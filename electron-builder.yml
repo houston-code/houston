@@ -1,0 +1,40 @@
+appId: com.coderpro.app
+productName: Coder Pro
+copyright: Copyright © 2026 Coder Pro contributors
+
+directories:
+  buildResources: build
+  output: release
+
+# out/ holds the bundled main/preload/renderer. electron-builder additionally
+# bundles production dependencies from package.json automatically.
+files:
+  - out/**/*
+  - package.json
+
+# No native modules — skip the rebuild step.
+npmRebuild: false
+asar: true
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch: arm64
+  # No Apple Developer ID on this machine — build an ad-hoc (unsigned) app.
+  # To notarize later, set identity to your Developer ID and configure notarize.
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+dmg:
+  title: ${productName} ${version}
+  artifactName: ${productName}-${version}-${arch}.dmg
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
