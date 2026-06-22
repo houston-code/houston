@@ -3,6 +3,14 @@ import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
 import { registerIpc } from './ipc'
 
+// Set the app name BEFORE the `ready` event. `app.getPath('userData')` and the
+// macOS Keychain service name that `safeStorage` uses for API keys are both
+// derived from the app name and are LOCKED in once the app is ready — calling
+// `setName` later (inside `whenReady`) changes `getName()` but not the already
+// resolved userData/Keychain, so stored keys would land in / be read from an
+// inconsistent location and silently fail to persist.
+app.setName(APP_NAME)
+
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
@@ -40,7 +48,6 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  app.setName(APP_NAME)
   registerIpc()
   createWindow()
 

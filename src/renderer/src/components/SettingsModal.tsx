@@ -50,6 +50,10 @@ export function SettingsModal({
     try {
       await persistThen(() => window.api.setKey(id, key))
       setKeyInputs((k) => ({ ...k, [id]: '' }))
+    } catch (e) {
+      // Surface storage failures (e.g. OS Keychain unavailable) instead of
+      // letting the key silently vanish.
+      alert(`Could not save API key: ${(e as Error).message}`)
     } finally {
       setBusy(null)
     }
