@@ -4,6 +4,7 @@ import { minimatch } from 'minimatch'
 import type { JSONSchema, ToolSchema } from '@shared/agent'
 import { runSandboxed } from '../sandbox'
 import { fetchUrlAsText } from './webfetch'
+import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network'
 
@@ -24,7 +25,6 @@ export interface ToolDef {
 
 const MAX_READ_CHARS = 100_000
 const MAX_GLOB_RESULTS = 200
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next', 'vendor', '.venv'])
 
 /** Resolve a user-supplied path against the workspace and reject anything that escapes it. */
 function resolveInWorkspace(workspace: string, p: string): string {
@@ -154,72 +154,32 @@ const listDir: ToolDef = {
   }
 }
 
-async function searchFiles(
-  dir: string,
-  workspace: string,
-  regex: RegExp,
-  out: string[],
-  max: number
-): Promise<void> {
-  if (out.length >= max) return
-  let entries
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true })
-  } catch {
-    return
-  }
-  for (const entry of entries) {
-    if (out.length >= max) return
-    if (entry.name.startsWith('.') && entry.name !== '.env.example') continue
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue
-      await searchFiles(full, workspace, regex, out, max)
-    } else if (entry.isFile()) {
-      let content: string
-      try {
-        content = await fs.readFile(full, 'utf8')
-      } catch {
-        continue
-      }
-      if (content.includes(String.fromCharCode(0))) continue // skip binary files
-      const lines = content.split('\n')
-      for (let i = 0; i < lines.length; i++) {
-        if (regex.test(lines[i])) {
-          out.push(`${relative(workspace, full)}:${i + 1}: ${lines[i].trim().slice(0, 200)}`)
-          if (out.length >= max) return
-        }
-      }
-    }
-  }
-}
-
 const searchTool: ToolDef = {
   kind: 'read',
   summarize: (a) => `Search "${str(a, 'pattern')}"`,
   schema: {
     name: 'search_files',
     description:
-      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Skips node_modules, .git, and build output.',
+      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Uses ripgrep when available, otherwise a built-in scan. Skips node_modules, .git, and build output.',
     parameters: objectSchema(
       {
-        pattern: { type: 'string', description: 'A JavaScript regular expression.' },
+        pattern: { type: 'string', description: 'A regular expression.' },
         path: { type: 'string', description: 'Subdirectory to search within (default project root).' }
       },
       ['pattern']
     )
   },
   async execute(args, ctx) {
-    const start = resolveInWorkspace(ctx.workspace, str(args, 'path') || '.')
-    let regex: RegExp
-    try {
-      regex = new RegExp(str(args, 'pattern'))
-    } catch (e) {
-      throw new Error(`Invalid regular expression: ${(e as Error).message}`)
-    }
-    const out: string[] = []
-    await searchFiles(start, ctx.workspace, regex, out, 100)
-    return out.length ? out.join('\n') : 'No matches found.'
+    const startAbs = resolveInWorkspace(ctx.workspace, str(args, 'path') || '.')
+    return searchContents({
+      pattern: str(args, 'pattern'),
+      workspace: ctx.workspace,
+      searchRel: relative(ctx.workspace, startAbs) || '.',
+      startAbs,
+      rgPath: resolveRipgrep(),
+      max: 100,
+      signal: ctx.signal
+    })
   }
 }
 
