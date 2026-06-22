@@ -28,6 +28,7 @@ describe('tool registry', () => {
       'read_file',
       'run_shell',
       'search_files',
+      'web_fetch',
       'write_file'
     ])
   })
