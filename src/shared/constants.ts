@@ -2,7 +2,7 @@
  * Shared constants used by both the main and renderer processes.
  */
 
-export const APP_NAME = 'Coder Pro'
+export const APP_NAME = 'Houston'
 
 /** IPC channel names. Keep in one place so main + preload + renderer agree. */
 export const IPC = {

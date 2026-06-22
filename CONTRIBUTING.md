@@ -1,6 +1,6 @@
-# Contributing to Coder Pro
+# Contributing to Houston
 
-Thanks for your interest! Coder Pro is an Electron + React + TypeScript desktop
+Thanks for your interest! Houston is an Electron + React + TypeScript desktop
 app. This guide covers local setup and the conventions the codebase follows.
 
 ## Prerequisites

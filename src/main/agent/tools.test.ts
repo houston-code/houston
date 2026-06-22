@@ -8,7 +8,7 @@ let workspace: string
 let ctx: ToolContext
 
 beforeEach(() => {
-  workspace = realpathSync(mkdtempSync(join(tmpdir(), 'coderpro-test-')))
+  workspace = realpathSync(mkdtempSync(join(tmpdir(), 'houston-test-')))
   ctx = { workspace, allowNetwork: false }
 })
 

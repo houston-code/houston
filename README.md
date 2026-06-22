@@ -1,4 +1,4 @@
-# Coder Pro
+# Houston
 
 An open-source, local-first **coding agent for macOS**, in the spirit of Claude Code
 and Codex — but **bring your own model**. Point it at Claude, GPT, Gemini, any
@@ -8,7 +8,7 @@ approval flow and confined to a macOS sandbox.
 
 Built with Electron + React + TypeScript. Apple Silicon (arm64).
 
-![Coder Pro icon](build/icon.png)
+![Houston icon](build/icon.png)
 
 ## Features
 
@@ -30,7 +30,7 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 
 ## Install (prebuilt DMG)
 
-Download `Coder Pro-<version>-arm64.dmg`, open it, and drag **Coder Pro** to
+Download `Houston-<version>-arm64.dmg`, open it, and drag **Houston** to
 Applications.
 
 > **The build is unsigned** (no Apple Developer ID). The first time you open it,
@@ -38,7 +38,7 @@ Applications.
 > - Right-click the app → **Open** → **Open**, or
 > - Remove the quarantine attribute:
 >   ```bash
->   xattr -dr com.apple.quarantine "/Applications/Coder Pro.app"
+>   xattr -dr com.apple.quarantine "/Applications/Houston.app"
 >   ```
 >
 > To ship a signed + notarized build, see [Signing & notarization](#signing--notarization).
@@ -69,7 +69,7 @@ npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ## Build a DMG
 
 ```bash
-npm run dist     # → release/Coder Pro-<version>-arm64.dmg
+npm run dist     # → release/Houston-<version>-arm64.dmg
 ```
 
 ## Architecture

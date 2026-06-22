@@ -1,6 +1,6 @@
-appId: com.coderpro.app
-productName: Coder Pro
-copyright: Copyright © 2026 Coder Pro contributors
+appId: com.houston.app
+productName: Houston
+copyright: Copyright © 2026 Houston contributors
 
 directories:
   buildResources: build

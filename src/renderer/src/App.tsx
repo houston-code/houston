@@ -174,7 +174,7 @@ export default function App(): JSX.Element {
 
         {chat.items.length === 0 ? (
           <div className="welcome">
-            <h1>Coder Pro</h1>
+            <h1>Houston</h1>
             <p>An open-source coding agent. Bring your own model.</p>
             {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
             {workspace && !settings.selected && (

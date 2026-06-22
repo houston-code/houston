@@ -6,7 +6,7 @@ import { ToolCard } from './ToolCard'
 function Bubble({ role, text, streaming }: { role: 'user' | 'assistant'; text: string; streaming?: boolean }): JSX.Element {
   return (
     <div className={`bubble bubble--${role}`}>
-      <div className="bubble__role">{role === 'user' ? 'You' : 'Coder Pro'}</div>
+      <div className="bubble__role">{role === 'user' ? 'You' : 'Houston'}</div>
       <div className="bubble__text">
         {text}
         {streaming && <span className="cursor">▋</span>}

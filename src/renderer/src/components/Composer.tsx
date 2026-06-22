@@ -31,7 +31,7 @@ export function Composer({
     <div className="composer">
       <textarea
         className="composer__input"
-        placeholder={disabled ? 'Pick a model and project folder to start…' : 'Ask Coder Pro to build or change something…'}
+        placeholder={disabled ? 'Pick a model and project folder to start…' : 'Ask Houston to build or change something…'}
         value={text}
         disabled={disabled}
         rows={1}

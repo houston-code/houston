@@ -1,4 +1,4 @@
-// Generates build/icon.png (1024x1024) — the Coder Pro app icon.
+// Generates build/icon.png (1024x1024) — the Houston app icon.
 // Dependency-free: rasterizes with simple signed-distance fields and encodes
 // the PNG by hand via node:zlib. Run: node scripts/make-icon.mjs
 import { deflateSync } from 'node:zlib'

@@ -2,7 +2,7 @@ import { basename } from 'node:path'
 
 /** Build the coding-agent system prompt for a run. */
 export function buildSystemPrompt(workspace: string, extra?: string): string {
-  const base = `You are Coder Pro, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
+  const base = `You are Houston, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
 
 Working directory: ${workspace} (project: "${basename(workspace)}")
 

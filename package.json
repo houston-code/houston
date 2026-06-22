@@ -1,11 +1,11 @@
 {
-  "name": "coder-pro",
+  "name": "houston",
   "version": "0.1.0",
   "description": "An open-source, local-first coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
-  "author": "Coder Pro contributors",
+  "author": "Houston contributors",
   "license": "MIT",
   "main": "./out/main/index.js",
-  "homepage": "https://github.com/coder-pro/coder-pro",
+  "homepage": "https://github.com/houston/houston",
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
