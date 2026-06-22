@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 
 /**
  * macOS Seatbelt sandbox for the agent's shell execution.
@@ -35,6 +36,37 @@ export interface SandboxRunResult {
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 1_000_000 // 1 MB cap per stream
+
+/** Standard macOS developer bin dirs, including Homebrew (Apple Silicon + Intel). */
+const EXTRA_PATH_DIRS = [
+  '/opt/homebrew/bin',
+  '/opt/homebrew/sbin',
+  '/usr/local/bin',
+  '/usr/local/sbin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin'
+]
+
+/**
+ * A GUI-launched macOS app inherits a minimal PATH (often just
+ * `/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew and other user-installed tools
+ * the agent reaches for via `run_shell` aren't found. Append the standard
+ * developer bin dirs (and `~/.local/bin`) that actually exist on disk, without
+ * disturbing the precedence of whatever PATH was already inherited.
+ */
+export function augmentPath(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (p: string) => boolean = existsSync
+): string {
+  const candidates = [...EXTRA_PATH_DIRS]
+  if (env.HOME) candidates.push(join(env.HOME, '.local', 'bin'))
+  const current = (env.PATH ?? '').split(delimiter).filter(Boolean)
+  const seen = new Set(current)
+  const added = candidates.filter((d) => !seen.has(d) && exists(d))
+  return [...current, ...added].join(delimiter)
+}
 
 /** Escape a path for safe embedding inside an SBPL double-quoted literal. */
 function sbplPath(p: string): string {
@@ -95,10 +127,12 @@ export function runSandboxed(opts: SandboxRunOptions): Promise<SandboxRunResult>
   // sandbox-exec -p <profile> /bin/bash -c <command>
   const args = ['-p', profile, '/bin/bash', '-c', opts.command]
 
+  const baseEnv = opts.env ?? process.env
+
   return new Promise((resolve) => {
     const child = spawn('sandbox-exec', args, {
       cwd: opts.cwd,
-      env: opts.env ?? process.env,
+      env: { ...baseEnv, PATH: augmentPath(baseEnv) },
       signal: opts.signal
     })
 
