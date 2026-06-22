@@ -104,7 +104,9 @@ the agent loop and UI never depend on a specific provider.
 - **File tools are contained** to the workspace in code — any path that resolves
   outside the project root is rejected.
 - **Human in the loop.** Writes and shell commands require approval unless you
-  opt into a more autonomous policy.
+  opt into a more autonomous policy. `web_fetch` network egress always prompts on
+  first use — even in *full auto* — since it leaves the machine; choose
+  *allow-for-the-run* to stop further prompts that run.
 - **Keys at rest** are encrypted via the OS Keychain; only ciphertext is written
   to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
 
