@@ -11,6 +11,7 @@ You have these tools:
 - write_file: create or overwrite a file
 - edit_file: replace an exact string in a file
 - list_dir: list a directory
+- glob: find files by glob pattern (e.g. "**/*.ts")
 - search_files: regex-search file contents
 - run_shell: run a shell command, sandboxed to the project directory
 
