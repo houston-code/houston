@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
 import type { DisplayItem } from '../lib/items'
+import { isNearBottom } from '../lib/scroll'
 import { ToolCard } from './ToolCard'
 
 function Bubble({ role, text, streaming }: { role: 'user' | 'assistant'; text: string; streaming?: boolean }): JSX.Element {
@@ -22,14 +23,27 @@ export function Transcript({
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
 }): JSX.Element {
-  const endRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  // Whether the view is currently stuck to the bottom. Starts pinned so the
+  // first messages scroll into view, then follows the user: scrolling up
+  // unpins, scrolling back to the bottom re-pins.
+  const pinnedRef = useRef(true)
 
+  function handleScroll(): void {
+    const el = containerRef.current
+    if (el) pinnedRef.current = isNearBottom(el)
+  }
+
+  // Keep the latest output in view only while pinned. Using an instant jump
+  // (not smooth) avoids restarting an animation on every streaming delta, which
+  // is what made the view flicker and fight the user's own scrolling.
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    const el = containerRef.current
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
   }, [items])
 
   return (
-    <div className="transcript">
+    <div className="transcript" ref={containerRef} onScroll={handleScroll}>
       {items.map((item) => {
         switch (item.kind) {
           case 'user':
@@ -48,7 +62,6 @@ export function Transcript({
             return null
         }
       })}
-      <div ref={endRef} />
     </div>
   )
 }

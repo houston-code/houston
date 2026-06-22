@@ -96,13 +96,17 @@ body {
 .app {
   display: grid;
   grid-template-columns: 248px 1fr;
+  grid-template-rows: 100%;
   height: 100%;
+  overflow: hidden;
 }
 
 /* ---- Sidebar ---- */
 .sidebar {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   background: var(--bg-elevated);
   border-right: 1px solid var(--border);
   padding: 10px;
@@ -118,6 +122,7 @@ body {
 }
 .sidebar__list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -180,13 +185,16 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   height: 100%;
+  overflow: hidden;
 }
 .topbar {
   display: flex;
   align-items: center;
   gap: 8px;
   height: 46px;
+  flex-shrink: 0;
   padding: 0 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
@@ -259,7 +267,9 @@ body {
 /* ---- Transcript ---- */
 .transcript {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 20px 0;
   display: flex;
   flex-direction: column;
@@ -402,6 +412,7 @@ body {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+  flex-shrink: 0;
   padding: 12px 24px 18px;
   border-top: 1px solid var(--border);
   max-width: 808px;
