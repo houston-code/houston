@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'node:path'
-import { IPC, APP_NAME } from '@shared/constants'
+import { APP_NAME } from '@shared/constants'
+import { registerIpc } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -36,19 +37,6 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
-}
-
-function registerIpc(): void {
-  ipcMain.handle(IPC.appGetVersion, () => app.getVersion())
-
-  ipcMain.handle(IPC.workspacePick, async () => {
-    const result = await dialog.showOpenDialog({
-      title: 'Choose a project folder',
-      properties: ['openDirectory', 'createDirectory']
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths[0]
-  })
 }
 
 app.whenReady().then(() => {

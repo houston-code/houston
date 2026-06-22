@@ -9,7 +9,12 @@ export const IPC = {
   // App / system
   appGetVersion: 'app:getVersion',
   // Workspace
-  workspacePick: 'workspace:pick'
+  workspacePick: 'workspace:pick',
+  // Settings
+  settingsGet: 'settings:get',
+  settingsSave: 'settings:save',
+  settingsSetKey: 'settings:setKey',
+  settingsDeleteKey: 'settings:deleteKey'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

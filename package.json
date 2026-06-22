@@ -19,10 +19,10 @@
     "dist:unpacked": "npm run build && electron-builder --mac --arm64 --dir"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "@google/genai": "^0.7.0",
+    "@anthropic-ai/sdk": "^0.105.0",
+    "@google/genai": "^2.9.0",
     "electron-updater": "^6.3.9",
-    "openai": "^4.85.0"
+    "openai": "^6.44.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
