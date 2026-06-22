@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
+import { minimatch } from 'minimatch'
 import type { JSONSchema, ToolSchema } from '@shared/agent'
 import { runSandboxed } from '../sandbox'
 
@@ -21,6 +22,7 @@ export interface ToolDef {
 }
 
 const MAX_READ_CHARS = 100_000
+const MAX_GLOB_RESULTS = 200
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next', 'vendor', '.venv'])
 
 /** Resolve a user-supplied path against the workspace and reject anything that escapes it. */
@@ -220,6 +222,70 @@ const searchTool: ToolDef = {
   }
 }
 
+async function collectGlob(
+  dir: string,
+  base: string,
+  pattern: string,
+  out: { full: string; mtimeMs: number }[],
+  max: number
+): Promise<void> {
+  if (out.length >= max) return
+  let entries
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (out.length >= max) return
+    if (entry.name.startsWith('.')) continue // honour default glob dot:false
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue
+      await collectGlob(full, base, pattern, out, max)
+    } else if (entry.isFile() && minimatch(relative(base, full), pattern)) {
+      try {
+        const st = await fs.stat(full)
+        out.push({ full, mtimeMs: st.mtimeMs })
+      } catch {
+        out.push({ full, mtimeMs: 0 })
+      }
+    }
+  }
+}
+
+const globTool: ToolDef = {
+  kind: 'read',
+  summarize: (a) => `Glob ${str(a, 'pattern')}`,
+  schema: {
+    name: 'glob',
+    description:
+      'Find files whose path matches a glob pattern (e.g. "**/*.ts", "src/**/*.test.tsx"). Returns matching paths relative to the project root, most-recently-modified first. Skips node_modules, .git, dotfiles, and build output.',
+    parameters: objectSchema(
+      {
+        pattern: { type: 'string', description: 'A glob pattern, e.g. "**/*.ts" or "src/*.json".' },
+        path: {
+          type: 'string',
+          description:
+            'Directory to search within (default project root). The pattern is matched relative to this directory.'
+        }
+      },
+      ['pattern']
+    )
+  },
+  async execute(args, ctx) {
+    const pattern = str(args, 'pattern')
+    if (!pattern) throw new Error('pattern is required.')
+    const start = resolveInWorkspace(ctx.workspace, str(args, 'path') || '.')
+    const found: { full: string; mtimeMs: number }[] = []
+    await collectGlob(start, start, pattern, found, MAX_GLOB_RESULTS)
+    if (found.length === 0) return 'No files found.'
+    found.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    const lines = found.map((f) => relative(ctx.workspace, f.full)).join('\n')
+    return found.length >= MAX_GLOB_RESULTS ? `${lines}\n[truncated at ${MAX_GLOB_RESULTS} matches]` : lines
+  }
+}
+
 const runShell: ToolDef = {
   kind: 'shell',
   summarize: (a) => str(a, 'command'),
@@ -253,7 +319,7 @@ const runShell: ToolDef = {
   }
 }
 
-export const TOOLS: ToolDef[] = [readFile, writeFile, editFile, listDir, searchTool, runShell]
+export const TOOLS: ToolDef[] = [readFile, writeFile, editFile, listDir, globTool, searchTool, runShell]
 
 export function toolSchemas(): ToolSchema[] {
   return TOOLS.map((t) => t.schema)

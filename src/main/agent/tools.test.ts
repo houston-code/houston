@@ -23,6 +23,7 @@ describe('tool registry', () => {
   it('exposes the expected tools', () => {
     expect(toolSchemas().map((t) => t.name).sort()).toEqual([
       'edit_file',
+      'glob',
       'list_dir',
       'read_file',
       'run_shell',
@@ -74,6 +75,41 @@ describe('list and search', () => {
     await run('write_file', { path: 'src/app.ts', content: 'const answer = 42\n' })
     const out = await run('search_files', { pattern: 'answer = \\d+' })
     expect(out).toContain('src/app.ts:1:')
+  })
+})
+
+describe('glob', () => {
+  it('finds files by recursive pattern', async () => {
+    await run('write_file', { path: 'src/a.ts', content: 'x' })
+    await run('write_file', { path: 'src/nested/b.ts', content: 'y' })
+    await run('write_file', { path: 'src/notes.md', content: 'z' })
+    const out = (await run('glob', { pattern: '**/*.ts' })).split('\n')
+    expect(out).toContain('src/a.ts')
+    expect(out).toContain('src/nested/b.ts')
+    expect(out).not.toContain('src/notes.md')
+  })
+
+  it('matches the pattern relative to a scoped path', async () => {
+    await run('write_file', { path: 'src/top.json', content: '{}' })
+    await run('write_file', { path: 'src/deep/inner.json', content: '{}' })
+    const out = (await run('glob', { pattern: '*.json', path: 'src' })).split('\n')
+    expect(out).toEqual(['src/top.json']) // *.json is shallow; inner.json needs **
+  })
+
+  it('skips build dirs and dotfiles', async () => {
+    await run('write_file', { path: 'keep.txt', content: 'x' })
+    await run('write_file', { path: 'node_modules/pkg/index.txt', content: 'x' })
+    await run('write_file', { path: '.secret/hidden.txt', content: 'x' })
+    const out = (await run('glob', { pattern: '**/*.txt' })).split('\n')
+    expect(out).toEqual(['keep.txt'])
+  })
+
+  it('reports when nothing matches', async () => {
+    expect(await run('glob', { pattern: '**/*.nope' })).toBe('No files found.')
+  })
+
+  it('blocks globbing outside the workspace', async () => {
+    await expect(run('glob', { pattern: '*', path: '../..' })).rejects.toThrow(/escapes the workspace/)
   })
 })
 
