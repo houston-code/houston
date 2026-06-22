@@ -108,7 +108,7 @@ export type AgentEvent =
       callId: string
       name: string
       summary: string
-      kind: 'read' | 'write' | 'shell'
+      kind: 'read' | 'write' | 'shell' | 'network'
     }
   | { runId: string; type: 'tool_result'; callId: string; name: string; ok: boolean; output: string }
   | { runId: string; type: 'done'; stopReason: StopReason }

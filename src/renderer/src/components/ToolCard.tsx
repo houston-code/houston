@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
 import type { ToolItem } from '../lib/items'
 
-const KIND_ICON: Record<string, string> = { read: '📖', write: '✏️', shell: '⌘' }
+const KIND_ICON: Record<string, string> = { read: '📖', write: '✏️', shell: '⌘', network: '🌐' }
 
 const STATUS_LABEL: Record<ToolItem['status'], string> = {
   'awaiting-approval': 'Needs approval',
@@ -15,6 +15,7 @@ const STATUS_LABEL: Record<ToolItem['status'], string> = {
 function detail(item: ToolItem): string {
   if (item.summary) return item.summary
   if (item.name === 'run_shell' && typeof item.args?.command === 'string') return item.args.command
+  if (typeof item.args?.url === 'string') return item.args.url
   if (typeof item.args?.path === 'string') return item.args.path
   if (typeof item.args?.pattern === 'string') return `/${item.args.pattern}/`
   return ''

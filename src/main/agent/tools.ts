@@ -3,8 +3,9 @@ import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { JSONSchema, ToolSchema } from '@shared/agent'
 import { runSandboxed } from '../sandbox'
+import { fetchUrlAsText } from './webfetch'
 
-export type ToolKind = 'read' | 'write' | 'shell'
+export type ToolKind = 'read' | 'write' | 'shell' | 'network'
 
 export interface ToolContext {
   /** Canonical (realpath'd) workspace root. */
@@ -319,7 +320,35 @@ const runShell: ToolDef = {
   }
 }
 
-export const TOOLS: ToolDef[] = [readFile, writeFile, editFile, listDir, globTool, searchTool, runShell]
+const webFetch: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `Fetch ${str(a, 'url')}`,
+  schema: {
+    name: 'web_fetch',
+    description:
+      'Fetch a URL over http/https and return its contents as text (HTML is converted to readable text). Use for documentation, references, or APIs. Network egress always requires approval. Private and loopback addresses are blocked.',
+    parameters: objectSchema(
+      { url: { type: 'string', description: 'An http or https URL to fetch.' } },
+      ['url']
+    )
+  },
+  async execute(args, ctx) {
+    const url = str(args, 'url')
+    if (!url) throw new Error('url is required.')
+    return fetchUrlAsText(url, { signal: ctx.signal, maxBytes: MAX_READ_CHARS * 2 })
+  }
+}
+
+export const TOOLS: ToolDef[] = [
+  readFile,
+  writeFile,
+  editFile,
+  listDir,
+  globTool,
+  searchTool,
+  runShell,
+  webFetch
+]
 
 export function toolSchemas(): ToolSchema[] {
   return TOOLS.map((t) => t.schema)

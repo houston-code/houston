@@ -45,7 +45,7 @@ function needsApproval(policy: ApprovalPolicy, kind: ToolKind, override: boolean
   if (override || policy === 'full-auto') return false
   if (kind === 'read') return false
   if (kind === 'write') return policy === 'ask' // auto-edit auto-approves writes
-  return true // shell always needs approval unless full-auto/override
+  return true // shell + network always need approval unless full-auto/override
 }
 
 function waitForApproval(run: RunState, callId: string): Promise<ToolApprovalDecision> {
