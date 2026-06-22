@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs'
 import type {
   AgentEvent,
-  AgentStartRequest,
+  AgentRunRequest,
   ChatMessage,
   StopReason,
   ToolApprovalDecision,
@@ -52,8 +52,15 @@ function waitForApproval(run: RunState, callId: string): Promise<ToolApprovalDec
   return new Promise((resolve) => run.approvals.set(callId, resolve))
 }
 
-/** Run the agent loop, streaming events via `send`. Never throws — errors become events. */
-export async function startRun(req: AgentStartRequest, send: (e: AgentEvent) => void): Promise<void> {
+/**
+ * Run the agent loop, streaming events via `send`. Never throws — errors become events.
+ * `onMessages` is called whenever the message log grows, so the caller can persist it.
+ */
+export async function startRun(
+  req: AgentRunRequest,
+  send: (e: AgentEvent) => void,
+  onMessages?: (messages: ChatMessage[]) => void
+): Promise<void> {
   const { runId } = req
   const abort = new AbortController()
   const run: RunState = { abort, approvals: new Map(), override: false }
@@ -134,6 +141,7 @@ export async function startRun(req: AgentStartRequest, send: (e: AgentEvent) => 
         content: assistantText,
         ...(toolCalls.length ? { toolCalls } : {})
       })
+      onMessages?.(messages)
 
       if (toolCalls.length === 0) {
         emit({ type: 'done', stopReason })
@@ -188,6 +196,7 @@ export async function startRun(req: AgentStartRequest, send: (e: AgentEvent) => 
 
         emit({ type: 'tool_result', callId: call.id, name: call.name, ok, output })
         messages.push({ role: 'tool', content: output, toolCallId: call.id, toolName: call.name })
+        onMessages?.(messages)
       }
     }
 

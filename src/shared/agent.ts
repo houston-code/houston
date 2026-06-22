@@ -60,15 +60,40 @@ export interface Provider {
 
 // ---- Agent run protocol (main <-> renderer) ----
 
-export type ApprovalPolicyRef = import('./types').ApprovalPolicy
+import type { ApprovalPolicy } from './types'
 
-export interface AgentStartRequest {
+export interface ConversationMeta {
+  id: string
+  title: string
+  workspace: string
+  providerId: string
+  model: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface Conversation extends ConversationMeta {
+  messages: ChatMessage[]
+}
+
+/** Internal input to the agent loop. */
+export interface AgentRunRequest {
   runId: string
   workspace: string
   providerId: string
   model: string
-  approvalPolicy: ApprovalPolicyRef
+  approvalPolicy: ApprovalPolicy
   messages: ChatMessage[]
+}
+
+/** What the renderer sends to start a turn in a conversation. */
+export interface AgentSendRequest {
+  runId: string
+  conversationId: string
+  userText: string
+  providerId: string
+  model: string
+  approvalPolicy: ApprovalPolicy
 }
 
 export type ToolApprovalDecision = 'allow' | 'deny' | 'always'

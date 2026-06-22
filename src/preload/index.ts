@@ -2,7 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent, AgentStartRequest, ToolApprovalDecision } from '@shared/agent'
+import type {
+  AgentEvent,
+  AgentSendRequest,
+  Conversation,
+  ConversationMeta,
+  ToolApprovalDecision
+} from '@shared/agent'
 
 /**
  * The bridge object exposed to the renderer as `window.api`.
@@ -23,8 +29,19 @@ const api = {
   listModels: (providerId: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.settingsListModels, providerId),
 
+  // Conversations
+  listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),
+  getConversation: (id: string): Promise<Conversation | null> =>
+    ipcRenderer.invoke(IPC.conversationGet, id),
+  createConversation: (input: {
+    workspace: string
+    providerId: string
+    model: string
+  }): Promise<Conversation> => ipcRenderer.invoke(IPC.conversationCreate, input),
+  deleteConversation: (id: string): Promise<void> => ipcRenderer.invoke(IPC.conversationDelete, id),
+
   // Agent
-  startAgent: (req: AgentStartRequest): Promise<void> => ipcRenderer.invoke(IPC.agentStart, req),
+  startAgent: (req: AgentSendRequest): Promise<void> => ipcRenderer.invoke(IPC.agentStart, req),
   cancelAgent: (runId: string): Promise<void> => ipcRenderer.invoke(IPC.agentCancel, runId),
   approveTool: (runId: string, callId: string, decision: ToolApprovalDecision): Promise<void> =>
     ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision),

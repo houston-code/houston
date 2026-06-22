@@ -16,6 +16,11 @@ export const IPC = {
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
   settingsListModels: 'settings:listModels',
+  // Conversations
+  conversationList: 'conversation:list',
+  conversationGet: 'conversation:get',
+  conversationCreate: 'conversation:create',
+  conversationDelete: 'conversation:delete',
   // Agent
   agentStart: 'agent:start',
   agentCancel: 'agent:cancel',
