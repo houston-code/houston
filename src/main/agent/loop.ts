@@ -7,11 +7,11 @@ import type {
   ToolApprovalDecision,
   ToolCall
 } from '@shared/agent'
-import type { ApprovalPolicy } from '@shared/types'
 import { getProvider, getSettings } from '../store'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
-import { getTool, toolSchemas, type ToolKind } from './tools'
+import { getTool, toolSchemas } from './tools'
+import { needsApproval } from './approval'
 
 const MAX_ITERATIONS = 40
 
@@ -39,13 +39,6 @@ export function resolveApproval(runId: string, callId: string, decision: ToolApp
     run.approvals.delete(callId)
     resolve(decision)
   }
-}
-
-function needsApproval(policy: ApprovalPolicy, kind: ToolKind, override: boolean): boolean {
-  if (override || policy === 'full-auto') return false
-  if (kind === 'read') return false
-  if (kind === 'write') return policy === 'ask' // auto-edit auto-approves writes
-  return true // shell + network always need approval unless full-auto/override
 }
 
 function waitForApproval(run: RunState, callId: string): Promise<ToolApprovalDecision> {
