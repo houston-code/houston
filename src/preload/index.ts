@@ -17,7 +17,9 @@ const api = {
   setKey: (providerId: string, key: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsSetKey, providerId, key),
   deleteKey: (providerId: string): Promise<AppSettings> =>
-    ipcRenderer.invoke(IPC.settingsDeleteKey, providerId)
+    ipcRenderer.invoke(IPC.settingsDeleteKey, providerId),
+  listModels: (providerId: string): Promise<string[]> =>
+    ipcRenderer.invoke(IPC.settingsListModels, providerId)
 }
 
 export type CoderApi = typeof api

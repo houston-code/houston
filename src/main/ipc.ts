@@ -1,8 +1,9 @@
 import { ipcMain, dialog, app, BrowserWindow } from 'electron'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
-import { getSettings, saveSettings, rememberWorkspace } from './store'
+import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
+import { listModels } from './providers'
 
 /** Register every IPC handler the renderer can call. */
 export function registerIpc(): void {
@@ -32,5 +33,11 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.settingsDeleteKey, (_event, providerId: string) => {
     deleteKey(providerId)
     return getSettings()
+  })
+
+  ipcMain.handle(IPC.settingsListModels, async (_event, providerId: string) => {
+    const provider = getProvider(providerId)
+    if (!provider) throw new Error(`Unknown provider: ${providerId}`)
+    return listModels(provider)
   })
 }
