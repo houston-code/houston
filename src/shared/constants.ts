@@ -15,7 +15,12 @@ export const IPC = {
   settingsSave: 'settings:save',
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
-  settingsListModels: 'settings:listModels'
+  settingsListModels: 'settings:listModels',
+  // Agent
+  agentStart: 'agent:start',
+  agentCancel: 'agent:cancel',
+  agentApprove: 'agent:approve',
+  agentEvent: 'agent:event'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
