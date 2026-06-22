@@ -1,0 +1,41 @@
+{
+  "name": "coder-pro",
+  "version": "0.1.0",
+  "description": "An open-source, local-first coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
+  "author": "Coder Pro contributors",
+  "license": "MIT",
+  "main": "./out/main/index.js",
+  "homepage": "https://github.com/coder-pro/coder-pro",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "npm run typecheck && electron-vite build",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist": "npm run build && electron-builder --mac --arm64",
+    "dist:unpacked": "npm run build && electron-builder --mac --arm64 --dir"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@google/genai": "^0.7.0",
+    "electron-updater": "^6.3.9",
+    "openai": "^4.85.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.14",
+    "vitest": "^2.1.8"
+  }
+}

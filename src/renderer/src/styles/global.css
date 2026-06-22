@@ -1,0 +1,102 @@
+:root {
+  --bg: #0e0f12;
+  --bg-elevated: #16181d;
+  --bg-input: #1c1f26;
+  --border: #2a2d36;
+  --text: #e6e8ec;
+  --text-dim: #9aa0ab;
+  --accent: #6ea8fe;
+  --accent-hover: #8bbcff;
+  --danger: #ff6b6b;
+  --ok: #4ade80;
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+  --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.titlebar {
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 16px 0 84px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 13px;
+}
+
+.titlebar__title {
+  font-weight: 600;
+}
+
+.titlebar__version {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.placeholder h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.placeholder p {
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.placeholder__path {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.btn {
+  -webkit-app-region: no-drag;
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+}
