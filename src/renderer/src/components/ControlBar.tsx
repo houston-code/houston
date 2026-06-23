@@ -21,7 +21,11 @@ const REASONING_LABEL: Record<ReasoningEffort, string> = {
   high: 'Think: high'
 }
 
-export function Topbar({
+/**
+ * The model / project / mode controls, plus token usage. Lives in a compact bar
+ * directly above the composer (moved out of the old top header).
+ */
+export function ControlBar({
   settings,
   selected,
   workspace,
@@ -44,19 +48,23 @@ export function Topbar({
 }): JSX.Element {
   const provider = settings.providers.find((p) => p.id === selected?.providerId)
   const needsKey = provider?.requiresKey && !provider.hasKey
-
   const value = selected ? `${selected.providerId}::${selected.model}` : ''
 
-  // Flatten providers → models into option groups.
   return (
-    <header className="topbar">
-      <button className="topbar__ws" onClick={onChangeWorkspace} title="Change project folder">
-        📁 {workspace ? basename(workspace) : 'Choose folder…'}
+    <div className="control-bar">
+      <button
+        className="control control--ws"
+        onClick={onChangeWorkspace}
+        title="Change project folder"
+      >
+        <span className="control__icon">📁</span>
+        <span className="control__text">{workspace ? basename(workspace) : 'Choose folder…'}</span>
       </button>
 
       <select
-        className="topbar__select"
+        className="control control--select"
         value={value}
+        title="Model"
         onChange={(e) => {
           const [providerId, model] = e.target.value.split('::')
           if (providerId && model) onSelectModel({ providerId, model })
@@ -81,14 +89,8 @@ export function Topbar({
         ))}
       </select>
 
-      {needsKey && (
-        <button className="topbar__warn" onClick={onOpenSettings}>
-          ⚠︎ Set API key
-        </button>
-      )}
-
       <select
-        className="topbar__select topbar__select--policy"
+        className="control control--select"
         value={settings.approvalPolicy}
         onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
         title="How much the agent may do without asking"
@@ -101,7 +103,7 @@ export function Topbar({
       </select>
 
       <select
-        className="topbar__select topbar__select--reasoning"
+        className="control control--select"
         value={settings.reasoningEffort ?? 'off'}
         onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
         title="How hard the model should think before answering (supported models only)"
@@ -113,14 +115,22 @@ export function Topbar({
         ))}
       </select>
 
+      <div className="control-bar__spacer" />
+
+      {needsKey && (
+        <button className="control control--warn" onClick={onOpenSettings}>
+          ⚠︎ Set API key
+        </button>
+      )}
+
       {usage && (usage.context > 0 || usage.output > 0) && (
         <span
-          className="topbar__usage"
+          className="control-bar__usage"
           title="Context tokens (last turn) · output tokens this session"
         >
           🧮 {formatTokens(usage.context)} ctx · {formatTokens(usage.output)} out
         </span>
       )}
-    </header>
+    </div>
   )
 }

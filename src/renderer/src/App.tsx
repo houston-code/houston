@@ -7,7 +7,8 @@ import { newGroupId } from './lib/chatGroups'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
 import { Sidebar } from './components/Sidebar'
-import { Topbar } from './components/Topbar'
+import { Titlebar } from './components/Titlebar'
+import { ControlBar } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
 import { SettingsModal } from './components/SettingsModal'
@@ -290,7 +291,7 @@ export default function App(): JSX.Element {
   // The composer is usable only when the *selected* provider is actually ready —
   // it doesn't require a key, or it has a usable one. Otherwise sending would fail
   // in the agent loop with "No API key set"; instead we disable input and the
-  // Topbar shows its "⚠︎ Set API key" prompt.
+  // ControlBar shows its "⚠︎ Set API key" prompt.
   const selectedProvider = settings.providers.find((p) => p.id === settings.selected?.providerId)
   const selectionReady = Boolean(
     selectedProvider && (!selectedProvider.requiresKey || selectedProvider.hasKey)
@@ -319,17 +320,7 @@ export default function App(): JSX.Element {
       />
 
       <div className="main">
-        <Topbar
-          settings={settings}
-          selected={settings.selected}
-          workspace={workspace}
-          usage={chat.usage}
-          onSelectModel={onSelectModel}
-          onChangePolicy={onChangePolicy}
-          onChangeReasoning={onChangeReasoning}
-          onChangeWorkspace={onChangeWorkspace}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
+        <Titlebar title={currentConv?.title ?? 'Houston'} />
 
         {chat.items.length === 0 ? (
           <div className="welcome">
@@ -355,15 +346,28 @@ export default function App(): JSX.Element {
           </div>
         )}
 
-        <Composer
-          disabled={!canChat}
-          running={chat.running}
-          workspace={workspace}
-          commands={commands}
-          onCommand={onCommand}
-          onSend={onSend}
-          onCancel={chat.cancel}
-        />
+        <div className="dock">
+          <ControlBar
+            settings={settings}
+            selected={settings.selected}
+            workspace={workspace}
+            usage={chat.usage}
+            onSelectModel={onSelectModel}
+            onChangePolicy={onChangePolicy}
+            onChangeReasoning={onChangeReasoning}
+            onChangeWorkspace={onChangeWorkspace}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+          <Composer
+            disabled={!canChat}
+            running={chat.running}
+            workspace={workspace}
+            commands={commands}
+            onCommand={onCommand}
+            onSend={onSend}
+            onCancel={chat.cancel}
+          />
+        </div>
       </div>
 
       {settingsOpen && (
