@@ -118,6 +118,26 @@ function mapStopReason(reason: string | null | undefined): StopReason {
   }
 }
 
+const EPHEMERAL = { type: 'ephemeral' as const }
+
+/**
+ * Add a prompt-cache breakpoint to the last content block of the last message.
+ * Combined with caching the (static) system prompt + tools, this lets Anthropic
+ * reuse the whole conversation prefix across the loop's iterations — each turn
+ * only the newest content is uncached. Mutates in place; the message array is
+ * freshly built per request so that's safe. Exported for testing.
+ */
+export function markMessagesCacheBreakpoint(messages: Anthropic.MessageParam[]): void {
+  const last = messages[messages.length - 1]
+  if (!last) return
+  if (typeof last.content === 'string') {
+    last.content = [{ type: 'text', text: last.content, cache_control: EPHEMERAL }]
+  } else if (Array.isArray(last.content) && last.content.length > 0) {
+    const block = last.content[last.content.length - 1] as { cache_control?: typeof EPHEMERAL }
+    block.cache_control = EPHEMERAL
+  }
+}
+
 /** Extract reasoning blocks (with signatures) from a completed message, for replay. */
 function reasoningFromMessage(content: Anthropic.ContentBlock[]): ReasoningBlock[] {
   const blocks: ReasoningBlock[] = []
@@ -136,13 +156,23 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
 
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
-      const tools = req.tools?.map((t) => ({
+      const tools: Anthropic.Tool[] | undefined = req.tools?.map((t) => ({
         name: t.name,
         description: t.description,
         input_schema: t.parameters as Anthropic.Tool.InputSchema
       }))
+      // Cache the (static) tool schemas: a breakpoint on the last tool covers them all.
+      if (tools && tools.length) tools[tools.length - 1].cache_control = EPHEMERAL
+
+      // Cache the (static) system prompt.
+      const system: Anthropic.TextBlockParam[] | undefined = req.system
+        ? [{ type: 'text', text: req.system, cache_control: EPHEMERAL }]
+        : undefined
 
       const thinking = anthropicThinking(req.model, req.reasoningEffort)
+      const messages = toAnthropicMessages(req.messages, thinking !== null)
+      markMessagesCacheBreakpoint(messages)
+
       // With thinking, max_tokens must exceed the thinking budget.
       const maxTokens = thinking ? thinking.maxTokens : req.maxTokens ?? DEFAULT_MAX_TOKENS
 
@@ -150,8 +180,8 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
         {
           model: req.model,
           max_tokens: maxTokens,
-          ...(req.system ? { system: req.system } : {}),
-          messages: toAnthropicMessages(req.messages, thinking !== null),
+          ...(system ? { system } : {}),
+          messages,
           ...(tools && tools.length ? { tools } : {}),
           ...(thinking
             ? { thinking: { type: 'enabled' as const, budget_tokens: thinking.budgetTokens } }
@@ -196,11 +226,19 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
 
       const final = await stream.finalMessage()
       const reasoning = reasoningFromMessage(final.content)
+      // With caching, input_tokens counts only the *uncached* prefix; add the
+      // cached reads/writes back so the reported context size stays accurate.
+      const u = final.usage
+      const inputTokens = u
+        ? (u.input_tokens ?? 0) +
+          (u.cache_read_input_tokens ?? 0) +
+          (u.cache_creation_input_tokens ?? 0)
+        : undefined
       yield {
         type: 'done',
         stopReason: mapStopReason(final.stop_reason),
         usage: {
-          inputTokens: final.usage?.input_tokens,
+          inputTokens,
           outputTokens: final.usage?.output_tokens
         },
         ...(reasoning.length ? { reasoning } : {})
