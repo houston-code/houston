@@ -28,6 +28,7 @@ describe('tool registry', () => {
       'read_file',
       'run_shell',
       'search_files',
+      'todo_write',
       'web_fetch',
       'write_file'
     ])
@@ -111,6 +112,34 @@ describe('glob', () => {
 
   it('blocks globbing outside the workspace', async () => {
     await expect(run('glob', { pattern: '*', path: '../..' })).rejects.toThrow(/escapes the workspace/)
+  })
+})
+
+describe('todo_write', () => {
+  it('accepts a valid list and echoes a summary + the rendered list', async () => {
+    const out = await run('todo_write', {
+      todos: [
+        { content: 'Write tests', status: 'in_progress' },
+        { content: 'Ship it', status: 'pending' }
+      ]
+    })
+    expect(out).toContain('2 items')
+    expect(out).toContain('Write tests')
+    expect(out).toContain('Ship it')
+  })
+
+  it('reports a cleared list for an empty array', async () => {
+    expect(await run('todo_write', { todos: [] })).toContain('Cleared')
+  })
+
+  it('rejects an invalid status', async () => {
+    await expect(run('todo_write', { todos: [{ content: 'x', status: 'wip' }] })).rejects.toThrow(
+      /status must be one of/
+    )
+  })
+
+  it('is a read-kind tool (no project side effects, never prompts)', () => {
+    expect(getTool('todo_write')!.kind).toBe('read')
   })
 })
 
