@@ -57,4 +57,6 @@ export interface AppSettings {
    * 0 disables compaction. Lower it for small-context local models.
    */
   compactionThreshold?: number
+  /** True when a web-search (Tavily) API key is stored. Derived, never persisted. */
+  hasWebSearchKey?: boolean
 }

@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from '
 import { join, dirname } from 'node:path'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
+import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 import { hasKey } from './secrets'
 
 /**
@@ -46,7 +47,8 @@ function persist(settings: AppSettings): void {
   // Don't persist the derived hasKey flag.
   const toWrite: AppSettings = {
     ...settings,
-    providers: settings.providers.map((p) => ({ ...p, hasKey: false }))
+    providers: settings.providers.map((p) => ({ ...p, hasKey: false })),
+    hasWebSearchKey: false // derived, recomputed on read
   }
   writeFileSync(tmp, JSON.stringify(toWrite, null, 2), 'utf8')
   renameSync(tmp, path)
@@ -56,7 +58,8 @@ function persist(settings: AppSettings): void {
 function withKeyFlags(settings: AppSettings): AppSettings {
   return {
     ...settings,
-    providers: settings.providers.map((p) => ({ ...p, hasKey: hasKey(p.id) }))
+    providers: settings.providers.map((p) => ({ ...p, hasKey: hasKey(p.id) })),
+    hasWebSearchKey: hasKey(WEB_SEARCH_KEY_ID)
   }
 }
 

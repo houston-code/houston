@@ -34,6 +34,7 @@ describe('tool registry', () => {
       'search_files',
       'todo_write',
       'web_fetch',
+      'web_search',
       'write_file'
     ])
   })
@@ -188,6 +189,17 @@ describe('todo_write', () => {
 
   it('is a read-kind tool (no project side effects, never prompts)', () => {
     expect(getTool('todo_write')!.kind).toBe('read')
+  })
+})
+
+describe('web_search', () => {
+  it('errors with guidance when no key is configured', async () => {
+    await expect(run('web_search', { query: 'anything' })).rejects.toThrow(/No web-search API key/)
+  })
+
+  it('requires a query', async () => {
+    const withKey: ToolContext = { ...ctx, getSecret: () => 'tvly-x' }
+    await expect(getTool('web_search')!.execute({}, withKey)).rejects.toThrow(/query is required/)
   })
 })
 

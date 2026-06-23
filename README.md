@@ -16,8 +16,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Add
   custom endpoints and fetch live model lists in Settings.
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
-  `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`, and `todo_write`
-  to actually do the work — not just describe it.
+  `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`, `web_search`, and
+  `todo_write` to actually do the work — not just describe it.
+- **Web search.** With a Tavily API key (set in Settings → *Web search*), the
+  agent can `web_search` the web for current information. Like `web_fetch`, it
+  requires approval since it leaves the machine.
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.

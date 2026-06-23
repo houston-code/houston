@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { AppSettings, ModelOption, ProviderConfig } from '@shared/types'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 
 function modelsToText(models: ModelOption[]): string {
   return models.map((m) => m.id).join('\n')
@@ -223,6 +224,40 @@ export function SettingsModal({
                 }))
               }
             />
+          </label>
+
+          <h3>Web search</h3>
+          <label className="field">
+            <span>
+              Tavily API key for the <code>web_search</code> tool{' '}
+              {settings.hasWebSearchKey && <span className="provider__key-ok">key set ✓</span>}
+            </span>
+            <div className="field__row">
+              <input
+                type="password"
+                placeholder={settings.hasWebSearchKey ? '•••••••• (stored)' : 'tvly-…'}
+                value={keyInputs[WEB_SEARCH_KEY_ID] ?? ''}
+                onChange={(e) =>
+                  setKeyInputs((k) => ({ ...k, [WEB_SEARCH_KEY_ID]: e.target.value }))
+                }
+              />
+              <button
+                className="btn btn--sm"
+                disabled={busy === WEB_SEARCH_KEY_ID}
+                onClick={() => saveKey(WEB_SEARCH_KEY_ID)}
+              >
+                Save
+              </button>
+              {settings.hasWebSearchKey && (
+                <button
+                  className="btn btn--sm btn--danger"
+                  disabled={busy === WEB_SEARCH_KEY_ID}
+                  onClick={() => removeKey(WEB_SEARCH_KEY_ID)}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </label>
         </div>
 

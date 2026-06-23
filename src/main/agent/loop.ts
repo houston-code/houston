@@ -10,6 +10,7 @@ import type {
 } from '@shared/agent'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { getProvider, getSettings } from '../store'
+import { getKey } from '../secrets'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
@@ -264,7 +265,8 @@ export async function startRun(
               output = await tool.execute(call.arguments, {
                 workspace,
                 allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
-                signal: abort.signal
+                signal: abort.signal,
+                getSecret: getKey
               })
             } catch (e) {
               output = `Error: ${(e as Error).message}`

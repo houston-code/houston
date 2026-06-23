@@ -4,6 +4,9 @@
 
 export const APP_NAME = 'Houston'
 
+/** Secrets-store id under which the web-search (Tavily) API key is kept. */
+export const WEB_SEARCH_KEY_ID = 'web-search'
+
 /** IPC channel names. Keep in one place so main + preload + renderer agree. */
 export const IPC = {
   // App / system

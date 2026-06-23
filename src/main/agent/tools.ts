@@ -3,9 +3,11 @@ import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { JSONSchema, ToolSchema } from '@shared/agent'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
+import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 import { runSandboxed, spawnSandboxed } from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
 import { fetchUrlAsText } from './webfetch'
+import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network'
@@ -15,6 +17,8 @@ export interface ToolContext {
   workspace: string
   allowNetwork: boolean
   signal?: AbortSignal
+  /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
+  getSecret?: (id: string) => string | null
 }
 
 export interface ToolDef {
@@ -468,6 +472,32 @@ const todoWrite: ToolDef = {
   }
 }
 
+const webSearch: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `Search the web: ${str(a, 'query')}`,
+  schema: {
+    name: 'web_search',
+    description:
+      'Search the web and return the top results (title, URL, snippet) plus a short synthesized answer. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a Tavily API key set in Settings.',
+    parameters: objectSchema(
+      {
+        query: { type: 'string', description: 'The search query.' },
+        max_results: { type: 'number', description: 'Maximum results to return (1–10, default 5).' }
+      },
+      ['query']
+    )
+  },
+  async execute(args, ctx) {
+    const query = str(args, 'query')
+    if (!query) throw new Error('query is required.')
+    const key = ctx.getSecret?.(WEB_SEARCH_KEY_ID)
+    if (!key) {
+      throw new Error('No web-search API key set. Add a Tavily API key in Settings to enable web_search.')
+    }
+    return tavilySearch(query, key, { signal: ctx.signal, maxResults: num(args, 'max_results') })
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -479,6 +509,7 @@ export const TOOLS: ToolDef[] = [
   readShellOutputTool,
   killShellTool,
   webFetch,
+  webSearch,
   todoWrite
 ]
 
