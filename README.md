@@ -34,6 +34,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.
+- **Rich transcript.** Replies render as full **Markdown** — headings, lists,
+  tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
+  activity collapses into a compact, grouped list (one tidy row per call,
+  expandable for output and diffs) instead of a wall of cards.
 - **Sandboxed execution.** Shell commands run under the macOS **Seatbelt**
   sandbox (`sandbox-exec`), confined to the project directory: writes outside the
   project and (by default) network access are blocked.
