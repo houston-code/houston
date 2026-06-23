@@ -27,6 +27,7 @@ import { runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills } from './skills'
 import { buildCapabilities } from './capabilities'
+import { gitContext } from './git'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -141,12 +142,14 @@ export async function startRun(
     const skills = await loadSkills(workspace)
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(agents, skills)
+    const gitStatus = await gitContext(workspace)
     const system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
       rules.text,
       planMode,
-      capabilities
+      capabilities,
+      gitStatus
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     const mcpToolDefs = await getMcpToolDefs(settings.mcpServers)

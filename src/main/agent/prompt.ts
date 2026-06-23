@@ -6,7 +6,8 @@ export function buildSystemPrompt(
   extra?: string,
   rules?: string,
   planMode?: boolean,
-  capabilities?: string
+  capabilities?: string,
+  gitStatus?: string
 ): string {
   const base = `You are Houston, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
 
@@ -36,6 +37,10 @@ Guidelines:
 - If a request is ambiguous or risky, ask before acting.`
 
   const sections = [base]
+
+  if (gitStatus && gitStatus.trim()) {
+    sections.push(gitStatus.trim())
+  }
 
   if (planMode) {
     sections.push(
