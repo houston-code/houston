@@ -362,6 +362,9 @@ export async function startRun(
       onMessages?.(messages)
 
       if (toolCalls.length === 0) {
+        // The model's reply was cut off at its output limit — say so rather than
+        // presenting a truncated answer as complete.
+        if (stopReason === 'max_tokens') emit({ type: 'limit', reason: 'max-output' })
         emit({ type: 'done', stopReason })
         return
       }
@@ -526,6 +529,9 @@ export async function startRun(
       }
     }
 
+    // Fell off the end of the iteration budget — the agent stopped mid-task rather
+    // than finishing. Signal it instead of emitting a normal "done".
+    emit({ type: 'limit', reason: 'max-steps' })
     emit({ type: 'done', stopReason: 'end_turn' })
   } finally {
     runs.delete(runId)
