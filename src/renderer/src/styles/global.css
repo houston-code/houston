@@ -550,6 +550,43 @@ pre.diff {
 .composer__btn {
   height: 44px;
 }
+.composer__field {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
+/* ---- @-mention autocomplete ---- */
+.mention-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin: 0 0 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  list-style: none;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  z-index: 50;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.mention-item {
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mention-item--active,
+.mention-item:hover {
+  background: var(--bg-hover);
+}
 
 /* ---- Settings modal ---- */
 .modal-backdrop {
