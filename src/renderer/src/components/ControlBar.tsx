@@ -1,6 +1,6 @@
 import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
 import type { ReasoningEffort } from '@shared/agent'
-import { formatTokens, type SessionUsage } from '@shared/usage'
+import { contextPercent, contextWindowFor, formatTokens, type SessionUsage } from '@shared/usage'
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/')
@@ -49,6 +49,10 @@ export function ControlBar({
   const provider = settings.providers.find((p) => p.id === selected?.providerId)
   const needsKey = provider?.requiresKey && !provider.hasKey
   const value = selected ? `${selected.providerId}::${selected.model}` : ''
+
+  const ctxWindow = selected ? contextWindowFor(selected.model) : null
+  const pct = usage ? contextPercent(usage.context, ctxWindow) : null
+  const meterClass = pct === null ? '' : pct >= 95 ? ' usage__fill--danger' : pct >= 80 ? ' usage__fill--warn' : ''
 
   return (
     <div className="control-bar">
@@ -125,10 +129,25 @@ export function ControlBar({
 
       {usage && (usage.context > 0 || usage.output > 0) && (
         <span
-          className="control-bar__usage"
-          title="Context tokens (last turn) · output tokens this session"
+          className="usage"
+          title={
+            (ctxWindow
+              ? `Context: ${usage.context.toLocaleString()} / ${ctxWindow.toLocaleString()} tokens (${pct}%)`
+              : `Context: ${usage.context.toLocaleString()} tokens`) +
+            `\nOutput this conversation: ${usage.output.toLocaleString()} tokens`
+          }
         >
-          🧮 {formatTokens(usage.context)} ctx · {formatTokens(usage.output)} out
+          {pct !== null && (
+            <span className="usage__meter">
+              <span className={`usage__fill${meterClass}`} style={{ width: `${pct}%` }} />
+            </span>
+          )}
+          <span className="usage__text">
+            {pct !== null
+              ? `${formatTokens(usage.context)}/${formatTokens(ctxWindow!)} · ${pct}%`
+              : `${formatTokens(usage.context)} ctx`}{' '}
+            · {formatTokens(usage.output)} out
+          </span>
         </span>
       )}
     </div>

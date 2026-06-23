@@ -108,8 +108,17 @@ export interface ConversationMeta {
   groupId?: string
 }
 
+/** Token usage persisted with a conversation so it survives reloads/restarts. */
+export interface ConversationUsage {
+  /** Input tokens of the most recent turn — i.e. the current context size. */
+  inputTokens: number
+  /** Output tokens summed across every turn ever run in this conversation. */
+  outputTokens: number
+}
+
 export interface Conversation extends ConversationMeta {
   messages: ChatMessage[]
+  usage?: ConversationUsage
 }
 
 /** Internal input to the agent loop. */
