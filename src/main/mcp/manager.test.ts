@@ -3,7 +3,13 @@ import { EventEmitter } from 'node:events'
 import type { McpServerConfig } from '@shared/types'
 import { mcpToolName } from '@shared/mcp'
 import { McpClient, type SpawnFn } from './client'
-import { _setMcpClientFactory, disconnectAllMcp, getMcpToolDefs } from './manager'
+import { McpHttpClient, type FetchFn } from './http-client'
+import {
+  _setMcpClientFactory,
+  _setMcpHttpClientFactory,
+  disconnectAllMcp,
+  getMcpToolDefs
+} from './manager'
 
 /** A fake stdio server exposing one tool — a fresh child per spawn call. */
 function okSpawn(toolName = 'echo'): SpawnFn {
@@ -59,9 +65,20 @@ const cfg = (over: Partial<McpServerConfig> = {}): McpServerConfig => ({
   ...over
 })
 
+/** A fake HTTP MCP server exposing one tool. */
+function okHttpFetch(toolName = 'remote'): FetchFn {
+  return async (_url, init) => {
+    const req = JSON.parse(init.body as string) as { id?: number; method: string }
+    const result = req.method === 'tools/list' ? { tools: [{ name: toolName }] } : {}
+    const body = req.id === undefined ? '' : JSON.stringify({ jsonrpc: '2.0', id: req.id, result })
+    return new Response(body, { status: 200, headers: new Headers({ 'content-type': 'application/json' }) })
+  }
+}
+
 afterEach(() => {
   disconnectAllMcp()
   _setMcpClientFactory(null)
+  _setMcpHttpClientFactory(null)
 })
 
 describe('mcp manager', () => {
@@ -106,5 +123,20 @@ describe('mcp manager', () => {
   it('returns [] when no servers are configured', async () => {
     expect(await getMcpToolDefs(undefined)).toEqual([])
     expect(await getMcpToolDefs([])).toEqual([])
+  })
+
+  it('connects an HTTP server (transport: http) and namespaces its tools', async () => {
+    _setMcpHttpClientFactory(() => new McpHttpClient(okHttpFetch('remote')))
+    const defs = await getMcpToolDefs([
+      cfg({ id: 'web', transport: 'http', command: '', url: 'https://x/mcp' })
+    ])
+    expect(defs.map((d) => d.schema.name)).toEqual([mcpToolName('web', 'remote')])
+  })
+
+  it('infers the HTTP transport from a url when no command is set', async () => {
+    _setMcpHttpClientFactory(() => new McpHttpClient(okHttpFetch()))
+    const defs = await getMcpToolDefs([cfg({ id: 'web', command: '', url: 'https://x/mcp' })])
+    expect(defs).toHaveLength(1)
+    expect(defs[0].schema.name).toBe(mcpToolName('web', 'remote'))
   })
 })

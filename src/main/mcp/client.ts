@@ -19,6 +19,18 @@ export interface McpToolInfo {
   inputSchema?: Record<string, unknown>
 }
 
+/**
+ * The transport-agnostic surface the manager uses. Implemented by McpClient
+ * (stdio) and McpHttpClient (streamable HTTP) so the manager can treat them
+ * uniformly once connected.
+ */
+export interface McpConnection {
+  readonly tools: McpToolInfo[]
+  readonly isClosed: boolean
+  callTool(name: string, args: Record<string, unknown>): Promise<string>
+  close(): void
+}
+
 interface Pending {
   resolve: (v: unknown) => void
   reject: (e: Error) => void

@@ -44,19 +44,26 @@ export interface ProviderConfig {
 export type ApprovalPolicy = 'plan' | 'ask' | 'auto-edit' | 'full-auto'
 
 /**
- * An MCP (Model Context Protocol) server Houston connects to over stdio. Its
- * tools are exposed to the agent namespaced as `mcp__<id>__<tool>`. The command
- * is user-configured and trusted; its tool calls still require approval.
+ * An MCP (Model Context Protocol) server Houston connects to — either a local
+ * process over stdio, or a remote endpoint over streamable HTTP. Its tools are
+ * exposed to the agent namespaced as `mcp__<id>__<tool>`. The server is
+ * user-configured and trusted; its tool calls still require approval.
  */
 export interface McpServerConfig {
   /** Stable id, [\w-]+, used to namespace the server's tools. */
   id: string
   /** Display name (optional). */
   name?: string
-  /** Executable to spawn (e.g. "npx"). */
+  /** Transport: a spawned local process ("stdio", default) or a remote HTTP endpoint. */
+  transport?: 'stdio' | 'http'
+  /** Executable to spawn (e.g. "npx"). stdio transport only. */
   command: string
-  /** Arguments (e.g. ["-y", "@modelcontextprotocol/server-filesystem", "."]). */
+  /** Arguments (e.g. ["-y", "@modelcontextprotocol/server-filesystem", "."]). stdio only. */
   args?: string[]
+  /** Endpoint URL for the streamable-HTTP transport (e.g. "https://host/mcp"). http only. */
+  url?: string
+  /** Extra HTTP headers to send (e.g. an Authorization token). http only. */
+  headers?: Record<string, string>
   enabled: boolean
 }
 
