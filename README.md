@@ -21,6 +21,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Web search.** With a Tavily API key (set in Settings → *Web search*), the
   agent can `web_search` the web for current information. Like `web_fetch`, it
   requires approval since it leaves the machine.
+- **@-mention files.** Type `@` in the composer to fuzzy-search project files and
+  drop a path into your message — no need to paste or describe where things live.
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.

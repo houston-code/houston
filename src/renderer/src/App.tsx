@@ -215,7 +215,13 @@ export default function App(): JSX.Element {
           <Transcript items={chat.items} onApprove={chat.approve} />
         )}
 
-        <Composer disabled={!canChat} running={chat.running} onSend={onSend} onCancel={chat.cancel} />
+        <Composer
+          disabled={!canChat}
+          running={chat.running}
+          workspace={workspace}
+          onSend={onSend}
+          onCancel={chat.cancel}
+        />
       </div>
 
       {settingsOpen && (

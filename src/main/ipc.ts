@@ -8,6 +8,8 @@ import { getSettings, saveSettings, rememberWorkspace, getProvider } from './sto
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
 import { startRun, cancelRun, resolveApproval } from './agent/loop'
+import { findFiles } from './agent/mentions'
+import { realpathSync } from 'node:fs'
 import {
   listConversations,
   getConversation,
@@ -33,6 +35,22 @@ export function registerIpc(): void {
     rememberWorkspace(dir)
     return dir
   })
+
+  // Fuzzy file search for the composer's @-mention autocomplete. Confined to the
+  // workspace (realpath'd, like the agent loop) so it can't list outside it.
+  ipcMain.handle(
+    IPC.workspaceListFiles,
+    async (_event, workspace: string, query: string): Promise<string[]> => {
+      if (!workspace) return []
+      let root: string
+      try {
+        root = realpathSync(workspace)
+      } catch {
+        return []
+      }
+      return findFiles(root, typeof query === 'string' ? query : '')
+    }
+  )
 
   ipcMain.handle(IPC.settingsGet, () => getSettings())
 
