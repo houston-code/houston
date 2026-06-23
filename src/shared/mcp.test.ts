@@ -4,7 +4,8 @@ import {
   parseMcpToolName,
   isMcpToolName,
   sanitizeServerId,
-  flattenMcpContent
+  flattenMcpContent,
+  parseHeaderLines
 } from './mcp'
 
 describe('mcp tool naming', () => {
@@ -45,5 +46,22 @@ describe('flattenMcpContent', () => {
     expect(flattenMcpContent('raw')).toBe('raw')
     expect(flattenMcpContent(undefined)).toBe('')
     expect(flattenMcpContent(42)).toBe('')
+  })
+})
+
+describe('parseHeaderLines', () => {
+  it('parses "Name: value" lines into a map', () => {
+    expect(parseHeaderLines('Authorization: Bearer t\nX-Env: prod')).toEqual({
+      Authorization: 'Bearer t',
+      'X-Env': 'prod'
+    })
+  })
+
+  it('keeps colons in the value and trims whitespace', () => {
+    expect(parseHeaderLines('  X-Url :  https://a/b:8080 ')).toEqual({ 'X-Url': 'https://a/b:8080' })
+  })
+
+  it('skips blank and malformed lines', () => {
+    expect(parseHeaderLines('\nnotaheader\n: noKey\nA: 1')).toEqual({ A: '1' })
   })
 })

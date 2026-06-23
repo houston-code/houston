@@ -40,6 +40,21 @@ export function sanitizeServerId(id: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
+/**
+ * Parse a textarea of "Name: value" lines into an HTTP headers map. Blank lines
+ * and lines without a colon are skipped; keys/values are trimmed.
+ */
+export function parseHeaderLines(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const idx = line.indexOf(':')
+    if (idx <= 0) continue
+    const key = line.slice(0, idx).trim()
+    if (key) out[key] = line.slice(idx + 1).trim()
+  }
+  return out
+}
+
 interface ContentBlock {
   type?: string
   text?: string

@@ -50,11 +50,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   body) — the main agent can dispatch it by name. Add a `.houston/skills/<name>/SKILL.md`
   to register a skill: its description is surfaced to the agent, which reads the
   full instructions on demand. Same shape as Claude Code's subagents and skills.
-- **MCP servers.** Connect Model Context Protocol servers (stdio) in Settings;
-  their tools are offered to the agent namespaced as `mcp__<id>__<tool>` and
-  always require approval. Point Houston at the filesystem, git, or any other MCP
-  server to extend what the agent can do — the same extensibility model as Claude
-  Code.
+- **MCP servers.** Connect Model Context Protocol servers in Settings — a local
+  **stdio** process or a remote **HTTP** endpoint (streamable HTTP, with optional
+  auth headers). Their tools are offered to the agent namespaced as
+  `mcp__<id>__<tool>` and always require approval. Point Houston at the
+  filesystem, git, a hosted MCP service, or any other server to extend what the
+  agent can do — the same extensibility model as Claude Code.
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.

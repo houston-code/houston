@@ -7,7 +7,7 @@ import type {
   PermissionRule,
   ProviderConfig
 } from '@shared/types'
-import { sanitizeServerId } from '@shared/mcp'
+import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 
@@ -406,46 +406,81 @@ export function SettingsModal({
 
           <h3>MCP servers</h3>
           <p className="field__hint">
-            Connect Model Context Protocol servers (stdio). Their tools are offered to the agent as{' '}
-            <code>mcp__&lt;id&gt;__&lt;tool&gt;</code> and always require approval. The command is run
+            Connect Model Context Protocol servers — a local <strong>stdio</strong> process or a remote{' '}
+            <strong>HTTP</strong> endpoint. Their tools are offered to the agent as{' '}
+            <code>mcp__&lt;id&gt;__&lt;tool&gt;</code> and always require approval. stdio commands run
             as you (not sandboxed), so only add servers you trust.
           </p>
-          {servers.map((sv, i) => (
-            <div className="mcp-server" key={i}>
-              <div className="mcp-server__row">
-                <input
-                  className="rule__tool"
-                  placeholder="id"
-                  value={sv.id}
-                  onChange={(e) => patchServer(i, { id: sanitizeServerId(e.target.value) })}
-                />
-                <input
-                  className="rule__match"
-                  placeholder="command (e.g. npx)"
-                  value={sv.command}
-                  onChange={(e) => patchServer(i, { command: e.target.value })}
-                />
-                <label className="mcp-server__enabled" title="Enabled">
+          {servers.map((sv, i) => {
+            const transport = sv.transport ?? (sv.url && !sv.command ? 'http' : 'stdio')
+            return (
+              <div className="mcp-server" key={i}>
+                <div className="mcp-server__row">
                   <input
-                    type="checkbox"
-                    checked={sv.enabled}
-                    onChange={(e) => patchServer(i, { enabled: e.target.checked })}
+                    className="rule__tool"
+                    placeholder="id"
+                    value={sv.id}
+                    onChange={(e) => patchServer(i, { id: sanitizeServerId(e.target.value) })}
                   />
-                </label>
-                <button className="btn btn--sm btn--danger" onClick={() => removeServer(i)}>
-                  ✕
-                </button>
+                  <select
+                    value={transport}
+                    onChange={(e) =>
+                      patchServer(i, { transport: e.target.value as McpServerConfig['transport'] })
+                    }
+                  >
+                    <option value="stdio">stdio</option>
+                    <option value="http">http</option>
+                  </select>
+                  <label className="mcp-server__enabled" title="Enabled">
+                    <input
+                      type="checkbox"
+                      checked={sv.enabled}
+                      onChange={(e) => patchServer(i, { enabled: e.target.checked })}
+                    />
+                  </label>
+                  <button className="btn btn--sm btn--danger" onClick={() => removeServer(i)}>
+                    ✕
+                  </button>
+                </div>
+                {transport === 'http' ? (
+                  <>
+                    <input
+                      className="mcp-server__args"
+                      placeholder="url (e.g. https://example.com/mcp)"
+                      value={sv.url ?? ''}
+                      onChange={(e) => patchServer(i, { url: e.target.value })}
+                    />
+                    <textarea
+                      className="mcp-server__args"
+                      placeholder="headers, one per line (e.g. Authorization: Bearer TOKEN)"
+                      rows={2}
+                      value={Object.entries(sv.headers ?? {})
+                        .map(([k, v]) => `${k}: ${v}`)
+                        .join('\n')}
+                      onChange={(e) => patchServer(i, { headers: parseHeaderLines(e.target.value) })}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <input
+                      className="mcp-server__args"
+                      placeholder="command (e.g. npx)"
+                      value={sv.command}
+                      onChange={(e) => patchServer(i, { command: e.target.value })}
+                    />
+                    <input
+                      className="mcp-server__args"
+                      placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
+                      value={(sv.args ?? []).join(' ')}
+                      onChange={(e) =>
+                        patchServer(i, { args: e.target.value.split(/\s+/).filter(Boolean) })
+                      }
+                    />
+                  </>
+                )}
               </div>
-              <input
-                className="mcp-server__args"
-                placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
-                value={(sv.args ?? []).join(' ')}
-                onChange={(e) =>
-                  patchServer(i, { args: e.target.value.split(/\s+/).filter(Boolean) })
-                }
-              />
-            </div>
-          ))}
+            )
+          })}
           <button className="btn btn--sm" onClick={addServer}>
             + Add MCP server
           </button>
