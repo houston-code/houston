@@ -2,8 +2,15 @@ import { ipcMain, dialog, app, BrowserWindow } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent, AgentSendRequest, ConversationMeta, ToolApprovalDecision } from '@shared/agent'
+import type {
+  AgentEvent,
+  AgentSendRequest,
+  ChatMessage,
+  ConversationMeta,
+  ToolApprovalDecision
+} from '@shared/agent'
 import { validateImportedConversation, resolveImportWorkspace } from '@shared/conversation-io'
+import { sanitizeAttachments } from '@shared/images'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
@@ -150,7 +157,13 @@ export function registerIpc(): void {
       return
     }
 
-    const messages = [...conv.messages, { role: 'user' as const, content: req.userText }]
+    const images = sanitizeAttachments(req.images)
+    const userMessage: ChatMessage = {
+      role: 'user',
+      content: req.userText,
+      ...(images.length ? { images } : {})
+    }
+    const messages = [...conv.messages, userMessage]
     setMessages(conv.id, messages)
     updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
 

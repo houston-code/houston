@@ -32,6 +32,8 @@ export interface ReasoningBlock {
 export interface ChatMessage {
   role: ChatRole
   content: string
+  /** Present on `user` turns with image attachments (drag-dropped/pasted). */
+  images?: ImageAttachment[]
   /** Present on assistant turns that call tools. */
   toolCalls?: ToolCall[]
   /** Present on assistant turns produced with reasoning enabled. */
@@ -81,6 +83,7 @@ export interface Provider {
 // ---- Agent run protocol (main <-> renderer) ----
 
 import type { ApprovalPolicy } from './types'
+import type { ImageAttachment } from './images'
 
 export interface ConversationMeta {
   id: string
@@ -111,6 +114,7 @@ export interface AgentSendRequest {
   runId: string
   conversationId: string
   userText: string
+  images?: ImageAttachment[]
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy

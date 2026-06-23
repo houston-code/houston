@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
 import type { AgentEvent, ToolApprovalDecision } from '@shared/agent'
+import type { ImageAttachment } from '@shared/images'
 import type { SessionUsage } from '@shared/usage'
 import { reduceEvent, type DisplayItem } from '../lib/items'
 
 interface SendParams {
   conversationId: string
   userText: string
+  images?: ImageAttachment[]
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy
@@ -69,13 +71,22 @@ export function useChat(): ChatController {
   const send = useCallback(async (params: SendParams) => {
     const runId = crypto.randomUUID()
     runIdRef.current = runId
-    setItems((prev) => [...prev, { kind: 'user', id: `u-${runId}`, text: params.userText }])
+    setItems((prev) => [
+      ...prev,
+      {
+        kind: 'user',
+        id: `u-${runId}`,
+        text: params.userText,
+        ...(params.images?.length ? { images: params.images } : {})
+      }
+    ])
     setRunning(true)
     setCheckpoint(null)
     await window.api.startAgent({
       runId,
       conversationId: params.conversationId,
       userText: params.userText,
+      images: params.images,
       providerId: params.providerId,
       model: params.model,
       approvalPolicy: params.approvalPolicy

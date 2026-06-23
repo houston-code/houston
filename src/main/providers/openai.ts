@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
+import { imageDataUrl } from '@shared/images'
 import { openaiReasoningEffort } from './reasoning'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
@@ -11,7 +12,16 @@ function toOpenAIMessages(system: string | undefined, messages: ChatMessage[]): 
 
   for (const m of messages) {
     if (m.role === 'user') {
-      out.push({ role: 'user', content: m.content })
+      if (m.images?.length) {
+        const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = []
+        if (m.content) parts.push({ type: 'text', text: m.content })
+        for (const img of m.images) {
+          parts.push({ type: 'image_url', image_url: { url: imageDataUrl(img) } })
+        }
+        out.push({ role: 'user', content: parts })
+      } else {
+        out.push({ role: 'user', content: m.content })
+      }
     } else if (m.role === 'assistant') {
       const msg: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
         role: 'assistant',

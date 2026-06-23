@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
+import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import type { DisplayItem } from '../lib/items'
 import { groupItems } from '../lib/toolDisplay'
 import { copyText } from '../lib/clipboard'
@@ -7,10 +8,19 @@ import { isNearBottom } from '../lib/scroll'
 import { ToolGroup } from './ToolGroup'
 import { Markdown } from './Markdown'
 
-function UserBubble({ text }: { text: string }): JSX.Element {
+function UserBubble({ text, images }: { text: string; images?: ImageAttachment[] }): JSX.Element {
   return (
     <div className="msg msg--user">
-      <div className="msg__body">{text}</div>
+      <div className="msg__body">
+        {images && images.length > 0 && (
+          <div className="bubble__images">
+            {images.map((img, i) => (
+              <img key={i} className="bubble__image" src={imageDataUrl(img)} alt="attachment" />
+            ))}
+          </div>
+        )}
+        {text}
+      </div>
     </div>
   )
 }
@@ -101,7 +111,7 @@ export function Transcript({
           {nodes.map((node) => {
             switch (node.kind) {
               case 'user':
-                return <UserBubble key={node.id} text={node.item.text} />
+                return <UserBubble key={node.id} text={node.item.text} images={node.item.images} />
               case 'assistant':
                 return (
                   <AssistantMessage

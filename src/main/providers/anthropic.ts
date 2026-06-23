@@ -57,7 +57,19 @@ function toAnthropicMessages(
     mergingToolResults = false
 
     if (m.role === 'user') {
-      out.push({ role: 'user', content: m.content })
+      if (m.images?.length) {
+        const blocks: unknown[] = []
+        if (m.content) blocks.push({ type: 'text', text: m.content })
+        for (const img of m.images) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.data }
+          })
+        }
+        out.push({ role: 'user', content: blocks as Anthropic.MessageParam['content'] })
+      } else {
+        out.push({ role: 'user', content: m.content })
+      }
     } else if (m.role === 'assistant') {
       // Thinking blocks must come first, before text and tool_use.
       const content: unknown[] = [...thinkingBlocks(m, thinkingEnabled)]

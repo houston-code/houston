@@ -15,6 +15,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Any model, your keys.** Anthropic (Claude), OpenAI (GPT), Google (Gemini),
   any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Add
   custom endpoints and fetch live model lists in Settings.
+- **Image attachments.** Drag-drop or paste images (PNG/JPEG/GIF/WebP) into the
+  composer to send them to a vision-capable model — screenshots, diagrams,
+  mockups. Thumbnails show inline and the images persist with the conversation.
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
   `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`, `web_search`, and
   `todo_write` to actually do the work — not just describe it.

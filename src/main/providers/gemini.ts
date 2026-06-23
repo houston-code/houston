@@ -8,7 +8,13 @@ function toGeminiContents(messages: ChatMessage[]): Content[] {
   const out: Content[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      out.push({ role: 'user', parts: [{ text: m.content }] })
+      const parts: Content['parts'] = []
+      if (m.content) parts!.push({ text: m.content })
+      for (const img of m.images ?? []) {
+        parts!.push({ inlineData: { mimeType: img.mediaType, data: img.data } })
+      }
+      if (!parts!.length) parts!.push({ text: '' }) // Gemini rejects an empty parts array
+      out.push({ role: 'user', parts })
     } else if (m.role === 'assistant') {
       const parts: Content['parts'] = []
       if (m.content) parts!.push({ text: m.content })
