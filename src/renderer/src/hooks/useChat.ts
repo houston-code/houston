@@ -18,6 +18,8 @@ interface SendParams {
 export interface Checkpoint {
   runId: string
   files: number
+  /** True once reverted — the changes can now be re-applied (redone). */
+  reverted: boolean
 }
 
 export interface ChatController {
@@ -32,6 +34,8 @@ export interface ChatController {
   approve: (callId: string, decision: ToolApprovalDecision) => void
   /** Revert the current checkpoint's file changes. Returns the count restored. */
   revertCheckpoint: () => Promise<number>
+  /** Re-apply a reverted checkpoint's file changes. Returns the count re-applied. */
+  reapplyCheckpoint: () => Promise<number>
   /** Replace the transcript (e.g. when switching conversations). */
   reset: (items: DisplayItem[]) => void
 }
@@ -58,7 +62,11 @@ export function useChat(): ChatController {
       // Track successful file writes so the turn's changes can be reverted.
       if (e.type === 'tool_result' && e.ok && WRITE_TOOLS.has(e.name)) {
         const runId = e.runId
-        setCheckpoint((prev) => ({ runId, files: (prev?.runId === runId ? prev.files : 0) + 1 }))
+        setCheckpoint((prev) => ({
+          runId,
+          files: (prev?.runId === runId ? prev.files : 0) + 1,
+          reverted: false
+        }))
       }
       setItems((prev) => reduceEvent(prev, e))
       if (e.type === 'done' || e.type === 'error') {
@@ -104,8 +112,16 @@ export function useChat(): ChatController {
   const revertCheckpoint = useCallback(async (): Promise<number> => {
     if (!checkpoint) return 0
     const restored = await window.api.restoreCheckpoint(checkpoint.runId)
-    setCheckpoint(null)
+    // Keep the checkpoint (now reverted) so the change can be redone.
+    setCheckpoint({ ...checkpoint, reverted: true })
     return restored
+  }, [checkpoint])
+
+  const reapplyCheckpoint = useCallback(async (): Promise<number> => {
+    if (!checkpoint) return 0
+    const reapplied = await window.api.reapplyCheckpoint(checkpoint.runId)
+    setCheckpoint({ ...checkpoint, reverted: false })
+    return reapplied
   }, [checkpoint])
 
   const reset = useCallback((next: DisplayItem[]) => {
@@ -116,5 +132,16 @@ export function useChat(): ChatController {
     runIdRef.current = null
   }, [])
 
-  return { items, running, usage, checkpoint, send, cancel, approve, revertCheckpoint, reset }
+  return {
+    items,
+    running,
+    usage,
+    checkpoint,
+    send,
+    cancel,
+    approve,
+    revertCheckpoint,
+    reapplyCheckpoint,
+    reset
+  }
 }

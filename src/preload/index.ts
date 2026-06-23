@@ -61,6 +61,9 @@ const api = {
   /** Revert the file changes a run made. Returns the number of files restored. */
   restoreCheckpoint: (runId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.checkpointRestore, runId),
+  /** Re-apply a reverted run's file changes. Returns the number of files re-applied. */
+  reapplyCheckpoint: (runId: string): Promise<number> =>
+    ipcRenderer.invoke(IPC.checkpointReapply, runId),
   /** Subscribe to streamed agent events. Returns an unsubscribe function. */
   onAgentEvent: (cb: (e: AgentEvent) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, payload: AgentEvent): void => cb(payload)
