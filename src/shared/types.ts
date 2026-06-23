@@ -44,6 +44,18 @@ export interface ProviderConfig {
 export type ApprovalPolicy = 'plan' | 'ask' | 'auto-edit' | 'full-auto'
 
 /**
+ * A tool-use hook: a shell command run before (PreToolUse) or after (PostToolUse)
+ * a tool call. PreToolUse can block the call by exiting non-zero; PostToolUse
+ * output is appended to the tool result. `matcher` is a glob over the tool name
+ * (empty or `*` = all tools).
+ */
+export interface Hook {
+  event: 'PreToolUse' | 'PostToolUse'
+  matcher: string
+  command: string
+}
+
+/**
  * A fine-grained permission rule, consulted before the approval policy. Matches a
  * tool (by name, or `*` for any) and a glob over the call's subject (shell
  * command, path, URL, or query). First match wins.
@@ -80,4 +92,6 @@ export interface AppSettings {
   reasoningEffort?: ReasoningEffort
   /** Fine-grained permission rules, consulted before the approval policy. */
   permissionRules?: PermissionRule[]
+  /** Shell hooks run before/after tool calls. */
+  hooks?: Hook[]
 }

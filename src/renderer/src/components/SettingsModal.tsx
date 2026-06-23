@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { AppSettings, ModelOption, PermissionRule, ProviderConfig } from '@shared/types'
+import type { AppSettings, Hook, ModelOption, PermissionRule, ProviderConfig } from '@shared/types'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 
@@ -60,6 +60,14 @@ export function SettingsModal({
   const patchRule = (i: number, patch: Partial<PermissionRule>): void =>
     setRules(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const removeRule = (i: number): void => setRules(rules.filter((_, idx) => idx !== i))
+
+  const hooks = settings.hooks ?? []
+  const setHooks = (next: Hook[]): void => setSettings((s) => ({ ...s, hooks: next }))
+  const addHook = (): void =>
+    setHooks([...hooks, { event: 'PostToolUse', matcher: 'edit_file', command: '' }])
+  const patchHook = (i: number, patch: Partial<Hook>): void =>
+    setHooks(hooks.map((h, idx) => (idx === i ? { ...h, ...patch } : h)))
+  const removeHook = (i: number): void => setHooks(hooks.filter((_, idx) => idx !== i))
 
   // Persist the current (non-secret) edits, then run a key/model action that returns fresh settings.
   const persistThen = async (action: () => Promise<AppSettings>): Promise<void> => {
@@ -325,6 +333,45 @@ export function SettingsModal({
           ))}
           <button className="btn btn--sm" onClick={addRule}>
             + Add rule
+          </button>
+
+          <h3>Hooks</h3>
+          <p className="field__hint">
+            Shell commands run around tool calls (sandboxed to the project, no network).{' '}
+            <strong>PreToolUse</strong> runs before a tool — a non-zero exit blocks it;{' '}
+            <strong>PostToolUse</strong> runs after, and its output is shown to the agent (e.g. a
+            formatter or test run). The call&apos;s context is in <code>$HOUSTON_TOOL_NAME</code> /{' '}
+            <code>$HOUSTON_TOOL_INPUT</code>.
+          </p>
+          {hooks.map((h, i) => (
+            <div className="rule" key={i}>
+              <select
+                value={h.event}
+                onChange={(e) => patchHook(i, { event: e.target.value as Hook['event'] })}
+              >
+                <option value="PreToolUse">Pre</option>
+                <option value="PostToolUse">Post</option>
+              </select>
+              <input
+                list="tool-names"
+                className="rule__tool"
+                placeholder="tool (or *)"
+                value={h.matcher}
+                onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
+              />
+              <input
+                className="rule__match"
+                placeholder="shell command, e.g. npm run format"
+                value={h.command}
+                onChange={(e) => patchHook(i, { command: e.target.value })}
+              />
+              <button className="btn btn--sm btn--danger" onClick={() => removeHook(i)}>
+                ✕
+              </button>
+            </div>
+          ))}
+          <button className="btn btn--sm" onClick={addHook}>
+            + Add hook
           </button>
         </div>
 
