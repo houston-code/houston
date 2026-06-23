@@ -81,6 +81,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   after the agent writes it, so when a turn edits files a **Revert** button appears —
   one click restores everything that turn changed (and deletes files it created).
   Changed your mind? **Redo** puts the changes back.
+- **Keyboard shortcuts.** ⌘N new chat, ⌘, settings, and Esc to stop a running
+  turn or close the settings dialog.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
   *Appearance*; *System* follows your macOS appearance and switches live.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
