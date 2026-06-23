@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai'
 import type { Content } from '@google/genai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import { geminiThinkingBudget } from './reasoning'
 
 function toGeminiContents(messages: ChatMessage[]): Content[] {
   const out: Content[] = []
@@ -39,6 +40,10 @@ export function createGeminiProvider(apiKey: string): Provider {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
       const config: Record<string, unknown> = {}
       if (req.system) config.systemInstruction = req.system
+      const thinkingBudget = geminiThinkingBudget(req.model, req.reasoningEffort)
+      if (thinkingBudget !== undefined) {
+        config.thinkingConfig = { thinkingBudget, includeThoughts: true }
+      }
       if (req.tools && req.tools.length) {
         config.tools = [
           {
@@ -68,20 +73,22 @@ export function createGeminiProvider(apiKey: string): Provider {
           inputTokens = usage.promptTokenCount
           outputTokens = usage.candidatesTokenCount
         }
-        const text = chunk.text
-        if (text) yield { type: 'text', text }
-        const calls = chunk.functionCalls
-        if (calls) {
-          for (const fc of calls) {
+        // Iterate parts so we can separate "thought" parts (reasoning) from the
+        // answer text — chunk.text would merge them.
+        const parts = chunk.candidates?.[0]?.content?.parts ?? []
+        for (const part of parts) {
+          if (part.functionCall) {
             sawToolCall = true
             yield {
               type: 'tool_call',
               call: {
-                id: fc.id || randomUUID(),
-                name: fc.name ?? '',
-                arguments: (fc.args as Record<string, unknown>) ?? {}
+                id: part.functionCall.id || randomUUID(),
+                name: part.functionCall.name ?? '',
+                arguments: (part.functionCall.args as Record<string, unknown>) ?? {}
               }
             }
+          } else if (part.text) {
+            yield part.thought ? { type: 'reasoning', text: part.text } : { type: 'text', text: part.text }
           }
         }
       }

@@ -4,14 +4,32 @@ import type { DisplayItem } from '../lib/items'
 import { isNearBottom } from '../lib/scroll'
 import { ToolCard } from './ToolCard'
 
-function Bubble({ role, text, streaming }: { role: 'user' | 'assistant'; text: string; streaming?: boolean }): JSX.Element {
+function Bubble({
+  role,
+  text,
+  streaming,
+  reasoning
+}: {
+  role: 'user' | 'assistant'
+  text: string
+  streaming?: boolean
+  reasoning?: string
+}): JSX.Element {
   return (
     <div className={`bubble bubble--${role}`}>
       <div className="bubble__role">{role === 'user' ? 'You' : 'Houston'}</div>
-      <div className="bubble__text">
-        {text}
-        {streaming && <span className="cursor">▋</span>}
-      </div>
+      {reasoning && (
+        <details className="reasoning" open={streaming && !text}>
+          <summary className="reasoning__summary">💭 Reasoning</summary>
+          <div className="reasoning__text">{reasoning}</div>
+        </details>
+      )}
+      {(text || !reasoning) && (
+        <div className="bubble__text">
+          {text}
+          {streaming && <span className="cursor">▋</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -49,7 +67,15 @@ export function Transcript({
           case 'user':
             return <Bubble key={item.id} role="user" text={item.text} />
           case 'assistant':
-            return <Bubble key={item.id} role="assistant" text={item.text} streaming={item.streaming} />
+            return (
+              <Bubble
+                key={item.id}
+                role="assistant"
+                text={item.text}
+                streaming={item.streaming}
+                reasoning={item.reasoning}
+              />
+            )
           case 'tool':
             return <ToolCard key={item.id} item={item} onApprove={onApprove} />
           case 'notice':
