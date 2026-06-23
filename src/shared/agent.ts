@@ -114,6 +114,8 @@ export interface ConversationUsage {
   inputTokens: number
   /** Output tokens summed across every turn ever run in this conversation. */
   outputTokens: number
+  /** Estimated cumulative USD cost across every turn (0 when the model has no known price). */
+  cost: number
 }
 
 export interface Conversation extends ConversationMeta {
@@ -161,7 +163,7 @@ export type AgentEvent =
   | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
   | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' }
-  | { runId: string; type: 'usage'; inputTokens: number; outputTokens: number }
+  | { runId: string; type: 'usage'; inputTokens: number; outputTokens: number; cost: number }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | { runId: string; type: 'error'; message: string }
 

@@ -64,7 +64,8 @@ export function useChat(): ChatController {
         // conversation's cumulative totals, so we set rather than sum.
         setUsage((prev) => ({
           context: e.inputTokens || prev?.context || 0,
-          output: e.outputTokens || prev?.output || 0
+          output: e.outputTokens || prev?.output || 0,
+          cost: e.cost || prev?.cost || 0
         }))
         return
       }

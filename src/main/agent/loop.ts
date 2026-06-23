@@ -12,6 +12,7 @@ import type {
 } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import { turnCostUsd } from '@shared/usage'
 import { getProvider, getSettings } from '../store'
 import { getKey } from '../secrets'
 import { createProvider } from '../providers'
@@ -362,7 +363,12 @@ export async function startRun(
       }
 
       if (turnInput || turnOutput) {
-        emit({ type: 'usage', inputTokens: turnInput, outputTokens: turnOutput })
+        emit({
+          type: 'usage',
+          inputTokens: turnInput,
+          outputTokens: turnOutput,
+          cost: turnCostUsd(req.model, turnInput, turnOutput)
+        })
       }
 
       messages.push({

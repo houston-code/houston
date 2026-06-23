@@ -163,14 +163,15 @@ function deriveTitle(messages: ChatMessage[]): string | null {
  */
 export function addUsage(
   id: string,
-  turn: { inputTokens: number; outputTokens: number }
+  turn: { inputTokens: number; outputTokens: number; cost: number }
 ): ConversationUsage | null {
   const conv = read(id)
   if (!conv) return null
-  const prev = conv.usage ?? { inputTokens: 0, outputTokens: 0 }
+  const prev = conv.usage ?? { inputTokens: 0, outputTokens: 0, cost: 0 }
   conv.usage = {
     inputTokens: turn.inputTokens || prev.inputTokens,
-    outputTokens: prev.outputTokens + (turn.outputTokens || 0)
+    outputTokens: prev.outputTokens + (turn.outputTokens || 0),
+    cost: (prev.cost ?? 0) + (turn.cost || 0)
   }
   write(conv)
   return conv.usage
