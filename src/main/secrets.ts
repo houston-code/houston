@@ -61,8 +61,20 @@ export function deleteKey(providerId: string): void {
   }
 }
 
-export function hasKey(providerId: string): boolean {
+/** True when *some* ciphertext is stored for this provider, decryptable or not. */
+export function hasStoredKey(providerId: string): boolean {
   return Boolean(load().keys[providerId])
+}
+
+/**
+ * True when a *usable* key is stored — ciphertext exists AND it decrypts with the
+ * current OS encryption key. A key that's present on disk but can no longer be
+ * unlocked (e.g. the Keychain item's access changed after an app re-sign/update)
+ * returns false, so the "key set" signal the UI and model selection rely on matches
+ * what an agent run can actually retrieve via `getKey`.
+ */
+export function hasKey(providerId: string): boolean {
+  return getKey(providerId) !== null
 }
 
 /** Main-process only. Returns the decrypted key, or null if none/undecryptable. */
