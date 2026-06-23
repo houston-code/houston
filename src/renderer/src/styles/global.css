@@ -1,31 +1,36 @@
+/* Default (dark) palette — "Graphite": flat near-black surfaces, hairline borders,
+   and a single electric-blue accent used sparingly. data-theme="dark" resolves here. */
 :root {
-  --bg: #0e0f12;
-  --bg-elevated: #16181d;
-  --bg-input: #1c1f26;
-  --bg-hover: #21242c;
-  --border: #2a2d36;
-  --text: #e6e8ec;
-  --text-dim: #9aa0ab;
-  --accent: #6ea8fe;
-  --accent-hover: #8bbcff;
-  --danger: #ff6b6b;
-  --ok: #4ade80;
-  --warn: #fbbf24;
+  --bg: #0a0a0b;
+  --bg-elevated: #131417;
+  --bg-input: #17181c;
+  --bg-hover: #1d1e23;
+  --bg-code: #08090b;
+  --border: #272930;
+  --text: #e8e9ec;
+  --text-dim: #8b8e96;
+  --accent: #4f8cff;
+  --accent-hover: #74a4ff;
+  --danger: #e0626b;
+  --ok: #43b884;
+  --warn: #d99a2b;
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
 }
 
-/* Light theme: applied when document.documentElement[data-theme="light"]. */
+/* Light palette — "Daylight": warm off-white surfaces, soft neutrals, indigo accent.
+   Applied when document.documentElement[data-theme="light"]. */
 :root[data-theme='light'] {
-  --bg: #ffffff;
-  --bg-elevated: #f6f7f9;
+  --bg: #faf9f6;
+  --bg-elevated: #f3f1ea;
   --bg-input: #ffffff;
-  --bg-hover: #eef0f3;
-  --border: #d9dde3;
-  --text: #1a1d22;
-  --text-dim: #6b7280;
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
+  --bg-hover: #ece9e1;
+  --bg-code: #f2f0e8;
+  --border: #e6e2d8;
+  --text: #2c2a26;
+  --text-dim: #6a655b;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
   --danger: #dc2626;
   --ok: #16a34a;
   --warn: #b45309;
@@ -810,7 +815,7 @@ h6.md-h {
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
-  background: #0a0b0e;
+  background: var(--bg-code);
 }
 .md-codeblock__bar {
   display: flex;
@@ -1124,7 +1129,7 @@ pre.diff {
 .notice--error {
   background: rgba(255, 107, 107, 0.12);
   border: 1px solid var(--danger);
-  color: #ffb4b4;
+  color: var(--danger);
 }
 .notice--info {
   color: var(--text-dim);
