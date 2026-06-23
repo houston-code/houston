@@ -21,6 +21,7 @@ import { loadCommands } from './agent/commands'
 import { realpathSync } from 'node:fs'
 import {
   listConversations,
+  searchConversations,
   getConversation,
   createConversation,
   forkConversation,
@@ -107,6 +108,7 @@ export function registerIpc(): void {
 
   // Conversations
   ipcMain.handle(IPC.conversationList, () => listConversations())
+  ipcMain.handle(IPC.conversationSearch, (_event, query: string) => searchConversations(query))
   ipcMain.handle(IPC.conversationGet, (_event, id: string) => getConversation(id))
   ipcMain.handle(
     IPC.conversationCreate,

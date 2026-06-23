@@ -125,6 +125,28 @@ export function deleteConversation(id: string): void {
   if (existsSync(path)) rmSync(path)
 }
 
+/** Whether a conversation matches a (lowercased) query in its title or any message text. Pure. */
+export function conversationMatches(conv: Conversation, queryLower: string): boolean {
+  if (conv.title.toLowerCase().includes(queryLower)) return true
+  return conv.messages.some((m) => m.content.toLowerCase().includes(queryLower))
+}
+
+/** Find conversations whose title or message content matches the query (newest first). */
+export function searchConversations(query: string): ConversationMeta[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return listConversations()
+  const files = readdirSync(dir()).filter((f) => f.endsWith('.json'))
+  const metas: ConversationMeta[] = []
+  for (const f of files) {
+    const conv = read(f.replace(/\.json$/, ''))
+    if (conv && conversationMatches(conv, q)) {
+      const { messages: _messages, ...meta } = conv
+      metas.push(meta)
+    }
+  }
+  return metas.sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
 /** Derive a title from the first user message. */
 function deriveTitle(messages: ChatMessage[]): string | null {
   const first = messages.find((m) => m.role === 'user')

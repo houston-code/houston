@@ -24,6 +24,7 @@ export const IPC = {
   settingsListModels: 'settings:listModels',
   // Conversations
   conversationList: 'conversation:list',
+  conversationSearch: 'conversation:search',
   conversationGet: 'conversation:get',
   conversationCreate: 'conversation:create',
   conversationFork: 'conversation:fork',

@@ -192,6 +192,21 @@ body {
   width: 100%;
   margin-bottom: 10px;
 }
+.sidebar__search {
+  width: 100%;
+  margin-bottom: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: var(--font);
+}
+.sidebar__search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .sidebar__list {
   flex: 1;
   min-height: 0;

@@ -42,6 +42,8 @@ export default function App(): JSX.Element {
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
+  const [search, setSearch] = useState('')
+  const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
   const chat = useChat()
 
   const refreshConversations = useCallback(async () => {
@@ -75,6 +77,30 @@ export default function App(): JSX.Element {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [theme])
+
+  // Debounced full-text search across conversations (title + message content).
+  useEffect(() => {
+    const q = search.trim()
+    if (!q) {
+      setMatchIds(null)
+      return
+    }
+    let cancelled = false
+    const t = setTimeout(() => {
+      void window.api.searchConversations(q).then((results) => {
+        if (!cancelled) setMatchIds(new Set(results.map((r) => r.id)))
+      })
+    }, 180)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [search])
+
+  const visibleConversations = useMemo(
+    () => (matchIds ? conversations.filter((c) => matchIds.has(c.id)) : conversations),
+    [conversations, matchIds]
+  )
 
   const currentConv = useMemo(
     () => conversations.find((c) => c.id === currentId) ?? null,
@@ -374,8 +400,10 @@ export default function App(): JSX.Element {
   return (
     <div className="app">
       <Sidebar
-        conversations={conversations}
-        groups={settings.chatGroups ?? []}
+        conversations={visibleConversations}
+        groups={search ? [] : settings.chatGroups ?? []}
+        search={search}
+        onSearch={setSearch}
         currentId={currentId}
         onSelect={selectConversation}
         onNew={onNewChat}

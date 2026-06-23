@@ -37,6 +37,8 @@ const api = {
 
   // Conversations
   listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),
+  searchConversations: (query: string): Promise<ConversationMeta[]> =>
+    ipcRenderer.invoke(IPC.conversationSearch, query),
   getConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationGet, id),
   createConversation: (input: {
