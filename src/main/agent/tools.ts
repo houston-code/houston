@@ -1,9 +1,17 @@
 import { promises as fs } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
-import type { JSONSchema, ToolSchema } from '@shared/agent'
+import type { DocumentAttachment, JSONSchema, ToolSchema } from '@shared/agent'
+import type { ImageAttachment } from '@shared/images'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
+import {
+  MAX_ATTACH_IMAGE_BYTES,
+  MAX_PDF_BYTES,
+  humanSize,
+  imageMediaTypeForPath,
+  isPdfPath
+} from './attachments'
 import { runSandboxed, spawnSandboxed } from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
 import { fetchUrlAsText } from './webfetch'
@@ -21,6 +29,10 @@ export interface ToolContext {
   getSecret?: (id: string) => string | null
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
   dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
+  /** Attach an image read by the agent to the tool result (injected by the loop). */
+  attachImage?: (img: ImageAttachment) => void
+  /** Attach a document (e.g. PDF) read by the agent to the tool result. */
+  attachDocument?: (doc: DocumentAttachment) => void
 }
 
 export interface ToolDef {
@@ -75,7 +87,7 @@ const readFile: ToolDef = {
   schema: {
     name: 'read_file',
     description:
-      'Read the contents of a text file within the project. Returns the file text. For large files, pass offset/limit (1-based line numbers) to read just a slice.',
+      'Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
@@ -92,7 +104,35 @@ const readFile: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const abs = resolveInWorkspace(ctx.workspace, str(args, 'path'))
+    const rel = str(args, 'path')
+    const abs = resolveInWorkspace(ctx.workspace, rel)
+
+    // Images and PDFs are binary — hand them to the model as attachments rather
+    // than returning garbled bytes as text.
+    const imageType = imageMediaTypeForPath(rel)
+    if (imageType) {
+      const buf = await fs.readFile(abs)
+      if (buf.byteLength > MAX_ATTACH_IMAGE_BYTES) {
+        return `[image: ${rel} (${humanSize(buf.byteLength)}) — too large to attach; limit is ${humanSize(MAX_ATTACH_IMAGE_BYTES)}]`
+      }
+      if (!ctx.attachImage) {
+        return `[image: ${rel} (${humanSize(buf.byteLength)}) — cannot be displayed in this context]`
+      }
+      ctx.attachImage({ mediaType: imageType, data: buf.toString('base64') })
+      return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}) — attached below for viewing]`
+    }
+    if (isPdfPath(rel)) {
+      const buf = await fs.readFile(abs)
+      if (buf.byteLength > MAX_PDF_BYTES) {
+        return `[pdf: ${rel} (${humanSize(buf.byteLength)}) — too large to attach; limit is ${humanSize(MAX_PDF_BYTES)}. Extract its text with run_shell (e.g. pdftotext) instead.]`
+      }
+      if (!ctx.attachDocument) {
+        return `[pdf: ${rel} (${humanSize(buf.byteLength)}) — cannot be displayed in this context; extract its text with run_shell (e.g. pdftotext)]`
+      }
+      ctx.attachDocument({ mediaType: 'application/pdf', data: buf.toString('base64'), name: rel })
+      return `[pdf: ${rel} (${humanSize(buf.byteLength)}) — attached below for viewing]`
+    }
+
     const data = await fs.readFile(abs, 'utf8')
     const offset = num(args, 'offset')
     const limit = num(args, 'limit')

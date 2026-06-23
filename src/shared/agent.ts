@@ -29,11 +29,20 @@ export interface ReasoningBlock {
   redactedData?: string
 }
 
+/** A non-image document (e.g. a PDF) attached to a message, base64-encoded. */
+export interface DocumentAttachment {
+  mediaType: string
+  data: string
+  name?: string
+}
+
 export interface ChatMessage {
   role: ChatRole
   content: string
-  /** Present on `user` turns with image attachments (drag-dropped/pasted). */
+  /** Present on `user` turns with image attachments, or `tool` turns that read an image. */
   images?: ImageAttachment[]
+  /** Present on `tool` turns that read a document (e.g. a PDF). */
+  documents?: DocumentAttachment[]
   /** Present on assistant turns that call tools. */
   toolCalls?: ToolCall[]
   /** Present on assistant turns produced with reasoning enabled. */

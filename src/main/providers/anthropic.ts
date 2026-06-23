@@ -39,10 +39,30 @@ function toAnthropicMessages(
 
   for (const m of messages) {
     if (m.role === 'tool') {
+      // When the tool read an image/PDF, return it as image/document blocks the
+      // model can actually view; otherwise plain text.
+      let content: unknown = m.content
+      if (m.images?.length || m.documents?.length) {
+        const blocks: unknown[] = []
+        if (m.content) blocks.push({ type: 'text', text: m.content })
+        for (const img of m.images ?? []) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.data }
+          })
+        }
+        for (const doc of m.documents ?? []) {
+          blocks.push({
+            type: 'document',
+            source: { type: 'base64', media_type: doc.mediaType, data: doc.data }
+          })
+        }
+        content = blocks
+      }
       const block = {
         type: 'tool_result' as const,
         tool_use_id: m.toolCallId ?? '',
-        content: m.content
+        content: content as Anthropic.ToolResultBlockParam['content']
       }
       const last = out[out.length - 1]
       if (mergingToolResults && last && Array.isArray(last.content)) {
