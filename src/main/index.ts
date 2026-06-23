@@ -7,6 +7,9 @@ import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initAutoUpdate } from './updater'
 import { log } from './logger'
+import { getSettings } from './store'
+import { startRun, resolveApproval } from './agent/loop'
+import { parseHeadlessArgs, runHeadless } from './headless'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
 // don't force-exit: in a GUI app a stray async error shouldn't kill the window.
@@ -57,16 +60,42 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
-  log.info(`Houston ${app.getVersion()} starting`)
-  registerIpc()
-  createWindow()
-  initAutoUpdate()
+// One-shot headless mode: `Houston -p "<prompt>" [--cwd dir] [--full-auto] [--json]`.
+// Runs the agent without a window and exits with a status code; everything else
+// (GUI, IPC, auto-update) is skipped.
+const headless = parseHeadlessArgs(process.argv, process.cwd())
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+if (headless) {
+  app.whenReady().then(async () => {
+    let code = 1
+    try {
+      code = await runHeadless(headless, {
+        getSettings,
+        startRun,
+        resolveApproval,
+        out: (s) => process.stdout.write(s),
+        err: (s) => process.stderr.write(s)
+      })
+    } catch (e) {
+      process.stderr.write(`Fatal: ${(e as Error).message}\n`)
+    } finally {
+      killAllShells()
+      disconnectAllMcp()
+      app.exit(code)
+    }
   })
-})
+} else {
+  app.whenReady().then(() => {
+    log.info(`Houston ${app.getVersion()} starting`)
+    registerIpc()
+    createWindow()
+    initAutoUpdate()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

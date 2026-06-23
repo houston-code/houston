@@ -16,12 +16,10 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   trusted project's hooks / MCP servers / allow-rules. *Why deferred:* needs a
   trust store + a clear consent UX to avoid becoming an RCE foot-gun.
 
-- **Headless / SDK / CLI mode.** Run the agent without the GUI window — a one-shot
-  `houston -p "<prompt>"` and a programmatic API for embedding/automation.
-  *Why deferred:* Houston is a GUI Electron app; a headless entry point is a
-  separate architecture (a non-window Electron or Node path plus a stdout
-  streaming protocol and exit-code contract). The agent loop itself is already
-  UI-agnostic, so this is mostly a new entry point + transport.
+- **Programmatic SDK.** A stable, importable API for embedding the agent in other
+  Node programs (beyond the one-shot CLI below). *Why deferred:* needs a versioned
+  public surface and packaging separate from the Electron app. One-shot headless
+  runs (`Houston -p "<prompt>"`, see the README) already cover scripting/CI.
 
 - **GitHub integration (first-class).** Built-in PR creation/review and a "install
   GitHub app" flow. *Why deferred:* the agent can already drive `git` and `gh`
