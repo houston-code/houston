@@ -90,6 +90,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   overflows the model's context window. The full transcript stays on screen —
   only what's sent to the model is compacted. Tune or disable the threshold in
   Settings → *Context window*.
+- **Git-aware.** If the project is a git repo, Houston folds the current branch
+  and a short working-tree status into the agent's context each turn, so it knows
+  what branch it's on and what's already modified without having to run git first.
 - **Project-aware.** Houston loads a small rules hierarchy into the system prompt —
   your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
   `CLAUDE.md` at its root — so the agent follows your conventions, build/test
