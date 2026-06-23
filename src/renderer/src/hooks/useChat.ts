@@ -14,6 +14,8 @@ interface SendParams {
   approvalPolicy: ApprovalPolicy
 }
 
+type RetryParams = Omit<SendParams, 'userText' | 'images'>
+
 /** A revertable set of file changes from the most recent turn. */
 export interface Checkpoint {
   runId: string
@@ -29,7 +31,11 @@ export interface ChatController {
   usage: SessionUsage | null
   /** The current/last turn's revertable file changes, or null. */
   checkpoint: Checkpoint | null
+  /** True when the last finished run ended in an error (offer a retry). */
+  errored: boolean
   send: (params: SendParams) => Promise<void>
+  /** Re-run the last turn after a failure, without re-sending the user message. */
+  retry: (params: RetryParams) => Promise<void>
   cancel: () => void
   approve: (callId: string, decision: ToolApprovalDecision) => void
   /** Revert the current checkpoint's file changes. Returns the count restored. */
@@ -47,6 +53,7 @@ export function useChat(): ChatController {
   const [running, setRunning] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null)
+  const [errored, setErrored] = useState(false)
   const runIdRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -71,6 +78,7 @@ export function useChat(): ChatController {
         }))
       }
       setItems((prev) => reduceEvent(prev, e))
+      if (e.type === 'error') setErrored(true)
       if (e.type === 'done' || e.type === 'error') {
         setRunning(false)
         runIdRef.current = null
@@ -92,6 +100,7 @@ export function useChat(): ChatController {
     ])
     setRunning(true)
     setCheckpoint(null)
+    setErrored(false)
     await window.api.startAgent({
       runId,
       conversationId: params.conversationId,
@@ -101,6 +110,14 @@ export function useChat(): ChatController {
       model: params.model,
       approvalPolicy: params.approvalPolicy
     })
+  }, [])
+
+  const retry = useCallback(async (params: RetryParams) => {
+    const runId = crypto.randomUUID()
+    runIdRef.current = runId
+    setRunning(true)
+    setErrored(false)
+    await window.api.retryAgent({ runId, ...params })
   }, [])
 
   const cancel = useCallback(() => {
@@ -131,6 +148,7 @@ export function useChat(): ChatController {
     setRunning(false)
     setUsage(nextUsage)
     setCheckpoint(null)
+    setErrored(false)
     runIdRef.current = null
   }, [])
 
@@ -139,7 +157,9 @@ export function useChat(): ChatController {
     running,
     usage,
     checkpoint,
+    errored,
     send,
+    retry,
     cancel,
     approve,
     revertCheckpoint,

@@ -111,7 +111,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff — shown inline as a
   "retrying…" notice — as long as nothing has streamed yet, so a blip mid-run no
-  longer throws the whole turn away.
+  longer throws the whole turn away. If a turn still fails, a **Retry** button
+  re-runs it without you re-typing.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a

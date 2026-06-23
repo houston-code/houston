@@ -33,6 +33,7 @@ export const IPC = {
   conversationOrganize: 'conversation:organize',
   // Agent
   agentStart: 'agent:start',
+  agentRetry: 'agent:retry',
   agentCancel: 'agent:cancel',
   agentApprove: 'agent:approve',
   agentEvent: 'agent:event',

@@ -284,6 +284,16 @@ export default function App(): JSX.Element {
     if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
   }, [chat])
 
+  const onRetry = useCallback(() => {
+    if (!settings?.selected || !currentId) return
+    void chat.retry({
+      conversationId: currentId,
+      providerId: settings.selected.providerId,
+      model: settings.selected.model,
+      approvalPolicy: settings.approvalPolicy
+    })
+  }, [chat, settings, currentId])
+
   const onReapply = useCallback(async () => {
     const n = await chat.reapplyCheckpoint()
     if (n > 0) alert(`Re-applied ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
@@ -397,6 +407,15 @@ export default function App(): JSX.Element {
           </div>
         ) : (
           <Transcript items={chat.items} onApprove={chat.approve} />
+        )}
+
+        {chat.errored && !chat.running && currentId && (
+          <div className="checkpoint-bar">
+            <span className="checkpoint-bar__label">The last turn failed.</span>
+            <button className="btn btn--sm" onClick={onRetry}>
+              ⟳ Retry
+            </button>
+          </div>
         )}
 
         {chat.checkpoint && !chat.running && (
