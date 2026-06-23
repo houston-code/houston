@@ -76,6 +76,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   within a turn: `cd` and exported environment variables carry over to later
   commands (e.g. `cd build` then `make`, or activate a virtualenv once and reuse
   it), so the agent gets "same terminal" behavior.
+- **Headless mode.** Run one prompt without the GUI and stream the result to
+  stdout — `Houston -p "<prompt>"` (read-only by default; add `--full-auto` to let
+  it edit/run, `--json` for machine-readable events). Good for scripts and CI.
+  See [Headless / scripting](#headless--scripting).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only —
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. Approve, deny,
@@ -172,6 +176,28 @@ Applications.
 2. Pick a **project folder** (control bar, above the composer).
 3. Choose a **model** and an **approval policy** (same control bar).
 4. Ask it to build or change something.
+
+## Headless / scripting
+
+Run a single prompt without opening the window — useful for scripts, pipelines,
+and CI. Pass `-p`/`--prompt` to the app binary:
+
+```bash
+# read-only by default (plan mode): analysis / Q&A, no edits or commands
+/Applications/Houston.app/Contents/MacOS/Houston -p "Summarize the architecture" --cwd ~/code/myproj
+
+# let it edit files and run commands (still sandboxed to the project)
+Houston -p "Add a unit test for utils/date.ts and run the suite" --cwd . --full-auto
+
+# machine-readable: one JSON object per agent event
+Houston -p "List the TODOs" --json
+```
+
+Flags: `--cwd <dir>` (project folder, default the current directory),
+`--provider <id>` / `--model <id>` (default your selected model), `--approval
+<plan|ask|auto-edit|full-auto>` (default `plan`), `--json`. Assistant text streams
+to stdout, tool activity to stderr, and the process exits non-zero on error. It
+reuses your saved settings and Keychain-stored API keys.
 
 ## Develop
 
