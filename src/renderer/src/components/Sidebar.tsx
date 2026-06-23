@@ -11,6 +11,8 @@ export function Sidebar({
   onSelect,
   onNew,
   onDelete,
+  onExport,
+  onImport,
   onOpenSettings
 }: {
   conversations: ConversationMeta[]
@@ -18,6 +20,8 @@ export function Sidebar({
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
+  onExport: (id: string) => void
+  onImport: () => void
   onOpenSettings: () => void
 }): JSX.Element {
   return (
@@ -39,7 +43,17 @@ export function Sidebar({
               <div className="conv__meta">{basename(c.workspace)}</div>
             </div>
             <button
-              className="conv__delete"
+              className="conv__action"
+              title="Export"
+              onClick={(e) => {
+                e.stopPropagation()
+                onExport(c.id)
+              }}
+            >
+              ⤓
+            </button>
+            <button
+              className="conv__action conv__action--danger"
               title="Delete"
               onClick={(e) => {
                 e.stopPropagation()
@@ -52,6 +66,9 @@ export function Sidebar({
         ))}
       </div>
 
+      <button className="btn sidebar__import" onClick={onImport}>
+        ⤒ Import chat
+      </button>
       <button className="btn sidebar__settings" onClick={onOpenSettings}>
         ⚙︎ Settings
       </button>

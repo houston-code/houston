@@ -39,6 +39,10 @@ const api = {
     model: string
   }): Promise<Conversation> => ipcRenderer.invoke(IPC.conversationCreate, input),
   deleteConversation: (id: string): Promise<void> => ipcRenderer.invoke(IPC.conversationDelete, id),
+  exportConversation: (id: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.conversationExport, id),
+  importConversation: (): Promise<ConversationMeta | null> =>
+    ipcRenderer.invoke(IPC.conversationImport),
 
   // Agent
   startAgent: (req: AgentSendRequest): Promise<void> => ipcRenderer.invoke(IPC.agentStart, req),
