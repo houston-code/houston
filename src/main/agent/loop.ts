@@ -21,6 +21,9 @@ import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal } from './checkpoints'
 import { runSubAgent } from './subagent'
 import { runHooks } from './hooks'
+import { loadAgents } from './agents'
+import { loadSkills } from './skills'
+import { buildCapabilities } from './capabilities'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -131,7 +134,17 @@ export async function startRun(
     const settings = getSettings()
     const rules = await loadProjectRules(workspace)
     const planMode = req.approvalPolicy === 'plan'
-    const system = buildSystemPrompt(workspace, settings.systemPromptExtra, rules.text, planMode)
+    const agents = await loadAgents(workspace)
+    const skills = await loadSkills(workspace)
+    const agentsByName = new Map(agents.map((a) => [a.name, a]))
+    const capabilities = buildCapabilities(agents, skills)
+    const system = buildSystemPrompt(
+      workspace,
+      settings.systemPromptExtra,
+      rules.text,
+      planMode,
+      capabilities
+    )
     const tools = toolSchemas()
     const messages: ChatMessage[] = [...req.messages]
 
@@ -324,8 +337,15 @@ export async function startRun(
                   allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
                   signal: abort.signal,
                   getSecret: getKey,
-                  dispatchSubAgent: (prompt) =>
-                    runSubAgent({ provider, model: req.model, workspace, prompt, signal: abort.signal })
+                  dispatchSubAgent: (prompt, agentName) =>
+                    runSubAgent({
+                      provider,
+                      model: req.model,
+                      workspace,
+                      prompt,
+                      signal: abort.signal,
+                      systemOverride: agentName ? agentsByName.get(agentName)?.systemPrompt : undefined
+                    })
                 })
               } catch (e) {
                 output = `Error: ${(e as Error).message}`

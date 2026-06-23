@@ -20,7 +20,7 @@ export interface ToolContext {
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
-  dispatchSubAgent?: (prompt: string) => Promise<string>
+  dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
 }
 
 export interface ToolDef {
@@ -513,6 +513,11 @@ const dispatchAgent: ToolDef = {
         prompt: {
           type: 'string',
           description: 'The full task/question for the subagent, with all the context it needs.'
+        },
+        agent: {
+          type: 'string',
+          description:
+            'Optional: the name of a custom agent (from .houston/agents) to use. Omit for the default research agent.'
         }
       },
       ['description', 'prompt']
@@ -522,7 +527,7 @@ const dispatchAgent: ToolDef = {
     const prompt = str(args, 'prompt')
     if (!prompt) throw new Error('prompt is required.')
     if (!ctx.dispatchSubAgent) throw new Error('Subagents are not available in this context.')
-    return ctx.dispatchSubAgent(prompt)
+    return ctx.dispatchSubAgent(prompt, str(args, 'agent') || undefined)
   }
 }
 
