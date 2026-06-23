@@ -29,6 +29,7 @@ describe('tool registry', () => {
       'glob',
       'kill_shell',
       'list_dir',
+      'multi_edit',
       'read_file',
       'read_shell_output',
       'review_changes',
@@ -72,6 +73,64 @@ describe('write/read/edit', () => {
     )
     await run('edit_file', { path: 'x.txt', old_string: 'a', new_string: 'b', replace_all: true })
     expect(await run('read_file', { path: 'x.txt' })).toBe('b b b')
+  })
+})
+
+describe('multi_edit', () => {
+  it('applies several edits in order, atomically', async () => {
+    await run('write_file', { path: 'm.txt', content: 'one two three' })
+    await run('multi_edit', {
+      path: 'm.txt',
+      edits: [
+        { old_string: 'one', new_string: '1' },
+        { old_string: 'three', new_string: '3' }
+      ]
+    })
+    expect(await run('read_file', { path: 'm.txt' })).toBe('1 two 3')
+  })
+
+  it('sees the result of earlier edits in later ones', async () => {
+    await run('write_file', { path: 'm.txt', content: 'a' })
+    await run('multi_edit', {
+      path: 'm.txt',
+      edits: [
+        { old_string: 'a', new_string: 'ab' },
+        { old_string: 'ab', new_string: 'abc' }
+      ]
+    })
+    expect(await run('read_file', { path: 'm.txt' })).toBe('abc')
+  })
+
+  it('honours replace_all per edit', async () => {
+    await run('write_file', { path: 'm.txt', content: 'x x x' })
+    await run('multi_edit', { path: 'm.txt', edits: [{ old_string: 'x', new_string: 'y', replace_all: true }] })
+    expect(await run('read_file', { path: 'm.txt' })).toBe('y y y')
+  })
+
+  it('is atomic: a failing edit writes nothing', async () => {
+    await run('write_file', { path: 'm.txt', content: 'hello world' })
+    await expect(
+      run('multi_edit', {
+        path: 'm.txt',
+        edits: [
+          { old_string: 'hello', new_string: 'hi' },
+          { old_string: 'nope', new_string: 'x' } // not found -> whole call fails
+        ]
+      })
+    ).rejects.toThrow(/edit 2: old_string was not found/)
+    expect(await run('read_file', { path: 'm.txt' })).toBe('hello world')
+  })
+
+  it('rejects an ambiguous edit without replace_all', async () => {
+    await run('write_file', { path: 'm.txt', content: 'a a' })
+    await expect(
+      run('multi_edit', { path: 'm.txt', edits: [{ old_string: 'a', new_string: 'b' }] })
+    ).rejects.toThrow(/occurs 2 times/)
+  })
+
+  it('rejects an empty edits array', async () => {
+    await run('write_file', { path: 'm.txt', content: 'a' })
+    await expect(run('multi_edit', { path: 'm.txt', edits: [] })).rejects.toThrow(/non-empty/)
   })
 })
 
