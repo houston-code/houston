@@ -21,6 +21,7 @@ import { loadCommands } from './agent/commands'
 import { realpathSync } from 'node:fs'
 import {
   listConversations,
+  searchConversations,
   getConversation,
   createConversation,
   forkConversation,
@@ -107,6 +108,7 @@ export function registerIpc(): void {
 
   // Conversations
   ipcMain.handle(IPC.conversationList, () => listConversations())
+  ipcMain.handle(IPC.conversationSearch, (_event, query: string) => searchConversations(query))
   ipcMain.handle(IPC.conversationGet, (_event, id: string) => getConversation(id))
   ipcMain.handle(
     IPC.conversationCreate,
@@ -211,6 +213,44 @@ export function registerIpc(): void {
       (msgs) => setMessages(conv.id, msgs)
     )
   })
+
+  // Re-run the last turn after a failure: run on the conversation's existing
+  // messages (the user turn is already persisted) without appending a new one.
+  ipcMain.handle(
+    IPC.agentRetry,
+    async (
+      event,
+      req: { runId: string; conversationId: string; providerId: string; model: string; approvalPolicy: AppSettings['approvalPolicy'] }
+    ) => {
+      const send = (e: AgentEvent): void => {
+        if (e.type === 'usage') {
+          const total = addUsage(req.conversationId, {
+            inputTokens: e.inputTokens,
+            outputTokens: e.outputTokens
+          })
+          if (total) e = { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens }
+        }
+        if (!event.sender.isDestroyed()) event.sender.send(IPC.agentEvent, e)
+      }
+      const conv = getConversation(req.conversationId)
+      if (!conv) {
+        send({ runId: req.runId, type: 'error', message: 'Conversation not found.' })
+        return
+      }
+      void startRun(
+        {
+          runId: req.runId,
+          workspace: conv.workspace,
+          providerId: req.providerId,
+          model: req.model,
+          approvalPolicy: req.approvalPolicy,
+          messages: conv.messages
+        },
+        send,
+        (msgs) => setMessages(conv.id, msgs)
+      )
+    }
+  )
 
   ipcMain.handle(IPC.agentCancel, (_event, runId: string) => {
     cancelRun(runId)

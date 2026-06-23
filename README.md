@@ -111,11 +111,13 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff — shown inline as a
   "retrying…" notice — as long as nothing has streamed yet, so a blip mid-run no
-  longer throws the whole turn away.
+  longer throws the whole turn away. If a turn still fails, a **Retry** button
+  re-runs it without you re-typing.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
   JSON file and import it back (or onto another machine) from the sidebar.
+  **Search** the sidebar to find a past chat by its title or anything said in it.
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
   direction without disturbing the original.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file

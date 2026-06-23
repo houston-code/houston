@@ -42,6 +42,8 @@ export default function App(): JSX.Element {
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
+  const [search, setSearch] = useState('')
+  const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
   const chat = useChat()
 
   const refreshConversations = useCallback(async () => {
@@ -75,6 +77,30 @@ export default function App(): JSX.Element {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [theme])
+
+  // Debounced full-text search across conversations (title + message content).
+  useEffect(() => {
+    const q = search.trim()
+    if (!q) {
+      setMatchIds(null)
+      return
+    }
+    let cancelled = false
+    const t = setTimeout(() => {
+      void window.api.searchConversations(q).then((results) => {
+        if (!cancelled) setMatchIds(new Set(results.map((r) => r.id)))
+      })
+    }, 180)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [search])
+
+  const visibleConversations = useMemo(
+    () => (matchIds ? conversations.filter((c) => matchIds.has(c.id)) : conversations),
+    [conversations, matchIds]
+  )
 
   const currentConv = useMemo(
     () => conversations.find((c) => c.id === currentId) ?? null,
@@ -284,6 +310,16 @@ export default function App(): JSX.Element {
     if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
   }, [chat])
 
+  const onRetry = useCallback(() => {
+    if (!settings?.selected || !currentId) return
+    void chat.retry({
+      conversationId: currentId,
+      providerId: settings.selected.providerId,
+      model: settings.selected.model,
+      approvalPolicy: settings.approvalPolicy
+    })
+  }, [chat, settings, currentId])
+
   const onReapply = useCallback(async () => {
     const n = await chat.reapplyCheckpoint()
     if (n > 0) alert(`Re-applied ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
@@ -364,8 +400,10 @@ export default function App(): JSX.Element {
   return (
     <div className="app">
       <Sidebar
-        conversations={conversations}
-        groups={settings.chatGroups ?? []}
+        conversations={visibleConversations}
+        groups={search ? [] : settings.chatGroups ?? []}
+        search={search}
+        onSearch={setSearch}
         currentId={currentId}
         onSelect={selectConversation}
         onNew={onNewChat}
@@ -397,6 +435,15 @@ export default function App(): JSX.Element {
           </div>
         ) : (
           <Transcript items={chat.items} onApprove={chat.approve} />
+        )}
+
+        {chat.errored && !chat.running && currentId && (
+          <div className="checkpoint-bar">
+            <span className="checkpoint-bar__label">The last turn failed.</span>
+            <button className="btn btn--sm" onClick={onRetry}>
+              ⟳ Retry
+            </button>
+          </div>
         )}
 
         {chat.checkpoint && !chat.running && (

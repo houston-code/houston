@@ -37,6 +37,8 @@ const api = {
 
   // Conversations
   listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),
+  searchConversations: (query: string): Promise<ConversationMeta[]> =>
+    ipcRenderer.invoke(IPC.conversationSearch, query),
   getConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationGet, id),
   createConversation: (input: {
@@ -58,6 +60,13 @@ const api = {
 
   // Agent
   startAgent: (req: AgentSendRequest): Promise<void> => ipcRenderer.invoke(IPC.agentStart, req),
+  retryAgent: (req: {
+    runId: string
+    conversationId: string
+    providerId: string
+    model: string
+    approvalPolicy: AgentSendRequest['approvalPolicy']
+  }): Promise<void> => ipcRenderer.invoke(IPC.agentRetry, req),
   cancelAgent: (runId: string): Promise<void> => ipcRenderer.invoke(IPC.agentCancel, runId),
   approveTool: (runId: string, callId: string, decision: ToolApprovalDecision): Promise<void> =>
     ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision),

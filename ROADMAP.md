@@ -43,6 +43,25 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 ## Deferred — polish
 
+- **Clickable file paths in the transcript.** Linkify `path:line` references in the
+  agent's replies so a click opens the file. *Why deferred:* doing it well needs
+  reliable path-detection in prose (to avoid false positives), an open-in-editor
+  IPC with an editor preference, and changes to the actively-evolving Markdown /
+  tool-row renderers — more than a polish pass.
+
+- **`.gitignore`-aware `glob`.** `search_files` already respects `.gitignore` (it
+  uses ripgrep); the `glob` tool doesn't (it skips node_modules / dotfiles / build
+  dirs but not project-specific ignores). *Why deferred:* ripgrep's glob semantics
+  differ from `glob`'s current `minimatch` (recursive vs. shallow `*.json`), so
+  delegating would change the tool's contract, and a partial hand-rolled
+  `.gitignore` parser would only *half*-respect it. Low marginal value given the
+  existing dir/​dotfile skips and that search is already ignore-aware.
+
+- **Edit & resend a message.** Edit an earlier user message and re-run from that
+  point (truncating the later turns). *Why deferred:* needs conversation-history
+  rewind + a branching/transcript-truncation model — a real feature, not a tweak.
+  (Retry-the-last-failed-turn already ships; see the README.)
+
 - **Customizable keybindings.** A user-editable key map beyond the built-in
   shortcuts (⌘N / ⌘, / Esc). Would add a keybindings file/UI and a resolver.
 

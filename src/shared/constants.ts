@@ -24,6 +24,7 @@ export const IPC = {
   settingsListModels: 'settings:listModels',
   // Conversations
   conversationList: 'conversation:list',
+  conversationSearch: 'conversation:search',
   conversationGet: 'conversation:get',
   conversationCreate: 'conversation:create',
   conversationFork: 'conversation:fork',
@@ -33,6 +34,7 @@ export const IPC = {
   conversationOrganize: 'conversation:organize',
   // Agent
   agentStart: 'agent:start',
+  agentRetry: 'agent:retry',
   agentCancel: 'agent:cancel',
   agentApprove: 'agent:approve',
   agentEvent: 'agent:event',

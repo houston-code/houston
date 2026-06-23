@@ -20,6 +20,8 @@ function basename(p: string): string {
 export interface SidebarProps {
   conversations: ConversationMeta[]
   groups: ChatGroup[]
+  search: string
+  onSearch: (query: string) => void
   currentId: string | null
   onSelect: (id: string) => void
   onNew: () => void
@@ -378,9 +380,20 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         ＋ New chat
       </button>
 
+      <input
+        className="sidebar__search"
+        type="search"
+        placeholder="Search chats…"
+        aria-label="Search conversations"
+        value={props.search}
+        onChange={(e) => props.onSearch(e.target.value)}
+      />
+
       <div className="sidebar__list">
-        {conversations.length === 0 && groups.length === 0 && (
-          <div className="sidebar__empty">No conversations yet.</div>
+        {conversations.length === 0 && (
+          <div className="sidebar__empty">
+            {props.search ? 'No matching conversations.' : 'No conversations yet.'}
+          </div>
         )}
 
         {sections.map((section) => (
