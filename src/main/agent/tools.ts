@@ -43,6 +43,11 @@ function str(args: Record<string, unknown>, key: string): string {
   return typeof v === 'string' ? v : ''
 }
 
+function num(args: Record<string, unknown>, key: string): number | undefined {
+  const v = args[key]
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
 const objectSchema = (properties: JSONSchema, required: string[]): JSONSchema => ({
   type: 'object',
   properties,
@@ -52,18 +57,56 @@ const objectSchema = (properties: JSONSchema, required: string[]): JSONSchema =>
 
 const readFile: ToolDef = {
   kind: 'read',
-  summarize: (a) => `Read ${str(a, 'path')}`,
+  summarize: (a) => {
+    const offset = num(a, 'offset')
+    const limit = num(a, 'limit')
+    if (offset !== undefined || limit !== undefined) {
+      return `Read ${str(a, 'path')} (lines ${offset ?? 1}${limit !== undefined ? `–${(offset ?? 1) + limit - 1}` : '+'})`
+    }
+    return `Read ${str(a, 'path')}`
+  },
   schema: {
     name: 'read_file',
-    description: 'Read the contents of a text file within the project. Returns the file text.',
+    description:
+      'Read the contents of a text file within the project. Returns the file text. For large files, pass offset/limit (1-based line numbers) to read just a slice.',
     parameters: objectSchema(
-      { path: { type: 'string', description: 'Path relative to the project root.' } },
+      {
+        path: { type: 'string', description: 'Path relative to the project root.' },
+        offset: {
+          type: 'number',
+          description: 'First line to read (1-based). Omit to start at the beginning.'
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of lines to read from offset. Omit to read to the end.'
+        }
+      },
       ['path']
     )
   },
   async execute(args, ctx) {
     const abs = resolveInWorkspace(ctx.workspace, str(args, 'path'))
     const data = await fs.readFile(abs, 'utf8')
+    const offset = num(args, 'offset')
+    const limit = num(args, 'limit')
+
+    if (offset !== undefined || limit !== undefined) {
+      const lines = data.split('\n')
+      const start = Math.max(0, (offset ?? 1) - 1)
+      const end = limit !== undefined ? start + Math.max(0, Math.floor(limit)) : lines.length
+      const sliced = lines.slice(start, end)
+      if (sliced.length === 0) {
+        return `[no lines in range: offset ${start + 1}, file has ${lines.length} line${
+          lines.length === 1 ? '' : 's'
+        }]`
+      }
+      const slice = sliced.join('\n')
+      const body =
+        slice.length > MAX_READ_CHARS ? `${slice.slice(0, MAX_READ_CHARS)}\n[truncated]` : slice
+      // shownEnd is derived from the actual slice length, so the range is never reversed.
+      return `[lines ${start + 1}-${start + sliced.length} of ${lines.length}]\n${body}`
+    }
+
     if (data.length > MAX_READ_CHARS) {
       return `${data.slice(0, MAX_READ_CHARS)}\n[truncated: file is ${data.length} chars]`
     }
@@ -165,13 +208,27 @@ const searchTool: ToolDef = {
     parameters: objectSchema(
       {
         pattern: { type: 'string', description: 'A regular expression.' },
-        path: { type: 'string', description: 'Subdirectory to search within (default project root).' }
+        path: { type: 'string', description: 'Subdirectory to search within (default project root).' },
+        ignore_case: { type: 'boolean', description: 'Case-insensitive match (default false).' },
+        glob: {
+          type: 'string',
+          description: 'Only search files whose path matches this glob (e.g. "*.ts", "src/**/*.tsx").'
+        },
+        context: {
+          type: 'number',
+          description: 'Lines of context to show before and after each match (like grep -C).'
+        },
+        files_with_matches: {
+          type: 'boolean',
+          description: 'Return only the matching file paths, not the matching lines (default false).'
+        }
       },
       ['pattern']
     )
   },
   async execute(args, ctx) {
     const startAbs = resolveInWorkspace(ctx.workspace, str(args, 'path') || '.')
+    const context = num(args, 'context')
     return searchContents({
       pattern: str(args, 'pattern'),
       workspace: ctx.workspace,
@@ -179,7 +236,11 @@ const searchTool: ToolDef = {
       startAbs,
       rgPath: resolveRipgrep(),
       max: 100,
-      signal: ctx.signal
+      signal: ctx.signal,
+      ignoreCase: args.ignore_case === true,
+      glob: str(args, 'glob') || undefined,
+      context: context !== undefined ? Math.max(0, Math.floor(context)) : undefined,
+      filesWithMatches: args.files_with_matches === true
     })
   }
 }

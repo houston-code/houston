@@ -62,6 +62,58 @@ describe('searchContents (JS fallback)', () => {
   })
 })
 
+describe('searchContents options (JS fallback)', () => {
+  let workspace: string
+
+  beforeEach(() => {
+    workspace = realpathSync(mkdtempSync(join(tmpdir(), 'houston-search-opt-')))
+    mkdirSync(join(workspace, 'src'))
+    writeFileSync(join(workspace, 'src', 'app.ts'), 'line1\nNEEDLE here\nline3\nneedle lower\n')
+    writeFileSync(join(workspace, 'src', 'notes.md'), 'needle in markdown\n')
+  })
+
+  afterEach(() => rmSync(workspace, { recursive: true, force: true }))
+
+  const search = (
+    pattern: string,
+    opts: Partial<Parameters<typeof searchContents>[0]> = {}
+  ): Promise<string> =>
+    searchContents({
+      pattern,
+      workspace,
+      searchRel: '.',
+      startAbs: workspace,
+      rgPath: null,
+      max: 100,
+      ...opts
+    })
+
+  it('respects ignoreCase', async () => {
+    expect(await search('needle')).not.toContain('app.ts:2') // case-sensitive misses NEEDLE
+    const ci = await search('needle', { ignoreCase: true })
+    expect(ci).toContain('src/app.ts:2:')
+    expect(ci).toContain('src/app.ts:4:')
+  })
+
+  it('filters by glob', async () => {
+    const out = await search('needle', { ignoreCase: true, glob: '*.md' })
+    expect(out).toContain('src/notes.md')
+    expect(out).not.toContain('app.ts')
+  })
+
+  it('returns files-with-matches mode', async () => {
+    const out = await search('needle', { ignoreCase: true, filesWithMatches: true })
+    expect(out.split('\n').sort()).toEqual(['src/app.ts', 'src/notes.md'])
+  })
+
+  it('includes context lines around a match', async () => {
+    const out = await search('NEEDLE', { context: 1 })
+    expect(out).toContain('src/app.ts:1- line1') // context before (dash separator)
+    expect(out).toContain('src/app.ts:2: NEEDLE here') // match (colon separator)
+    expect(out).toContain('src/app.ts:3- line3') // context after
+  })
+})
+
 describe('searchContents (ripgrep)', () => {
   const rg = resolveRipgrep()
   let workspace: string
@@ -92,5 +144,62 @@ describe('searchContents (ripgrep)', () => {
   it.skipIf(!rg)('surfaces an invalid pattern as an error', async () => {
     const res = await runRipgrep(rg as string, '(', workspace, '.', 100)
     expect(res.error).toBeTruthy()
+  })
+})
+
+describe('searchContents options (ripgrep)', () => {
+  const rg = resolveRipgrep()
+  let workspace: string
+
+  beforeEach(() => {
+    workspace = realpathSync(mkdtempSync(join(tmpdir(), 'houston-rg-opt-')))
+    mkdirSync(join(workspace, 'src'))
+    writeFileSync(join(workspace, 'src', 'app.ts'), 'line1\nNEEDLE here\nline3\nneedle lower\n')
+    writeFileSync(join(workspace, 'src', 'notes.md'), 'needle in markdown\n')
+  })
+
+  afterEach(() => rmSync(workspace, { recursive: true, force: true }))
+
+  const search = (
+    pattern: string,
+    opts: Partial<Parameters<typeof searchContents>[0]> = {}
+  ): Promise<string> =>
+    searchContents({
+      pattern,
+      workspace,
+      searchRel: '.',
+      startAbs: workspace,
+      rgPath: rg,
+      max: 100,
+      ...opts
+    })
+
+  // The rg and JS paths aren't byte-identical (rg emits full lines, the JS walk
+  // trims), so these assert behavioral parity: the options take effect.
+  it.skipIf(!rg)('respects ignoreCase', async () => {
+    expect(await search('needle')).not.toContain('app.ts:2')
+    const ci = await search('needle', { ignoreCase: true })
+    expect(ci).toContain('src/app.ts:2:')
+    expect(ci).toContain('src/app.ts:4:')
+  })
+
+  it.skipIf(!rg)('filters by glob', async () => {
+    const out = await search('needle', { ignoreCase: true, glob: '*.md' })
+    expect(out).toContain('src/notes.md')
+    expect(out).not.toContain('app.ts')
+  })
+
+  it.skipIf(!rg)('returns files-with-matches mode (paths only, no line numbers)', async () => {
+    const out = await search('needle', { ignoreCase: true, filesWithMatches: true })
+    const lines = out.split('\n').sort()
+    expect(lines).toEqual(['src/app.ts', 'src/notes.md'])
+    expect(out).not.toMatch(/:\d+:/)
+  })
+
+  it.skipIf(!rg)('includes context lines around a match', async () => {
+    const out = await search('NEEDLE', { context: 1 })
+    expect(out).toContain('line1') // context before
+    expect(out).toContain('NEEDLE here') // match
+    expect(out).toContain('line3') // context after
   })
 })
