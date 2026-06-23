@@ -24,6 +24,7 @@ export interface SidebarProps {
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
+  onFork: (id: string) => void
   onExport: (id: string) => void
   onImport: () => void
   onOpenSettings: () => void
@@ -209,6 +210,15 @@ function ConvRow({
               }}
             >
               ✎ Rename
+            </button>
+            <button
+              className="menu__item"
+              onClick={() => {
+                props.onFork(conv.id)
+                close()
+              }}
+            >
+              ⑂ Fork
             </button>
             <div className="menu__sep" />
             <div className="menu__label">Move to</div>

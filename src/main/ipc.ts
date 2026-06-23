@@ -23,6 +23,7 @@ import {
   listConversations,
   getConversation,
   createConversation,
+  forkConversation,
   deleteConversation,
   importConversation,
   organizeConversation,
@@ -112,6 +113,7 @@ export function registerIpc(): void {
     (_event, input: { workspace: string; providerId: string; model: string }) =>
       createConversation(input)
   )
+  ipcMain.handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
   ipcMain.handle(IPC.conversationDelete, (_event, id: string) => {
     deleteConversation(id)
   })

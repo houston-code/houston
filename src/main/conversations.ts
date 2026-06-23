@@ -11,7 +11,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatMessage, Conversation, ConversationMeta, ConversationUsage } from '@shared/agent'
-import type { ImportedConversation } from '@shared/conversation-io'
+import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
@@ -64,6 +64,20 @@ export function createConversation(input: {
 
 export function getConversation(id: string): Conversation | null {
   return read(id)
+}
+
+/**
+ * Duplicate a conversation into a new one with a fresh id, a "(fork)" title, and a
+ * copy of the full message log — so the user can branch off and explore a
+ * different direction without disturbing the original. Returns the new
+ * conversation, or null if the source doesn't exist.
+ */
+export function forkConversation(id: string): Conversation | null {
+  const src = read(id)
+  if (!src) return null
+  const fork = forkConversationData(src, randomUUID(), Date.now())
+  write(fork)
+  return fork
 }
 
 /**

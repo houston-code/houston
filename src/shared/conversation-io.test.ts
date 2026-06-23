@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { resolveImportWorkspace, validateImportedConversation } from './conversation-io'
+import type { Conversation } from './agent'
+import {
+  forkConversationData,
+  forkTitle,
+  resolveImportWorkspace,
+  validateImportedConversation
+} from './conversation-io'
 
 const valid = {
   id: 'old-id',
@@ -104,5 +110,58 @@ describe('resolveImportWorkspace', () => {
 
   it('falls back when the import omits a workspace', () => {
     expect(resolveImportWorkspace(undefined, ['/projects/foo'])).toBe('/projects/foo')
+  })
+})
+
+describe('forkTitle', () => {
+  it('appends "(fork)"', () => {
+    expect(forkTitle('Add auth')).toBe('Add auth (fork)')
+  })
+
+  it('does not stack suffixes', () => {
+    expect(forkTitle('Add auth (fork)')).toBe('Add auth (fork)')
+    expect(forkTitle('Add auth (fork 2)')).toBe('Add auth (fork)')
+  })
+
+  it('falls back to "Chat" for an empty title', () => {
+    expect(forkTitle('   ')).toBe('Chat (fork)')
+  })
+})
+
+describe('forkConversationData', () => {
+  const src: Conversation = {
+    id: 'src-id',
+    title: 'Original',
+    workspace: '/proj',
+    providerId: 'anthropic',
+    model: 'claude',
+    createdAt: 1,
+    updatedAt: 2,
+    pinned: true,
+    groupId: 'g1',
+    usage: { inputTokens: 10, outputTokens: 20 },
+    messages: [{ role: 'user', content: 'hi' }]
+  }
+
+  it('gives the fork a fresh id, timestamps, and "(fork)" title', () => {
+    const fork = forkConversationData(src, 'new-id', 99)
+    expect(fork.id).toBe('new-id')
+    expect(fork.title).toBe('Original (fork)')
+    expect(fork.createdAt).toBe(99)
+    expect(fork.updatedAt).toBe(99)
+  })
+
+  it('clears pin and group so the fork lands in the default list', () => {
+    const fork = forkConversationData(src, 'new-id', 99)
+    expect(fork.pinned).toBeUndefined()
+    expect(fork.groupId).toBeUndefined()
+  })
+
+  it('copies messages into an independent array', () => {
+    const fork = forkConversationData(src, 'new-id', 99)
+    expect(fork.messages).toEqual(src.messages)
+    expect(fork.messages).not.toBe(src.messages)
+    fork.messages.push({ role: 'assistant', content: 'yo' })
+    expect(src.messages).toHaveLength(1)
   })
 })

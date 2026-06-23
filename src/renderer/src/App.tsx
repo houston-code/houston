@@ -150,6 +150,16 @@ export default function App(): JSX.Element {
     [currentId, chat, refreshConversations]
   )
 
+  const onForkConversation = useCallback(
+    async (id: string) => {
+      const fork = await window.api.forkConversation(id)
+      if (!fork) return
+      await refreshConversations()
+      await selectConversation(fork.id)
+    },
+    [refreshConversations, selectConversation]
+  )
+
   const onExportConversation = useCallback(async (id: string) => {
     try {
       await window.api.exportConversation(id)
@@ -360,6 +370,7 @@ export default function App(): JSX.Element {
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
+        onFork={onForkConversation}
         onExport={onExportConversation}
         onImport={onImportConversation}
         onOpenSettings={() => setSettingsOpen(true)}

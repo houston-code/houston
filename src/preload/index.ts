@@ -44,6 +44,8 @@ const api = {
     providerId: string
     model: string
   }): Promise<Conversation> => ipcRenderer.invoke(IPC.conversationCreate, input),
+  forkConversation: (id: string): Promise<Conversation | null> =>
+    ipcRenderer.invoke(IPC.conversationFork, id),
   deleteConversation: (id: string): Promise<void> => ipcRenderer.invoke(IPC.conversationDelete, id),
   exportConversation: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExport, id),
