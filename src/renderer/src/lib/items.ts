@@ -1,4 +1,5 @@
 import type { AgentEvent, ChatMessage } from '@shared/agent'
+import type { ImageAttachment } from '@shared/images'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
@@ -8,6 +9,7 @@ export interface UserItem {
   kind: 'user'
   id: string
   text: string
+  images?: ImageAttachment[]
 }
 export interface AssistantItem {
   kind: 'assistant'
@@ -137,7 +139,14 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
   const items: DisplayItem[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      if (m.content.trim()) items.push({ kind: 'user', id: nextId(), text: m.content })
+      if (m.content.trim() || m.images?.length) {
+        items.push({
+          kind: 'user',
+          id: nextId(),
+          text: m.content,
+          ...(m.images?.length ? { images: m.images } : {})
+        })
+      }
     } else if (m.role === 'assistant') {
       const reasoning = m.reasoning?.map((r) => r.text).filter(Boolean).join('\n') || undefined
       if (m.content.trim() || reasoning) {

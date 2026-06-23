@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type KeyboardEvent
+} from 'react'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
   expandTemplate,
@@ -7,6 +15,38 @@ import {
   resolveCommand,
   type Command
 } from '@shared/commands'
+import {
+  MAX_ATTACHMENTS,
+  exceedsImageSizeLimit,
+  imageDataUrl,
+  isSupportedImageType,
+  type ImageAttachment
+} from '@shared/images'
+
+/** Read an image File into a base64 ImageAttachment, or null if unsupported. */
+function readImageFile(file: File): Promise<ImageAttachment | null> {
+  return new Promise((resolve) => {
+    if (!isSupportedImageType(file.type)) {
+      resolve(null)
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const comma = result.indexOf(',')
+      if (comma < 0) {
+        resolve(null)
+        return
+      }
+      const data = result.slice(comma + 1)
+      // Match the main-process cap so the UI never shows an image that would be
+      // dropped before sending/persisting.
+      resolve(exceedsImageSizeLimit(data) ? null : { mediaType: file.type, data })
+    }
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
+}
 
 export function Composer({
   disabled,
@@ -22,16 +62,39 @@ export function Composer({
   workspace: string | null
   commands: Command[]
   onCommand: (cmd: Command, args: string) => void
-  onSend: (text: string) => void
+  onSend: (text: string, images?: ImageAttachment[]) => void
   onCancel: () => void
 }): JSX.Element {
   const [text, setText] = useState('')
+  const [images, setImages] = useState<ImageAttachment[]>([])
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
   const [cmdIndex, setCmdIndex] = useState(0)
   const [cmdDismissed, setCmdDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+
+  const addFiles = async (files: File[]): Promise<void> => {
+    const read = await Promise.all(files.map(readImageFile))
+    const valid = read.filter((x): x is ImageAttachment => x !== null)
+    if (valid.length) setImages((prev) => [...prev, ...valid].slice(0, MAX_ATTACHMENTS))
+  }
+
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
+    if (files.length) {
+      e.preventDefault()
+      void addFiles(files)
+    }
+  }
+
+  const onDrop = (e: DragEvent<HTMLDivElement>): void => {
+    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'))
+    if (files.length) {
+      e.preventDefault()
+      void addFiles(files)
+    }
+  }
 
   // A leading "/name" (no space yet) opens the command menu.
   const cmdPrefix = useMemo(() => {
@@ -110,8 +173,10 @@ export function Composer({
 
   const submit = (): void => {
     const trimmed = text.trim()
-    if (!trimmed || disabled || running) return
-    const parsed = parseSlashCommand(trimmed)
+    if ((!trimmed && images.length === 0) || disabled || running) return
+    // Slash commands only when there are no attachments (a message with images
+    // is always sent as a normal message).
+    const parsed = images.length === 0 ? parseSlashCommand(trimmed) : null
     if (parsed) {
       const cmd = resolveCommand(commands, parsed.name)
       if (cmd) {
@@ -131,8 +196,9 @@ export function Composer({
       }
       // Unknown command — fall through and send it as a normal message.
     }
-    onSend(trimmed)
+    onSend(trimmed, images.length ? images : undefined)
     setText('')
+    setImages([])
     resetMenus()
   }
 
@@ -189,7 +255,23 @@ export function Composer({
 
   return (
     <div className="composer">
-      <div className="composer__field">
+      <div className="composer__field" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+        {images.length > 0 && (
+          <div className="composer__attachments">
+            {images.map((img, i) => (
+              <div key={i} className="attachment">
+                <img className="attachment__thumb" src={imageDataUrl(img)} alt="attachment" />
+                <button
+                  className="attachment__remove"
+                  title="Remove"
+                  onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {showCmdMenu && (
           <ul className="mention-menu">
             {cmdMatches.map((cmd, i) => (
@@ -229,13 +311,14 @@ export function Composer({
           placeholder={
             disabled
               ? 'Pick a model and project folder to start…'
-              : 'Ask Houston…  (@ to mention a file, / for commands)'
+              : 'Ask Houston…  (@ file, / command, or drop/paste an image)'
           }
           value={text}
           disabled={disabled}
           rows={1}
           onChange={(e) => sync(e.target.value, e.target.selectionStart ?? e.target.value.length)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
         />
       </div>
       {running ? (
@@ -243,7 +326,11 @@ export function Composer({
           Stop
         </button>
       ) : (
-        <button className="btn btn--accent composer__btn" onClick={submit} disabled={disabled || !text.trim()}>
+        <button
+          className="btn btn--accent composer__btn"
+          onClick={submit}
+          disabled={disabled || (!text.trim() && images.length === 0)}
+        >
           Send
         </button>
       )}

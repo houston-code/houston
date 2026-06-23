@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
 import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
+import type { ImageAttachment } from '@shared/images'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
 import { Sidebar } from './components/Sidebar'
@@ -172,7 +173,7 @@ export default function App(): JSX.Element {
   }, [chat])
 
   const onSend = useCallback(
-    async (text: string) => {
+    async (text: string, images?: ImageAttachment[]) => {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
@@ -187,6 +188,7 @@ export default function App(): JSX.Element {
       await chat.send({
         conversationId: convId,
         userText: text,
+        images,
         providerId: settings.selected.providerId,
         model: settings.selected.model,
         approvalPolicy: settings.approvalPolicy
