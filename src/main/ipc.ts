@@ -8,6 +8,7 @@ import { getSettings, saveSettings, rememberWorkspace, getProvider } from './sto
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
 import { startRun, cancelRun, resolveApproval } from './agent/loop'
+import { restoreCheckpoint } from './agent/checkpoints'
 import { findFiles } from './agent/mentions'
 import { loadCommands } from './agent/commands'
 import { realpathSync } from 'node:fs'
@@ -176,5 +177,10 @@ export function registerIpc(): void {
     (_event, runId: string, callId: string, decision: ToolApprovalDecision) => {
       resolveApproval(runId, callId, decision)
     }
+  )
+
+  // Revert the file changes a run made (restore each touched file to its pre-turn state).
+  ipcMain.handle(IPC.checkpointRestore, (_event, runId: string): Promise<number> =>
+    restoreCheckpoint(runId)
   )
 }

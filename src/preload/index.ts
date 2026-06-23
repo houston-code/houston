@@ -54,6 +54,9 @@ const api = {
   cancelAgent: (runId: string): Promise<void> => ipcRenderer.invoke(IPC.agentCancel, runId),
   approveTool: (runId: string, callId: string, decision: ToolApprovalDecision): Promise<void> =>
     ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision),
+  /** Revert the file changes a run made. Returns the number of files restored. */
+  restoreCheckpoint: (runId: string): Promise<number> =>
+    ipcRenderer.invoke(IPC.checkpointRestore, runId),
   /** Subscribe to streamed agent events. Returns an unsubscribe function. */
   onAgentEvent: (cb: (e: AgentEvent) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, payload: AgentEvent): void => cb(payload)

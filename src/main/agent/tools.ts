@@ -33,7 +33,7 @@ const MAX_READ_CHARS = 100_000
 const MAX_GLOB_RESULTS = 200
 
 /** Resolve a user-supplied path against the workspace and reject anything that escapes it. */
-function resolveInWorkspace(workspace: string, p: string): string {
+export function resolveInWorkspace(workspace: string, p: string): string {
   if (typeof p !== 'string' || p.length === 0) throw new Error('A path is required.')
   const abs = isAbsolute(p) ? p : resolve(workspace, p)
   const rel = relative(workspace, abs)

@@ -18,6 +18,7 @@ import { loadProjectRules } from './rules'
 import { getTool, toolSchemas } from './tools'
 import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
+import { recordOriginal } from './checkpoints'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -298,6 +299,10 @@ export async function startRun(
             output = 'Denied by the user.'
             ok = false
           } else {
+            // Snapshot the target's prior content so this turn's file changes can be reverted.
+            if (tool.kind === 'write' && typeof call.arguments.path === 'string') {
+              await recordOriginal(runId, workspace, call.arguments.path)
+            }
             emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
             try {
               output = await tool.execute(call.arguments, {
