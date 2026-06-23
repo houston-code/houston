@@ -108,6 +108,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
   JSON file and import it back (or onto another machine) from the sidebar.
+  **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
+  direction without disturbing the original.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
   and groups persist across restarts.

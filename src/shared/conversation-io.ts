@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRole, ToolCall } from './agent'
+import type { ChatMessage, ChatRole, Conversation, ToolCall } from './agent'
 
 /**
  * Validation for imported conversation JSON. Kept Electron-free (and in shared)
@@ -88,4 +88,30 @@ export function resolveImportWorkspace(
 ): string {
   if (importedWorkspace && recentWorkspaces.includes(importedWorkspace)) return importedWorkspace
   return recentWorkspaces[0] ?? ''
+}
+
+/** Title for a forked conversation: "<base> (fork)", without stacking suffixes. */
+export function forkTitle(title: string): string {
+  const base = title.replace(/\s*\(fork(?: \d+)?\)\s*$/i, '').trim() || 'Chat'
+  return `${base} (fork)`
+}
+
+/**
+ * Shape a forked conversation from a source: a fresh id + timestamps, a "(fork)"
+ * title, and an independent copy of the message log. Pin and group membership are
+ * cleared so the fork lands in the default list rather than duplicating a pin.
+ * Pure (no fs/electron) so it's unit-testable.
+ */
+export function forkConversationData(src: Conversation, id: string, now: number): Conversation {
+  const fork: Conversation = {
+    ...src,
+    id,
+    title: forkTitle(src.title),
+    createdAt: now,
+    updatedAt: now,
+    messages: src.messages.map((m) => ({ ...m }))
+  }
+  delete fork.pinned
+  delete fork.groupId
+  return fork
 }
