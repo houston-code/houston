@@ -141,10 +141,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   build/test commands, and house rules without you re-explaining them each time.
   Any rules file can also pull in others with `@path` imports (relative, `~/…`, or
   absolute), the same way Claude Code splits or shares memory files.
-- **Token usage at a glance.** The control bar above the composer shows the
-  current context size and the output tokens used this session, so you can see how
-  big a conversation is getting. The model, project folder, approval policy and
-  thinking controls live there too — down by the composer, where you're typing.
+- **Token usage & cost at a glance.** The control bar above the composer shows the
+  current context size, the output tokens used this session, and an **estimated
+  USD cost** (for models with known pricing — Claude/GPT/Gemini; local models show
+  none), so you can see how big and how expensive a conversation is getting. The
+  model, project folder, approval policy and thinking controls live there too —
+  down by the composer, where you're typing.
 
 ## Install (prebuilt DMG)
 

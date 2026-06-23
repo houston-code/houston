@@ -1,6 +1,12 @@
 import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
 import type { ReasoningEffort } from '@shared/agent'
-import { contextPercent, contextWindowFor, formatTokens, type SessionUsage } from '@shared/usage'
+import {
+  contextPercent,
+  contextWindowFor,
+  formatTokens,
+  formatUsd,
+  type SessionUsage
+} from '@shared/usage'
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/')
@@ -134,7 +140,8 @@ export function ControlBar({
             (ctxWindow
               ? `Context: ${usage.context.toLocaleString()} / ${ctxWindow.toLocaleString()} tokens (${pct}%)`
               : `Context: ${usage.context.toLocaleString()} tokens`) +
-            `\nOutput this conversation: ${usage.output.toLocaleString()} tokens`
+            `\nOutput this conversation: ${usage.output.toLocaleString()} tokens` +
+            (usage.cost > 0 ? `\nEstimated cost: ${formatUsd(usage.cost)} (approximate)` : '')
           }
         >
           {pct !== null && (
@@ -147,6 +154,7 @@ export function ControlBar({
               ? `${formatTokens(usage.context)}/${formatTokens(ctxWindow!)} · ${pct}%`
               : `${formatTokens(usage.context)} ctx`}{' '}
             · {formatTokens(usage.output)} out
+            {usage.cost > 0 && <> · {formatUsd(usage.cost)}</>}
           </span>
         </span>
       )}

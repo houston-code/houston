@@ -105,7 +105,13 @@ export default function App(): JSX.Element {
       setLastWorkspace(conv.workspace)
       chat.reset(
         itemsFromMessages(conv.messages),
-        conv.usage ? { context: conv.usage.inputTokens, output: conv.usage.outputTokens } : null
+        conv.usage
+          ? {
+              context: conv.usage.inputTokens,
+              output: conv.usage.outputTokens,
+              cost: conv.usage.cost ?? 0
+            }
+          : null
       )
     },
     [chat]

@@ -139,7 +139,7 @@ describe('forkConversationData', () => {
     updatedAt: 2,
     pinned: true,
     groupId: 'g1',
-    usage: { inputTokens: 10, outputTokens: 20 },
+    usage: { inputTokens: 10, outputTokens: 20, cost: 0.01 },
     messages: [{ role: 'user', content: 'hi' }]
   }
 

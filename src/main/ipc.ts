@@ -175,9 +175,12 @@ export function registerIpc(): void {
       if (e.type === 'usage') {
         const total = addUsage(req.conversationId, {
           inputTokens: e.inputTokens,
-          outputTokens: e.outputTokens
+          outputTokens: e.outputTokens,
+          cost: e.cost
         })
-        if (total) e = { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens }
+        if (total) {
+          e = { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens, cost: total.cost }
+        }
       }
       if (!event.sender.isDestroyed()) event.sender.send(IPC.agentEvent, e)
     }
