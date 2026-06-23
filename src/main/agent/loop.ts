@@ -16,7 +16,7 @@ import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
 import { getTool, toolSchemas } from './tools'
-import { needsApproval } from './approval'
+import { isBlockedByPlan, needsApproval } from './approval'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -126,7 +126,8 @@ export async function startRun(
 
     const settings = getSettings()
     const rules = await loadProjectRules(workspace)
-    const system = buildSystemPrompt(workspace, settings.systemPromptExtra, rules.text)
+    const planMode = req.approvalPolicy === 'plan'
+    const system = buildSystemPrompt(workspace, settings.systemPromptExtra, rules.text, planMode)
     const tools = toolSchemas()
     const messages: ChatMessage[] = [...req.messages]
 
@@ -257,6 +258,10 @@ export async function startRun(
 
         if (!tool) {
           output = `Unknown tool: ${call.name}`
+          ok = false
+        } else if (isBlockedByPlan(req.approvalPolicy, tool.kind)) {
+          output =
+            'Blocked: Houston is in Plan mode (read-only). Do not modify files or run commands. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
           ok = false
         } else {
           let approved = true

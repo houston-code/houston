@@ -33,10 +33,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   servers, watchers) in the background and return immediately; the agent polls
   them with `read_shell_output` and stops them with `kill_shell`. They're killed
   when the app quits.
-- **Approval flow.** Choose how much autonomy to grant: *ask every time*,
-  *auto-approve edits*, or *full auto*. Approve, deny, or allow-for-the-run on
-  each tool call. File edits show an inline red/green **diff** so you can review
-  exactly what changes before approving.
+- **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only —
+  the agent researches and proposes a plan, with writes and shell commands
+  blocked), *ask every time*, *auto-approve edits*, or *full auto*. Approve, deny,
+  or allow-for-the-run on each tool call. File edits show an inline red/green
+  **diff** so you can review exactly what changes before approving.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a

@@ -2,6 +2,17 @@ import type { ApprovalPolicy } from '@shared/types'
 import type { ToolKind } from './tools'
 
 /**
+ * In plan mode the agent is read-only: it researches and proposes a plan but may
+ * not change anything. Writes and shell commands are blocked outright (not merely
+ * prompted) until the user switches off plan mode. Reads and network fetches
+ * (which don't mutate the workspace) are still allowed, network via its usual
+ * approval prompt.
+ */
+export function isBlockedByPlan(policy: ApprovalPolicy, kind: ToolKind): boolean {
+  return policy === 'plan' && (kind === 'write' || kind === 'shell')
+}
+
+/**
  * Decide whether a tool call must be approved by the user before it runs.
  *
  * - `override` ("Allow for run") auto-approves everything for the rest of the run.

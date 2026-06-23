@@ -31,4 +31,9 @@ describe('buildSystemPrompt', () => {
     expect(p).not.toContain('Project instructions')
     expect(p).not.toContain('Additional user instructions')
   })
+
+  it('adds a plan-mode notice only when plan mode is on', () => {
+    expect(buildSystemPrompt('/tmp/x')).not.toContain('PLAN MODE')
+    expect(buildSystemPrompt('/tmp/x', undefined, undefined, true)).toContain('PLAN MODE IS ON')
+  })
 })

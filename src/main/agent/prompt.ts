@@ -1,7 +1,12 @@
 import { basename } from 'node:path'
 
 /** Build the coding-agent system prompt for a run. */
-export function buildSystemPrompt(workspace: string, extra?: string, rules?: string): string {
+export function buildSystemPrompt(
+  workspace: string,
+  extra?: string,
+  rules?: string,
+  planMode?: boolean
+): string {
   const base = `You are Houston, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
 
 Working directory: ${workspace} (project: "${basename(workspace)}")
@@ -29,6 +34,12 @@ Guidelines:
 - If a request is ambiguous or risky, ask before acting.`
 
   const sections = [base]
+
+  if (planMode) {
+    sections.push(
+      `PLAN MODE IS ON. You are read-only: write_file, edit_file, and run_shell are blocked and will be refused. Investigate with read_file, list_dir, glob, search_files (and web_fetch/web_search if needed), then present a clear, concrete step-by-step plan for the change and STOP — do not attempt to edit files or run commands. The user will switch off plan mode when they're ready for you to carry it out.`
+    )
+  }
 
   if (rules && rules.trim()) {
     sections.push(
