@@ -32,7 +32,7 @@ Guidelines:
 
   if (rules && rules.trim()) {
     sections.push(
-      `Project instructions (from the project's own rules files — follow them, and prefer them over your defaults when they conflict):\n${rules.trim()}`
+      `Project instructions (from the global and project rules files — follow them, and prefer them over your defaults when they conflict; later, more specific sections win over earlier ones):\n${rules.trim()}`
     )
   }
 
