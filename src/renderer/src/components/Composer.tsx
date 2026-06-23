@@ -1,24 +1,48 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
+import {
+  expandTemplate,
+  matchCommands,
+  parseSlashCommand,
+  resolveCommand,
+  type Command
+} from '@shared/commands'
 
 export function Composer({
   disabled,
   running,
   workspace,
+  commands,
+  onCommand,
   onSend,
   onCancel
 }: {
   disabled: boolean
   running: boolean
   workspace: string | null
+  commands: Command[]
+  onCommand: (cmd: Command, args: string) => void
   onSend: (text: string) => void
   onCancel: () => void
 }): JSX.Element {
   const [text, setText] = useState('')
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
-  const [activeIndex, setActiveIndex] = useState(0)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [cmdIndex, setCmdIndex] = useState(0)
+  const [cmdDismissed, setCmdDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+
+  // A leading "/name" (no space yet) opens the command menu.
+  const cmdPrefix = useMemo(() => {
+    const m = text.match(/^\/(\S*)$/)
+    return m ? m[1] : null
+  }, [text])
+  const cmdMatches = useMemo(
+    () => (cmdPrefix === null ? [] : matchCommands(commands, cmdPrefix)),
+    [cmdPrefix, commands]
+  )
+  const showCmdMenu = !cmdDismissed && cmdMatches.length > 0
 
   // Query workspace files for the active @-mention (debounced).
   useEffect(() => {
@@ -31,7 +55,7 @@ export function Composer({
       void window.api.listWorkspaceFiles(workspace, mention.query).then((files) => {
         if (!cancelled) {
           setSuggestions(files)
-          setActiveIndex(0)
+          setMentionIndex(0)
         }
       })
     }, 80)
@@ -41,20 +65,16 @@ export function Composer({
     }
   }, [mention, workspace])
 
-  const showMenu = mention !== null && suggestions.length > 0
+  const showMentionMenu = mention !== null && suggestions.length > 0
 
   const sync = (value: string, cursor: number): void => {
     setText(value)
     setMention(mentionBeforeCursor(value.slice(0, cursor)))
+    setCmdDismissed(false)
+    setCmdIndex(0)
   }
 
-  const choose = (path: string): void => {
-    if (!mention) return
-    const { text: next, caret } = applyMention(text, mention, path)
-    setText(next)
-    setMention(null)
-    setSuggestions([])
-    // Restore focus and place the cursor right after the inserted mention.
+  const focusEnd = (caret: number): void => {
     requestAnimationFrame(() => {
       const el = ref.current
       if (el) {
@@ -64,30 +84,94 @@ export function Composer({
     })
   }
 
+  const chooseMention = (path: string): void => {
+    if (!mention) return
+    const { text: next, caret } = applyMention(text, mention, path)
+    setText(next)
+    setMention(null)
+    setSuggestions([])
+    focusEnd(caret)
+  }
+
+  // Complete the command name into the input; the user adds args, then Enter runs it.
+  const chooseCommand = (cmd: Command): void => {
+    const next = `/${cmd.name} `
+    setText(next)
+    setCmdDismissed(true)
+    focusEnd(next.length)
+  }
+
+  const resetMenus = (): void => {
+    setMention(null)
+    setSuggestions([])
+    setCmdDismissed(false)
+    setCmdIndex(0)
+  }
+
   const submit = (): void => {
     const trimmed = text.trim()
     if (!trimmed || disabled || running) return
+    const parsed = parseSlashCommand(trimmed)
+    if (parsed) {
+      const cmd = resolveCommand(commands, parsed.name)
+      if (cmd) {
+        if (cmd.template) {
+          // Custom command: expand into the composer so the (workspace-supplied)
+          // prompt is visible and editable before the user sends it.
+          const expanded = expandTemplate(cmd.template, parsed.args)
+          setText(expanded)
+          resetMenus()
+          focusEnd(expanded.length)
+        } else {
+          onCommand(cmd, parsed.args)
+          setText('')
+          resetMenus()
+        }
+        return
+      }
+      // Unknown command — fall through and send it as a normal message.
+    }
     onSend(trimmed)
     setText('')
-    setMention(null)
-    setSuggestions([])
+    resetMenus()
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (showMenu) {
+    if (showCmdMenu) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setActiveIndex((i) => (i + 1) % suggestions.length)
+        setCmdIndex((i) => (i + 1) % cmdMatches.length)
         return
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setActiveIndex((i) => (i - 1 + suggestions.length) % suggestions.length)
+        setCmdIndex((i) => (i - 1 + cmdMatches.length) % cmdMatches.length)
         return
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
-        choose(suggestions[activeIndex])
+        chooseCommand(cmdMatches[cmdIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setCmdDismissed(true)
+        return
+      }
+    } else if (showMentionMenu) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex((i) => (i + 1) % suggestions.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex((i) => (i - 1 + suggestions.length) % suggestions.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        chooseMention(suggestions[mentionIndex])
         return
       }
       if (e.key === 'Escape') {
@@ -106,16 +190,32 @@ export function Composer({
   return (
     <div className="composer">
       <div className="composer__field">
-        {showMenu && (
+        {showCmdMenu && (
+          <ul className="mention-menu">
+            {cmdMatches.map((cmd, i) => (
+              <li
+                key={cmd.name}
+                className={`mention-item ${i === cmdIndex ? 'mention-item--active' : ''}`}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  chooseCommand(cmd)
+                }}
+              >
+                <span className="mention-item__name">/{cmd.name}</span>
+                <span className="mention-item__desc">{cmd.description}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {showMentionMenu && (
           <ul className="mention-menu">
             {suggestions.map((path, i) => (
               <li
                 key={path}
-                className={`mention-item ${i === activeIndex ? 'mention-item--active' : ''}`}
-                // onMouseDown (not onClick) so it fires before the textarea blurs.
+                className={`mention-item ${i === mentionIndex ? 'mention-item--active' : ''}`}
                 onMouseDown={(e) => {
                   e.preventDefault()
-                  choose(path)
+                  chooseMention(path)
                 }}
               >
                 {path}
@@ -129,7 +229,7 @@ export function Composer({
           placeholder={
             disabled
               ? 'Pick a model and project folder to start…'
-              : 'Ask Houston to build or change something…  (@ to mention a file)'
+              : 'Ask Houston…  (@ to mention a file, / for commands)'
           }
           value={text}
           disabled={disabled}

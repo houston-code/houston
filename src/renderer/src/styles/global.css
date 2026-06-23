@@ -610,6 +610,15 @@ pre.diff {
 .mention-item:hover {
   background: var(--bg-hover);
 }
+.mention-item__name {
+  font-family: var(--mono);
+  color: var(--accent);
+  margin-right: 8px;
+}
+.mention-item__desc {
+  color: var(--text-dim);
+  font-size: 11px;
+}
 
 /* ---- Settings modal ---- */
 .modal-backdrop {

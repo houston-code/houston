@@ -23,6 +23,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   requires approval since it leaves the machine.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message — no need to paste or describe where things live.
+- **Slash commands.** Type `/` for a command menu: `/new` starts a chat, and any
+  Markdown file in `.houston/commands/` becomes a custom command — its contents are
+  a prompt template (`$ARGUMENTS` is filled in with whatever you type after the
+  command name).
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.

@@ -9,6 +9,7 @@ import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
 import { startRun, cancelRun, resolveApproval } from './agent/loop'
 import { findFiles } from './agent/mentions'
+import { loadCommands } from './agent/commands'
 import { realpathSync } from 'node:fs'
 import {
   listConversations,
@@ -51,6 +52,16 @@ export function registerIpc(): void {
       return findFiles(root, typeof query === 'string' ? query : '')
     }
   )
+
+  // Custom slash commands from the workspace's .houston/commands directory.
+  ipcMain.handle(IPC.commandsList, async (_event, workspace: string) => {
+    if (!workspace) return []
+    try {
+      return await loadCommands(realpathSync(workspace))
+    } catch {
+      return []
+    }
+  })
 
   ipcMain.handle(IPC.settingsGet, () => getSettings())
 
