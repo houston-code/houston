@@ -19,6 +19,7 @@ import { getTool, toolSchemas } from './tools'
 import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal } from './checkpoints'
+import { runSubAgent } from './subagent'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -309,7 +310,9 @@ export async function startRun(
                 workspace,
                 allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
                 signal: abort.signal,
-                getSecret: getKey
+                getSecret: getKey,
+                dispatchSubAgent: (prompt) =>
+                  runSubAgent({ provider, model: req.model, workspace, prompt, signal: abort.signal })
               })
             } catch (e) {
               output = `Error: ${(e as Error).message}`

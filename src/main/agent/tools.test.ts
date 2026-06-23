@@ -24,6 +24,7 @@ const run = (name: string, args: Record<string, unknown>): Promise<string> =>
 describe('tool registry', () => {
   it('exposes the expected tools', () => {
     expect(toolSchemas().map((t) => t.name).sort()).toEqual([
+      'dispatch_agent',
       'edit_file',
       'glob',
       'kill_shell',

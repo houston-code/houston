@@ -19,6 +19,8 @@ export interface ToolContext {
   signal?: AbortSignal
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
+  /** Run a read-only research subagent (injected by the loop, which has the provider). */
+  dispatchSubAgent?: (prompt: string) => Promise<string>
 }
 
 export interface ToolDef {
@@ -498,6 +500,32 @@ const webSearch: ToolDef = {
   }
 }
 
+const dispatchAgent: ToolDef = {
+  kind: 'read', // spawns a read-only subagent — no side effects, no approval needed
+  summarize: (a) => `Subagent: ${str(a, 'description') || 'research task'}`,
+  schema: {
+    name: 'dispatch_agent',
+    description:
+      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report.',
+    parameters: objectSchema(
+      {
+        description: { type: 'string', description: 'A short label for the task (a few words).' },
+        prompt: {
+          type: 'string',
+          description: 'The full task/question for the subagent, with all the context it needs.'
+        }
+      },
+      ['description', 'prompt']
+    )
+  },
+  async execute(args, ctx) {
+    const prompt = str(args, 'prompt')
+    if (!prompt) throw new Error('prompt is required.')
+    if (!ctx.dispatchSubAgent) throw new Error('Subagents are not available in this context.')
+    return ctx.dispatchSubAgent(prompt)
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -510,7 +538,8 @@ export const TOOLS: ToolDef[] = [
   killShellTool,
   webFetch,
   webSearch,
-  todoWrite
+  todoWrite,
+  dispatchAgent
 ]
 
 export function toolSchemas(): ToolSchema[] {
