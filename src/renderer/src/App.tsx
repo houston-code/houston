@@ -17,7 +17,15 @@ import { Composer } from './components/Composer'
 import { SettingsModal } from './components/SettingsModal'
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
-const BUILTIN_COMMANDS: Command[] = [{ name: 'new', description: 'Start a new chat' }]
+const BUILTIN_COMMANDS: Command[] = [
+  { name: 'new', description: 'Start a new chat' },
+  {
+    name: 'review',
+    description: 'Adversarial review of your uncommitted changes',
+    template:
+      'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
+  }
+]
 
 /** Pick a sensible default model: first provider that has a key and a model. */
 function defaultSelection(settings: AppSettings): SelectedModel | null {

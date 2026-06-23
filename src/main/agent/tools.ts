@@ -31,6 +31,8 @@ export interface ToolContext {
   getSecret?: (id: string) => string | null
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
   dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
+  /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
+  dispatchReview?: (base?: string) => Promise<string>
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
@@ -595,6 +597,30 @@ const dispatchAgent: ToolDef = {
   }
 }
 
+const reviewChanges: ToolDef = {
+  kind: 'read', // spawns read-only reviewer subagents + read-only git — no side effects, no approval
+  summarize: (a) => `Review changes${str(a, 'base') ? ` vs ${str(a, 'base')}` : ''}`,
+  schema: {
+    name: 'review_changes',
+    description:
+      'Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don\'t inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done — then fix what it confirms. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch.',
+    parameters: objectSchema(
+      {
+        base: {
+          type: 'string',
+          description:
+            'Optional git ref to diff against (e.g. "main" or a commit SHA). Default: HEAD (all uncommitted changes).'
+        }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    if (!ctx.dispatchReview) throw new Error('Review is not available in this context.')
+    return ctx.dispatchReview(str(args, 'base') || undefined)
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -608,7 +634,8 @@ export const TOOLS: ToolDef[] = [
   webFetch,
   webSearch,
   todoWrite,
-  dispatchAgent
+  dispatchAgent,
+  reviewChanges
 ]
 
 export function toolSchemas(): ToolSchema[] {

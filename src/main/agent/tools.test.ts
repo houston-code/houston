@@ -31,6 +31,7 @@ describe('tool registry', () => {
       'list_dir',
       'read_file',
       'read_shell_output',
+      'review_changes',
       'run_shell',
       'search_files',
       'todo_write',
@@ -38,6 +39,10 @@ describe('tool registry', () => {
       'web_search',
       'write_file'
     ])
+  })
+
+  it('review_changes errors without a review dispatcher in context', async () => {
+    await expect(run('review_changes', {})).rejects.toThrow(/not available/)
   })
 })
 

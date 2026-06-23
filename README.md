@@ -30,14 +30,21 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   requires approval since it leaves the machine.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message — no need to paste or describe where things live.
-- **Slash commands.** Type `/` for a command menu: `/new` starts a chat, and any
-  Markdown file in `.houston/commands/` becomes a custom command — its contents are
-  a prompt template (`$ARGUMENTS` is filled in with whatever you type after the
-  command name).
+- **Slash commands.** Type `/` for a command menu: `/new` starts a chat, `/review`
+  runs an adversarial review of your changes, and any Markdown file in
+  `.houston/commands/` becomes a custom command — its contents are a prompt
+  template (`$ARGUMENTS` is filled in with whatever you type after the command name).
 - **Research subagents.** The agent can `dispatch_agent` to hand a focused,
   read-only question to a subagent with its own fresh context. The subagent
   reads, globs, and searches the project and reports back — keeping the main
   agent's context clean. Subagents can't edit, run commands, or use the network.
+- **Adversarial review.** `review_changes` (or `/review`) reviews your uncommitted
+  changes for correctness, security, and quality. It runs an independent read-only
+  reviewer per dimension — each in its own fresh context, so they don't inherit the
+  author's blind spots — then a skeptical verifier that re-checks every candidate
+  finding against the real code and drops the false positives, and reports the
+  confirmed ones. The agent can self-review after a substantial change before
+  telling you it's done. Same multi-agent shape as Claude Code's review.
 - **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
   a specialized read-only subagent (front-matter `description` + a system-prompt
   body) — the main agent can dispatch it by name. Add a `.houston/skills/<name>/SKILL.md`
