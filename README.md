@@ -81,6 +81,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   after the agent writes it, so when a turn edits files a **Revert** button appears —
   one click restores everything that turn changed (and deletes files it created).
   Changed your mind? **Redo** puts the changes back.
+- **Status bar.** A slim bar along the bottom shows what the agent is doing right
+  now (Ready / Responding… / Running a tool / Awaiting approval) and the active
+  model.
 - **Keyboard shortcuts.** ⌘N new chat, ⌘, settings, and Esc to stop a running
   turn or close the settings dialog.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
