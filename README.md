@@ -95,6 +95,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   turn or close the settings dialog.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
   *Appearance*; *System* follows your macOS appearance and switches live.
+- **Resilient streaming.** Transient provider failures (rate limits, overloads,
+  dropped connections) are retried with exponential backoff — shown inline as a
+  "retrying…" notice — as long as nothing has streamed yet, so a blip mid-run no
+  longer throws the whole turn away.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a

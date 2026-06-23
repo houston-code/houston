@@ -20,6 +20,7 @@ import { loadProjectRules } from './rules'
 import { getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
 import { getMcpToolDefs } from '../mcp/manager'
 import { isParallelizableRead } from './scheduling'
+import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
 import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
@@ -41,6 +42,8 @@ import {
 } from './compaction'
 
 const MAX_ITERATIONS = 40
+/** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
+const MAX_STREAM_RETRIES = 3
 
 /**
  * Ask the provider to summarize a slice of the conversation. Returns the summary
@@ -273,48 +276,77 @@ export async function startRun(
       const sendMessages = [...summaryMsgs, ...messages.slice(cut)]
 
       let assistantText = ''
-      const toolCalls: ToolCall[] = []
+      let toolCalls: ToolCall[] = []
       let stopReason: StopReason = 'end_turn'
       let turnInput = 0
       let turnOutput = 0
       let turnReasoning: ReasoningBlock[] = []
 
-      try {
-        for await (const ev of provider.streamChat({
-          model: req.model,
-          system,
-          messages: sendMessages,
-          tools,
-          reasoningEffort: settings.reasoningEffort,
-          signal: abort.signal
-        })) {
-          if (ev.type === 'text') {
-            assistantText += ev.text
-            emit({ type: 'text', delta: ev.text })
-          } else if (ev.type === 'reasoning') {
-            emit({ type: 'reasoning', delta: ev.text })
-          } else if (ev.type === 'tool_call') {
-            toolCalls.push(ev.call)
-          } else if (ev.type === 'done') {
-            stopReason = ev.stopReason
-            if (ev.usage?.inputTokens) {
-              lastInputTokens = ev.usage.inputTokens
-              turnInput = ev.usage.inputTokens
+      // Stream the model turn, retrying transient failures with backoff — but only
+      // when nothing has been emitted yet this attempt, so retried output can't
+      // duplicate what the user already saw.
+      streaming: for (let attempt = 0; ; attempt++) {
+        assistantText = ''
+        toolCalls = []
+        stopReason = 'end_turn'
+        turnInput = 0
+        turnOutput = 0
+        turnReasoning = []
+        let emitted = false
+        try {
+          for await (const ev of provider.streamChat({
+            model: req.model,
+            system,
+            messages: sendMessages,
+            tools,
+            reasoningEffort: settings.reasoningEffort,
+            signal: abort.signal
+          })) {
+            if (ev.type === 'text') {
+              emitted = true
+              assistantText += ev.text
+              emit({ type: 'text', delta: ev.text })
+            } else if (ev.type === 'reasoning') {
+              emitted = true
+              emit({ type: 'reasoning', delta: ev.text })
+            } else if (ev.type === 'tool_call') {
+              emitted = true
+              toolCalls.push(ev.call)
+            } else if (ev.type === 'done') {
+              stopReason = ev.stopReason
+              if (ev.usage?.inputTokens) {
+                lastInputTokens = ev.usage.inputTokens
+                turnInput = ev.usage.inputTokens
+              }
+              if (ev.usage?.outputTokens) turnOutput = ev.usage.outputTokens
+              if (ev.reasoning?.length) turnReasoning = ev.reasoning
+            } else if (ev.type === 'error') {
+              throw new Error(ev.message)
             }
-            if (ev.usage?.outputTokens) turnOutput = ev.usage.outputTokens
-            if (ev.reasoning?.length) turnReasoning = ev.reasoning
-          } else if (ev.type === 'error') {
-            emit({ type: 'error', message: ev.message })
+          }
+          break streaming // turn completed successfully
+        } catch (e) {
+          if (abort.signal.aborted) {
+            emit({ type: 'done', stopReason: 'aborted' })
+            return
+          }
+          // Can't safely retry once output has streamed, or if it's not transient.
+          if (emitted || attempt >= MAX_STREAM_RETRIES || !isRetryableError(e)) {
+            emit({ type: 'error', message: (e as Error).message })
+            return
+          }
+          emit({
+            type: 'retry',
+            attempt: attempt + 1,
+            max: MAX_STREAM_RETRIES,
+            message: (e as Error).message
+          })
+          await abortableSleep(backoffDelayMs(attempt + 1), abort.signal)
+          if (abort.signal.aborted) {
+            emit({ type: 'done', stopReason: 'aborted' })
             return
           }
         }
-      } catch (e) {
-        if (abort.signal.aborted) {
-          emit({ type: 'done', stopReason: 'aborted' })
-        } else {
-          emit({ type: 'error', message: (e as Error).message })
-        }
-        return
       }
 
       if (turnInput || turnOutput) {
