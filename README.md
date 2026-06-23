@@ -79,6 +79,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. Approve, deny,
   or allow-for-the-run on each tool call. File edits show an inline red/green
   **diff** so you can review exactly what changes before approving.
+- **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
+  *deny* / *ask* permission rules (checked before your global ones) — e.g. always
+  ask before touching `infra/**`. For safety a project file can only *tighten*:
+  `allow` rules, hooks, and MCP servers stay in your own global Settings, so
+  cloning an untrusted repo can't auto-approve actions or run commands.
 - **Permission rules.** Beyond the coarse policy, add fine-grained
   *allow* / *deny* / *ask* rules in Settings, matched on the tool and a glob over
   its target (e.g. allow `run_shell` matching `git *`, deny anything matching
