@@ -139,4 +139,45 @@ describe('loadProjectRules', () => {
       expect(rules.text).toContain('end')
     })
   })
+
+  describe('nested rules', () => {
+    it('discovers AGENTS.md / CLAUDE.md in subdirectories, shallowest first', async () => {
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Root rules.')
+      mkdirSync(join(workspace, 'packages', 'api'), { recursive: true })
+      writeFileSync(join(workspace, 'packages', 'api', 'AGENTS.md'), 'API package rules.')
+      mkdirSync(join(workspace, 'packages', 'api', 'deep'), { recursive: true })
+      writeFileSync(join(workspace, 'packages', 'api', 'deep', 'CLAUDE.md'), 'Deep rules.')
+
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toContain('AGENTS.md')
+      expect(rules.files.some((f) => f.includes('packages/api/AGENTS.md'))).toBe(true)
+      expect(rules.files.some((f) => f.includes('packages/api/deep/CLAUDE.md'))).toBe(true)
+      // Root first, then shallower nested, then deeper nested (precedence order).
+      expect(rules.text.indexOf('Root rules.')).toBeLessThan(rules.text.indexOf('API package rules.'))
+      expect(rules.text.indexOf('API package rules.')).toBeLessThan(rules.text.indexOf('Deep rules.'))
+    })
+
+    it('skips node_modules and other vendor/build dirs', async () => {
+      mkdirSync(join(workspace, 'node_modules', 'pkg'), { recursive: true })
+      writeFileSync(join(workspace, 'node_modules', 'pkg', 'AGENTS.md'), 'Vendor noise.')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).not.toContain('Vendor noise.')
+    })
+
+    it('respects the depth limit', async () => {
+      mkdirSync(join(workspace, 'a', 'b', 'c'), { recursive: true })
+      writeFileSync(join(workspace, 'a', 'b', 'c', 'AGENTS.md'), 'Too deep.')
+      const rules = await loadProjectRules(workspace, { ...opts(), maxNestedDepth: 1 })
+      expect(rules.text).not.toContain('Too deep.')
+    })
+
+    it('can be disabled with maxNestedDepth 0', async () => {
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Root.')
+      mkdirSync(join(workspace, 'sub'))
+      writeFileSync(join(workspace, 'sub', 'AGENTS.md'), 'Nested.')
+      const rules = await loadProjectRules(workspace, { ...opts(), maxNestedDepth: 0 })
+      expect(rules.files).toEqual(['AGENTS.md'])
+      expect(rules.text).not.toContain('Nested.')
+    })
+  })
 })

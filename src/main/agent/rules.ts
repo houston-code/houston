@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { SKIP_DIRS } from './search'
 
 /**
  * Project-level agent instructions. Many repos ship an `AGENTS.md` (the emerging
@@ -11,14 +12,17 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
  * Houston assembles a small hierarchy, lowest precedence first:
  *   1. Global user rules at `~/.claude/CLAUDE.md` (apply to every project).
  *   2. Project rules: `AGENTS.md` then `CLAUDE.md` at the workspace root.
+ *   3. Nested rules: `AGENTS.md`/`CLAUDE.md` discovered in subdirectories
+ *      (shallowest first), so per-package conventions in a monorepo are picked
+ *      up without being explicitly imported.
  *
- * Any loaded file may pull in other files with `@path` imports (relative to the
- * importing file, `~/…` for home, or absolute) — the same mechanism Claude Code
- * uses to split a large memory file or share nested per-directory rules. Imports
- * are expanded recursively with a depth cap and cycle protection.
+ * Any loaded file may also pull in other files with `@path` imports (relative to
+ * the importing file, `~/…` for home, or absolute) — the same mechanism Claude
+ * Code uses to split a large memory file. Imports are expanded recursively with a
+ * depth cap and cycle protection.
  */
 
-/** Filenames read from the workspace root, in precedence order. */
+/** Filenames read from each directory, in precedence order. */
 export const RULES_FILES = ['AGENTS.md', 'CLAUDE.md'] as const
 
 /** Cap the combined rules text so a huge file can't crowd out the context window. */
@@ -26,6 +30,12 @@ export const MAX_RULES_CHARS = 32_000
 
 /** Maximum @import nesting depth (matches Claude Code). */
 export const MAX_IMPORT_DEPTH = 5
+
+/** How deep below the workspace root to look for nested rules files. */
+export const MAX_NESTED_DEPTH = 4
+
+/** Cap how many nested rules files we discover, so a huge monorepo can't explode. */
+export const MAX_NESTED_RULES_FILES = 25
 
 export interface ProjectRules {
   /** Combined, section-headed rules text (empty when no rules files exist). */
@@ -39,6 +49,55 @@ export interface LoadRulesOptions {
   globalDir?: string
   /** Home directory used to resolve `~/…` in @imports (default `os.homedir()`). */
   home?: string
+  /** Max subdirectory depth to scan for nested rules (default MAX_NESTED_DEPTH; 0 disables). */
+  maxNestedDepth?: number
+  /** Max number of nested rules files to load (default MAX_NESTED_RULES_FILES). */
+  maxNestedFiles?: number
+}
+
+/**
+ * Walk the workspace subtree for nested `AGENTS.md`/`CLAUDE.md` files (excluding
+ * the root, which is loaded separately). Skips dotdirs and build/vendor dirs,
+ * and is bounded by depth and count. Returns `{ path, label }` sorted shallowest
+ * first then alphabetically, so deeper (more specific) rules land later — and
+ * thus at higher precedence — in the assembled output.
+ */
+async function discoverNestedRules(
+  workspace: string,
+  maxDepth: number,
+  maxFiles: number
+): Promise<{ path: string; label: string }[]> {
+  const found: { path: string; label: string; depth: number }[] = []
+
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (found.length >= maxFiles) return
+    let entries
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    if (dir !== workspace) {
+      for (const name of RULES_FILES) {
+        if (found.length >= maxFiles) break
+        if (entries.some((e) => e.isFile() && e.name === name)) {
+          const path = join(dir, name)
+          found.push({ path, label: relative(workspace, path), depth })
+        }
+      }
+    }
+    if (depth >= maxDepth) return
+    for (const e of entries) {
+      if (found.length >= maxFiles) break
+      if (e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)) {
+        await walk(join(dir, e.name), depth + 1)
+      }
+    }
+  }
+
+  await walk(workspace, 0)
+  found.sort((a, b) => a.depth - b.depth || a.label.localeCompare(b.label))
+  return found.map(({ path, label }) => ({ path, label }))
 }
 
 /** Resolve an @import spec against the importing file's directory; `~` is home. */
@@ -134,9 +193,9 @@ async function loadOne(
 }
 
 /**
- * Assemble the rules hierarchy (global → project) with @imports expanded, capped
- * to MAX_RULES_CHARS. Only the workspace root and the global dir are consulted
- * directly; deeper nesting is reachable via @imports. Never throws.
+ * Assemble the rules hierarchy (global → workspace root → nested subdirectories)
+ * with @imports expanded, capped to MAX_RULES_CHARS. Nested AGENTS.md/CLAUDE.md
+ * are auto-discovered below the root (bounded by depth and count). Never throws.
  */
 export async function loadProjectRules(
   workspace: string,
@@ -144,13 +203,19 @@ export async function loadProjectRules(
 ): Promise<ProjectRules> {
   const home = opts.home ?? homedir()
   const globalDir = opts.globalDir ?? join(home, '.claude')
+  const maxNestedDepth = opts.maxNestedDepth ?? MAX_NESTED_DEPTH
+  const maxNestedFiles = opts.maxNestedFiles ?? MAX_NESTED_RULES_FILES
   const visited = new Set<string>()
   const parts: string[] = []
   const files: string[] = []
 
+  const nested =
+    maxNestedDepth > 0 ? await discoverNestedRules(workspace, maxNestedDepth, maxNestedFiles) : []
+
   const sources: { path: string; label: string }[] = [
     { path: join(globalDir, 'CLAUDE.md'), label: '~/.claude/CLAUDE.md (global)' },
-    ...RULES_FILES.map((name) => ({ path: join(workspace, name), label: name }))
+    ...RULES_FILES.map((name) => ({ path: join(workspace, name), label: name })),
+    ...nested
   ]
 
   for (const { path, label } of sources) {
