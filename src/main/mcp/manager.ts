@@ -2,6 +2,7 @@ import type { McpServerConfig } from '@shared/types'
 import { mcpToolName } from '@shared/mcp'
 import type { ToolDef } from '../agent/tools'
 import { McpClient } from './client'
+import { log } from '../logger'
 
 /**
  * Manages connections to the configured MCP servers and exposes their tools to
@@ -62,7 +63,7 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
     } catch (e) {
       client.close()
       connections.delete(c.id)
-      console.warn(`[mcp] server "${c.id}" failed to connect: ${(e as Error).message}`)
+      log.warn(`MCP server "${c.id}" failed to connect: ${(e as Error).message}`)
     }
   }
 }
