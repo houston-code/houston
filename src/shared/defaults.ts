@@ -93,6 +93,7 @@ export function defaultSettings(): AppSettings {
     permissionRules: [],
     hooks: [],
     mcpServers: [],
-    additionalRoots: []
+    additionalRoots: [],
+    theme: 'system'
   }
 }

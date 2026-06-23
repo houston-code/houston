@@ -469,6 +469,21 @@ export function SettingsModal({
           <button className="btn btn--sm" onClick={() => void addRoot()}>
             + Add folder
           </button>
+
+          <h3>Appearance</h3>
+          <label className="field">
+            <span>Color theme</span>
+            <select
+              value={settings.theme ?? 'system'}
+              onChange={(e) =>
+                setSettings((s) => ({ ...s, theme: e.target.value as AppSettings['theme'] }))
+              }
+            >
+              <option value="system">System</option>
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </label>
         </div>
 
         <div className="modal__foot">

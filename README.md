@@ -81,6 +81,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   after the agent writes it, so when a turn edits files a **Revert** button appears —
   one click restores everything that turn changed (and deletes files it created).
   Changed your mind? **Redo** puts the changes back.
+- **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
+  *Appearance*; *System* follows your macOS appearance and switches live.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a

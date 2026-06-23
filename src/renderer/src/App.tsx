@@ -3,6 +3,7 @@ import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@sha
 import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
+import { applyTheme } from './lib/theme'
 import { newGroupId } from './lib/chatGroups'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
@@ -53,6 +54,17 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (!chat.running) void refreshConversations()
   }, [chat.running, refreshConversations])
+
+  // Apply the color theme whenever it changes, and follow the OS while on "system".
+  const theme = settings?.theme ?? 'system'
+  useEffect(() => {
+    applyTheme(theme)
+    if (theme !== 'system' || typeof window.matchMedia !== 'function') return
+    const mq = window.matchMedia('(prefers-color-scheme: light)')
+    const onChange = (): void => applyTheme('system')
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [theme])
 
   const currentConv = useMemo(
     () => conversations.find((c) => c.id === currentId) ?? null,
