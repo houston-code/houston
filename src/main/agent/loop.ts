@@ -12,6 +12,7 @@ import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { getProvider, getSettings } from '../store'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
+import { loadProjectRules } from './rules'
 import { getTool, toolSchemas } from './tools'
 import { needsApproval } from './approval'
 import {
@@ -122,7 +123,8 @@ export async function startRun(
     }
 
     const settings = getSettings()
-    const system = buildSystemPrompt(workspace, settings.systemPromptExtra)
+    const rules = await loadProjectRules(workspace)
+    const system = buildSystemPrompt(workspace, settings.systemPromptExtra, rules.text)
     const tools = toolSchemas()
     const messages: ChatMessage[] = [...req.messages]
 

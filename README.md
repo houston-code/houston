@@ -32,6 +32,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   overflows the model's context window. The full transcript stays on screen —
   only what's sent to the model is compacted. Tune or disable the threshold in
   Settings → *Context window*.
+- **Project-aware.** If your project has an `AGENTS.md` or `CLAUDE.md` at its root,
+  Houston loads it into the system prompt so the agent follows your conventions,
+  build/test commands, and house rules without you re-explaining them each time.
 
 ## Install (prebuilt DMG)
 
@@ -88,7 +91,8 @@ src/
 ├── main/          Electron main process (Node)
 │   ├── providers/     Anthropic / OpenAI / Gemini / OpenAI-compatible adapters
 │   ├── agent/         tool definitions + the tool-calling loop + system prompt
-│   │                  (incl. compaction.ts — summarize old turns to fit context)
+│   │                  (incl. compaction.ts — summarize old turns to fit context;
+│   │                   rules.ts — load project AGENTS.md / CLAUDE.md)
 │   ├── sandbox.ts     macOS Seatbelt profile + sandboxed command runner
 │   ├── secrets.ts     Keychain-encrypted API-key storage
 │   ├── store.ts       settings persistence

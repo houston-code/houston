@@ -1,7 +1,7 @@
 import { basename } from 'node:path'
 
 /** Build the coding-agent system prompt for a run. */
-export function buildSystemPrompt(workspace: string, extra?: string): string {
+export function buildSystemPrompt(workspace: string, extra?: string, rules?: string): string {
   const base = `You are Houston, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
 
 Working directory: ${workspace} (project: "${basename(workspace)}")
@@ -24,5 +24,17 @@ Guidelines:
 - When you finish a task, give a short summary of what you changed. Don't narrate every step.
 - If a request is ambiguous or risky, ask before acting.`
 
-  return extra && extra.trim() ? `${base}\n\nAdditional user instructions:\n${extra.trim()}` : base
+  const sections = [base]
+
+  if (rules && rules.trim()) {
+    sections.push(
+      `Project instructions (from the project's own rules files — follow them, and prefer them over your defaults when they conflict):\n${rules.trim()}`
+    )
+  }
+
+  if (extra && extra.trim()) {
+    sections.push(`Additional user instructions:\n${extra.trim()}`)
+  }
+
+  return sections.join('\n\n')
 }
