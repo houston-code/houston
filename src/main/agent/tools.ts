@@ -246,6 +246,76 @@ const editFile: ToolDef = {
   }
 }
 
+interface EditSpec {
+  old_string: string
+  new_string: string
+  replace_all?: boolean
+}
+
+/** Apply one find/replace to `data`, enforcing the same uniqueness rules as edit_file. */
+function applyEdit(data: string, edit: EditSpec, index: number): string {
+  const oldStr = typeof edit.old_string === 'string' ? edit.old_string : ''
+  const newStr = typeof edit.new_string === 'string' ? edit.new_string : ''
+  const replaceAll = edit.replace_all === true
+  if (!oldStr) throw new Error(`edit ${index + 1}: old_string must not be empty.`)
+  if (oldStr === newStr) throw new Error(`edit ${index + 1}: old_string and new_string are identical.`)
+  const count = data.split(oldStr).length - 1
+  if (count === 0) throw new Error(`edit ${index + 1}: old_string was not found.`)
+  if (count > 1 && !replaceAll) {
+    throw new Error(`edit ${index + 1}: old_string occurs ${count} times; pass replace_all or add context.`)
+  }
+  return replaceAll ? data.split(oldStr).join(newStr) : data.replace(oldStr, newStr)
+}
+
+const multiEdit: ToolDef = {
+  kind: 'write',
+  summarize: (a) => {
+    const n = Array.isArray(a.edits) ? a.edits.length : 0
+    return `Edit ${str(a, 'path')} (${n} edit${n === 1 ? '' : 's'})`
+  },
+  schema: {
+    name: 'multi_edit',
+    description:
+      'Apply several exact-string replacements to a single file in one atomic operation. The edits are applied in order (each later edit sees the result of the earlier ones), and the file is only written if every edit succeeds. Each edit follows the same rules as edit_file: old_string must occur exactly once unless replace_all is set. Prefer this over multiple edit_file calls when changing several places in the same file.',
+    parameters: objectSchema(
+      {
+        path: { type: 'string', description: 'Path relative to the project root.' },
+        edits: {
+          type: 'array',
+          description: 'The edits to apply, in order.',
+          items: {
+            type: 'object',
+            properties: {
+              old_string: { type: 'string', description: 'The exact text to replace.' },
+              new_string: { type: 'string', description: 'The replacement text.' },
+              replace_all: {
+                type: 'boolean',
+                description: 'Replace every occurrence of this edit (default false).'
+              }
+            },
+            required: ['old_string', 'new_string'],
+            additionalProperties: false
+          }
+        }
+      },
+      ['path', 'edits']
+    )
+  },
+  async execute(args, ctx) {
+    const abs = resolveInRoots(rootsOf(ctx), str(args, 'path'))
+    const edits = args.edits
+    if (!Array.isArray(edits) || edits.length === 0) {
+      throw new Error('edits must be a non-empty array.')
+    }
+    let data = await fs.readFile(abs, 'utf8')
+    edits.forEach((edit, i) => {
+      data = applyEdit(data, (edit ?? {}) as EditSpec, i)
+    })
+    await fs.writeFile(abs, data, 'utf8')
+    return `Edited ${str(args, 'path')} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
+  }
+}
+
 const listDir: ToolDef = {
   kind: 'read',
   summarize: (a) => `List ${str(a, 'path') || '.'}`,
@@ -625,6 +695,7 @@ export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
   editFile,
+  multiEdit,
   listDir,
   globTool,
   searchTool,
