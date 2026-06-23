@@ -31,6 +31,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   read-only question to a subagent with its own fresh context. The subagent
   reads, globs, and searches the project and reports back — keeping the main
   agent's context clean. Subagents can't edit, run commands, or use the network.
+- **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
+  a specialized read-only subagent (front-matter `description` + a system-prompt
+  body) — the main agent can dispatch it by name. Add a `.houston/skills/<name>/SKILL.md`
+  to register a skill: its description is surfaced to the agent, which reads the
+  full instructions on demand. Same shape as Claude Code's subagents and skills.
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.

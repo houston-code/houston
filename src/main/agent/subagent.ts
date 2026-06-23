@@ -16,12 +16,17 @@ const SUBAGENT_TOOL_SET = new Set<string>(SUBAGENT_TOOLS)
 const MAX_SUBAGENT_ITERATIONS = 16
 const SUBAGENT_MAX_TOKENS = 4096
 
+/** Read-only constraints + reporting contract, shared by the default and custom agents. */
+function subAgentConstraints(workspace: string): string {
+  return `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files. You cannot edit files, run commands, or access the network.
+
+Your final message is your entire report back to the calling agent — make it self-contained: include the concrete findings (file paths, key code, answers) it needs, not a narration of your steps. Be concise.`
+}
+
 function subAgentSystemPrompt(workspace: string): string {
-  return `You are a research subagent working inside the project at ${workspace}. Another agent has delegated a focused question to you.
+  return `You are a research subagent. Another agent has delegated a focused question to you. Investigate efficiently, then answer it directly.
 
-You can only READ: read_file, list_dir, glob, search_files. You cannot edit files, run commands, or access the network.
-
-Investigate efficiently, then answer the question directly. Your final message is your entire report back to the calling agent — make it self-contained: include the concrete findings (file paths, key code, answers) it needs, not a narration of your steps. Be concise.`
+${subAgentConstraints(workspace)}`
 }
 
 export interface SubAgentOptions {
@@ -31,13 +36,18 @@ export interface SubAgentOptions {
   /** The task/question delegated to the subagent. */
   prompt: string
   signal: AbortSignal
+  /** A custom agent's system prompt to use instead of the default research one. */
+  systemOverride?: string
 }
 
 /** Run a read-only subagent loop to completion and return its final report text. */
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const { provider, model, workspace, prompt, signal } = opts
   const tools = SUBAGENT_TOOLS.map((name) => getTool(name)!.schema)
-  const system = subAgentSystemPrompt(workspace)
+  // A custom agent's prompt still gets the read-only constraints appended.
+  const system = opts.systemOverride
+    ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace)}`
+    : subAgentSystemPrompt(workspace)
   const messages: ChatMessage[] = [{ role: 'user', content: prompt }]
   let lastText = ''
 
