@@ -16,8 +16,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Add
   custom endpoints and fetch live model lists in Settings.
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
-  `list_dir`, `glob`, `search_files`, `run_shell`, and `web_fetch` to actually do
-  the work — not just describe it.
+  `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`, and `todo_write`
+  to actually do the work — not just describe it.
+- **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
+  rendered live as a checklist in the transcript so you can see the plan and
+  watch it tick off items.
 - **Sandboxed execution.** Shell commands run under the macOS **Seatbelt**
   sandbox (`sandbox-exec`), confined to the project directory: writes outside the
   project and (by default) network access are blocked.

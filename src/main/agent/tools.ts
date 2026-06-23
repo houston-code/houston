@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { JSONSchema, ToolSchema } from '@shared/agent'
+import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
 import { runSandboxed } from '../sandbox'
 import { fetchUrlAsText } from './webfetch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
@@ -299,6 +300,49 @@ const webFetch: ToolDef = {
   }
 }
 
+const todoWrite: ToolDef = {
+  kind: 'read', // a scratchpad with no side effects on the project — never needs approval
+  summarize: (a) => {
+    try {
+      return formatTodoSummary(parseTodos(a.todos))
+    } catch {
+      return 'Update todo list'
+    }
+  },
+  schema: {
+    name: 'todo_write',
+    description:
+      'Record or update your task list — a scratchpad for planning and tracking multi-step work. Pass the FULL list every time (it replaces the previous one). Use it to break a complex task into steps and to track progress; keep exactly one item "in_progress" while you work on it and mark items "completed" as you finish. Has no side effects on the project.',
+    parameters: objectSchema(
+      {
+        todos: {
+          type: 'array',
+          description: 'The full todo list, replacing any previous one.',
+          items: {
+            type: 'object',
+            properties: {
+              content: { type: 'string', description: 'What needs to be done.' },
+              status: {
+                type: 'string',
+                enum: ['pending', 'in_progress', 'completed'],
+                description: 'Current status of this item.'
+              }
+            },
+            required: ['content', 'status'],
+            additionalProperties: false
+          }
+        }
+      },
+      ['todos']
+    )
+  },
+  async execute(args) {
+    const todos = parseTodos(args.todos)
+    const summary = formatTodoSummary(todos)
+    return todos.length ? `${summary}\n${formatTodoList(todos)}` : summary
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -307,7 +351,8 @@ export const TOOLS: ToolDef[] = [
   globTool,
   searchTool,
   runShell,
-  webFetch
+  webFetch,
+  todoWrite
 ]
 
 export function toolSchemas(): ToolSchema[] {

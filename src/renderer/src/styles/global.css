@@ -390,6 +390,41 @@ body {
   word-break: break-word;
 }
 
+/* ---- Todo checklist (todo_write) ---- */
+.todo-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.todo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.todo__mark {
+  font-size: 11px;
+  width: 1em;
+  flex-shrink: 0;
+}
+.todo--pending .todo__mark {
+  color: var(--text-dim);
+}
+.todo--in_progress .todo__mark {
+  color: var(--accent);
+}
+.todo--completed .todo__mark {
+  color: var(--ok);
+}
+.todo--completed .todo__text {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
 .notice {
   max-width: 760px;
   width: 100%;

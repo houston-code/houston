@@ -1,8 +1,15 @@
 import { useState } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
+import { parseTodosSafe, type Todo } from '@shared/todos'
 import type { ToolItem } from '../lib/items'
 
 const KIND_ICON: Record<string, string> = { read: '📖', write: '✏️', shell: '⌘', network: '🌐' }
+
+const TODO_MARK: Record<Todo['status'], string> = {
+  pending: '○',
+  in_progress: '◐',
+  completed: '●'
+}
 
 const STATUS_LABEL: Record<ToolItem['status'], string> = {
   'awaiting-approval': 'Needs approval',
@@ -29,18 +36,31 @@ export function ToolCard({
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
 }): JSX.Element {
   const [expanded, setExpanded] = useState(false)
-  const d = detail(item)
+  const todos = item.name === 'todo_write' ? parseTodosSafe(item.args?.todos) : []
+  const isTodo = item.name === 'todo_write' && todos.length > 0
+  const d = isTodo ? '' : detail(item)
 
   return (
     <div className={`tool-card tool-card--${item.status}`}>
       <div className="tool-card__head">
-        <span className="tool-card__icon">{KIND_ICON[item.toolKind ?? ''] ?? '🔧'}</span>
-        <span className="tool-card__name">{item.name}</span>
+        <span className="tool-card__icon">{isTodo ? '📝' : KIND_ICON[item.toolKind ?? ''] ?? '🔧'}</span>
+        <span className="tool-card__name">{isTodo ? 'todos' : item.name}</span>
         {d && <code className="tool-card__detail">{d}</code>}
         <span className={`tool-card__status tool-card__status--${item.status}`}>
           {STATUS_LABEL[item.status]}
         </span>
       </div>
+
+      {isTodo && (
+        <ul className="todo-list">
+          {todos.map((t, i) => (
+            <li key={i} className={`todo todo--${t.status}`}>
+              <span className="todo__mark">{TODO_MARK[t.status]}</span>
+              <span className="todo__text">{t.content}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {item.status === 'awaiting-approval' && (
         <div className="tool-card__approval">
@@ -56,7 +76,7 @@ export function ToolCard({
         </div>
       )}
 
-      {item.output && (
+      {item.output && !isTodo && (
         <div className="tool-card__output">
           <button className="tool-card__toggle" onClick={() => setExpanded((v) => !v)}>
             {expanded ? '▾ Hide output' : '▸ Show output'}
