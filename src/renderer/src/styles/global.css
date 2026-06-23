@@ -35,6 +35,19 @@
   color: #ffffff;
 }
 
+/* Respect the OS "reduce motion" preference: disable the blink/spin animations
+   and collapse transitions for users who are sensitive to motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useFocusTrap } from '../lib/useFocusTrap'
 import type {
   AppSettings,
   Hook,
@@ -52,6 +53,8 @@ export function SettingsModal({
   const [busy, setBusy] = useState<string | null>(null)
   const [newLabel, setNewLabel] = useState('')
   const [newUrl, setNewUrl] = useState('')
+  const modalRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(modalRef, onClose)
 
   const patchProvider = (id: string, patch: Partial<ProviderConfig>): void => {
     setSettings((s) => ({
@@ -181,10 +184,18 @@ export function SettingsModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal__head">
-          <h2>Settings</h2>
-          <button className="modal__close" onClick={onClose}>
+          <h2 id="settings-title">Settings</h2>
+          <button className="modal__close" onClick={onClose} aria-label="Close settings">
             ✕
           </button>
         </div>
