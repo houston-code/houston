@@ -35,11 +35,13 @@ export interface ProviderConfig {
 
 /**
  * How aggressively the agent may act without asking.
+ * - plan:      read-only — the agent researches and proposes a plan; writes and
+ *              shell commands are blocked until you switch out of plan mode
  * - ask:       confirm every shell command and file write
  * - auto-edit: auto-approve reads/edits inside the workspace, ask for shell commands
  * - full-auto: auto-approve everything (still sandboxed to the workspace)
  */
-export type ApprovalPolicy = 'ask' | 'auto-edit' | 'full-auto'
+export type ApprovalPolicy = 'plan' | 'ask' | 'auto-edit' | 'full-auto'
 
 export interface SelectedModel {
   providerId: string

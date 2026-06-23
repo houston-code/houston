@@ -94,7 +94,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     case 'tool_result': {
       const status: ToolStatus = e.ok
         ? 'done'
-        : e.output.startsWith('Denied')
+        : e.output.startsWith('Denied') || e.output.startsWith('Blocked')
           ? 'denied'
           : 'error'
       return updateTool(items, e.callId, { status, output: e.output })
@@ -148,7 +148,7 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
         const output = res?.output
         const status: ToolStatus = !output
           ? 'done'
-          : output.startsWith('Denied')
+          : output.startsWith('Denied') || output.startsWith('Blocked')
             ? 'denied'
             : output.startsWith('Error:')
               ? 'error'

@@ -8,6 +8,7 @@ function basename(p: string): string {
 }
 
 const POLICY_LABEL: Record<ApprovalPolicy, string> = {
+  plan: 'Plan mode (read-only)',
   ask: 'Ask every time',
   'auto-edit': 'Auto-approve edits',
   'full-auto': 'Full auto'
