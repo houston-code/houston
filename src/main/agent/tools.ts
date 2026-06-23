@@ -18,6 +18,7 @@ import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
 import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
+import { resolveEdit } from './edit-match'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -218,7 +219,7 @@ const editFile: ToolDef = {
   schema: {
     name: 'edit_file',
     description:
-      'Replace an exact string in a file with a new string. By default the old string must occur exactly once; set replace_all to replace every occurrence.',
+      'Replace a string in a file with a new string. The old string is matched verbatim first; if that fails it is matched ignoring each line\'s indentation/whitespace (so minor drift does not lose the edit). By default the old string must resolve to exactly one match; set replace_all to replace every occurrence.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
@@ -235,17 +236,12 @@ const editFile: ToolDef = {
     const newStr = str(args, 'new_string')
     const replaceAll = args.replace_all === true
     const data = await fs.readFile(abs, 'utf8')
-    if (!oldStr) throw new Error('old_string must not be empty.')
-    const count = data.split(oldStr).length - 1
-    if (count === 0) throw new Error('old_string was not found in the file.')
-    if (count > 1 && !replaceAll) {
-      throw new Error(`old_string occurs ${count} times; pass replace_all or provide more context.`)
-    }
-    const updated = replaceAll ? data.split(oldStr).join(newStr) : data.replace(oldStr, newStr)
-    await fs.writeFile(abs, updated, 'utf8')
-    return `Edited ${str(args, 'path')} (${replaceAll ? count : 1} replacement${
-      replaceAll && count !== 1 ? 's' : ''
-    }).`
+    const { content, strategy, replacements } = resolveEdit(data, oldStr, newStr, replaceAll)
+    await fs.writeFile(abs, content, 'utf8')
+    const fuzzy = strategy === 'exact' ? '' : ` [matched via ${strategy}]`
+    return `Edited ${str(args, 'path')} (${replacements} replacement${
+      replacements === 1 ? '' : 's'
+    })${fuzzy}.`
   }
 }
 
@@ -255,19 +251,15 @@ interface EditSpec {
   replace_all?: boolean
 }
 
-/** Apply one find/replace to `data`, enforcing the same uniqueness rules as edit_file. */
+/** Apply one find/replace to `data` via the resilient matcher, with per-edit error context. */
 function applyEdit(data: string, edit: EditSpec, index: number): string {
   const oldStr = typeof edit.old_string === 'string' ? edit.old_string : ''
   const newStr = typeof edit.new_string === 'string' ? edit.new_string : ''
-  const replaceAll = edit.replace_all === true
-  if (!oldStr) throw new Error(`edit ${index + 1}: old_string must not be empty.`)
-  if (oldStr === newStr) throw new Error(`edit ${index + 1}: old_string and new_string are identical.`)
-  const count = data.split(oldStr).length - 1
-  if (count === 0) throw new Error(`edit ${index + 1}: old_string was not found.`)
-  if (count > 1 && !replaceAll) {
-    throw new Error(`edit ${index + 1}: old_string occurs ${count} times; pass replace_all or add context.`)
+  try {
+    return resolveEdit(data, oldStr, newStr, edit.replace_all === true).content
+  } catch (e) {
+    throw new Error(`edit ${index + 1}: ${(e as Error).message}`)
   }
-  return replaceAll ? data.split(oldStr).join(newStr) : data.replace(oldStr, newStr)
 }
 
 const multiEdit: ToolDef = {
