@@ -8,6 +8,14 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 ## Deferred — larger effort
 
+- **Trusted folders (project-config elevation).** A repo's `.houston/settings.json`
+  may currently only *tighten* (add deny/ask rules) — `allow` rules, hooks, and
+  MCP servers are ignored from project files because opening an untrusted repo
+  would otherwise let it auto-approve actions or spawn processes. A "trust this
+  folder" prompt (persisted per workspace) would let users opt into honoring a
+  trusted project's hooks / MCP servers / allow-rules. *Why deferred:* needs a
+  trust store + a clear consent UX to avoid becoming an RCE foot-gun.
+
 - **Headless / SDK / CLI mode.** Run the agent without the GUI window — a one-shot
   `houston -p "<prompt>"` and a programmatic API for embedding/automation.
   *Why deferred:* Houston is a GUI Electron app; a headless entry point is a

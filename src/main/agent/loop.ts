@@ -17,6 +17,7 @@ import { getKey } from '../secrets'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
+import { loadProjectConfig } from './projectConfig'
 import { getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
 import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
@@ -143,6 +144,11 @@ export async function startRun(
 
     const settings = getSettings()
     const rules = await loadProjectRules(workspace)
+    // Project-scoped guardrails (.houston/settings.json) are checked before the
+    // user's global rules. The project file can only tighten (deny/ask) — see
+    // projectConfig.ts for why.
+    const projectConfig = await loadProjectConfig(workspace)
+    const permissionRules = [...projectConfig.permissionRules, ...(settings.permissionRules ?? [])]
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
     const skills = await loadSkills(workspace)
@@ -218,7 +224,7 @@ export async function startRun(
       const tool = lookupTool(call.name)
       if (!tool) return false
       const ruleAction = matchRule(
-        settings.permissionRules,
+        permissionRules,
         call.name,
         permissionSubject(call.name, call.arguments)
       )
@@ -435,7 +441,7 @@ export async function startRun(
         const toolDocs: DocumentAttachment[] = []
 
         const ruleAction = tool
-          ? matchRule(settings.permissionRules, call.name, permissionSubject(call.name, call.arguments))
+          ? matchRule(permissionRules, call.name, permissionSubject(call.name, call.arguments))
           : null
 
         if (!tool) {
