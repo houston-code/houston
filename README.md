@@ -84,9 +84,10 @@ npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 npm run dist     # → release/Houston-<version>-arm64.dmg
 ```
 
-Every merge to `main` also builds the `.app` + `.dmg` in CI (on a macOS
-runner) and uploads them as a `houston-mac-arm64` artifact on the workflow
-run — grab a build from the **Actions** tab without building locally.
+Every PR set to auto-merge also builds the `.app` + `.dmg` in CI (on a macOS
+runner, against the merged state) and uploads them as a `houston-mac-arm64`
+artifact on the workflow run — grab a build from the **Actions** tab without
+building locally.
 
 ## Architecture
 
