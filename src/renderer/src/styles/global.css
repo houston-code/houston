@@ -15,6 +15,26 @@
   --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
 }
 
+/* Light theme: applied when document.documentElement[data-theme="light"]. */
+:root[data-theme='light'] {
+  --bg: #ffffff;
+  --bg-elevated: #f6f7f9;
+  --bg-input: #ffffff;
+  --bg-hover: #eef0f3;
+  --border: #d9dde3;
+  --text: #1a1d22;
+  --text-dim: #6b7280;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --danger: #dc2626;
+  --ok: #16a34a;
+  --warn: #b45309;
+}
+/* Accent buttons use white text on the blue accent in light mode (better contrast). */
+:root[data-theme='light'] .btn--accent {
+  color: #ffffff;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1240,6 +1260,7 @@ pre.diff {
 }
 .field input,
 .field textarea,
+.field select,
 .add-endpoint input,
 .full-textarea {
   width: 100%;

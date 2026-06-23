@@ -127,6 +127,8 @@ export interface AppSettings {
   mcpServers?: McpServerConfig[]
   /** Extra directories (beyond the project folder) the agent may read and write. */
   additionalRoots?: string[]
+  /** UI color theme (default follows the OS). */
+  theme?: 'system' | 'dark' | 'light'
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
 }
