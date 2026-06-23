@@ -44,9 +44,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   overflows the model's context window. The full transcript stays on screen —
   only what's sent to the model is compacted. Tune or disable the threshold in
   Settings → *Context window*.
-- **Project-aware.** If your project has an `AGENTS.md` or `CLAUDE.md` at its root,
-  Houston loads it into the system prompt so the agent follows your conventions,
-  build/test commands, and house rules without you re-explaining them each time.
+- **Project-aware.** Houston loads a small rules hierarchy into the system prompt —
+  your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
+  `CLAUDE.md` at its root — so the agent follows your conventions, build/test
+  commands, and house rules without you re-explaining them each time. Any rules
+  file can pull in others with `@path` imports (relative, `~/…`, or absolute),
+  the same way Claude Code splits or shares memory files.
 - **Token usage at a glance.** The top bar shows the current context size and the
   output tokens used this session, so you can see how big a conversation is getting.
 
