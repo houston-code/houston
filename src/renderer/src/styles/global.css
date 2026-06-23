@@ -59,6 +59,45 @@ body {
   color: var(--text-dim);
 }
 
+/* ---- Crash fallback (error boundary) ---- */
+.crash {
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 48px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+.crash__title {
+  margin: 0;
+  font-size: 20px;
+}
+.crash__msg {
+  margin: 0;
+  color: var(--danger);
+}
+.crash__actions {
+  display: flex;
+  gap: 8px;
+}
+.crash__stack {
+  width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 50vh;
+  overflow: auto;
+}
+
 /* ---- Buttons ---- */
 .btn {
   appearance: none;
