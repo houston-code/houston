@@ -1,7 +1,12 @@
 name: CI
 
 on:
+  # `labeled` is included so adding the `auto-merge` label triggers a run that
+  # sees it: when a PR is opened and labeled near-simultaneously, the `opened`
+  # event payload can miss the label and the label-gated jobs skip. (opened,
+  # synchronize, reopened are the defaults, restated here since `types` replaces them.)
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
 
