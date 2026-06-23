@@ -125,10 +125,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   what branch it's on and what's already modified without having to run git first.
 - **Project-aware.** Houston loads a small rules hierarchy into the system prompt —
   your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
-  `CLAUDE.md` at its root — so the agent follows your conventions, build/test
-  commands, and house rules without you re-explaining them each time. Any rules
-  file can pull in others with `@path` imports (relative, `~/…`, or absolute),
-  the same way Claude Code splits or shares memory files.
+  `CLAUDE.md` at its root, then any `AGENTS.md` / `CLAUDE.md` found in
+  subdirectories (so per-package conventions in a monorepo are picked up
+  automatically, shallowest first) — so the agent follows your conventions,
+  build/test commands, and house rules without you re-explaining them each time.
+  Any rules file can also pull in others with `@path` imports (relative, `~/…`, or
+  absolute), the same way Claude Code splits or shares memory files.
 - **Token usage at a glance.** The control bar above the composer shows the
   current context size and the output tokens used this session, so you can see how
   big a conversation is getting. The model, project folder, approval policy and
