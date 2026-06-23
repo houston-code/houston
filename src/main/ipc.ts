@@ -26,6 +26,7 @@ import {
   deleteConversation,
   importConversation,
   organizeConversation,
+  addUsage,
   setMessages,
   updateConversationMeta
 } from './conversations'
@@ -156,6 +157,15 @@ export function registerIpc(): void {
   // Agent: fire-and-forget; progress is streamed back over IPC.agentEvent.
   ipcMain.handle(IPC.agentStart, async (event, req: AgentSendRequest) => {
     const send = (e: AgentEvent): void => {
+      // Persist usage and rewrite the event to carry the conversation's running
+      // cumulative totals (the loop reports only the latest turn).
+      if (e.type === 'usage') {
+        const total = addUsage(req.conversationId, {
+          inputTokens: e.inputTokens,
+          outputTokens: e.outputTokens
+        })
+        if (total) e = { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens }
+      }
       if (!event.sender.isDestroyed()) event.sender.send(IPC.agentEvent, e)
     }
 

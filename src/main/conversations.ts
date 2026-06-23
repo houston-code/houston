@@ -10,7 +10,7 @@ import {
   rmSync
 } from 'node:fs'
 import { join } from 'node:path'
-import type { ChatMessage, Conversation, ConversationMeta } from '@shared/agent'
+import type { ChatMessage, Conversation, ConversationMeta, ConversationUsage } from '@shared/agent'
 import type { ImportedConversation } from '@shared/conversation-io'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
@@ -117,6 +117,27 @@ function deriveTitle(messages: ChatMessage[]): string | null {
   if (!first) return null
   const text = first.content.trim().replace(/\s+/g, ' ')
   return text.length > 60 ? `${text.slice(0, 57)}…` : text || null
+}
+
+/**
+ * Fold one turn's token usage into the conversation's persisted totals and return
+ * the new cumulative usage. `inputTokens` tracks the latest turn (current context
+ * size); `outputTokens` accumulates across every turn. Does not touch `updatedAt`
+ * (it's a side-channel of the active run, not new activity).
+ */
+export function addUsage(
+  id: string,
+  turn: { inputTokens: number; outputTokens: number }
+): ConversationUsage | null {
+  const conv = read(id)
+  if (!conv) return null
+  const prev = conv.usage ?? { inputTokens: 0, outputTokens: 0 }
+  conv.usage = {
+    inputTokens: turn.inputTokens || prev.inputTokens,
+    outputTokens: prev.outputTokens + (turn.outputTokens || 0)
+  }
+  write(conv)
+  return conv.usage
 }
 
 /** Replace the message log for a conversation and bump updatedAt. */

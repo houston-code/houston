@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatTokens } from './usage'
+import { contextPercent, contextWindowFor, formatTokens } from './usage'
 
 describe('formatTokens', () => {
   it('shows small counts verbatim', () => {
@@ -29,5 +29,45 @@ describe('formatTokens', () => {
 
   it('rounds fractional small counts', () => {
     expect(formatTokens(12.6)).toBe('13')
+  })
+})
+
+describe('contextWindowFor', () => {
+  it('knows the Claude / Gemini / GPT families', () => {
+    expect(contextWindowFor('claude-opus-4-8')).toBe(200_000)
+    expect(contextWindowFor('gemini-2.5-pro')).toBe(1_000_000)
+    expect(contextWindowFor('gpt-4o')).toBe(128_000)
+    expect(contextWindowFor('gpt-4o-mini')).toBe(128_000)
+    expect(contextWindowFor('gpt-4.1')).toBe(1_000_000)
+    expect(contextWindowFor('gpt-3.5-turbo')).toBe(16_385)
+  })
+
+  it('matches the o-series reasoning models without false positives', () => {
+    expect(contextWindowFor('o3')).toBe(200_000)
+    expect(contextWindowFor('o4-mini')).toBe(200_000)
+    expect(contextWindowFor('o1-preview')).toBe(200_000)
+    expect(contextWindowFor('llama3-8b')).toBeNull() // the "o" in a word must not match
+  })
+
+  it('returns null for unknown / local models', () => {
+    expect(contextWindowFor('qwen2.5-coder')).toBeNull()
+    expect(contextWindowFor('')).toBeNull()
+  })
+})
+
+describe('contextPercent', () => {
+  it('computes a rounded percentage', () => {
+    expect(contextPercent(100_000, 200_000)).toBe(50)
+    expect(contextPercent(18_000, 200_000)).toBe(9)
+  })
+
+  it('clamps to 100 when context exceeds the window', () => {
+    expect(contextPercent(250_000, 200_000)).toBe(100)
+  })
+
+  it('returns null without a window or usable context', () => {
+    expect(contextPercent(5000, null)).toBeNull()
+    expect(contextPercent(0, 200_000)).toBeNull()
+    expect(contextPercent(NaN, 200_000)).toBeNull()
   })
 })

@@ -25,7 +25,7 @@ export interface Checkpoint {
 export interface ChatController {
   items: DisplayItem[]
   running: boolean
-  /** Running token usage for the open conversation's in-session turns, or null. */
+  /** The open conversation's persisted running token usage, or null. */
   usage: SessionUsage | null
   /** The current/last turn's revertable file changes, or null. */
   checkpoint: Checkpoint | null
@@ -36,8 +36,8 @@ export interface ChatController {
   revertCheckpoint: () => Promise<number>
   /** Re-apply a reverted checkpoint's file changes. Returns the count re-applied. */
   reapplyCheckpoint: () => Promise<number>
-  /** Replace the transcript (e.g. when switching conversations). */
-  reset: (items: DisplayItem[]) => void
+  /** Replace the transcript and (optionally) seed usage, e.g. when switching conversations. */
+  reset: (items: DisplayItem[], usage?: SessionUsage | null) => void
 }
 
 const WRITE_TOOLS = new Set(['write_file', 'edit_file'])
@@ -53,9 +53,11 @@ export function useChat(): ChatController {
     return window.api.onAgentEvent((e: AgentEvent) => {
       if (e.runId !== runIdRef.current) return
       if (e.type === 'usage') {
+        // The main process accumulates and persists; the event carries the
+        // conversation's cumulative totals, so we set rather than sum.
         setUsage((prev) => ({
           context: e.inputTokens || prev?.context || 0,
-          output: (prev?.output ?? 0) + (e.outputTokens || 0)
+          output: e.outputTokens || prev?.output || 0
         }))
         return
       }
@@ -124,10 +126,10 @@ export function useChat(): ChatController {
     return reapplied
   }, [checkpoint])
 
-  const reset = useCallback((next: DisplayItem[]) => {
+  const reset = useCallback((next: DisplayItem[], nextUsage: SessionUsage | null = null) => {
     setItems(next)
     setRunning(false)
-    setUsage(null)
+    setUsage(nextUsage)
     setCheckpoint(null)
     runIdRef.current = null
   }, [])
