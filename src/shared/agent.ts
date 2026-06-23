@@ -159,6 +159,7 @@ export type AgentEvent =
     }
   | { runId: string; type: 'tool_result'; callId: string; name: string; ok: boolean; output: string }
   | { runId: string; type: 'compaction'; summarized: number }
+  | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
   | { runId: string; type: 'usage'; inputTokens: number; outputTokens: number }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | { runId: string; type: 'error'; message: string }

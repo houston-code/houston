@@ -113,6 +113,18 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         }
       ]
     }
+    case 'retry': {
+      const finalized = finalizeStreaming(items)
+      return [
+        ...finalized,
+        {
+          kind: 'notice',
+          id: nextId(),
+          text: `⟳ Connection issue, retrying (${e.attempt}/${e.max})… — ${e.message}`,
+          tone: 'info'
+        }
+      ]
+    }
     case 'done': {
       const finalized = finalizeStreaming(items)
       if (e.stopReason === 'aborted') {
