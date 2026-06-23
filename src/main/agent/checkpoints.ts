@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
-import { resolveInWorkspace } from './tools'
+import { resolveInRoots } from './tools'
 
 /**
  * Lightweight file checkpoints, so a turn's file changes can be undone *and*
@@ -35,11 +35,11 @@ const MAX_CHECKPOINTS = 50
 
 const checkpoints = new Map<string, Checkpoint>()
 
-function resolveOrNull(workspace: string, relPath: string): string | null {
+function resolveOrNull(roots: string[], relPath: string): string | null {
   try {
-    return resolveInWorkspace(workspace, relPath)
+    return resolveInRoots(roots, relPath)
   } catch {
-    return null // path escapes the workspace — the write itself will be rejected
+    return null // path escapes the allowed roots — the write itself will be rejected
   }
 }
 
@@ -66,10 +66,10 @@ async function applyState(abs: string, content: string | null): Promise<void> {
 
 /**
  * Record a file's current content before the turn modifies it. No-op if already
- * recorded for this run, if the path escapes the workspace, or if it's too large.
+ * recorded for this run, if the path escapes the allowed roots, or if too large.
  */
-export async function recordOriginal(runId: string, workspace: string, relPath: string): Promise<void> {
-  const abs = resolveOrNull(workspace, relPath)
+export async function recordOriginal(runId: string, roots: string[], relPath: string): Promise<void> {
+  const abs = resolveOrNull(roots, relPath)
   if (!abs) return
 
   let cp = checkpoints.get(runId)
@@ -80,7 +80,7 @@ export async function recordOriginal(runId: string, workspace: string, relPath: 
       if (oldest === undefined) break
       checkpoints.delete(oldest)
     }
-    cp = { workspace, files: new Map() }
+    cp = { workspace: roots[0], files: new Map() }
     checkpoints.set(runId, cp)
   }
   if (cp.files.has(abs)) return
@@ -94,8 +94,8 @@ export async function recordOriginal(runId: string, workspace: string, relPath: 
  * Record a file's content after a successful write, so the change can be redone.
  * No-op if the file wasn't snapshotted before the write (escaped / oversized).
  */
-export async function recordResult(runId: string, workspace: string, relPath: string): Promise<void> {
-  const abs = resolveOrNull(workspace, relPath)
+export async function recordResult(runId: string, roots: string[], relPath: string): Promise<void> {
+  const abs = resolveOrNull(roots, relPath)
   if (!abs) return
   const snap = checkpoints.get(runId)?.files.get(abs)
   if (!snap) return

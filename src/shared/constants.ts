@@ -13,6 +13,7 @@ export const IPC = {
   appGetVersion: 'app:getVersion',
   // Workspace
   workspacePick: 'workspace:pick',
+  directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
   commandsList: 'commands:list',
   // Settings

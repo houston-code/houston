@@ -21,8 +21,10 @@ import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
 export interface ToolContext {
-  /** Canonical (realpath'd) workspace root. */
+  /** Canonical (realpath'd) workspace root (the primary directory). */
   workspace: string
+  /** All allowed roots (workspace + added directories). Defaults to [workspace]. */
+  roots?: string[]
   allowNetwork: boolean
   signal?: AbortSignal
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
@@ -46,15 +48,35 @@ export interface ToolDef {
 const MAX_READ_CHARS = 100_000
 const MAX_GLOB_RESULTS = 200
 
+/** Whether `abs` is `root` itself or lives inside it. */
+function isWithin(root: string, abs: string): boolean {
+  const rel = relative(root, abs)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
 /** Resolve a user-supplied path against the workspace and reject anything that escapes it. */
 export function resolveInWorkspace(workspace: string, p: string): string {
+  return resolveInRoots([workspace], p)
+}
+
+/**
+ * Resolve a user-supplied path and reject anything outside every allowed root.
+ * Relative paths resolve against the first root (the primary workspace);
+ * absolute paths must fall within one of the roots. This is the file-tool
+ * containment boundary, so it must stay airtight.
+ */
+export function resolveInRoots(roots: string[], p: string): string {
   if (typeof p !== 'string' || p.length === 0) throw new Error('A path is required.')
-  const abs = isAbsolute(p) ? p : resolve(workspace, p)
-  const rel = relative(workspace, abs)
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error(`Path escapes the workspace: ${p}`)
-  }
-  return abs
+  if (roots.length === 0) throw new Error('No allowed roots configured.')
+  const base = roots[0]
+  const abs = isAbsolute(p) ? resolve(p) : resolve(base, p)
+  if (roots.some((root) => isWithin(root, abs))) return abs
+  throw new Error(`Path escapes the allowed roots: ${p}`)
+}
+
+/** The allowed roots for a tool call (workspace plus any added directories). */
+function rootsOf(ctx: ToolContext): string[] {
+  return ctx.roots && ctx.roots.length ? ctx.roots : [ctx.workspace]
 }
 
 function str(args: Record<string, unknown>, key: string): string {
@@ -105,7 +127,7 @@ const readFile: ToolDef = {
   },
   async execute(args, ctx) {
     const rel = str(args, 'path')
-    const abs = resolveInWorkspace(ctx.workspace, rel)
+    const abs = resolveInRoots(rootsOf(ctx), rel)
 
     // Images and PDFs are binary — hand them to the model as attachments rather
     // than returning garbled bytes as text.
@@ -177,7 +199,7 @@ const writeFile: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const abs = resolveInWorkspace(ctx.workspace, str(args, 'path'))
+    const abs = resolveInRoots(rootsOf(ctx), str(args, 'path'))
     const content = str(args, 'content')
     await fs.mkdir(dirname(abs), { recursive: true })
     await fs.writeFile(abs, content, 'utf8')
@@ -203,7 +225,7 @@ const editFile: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const abs = resolveInWorkspace(ctx.workspace, str(args, 'path'))
+    const abs = resolveInRoots(rootsOf(ctx), str(args, 'path'))
     const oldStr = str(args, 'old_string')
     const newStr = str(args, 'new_string')
     const replaceAll = args.replace_all === true
@@ -235,7 +257,7 @@ const listDir: ToolDef = {
   },
   async execute(args, ctx) {
     const target = str(args, 'path') || '.'
-    const abs = resolveInWorkspace(ctx.workspace, target)
+    const abs = resolveInRoots(rootsOf(ctx), target)
     const entries = await fs.readdir(abs, { withFileTypes: true })
     if (entries.length === 0) return '[empty directory]'
     return entries
@@ -274,7 +296,7 @@ const searchTool: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const startAbs = resolveInWorkspace(ctx.workspace, str(args, 'path') || '.')
+    const startAbs = resolveInRoots(rootsOf(ctx), str(args, 'path') || '.')
     const context = num(args, 'context')
     return searchContents({
       pattern: str(args, 'pattern'),
@@ -346,7 +368,7 @@ const globTool: ToolDef = {
   async execute(args, ctx) {
     const pattern = str(args, 'pattern')
     if (!pattern) throw new Error('pattern is required.')
-    const start = resolveInWorkspace(ctx.workspace, str(args, 'path') || '.')
+    const start = resolveInRoots(rootsOf(ctx), str(args, 'path') || '.')
     const found: { full: string; mtimeMs: number }[] = []
     await collectGlob(start, start, pattern, found, MAX_GLOB_RESULTS)
     if (found.length === 0) return 'No files found.'
@@ -383,6 +405,7 @@ const runShell: ToolDef = {
         command,
         cwd: ctx.workspace,
         workspace: ctx.workspace,
+        roots: rootsOf(ctx),
         allowNetwork: ctx.allowNetwork,
         signal: ctx.signal
       })
@@ -394,6 +417,7 @@ const runShell: ToolDef = {
       command,
       cwd: ctx.workspace,
       workspace: ctx.workspace,
+      roots: rootsOf(ctx),
       allowNetwork: ctx.allowNetwork,
       signal: ctx.signal
     })

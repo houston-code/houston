@@ -26,9 +26,9 @@ describe('checkpoints', () => {
   it('restores an edited file to its prior content', async () => {
     const f = join(ws, 'a.txt')
     writeFileSync(f, 'original')
-    await recordOriginal('run1', ws, 'a.txt')
+    await recordOriginal('run1', [ws], 'a.txt')
     writeFileSync(f, 'modified by agent')
-    await recordResult('run1', ws, 'a.txt')
+    await recordResult('run1', [ws], 'a.txt')
     expect(checkpointFileCount('run1')).toBe(1)
 
     const n = await restoreCheckpoint('run1')
@@ -37,9 +37,9 @@ describe('checkpoints', () => {
   })
 
   it('deletes a file the turn newly created', async () => {
-    await recordOriginal('run2', ws, 'new.txt')
+    await recordOriginal('run2', [ws], 'new.txt')
     writeFileSync(join(ws, 'new.txt'), 'created by agent')
-    await recordResult('run2', ws, 'new.txt')
+    await recordResult('run2', [ws], 'new.txt')
 
     const n = await restoreCheckpoint('run2')
     expect(n).toBe(1)
@@ -49,17 +49,17 @@ describe('checkpoints', () => {
   it('snapshots each path only once (keeps the earliest content)', async () => {
     const f = join(ws, 'b.txt')
     writeFileSync(f, 'v1')
-    await recordOriginal('run3', ws, 'b.txt')
+    await recordOriginal('run3', [ws], 'b.txt')
     writeFileSync(f, 'v2')
-    await recordOriginal('run3', ws, 'b.txt') // second touch — should not overwrite the snapshot
+    await recordOriginal('run3', [ws], 'b.txt') // second touch — should not overwrite the snapshot
     writeFileSync(f, 'v3')
 
     await restoreCheckpoint('run3')
     expect(readFileSync(f, 'utf8')).toBe('v1')
   })
 
-  it('ignores paths that escape the workspace', async () => {
-    await recordOriginal('run4', ws, '../../etc/passwd')
+  it('ignores paths that escape the allowed roots', async () => {
+    await recordOriginal('run4', [ws], '../../etc/passwd')
     expect(checkpointFileCount('run4')).toBe(0)
   })
 
@@ -72,9 +72,9 @@ describe('checkpoints', () => {
     it('re-applies an edit after a revert', async () => {
       const f = join(ws, 'a.txt')
       writeFileSync(f, 'original')
-      await recordOriginal('r', ws, 'a.txt')
+      await recordOriginal('r', [ws], 'a.txt')
       writeFileSync(f, 'modified')
-      await recordResult('r', ws, 'a.txt')
+      await recordResult('r', [ws], 'a.txt')
 
       expect(await restoreCheckpoint('r')).toBe(1)
       expect(readFileSync(f, 'utf8')).toBe('original')
@@ -85,9 +85,9 @@ describe('checkpoints', () => {
 
     it('re-creates a file that revert deleted', async () => {
       const f = join(ws, 'new.txt')
-      await recordOriginal('r', ws, 'new.txt')
+      await recordOriginal('r', [ws], 'new.txt')
       writeFileSync(f, 'created')
-      await recordResult('r', ws, 'new.txt')
+      await recordResult('r', [ws], 'new.txt')
 
       await restoreCheckpoint('r')
       expect(existsSync(f)).toBe(false)
@@ -99,9 +99,9 @@ describe('checkpoints', () => {
     it('round-trips revert and redo repeatedly', async () => {
       const f = join(ws, 'a.txt')
       writeFileSync(f, 'v0')
-      await recordOriginal('r', ws, 'a.txt')
+      await recordOriginal('r', [ws], 'a.txt')
       writeFileSync(f, 'v1')
-      await recordResult('r', ws, 'a.txt')
+      await recordResult('r', [ws], 'a.txt')
 
       await restoreCheckpoint('r')
       await reapplyCheckpoint('r')
@@ -113,9 +113,9 @@ describe('checkpoints', () => {
 
     it('does not consume the checkpoint on restore (so redo still works)', async () => {
       writeFileSync(join(ws, 'c.txt'), 'before')
-      await recordOriginal('r', ws, 'c.txt')
+      await recordOriginal('r', [ws], 'c.txt')
       writeFileSync(join(ws, 'c.txt'), 'after')
-      await recordResult('r', ws, 'c.txt')
+      await recordResult('r', [ws], 'c.txt')
 
       expect(await restoreCheckpoint('r')).toBe(1)
       expect(await restoreCheckpoint('r')).toBe(1) // still there, idempotent
@@ -125,7 +125,7 @@ describe('checkpoints', () => {
     it('skips files whose post-turn content was never captured (e.g. failed write)', async () => {
       const f = join(ws, 'a.txt')
       writeFileSync(f, 'original')
-      await recordOriginal('r', ws, 'a.txt')
+      await recordOriginal('r', [ws], 'a.txt')
       // write "fails" -> recordResult never called -> afterCaptured stays false
 
       await restoreCheckpoint('r')
@@ -139,18 +139,18 @@ describe('checkpoints', () => {
     it('recordResult is a no-op when the file was never snapshotted', async () => {
       // No recordOriginal first (e.g. path escaped / oversized).
       writeFileSync(join(ws, 'x.txt'), 'hi')
-      await recordResult('r', ws, 'x.txt')
+      await recordResult('r', [ws], 'x.txt')
       expect(checkpointFileCount('r')).toBe(0)
     })
 
     it('skips redo (does not delete) when the post-write read fails', async () => {
       const f = join(ws, 'a.txt')
       writeFileSync(f, 'original')
-      await recordOriginal('r', ws, 'a.txt')
+      await recordOriginal('r', [ws], 'a.txt')
       writeFileSync(f, 'modified')
       // The file vanishes before we capture the result -> recordResult reads null.
       rmSync(f, { force: true })
-      await recordResult('r', ws, 'a.txt')
+      await recordResult('r', [ws], 'a.txt')
 
       await restoreCheckpoint('r') // restores the original
       expect(readFileSync(f, 'utf8')).toBe('original')
@@ -165,9 +165,9 @@ describe('checkpoints', () => {
       mkdirSync(join(ws, 'sub'))
       const f = join(ws, 'sub', 'a.txt')
       writeFileSync(f, 'original')
-      await recordOriginal('r', ws, 'sub/a.txt')
+      await recordOriginal('r', [ws], 'sub/a.txt')
       writeFileSync(f, 'modified')
-      await recordResult('r', ws, 'sub/a.txt')
+      await recordResult('r', [ws], 'sub/a.txt')
 
       // Simulate the directory disappearing before a revert.
       rmSync(join(ws, 'sub'), { recursive: true, force: true })
@@ -179,7 +179,7 @@ describe('checkpoints', () => {
       // MAX_CHECKPOINTS is 50; create 51 distinct runs, each touching one file.
       for (let i = 0; i < 51; i++) {
         writeFileSync(join(ws, `f${i}.txt`), 'x')
-        await recordOriginal(`run-${i}`, ws, `f${i}.txt`)
+        await recordOriginal(`run-${i}`, [ws], `f${i}.txt`)
       }
       // The oldest (run-0) should have been evicted; the newest retained.
       expect(checkpointFileCount('run-0')).toBe(0)

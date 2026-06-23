@@ -92,6 +92,7 @@ export function defaultSettings(): AppSettings {
     reasoningEffort: 'off',
     permissionRules: [],
     hooks: [],
-    mcpServers: []
+    mcpServers: [],
+    additionalRoots: []
   }
 }

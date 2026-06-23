@@ -159,6 +159,18 @@ export async function startRun(
       getTool(name) ?? mcpToolDefs.find((d) => d.schema.name === name)
     const messages: ChatMessage[] = [...req.messages]
 
+    // Allowed roots: the workspace plus any configured additional directories
+    // that still resolve (deduped). This is the file-tool + sandbox boundary.
+    const roots = [workspace]
+    for (const dir of settings.additionalRoots ?? []) {
+      try {
+        const real = realpathSync(dir)
+        if (!roots.includes(real)) roots.push(real)
+      } catch {
+        // a configured directory that no longer exists — skip it
+      }
+    }
+
     // Shared tool-execution context. `run.override` is read at call time so an
     // "Allow for run" decision earlier in the turn takes effect.
     const makeToolContext = (
@@ -166,6 +178,7 @@ export async function startRun(
       attachDocument: (d: DocumentAttachment) => void
     ): ToolContext => ({
       workspace,
+      roots,
       allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
       signal: abort.signal,
       getSecret: getKey,
@@ -426,7 +439,7 @@ export async function startRun(
             } else {
               // Snapshot the target's prior content so this turn's file changes can be reverted.
               if (tool.kind === 'write' && typeof call.arguments.path === 'string') {
-                await recordOriginal(runId, workspace, call.arguments.path)
+                await recordOriginal(runId, roots, call.arguments.path)
               }
               emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
               try {
@@ -453,7 +466,7 @@ export async function startRun(
               // Snapshot the file's final content (after any hook, e.g. a formatter)
               // so the change can be faithfully redone after a revert.
               if (ok && tool.kind === 'write' && typeof call.arguments.path === 'string') {
-                await recordResult(runId, workspace, call.arguments.path)
+                await recordResult(runId, roots, call.arguments.path)
               }
             }
           }

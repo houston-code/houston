@@ -18,6 +18,7 @@ import type {
 const api = {
   getVersion: (): Promise<string> => ipcRenderer.invoke(IPC.appGetVersion),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
+  pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.workspaceListFiles, workspace, query),
   listCommands: (workspace: string): Promise<Command[]> =>
