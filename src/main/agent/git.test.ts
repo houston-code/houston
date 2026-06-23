@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatGitContext, gitContext } from './git'
+import { formatGitContext, gitContext, gitDiff, isSafeGitRef } from './git'
 
 describe('formatGitContext', () => {
   it('reports a clean tree', () => {
@@ -58,5 +58,67 @@ describe('gitContext', () => {
     }
     const s = await gitContext('/ws', exec)
     expect(s).toContain('branch "detached"')
+  })
+})
+
+describe('gitDiff', () => {
+  it('returns the tracked diff and untracked files', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') return 'true\n'
+      if (args[0] === 'diff') return '@@ a.ts @@\n+changed\n'
+      if (args[0] === 'ls-files') return 'new.ts\nother.ts\n'
+      return ''
+    }
+    const d = await gitDiff('/ws', 'HEAD', exec)
+    expect(d.isRepo).toBe(true)
+    expect(d.diff).toContain('+changed')
+    expect(d.untracked).toEqual(['new.ts', 'other.ts'])
+  })
+
+  it('reports not-a-repo when rev-parse fails', async () => {
+    const exec = async (): Promise<string> => {
+      throw new Error('not a git repository')
+    }
+    const d = await gitDiff('/ws', 'HEAD', exec)
+    expect(d).toEqual({ isRepo: false, diff: '', untracked: [] })
+  })
+
+  it('still lists untracked files when the diff fails (e.g. unborn HEAD)', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') return 'true\n'
+      if (args[0] === 'diff') throw new Error('bad revision HEAD')
+      if (args[0] === 'ls-files') return 'first.ts\n'
+      return ''
+    }
+    const d = await gitDiff('/ws', 'HEAD', exec)
+    expect(d.isRepo).toBe(true)
+    expect(d.diff).toBe('')
+    expect(d.untracked).toEqual(['first.ts'])
+  })
+
+  it('never runs git diff with an option-like base', async () => {
+    const seen: string[][] = []
+    const exec = async (args: string[]): Promise<string> => {
+      seen.push(args)
+      if (args[0] === 'rev-parse') return 'true\n'
+      return ''
+    }
+    const d = await gitDiff('/ws', '--output=/tmp/pwn', exec)
+    expect(d.isRepo).toBe(true)
+    expect(seen.some((a) => a[0] === 'diff')).toBe(false) // the dangerous arg never reached git diff
+  })
+})
+
+describe('isSafeGitRef', () => {
+  it('accepts ordinary refs and SHAs', () => {
+    for (const ref of ['HEAD', 'main', 'origin/main', 'v1.2.3', 'HEAD~3', 'HEAD@{1}', 'a1b2c3d']) {
+      expect(isSafeGitRef(ref)).toBe(true)
+    }
+  })
+
+  it('rejects option-like and shell-ish refs', () => {
+    for (const ref of ['--output=/tmp/x', '-O', '', 'a b', '$(id)', 'a;rm -rf', 'a|b']) {
+      expect(isSafeGitRef(ref)).toBe(false)
+    }
   })
 })

@@ -24,6 +24,7 @@ import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
 import { runSubAgent } from './subagent'
+import { reviewWorkspaceChanges } from './review'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills } from './skills'
@@ -190,6 +191,14 @@ export async function startRun(
           prompt,
           signal: abort.signal,
           systemOverride: agentName ? agentsByName.get(agentName)?.systemPrompt : undefined
+        }),
+      dispatchReview: (base) =>
+        reviewWorkspaceChanges({
+          provider,
+          model: req.model,
+          workspace,
+          base,
+          signal: abort.signal
         }),
       attachImage,
       attachDocument

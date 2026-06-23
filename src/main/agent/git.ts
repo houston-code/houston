@@ -58,3 +58,59 @@ export async function gitContext(workspace: string, exec: GitExec = runGit): Pro
   }
   return formatGitContext(branch, status)
 }
+
+/**
+ * Whether a ref is safe to pass to git as a positional revision. Refs are run via
+ * execFile (no shell), so the only injection risk is a value that begins with `-`
+ * being read as an *option* (e.g. `--output=<file>`, which would write a file).
+ * Requiring a leading ref character and a conservative charset closes that.
+ */
+export function isSafeGitRef(ref: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]*$/.test(ref)
+}
+
+/** The uncommitted change set for a workspace, used as input to a review. */
+export interface WorkspaceDiff {
+  /** False when the workspace is not a git repo (there is no diff to review). */
+  isRepo: boolean
+  /** Unified diff of tracked changes vs `base` (staged + unstaged); '' if none. */
+  diff: string
+  /** Paths of new, untracked, non-ignored files (not present in `diff`). */
+  untracked: string[]
+}
+
+/**
+ * Read the workspace's uncommitted changes for review: the diff of tracked files
+ * against `base` (default HEAD, i.e. everything not yet committed) plus the list
+ * of new untracked files. Read-only git, never throws. `exec` is injectable.
+ */
+export async function gitDiff(
+  workspace: string,
+  base = 'HEAD',
+  exec: GitExec = runGit
+): Promise<WorkspaceDiff> {
+  try {
+    await exec(['rev-parse', '--is-inside-work-tree'], workspace)
+  } catch {
+    return { isRepo: false, diff: '', untracked: [] }
+  }
+  let diff = ''
+  // Refuse an option-like base (defence in depth — callers should validate too).
+  if (isSafeGitRef(base)) {
+    try {
+      // `--` guards against `base` being read as a path; on a repo with no commits
+      // `git diff HEAD` throws (no HEAD) — the untracked list carries the review then.
+      diff = await exec(['diff', base, '--'], workspace)
+    } catch {
+      // invalid base (e.g. unborn HEAD) — fall back to no tracked diff
+    }
+  }
+  let untracked: string[] = []
+  try {
+    const out = await exec(['ls-files', '--others', '--exclude-standard'], workspace)
+    untracked = out.split('\n').map((l) => l.trim()).filter(Boolean)
+  } catch {
+    // ignore — untracked listing is best-effort
+  }
+  return { isRepo: true, diff: diff.trim(), untracked }
+}
