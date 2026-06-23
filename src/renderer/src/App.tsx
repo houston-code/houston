@@ -332,6 +332,9 @@ export default function App(): JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+    // chat.cancel is stable (useCallback); depending on the whole `chat` object
+    // would re-subscribe every render. The fields we read are listed explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onNewChat, settingsOpen, chat.running, chat.cancel])
 
   if (!settings) {
