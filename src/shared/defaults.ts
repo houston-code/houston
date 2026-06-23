@@ -91,6 +91,7 @@ export function defaultSettings(): AppSettings {
     compactionThreshold: DEFAULT_COMPACTION_THRESHOLD,
     reasoningEffort: 'off',
     permissionRules: [],
-    hooks: []
+    hooks: [],
+    mcpServers: []
   }
 }

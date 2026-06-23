@@ -44,6 +44,23 @@ export interface ProviderConfig {
 export type ApprovalPolicy = 'plan' | 'ask' | 'auto-edit' | 'full-auto'
 
 /**
+ * An MCP (Model Context Protocol) server Houston connects to over stdio. Its
+ * tools are exposed to the agent namespaced as `mcp__<id>__<tool>`. The command
+ * is user-configured and trusted; its tool calls still require approval.
+ */
+export interface McpServerConfig {
+  /** Stable id, [\w-]+, used to namespace the server's tools. */
+  id: string
+  /** Display name (optional). */
+  name?: string
+  /** Executable to spawn (e.g. "npx"). */
+  command: string
+  /** Arguments (e.g. ["-y", "@modelcontextprotocol/server-filesystem", "."]). */
+  args?: string[]
+  enabled: boolean
+}
+
+/**
  * A tool-use hook: a shell command run before (PreToolUse) or after (PostToolUse)
  * a tool call. PreToolUse can block the call by exiting non-zero; PostToolUse
  * output is appended to the tool result. `matcher` is a glob over the tool name
@@ -94,4 +111,6 @@ export interface AppSettings {
   permissionRules?: PermissionRule[]
   /** Shell hooks run before/after tool calls. */
   hooks?: Hook[]
+  /** MCP servers to connect to (stdio). Their tools are offered to the agent. */
+  mcpServers?: McpServerConfig[]
 }

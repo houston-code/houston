@@ -10,7 +10,7 @@ import { fetchUrlAsText } from './webfetch'
 import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 
-export type ToolKind = 'read' | 'write' | 'shell' | 'network'
+export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
 export interface ToolContext {
   /** Canonical (realpath'd) workspace root. */

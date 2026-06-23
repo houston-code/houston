@@ -9,7 +9,7 @@ import type { ToolKind } from './tools'
  * approval prompt.
  */
 export function isBlockedByPlan(policy: ApprovalPolicy, kind: ToolKind): boolean {
-  return policy === 'plan' && (kind === 'write' || kind === 'shell')
+  return policy === 'plan' && (kind === 'write' || kind === 'shell' || kind === 'mcp')
 }
 
 /**
@@ -24,7 +24,9 @@ export function isBlockedByPlan(policy: ApprovalPolicy, kind: ToolKind): boolean
  */
 export function needsApproval(policy: ApprovalPolicy, kind: ToolKind, override: boolean): boolean {
   if (override) return false
-  if (kind === 'network') return true
+  // Network egress and MCP tools always prompt (they leave the machine / run
+  // outside the sandbox) — even in full-auto, unless a permission rule allows them.
+  if (kind === 'network' || kind === 'mcp') return true
   if (policy === 'full-auto') return false
   if (kind === 'read') return false
   if (kind === 'write') return policy === 'ask' // auto-edit auto-approves writes
