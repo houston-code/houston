@@ -181,7 +181,3 @@ The build is ad-hoc signed because there's no Developer ID configured. To sign
 and notarize, set `mac.identity` in [`electron-builder.yml`](electron-builder.yml)
 to your Developer ID and add a notarization step (e.g. `@electron/notarize` via
 an `afterSign` hook), then `npm run dist`.
-
-## License
-
-[MIT](./LICENSE)

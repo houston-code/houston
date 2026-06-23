@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "An open-source, local-first coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": "Houston contributors",
-  "license": "MIT",
   "main": "./out/main/index.js",
   "homepage": "https://github.com/piyushvijay/houston",
   "scripts": {
