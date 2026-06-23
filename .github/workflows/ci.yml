@@ -56,11 +56,40 @@ jobs:
     needs: test
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
     runs-on: ubuntu-latest
+    # A PR opened *and* labeled at once can spawn two CI runs for the same PR (see
+    # the `on:` comment). Without this, both runs' auto-merge jobs fire `gh pr merge`
+    # at once and the loser dies with "merge already in progress", reddening a PR that
+    # merged fine. Serialize auto-merge per-PR so the second job waits for the first
+    # instead of racing it. cancel-in-progress is false on purpose: cancelling could
+    # tear down a mid-merge job, and we never want to lose the run carrying the label.
+    concurrency:
+      group: auto-merge-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
     steps:
-      - run: gh pr merge "$PR" --merge --delete-branch
+      # Idempotent merge. `gh pr merge` exits non-zero for several reasons; only a
+      # genuinely un-merged PR should fail the job. After a non-zero exit we confirm
+      # the PR's state (polling briefly, since a concurrent run's merge may still be
+      # committing) and exit 0 if it's MERGED — otherwise stay red so real failures
+      # (conflicts, failing required checks) surface. `|| state=UNKNOWN` keeps a flaky
+      # `gh pr view` from aborting the step under `set -eo pipefail`.
+      - run: |
+          if gh pr merge "$PR" --merge --delete-branch; then
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5; do
+            state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
+            if [ "$state" = "MERGED" ]; then
+              echo "::warning::PR #$PR is MERGED but 'gh pr merge' exited non-zero (a concurrent run merged it, or --delete-branch failed). Verify the head branch was removed."
+              exit 0
+            fi
+            echo "Attempt $attempt: PR #$PR state=$state (not yet MERGED); waiting for any in-flight merge."
+            sleep 3
+          done
+          echo "::error::Merge failed and PR #$PR is not merged (state=$state)."
+          exit 1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
