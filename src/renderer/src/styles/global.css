@@ -390,6 +390,67 @@ body {
   word-break: break-word;
 }
 
+/* ---- Diff (edit_file / write_file) ---- */
+.tool-card__diff {
+  margin-top: 8px;
+}
+.diff-stat {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.diff-stat__add {
+  color: var(--ok);
+}
+.diff-stat__del {
+  color: var(--danger);
+}
+pre.diff {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  max-height: 360px;
+  overflow: auto;
+}
+.diff__line {
+  display: flex;
+  gap: 6px;
+}
+.diff__sign {
+  width: 1ch;
+  flex-shrink: 0;
+  color: var(--text-dim);
+  user-select: none;
+}
+.diff__text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff__line--add {
+  background: rgba(74, 222, 128, 0.13);
+}
+.diff__line--add .diff__sign {
+  color: var(--ok);
+}
+.diff__line--del {
+  background: rgba(255, 107, 107, 0.13);
+}
+.diff__line--del .diff__sign {
+  color: var(--danger);
+}
+.diff__line--ctx .diff__text {
+  color: var(--text-dim);
+}
+.diff__more {
+  color: var(--text-dim);
+  padding-top: 4px;
+}
+
 /* ---- Todo checklist (todo_write) ---- */
 .todo-list {
   list-style: none;
