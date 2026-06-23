@@ -55,6 +55,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   its target (e.g. allow `run_shell` matching `git *`, deny anything matching
   `*rm -rf*`, always ask before `write_file` under `src/secret/**`). Rules are
   checked before the policy; first match wins.
+- **Hooks.** Run your own shell commands around tool calls (Settings → *Hooks*):
+  a *PreToolUse* hook can block a call by exiting non-zero, and a *PostToolUse*
+  hook's output is fed back to the agent — e.g. auto-format after every edit, or
+  run tests after a write. Hooks run sandboxed to the project; the call's context
+  is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT`.
 - **Undo a turn's file changes.** Houston snapshots each file before the agent
   writes it, so when a turn edits files a **Revert** button appears — one click
   restores everything that turn changed (and deletes files it created).

@@ -20,6 +20,7 @@ import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal } from './checkpoints'
 import { runSubAgent } from './subagent'
+import { runHooks } from './hooks'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -300,23 +301,45 @@ export async function startRun(
             output = 'Denied by the user.'
             ok = false
           } else {
-            // Snapshot the target's prior content so this turn's file changes can be reverted.
-            if (tool.kind === 'write' && typeof call.arguments.path === 'string') {
-              await recordOriginal(runId, workspace, call.arguments.path)
-            }
-            emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
-            try {
-              output = await tool.execute(call.arguments, {
-                workspace,
-                allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
-                signal: abort.signal,
-                getSecret: getKey,
-                dispatchSubAgent: (prompt) =>
-                  runSubAgent({ provider, model: req.model, workspace, prompt, signal: abort.signal })
-              })
-            } catch (e) {
-              output = `Error: ${(e as Error).message}`
+            // PreToolUse hooks can block the call before it runs.
+            const pre = await runHooks(
+              settings.hooks,
+              'PreToolUse',
+              { tool: call.name, input: call.arguments },
+              workspace,
+              abort.signal
+            )
+            if (pre.blocked) {
+              output = `Blocked by a PreToolUse hook:\n${pre.message || '(no output)'}`
               ok = false
+            } else {
+              // Snapshot the target's prior content so this turn's file changes can be reverted.
+              if (tool.kind === 'write' && typeof call.arguments.path === 'string') {
+                await recordOriginal(runId, workspace, call.arguments.path)
+              }
+              emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
+              try {
+                output = await tool.execute(call.arguments, {
+                  workspace,
+                  allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
+                  signal: abort.signal,
+                  getSecret: getKey,
+                  dispatchSubAgent: (prompt) =>
+                    runSubAgent({ provider, model: req.model, workspace, prompt, signal: abort.signal })
+                })
+              } catch (e) {
+                output = `Error: ${(e as Error).message}`
+                ok = false
+              }
+              // PostToolUse hooks run after the tool; their output is shown to the agent.
+              const post = await runHooks(
+                settings.hooks,
+                'PostToolUse',
+                { tool: call.name, input: call.arguments, result: output },
+                workspace,
+                abort.signal
+              )
+              if (post.message) output += `\n\n[PostToolUse hook]\n${post.message}`
             }
           }
         }

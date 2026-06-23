@@ -90,6 +90,7 @@ export function defaultSettings(): AppSettings {
     recentWorkspaces: [],
     compactionThreshold: DEFAULT_COMPACTION_THRESHOLD,
     reasoningEffort: 'off',
-    permissionRules: []
+    permissionRules: [],
+    hooks: []
   }
 }
