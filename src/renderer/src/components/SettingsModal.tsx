@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AppSettings, ModelOption, ProviderConfig } from '@shared/types'
+import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 
 function modelsToText(models: ModelOption[]): string {
   return models.map((m) => m.id).join('\n')
@@ -203,6 +204,26 @@ export function SettingsModal({
             value={settings.systemPromptExtra ?? ''}
             onChange={(e) => setSettings((s) => ({ ...s, systemPromptExtra: e.target.value }))}
           />
+
+          <h3>Context window</h3>
+          <label className="field">
+            <span>
+              Compact the conversation when it grows past this many tokens (0 to disable).
+              Lower it for small-context local models.
+            </span>
+            <input
+              type="number"
+              min={0}
+              step={1000}
+              value={settings.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD}
+              onChange={(e) =>
+                setSettings((s) => ({
+                  ...s,
+                  compactionThreshold: Math.max(0, Math.floor(Number(e.target.value) || 0))
+                }))
+              }
+            />
+          </label>
         </div>
 
         <div className="modal__foot">

@@ -52,4 +52,9 @@ export interface AppSettings {
   recentWorkspaces: string[]
   /** Optional extra instructions appended to the system prompt. */
   systemPromptExtra?: string
+  /**
+   * Compact the conversation when the estimated context exceeds this many tokens.
+   * 0 disables compaction. Lower it for small-context local models.
+   */
+  compactionThreshold?: number
 }
