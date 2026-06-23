@@ -130,6 +130,46 @@ describe('read_file ranges', () => {
   })
 })
 
+describe('read_file images and PDFs', () => {
+  // 1x1 transparent PNG.
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+    'base64'
+  )
+
+  it('attaches an image and returns a marker', async () => {
+    writeFileSync(join(workspace, 'logo.png'), PNG)
+    const images: { mediaType: string; data: string }[] = []
+    const out = await getTool('read_file')!.execute(
+      { path: 'logo.png' },
+      { ...ctx, attachImage: (img) => images.push(img) }
+    )
+    expect(out).toContain('[image: logo.png')
+    expect(images).toHaveLength(1)
+    expect(images[0].mediaType).toBe('image/png')
+    expect(images[0].data).toBe(PNG.toString('base64'))
+  })
+
+  it('attaches a PDF as a document', async () => {
+    writeFileSync(join(workspace, 'doc.pdf'), Buffer.from('%PDF-1.4 minimal'))
+    const docs: { mediaType: string; data: string }[] = []
+    const out = await getTool('read_file')!.execute(
+      { path: 'doc.pdf' },
+      { ...ctx, attachDocument: (d) => docs.push(d) }
+    )
+    expect(out).toContain('[pdf: doc.pdf')
+    expect(docs).toHaveLength(1)
+    expect(docs[0].mediaType).toBe('application/pdf')
+  })
+
+  it('notes that an image cannot be shown when attachment is unavailable', async () => {
+    writeFileSync(join(workspace, 'logo.png'), PNG)
+    // ctx has no attachImage (e.g. a subagent context).
+    const out = await run('read_file', { path: 'logo.png' })
+    expect(out).toContain('cannot be displayed')
+  })
+})
+
 describe('glob', () => {
   it('finds files by recursive pattern', async () => {
     await run('write_file', { path: 'src/a.ts', content: 'x' })

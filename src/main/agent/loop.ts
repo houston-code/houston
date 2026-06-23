@@ -3,12 +3,14 @@ import type {
   AgentEvent,
   AgentRunRequest,
   ChatMessage,
+  DocumentAttachment,
   Provider,
   ReasoningBlock,
   StopReason,
   ToolApprovalDecision,
   ToolCall
 } from '@shared/agent'
+import type { ImageAttachment } from '@shared/images'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { getProvider, getSettings } from '../store'
 import { getKey } from '../secrets'
@@ -277,6 +279,8 @@ export async function startRun(
         const tool = lookupTool(call.name)
         let output: string
         let ok = true
+        const toolImages: ImageAttachment[] = []
+        const toolDocs: DocumentAttachment[] = []
 
         const ruleAction = tool
           ? matchRule(settings.permissionRules, call.name, permissionSubject(call.name, call.arguments))
@@ -350,7 +354,9 @@ export async function startRun(
                       prompt,
                       signal: abort.signal,
                       systemOverride: agentName ? agentsByName.get(agentName)?.systemPrompt : undefined
-                    })
+                    }),
+                  attachImage: (img) => toolImages.push(img),
+                  attachDocument: (doc) => toolDocs.push(doc)
                 })
               } catch (e) {
                 output = `Error: ${(e as Error).message}`
@@ -370,7 +376,14 @@ export async function startRun(
         }
 
         emit({ type: 'tool_result', callId: call.id, name: call.name, ok, output })
-        messages.push({ role: 'tool', content: output, toolCallId: call.id, toolName: call.name })
+        messages.push({
+          role: 'tool',
+          content: output,
+          toolCallId: call.id,
+          toolName: call.name,
+          ...(toolImages.length ? { images: toolImages } : {}),
+          ...(toolDocs.length ? { documents: toolDocs } : {})
+        })
         onMessages?.(messages)
       }
     }

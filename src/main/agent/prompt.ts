@@ -13,7 +13,7 @@ export function buildSystemPrompt(
 Working directory: ${workspace} (project: "${basename(workspace)}")
 
 You have these tools:
-- read_file: read a text file in the project
+- read_file: read a file in the project (text, or an image/PDF the model can view directly)
 - write_file: create or overwrite a file
 - edit_file: replace an exact string in a file
 - list_dir: list a directory
