@@ -24,6 +24,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Sandboxed execution.** Shell commands run under the macOS **Seatbelt**
   sandbox (`sandbox-exec`), confined to the project directory: writes outside the
   project and (by default) network access are blocked.
+- **Background processes.** `run_shell` can start long-running commands (dev
+  servers, watchers) in the background and return immediately; the agent polls
+  them with `read_shell_output` and stops them with `kill_shell`. They're killed
+  when the app quits.
 - **Approval flow.** Choose how much autonomy to grant: *ask every time*,
   *auto-approve edits*, or *full auto*. Approve, deny, or allow-for-the-run on
   each tool call. File edits show an inline red/green **diff** so you can review
