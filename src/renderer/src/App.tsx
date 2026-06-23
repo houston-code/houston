@@ -5,6 +5,7 @@ import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { applyTheme } from './lib/theme'
 import { shortcutFor } from './lib/shortcuts'
+import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
@@ -416,6 +417,12 @@ export default function App(): JSX.Element {
             onCancel={chat.cancel}
           />
         </div>
+
+        <footer className="statusbar">
+          <span className={`statusbar__dot${chat.running ? ' statusbar__dot--busy' : ''}`} />
+          <span className="statusbar__state">{statusText(chat.items, chat.running)}</span>
+          {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
+        </footer>
       </div>
 
       {settingsOpen && (
