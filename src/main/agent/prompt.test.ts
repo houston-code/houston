@@ -1,0 +1,34 @@
+import { describe, expect, it } from 'vitest'
+import { buildSystemPrompt } from './prompt'
+
+describe('buildSystemPrompt', () => {
+  it('includes the workspace path and project name', () => {
+    const p = buildSystemPrompt('/tmp/my-project')
+    expect(p).toContain('/tmp/my-project')
+    expect(p).toContain('my-project')
+  })
+
+  it('omits the rules and extra sections when not provided', () => {
+    const p = buildSystemPrompt('/tmp/x')
+    expect(p).not.toContain('Project instructions')
+    expect(p).not.toContain('Additional user instructions')
+  })
+
+  it('appends project rules when provided', () => {
+    const p = buildSystemPrompt('/tmp/x', undefined, '### AGENTS.md\nUse tabs.')
+    expect(p).toContain('Project instructions')
+    expect(p).toContain('Use tabs.')
+  })
+
+  it('orders base, then project rules, then user extra', () => {
+    const p = buildSystemPrompt('/tmp/x', 'be terse', '### AGENTS.md\nUse tabs.')
+    expect(p.indexOf('Project instructions')).toBeLessThan(p.indexOf('Additional user instructions'))
+    expect(p).toContain('be terse')
+  })
+
+  it('ignores blank rules / extra strings', () => {
+    const p = buildSystemPrompt('/tmp/x', '   ', '  \n ')
+    expect(p).not.toContain('Project instructions')
+    expect(p).not.toContain('Additional user instructions')
+  })
+})
