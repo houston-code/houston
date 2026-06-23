@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process'
 import { promises as fs, existsSync } from 'node:fs'
 import { join, relative, delimiter } from 'node:path'
+import { minimatch } from 'minimatch'
 
 /**
  * Content search for the `search_files` tool. Uses ripgrep when a binary can be
  * located (fast, skips binaries) and falls back to a pure-JS recursive walk
  * otherwise, so the tool works in any environment with no bundled binary.
+ *
+ * Both paths support the same options: case-insensitive matching, a file glob
+ * filter, context lines, and a files-with-matches output mode.
  */
 
 export const SKIP_DIRS = new Set([
@@ -44,10 +48,21 @@ export function resolveRipgrep(opts: ResolveRgOptions = {}): string | null {
 
 const clip = (line: string): string => (line.length > MAX_LINE ? line.slice(0, MAX_LINE) : line)
 
+/** Match-shaping options shared by the ripgrep and JS-fallback paths. */
+export interface MatchOptions {
+  ignoreCase?: boolean
+  /** Glob filter on file paths (e.g. "*.ts"). */
+  glob?: string
+  /** Lines of context to show before and after each match (ripgrep -C). */
+  context?: number
+  /** Output matching file paths only, not the matching lines. */
+  filesWithMatches?: boolean
+}
+
 /**
- * Run ripgrep and collect up to `max` "path:line:text" matches. Resolves with an
- * `error` (rather than rejecting) when the pattern is invalid so the caller can
- * surface it. Paths are relative to `cwd`.
+ * Run ripgrep and collect up to `max` output lines. Resolves with an `error`
+ * (rather than rejecting) when the pattern is invalid so the caller can surface
+ * it. Paths are relative to `cwd`.
  */
 export function runRipgrep(
   rgPath: string,
@@ -55,21 +70,27 @@ export function runRipgrep(
   cwd: string,
   searchRel: string,
   max: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  opts: MatchOptions = {}
 ): Promise<{ matches: string[]; error?: string }> {
   return new Promise((resolve) => {
     const args = [
-      '--line-number',
       '--no-heading',
       '--color=never',
       '--no-messages',
       '--no-ignore', // match the JS walk: search everything except the dirs below
-      ...[...SKIP_DIRS].map((d) => `--glob=!${d}`),
-      '-e',
-      pattern,
-      '--',
-      searchRel || '.'
+      ...[...SKIP_DIRS].map((d) => `--glob=!${d}`)
     ]
+    if (opts.ignoreCase) args.push('-i')
+    if (opts.glob) args.push(`--glob=${opts.glob}`)
+    if (opts.filesWithMatches) {
+      args.push('--files-with-matches')
+    } else {
+      args.push('--line-number')
+      if (opts.context && opts.context > 0) args.push('-C', String(opts.context))
+    }
+    args.push('-e', pattern, '--', searchRel || '.')
+
     let child
     try {
       child = spawn(rgPath, args, { cwd, signal })
@@ -103,7 +124,8 @@ async function jsWalk(
   workspace: string,
   regex: RegExp,
   out: string[],
-  max: number
+  max: number,
+  opts: MatchOptions
 ): Promise<void> {
   if (out.length >= max) return
   let entries
@@ -118,8 +140,12 @@ async function jsWalk(
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue
-      await jsWalk(full, workspace, regex, out, max)
+      await jsWalk(full, workspace, regex, out, max, opts)
     } else if (entry.isFile()) {
+      const rel = relative(workspace, full)
+      // matchBase mirrors ripgrep's gitignore-style globs: a slash-less pattern
+      // like "*.ts" matches files at any depth, while "src/**/*.ts" matches by path.
+      if (opts.glob && !minimatch(rel, opts.glob, { matchBase: true })) continue
       let content: string
       try {
         content = await fs.readFile(full, 'utf8')
@@ -128,9 +154,28 @@ async function jsWalk(
       }
       if (content.includes(String.fromCharCode(0))) continue // skip binary files
       const lines = content.split('\n')
+      const matchedLines: number[] = []
       for (let i = 0; i < lines.length; i++) {
-        if (regex.test(lines[i])) {
-          out.push(`${relative(workspace, full)}:${i + 1}: ${lines[i].trim().slice(0, 200)}`)
+        if (regex.test(lines[i])) matchedLines.push(i)
+      }
+      if (matchedLines.length === 0) continue
+
+      if (opts.filesWithMatches) {
+        out.push(rel)
+        if (out.length >= max) return
+        continue
+      }
+
+      const ctx = opts.context && opts.context > 0 ? opts.context : 0
+      const emitted = new Set<number>()
+      for (const m of matchedLines) {
+        const from = Math.max(0, m - ctx)
+        const to = Math.min(lines.length - 1, m + ctx)
+        for (let i = from; i <= to; i++) {
+          if (emitted.has(i)) continue
+          emitted.add(i)
+          const sep = i === m ? ':' : '-'
+          out.push(`${rel}:${i + 1}${sep} ${lines[i].trim().slice(0, 200)}`)
           if (out.length >= max) return
         }
       }
@@ -138,7 +183,7 @@ async function jsWalk(
   }
 }
 
-export interface SearchOptions {
+export interface SearchOptions extends MatchOptions {
   pattern: string
   /** Workspace root; ripgrep runs with this as cwd so output paths are workspace-relative. */
   workspace: string
@@ -155,18 +200,32 @@ export interface SearchOptions {
 /** Search file contents, preferring ripgrep and falling back to the JS walk. */
 export async function searchContents(o: SearchOptions): Promise<string> {
   if (!o.pattern) throw new Error('pattern is required.')
+  const matchOpts: MatchOptions = {
+    ignoreCase: o.ignoreCase,
+    glob: o.glob,
+    context: o.context,
+    filesWithMatches: o.filesWithMatches
+  }
   if (o.rgPath) {
-    const { matches, error } = await runRipgrep(o.rgPath, o.pattern, o.workspace, o.searchRel, o.max, o.signal)
+    const { matches, error } = await runRipgrep(
+      o.rgPath,
+      o.pattern,
+      o.workspace,
+      o.searchRel,
+      o.max,
+      o.signal,
+      matchOpts
+    )
     if (error) throw new Error(`Invalid regular expression: ${error}`)
     return matches.length ? matches.join('\n') : 'No matches found.'
   }
   let regex: RegExp
   try {
-    regex = new RegExp(o.pattern)
+    regex = new RegExp(o.pattern, o.ignoreCase ? 'i' : undefined)
   } catch (e) {
     throw new Error(`Invalid regular expression: ${(e as Error).message}`)
   }
   const out: string[] = []
-  await jsWalk(o.startAbs, o.workspace, regex, out, o.max)
+  await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
   return out.length ? out.join('\n') : 'No matches found.'
 }

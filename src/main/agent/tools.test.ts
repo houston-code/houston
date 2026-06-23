@@ -78,6 +78,50 @@ describe('list and search', () => {
     const out = await run('search_files', { pattern: 'answer = \\d+' })
     expect(out).toContain('src/app.ts:1:')
   })
+
+  it('supports ignore_case and files_with_matches', async () => {
+    await run('write_file', { path: 'a.ts', content: 'Hello World\n' })
+    expect(await run('search_files', { pattern: 'hello' })).toBe('No matches found.')
+    expect(await run('search_files', { pattern: 'hello', ignore_case: true })).toContain('a.ts:1:')
+    expect(await run('search_files', { pattern: 'hello', ignore_case: true, files_with_matches: true })).toBe(
+      'a.ts'
+    )
+  })
+})
+
+describe('read_file ranges', () => {
+  beforeEach(async () => {
+    await run('write_file', { path: 'big.txt', content: 'l1\nl2\nl3\nl4\nl5' })
+  })
+
+  it('reads a line slice with offset and limit', async () => {
+    const out = await run('read_file', { path: 'big.txt', offset: 2, limit: 2 })
+    expect(out).toContain('[lines 2-3 of 5]')
+    expect(out).toContain('l2\nl3')
+    expect(out).not.toContain('l4')
+  })
+
+  it('reads from an offset to the end when limit is omitted', async () => {
+    const out = await run('read_file', { path: 'big.txt', offset: 4 })
+    expect(out).toContain('[lines 4-5 of 5]')
+    expect(out.trimEnd().endsWith('l4\nl5')).toBe(true)
+  })
+
+  it('reads the whole file when no range is given', async () => {
+    expect(await run('read_file', { path: 'big.txt' })).toBe('l1\nl2\nl3\nl4\nl5')
+  })
+
+  it('reports an empty range when the offset is past end-of-file', async () => {
+    const out = await run('read_file', { path: 'big.txt', offset: 99 })
+    expect(out).toContain('[no lines in range')
+    expect(out).not.toMatch(/\[lines \d+-\d+ of/) // no reversed range header
+  })
+
+  it('reports an empty range for limit 0', async () => {
+    expect(await run('read_file', { path: 'big.txt', offset: 2, limit: 0 })).toContain(
+      '[no lines in range'
+    )
+  })
 })
 
 describe('glob', () => {
