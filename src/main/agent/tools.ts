@@ -14,6 +14,7 @@ import {
 } from './attachments'
 import { runSandboxed, spawnSandboxed } from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
+import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
 import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
@@ -37,6 +38,8 @@ export interface ToolContext {
   attachImage?: (img: ImageAttachment) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
   attachDocument?: (doc: DocumentAttachment) => void
+  /** Persistent shell state (cwd + exported env) shared across run_shell calls in a run. */
+  shellSession?: ShellSession
 }
 
 export interface ToolDef {
@@ -456,7 +459,7 @@ const runShell: ToolDef = {
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command inside a macOS Seatbelt sandbox confined to the project directory. Writes are limited to the project and temp dirs. Returns combined stdout/stderr and the exit code. Set background:true for long-running commands (e.g. a dev server or watcher): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell.',
+      'Run a shell command inside a macOS Seatbelt sandbox confined to the project directory. Writes are limited to the project and temp dirs. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). Set background:true for long-running commands (e.g. a dev server or watcher): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell.',
     parameters: objectSchema(
       {
         command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' },
@@ -485,14 +488,24 @@ const runShell: ToolDef = {
       return `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
     }
 
-    const result = await runSandboxed({
-      command,
-      cwd: ctx.workspace,
-      workspace: ctx.workspace,
-      roots: rootsOf(ctx),
-      allowNetwork: ctx.allowNetwork,
-      signal: ctx.signal
-    })
+    const result = ctx.shellSession
+      ? await runInSession({
+          command,
+          session: ctx.shellSession,
+          workspace: ctx.workspace,
+          roots: rootsOf(ctx),
+          allowNetwork: ctx.allowNetwork,
+          signal: ctx.signal,
+          run: runSandboxed
+        })
+      : await runSandboxed({
+          command,
+          cwd: ctx.workspace,
+          workspace: ctx.workspace,
+          roots: rootsOf(ctx),
+          allowNetwork: ctx.allowNetwork,
+          signal: ctx.signal
+        })
     const parts: string[] = []
     if (result.stdout) parts.push(result.stdout.trimEnd())
     if (result.stderr) parts.push(result.stderr.trimEnd())

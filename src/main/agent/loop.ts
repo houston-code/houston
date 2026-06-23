@@ -18,6 +18,7 @@ import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
 import { getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
+import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
 import { isParallelizableRead } from './scheduling'
 import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
@@ -175,6 +176,10 @@ export async function startRun(
       }
     }
 
+    // Persistent shell state for this run: `cd` and exported env carry between
+    // foreground run_shell calls so the agent gets "same terminal" behavior.
+    const shellSession = createShellSession(workspace)
+
     // Shared tool-execution context. `run.override` is read at call time so an
     // "Allow for run" decision earlier in the turn takes effect.
     const makeToolContext = (
@@ -185,6 +190,7 @@ export async function startRun(
       roots,
       allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
       signal: abort.signal,
+      shellSession,
       getSecret: getKey,
       dispatchSubAgent: (prompt, agentName) =>
         runSubAgent({
