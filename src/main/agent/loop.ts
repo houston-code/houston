@@ -3,17 +3,52 @@ import type {
   AgentEvent,
   AgentRunRequest,
   ChatMessage,
+  Provider,
   StopReason,
   ToolApprovalDecision,
   ToolCall
 } from '@shared/agent'
+import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { getProvider, getSettings } from '../store'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { getTool, toolSchemas } from './tools'
 import { needsApproval } from './approval'
+import {
+  KEEP_RECENT_USER_TURNS,
+  SUMMARY_MAX_TOKENS,
+  buildSummaryMessages,
+  buildSummaryRequestMessages,
+  estimateTokens,
+  findCompactionCut,
+  summarizationSystemPrompt
+} from './compaction'
 
 const MAX_ITERATIONS = 40
+
+/**
+ * Ask the provider to summarize a slice of the conversation. Returns the summary
+ * text; tools are intentionally omitted so the model can only reply with prose.
+ */
+async function summarize(
+  provider: Provider,
+  model: string,
+  messages: ChatMessage[],
+  signal: AbortSignal
+): Promise<string> {
+  let text = ''
+  for await (const ev of provider.streamChat({
+    model,
+    system: summarizationSystemPrompt,
+    messages,
+    maxTokens: SUMMARY_MAX_TOKENS,
+    signal
+  })) {
+    if (ev.type === 'text') text += ev.text
+    else if (ev.type === 'error') throw new Error(ev.message)
+  }
+  return text.trim()
+}
 
 interface RunState {
   abort: AbortController
@@ -86,15 +121,63 @@ export async function startRun(
       return
     }
 
-    const system = buildSystemPrompt(workspace, getSettings().systemPromptExtra)
+    const settings = getSettings()
+    const system = buildSystemPrompt(workspace, settings.systemPromptExtra)
     const tools = toolSchemas()
     const messages: ChatMessage[] = [...req.messages]
+
+    // Context compaction state. `messages` is always the full, persisted log; what
+    // we actually send the provider is `summaryMsgs` (a synthetic summary of the
+    // turns before `cut`) followed by `messages.slice(cut)`.
+    const threshold = settings.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD
+    let cut = 0
+    let summaryMsgs: ChatMessage[] = []
+    let lastInputTokens = 0
 
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
         return
       }
+
+      // Compact older turns before they overflow the model's context window. The
+      // visible transcript (persisted `messages`) is untouched — only the window
+      // sent to the provider shrinks.
+      if (threshold > 0) {
+        const windowNow = [...summaryMsgs, ...messages.slice(cut)]
+        const size = Math.max(estimateTokens(system, windowNow), lastInputTokens)
+        if (size > threshold) {
+          const newCut = findCompactionCut(messages, cut, KEEP_RECENT_USER_TURNS)
+          if (newCut > cut) {
+            try {
+              const summary = await summarize(
+                provider,
+                req.model,
+                buildSummaryRequestMessages(summaryMsgs, messages.slice(cut, newCut)),
+                abort.signal
+              )
+              if (summary) {
+                // Messages folded into the summary *this round* (a count, which is
+                // what the renderer shows) — not the absolute tail-start index.
+                const compactedNow = newCut - cut
+                summaryMsgs = buildSummaryMessages(summary)
+                cut = newCut
+                lastInputTokens = 0
+                emit({ type: 'compaction', summarized: compactedNow })
+              }
+            } catch {
+              if (abort.signal.aborted) {
+                emit({ type: 'done', stopReason: 'aborted' })
+                return
+              }
+              // Summarization failed — keep going with the full window rather than
+              // breaking the run. The turn may still fit, or surface a provider error.
+            }
+          }
+        }
+      }
+
+      const sendMessages = [...summaryMsgs, ...messages.slice(cut)]
 
       let assistantText = ''
       const toolCalls: ToolCall[] = []
@@ -104,7 +187,7 @@ export async function startRun(
         for await (const ev of provider.streamChat({
           model: req.model,
           system,
-          messages,
+          messages: sendMessages,
           tools,
           signal: abort.signal
         })) {
@@ -115,6 +198,7 @@ export async function startRun(
             toolCalls.push(ev.call)
           } else if (ev.type === 'done') {
             stopReason = ev.stopReason
+            if (ev.usage?.inputTokens) lastInputTokens = ev.usage.inputTokens
           } else if (ev.type === 'error') {
             emit({ type: 'error', message: ev.message })
             return

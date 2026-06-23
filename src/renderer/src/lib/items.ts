@@ -90,6 +90,18 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           : 'error'
       return updateTool(items, e.callId, { status, output: e.output })
     }
+    case 'compaction': {
+      const finalized = finalizeStreaming(items)
+      return [
+        ...finalized,
+        {
+          kind: 'notice',
+          id: nextId(),
+          text: `🗜 Compacted ${e.summarized} earlier message${e.summarized === 1 ? '' : 's'} to stay within the context window.`,
+          tone: 'info'
+        }
+      ]
+    }
     case 'done': {
       const finalized = finalizeStreaming(items)
       if (e.stopReason === 'aborted') {

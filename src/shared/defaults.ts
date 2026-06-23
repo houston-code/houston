@@ -3,6 +3,12 @@ import type { AppSettings, ProviderConfig } from './types'
 export const SETTINGS_SCHEMA_VERSION = 1
 
 /**
+ * Default context-compaction threshold in tokens. Comfortable for large-context
+ * cloud models (Claude/GPT/Gemini); small-context local models should lower it.
+ */
+export const DEFAULT_COMPACTION_THRESHOLD = 100_000
+
+/**
  * Built-in providers seeded on first run. Model lists are starting points only —
  * users can edit them or fetch the live list from each provider in Settings.
  */
@@ -81,6 +87,7 @@ export function defaultSettings(): AppSettings {
     providers: defaultProviders(),
     selected: null,
     approvalPolicy: 'ask',
-    recentWorkspaces: []
+    recentWorkspaces: [],
+    compactionThreshold: DEFAULT_COMPACTION_THRESHOLD
   }
 }

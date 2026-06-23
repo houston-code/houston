@@ -111,6 +111,7 @@ export type AgentEvent =
       kind: 'read' | 'write' | 'shell' | 'network'
     }
   | { runId: string; type: 'tool_result'; callId: string; name: string; ok: boolean; output: string }
+  | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | { runId: string; type: 'error'; message: string }
 

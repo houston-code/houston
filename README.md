@@ -27,6 +27,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder.
+- **Long sessions stay in budget.** When a conversation grows past a configurable
+  token threshold, Houston automatically summarizes the older turns so it never
+  overflows the model's context window. The full transcript stays on screen —
+  only what's sent to the model is compacted. Tune or disable the threshold in
+  Settings → *Context window*.
 
 ## Install (prebuilt DMG)
 
@@ -83,6 +88,7 @@ src/
 ├── main/          Electron main process (Node)
 │   ├── providers/     Anthropic / OpenAI / Gemini / OpenAI-compatible adapters
 │   ├── agent/         tool definitions + the tool-calling loop + system prompt
+│   │                  (incl. compaction.ts — summarize old turns to fit context)
 │   ├── sandbox.ts     macOS Seatbelt profile + sandboxed command runner
 │   ├── secrets.ts     Keychain-encrypted API-key storage
 │   ├── store.ts       settings persistence
