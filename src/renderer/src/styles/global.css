@@ -1267,9 +1267,10 @@ pre.diff {
   z-index: 100;
 }
 .modal {
-  width: 640px;
+  width: 720px;
   max-width: 92vw;
-  max-height: 86vh;
+  /* Fixed height keeps the dialog from resizing as you switch tabs. */
+  height: min(86vh, 640px);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -1297,7 +1298,44 @@ pre.diff {
   cursor: pointer;
   font-size: 16px;
 }
+.modal__main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.modal__nav {
+  flex-shrink: 0;
+  width: 176px;
+  border-right: 1px solid var(--border);
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.modal__nav button {
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font);
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+.modal__nav button:hover {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.modal__nav button.is-active {
+  background: var(--bg-input);
+  color: var(--text);
+  font-weight: 600;
+}
 .modal__body {
+  flex: 1;
+  min-width: 0;
   padding: 18px;
   overflow-y: auto;
 }
