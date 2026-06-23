@@ -5,6 +5,8 @@
  * learns whether a provider *has* a key (`hasKey`), never the key itself.
  */
 
+import type { ReasoningEffort } from './agent'
+
 export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'
 
 export interface ModelOption {
@@ -59,4 +61,6 @@ export interface AppSettings {
   compactionThreshold?: number
   /** True when a web-search (Tavily) API key is stored. Derived, never persisted. */
   hasWebSearchKey?: boolean
+  /** How hard the model should think before answering (default `off`). */
+  reasoningEffort?: ReasoningEffort
 }

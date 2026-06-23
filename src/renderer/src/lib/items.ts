@@ -14,6 +14,8 @@ export interface AssistantItem {
   id: string
   text: string
   streaming: boolean
+  /** Model reasoning ("thinking") streamed before the answer, if any. */
+  reasoning?: string
 }
 export interface ToolItem {
   kind: 'tool'
@@ -58,6 +60,13 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         return [...items.slice(0, -1), { ...last, text: last.text + e.delta }]
       }
       return [...items, { kind: 'assistant', id: nextId(), text: e.delta, streaming: true }]
+    }
+    case 'reasoning': {
+      const last = items[items.length - 1]
+      if (last && last.kind === 'assistant' && last.streaming) {
+        return [...items.slice(0, -1), { ...last, reasoning: (last.reasoning ?? '') + e.delta }]
+      }
+      return [...items, { kind: 'assistant', id: nextId(), text: '', streaming: true, reasoning: e.delta }]
     }
     case 'tool_approval': {
       const finalized = finalizeStreaming(items)
@@ -130,8 +139,9 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
     if (m.role === 'user') {
       if (m.content.trim()) items.push({ kind: 'user', id: nextId(), text: m.content })
     } else if (m.role === 'assistant') {
-      if (m.content.trim()) {
-        items.push({ kind: 'assistant', id: nextId(), text: m.content, streaming: false })
+      const reasoning = m.reasoning?.map((r) => r.text).filter(Boolean).join('\n') || undefined
+      if (m.content.trim() || reasoning) {
+        items.push({ kind: 'assistant', id: nextId(), text: m.content, streaming: false, reasoning })
       }
       for (const tc of m.toolCalls ?? []) {
         const res = resultByCallId.get(tc.id)

@@ -14,11 +14,28 @@ export interface ToolCall {
   arguments: Record<string, unknown>
 }
 
+/** How hard the model should "think" before answering. `off` disables it. */
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+
+/**
+ * A block of model reasoning ("extended thinking"). For Anthropic these must be
+ * preserved verbatim — including their cryptographic `signature` — and replayed
+ * on the next request when the turn used tools, or the API rejects the turn.
+ * `redactedData` carries an encrypted (redacted) thinking block instead of text.
+ */
+export interface ReasoningBlock {
+  text: string
+  signature?: string
+  redactedData?: string
+}
+
 export interface ChatMessage {
   role: ChatRole
   content: string
   /** Present on assistant turns that call tools. */
   toolCalls?: ToolCall[]
+  /** Present on assistant turns produced with reasoning enabled. */
+  reasoning?: ReasoningBlock[]
   /** Present on `tool` turns — the id of the call this result answers. */
   toolCallId?: string
   /** Present on `tool` turns — the name of the tool that produced this result. */
@@ -41,8 +58,9 @@ export interface TokenUsage {
 /** A single event in a streamed provider response. */
 export type ProviderStreamEvent =
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; call: ToolCall }
-  | { type: 'done'; stopReason: StopReason; usage?: TokenUsage }
+  | { type: 'done'; stopReason: StopReason; usage?: TokenUsage; reasoning?: ReasoningBlock[] }
   | { type: 'error'; message: string }
 
 export interface ChatRequest {
@@ -51,6 +69,8 @@ export interface ChatRequest {
   messages: ChatMessage[]
   tools?: ToolSchema[]
   maxTokens?: number
+  /** Enable model reasoning at this effort (omit/`off` to disable). */
+  reasoningEffort?: ReasoningEffort
   signal?: AbortSignal
 }
 
@@ -101,6 +121,7 @@ export type ToolApprovalDecision = 'allow' | 'deny' | 'always'
 /** Events streamed from a running agent to the renderer. */
 export type AgentEvent =
   | { runId: string; type: 'text'; delta: string }
+  | { runId: string; type: 'reasoning'; delta: string }
   | { runId: string; type: 'tool_start'; callId: string; name: string; args: Record<string, unknown> }
   | {
       runId: string

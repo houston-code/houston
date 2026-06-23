@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
-import type { ConversationMeta } from '@shared/agent'
+import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
 import { Sidebar } from './components/Sidebar'
@@ -138,6 +138,14 @@ export default function App(): JSX.Element {
     setSettings(fresh)
   }, [])
 
+  const onChangeReasoning = useCallback(async (reasoningEffort: ReasoningEffort) => {
+    const fresh = await window.api.saveSettings({
+      ...(await window.api.getSettings()),
+      reasoningEffort
+    })
+    setSettings(fresh)
+  }, [])
+
   const onSend = useCallback(
     async (text: string) => {
       if (!settings?.selected || !workspace) return
@@ -198,6 +206,7 @@ export default function App(): JSX.Element {
           usage={chat.usage}
           onSelectModel={onSelectModel}
           onChangePolicy={onChangePolicy}
+          onChangeReasoning={onChangeReasoning}
           onChangeWorkspace={onChangeWorkspace}
           onOpenSettings={() => setSettingsOpen(true)}
         />

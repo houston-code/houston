@@ -4,6 +4,7 @@ import type {
   AgentRunRequest,
   ChatMessage,
   Provider,
+  ReasoningBlock,
   StopReason,
   ToolApprovalDecision,
   ToolCall
@@ -187,6 +188,7 @@ export async function startRun(
       let stopReason: StopReason = 'end_turn'
       let turnInput = 0
       let turnOutput = 0
+      let turnReasoning: ReasoningBlock[] = []
 
       try {
         for await (const ev of provider.streamChat({
@@ -194,11 +196,14 @@ export async function startRun(
           system,
           messages: sendMessages,
           tools,
+          reasoningEffort: settings.reasoningEffort,
           signal: abort.signal
         })) {
           if (ev.type === 'text') {
             assistantText += ev.text
             emit({ type: 'text', delta: ev.text })
+          } else if (ev.type === 'reasoning') {
+            emit({ type: 'reasoning', delta: ev.text })
           } else if (ev.type === 'tool_call') {
             toolCalls.push(ev.call)
           } else if (ev.type === 'done') {
@@ -208,6 +213,7 @@ export async function startRun(
               turnInput = ev.usage.inputTokens
             }
             if (ev.usage?.outputTokens) turnOutput = ev.usage.outputTokens
+            if (ev.reasoning?.length) turnReasoning = ev.reasoning
           } else if (ev.type === 'error') {
             emit({ type: 'error', message: ev.message })
             return
@@ -229,7 +235,8 @@ export async function startRun(
       messages.push({
         role: 'assistant',
         content: assistantText,
-        ...(toolCalls.length ? { toolCalls } : {})
+        ...(toolCalls.length ? { toolCalls } : {}),
+        ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
       })
       onMessages?.(messages)
 

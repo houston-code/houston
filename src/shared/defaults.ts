@@ -88,6 +88,7 @@ export function defaultSettings(): AppSettings {
     selected: null,
     approvalPolicy: 'ask',
     recentWorkspaces: [],
-    compactionThreshold: DEFAULT_COMPACTION_THRESHOLD
+    compactionThreshold: DEFAULT_COMPACTION_THRESHOLD,
+    reasoningEffort: 'off'
   }
 }

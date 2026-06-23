@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
+import { openaiReasoningEffort } from './reasoning'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
@@ -52,6 +53,9 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
         function: { name: t.name, description: t.description, parameters: t.parameters }
       }))
 
+      // o-series / gpt-5 accept reasoning_effort; other models reject it, so it's gated.
+      const reasoningEffort = openaiReasoningEffort(req.model, req.reasoningEffort)
+
       const stream = await client.chat.completions.create(
         {
           model: req.model,
@@ -60,6 +64,7 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
           // Ask for a final usage-only chunk. Most OpenAI-compatible servers honour
           // this; those that don't simply never send it, which we handle gracefully.
           stream_options: { include_usage: true },
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
           ...(tools && tools.length ? { tools } : {})
         },
         { signal: req.signal }

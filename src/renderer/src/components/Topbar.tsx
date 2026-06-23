@@ -1,4 +1,5 @@
 import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
+import type { ReasoningEffort } from '@shared/agent'
 import { formatTokens, type SessionUsage } from '@shared/usage'
 
 function basename(p: string): string {
@@ -12,6 +13,13 @@ const POLICY_LABEL: Record<ApprovalPolicy, string> = {
   'full-auto': 'Full auto'
 }
 
+const REASONING_LABEL: Record<ReasoningEffort, string> = {
+  off: 'Think: off',
+  low: 'Think: low',
+  medium: 'Think: medium',
+  high: 'Think: high'
+}
+
 export function Topbar({
   settings,
   selected,
@@ -19,6 +27,7 @@ export function Topbar({
   usage,
   onSelectModel,
   onChangePolicy,
+  onChangeReasoning,
   onChangeWorkspace,
   onOpenSettings
 }: {
@@ -28,6 +37,7 @@ export function Topbar({
   usage: SessionUsage | null
   onSelectModel: (sel: SelectedModel) => void
   onChangePolicy: (p: ApprovalPolicy) => void
+  onChangeReasoning: (e: ReasoningEffort) => void
   onChangeWorkspace: () => void
   onOpenSettings: () => void
 }): JSX.Element {
@@ -85,6 +95,19 @@ export function Topbar({
         {(Object.keys(POLICY_LABEL) as ApprovalPolicy[]).map((p) => (
           <option key={p} value={p}>
             {POLICY_LABEL[p]}
+          </option>
+        ))}
+      </select>
+
+      <select
+        className="topbar__select topbar__select--reasoning"
+        value={settings.reasoningEffort ?? 'off'}
+        onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
+        title="How hard the model should think before answering (supported models only)"
+      >
+        {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
+          <option key={r} value={r}>
+            {REASONING_LABEL[r]}
           </option>
         ))}
       </select>

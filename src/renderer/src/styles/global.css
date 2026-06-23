@@ -313,6 +313,29 @@ body {
   border-radius: 10px;
   border: 1px solid var(--border);
 }
+.reasoning {
+  margin-bottom: 8px;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+.reasoning__summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+  list-style: none;
+  user-select: none;
+}
+.reasoning__summary::-webkit-details-marker {
+  display: none;
+}
+.reasoning__text {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
 .cursor {
   animation: blink 1s steps(2) infinite;
   color: var(--accent);
