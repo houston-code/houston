@@ -25,6 +25,7 @@ import {
   createConversation,
   deleteConversation,
   importConversation,
+  organizeConversation,
   setMessages,
   updateConversationMeta
 } from './conversations'
@@ -102,6 +103,13 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.conversationDelete, (_event, id: string) => {
     deleteConversation(id)
   })
+  // Rename / pin / move-to-group. Does not affect the recency ordering.
+  ipcMain.handle(
+    IPC.conversationOrganize,
+    (_event, id: string, patch: { title?: string; pinned?: boolean; groupId?: string | null }) => {
+      organizeConversation(id, patch)
+    }
+  )
 
   // Export a conversation to a JSON file the user chooses. Returns the path, or
   // null if cancelled / unknown id.

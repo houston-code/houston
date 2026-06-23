@@ -82,6 +82,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
   JSON file and import it back (or onto another machine) from the sidebar.
+- **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
+  the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
+  and groups persist across restarts.
 - **Long sessions stay in budget.** When a conversation grows past a configurable
   token threshold, Houston automatically summarizes the older turns so it never
   overflows the model's context window. The full transcript stays on screen —
@@ -93,8 +96,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   commands, and house rules without you re-explaining them each time. Any rules
   file can pull in others with `@path` imports (relative, `~/…`, or absolute),
   the same way Claude Code splits or shares memory files.
-- **Token usage at a glance.** The top bar shows the current context size and the
-  output tokens used this session, so you can see how big a conversation is getting.
+- **Token usage at a glance.** The control bar above the composer shows the
+  current context size and the output tokens used this session, so you can see how
+  big a conversation is getting. The model, project folder, approval policy and
+  thinking controls live there too — down by the composer, where you're typing.
 
 ## Install (prebuilt DMG)
 
@@ -115,8 +120,8 @@ Applications.
 
 1. Open **Settings** (sidebar) and set an API key for at least one provider
    (or point a local endpoint at Ollama/LM Studio — no key needed).
-2. Pick a **project folder** (top bar).
-3. Choose a **model** and an **approval policy**.
+2. Pick a **project folder** (control bar, above the composer).
+3. Choose a **model** and an **approval policy** (same control bar).
 4. Ask it to build or change something.
 
 ## Develop

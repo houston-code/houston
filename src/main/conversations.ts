@@ -142,3 +142,23 @@ export function updateConversationMeta(
   conv.updatedAt = Date.now()
   write(conv)
 }
+
+/**
+ * Apply a user-driven organization change (rename, pin, move to/clear group). Unlike
+ * {@link updateConversationMeta} this does NOT bump `updatedAt`, so pinning or filing a
+ * chat doesn't reorder it to the top of the recency list. `groupId: null` clears it.
+ */
+export function organizeConversation(
+  id: string,
+  patch: { title?: string; pinned?: boolean; groupId?: string | null }
+): void {
+  const conv = read(id)
+  if (!conv) return
+  if (typeof patch.title === 'string' && patch.title.trim()) conv.title = patch.title.trim()
+  if (typeof patch.pinned === 'boolean') conv.pinned = patch.pinned
+  if (patch.groupId !== undefined) {
+    if (patch.groupId === null) delete conv.groupId
+    else conv.groupId = patch.groupId
+  }
+  write(conv)
+}

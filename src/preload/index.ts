@@ -48,6 +48,10 @@ const api = {
     ipcRenderer.invoke(IPC.conversationExport, id),
   importConversation: (): Promise<ConversationMeta | null> =>
     ipcRenderer.invoke(IPC.conversationImport),
+  organizeConversation: (
+    id: string,
+    patch: { title?: string; pinned?: boolean; groupId?: string | null }
+  ): Promise<void> => ipcRenderer.invoke(IPC.conversationOrganize, id, patch),
 
   // Agent
   startAgent: (req: AgentSendRequest): Promise<void> => ipcRenderer.invoke(IPC.agentStart, req),
