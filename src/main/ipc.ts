@@ -1,7 +1,9 @@
 import { ipcMain, dialog, app, BrowserWindow } from 'electron'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent, AgentSendRequest, ToolApprovalDecision } from '@shared/agent'
+import type { AgentEvent, AgentSendRequest, ConversationMeta, ToolApprovalDecision } from '@shared/agent'
+import { validateImportedConversation, resolveImportWorkspace } from '@shared/conversation-io'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
@@ -11,6 +13,7 @@ import {
   getConversation,
   createConversation,
   deleteConversation,
+  importConversation,
   setMessages,
   updateConversationMeta
 } from './conversations'
@@ -61,6 +64,48 @@ export function registerIpc(): void {
   )
   ipcMain.handle(IPC.conversationDelete, (_event, id: string) => {
     deleteConversation(id)
+  })
+
+  // Export a conversation to a JSON file the user chooses. Returns the path, or
+  // null if cancelled / unknown id.
+  ipcMain.handle(IPC.conversationExport, async (event, id: string): Promise<string | null> => {
+    const conv = getConversation(id)
+    if (!conv) return null
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const safeTitle = conv.title.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'conversation'
+    const res = await dialog.showSaveDialog(win!, {
+      title: 'Export conversation',
+      defaultPath: `${safeTitle}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (res.canceled || !res.filePath) return null
+    writeFileSync(res.filePath, JSON.stringify(conv, null, 2), 'utf8')
+    return res.filePath
+  })
+
+  // Import a conversation from a JSON file into a new conversation. Returns its
+  // metadata, or null if cancelled. Throws (surfaced to the renderer) on a
+  // malformed file.
+  ipcMain.handle(IPC.conversationImport, async (event): Promise<ConversationMeta | null> => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const res = await dialog.showOpenDialog(win!, {
+      title: 'Import conversation',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (res.canceled || res.filePaths.length === 0) return null
+    const raw = JSON.parse(readFileSync(res.filePaths[0], 'utf8'))
+    const data = validateImportedConversation(raw)
+    const settings = getSettings()
+    const conv = importConversation(data, {
+      // Only honor the file's workspace if it's already a trusted (recents) dir;
+      // otherwise an import must not widen the sandbox scope.
+      workspace: resolveImportWorkspace(data.workspace, settings.recentWorkspaces),
+      providerId: settings.selected?.providerId ?? '',
+      model: settings.selected?.model ?? ''
+    })
+    const { messages: _messages, ...meta } = conv
+    return meta
   })
 
   // Agent: fire-and-forget; progress is streamed back over IPC.agentEvent.

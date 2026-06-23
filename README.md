@@ -37,7 +37,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   exactly what changes before approving.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
-- **Persistent conversations**, scoped per project folder.
+- **Persistent conversations**, scoped per project folder. Export any chat to a
+  JSON file and import it back (or onto another machine) from the sidebar.
 - **Long sessions stay in budget.** When a conversation grows past a configurable
   token threshold, Houston automatically summarizes the older turns so it never
   overflows the model's context window. The full transcript stays on screen —

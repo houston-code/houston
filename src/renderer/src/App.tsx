@@ -102,6 +102,25 @@ export default function App(): JSX.Element {
     [currentId, chat, refreshConversations]
   )
 
+  const onExportConversation = useCallback(async (id: string) => {
+    try {
+      await window.api.exportConversation(id)
+    } catch (e) {
+      alert(`Could not export conversation: ${(e as Error).message}`)
+    }
+  }, [])
+
+  const onImportConversation = useCallback(async () => {
+    try {
+      const meta = await window.api.importConversation()
+      if (!meta) return
+      await refreshConversations()
+      await selectConversation(meta.id)
+    } catch (e) {
+      alert(`Could not import conversation: ${(e as Error).message}`)
+    }
+  }, [refreshConversations, selectConversation])
+
   const onSelectModel = useCallback(async (sel: SelectedModel) => {
     setSettings((s) => (s ? { ...s, selected: sel } : s))
     const fresh = await window.api.saveSettings({
@@ -166,6 +185,8 @@ export default function App(): JSX.Element {
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
+        onExport={onExportConversation}
+        onImport={onImportConversation}
         onOpenSettings={() => setSettingsOpen(true)}
       />
 

@@ -11,6 +11,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatMessage, Conversation, ConversationMeta } from '@shared/agent'
+import type { ImportedConversation } from '@shared/conversation-io'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
@@ -63,6 +64,33 @@ export function createConversation(input: {
 
 export function getConversation(id: string): Conversation | null {
   return read(id)
+}
+
+/**
+ * Create a new conversation from imported data. A fresh id and timestamps are
+ * generated. `workspace` is taken from the caller's resolved value — NOT from the
+ * file — so an import can't silently set the sandbox's writable scope (the caller
+ * resolves it via resolveImportWorkspace). providerId/model fall back to the
+ * caller's defaults when the import omits them (they're labels, not a trust
+ * boundary — an unknown provider just surfaces an error on the next run).
+ */
+export function importConversation(
+  data: ImportedConversation,
+  resolved: { workspace: string; providerId: string; model: string }
+): Conversation {
+  const now = Date.now()
+  const conv: Conversation = {
+    id: randomUUID(),
+    title: data.title,
+    workspace: resolved.workspace,
+    providerId: data.providerId ?? resolved.providerId,
+    model: data.model ?? resolved.model,
+    createdAt: now,
+    updatedAt: now,
+    messages: data.messages
+  }
+  write(conv)
+  return conv
 }
 
 export function listConversations(): ConversationMeta[] {

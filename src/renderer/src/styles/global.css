@@ -161,22 +161,30 @@ body {
   font-size: 11px;
   color: var(--text-dim);
 }
-.conv__delete {
+.conv__action {
   visibility: hidden;
   background: none;
   border: none;
   color: var(--text-dim);
   cursor: pointer;
   font-size: 12px;
+  padding: 0 2px;
 }
-.conv:hover .conv__delete {
+.conv:hover .conv__action {
   visibility: visible;
 }
-.conv__delete:hover {
+.conv__action:hover {
+  color: var(--accent);
+}
+.conv__action--danger:hover {
   color: var(--danger);
 }
-.sidebar__settings {
+.sidebar__import {
   margin-top: 8px;
+  width: 100%;
+}
+.sidebar__settings {
+  margin-top: 6px;
   width: 100%;
 }
 
