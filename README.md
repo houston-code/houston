@@ -69,6 +69,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   servers, watchers) in the background and return immediately; the agent polls
   them with `read_shell_output` and stops them with `kill_shell`. They're killed
   when the app quits.
+- **Persistent shell session.** Foreground `run_shell` commands share a session
+  within a turn: `cd` and exported environment variables carry over to later
+  commands (e.g. `cd build` then `make`, or activate a virtualenv once and reuse
+  it), so the agent gets "same terminal" behavior.
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only —
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. Approve, deny,
