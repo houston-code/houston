@@ -103,6 +103,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   model.
 - **Keyboard shortcuts.** ⌘N new chat, ⌘, settings, and Esc to stop a running
   turn or close the settings dialog.
+- **Accessible.** The Settings dialog is a proper focus-trapped `dialog` (focus
+  moves in on open and restores on close, Tab stays inside, Esc closes), and all
+  animations honor the OS *reduce motion* setting.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
   *Appearance*; *System* follows your macOS appearance and switches live.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
