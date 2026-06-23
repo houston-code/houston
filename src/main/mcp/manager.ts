@@ -18,11 +18,25 @@ interface Connection {
 
 const connections = new Map<string, Connection>()
 
+/** Test seam: how MCP clients are constructed (overridable in tests). */
+let createClient: () => McpClient = () => new McpClient()
+export function _setMcpClientFactory(factory: (() => McpClient) | null): void {
+  createClient = factory ?? (() => new McpClient())
+}
+
 function configKey(c: McpServerConfig): string {
   return JSON.stringify([c.command, c.args ?? [], c.enabled])
 }
 
-async function ensureConnections(configs: McpServerConfig[]): Promise<void> {
+// Serialize reconciliation so overlapping runs can't interleave on the shared
+// `connections` map (one run closing/replacing a connection mid-reconcile).
+let ensureLock: Promise<void> = Promise.resolve()
+function ensureConnections(configs: McpServerConfig[]): Promise<void> {
+  ensureLock = ensureLock.catch(() => undefined).then(() => reconcileConnections(configs))
+  return ensureLock
+}
+
+async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
   const enabled = configs.filter((c) => c.enabled && c.command && c.id)
   const wanted = new Set(enabled.map((c) => c.id))
 
@@ -37,9 +51,11 @@ async function ensureConnections(configs: McpServerConfig[]): Promise<void> {
   for (const c of enabled) {
     const existing = connections.get(c.id)
     const key = configKey(c)
-    if (existing && existing.key === key) continue
+    // Reuse only a live connection with the same config; reconnect if the config
+    // changed or the cached client has since died (so calls don't hang on it).
+    if (existing && existing.key === key && !existing.client.isClosed) continue
     if (existing) existing.client.close()
-    const client = new McpClient()
+    const client = createClient()
     try {
       await client.connect({ command: c.command, args: c.args })
       connections.set(c.id, { key, client })
@@ -53,14 +69,15 @@ async function ensureConnections(configs: McpServerConfig[]): Promise<void> {
 
 /** Connect the configured servers (best effort) and return their tools as ToolDefs. */
 export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Promise<ToolDef[]> {
-  if (!configs?.length) return []
-  await ensureConnections(configs)
+  // Reconcile even with no configs when connections are still open, so removing
+  // (or disabling) every server actually closes them instead of leaking to quit.
+  if (!configs?.length && connections.size === 0) return []
+  await ensureConnections(configs ?? [])
 
   const defs: ToolDef[] = []
   for (const [serverId, conn] of connections) {
     for (const t of conn.client.tools) {
       const fullName = mcpToolName(serverId, t.name)
-      const client = conn.client
       const original = t.name
       defs.push({
         kind: 'mcp',
@@ -73,7 +90,13 @@ export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Pr
               ? t.inputSchema
               : { type: 'object', properties: {} }
         },
-        execute: (args) => client.callTool(original, args)
+        // Resolve the live connection at call time so a reconnect (or removal)
+        // between building the tool list and the call doesn't hit a stale client.
+        execute: (args) => {
+          const live = connections.get(serverId)
+          if (!live) return Promise.resolve(`[MCP server "${serverId}" is no longer connected]`)
+          return live.client.callTool(original, args)
+        }
       })
     }
   }

@@ -75,4 +75,28 @@ describe('McpClient (fake stdio server)', () => {
     expect([a, b].sort()).toEqual(['1', '2'])
     client.close()
   })
+
+  it('marks the client closed on process exit so later calls fail fast', async () => {
+    const stdout = new EventEmitter()
+    const stdin = {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+        if (msg.id === undefined) return true
+        const result = msg.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : {}
+        queueMicrotask(() =>
+          stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+        )
+        return true
+      }
+    }
+    const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    const client = new McpClient((() => child) as unknown as SpawnFn)
+    await client.connect({ command: 'fake' })
+    expect(client.isClosed).toBe(false)
+
+    child.emit('exit') // server died
+    expect(client.isClosed).toBe(true)
+    // Should reject immediately (not wait out the 120s call timeout).
+    await expect(client.callTool('echo', {})).rejects.toThrow(/closed/)
+  })
 })
