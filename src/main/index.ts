@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
 import { registerIpc } from './ipc'
 import { killAllShells } from './agent/shells'
+import { initAutoUpdate } from './updater'
 
 // Set the app name BEFORE the `ready` event. `app.getPath('userData')` and the
 // macOS Keychain service name that `safeStorage` uses for API keys are both
@@ -51,6 +52,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   registerIpc()
   createWindow()
+  initAutoUpdate()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
