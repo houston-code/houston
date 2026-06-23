@@ -125,6 +125,14 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         }
       ]
     }
+    case 'limit': {
+      const finalized = finalizeStreaming(items)
+      const text =
+        e.reason === 'max-steps'
+          ? '⚠ Reached the step limit for one turn and stopped — send a message to have me continue.'
+          : '⚠ The reply was cut off at the model’s output limit — ask me to continue it.'
+      return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'error' }]
+    }
     case 'done': {
       const finalized = finalizeStreaming(items)
       if (e.stopReason === 'aborted') {
