@@ -6,6 +6,12 @@ import { killAllShells } from './agent/shells'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initAutoUpdate } from './updater'
+import { log } from './logger'
+
+// Log uncaught failures instead of letting them vanish (or crash silently). We
+// don't force-exit: in a GUI app a stray async error shouldn't kill the window.
+process.on('uncaughtException', (err) => log.error('uncaughtException', err))
+process.on('unhandledRejection', (reason) => log.error('unhandledRejection', reason))
 
 // Set the app name BEFORE the `ready` event. `app.getPath('userData')` and the
 // macOS Keychain service name that `safeStorage` uses for API keys are both
@@ -52,6 +58,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  log.info(`Houston ${app.getVersion()} starting`)
   registerIpc()
   createWindow()
   initAutoUpdate()
