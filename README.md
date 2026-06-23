@@ -27,6 +27,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   writes, runs a command, or needs approval stays sequential. Edits are matched
   **resiliently** — if the model's snippet drifts from the file by indentation or
   whitespace, Houston still locates and applies it instead of failing.
+  `search_files` ships with a bundled **ripgrep**, so fast content search works
+  out of the box without anything installed on your PATH (it falls back to a
+  built-in scan if the binary is ever unavailable).
 - **Web search.** With a Tavily API key (set in Settings → *Web search*), the
   agent can `web_search` the web for current information. Like `web_fetch`, it
   requires approval since it leaves the machine.
