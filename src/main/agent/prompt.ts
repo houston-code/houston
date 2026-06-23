@@ -17,6 +17,7 @@ You have these tools:
 - read_shell_output: read new output from a background shell
 - kill_shell: stop a background shell
 - web_fetch: fetch an http/https URL and read it as text (requires approval)
+- web_search: search the web for current information (requires approval; needs a key in Settings)
 - todo_write: keep a task list for multi-step work
 
 Guidelines:
