@@ -166,6 +166,11 @@ export default function App(): JSX.Element {
     setSettings(fresh)
   }, [])
 
+  const onRevert = useCallback(async () => {
+    const n = await chat.revertCheckpoint()
+    if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
+  }, [chat])
+
   const onSend = useCallback(
     async (text: string) => {
       if (!settings?.selected || !workspace) return
@@ -251,6 +256,17 @@ export default function App(): JSX.Element {
           </div>
         ) : (
           <Transcript items={chat.items} onApprove={chat.approve} />
+        )}
+
+        {chat.checkpoint && !chat.running && (
+          <div className="checkpoint-bar">
+            <span className="checkpoint-bar__label">
+              ✎ {chat.checkpoint.files} file change{chat.checkpoint.files === 1 ? '' : 's'} this turn
+            </span>
+            <button className="btn btn--sm" onClick={onRevert}>
+              ↶ Revert
+            </button>
+          </div>
         )}
 
         <Composer

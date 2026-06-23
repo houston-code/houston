@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
 import { registerIpc } from './ipc'
 import { killAllShells } from './agent/shells'
+import { clearCheckpoints } from './agent/checkpoints'
 import { initAutoUpdate } from './updater'
 
 // Set the app name BEFORE the `ready` event. `app.getPath('userData')` and the
@@ -64,4 +65,7 @@ app.on('window-all-closed', () => {
 })
 
 // Don't leave the agent's background shells running after the app exits.
-app.on('will-quit', () => killAllShells())
+app.on('will-quit', () => {
+  killAllShells()
+  clearCheckpoints()
+})

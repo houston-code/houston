@@ -47,6 +47,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   its target (e.g. allow `run_shell` matching `git *`, deny anything matching
   `*rm -rf*`, always ask before `write_file` under `src/secret/**`). Rules are
   checked before the policy; first match wins.
+- **Undo a turn's file changes.** Houston snapshots each file before the agent
+  writes it, so when a turn edits files a **Revert** button appears — one click
+  restores everything that turn changed (and deletes files it created).
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
