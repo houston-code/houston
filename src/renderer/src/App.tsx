@@ -4,6 +4,7 @@ import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { applyTheme } from './lib/theme'
+import { shortcutFor } from './lib/shortcuts'
 import { newGroupId } from './lib/chatGroups'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
@@ -303,6 +304,26 @@ export default function App(): JSX.Element {
     },
     [onNewChat]
   )
+
+  // Global keyboard shortcuts: Cmd/Ctrl+N new chat, Cmd/Ctrl+, settings,
+  // Esc to stop a run or close the settings dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const action = shortcutFor(e)
+      if (action === 'new-chat') {
+        e.preventDefault()
+        void onNewChat()
+      } else if (action === 'open-settings') {
+        e.preventDefault()
+        setSettingsOpen(true)
+      } else if (action === 'escape') {
+        if (settingsOpen) setSettingsOpen(false)
+        else if (chat.running) chat.cancel()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onNewChat, settingsOpen, chat.running, chat.cancel])
 
   if (!settings) {
     return <div className="loading">Loading…</div>
