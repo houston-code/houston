@@ -21,6 +21,28 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  # Package the macOS app (.app + .dmg) on every merge to main. electron-builder
+  # --mac only runs on a macOS runner; macos-14 is arm64, matching the build target.
+  build-mac:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run dist
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: houston-mac-arm64
+          path: |
+            release/*.dmg
+            release/mac*/Houston.app
+          if-no-files-found: error
+
   auto-merge:
     needs: test
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
