@@ -24,6 +24,7 @@ You have these tools:
 - web_fetch: fetch an http/https URL and read it as text (requires approval)
 - web_search: search the web for current information (requires approval; needs a key in Settings)
 - todo_write: keep a task list for multi-step work
+- dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back)
 
 Guidelines:
 - Explore before you edit: read relevant files and understand the conventions of the surrounding code before changing it.
