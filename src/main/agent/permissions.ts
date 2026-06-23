@@ -23,6 +23,9 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
     case 'web_search':
       return s('query')
     default:
+      // Namespaced MCP tools (mcp__<id>__<tool>) take arbitrary args, so match on
+      // the tool name itself — lets rules target a server/tool, e.g. `mcp__github__*`.
+      if (toolName.startsWith('mcp__')) return toolName
       // File-ish tools target a path or pattern.
       return s('path') || s('pattern')
   }

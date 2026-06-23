@@ -44,6 +44,11 @@ export class McpClient {
 
   constructor(private readonly spawnFn: SpawnFn = nodeSpawn as unknown as SpawnFn) {}
 
+  /** True once the process exited, errored, or the client was closed. */
+  get isClosed(): boolean {
+    return this.closed
+  }
+
   /** Spawn the server, perform the initialize handshake, and list its tools. */
   async connect(opts: {
     command: string
@@ -148,11 +153,22 @@ export class McpClient {
           reject(e)
         }
       })
-      this.send({ jsonrpc: '2.0', id, method, params })
+      try {
+        this.send({ jsonrpc: '2.0', id, method, params })
+      } catch (e) {
+        // A synchronous write failure (e.g. EPIPE on a closing pipe) must clear the
+        // pending entry + timer; the stored reject does both.
+        this.pending.get(id)?.reject(e as Error)
+        this.pending.delete(id)
+      }
     })
   }
 
   private failAll(message: string): void {
+    // A process that exited/errored (or an explicit close) can never answer again —
+    // mark the client closed so later request()s reject immediately instead of
+    // hanging until the call timeout on a dead server.
+    this.closed = true
     for (const p of this.pending.values()) p.reject(new Error(message))
     this.pending.clear()
   }
