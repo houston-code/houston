@@ -57,6 +57,9 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
           model: req.model,
           messages: toOpenAIMessages(req.system, req.messages),
           stream: true,
+          // Ask for a final usage-only chunk. Most OpenAI-compatible servers honour
+          // this; those that don't simply never send it, which we handle gracefully.
+          stream_options: { include_usage: true },
           ...(tools && tools.length ? { tools } : {})
         },
         { signal: req.signal }
@@ -65,8 +68,15 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
       // Accumulate streamed tool calls by their `index`.
       const toolAcc = new Map<number, { id: string; name: string; args: string }>()
       let finishReason: string | null = null
+      let inputTokens: number | undefined
+      let outputTokens: number | undefined
 
       for await (const chunk of stream) {
+        // The usage-only chunk arrives last and has an empty `choices` array.
+        if (chunk.usage) {
+          inputTokens = chunk.usage.prompt_tokens
+          outputTokens = chunk.usage.completion_tokens
+        }
         const choice = chunk.choices[0]
         if (!choice) continue
         const delta = choice.delta
@@ -98,7 +108,11 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
         yield { type: 'tool_call', call: { id: acc.id || randomUUID(), name: acc.name, arguments: args } }
       }
 
-      yield { type: 'done', stopReason: mapFinishReason(finishReason, hadToolCalls) }
+      yield {
+        type: 'done',
+        stopReason: mapFinishReason(finishReason, hadToolCalls),
+        usage: { inputTokens, outputTokens }
+      }
     }
   }
 }

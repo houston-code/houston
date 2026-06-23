@@ -47,6 +47,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Project-aware.** If your project has an `AGENTS.md` or `CLAUDE.md` at its root,
   Houston loads it into the system prompt so the agent follows your conventions,
   build/test commands, and house rules without you re-explaining them each time.
+- **Token usage at a glance.** The top bar shows the current context size and the
+  output tokens used this session, so you can see how big a conversation is getting.
 
 ## Install (prebuilt DMG)
 

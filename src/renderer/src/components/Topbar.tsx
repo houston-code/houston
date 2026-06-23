@@ -1,4 +1,5 @@
 import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
+import { formatTokens, type SessionUsage } from '@shared/usage'
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/')
@@ -15,6 +16,7 @@ export function Topbar({
   settings,
   selected,
   workspace,
+  usage,
   onSelectModel,
   onChangePolicy,
   onChangeWorkspace,
@@ -23,6 +25,7 @@ export function Topbar({
   settings: AppSettings
   selected: SelectedModel | null
   workspace: string | null
+  usage: SessionUsage | null
   onSelectModel: (sel: SelectedModel) => void
   onChangePolicy: (p: ApprovalPolicy) => void
   onChangeWorkspace: () => void
@@ -85,6 +88,15 @@ export function Topbar({
           </option>
         ))}
       </select>
+
+      {usage && (usage.context > 0 || usage.output > 0) && (
+        <span
+          className="topbar__usage"
+          title="Context tokens (last turn) · output tokens this session"
+        >
+          🧮 {formatTokens(usage.context)} ctx · {formatTokens(usage.output)} out
+        </span>
+      )}
     </header>
   )
 }

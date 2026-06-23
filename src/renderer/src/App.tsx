@@ -195,6 +195,7 @@ export default function App(): JSX.Element {
           settings={settings}
           selected={settings.selected}
           workspace={workspace}
+          usage={chat.usage}
           onSelectModel={onSelectModel}
           onChangePolicy={onChangePolicy}
           onChangeWorkspace={onChangeWorkspace}
