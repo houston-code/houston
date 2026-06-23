@@ -21,6 +21,8 @@ export interface SandboxRunOptions {
   command: string
   cwd: string
   workspace: string
+  /** Extra writable roots beyond the workspace (e.g. added directories). */
+  roots?: string[]
   allowNetwork: boolean
   timeoutMs?: number
   signal?: AbortSignal
@@ -80,9 +82,10 @@ function sbplPath(p: string): string {
   return real.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
-export function buildSeatbeltProfile(workspace: string, allowNetwork: boolean): string {
-  const ws = sbplPath(workspace)
+export function buildSeatbeltProfile(roots: string | string[], allowNetwork: boolean): string {
+  const rootList = (Array.isArray(roots) ? roots : [roots]).filter(Boolean)
   const tmp = sbplPath(tmpdir())
+  const writableRoots = rootList.map((r) => `  (subpath "${sbplPath(r)}")`).join('\n')
 
   return `(version 1)
 (deny default)
@@ -93,7 +96,7 @@ export function buildSeatbeltProfile(workspace: string, allowNetwork: boolean): 
 (allow mach-lookup)
 (allow file-read*)
 (allow file-write*
-  (subpath "${ws}")
+${writableRoots}
   (subpath "${tmp}")
   (subpath "/private/tmp")
   (subpath "/private/var/tmp"))
@@ -151,11 +154,12 @@ export function spawnSandboxed(opts: {
   command: string
   cwd: string
   workspace: string
+  roots?: string[]
   allowNetwork: boolean
   env?: NodeJS.ProcessEnv
   signal?: AbortSignal
 }): ChildProcess {
-  const profile = buildSeatbeltProfile(opts.workspace, opts.allowNetwork)
+  const profile = buildSeatbeltProfile(opts.roots ?? [opts.workspace], opts.allowNetwork)
   const args = ['-p', profile, '/bin/bash', '-c', opts.command]
   const baseEnv = opts.env ?? process.env
   const child = spawn('sandbox-exec', args, {
@@ -172,7 +176,7 @@ export function spawnSandboxed(opts: {
 
 export function runSandboxed(opts: SandboxRunOptions): Promise<SandboxRunResult> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const profile = buildSeatbeltProfile(opts.workspace, opts.allowNetwork)
+  const profile = buildSeatbeltProfile(opts.roots ?? [opts.workspace], opts.allowNetwork)
 
   // sandbox-exec -p <profile> /bin/bash -c <command>
   const args = ['-p', profile, '/bin/bash', '-c', opts.command]

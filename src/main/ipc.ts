@@ -47,6 +47,17 @@ export function registerIpc(): void {
     return dir
   })
 
+  // Pick a directory without recording it as a recent workspace (used to add an
+  // extra allowed root in Settings).
+  ipcMain.handle(IPC.directoryPick, async (event): Promise<string | null> => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Choose a directory',
+      properties: ['openDirectory']
+    })
+    return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
+  })
+
   // Fuzzy file search for the composer's @-mention autocomplete. Confined to the
   // workspace (realpath'd, like the agent loop) so it can't list outside it.
   ipcMain.handle(

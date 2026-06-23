@@ -93,6 +93,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   overflows the model's context window. The full transcript stays on screen —
   only what's sent to the model is compacted. Tune or disable the threshold in
   Settings → *Context window*.
+- **Multiple folders.** Beyond the project folder, add extra directories in
+  Settings → *Additional folders* that the agent may read and write; they're
+  added to the file tools' allowed roots and the shell sandbox so it can work
+  across more than one repo at once.
 - **Git-aware.** If the project is a git repo, Houston folds the current branch
   and a short working-tree status into the agent's context each turn, so it knows
   what branch it's on and what's already modified without having to run git first.

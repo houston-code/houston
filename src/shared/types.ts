@@ -125,6 +125,8 @@ export interface AppSettings {
   hooks?: Hook[]
   /** MCP servers to connect to (stdio). Their tools are offered to the agent. */
   mcpServers?: McpServerConfig[]
+  /** Extra directories (beyond the project folder) the agent may read and write. */
+  additionalRoots?: string[]
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
 }

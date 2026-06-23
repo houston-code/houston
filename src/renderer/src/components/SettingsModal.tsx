@@ -77,6 +77,19 @@ export function SettingsModal({
     setHooks(hooks.map((h, idx) => (idx === i ? { ...h, ...patch } : h)))
   const removeHook = (i: number): void => setHooks(hooks.filter((_, idx) => idx !== i))
 
+  const additionalRoots = settings.additionalRoots ?? []
+  const addRoot = async (): Promise<void> => {
+    const dir = await window.api.pickDirectory()
+    if (dir && !additionalRoots.includes(dir)) {
+      setSettings((s) => ({ ...s, additionalRoots: [...(s.additionalRoots ?? []), dir] }))
+    }
+  }
+  const removeRoot = (dir: string): void =>
+    setSettings((s) => ({
+      ...s,
+      additionalRoots: (s.additionalRoots ?? []).filter((d) => d !== dir)
+    }))
+
   const servers = settings.mcpServers ?? []
   const setServers = (next: McpServerConfig[]): void =>
     setSettings((s) => ({ ...s, mcpServers: next }))
@@ -435,6 +448,26 @@ export function SettingsModal({
           ))}
           <button className="btn btn--sm" onClick={addServer}>
             + Add MCP server
+          </button>
+
+          <h3>Additional folders</h3>
+          <p className="field__hint">
+            Extra directories the agent may read and write, beyond the project folder. They&apos;re
+            added to the file tools&apos; allowed roots and the shell sandbox. Only add folders you
+            trust the agent to modify.
+          </p>
+          {additionalRoots.map((dir) => (
+            <div className="rule" key={dir}>
+              <code className="rule__path" title={dir}>
+                {dir}
+              </code>
+              <button className="btn btn--sm btn--danger" onClick={() => removeRoot(dir)}>
+                ✕
+              </button>
+            </div>
+          ))}
+          <button className="btn btn--sm" onClick={() => void addRoot()}>
+            + Add folder
           </button>
         </div>
 

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { getTool, toolSchemas, type ToolContext } from './tools'
+import { getTool, toolSchemas, resolveInRoots, type ToolContext } from './tools'
 import { registerShell } from './shells'
 
 let workspace: string
@@ -201,7 +201,7 @@ describe('glob', () => {
   })
 
   it('blocks globbing outside the workspace', async () => {
-    await expect(run('glob', { pattern: '*', path: '../..' })).rejects.toThrow(/escapes the workspace/)
+    await expect(run('glob', { pattern: '*', path: '../..' })).rejects.toThrow(/escapes the allowed roots/)
   })
 })
 
@@ -272,17 +272,45 @@ describe('background shell tools', () => {
 
 describe('workspace containment', () => {
   it('blocks reads outside the workspace', async () => {
-    await expect(run('read_file', { path: '../../../etc/hosts' })).rejects.toThrow(/escapes the workspace/)
+    await expect(run('read_file', { path: '../../../etc/hosts' })).rejects.toThrow(/escapes the allowed roots/)
   })
 
   it('blocks writes outside the workspace', async () => {
     await expect(run('write_file', { path: '../escape.txt', content: 'nope' })).rejects.toThrow(
-      /escapes the workspace/
+      /escapes the allowed roots/
     )
   })
 
   it('blocks absolute paths outside the workspace', async () => {
     writeFileSync(join(tmpdir(), 'outside-target.txt'), 'secret')
-    await expect(run('read_file', { path: '/etc/hosts' })).rejects.toThrow(/escapes the workspace/)
+    await expect(run('read_file', { path: '/etc/hosts' })).rejects.toThrow(
+      /escapes the allowed roots/
+    )
+  })
+})
+
+describe('resolveInRoots (multi-root containment)', () => {
+  it('allows relative paths within the primary root', () => {
+    expect(resolveInRoots(['/ws'], 'src/a.ts')).toBe('/ws/src/a.ts')
+  })
+
+  it('allows an absolute path inside any allowed root', () => {
+    expect(resolveInRoots(['/ws', '/other'], '/other/lib/x.ts')).toBe('/other/lib/x.ts')
+  })
+
+  it('allows a root directory itself', () => {
+    expect(resolveInRoots(['/ws', '/other'], '/other')).toBe('/other')
+  })
+
+  it('rejects a path outside every root', () => {
+    expect(() => resolveInRoots(['/ws', '/other'], '/etc/passwd')).toThrow(/escapes the allowed roots/)
+  })
+
+  it('rejects relative traversal out of the primary root', () => {
+    expect(() => resolveInRoots(['/ws'], '../../etc/passwd')).toThrow(/escapes the allowed roots/)
+  })
+
+  it('does not treat a sibling with a shared prefix as inside', () => {
+    expect(() => resolveInRoots(['/ws'], '/ws-evil/x')).toThrow(/escapes the allowed roots/)
   })
 })
