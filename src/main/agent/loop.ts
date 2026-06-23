@@ -17,6 +17,7 @@ import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
 import { getTool, toolSchemas } from './tools'
 import { isBlockedByPlan, needsApproval } from './approval'
+import { matchRule, permissionSubject } from './permissions'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -256,16 +257,31 @@ export async function startRun(
         let output: string
         let ok = true
 
+        const ruleAction = tool
+          ? matchRule(settings.permissionRules, call.name, permissionSubject(call.name, call.arguments))
+          : null
+
         if (!tool) {
           output = `Unknown tool: ${call.name}`
+          ok = false
+        } else if (ruleAction === 'deny') {
+          output = 'Denied by a permission rule.'
           ok = false
         } else if (isBlockedByPlan(req.approvalPolicy, tool.kind)) {
           output =
             'Blocked: Houston is in Plan mode (read-only). Do not modify files or run commands. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
           ok = false
         } else {
+          // A permission rule can force-allow or force-ask; otherwise the policy decides.
+          const mustApprove =
+            ruleAction === 'allow'
+              ? false
+              : ruleAction === 'ask'
+                ? true
+                : needsApproval(req.approvalPolicy, tool.kind, run.override)
+
           let approved = true
-          if (needsApproval(req.approvalPolicy, tool.kind, run.override)) {
+          if (mustApprove) {
             emit({
               type: 'tool_approval',
               callId: call.id,

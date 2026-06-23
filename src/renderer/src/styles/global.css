@@ -737,6 +737,42 @@ pre.diff {
   outline: none;
   border-color: var(--accent);
 }
+.field__hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+.rule {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  align-items: center;
+}
+.rule select,
+.rule input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+.rule__tool {
+  width: 120px;
+  flex-shrink: 0;
+  font-family: var(--mono);
+}
+.rule__match {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+}
+.rule select:focus,
+.rule input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .field__row {
   display: flex;
   gap: 6px;

@@ -43,6 +43,19 @@ export interface ProviderConfig {
  */
 export type ApprovalPolicy = 'plan' | 'ask' | 'auto-edit' | 'full-auto'
 
+/**
+ * A fine-grained permission rule, consulted before the approval policy. Matches a
+ * tool (by name, or `*` for any) and a glob over the call's subject (shell
+ * command, path, URL, or query). First match wins.
+ */
+export interface PermissionRule {
+  action: 'allow' | 'deny' | 'ask'
+  /** Tool name, or `*` for any tool. */
+  tool: string
+  /** Glob over the call's subject. Empty or `*` matches anything for that tool. */
+  match: string
+}
+
 export interface SelectedModel {
   providerId: string
   model: string
@@ -65,4 +78,6 @@ export interface AppSettings {
   hasWebSearchKey?: boolean
   /** How hard the model should think before answering (default `off`). */
   reasoningEffort?: ReasoningEffort
+  /** Fine-grained permission rules, consulted before the approval policy. */
+  permissionRules?: PermissionRule[]
 }

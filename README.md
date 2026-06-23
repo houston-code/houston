@@ -42,6 +42,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. Approve, deny,
   or allow-for-the-run on each tool call. File edits show an inline red/green
   **diff** so you can review exactly what changes before approving.
+- **Permission rules.** Beyond the coarse policy, add fine-grained
+  *allow* / *deny* / *ask* rules in Settings, matched on the tool and a glob over
+  its target (e.g. allow `run_shell` matching `git *`, deny anything matching
+  `*rm -rf*`, always ask before `write_file` under `src/secret/**`). Rules are
+  checked before the policy; first match wins.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a

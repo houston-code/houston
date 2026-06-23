@@ -1,7 +1,21 @@
 import { useState } from 'react'
-import type { AppSettings, ModelOption, ProviderConfig } from '@shared/types'
+import type { AppSettings, ModelOption, PermissionRule, ProviderConfig } from '@shared/types'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
+
+/** Tool names offered as autocomplete in the permission-rule editor. */
+const TOOL_NAMES = [
+  '*',
+  'read_file',
+  'write_file',
+  'edit_file',
+  'list_dir',
+  'glob',
+  'search_files',
+  'run_shell',
+  'web_fetch',
+  'web_search'
+]
 
 function modelsToText(models: ModelOption[]): string {
   return models.map((m) => m.id).join('\n')
@@ -37,6 +51,15 @@ export function SettingsModal({
       providers: s.providers.map((p) => (p.id === id ? { ...p, ...patch } : p))
     }))
   }
+
+  const rules = settings.permissionRules ?? []
+  const setRules = (next: PermissionRule[]): void =>
+    setSettings((s) => ({ ...s, permissionRules: next }))
+  const addRule = (): void =>
+    setRules([...rules, { action: 'allow', tool: 'run_shell', match: '' }])
+  const patchRule = (i: number, patch: Partial<PermissionRule>): void =>
+    setRules(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
+  const removeRule = (i: number): void => setRules(rules.filter((_, idx) => idx !== i))
 
   // Persist the current (non-secret) edits, then run a key/model action that returns fresh settings.
   const persistThen = async (action: () => Promise<AppSettings>): Promise<void> => {
@@ -259,6 +282,50 @@ export function SettingsModal({
               )}
             </div>
           </label>
+
+          <h3>Permissions</h3>
+          <p className="field__hint">
+            Rules are checked before the approval policy (first match wins).{' '}
+            <strong>Allow</strong> auto-approves, <strong>Deny</strong> refuses,{' '}
+            <strong>Ask</strong> always prompts. The pattern is a glob over the call&apos;s
+            command, path, URL, or query.
+          </p>
+          <datalist id="tool-names">
+            {TOOL_NAMES.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
+          {rules.map((r, i) => (
+            <div className="rule" key={i}>
+              <select
+                value={r.action}
+                onChange={(e) => patchRule(i, { action: e.target.value as PermissionRule['action'] })}
+              >
+                <option value="allow">Allow</option>
+                <option value="ask">Ask</option>
+                <option value="deny">Deny</option>
+              </select>
+              <input
+                list="tool-names"
+                className="rule__tool"
+                placeholder="tool (or *)"
+                value={r.tool}
+                onChange={(e) => patchRule(i, { tool: e.target.value.trim() })}
+              />
+              <input
+                className="rule__match"
+                placeholder="pattern, e.g. git * or src/**"
+                value={r.match}
+                onChange={(e) => patchRule(i, { match: e.target.value })}
+              />
+              <button className="btn btn--sm btn--danger" onClick={() => removeRule(i)}>
+                ✕
+              </button>
+            </div>
+          ))}
+          <button className="btn btn--sm" onClick={addRule}>
+            + Add rule
+          </button>
         </div>
 
         <div className="modal__foot">
