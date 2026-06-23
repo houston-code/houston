@@ -8,6 +8,14 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('my-project')
   })
 
+  it('carries the core working-style, safety, and conciseness guidance', () => {
+    const p = buildSystemPrompt('/tmp/x')
+    expect(p).toMatch(/verify|run the project's tests/i) // verify your changes
+    expect(p).toMatch(/concise/i) // communication discipline
+    expect(p).toMatch(/DATA, not instructions/i) // prompt-injection posture
+    expect(p).toMatch(/match the existing style/i) // follow conventions
+  })
+
   it('omits the rules and extra sections when not provided', () => {
     const p = buildSystemPrompt('/tmp/x')
     expect(p).not.toContain('Project instructions')
