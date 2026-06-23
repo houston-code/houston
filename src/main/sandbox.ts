@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -118,6 +119,55 @@ function appendCapped(buffers: Buffer[], current: number, chunk: Buffer): number
   const remaining = MAX_OUTPUT_BYTES - current
   buffers.push(chunk.length > remaining ? chunk.subarray(0, remaining) : chunk)
   return current + chunk.length
+}
+
+/**
+ * SIGKILL a child and its descendants. Background shells are spawned `detached`
+ * so the child leads its own process group; killing the negative pid reaps the
+ * whole tree (a dev server's child processes, not just the bash wrapper).
+ */
+export function killProcessTree(child: ChildProcess): void {
+  const pid = child.pid
+  if (pid === undefined) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      // already gone
+    }
+  }
+}
+
+/**
+ * Spawn a sandboxed command WITHOUT awaiting it — used for background shells the
+ * agent starts and polls later. Same Seatbelt profile and PATH augmentation as
+ * `runSandboxed`; the caller owns output capture. Spawned `detached` so the whole
+ * process tree can be killed together. If a `signal` is given, aborting it (e.g.
+ * the user cancelling the run) kills the tree.
+ */
+export function spawnSandboxed(opts: {
+  command: string
+  cwd: string
+  workspace: string
+  allowNetwork: boolean
+  env?: NodeJS.ProcessEnv
+  signal?: AbortSignal
+}): ChildProcess {
+  const profile = buildSeatbeltProfile(opts.workspace, opts.allowNetwork)
+  const args = ['-p', profile, '/bin/bash', '-c', opts.command]
+  const baseEnv = opts.env ?? process.env
+  const child = spawn('sandbox-exec', args, {
+    cwd: opts.cwd,
+    env: { ...baseEnv, PATH: augmentPath(baseEnv) },
+    detached: true
+  })
+  if (opts.signal) {
+    if (opts.signal.aborted) killProcessTree(child)
+    else opts.signal.addEventListener('abort', () => killProcessTree(child), { once: true })
+  }
+  return child
 }
 
 export function runSandboxed(opts: SandboxRunOptions): Promise<SandboxRunResult> {

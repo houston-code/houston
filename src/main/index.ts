@@ -2,6 +2,7 @@ import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
 import { registerIpc } from './ipc'
+import { killAllShells } from './agent/shells'
 
 // Set the app name BEFORE the `ready` event. `app.getPath('userData')` and the
 // macOS Keychain service name that `safeStorage` uses for API keys are both
@@ -59,3 +60,6 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+// Don't leave the agent's background shells running after the app exits.
+app.on('will-quit', () => killAllShells())

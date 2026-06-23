@@ -3,7 +3,8 @@ import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { JSONSchema, ToolSchema } from '@shared/agent'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
-import { runSandboxed } from '../sandbox'
+import { runSandboxed, spawnSandboxed } from '../sandbox'
+import { killShell, readShellOutput, registerShell } from './shells'
 import { fetchUrlAsText } from './webfetch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 
@@ -311,14 +312,18 @@ const globTool: ToolDef = {
 
 const runShell: ToolDef = {
   kind: 'shell',
-  summarize: (a) => str(a, 'command'),
+  summarize: (a) => (a.background === true ? `${str(a, 'command')} (background)` : str(a, 'command')),
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command inside a macOS Seatbelt sandbox confined to the project directory. Writes are limited to the project and temp dirs. Returns combined stdout/stderr and the exit code.',
+      'Run a shell command inside a macOS Seatbelt sandbox confined to the project directory. Writes are limited to the project and temp dirs. Returns combined stdout/stderr and the exit code. Set background:true for long-running commands (e.g. a dev server or watcher): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell.',
     parameters: objectSchema(
       {
-        command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' }
+        command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' },
+        background: {
+          type: 'boolean',
+          description: 'Run without waiting and return a shell id (default false). Use for long-running processes.'
+        }
       },
       ['command']
     )
@@ -326,6 +331,19 @@ const runShell: ToolDef = {
   async execute(args, ctx) {
     const command = str(args, 'command')
     if (!command) throw new Error('command is required.')
+
+    if (args.background === true) {
+      const child = spawnSandboxed({
+        command,
+        cwd: ctx.workspace,
+        workspace: ctx.workspace,
+        allowNetwork: ctx.allowNetwork,
+        signal: ctx.signal
+      })
+      const id = registerShell(command, child)
+      return `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
+    }
+
     const result = await runSandboxed({
       command,
       cwd: ctx.workspace,
@@ -339,6 +357,52 @@ const runShell: ToolDef = {
     if (result.timedOut) parts.push('[command timed out]')
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
     return parts.join('\n')
+  }
+}
+
+const readShellOutputTool: ToolDef = {
+  kind: 'read',
+  summarize: (a) => `Read output of shell ${str(a, 'shell_id')}`,
+  schema: {
+    name: 'read_shell_output',
+    description:
+      'Read new output from a background shell started by run_shell. By default returns only output produced since the last read; set full:true for everything buffered. Also reports whether the shell is still running and its exit code.',
+    parameters: objectSchema(
+      {
+        shell_id: { type: 'string', description: 'The id returned by run_shell with background:true.' },
+        full: { type: 'boolean', description: 'Return all buffered output, not just new output (default false).' }
+      },
+      ['shell_id']
+    )
+  },
+  async execute(args) {
+    const id = str(args, 'shell_id')
+    if (!id) throw new Error('shell_id is required.')
+    const r = readShellOutput(id, { full: args.full === true })
+    if (!r.found) return `No background shell with id ${id}.`
+    const parts: string[] = []
+    if (r.stdout) parts.push(r.stdout.trimEnd())
+    if (r.stderr) parts.push(r.stderr.trimEnd())
+    parts.push(r.running ? '[still running]' : `[exited with code ${r.exitCode ?? 'killed'}]`)
+    return parts.join('\n')
+  }
+}
+
+const killShellTool: ToolDef = {
+  kind: 'read', // only affects a process the agent itself started — no approval needed
+  summarize: (a) => `Kill shell ${str(a, 'shell_id')}`,
+  schema: {
+    name: 'kill_shell',
+    description: 'Stop a background shell started by run_shell.',
+    parameters: objectSchema(
+      { shell_id: { type: 'string', description: 'The id returned by run_shell with background:true.' } },
+      ['shell_id']
+    )
+  },
+  async execute(args) {
+    const id = str(args, 'shell_id')
+    if (!id) throw new Error('shell_id is required.')
+    return killShell(id) ? `Killed background shell ${id}.` : `No background shell with id ${id}.`
   }
 }
 
@@ -412,6 +476,8 @@ export const TOOLS: ToolDef[] = [
   globTool,
   searchTool,
   runShell,
+  readShellOutputTool,
+  killShellTool,
   webFetch,
   todoWrite
 ]

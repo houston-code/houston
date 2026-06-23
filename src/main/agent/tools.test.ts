@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawn } from 'node:child_process'
 import { getTool, toolSchemas, type ToolContext } from './tools'
+import { registerShell } from './shells'
 
 let workspace: string
 let ctx: ToolContext
@@ -24,8 +26,10 @@ describe('tool registry', () => {
     expect(toolSchemas().map((t) => t.name).sort()).toEqual([
       'edit_file',
       'glob',
+      'kill_shell',
       'list_dir',
       'read_file',
+      'read_shell_output',
       'run_shell',
       'search_files',
       'todo_write',
@@ -184,6 +188,32 @@ describe('todo_write', () => {
 
   it('is a read-kind tool (no project side effects, never prompts)', () => {
     expect(getTool('todo_write')!.kind).toBe('read')
+  })
+})
+
+describe('background shell tools', () => {
+  it('run_shell background returns a shell id message', async () => {
+    const out = await run('run_shell', { command: 'echo hi', background: true })
+    expect(out).toMatch(/Started background shell \w+/)
+  })
+
+  it('read_shell_output reports an unknown id', async () => {
+    expect(await run('read_shell_output', { shell_id: 'nope' })).toBe('No background shell with id nope.')
+  })
+
+  it('kill_shell reports an unknown id', async () => {
+    expect(await run('kill_shell', { shell_id: 'nope' })).toBe('No background shell with id nope.')
+  })
+
+  // Inject a real (non-sandboxed) child so the tool's output formatting is
+  // exercised on every platform, not just where sandbox-exec exists.
+  it('read_shell_output formats output and exit code of a finished shell', async () => {
+    const child = spawn(process.execPath, ['-e', 'process.stdout.write("done"); process.exit(0)'])
+    const id = registerShell('node', child)
+    await new Promise<void>((resolve) => child.on('close', () => resolve()))
+    const out = await run('read_shell_output', { shell_id: id })
+    expect(out).toContain('done')
+    expect(out).toContain('[exited with code 0]')
   })
 })
 
