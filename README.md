@@ -26,7 +26,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   project and (by default) network access are blocked.
 - **Approval flow.** Choose how much autonomy to grant: *ask every time*,
   *auto-approve edits*, or *full auto*. Approve, deny, or allow-for-the-run on
-  each tool call.
+  each tool call. File edits show an inline red/green **diff** so you can review
+  exactly what changes before approving.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder.

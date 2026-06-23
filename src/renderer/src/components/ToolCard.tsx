@@ -1,9 +1,27 @@
 import { useState } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
+import { diffLines, diffStat, type DiffLine } from '@shared/diff'
 import type { ToolItem } from '../lib/items'
 
 const KIND_ICON: Record<string, string> = { read: '📖', write: '✏️', shell: '⌘', network: '🌐' }
+
+const MAX_DIFF_LINES = 300
+
+/** Build a line diff for file-changing tools, from the tool arguments. */
+function diffFor(item: ToolItem): DiffLine[] | null {
+  const a = item.args
+  if (!a) return null
+  if (item.name === 'edit_file' && typeof a.old_string === 'string' && typeof a.new_string === 'string') {
+    return diffLines(a.old_string, a.new_string)
+  }
+  // write_file has no prior content available client-side, so an overwrite shows
+  // as all-additions (which reads correctly for new files).
+  if (item.name === 'write_file' && typeof a.content === 'string') {
+    return diffLines('', a.content)
+  }
+  return null
+}
 
 const TODO_MARK: Record<Todo['status'], string> = {
   pending: '○',
@@ -38,6 +56,10 @@ export function ToolCard({
   const [expanded, setExpanded] = useState(false)
   const todos = item.name === 'todo_write' ? parseTodosSafe(item.args?.todos) : []
   const isTodo = item.name === 'todo_write' && todos.length > 0
+  const diff = diffFor(item)
+  const stat = diff ? diffStat(diff) : null
+  // Open by default while awaiting approval so the change can be reviewed first.
+  const [diffOpen, setDiffOpen] = useState(item.status === 'awaiting-approval')
   const d = isTodo ? '' : detail(item)
 
   return (
@@ -60,6 +82,33 @@ export function ToolCard({
             </li>
           ))}
         </ul>
+      )}
+
+      {diff && diff.length > 0 && (
+        <div className="tool-card__diff">
+          <button className="tool-card__toggle" onClick={() => setDiffOpen((v) => !v)}>
+            {diffOpen ? '▾ Hide diff' : '▸ Show diff'}{' '}
+            <span className="diff-stat">
+              <span className="diff-stat__add">+{stat!.added}</span>{' '}
+              <span className="diff-stat__del">−{stat!.removed}</span>
+            </span>
+          </button>
+          {diffOpen && (
+            <pre className="diff">
+              {diff.slice(0, MAX_DIFF_LINES).map((l, i) => (
+                <div key={i} className={`diff__line diff__line--${l.type}`}>
+                  <span className="diff__sign">
+                    {l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' '}
+                  </span>
+                  <span className="diff__text">{l.text || ' '}</span>
+                </div>
+              ))}
+              {diff.length > MAX_DIFF_LINES && (
+                <div className="diff__more">… {diff.length - MAX_DIFF_LINES} more lines</div>
+              )}
+            </pre>
+          )}
+        </div>
       )}
 
       {item.status === 'awaiting-approval' && (
