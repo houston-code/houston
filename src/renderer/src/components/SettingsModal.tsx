@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import type { AppSettings, Hook, ModelOption, PermissionRule, ProviderConfig } from '@shared/types'
+import type {
+  AppSettings,
+  Hook,
+  McpServerConfig,
+  ModelOption,
+  PermissionRule,
+  ProviderConfig
+} from '@shared/types'
+import { sanitizeServerId } from '@shared/mcp'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 
@@ -68,6 +76,15 @@ export function SettingsModal({
   const patchHook = (i: number, patch: Partial<Hook>): void =>
     setHooks(hooks.map((h, idx) => (idx === i ? { ...h, ...patch } : h)))
   const removeHook = (i: number): void => setHooks(hooks.filter((_, idx) => idx !== i))
+
+  const servers = settings.mcpServers ?? []
+  const setServers = (next: McpServerConfig[]): void =>
+    setSettings((s) => ({ ...s, mcpServers: next }))
+  const addServer = (): void =>
+    setServers([...servers, { id: '', command: '', args: [], enabled: true }])
+  const patchServer = (i: number, patch: Partial<McpServerConfig>): void =>
+    setServers(servers.map((sv, idx) => (idx === i ? { ...sv, ...patch } : sv)))
+  const removeServer = (i: number): void => setServers(servers.filter((_, idx) => idx !== i))
 
   // Persist the current (non-secret) edits, then run a key/model action that returns fresh settings.
   const persistThen = async (action: () => Promise<AppSettings>): Promise<void> => {
@@ -372,6 +389,52 @@ export function SettingsModal({
           ))}
           <button className="btn btn--sm" onClick={addHook}>
             + Add hook
+          </button>
+
+          <h3>MCP servers</h3>
+          <p className="field__hint">
+            Connect Model Context Protocol servers (stdio). Their tools are offered to the agent as{' '}
+            <code>mcp__&lt;id&gt;__&lt;tool&gt;</code> and always require approval. The command is run
+            as you (not sandboxed), so only add servers you trust.
+          </p>
+          {servers.map((sv, i) => (
+            <div className="mcp-server" key={i}>
+              <div className="mcp-server__row">
+                <input
+                  className="rule__tool"
+                  placeholder="id"
+                  value={sv.id}
+                  onChange={(e) => patchServer(i, { id: sanitizeServerId(e.target.value) })}
+                />
+                <input
+                  className="rule__match"
+                  placeholder="command (e.g. npx)"
+                  value={sv.command}
+                  onChange={(e) => patchServer(i, { command: e.target.value })}
+                />
+                <label className="mcp-server__enabled" title="Enabled">
+                  <input
+                    type="checkbox"
+                    checked={sv.enabled}
+                    onChange={(e) => patchServer(i, { enabled: e.target.checked })}
+                  />
+                </label>
+                <button className="btn btn--sm btn--danger" onClick={() => removeServer(i)}>
+                  ✕
+                </button>
+              </div>
+              <input
+                className="mcp-server__args"
+                placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
+                value={(sv.args ?? []).join(' ')}
+                onChange={(e) =>
+                  patchServer(i, { args: e.target.value.split(/\s+/).filter(Boolean) })
+                }
+              />
+            </div>
+          ))}
+          <button className="btn btn--sm" onClick={addServer}>
+            + Add MCP server
           </button>
         </div>
 

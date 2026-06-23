@@ -133,7 +133,7 @@ export type AgentEvent =
       callId: string
       name: string
       summary: string
-      kind: 'read' | 'write' | 'shell' | 'network'
+      kind: 'read' | 'write' | 'shell' | 'network' | 'mcp'
     }
   | { runId: string; type: 'tool_result'; callId: string; name: string; ok: boolean; output: string }
   | { runId: string; type: 'compaction'; summarized: number }

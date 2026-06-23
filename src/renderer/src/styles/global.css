@@ -1082,6 +1082,34 @@ pre.diff {
   outline: none;
   border-color: var(--accent);
 }
+.mcp-server {
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mcp-server__row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.mcp-server__enabled {
+  display: flex;
+  align-items: center;
+}
+.mcp-server__args {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: var(--mono);
+}
+.mcp-server__args:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .field__row {
   display: flex;
   gap: 6px;

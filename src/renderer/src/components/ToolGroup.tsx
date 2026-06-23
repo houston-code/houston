@@ -11,7 +11,8 @@ const KIND_ICON: Record<string, string> = {
   read: '○',
   write: '◆',
   shell: '›_',
-  network: '@'
+  network: '@',
+  mcp: '⚇'
 }
 const TOOL_ICON: Record<string, string> = {
   read_file: '○',

@@ -1,0 +1,78 @@
+import { describe, it, expect } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { McpClient, type SpawnFn } from './client'
+
+interface ToolDecl {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
+/**
+ * A fake MCP server over an in-memory stdio transport: it auto-responds to
+ * initialize / tools/list / tools/call with the configured tools and result.
+ */
+function fakeServer(tools: ToolDecl[], callResult: (params: unknown) => unknown): SpawnFn {
+  const stdout = new EventEmitter()
+  const reply = (id: number, result: unknown): void => {
+    queueMicrotask(() =>
+      stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`))
+    )
+  }
+  const stdin = {
+    write(line: string): boolean {
+      const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: unknown }
+      if (msg.id === undefined) return true // a notification
+      if (msg.method === 'initialize') reply(msg.id, { protocolVersion: '2024-11-05', capabilities: {} })
+      else if (msg.method === 'tools/list') reply(msg.id, { tools })
+      else if (msg.method === 'tools/call') reply(msg.id, callResult(msg.params))
+      return true
+    }
+  }
+  const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+  return (() => child) as unknown as SpawnFn
+}
+
+describe('McpClient (fake stdio server)', () => {
+  it('initializes and lists tools', async () => {
+    const client = new McpClient(
+      fakeServer([{ name: 'echo', description: 'Echoes input' }], () => ({}))
+    )
+    await client.connect({ command: 'fake' })
+    expect(client.tools.map((t) => t.name)).toEqual(['echo'])
+    client.close()
+  })
+
+  it('calls a tool and flattens the text result', async () => {
+    const client = new McpClient(
+      fakeServer([{ name: 'echo' }], (params) => ({
+        content: [{ type: 'text', text: `got:${JSON.stringify((params as { arguments: unknown }).arguments)}` }]
+      }))
+    )
+    await client.connect({ command: 'fake' })
+    const out = await client.callTool('echo', { x: 1 })
+    expect(out).toBe('got:{"x":1}')
+    client.close()
+  })
+
+  it('marks an error result', async () => {
+    const client = new McpClient(
+      fakeServer([{ name: 'boom' }], () => ({ content: [{ type: 'text', text: 'nope' }], isError: true }))
+    )
+    await client.connect({ command: 'fake' })
+    const out = await client.callTool('boom', {})
+    expect(out).toContain('nope')
+    expect(out).toContain('error')
+    client.close()
+  })
+
+  it('correlates concurrent requests by id', async () => {
+    const client = new McpClient(
+      fakeServer([{ name: 't' }], (p) => ({ content: [{ type: 'text', text: String((p as { arguments: { n: number } }).arguments.n) }] }))
+    )
+    await client.connect({ command: 'fake' })
+    const [a, b] = await Promise.all([client.callTool('t', { n: 1 }), client.callTool('t', { n: 2 })])
+    expect([a, b].sort()).toEqual(['1', '2'])
+    client.close()
+  })
+})

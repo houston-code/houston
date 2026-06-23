@@ -15,7 +15,8 @@ import { getKey } from '../secrets'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
-import { getTool, toolSchemas } from './tools'
+import { getTool, toolSchemas, type ToolDef } from './tools'
+import { getMcpToolDefs } from '../mcp/manager'
 import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal } from './checkpoints'
@@ -145,7 +146,11 @@ export async function startRun(
       planMode,
       capabilities
     )
-    const tools = toolSchemas()
+    // Built-in tools plus any tools from connected MCP servers (best effort).
+    const mcpToolDefs = await getMcpToolDefs(settings.mcpServers)
+    const tools = [...toolSchemas(), ...mcpToolDefs.map((d) => d.schema)]
+    const lookupTool = (name: string): ToolDef | undefined =>
+      getTool(name) ?? mcpToolDefs.find((d) => d.schema.name === name)
     const messages: ChatMessage[] = [...req.messages]
 
     // Context compaction state. `messages` is always the full, persisted log; what
@@ -269,7 +274,7 @@ export async function startRun(
           return
         }
 
-        const tool = getTool(call.name)
+        const tool = lookupTool(call.name)
         let output: string
         let ok = true
 

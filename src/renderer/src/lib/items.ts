@@ -25,7 +25,7 @@ export interface ToolItem {
   name: string
   summary?: string
   args?: Record<string, unknown>
-  toolKind?: 'read' | 'write' | 'shell' | 'network'
+  toolKind?: 'read' | 'write' | 'shell' | 'network' | 'mcp'
   status: ToolStatus
   output?: string
 }

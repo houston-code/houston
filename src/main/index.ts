@@ -4,6 +4,7 @@ import { APP_NAME } from '@shared/constants'
 import { registerIpc } from './ipc'
 import { killAllShells } from './agent/shells'
 import { clearCheckpoints } from './agent/checkpoints'
+import { disconnectAllMcp } from './mcp/manager'
 import { initAutoUpdate } from './updater'
 
 // Set the app name BEFORE the `ready` event. `app.getPath('userData')` and the
@@ -68,4 +69,5 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   killAllShells()
   clearCheckpoints()
+  disconnectAllMcp()
 })
