@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
 import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
+import { mergeCommands, type Command } from '@shared/commands'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
 import { Sidebar } from './components/Sidebar'
@@ -8,6 +9,9 @@ import { Topbar } from './components/Topbar'
 import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
 import { SettingsModal } from './components/SettingsModal'
+
+/** Built-in slash commands (custom ones are loaded from the workspace). */
+const BUILTIN_COMMANDS: Command[] = [{ name: 'new', description: 'Start a new chat' }]
 
 /** Pick a sensible default model: first provider that has a key and a model. */
 function defaultSelection(settings: AppSettings): SelectedModel | null {
@@ -23,6 +27,7 @@ export default function App(): JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const chat = useChat()
 
   const refreshConversations = useCallback(async () => {
@@ -51,6 +56,21 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+
+  // Load the workspace's custom slash commands (alongside the built-ins).
+  useEffect(() => {
+    if (!workspace) {
+      setCommands(BUILTIN_COMMANDS)
+      return
+    }
+    let cancelled = false
+    void window.api.listCommands(workspace).then((custom) => {
+      if (!cancelled) setCommands(mergeCommands(BUILTIN_COMMANDS, custom))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [workspace])
 
   const selectConversation = useCallback(
     async (id: string) => {
@@ -171,6 +191,15 @@ export default function App(): JSX.Element {
     [settings, workspace, currentId, chat, refreshConversations]
   )
 
+  const onCommand = useCallback(
+    (cmd: Command) => {
+      // Only built-in action commands reach here; custom (template) commands are
+      // expanded into the composer by the Composer itself.
+      if (cmd.name === 'new') void onNewChat()
+    },
+    [onNewChat]
+  )
+
   if (!settings) {
     return <div className="loading">Loading…</div>
   }
@@ -228,6 +257,8 @@ export default function App(): JSX.Element {
           disabled={!canChat}
           running={chat.running}
           workspace={workspace}
+          commands={commands}
+          onCommand={onCommand}
           onSend={onSend}
           onCancel={chat.cancel}
         />

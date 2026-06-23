@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
+import type { Command } from '@shared/commands'
 import type {
   AgentEvent,
   AgentSendRequest,
@@ -19,6 +20,8 @@ const api = {
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.workspaceListFiles, workspace, query),
+  listCommands: (workspace: string): Promise<Command[]> =>
+    ipcRenderer.invoke(IPC.commandsList, workspace),
 
   // Settings
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),

@@ -14,6 +14,7 @@ export const IPC = {
   // Workspace
   workspacePick: 'workspace:pick',
   workspaceListFiles: 'workspace:listFiles',
+  commandsList: 'commands:list',
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',
