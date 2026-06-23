@@ -24,6 +24,7 @@ const run = (name: string, args: Record<string, unknown>): Promise<string> =>
 describe('tool registry', () => {
   it('exposes the expected tools', () => {
     expect(toolSchemas().map((t) => t.name).sort()).toEqual([
+      'apply_patch',
       'dispatch_agent',
       'edit_file',
       'glob',
@@ -131,6 +132,77 @@ describe('multi_edit', () => {
   it('rejects an empty edits array', async () => {
     await run('write_file', { path: 'm.txt', content: 'a' })
     await expect(run('multi_edit', { path: 'm.txt', edits: [] })).rejects.toThrow(/non-empty/)
+  })
+})
+
+describe('apply_patch', () => {
+  const patch = (...body: string[]): string =>
+    ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
+
+  it('adds, updates, and deletes across files atomically', async () => {
+    await run('write_file', { path: 'keep.ts', content: 'const a = 1\nconst b = 2\n' })
+    await run('write_file', { path: 'old.ts', content: 'remove me' })
+    const out = await run('apply_patch', {
+      patch: patch(
+        '*** Add File: new.ts',
+        '+export const x = 1',
+        '*** Update File: keep.ts',
+        ' const a = 1',
+        '-const b = 2',
+        '+const b = 3',
+        '*** Delete File: old.ts'
+      )
+    })
+    expect(out).toMatch(/1 added, 1 updated, 1 deleted/)
+    expect(await run('read_file', { path: 'new.ts' })).toBe('export const x = 1')
+    expect(await run('read_file', { path: 'keep.ts' })).toBe('const a = 1\nconst b = 3\n')
+    await expect(run('read_file', { path: 'old.ts' })).rejects.toThrow()
+  })
+
+  it('renames a file with Move to', async () => {
+    await run('write_file', { path: 'a.ts', content: 'hello\nworld\n' })
+    await run('apply_patch', {
+      patch: patch('*** Update File: a.ts', '*** Move to: b.ts', ' hello', '-world', '+there')
+    })
+    await expect(run('read_file', { path: 'a.ts' })).rejects.toThrow()
+    expect(await run('read_file', { path: 'b.ts' })).toBe('hello\nthere\n')
+  })
+
+  it('is atomic: a failing op writes nothing', async () => {
+    await run('write_file', { path: 'k.ts', content: 'value' })
+    await expect(
+      run('apply_patch', {
+        patch: patch(
+          '*** Update File: k.ts',
+          '-value',
+          '+VALUE',
+          '*** Delete File: missing.ts' // does not exist -> whole patch fails
+        )
+      })
+    ).rejects.toThrow(/does not exist/)
+    // k.ts untouched, no partial write
+    expect(await run('read_file', { path: 'k.ts' })).toBe('value')
+  })
+
+  it('refuses to add over an existing file', async () => {
+    await run('write_file', { path: 'there.ts', content: 'x' })
+    await expect(
+      run('apply_patch', { patch: patch('*** Add File: there.ts', '+y') })
+    ).rejects.toThrow(/already exists/)
+  })
+
+  it('applies a hunk whose context drifted by whitespace (resilient match)', async () => {
+    await run('write_file', { path: 'd.ts', content: 'function f() {\n      return 1\n}\n' })
+    await run('apply_patch', {
+      patch: patch('*** Update File: d.ts', ' function f() {', '-  return 1', '+  return 2', ' }')
+    })
+    expect(await run('read_file', { path: 'd.ts' })).toBe('function f() {\n  return 2\n}\n')
+  })
+
+  it('rejects a path that escapes the roots', async () => {
+    await expect(
+      run('apply_patch', { patch: patch('*** Delete File: ../escape.ts') })
+    ).rejects.toThrow(/escapes the allowed roots/)
   })
 })
 

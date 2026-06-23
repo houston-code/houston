@@ -20,6 +20,7 @@ import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 import { resolveEdit } from './edit-match'
 import { bundledRipgrep } from '../binaries'
+import { parsePatch } from './apply-patch'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -84,6 +85,16 @@ export function resolveInRoots(roots: string[], p: string): string {
 /** The allowed roots for a tool call (workspace plus any added directories). */
 function rootsOf(ctx: ToolContext): string[] {
   return ctx.roots && ctx.roots.length ? ctx.roots : [ctx.workspace]
+}
+
+/** Whether a path exists (file or directory). */
+async function exists(abs: string): Promise<boolean> {
+  try {
+    await fs.stat(abs)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function str(args: Record<string, unknown>, key: string): string {
@@ -309,6 +320,88 @@ const multiEdit: ToolDef = {
     })
     await fs.writeFile(abs, data, 'utf8')
     return `Edited ${str(args, 'path')} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
+  }
+}
+
+/** A staged file mutation computed before anything is written, for atomic apply. */
+interface StagedChange {
+  abs: string
+  /** null = delete the file; string = write this content. */
+  content: string | null
+  verb: 'add' | 'update' | 'delete'
+}
+
+const applyPatch: ToolDef = {
+  kind: 'write',
+  summarize: (a) => {
+    let n = 0
+    try {
+      n = parsePatch(str(a, 'patch')).length
+    } catch {
+      /* shown as a failed call instead */
+    }
+    return `Apply patch (${n} file${n === 1 ? '' : 's'})`
+  },
+  schema: {
+    name: 'apply_patch',
+    description:
+      'Apply a multi-file patch in one atomic operation using the OpenAI patch format: an envelope between "*** Begin Patch" and "*** End Patch" containing "*** Add File: <path>" (with +lines), "*** Update File: <path>" (optionally followed by "*** Move to: <path>", then @@/space/-/+ hunks), and "*** Delete File: <path>". Either every change applies or none does. Prefer this when a single change spans several files; use edit_file/multi_edit for one file.',
+    parameters: objectSchema(
+      { patch: { type: 'string', description: 'The patch envelope.' } },
+      ['patch']
+    )
+  },
+  async execute(args, ctx) {
+    const roots = rootsOf(ctx)
+    const ops = parsePatch(str(args, 'patch'))
+    const staged: StagedChange[] = []
+    let added = 0
+    let updated = 0
+    let deleted = 0
+
+    // Phase 1: validate and compute every change. Nothing is written yet, so a
+    // failure on any op leaves the working tree untouched.
+    for (const op of ops) {
+      const abs = resolveInRoots(roots, op.path)
+      if (op.type === 'add') {
+        if (await exists(abs)) throw new Error(`Add File: ${op.path} already exists.`)
+        staged.push({ abs, content: op.content, verb: 'add' })
+        added += 1
+      } else if (op.type === 'delete') {
+        if (!(await exists(abs))) throw new Error(`Delete File: ${op.path} does not exist.`)
+        staged.push({ abs, content: null, verb: 'delete' })
+        deleted += 1
+      } else {
+        let data: string
+        try {
+          data = await fs.readFile(abs, 'utf8')
+        } catch {
+          throw new Error(`Update File: ${op.path} does not exist.`)
+        }
+        for (const hunk of op.hunks) data = resolveEdit(data, hunk.oldText, hunk.newText).content
+        if (op.moveTo) {
+          const target = resolveInRoots(roots, op.moveTo)
+          if (target !== abs && (await exists(target))) {
+            throw new Error(`Move to: ${op.moveTo} already exists.`)
+          }
+          staged.push({ abs, content: null, verb: 'delete' })
+          staged.push({ abs: target, content: data, verb: 'update' })
+        } else {
+          staged.push({ abs, content: data, verb: 'update' })
+        }
+        updated += 1
+      }
+    }
+
+    // Phase 2: commit. Deletes first so a Move's delete can't clobber its target.
+    for (const change of staged.filter((c) => c.content === null)) {
+      await fs.rm(change.abs, { force: true })
+    }
+    for (const change of staged.filter((c) => c.content !== null)) {
+      await fs.mkdir(dirname(change.abs), { recursive: true })
+      await fs.writeFile(change.abs, change.content as string, 'utf8')
+    }
+    return `Applied patch: ${ops.length} file${ops.length === 1 ? '' : 's'} (${added} added, ${updated} updated, ${deleted} deleted).`
   }
 }
 
@@ -704,6 +797,7 @@ export const TOOLS: ToolDef[] = [
   writeFile,
   editFile,
   multiEdit,
+  applyPatch,
   listDir,
   globTool,
   searchTool,

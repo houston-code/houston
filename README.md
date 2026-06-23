@@ -21,7 +21,7 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   The agent can also `read_file` an image or PDF in the project and view it
   directly (full vision on Anthropic; other providers get a text placeholder).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
-  `multi_edit`, `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`,
+  `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`,
   `web_search`, and `todo_write` to actually do the work — not just describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
