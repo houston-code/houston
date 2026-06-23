@@ -2,6 +2,14 @@ appId: com.houston.app
 productName: Houston
 copyright: Copyright © 2026 Houston contributors
 
+# Update feed for electron-updater. electron-builder generates the update
+# metadata (latest-mac.yml) alongside the DMG; publishing a GitHub Release with
+# those assets is what lets packaged apps auto-update from it.
+publish:
+  provider: github
+  owner: piyushvijay
+  repo: houston
+
 directories:
   buildResources: build
   output: release

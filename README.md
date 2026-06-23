@@ -96,6 +96,23 @@ runner, against the merged state) and uploads them as a `houston-mac-arm64`
 artifact on the workflow run — grab a build from the **Actions** tab without
 building locally.
 
+## Updates
+
+Packaged builds check for updates on launch via `electron-updater`, against the
+GitHub Releases feed configured in [`electron-builder.yml`](electron-builder.yml)
+(`publish:`), and log when a newer version is available. (No-op in dev; set
+`HOUSTON_DISABLE_UPDATER=1` to turn it off.)
+
+It does **not** auto-download or silently install: this build is unsigned, so
+there's no Developer ID signature for `electron-updater` to verify against, and
+silently installing remote packages would make the release pipeline an RCE
+boundary. Grab the newer DMG from **Releases** manually. Once the app is
+[signed + notarized](#signing--notarization), enable `autoDownload` /
+`autoInstallOnAppQuit` in [`src/main/updater.ts`](src/main/updater.ts) so the
+signature check is meaningful. Update metadata is published by running
+`npm run dist` with a `GH_TOKEN` and `--publish`, or by attaching the DMG and the
+generated `latest-mac.yml` to a release.
+
 ## Architecture
 
 ```
