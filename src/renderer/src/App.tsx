@@ -249,6 +249,11 @@ export default function App(): JSX.Element {
     if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
   }, [chat])
 
+  const onReapply = useCallback(async () => {
+    const n = await chat.reapplyCheckpoint()
+    if (n > 0) alert(`Re-applied ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
+  }, [chat])
+
   const onSend = useCallback(
     async (text: string, images?: ImageAttachment[]) => {
       if (!settings?.selected || !workspace) return
@@ -338,11 +343,18 @@ export default function App(): JSX.Element {
         {chat.checkpoint && !chat.running && (
           <div className="checkpoint-bar">
             <span className="checkpoint-bar__label">
-              ✎ {chat.checkpoint.files} file change{chat.checkpoint.files === 1 ? '' : 's'} this turn
+              {chat.checkpoint.reverted ? '↩︎ Reverted' : '✎'} {chat.checkpoint.files} file change
+              {chat.checkpoint.files === 1 ? '' : 's'} this turn
             </span>
-            <button className="btn btn--sm" onClick={onRevert}>
-              ↶ Revert
-            </button>
+            {chat.checkpoint.reverted ? (
+              <button className="btn btn--sm" onClick={onReapply}>
+                ↷ Redo
+              </button>
+            ) : (
+              <button className="btn btn--sm" onClick={onRevert}>
+                ↶ Revert
+              </button>
+            )}
           </div>
         )}
 

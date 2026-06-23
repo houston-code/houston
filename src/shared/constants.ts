@@ -34,7 +34,8 @@ export const IPC = {
   agentCancel: 'agent:cancel',
   agentApprove: 'agent:approve',
   agentEvent: 'agent:event',
-  checkpointRestore: 'checkpoint:restore'
+  checkpointRestore: 'checkpoint:restore',
+  checkpointReapply: 'checkpoint:reapply'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

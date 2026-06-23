@@ -75,9 +75,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   hook's output is fed back to the agent — e.g. auto-format after every edit, or
   run tests after a write. Hooks run sandboxed to the project; the call's context
   is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT`.
-- **Undo a turn's file changes.** Houston snapshots each file before the agent
-  writes it, so when a turn edits files a **Revert** button appears — one click
-  restores everything that turn changed (and deletes files it created).
+- **Undo / redo a turn's file changes.** Houston snapshots each file before and
+  after the agent writes it, so when a turn edits files a **Revert** button appears —
+  one click restores everything that turn changed (and deletes files it created).
+  Changed your mind? **Redo** puts the changes back.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a

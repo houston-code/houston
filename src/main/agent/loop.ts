@@ -21,7 +21,7 @@ import { getTool, toolSchemas, type ToolDef } from './tools'
 import { getMcpToolDefs } from '../mcp/manager'
 import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
-import { recordOriginal } from './checkpoints'
+import { recordOriginal, recordResult } from './checkpoints'
 import { runSubAgent } from './subagent'
 import { runHooks } from './hooks'
 import { loadAgents } from './agents'
@@ -371,6 +371,11 @@ export async function startRun(
                 abort.signal
               )
               if (post.message) output += `\n\n[PostToolUse hook]\n${post.message}`
+              // Snapshot the file's final content (after any hook, e.g. a formatter)
+              // so the change can be faithfully redone after a revert.
+              if (ok && tool.kind === 'write' && typeof call.arguments.path === 'string') {
+                await recordResult(runId, workspace, call.arguments.path)
+              }
             }
           }
         }
