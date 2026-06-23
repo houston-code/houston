@@ -22,7 +22,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   directly (full vision on Anthropic; other providers get a text placeholder).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
   `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`, `web_search`, and
-  `todo_write` to actually do the work — not just describe it.
+  `todo_write` to actually do the work — not just describe it. When a turn is all
+  reads (e.g. open five files at once), they run **concurrently**; anything that
+  writes, runs a command, or needs approval stays sequential.
 - **Web search.** With a Tavily API key (set in Settings → *Web search*), the
   agent can `web_search` the web for current information. Like `web_fetch`, it
   requires approval since it leaves the machine.

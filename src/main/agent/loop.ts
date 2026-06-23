@@ -17,13 +17,14 @@ import { getKey } from '../secrets'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
-import { getTool, toolSchemas, type ToolDef } from './tools'
+import { getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
 import { getMcpToolDefs } from '../mcp/manager'
+import { isParallelizableRead } from './scheduling'
 import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal } from './checkpoints'
 import { runSubAgent } from './subagent'
-import { runHooks } from './hooks'
+import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills } from './skills'
 import { buildCapabilities } from './capabilities'
@@ -158,6 +159,44 @@ export async function startRun(
       getTool(name) ?? mcpToolDefs.find((d) => d.schema.name === name)
     const messages: ChatMessage[] = [...req.messages]
 
+    // Shared tool-execution context. `run.override` is read at call time so an
+    // "Allow for run" decision earlier in the turn takes effect.
+    const makeToolContext = (
+      attachImage: (i: ImageAttachment) => void,
+      attachDocument: (d: DocumentAttachment) => void
+    ): ToolContext => ({
+      workspace,
+      allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
+      signal: abort.signal,
+      getSecret: getKey,
+      dispatchSubAgent: (prompt, agentName) =>
+        runSubAgent({
+          provider,
+          model: req.model,
+          workspace,
+          prompt,
+          signal: abort.signal,
+          systemOverride: agentName ? agentsByName.get(agentName)?.systemPrompt : undefined
+        }),
+      attachImage,
+      attachDocument
+    })
+
+    /** True if a call is a read-only tool with no gating — safe to run concurrently. */
+    const isParallelCall = (call: ToolCall): boolean => {
+      const tool = lookupTool(call.name)
+      if (!tool) return false
+      const ruleAction = matchRule(
+        settings.permissionRules,
+        call.name,
+        permissionSubject(call.name, call.arguments)
+      )
+      const hasHook =
+        matchingHooks(settings.hooks, 'PreToolUse', call.name).length > 0 ||
+        matchingHooks(settings.hooks, 'PostToolUse', call.name).length > 0
+      return isParallelizableRead(tool.kind, ruleAction, hasHook)
+    }
+
     // Context compaction state. `messages` is always the full, persisted log; what
     // we actually send the provider is `summaryMsgs` (a synthetic summary of the
     // turns before `cut`) followed by `messages.slice(cut)`.
@@ -273,6 +312,53 @@ export async function startRun(
         return
       }
 
+      // Fast path: when every call in the turn is an unencumbered read, run them
+      // concurrently. Any write/shell/network/mcp call, gating rule, or hook makes
+      // the whole turn fall back to the sequential path below (unchanged).
+      if (toolCalls.length > 1 && toolCalls.every(isParallelCall)) {
+        for (const call of toolCalls) {
+          emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
+        }
+        const results = await Promise.all(
+          toolCalls.map(async (call) => {
+            const images: ImageAttachment[] = []
+            const documents: DocumentAttachment[] = []
+            let output: string
+            let ok = true
+            try {
+              output = await lookupTool(call.name)!.execute(
+                call.arguments,
+                makeToolContext(
+                  (i) => images.push(i),
+                  (d) => documents.push(d)
+                )
+              )
+            } catch (e) {
+              output = `Error: ${(e as Error).message}`
+              ok = false
+            }
+            return { call, output, ok, images, documents }
+          })
+        )
+        for (const r of results) {
+          emit({ type: 'tool_result', callId: r.call.id, name: r.call.name, ok: r.ok, output: r.output })
+          messages.push({
+            role: 'tool',
+            content: r.output,
+            toolCallId: r.call.id,
+            toolName: r.call.name,
+            ...(r.images.length ? { images: r.images } : {}),
+            ...(r.documents.length ? { documents: r.documents } : {})
+          })
+        }
+        onMessages?.(messages)
+        if (abort.signal.aborted) {
+          emit({ type: 'done', stopReason: 'aborted' })
+          return
+        }
+        continue
+      }
+
       for (const call of toolCalls) {
         if (abort.signal.aborted) {
           emit({ type: 'done', stopReason: 'aborted' })
@@ -344,23 +430,13 @@ export async function startRun(
               }
               emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
               try {
-                output = await tool.execute(call.arguments, {
-                  workspace,
-                  allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
-                  signal: abort.signal,
-                  getSecret: getKey,
-                  dispatchSubAgent: (prompt, agentName) =>
-                    runSubAgent({
-                      provider,
-                      model: req.model,
-                      workspace,
-                      prompt,
-                      signal: abort.signal,
-                      systemOverride: agentName ? agentsByName.get(agentName)?.systemPrompt : undefined
-                    }),
-                  attachImage: (img) => toolImages.push(img),
-                  attachDocument: (doc) => toolDocs.push(doc)
-                })
+                output = await tool.execute(
+                  call.arguments,
+                  makeToolContext(
+                    (img) => toolImages.push(img),
+                    (doc) => toolDocs.push(doc)
+                  )
+                )
               } catch (e) {
                 output = `Error: ${(e as Error).message}`
                 ok = false
