@@ -93,6 +93,10 @@ export interface ConversationMeta {
   model: string
   createdAt: number
   updatedAt: number
+  /** Pinned chats float to a "Pinned" section at the top of the sidebar. */
+  pinned?: boolean
+  /** Id of the custom group (see AppSettings.chatGroups) this chat belongs to. */
+  groupId?: string
 }
 
 export interface Conversation extends ConversationMeta {

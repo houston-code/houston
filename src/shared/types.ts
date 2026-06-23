@@ -90,6 +90,18 @@ export interface SelectedModel {
   model: string
 }
 
+/**
+ * A user-defined sidebar group ("folder") that chats can be filed into. Definitions
+ * (and collapsed state) are app-level and persisted in settings; which group a chat
+ * belongs to is stored on the conversation itself (ConversationMeta.groupId).
+ */
+export interface ChatGroup {
+  id: string
+  name: string
+  /** Whether the group is collapsed in the sidebar. */
+  collapsed?: boolean
+}
+
 export interface AppSettings {
   schemaVersion: number
   providers: ProviderConfig[]
@@ -113,4 +125,6 @@ export interface AppSettings {
   hooks?: Hook[]
   /** MCP servers to connect to (stdio). Their tools are offered to the agent. */
   mcpServers?: McpServerConfig[]
+  /** User-defined sidebar groups, in display order. */
+  chatGroups?: ChatGroup[]
 }

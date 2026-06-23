@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
+import { newGroupId } from './lib/chatGroups'
 import { useChat } from './hooks/useChat'
 import { itemsFromMessages } from './lib/items'
 import { Sidebar } from './components/Sidebar'
@@ -142,6 +143,81 @@ export default function App(): JSX.Element {
     }
   }, [refreshConversations, selectConversation])
 
+  // ---- Chat organization (rename / pin / move) ----
+
+  const onRenameConversation = useCallback(
+    async (id: string, title: string) => {
+      await window.api.organizeConversation(id, { title })
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  const onSetPinned = useCallback(
+    async (id: string, pinned: boolean) => {
+      await window.api.organizeConversation(id, { pinned })
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  const onMoveConversation = useCallback(
+    async (id: string, groupId: string | null) => {
+      await window.api.organizeConversation(id, { groupId })
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  // ---- Custom groups (persisted in settings) ----
+
+  const saveGroups = useCallback(async (next: ChatGroup[]) => {
+    const fresh = await window.api.saveSettings({
+      ...(await window.api.getSettings()),
+      chatGroups: next
+    })
+    setSettings(fresh)
+  }, [])
+
+  const onCreateGroup = useCallback(async (): Promise<string> => {
+    const id = newGroupId()
+    const current = await window.api.getSettings()
+    await saveGroups([...(current.chatGroups ?? []), { id, name: 'New group' }])
+    return id
+  }, [saveGroups])
+
+  const onRenameGroup = useCallback(
+    async (groupId: string, name: string) => {
+      const current = await window.api.getSettings()
+      await saveGroups((current.chatGroups ?? []).map((g) => (g.id === groupId ? { ...g, name } : g)))
+    },
+    [saveGroups]
+  )
+
+  const onToggleGroupCollapsed = useCallback(
+    async (groupId: string) => {
+      const current = await window.api.getSettings()
+      await saveGroups(
+        (current.chatGroups ?? []).map((g) =>
+          g.id === groupId ? { ...g, collapsed: !g.collapsed } : g
+        )
+      )
+    },
+    [saveGroups]
+  )
+
+  const onDeleteGroup = useCallback(
+    async (groupId: string) => {
+      // Return member chats to "Ungrouped" before dropping the group.
+      const members = conversations.filter((c) => c.groupId === groupId)
+      await Promise.all(members.map((c) => window.api.organizeConversation(c.id, { groupId: null })))
+      const current = await window.api.getSettings()
+      await saveGroups((current.chatGroups ?? []).filter((g) => g.id !== groupId))
+      await refreshConversations()
+    },
+    [conversations, saveGroups, refreshConversations]
+  )
+
   const onSelectModel = useCallback(async (sel: SelectedModel) => {
     setSettings((s) => (s ? { ...s, selected: sel } : s))
     const fresh = await window.api.saveSettings({
@@ -225,6 +301,7 @@ export default function App(): JSX.Element {
     <div className="app">
       <Sidebar
         conversations={conversations}
+        groups={settings.chatGroups ?? []}
         currentId={currentId}
         onSelect={selectConversation}
         onNew={onNewChat}
@@ -232,6 +309,13 @@ export default function App(): JSX.Element {
         onExport={onExportConversation}
         onImport={onImportConversation}
         onOpenSettings={() => setSettingsOpen(true)}
+        onRename={onRenameConversation}
+        onSetPinned={onSetPinned}
+        onMove={onMoveConversation}
+        onCreateGroup={onCreateGroup}
+        onRenameGroup={onRenameGroup}
+        onDeleteGroup={onDeleteGroup}
+        onToggleGroupCollapsed={onToggleGroupCollapsed}
       />
 
       <div className="main">

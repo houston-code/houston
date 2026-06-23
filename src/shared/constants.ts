@@ -28,6 +28,7 @@ export const IPC = {
   conversationDelete: 'conversation:delete',
   conversationExport: 'conversation:export',
   conversationImport: 'conversation:import',
+  conversationOrganize: 'conversation:organize',
   // Agent
   agentStart: 'agent:start',
   agentCancel: 'agent:cancel',
