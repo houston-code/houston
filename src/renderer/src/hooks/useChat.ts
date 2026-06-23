@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
 import type { AgentEvent, ToolApprovalDecision } from '@shared/agent'
+import type { SessionUsage } from '@shared/usage'
 import { reduceEvent, type DisplayItem } from '../lib/items'
 
 interface SendParams {
@@ -14,6 +15,8 @@ interface SendParams {
 export interface ChatController {
   items: DisplayItem[]
   running: boolean
+  /** Running token usage for the open conversation's in-session turns, or null. */
+  usage: SessionUsage | null
   send: (params: SendParams) => Promise<void>
   cancel: () => void
   approve: (callId: string, decision: ToolApprovalDecision) => void
@@ -24,11 +27,19 @@ export interface ChatController {
 export function useChat(): ChatController {
   const [items, setItems] = useState<DisplayItem[]>([])
   const [running, setRunning] = useState(false)
+  const [usage, setUsage] = useState<SessionUsage | null>(null)
   const runIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     return window.api.onAgentEvent((e: AgentEvent) => {
       if (e.runId !== runIdRef.current) return
+      if (e.type === 'usage') {
+        setUsage((prev) => ({
+          context: e.inputTokens || prev?.context || 0,
+          output: (prev?.output ?? 0) + (e.outputTokens || 0)
+        }))
+        return
+      }
       setItems((prev) => reduceEvent(prev, e))
       if (e.type === 'done' || e.type === 'error') {
         setRunning(false)
@@ -63,8 +74,9 @@ export function useChat(): ChatController {
   const reset = useCallback((next: DisplayItem[]) => {
     setItems(next)
     setRunning(false)
+    setUsage(null)
     runIdRef.current = null
   }, [])
 
-  return { items, running, send, cancel, approve, reset }
+  return { items, running, usage, send, cancel, approve, reset }
 }

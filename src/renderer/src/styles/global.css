@@ -240,6 +240,12 @@ body {
   cursor: pointer;
   font-size: 12px;
 }
+.topbar__usage {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 /* ---- Welcome ---- */
 .welcome {

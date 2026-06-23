@@ -185,6 +185,8 @@ export async function startRun(
       let assistantText = ''
       const toolCalls: ToolCall[] = []
       let stopReason: StopReason = 'end_turn'
+      let turnInput = 0
+      let turnOutput = 0
 
       try {
         for await (const ev of provider.streamChat({
@@ -201,7 +203,11 @@ export async function startRun(
             toolCalls.push(ev.call)
           } else if (ev.type === 'done') {
             stopReason = ev.stopReason
-            if (ev.usage?.inputTokens) lastInputTokens = ev.usage.inputTokens
+            if (ev.usage?.inputTokens) {
+              lastInputTokens = ev.usage.inputTokens
+              turnInput = ev.usage.inputTokens
+            }
+            if (ev.usage?.outputTokens) turnOutput = ev.usage.outputTokens
           } else if (ev.type === 'error') {
             emit({ type: 'error', message: ev.message })
             return
@@ -214,6 +220,10 @@ export async function startRun(
           emit({ type: 'error', message: (e as Error).message })
         }
         return
+      }
+
+      if (turnInput || turnOutput) {
+        emit({ type: 'usage', inputTokens: turnInput, outputTokens: turnOutput })
       }
 
       messages.push({
