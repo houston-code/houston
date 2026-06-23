@@ -148,7 +148,15 @@ export default function App(): JSX.Element {
     return <div className="loading">Loading…</div>
   }
 
-  const canChat = Boolean(settings.selected && workspace)
+  // The composer is usable only when the *selected* provider is actually ready —
+  // it doesn't require a key, or it has a usable one. Otherwise sending would fail
+  // in the agent loop with "No API key set"; instead we disable input and the
+  // Topbar shows its "⚠︎ Set API key" prompt.
+  const selectedProvider = settings.providers.find((p) => p.id === settings.selected?.providerId)
+  const selectionReady = Boolean(
+    selectedProvider && (!selectedProvider.requiresKey || selectedProvider.hasKey)
+  )
+  const canChat = Boolean(settings.selected && workspace && selectionReady)
 
   return (
     <div className="app">
