@@ -239,7 +239,24 @@ export function spawnSandboxed(opts: {
   return child
 }
 
-export function runSandboxed(opts: SandboxRunOptions): Promise<SandboxRunResult> {
+/** Grace period after the process exits (or is killed) for final stdio to flush
+ *  before the call settles. Bounds how long a wedged/orphaned pipe can stall us. */
+const STDIO_DRAIN_MS = 250
+
+/** Injectable seams for `runSandboxed` (real implementations used in production). */
+export interface RunSandboxedDeps {
+  spawn?: typeof spawn
+  killTree?: (child: ChildProcess) => void
+  drainMs?: number
+}
+
+export function runSandboxed(
+  opts: SandboxRunOptions,
+  deps: RunSandboxedDeps = {}
+): Promise<SandboxRunResult> {
+  const spawnFn = deps.spawn ?? spawn
+  const killTree = deps.killTree ?? killProcessTree
+  const drainMs = deps.drainMs ?? STDIO_DRAIN_MS
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const profile = buildSeatbeltProfile(opts.roots ?? [opts.workspace], opts.allowNetwork)
 
@@ -249,46 +266,79 @@ export function runSandboxed(opts: SandboxRunOptions): Promise<SandboxRunResult>
   const baseEnv = opts.env ?? process.env
 
   return new Promise((resolve) => {
-    const child = spawn('sandbox-exec', args, {
+    // `detached` puts the command in its own process group so `killTree` can reap
+    // the whole tree (bash + npm + node + …) on timeout/abort. Without it, a kill
+    // hits only the `sandbox-exec` wrapper and leaves orphaned grandchildren alive.
+    const child = spawnFn('sandbox-exec', args, {
       cwd: opts.cwd,
       env: { ...baseEnv, PATH: augmentPath(baseEnv) },
-      signal: opts.signal
+      detached: true
     })
 
     const out = new CappedOutput()
     const err = new CappedOutput()
     let timedOut = false
+    let settled = false
+    let drainTimer: ReturnType<typeof setTimeout> | undefined
+
+    let onAbort: (() => void) | undefined
+    const cleanupAbort = (): void => {
+      if (onAbort) opts.signal?.removeEventListener('abort', onAbort)
+    }
+
+    const settle = (exitCode: number | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (drainTimer) clearTimeout(drainTimer)
+      cleanupAbort()
+      resolve({ stdout: out.toString(), stderr: err.toString(), exitCode, timedOut, sandboxed: true })
+    }
+
+    // Force settlement even if 'exit'/'close' never fire — e.g. a backgrounded
+    // grandchild inherits the stdout/stderr pipe and holds it open, so 'close'
+    // (which waits for stdio EOF) would otherwise hang the call forever.
+    const armDrain = (exitCode: number | null): void => {
+      if (settled || drainTimer) return
+      drainTimer = setTimeout(() => settle(exitCode), drainMs)
+    }
 
     const timer = setTimeout(() => {
       timedOut = true
-      child.kill('SIGKILL')
+      killTree(child)
+      armDrain(child.exitCode ?? null)
     }, timeoutMs)
 
-    child.stdout.on('data', (c: Buffer) => out.push(c))
-    child.stderr.on('data', (c: Buffer) => err.push(c))
-
-    const finish = (exitCode: number | null): void => {
-      clearTimeout(timer)
-      resolve({
-        stdout: out.toString(),
-        stderr: err.toString(),
-        exitCode,
-        timedOut,
-        sandboxed: true
-      })
+    // Aborting the run (user cancel) kills the whole tree, same as a timeout.
+    if (opts.signal) {
+      if (opts.signal.aborted) killTree(child)
+      else {
+        onAbort = () => killTree(child)
+        opts.signal.addEventListener('abort', onAbort, { once: true })
+      }
     }
 
-    child.on('error', (err) => {
+    child.stdout?.on('data', (c: Buffer) => out.push(c))
+    child.stderr?.on('data', (c: Buffer) => err.push(c))
+
+    child.on('error', (e) => {
+      if (settled) return
+      settled = true
       clearTimeout(timer)
+      if (drainTimer) clearTimeout(drainTimer)
+      cleanupAbort()
       resolve({
         stdout: '',
-        stderr: `Failed to launch sandboxed process: ${err.message}`,
+        stderr: `Failed to launch sandboxed process: ${e.message}`,
         exitCode: null,
         timedOut,
         sandboxed: true
       })
     })
 
-    child.on('close', (code) => finish(code))
+    // Settle on 'close' (all stdio drained — the clean, common case). Fall back to
+    // a short drain after 'exit' so an orphaned pipe can't keep the call pending.
+    child.on('exit', (code) => armDrain(code))
+    child.on('close', (code) => settle(code))
   })
 }
