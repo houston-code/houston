@@ -7,6 +7,14 @@ on:
   # synchronize, reopened are the defaults, restated here since `types` replaces them.)
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+  # NOTE: this push trigger is effectively inert for normal merges. The auto-merge
+  # job below merges (and pushes version bumps) with GITHUB_TOKEN, and GitHub does
+  # not start a workflow run from a GITHUB_TOKEN push — so main is never tested
+  # *after* a merge. That gap is exactly what let an untested PR+PR combination
+  # land and then redden every later PR's merge ref. The real safety net is
+  # therefore the pre-merge validation gate in `auto-merge`, which tests the
+  # actual landing commit *before* merging. This trigger is kept only so a
+  # human/PAT push to main (rare) still gets checked.
   push:
     branches: [main]
 
@@ -113,8 +121,30 @@ jobs:
       # artifacts) and release-publish.yml (published as a GitHub Release) instead.
       - run: npm run dist:linux
 
+  # Pre-merge validation gate — a poor-man's merge queue.
+  #
+  # The `test` job above runs against the PR's merge ref, which GitHub computes as
+  # `main + PR` *at the moment the PR event fired*. When several PRs are open at
+  # once, each is green against a main that has since moved on, and `gh pr merge`
+  # will happily land a PR against the *current* main even though that exact
+  # combination was never tested (there's no branch protection / GitHub merge
+  # queue on this plan to require an up-to-date branch). A broken A+B combination
+  # then lands on main and poisons every later PR's merge ref — green per-PR, red
+  # on merge, whole queue blocked.
+  #
+  # This job closes that gap: before merging, it reproduces the *real* landing
+  # commit (current main + this PR) and re-runs the `test` job's suite against it,
+  # merging only if that is green — so a broken combination can never reach main.
+  # A compare-and-swap loop re-validates if main advances mid-run (a concurrent PR
+  # merged), and bails safely if it can't get a stable base — far better than
+  # silently merging an untested tree. (`linux-sandbox` and `build` still validate
+  # the PR's merge ref only: re-running them against the landing tree too would
+  # roughly double the cost of every merge, for jobs merge skew rarely breaks.)
   auto-merge:
-    timeout-minutes: 10
+    # One validation pass ≈ the `test` job (≤15 min), and the compare-and-swap
+    # loop can run up to 3 of them if main keeps advancing, plus the merge and
+    # version bump — bounded, but far above the old merge-only job's 10.
+    timeout-minutes: 45
     # The merge gate: this job runs — and can merge — only after EVERY job listed in
     # `needs` has succeeded. If any of them (or any of their matrix legs) fails, GitHub
     # skips this job and the PR does not merge. IMPORTANT: when you add a CI job that
@@ -123,43 +153,95 @@ jobs:
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
     runs-on: ubuntu-latest
     # A PR opened *and* labeled at once can spawn two CI runs for the same PR (see
-    # the `on:` comment). Without this, both runs' auto-merge jobs fire `gh pr merge`
-    # at once and the loser dies with "merge already in progress", reddening a PR that
-    # merged fine. Serialize auto-merge per-PR so the second job waits for the first
-    # instead of racing it. cancel-in-progress is false on purpose: cancelling could
-    # tear down a mid-merge job, and we never want to lose the run carrying the label.
+    # the `on:` comment). Serialize auto-merge per-PR so the second job waits for
+    # the first instead of both racing `gh pr merge`. cancel-in-progress is false
+    # on purpose: cancelling could tear down a mid-merge job, and we never want to
+    # lose the run carrying the label. (Per-PR, not global: a global group would
+    # cancel intermediate *pending* runs during a burst and strand those PRs.)
     concurrency:
       group: auto-merge-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR: ${{ github.event.pull_request.number }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      # Idempotent merge. `gh pr merge` exits non-zero for several reasons; only a
-      # genuinely un-merged PR should fail the job. After a non-zero exit we confirm
-      # the PR's state (polling briefly, since a concurrent run's merge may still be
-      # committing) and exit 0 if it's MERGED — otherwise stay red so real failures
-      # (conflicts, failing required checks) surface. `|| state=UNKNOWN` keeps a flaky
-      # `gh pr view` from aborting the step under `set -eo pipefail`.
-      - run: |
-          if gh pr merge "$PR" --merge --delete-branch; then
-            exit 0
-          fi
-          for attempt in 1 2 3 4 5; do
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - name: Validate the real merge result, then merge
+        run: |
+          set -eo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Fetch the PR head once; we re-merge it onto a fresh main each attempt.
+          git fetch --no-tags origin "pull/$PR/head:pr-head"
+
+          # Up to 3 attempts: each validates against the current main, then merges
+          # only if main hasn't moved since (compare-and-swap). If it moved, a
+          # concurrent PR landed and we re-validate against the new main.
+          for attempt in 1 2 3; do
             state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
             if [ "$state" = "MERGED" ]; then
-              echo "::warning::PR #$PR is MERGED but 'gh pr merge' exited non-zero (a concurrent run merged it, or --delete-branch failed). Verify the head branch was removed."
+              echo "PR #$PR already merged."; exit 0
+            fi
+            if [ "$state" != "OPEN" ]; then
+              echo "::error::PR #$PR is $state, not OPEN; refusing to merge."; exit 1
+            fi
+
+            git fetch --no-tags origin main
+            base=$(git rev-parse FETCH_HEAD)
+            echo "Attempt $attempt: validating PR #$PR against main@${base:0:8}"
+            git checkout --quiet -B ci-merge-validate "$base"
+            if ! git merge --no-ff --no-edit pr-head; then
+              echo "::error::PR #$PR does not merge cleanly into current main — rebase the branch onto main and resolve conflicts."
+              exit 1
+            fi
+
+            # Exactly the checks the required `test` job runs, but against the tree
+            # that will actually land. Any failure exits non-zero (set -e) WITHOUT
+            # merging, so main stays green.
+            npm ci
+            npm run lint
+            npm run typecheck
+            npm test
+
+            # Compare-and-swap: only merge if main is still where we validated.
+            git fetch --no-tags origin main
+            if [ "$(git rev-parse FETCH_HEAD)" != "$base" ]; then
+              echo "main advanced during validation (a concurrent PR merged); re-validating."
+              continue
+            fi
+
+            # Validated state == landing state. Merge it. `gh pr merge` can exit
+            # non-zero even when the merge happened (concurrent run, --delete-branch
+            # hiccup), so confirm the PR's terminal state before deciding.
+            if gh pr merge "$PR" --merge --delete-branch; then
               exit 0
             fi
-            echo "Attempt $attempt: PR #$PR state=$state (not yet MERGED); waiting for any in-flight merge."
-            sleep 3
+            for check in 1 2 3 4 5; do
+              state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
+              if [ "$state" = "MERGED" ]; then
+                echo "::warning::PR #$PR is MERGED but 'gh pr merge' exited non-zero (concurrent run, or --delete-branch failed). Verify the head branch was removed."
+                exit 0
+              fi
+              echo "Post-merge check $check: PR #$PR state=$state (not yet MERGED); waiting."
+              sleep 3
+            done
+            echo "::error::Merge call failed and PR #$PR is not merged (state=$state)."
+            exit 1
           done
-          echo "::error::Merge failed and PR #$PR is not merged (state=$state)."
+
+          echo "::error::main kept advancing; could not validate PR #$PR against a stable base in 3 attempts. Re-run this job, or update the branch."
           exit 1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-          GH_REPO: ${{ github.repository }}
 
       # Auto-advance the version after a successful merge so package.json always reflects
       # the merge count. Feature PRs bump the PATCH here; the release-prep PR (label
