@@ -108,6 +108,44 @@ export interface Provider {
 import type { ApprovalPolicy } from './types'
 import type { ImageAttachment } from './images'
 
+/**
+ * A git worktree Houston created to back a conversation. Lets a chat work on its
+ * own branch in an isolated checkout — and lets the app surface the branch in the
+ * UI and clean the worktree up when the chat is deleted. `path` is the worktree's
+ * working directory (also the conversation's `workspace`); `repoRoot` is the main
+ * worktree the branch was created from.
+ */
+export interface ConversationWorktree {
+  /** Absolute path of the worktree's working directory (equals `workspace`). */
+  path: string
+  /** Branch created and checked out in the worktree. */
+  branch: string
+  /** Absolute path of the repo's main worktree the branch was created from. */
+  repoRoot: string
+}
+
+/** A git repo as seen from one of its worktrees, used to drive the new-chat UI. */
+export interface RepoInfo {
+  /** False when the path isn't inside a git repo (no worktree options offered). */
+  isRepo: boolean
+  /** Absolute path of the main worktree (where new worktrees are nested). */
+  root: string
+  /** Branch currently checked out at the queried path (null if detached). */
+  currentBranch: string | null
+  /** Local branch names, newest-committed first, for picking a base. */
+  branches: string[]
+}
+
+/** Outcome of tearing down a conversation's worktree, for reporting to the user. */
+export interface WorktreeRemoval {
+  /** Whether the worktree directory was removed from git and disk. */
+  removed: boolean
+  /** Whether the branch was deleted (only when fully merged, unless forced). */
+  branchDeleted: boolean
+  /** Human-readable note when something was left in place. */
+  message?: string
+}
+
 export interface ConversationMeta {
   id: string
   title: string
@@ -120,6 +158,8 @@ export interface ConversationMeta {
   pinned?: boolean
   /** Id of the custom group (see AppSettings.chatGroups) this chat belongs to. */
   groupId?: string
+  /** Present when this chat runs in a git worktree Houston created for it. */
+  worktree?: ConversationWorktree
 }
 
 /** Token usage persisted with a conversation so it survives reloads/restarts. */

@@ -171,6 +171,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Git-aware.** If the project is a git repo, Houston folds the current branch
   and a short working-tree status into the agent's context each turn, so it knows
   what branch it's on and what's already modified without having to run git first.
+- **Start a chat in its own worktree.** The **⑂** button next to *New chat* spins
+  up a fresh git branch in an isolated worktree under `.houston/worktrees/`, and
+  runs the chat there — so the agent's edits never touch your current checkout.
+  Pick the new branch name and the base to branch from; the worktree is kept out
+  of the parent repo's `git status` via `.git/info/exclude`. Deleting the chat
+  offers to remove the worktree too (uncommitted or unmerged work is always kept).
 - **Project-aware.** Houston loads a small rules hierarchy into the system prompt —
   your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
   `CLAUDE.md` at its root, then any `AGENTS.md` / `CLAUDE.md` found in

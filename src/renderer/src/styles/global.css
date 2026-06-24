@@ -209,9 +209,21 @@ body {
 .sidebar > * {
   -webkit-app-region: no-drag;
 }
-.sidebar__new {
-  width: 100%;
+.sidebar__new-row {
+  display: flex;
+  gap: 6px;
   margin-bottom: 10px;
+}
+.sidebar__new {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar__new-worktree {
+  flex: 0 0 auto;
+  padding-left: 11px;
+  padding-right: 11px;
+  font-size: 15px;
+  line-height: 1;
 }
 .sidebar__search {
   width: 100%;
@@ -338,6 +350,12 @@ body {
 .conv__meta {
   font-size: 11px;
   color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv__branch {
+  color: var(--accent);
 }
 .conv__menu-wrap {
   position: relative;
@@ -1337,6 +1355,12 @@ pre.diff {
   display: flex;
   flex-direction: column;
 }
+/* Compact, content-height variant for small dialogs (e.g. the worktree picker). */
+.modal--sm {
+  width: 460px;
+  height: auto;
+  max-height: 86vh;
+}
 .modal__head,
 .modal__foot {
   display: flex;
@@ -1479,6 +1503,9 @@ pre.diff {
   color: var(--text-dim);
   margin: 0 0 8px;
   line-height: 1.5;
+}
+.field__hint--warn {
+  color: var(--warn);
 }
 .field--checkbox {
   display: flex;
