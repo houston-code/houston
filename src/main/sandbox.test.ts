@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { delimiter } from 'node:path'
 import { EventEmitter } from 'node:events'
-import { augmentPath, CappedOutput, runSandboxed, type SandboxRunOptions } from './sandbox'
+import {
+  augmentPath,
+  CappedOutput,
+  clampToolResult,
+  runSandboxed,
+  type SandboxRunOptions
+} from './sandbox'
 
 describe('augmentPath', () => {
   const minimalPath = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter)
@@ -102,6 +108,30 @@ describe('CappedOutput', () => {
     expect(out.startsWith('HEAD')).toBe(true)
     expect(out.endsWith('TAIL')).toBe(true)
     expect(cap.droppedBytes).toBe(20)
+  })
+})
+
+describe('clampToolResult', () => {
+  const MARKER = /\n\[\.\.\. (\d+) bytes truncated \.\.\.\]\n/
+
+  it('returns output verbatim when it fits the budget', () => {
+    expect(clampToolResult('all good', 64)).toBe('all good')
+    expect(clampToolResult('all good')).toBe('all good') // default budget
+  })
+
+  it('keeps both ends with a truncation marker when over budget', () => {
+    const text = 'START' + 'x'.repeat(1000) + 'END'
+    const out = clampToolResult(text, 20)
+    expect(out.startsWith('START')).toBe(true) // command echo / early errors survive
+    expect(out.endsWith('END')).toBe(true) // trailing summary survives
+    expect(out).toMatch(MARKER)
+    expect(out.length).toBeLessThan(text.length)
+  })
+
+  it('bounds a multi-hundred-KB result to roughly the default budget', () => {
+    const out = clampToolResult('y'.repeat(500_000))
+    expect(out).toMatch(MARKER)
+    expect(out.length).toBeLessThanOrEqual(64_000 + 64) // budget + short marker line
   })
 })
 
