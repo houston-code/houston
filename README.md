@@ -51,10 +51,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   approval like `web_fetch`. Pass a `selector` to capture just one element.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message — no need to paste or describe where things live.
-- **Slash commands.** Type `/` for a command menu: `/new` starts a chat, `/review`
-  runs an adversarial review of your changes, and any Markdown file in
-  `.houston/commands/` becomes a custom command — its contents are a prompt
-  template (`$ARGUMENTS` is filled in with whatever you type after the command name).
+- **Slash commands.** Type `/` for a command menu. Built-ins: `/new` (new chat),
+  `/compact` (summarize older turns to free up context now), `/plan` `/ask`
+  `/auto` `/full` (switch approval mode), `/review` (adversarial review), `/help`.
+  Any Markdown file in `.houston/commands/` becomes a custom command — its
+  contents are a prompt template (`$ARGUMENTS` is filled in with whatever you type
+  after the command name).
 - **Research subagents.** The agent can `dispatch_agent` to hand a focused,
   read-only question to a subagent with its own fresh context. The subagent
   reads, globs, and searches the project and reports back — keeping the main

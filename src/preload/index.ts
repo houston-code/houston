@@ -6,6 +6,7 @@ import type { Command } from '@shared/commands'
 import type {
   AgentEvent,
   AgentSendRequest,
+  ChatMessage,
   Conversation,
   ConversationMeta,
   ToolApprovalDecision
@@ -48,6 +49,12 @@ const api = {
   }): Promise<Conversation> => ipcRenderer.invoke(IPC.conversationCreate, input),
   forkConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationFork, id),
+  compactConversation: (
+    id: string,
+    providerId: string,
+    model: string
+  ): Promise<{ ok: boolean; summarized: number; messages?: ChatMessage[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
   deleteConversation: (id: string): Promise<void> => ipcRenderer.invoke(IPC.conversationDelete, id),
   exportConversation: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExport, id),

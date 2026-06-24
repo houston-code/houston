@@ -44,6 +44,8 @@ export interface ChatController {
   reapplyCheckpoint: () => Promise<number>
   /** Replace the transcript and (optionally) seed usage, e.g. when switching conversations. */
   reset: (items: DisplayItem[], usage?: SessionUsage | null) => void
+  /** Append a transient notice to the transcript (e.g. slash-command feedback). */
+  notify: (text: string, tone?: 'info' | 'error') => void
 }
 
 const WRITE_TOOLS = new Set(['write_file', 'edit_file'])
@@ -153,6 +155,10 @@ export function useChat(): ChatController {
     runIdRef.current = null
   }, [])
 
+  const notify = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
+    setItems((prev) => [...prev, { kind: 'notice', id: crypto.randomUUID(), text, tone }])
+  }, [])
+
   return {
     items,
     running,
@@ -165,6 +171,7 @@ export function useChat(): ChatController {
     approve,
     revertCheckpoint,
     reapplyCheckpoint,
-    reset
+    reset,
+    notify
   }
 }

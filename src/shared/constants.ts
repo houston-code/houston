@@ -28,6 +28,7 @@ export const IPC = {
   conversationGet: 'conversation:get',
   conversationCreate: 'conversation:create',
   conversationFork: 'conversation:fork',
+  conversationCompact: 'conversation:compact',
   conversationDelete: 'conversation:delete',
   conversationExport: 'conversation:export',
   conversationImport: 'conversation:import',

@@ -19,6 +19,12 @@ import { SettingsModal } from './components/SettingsModal'
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
   { name: 'new', description: 'Start a new chat' },
+  { name: 'compact', description: 'Summarize older turns to free up context now' },
+  { name: 'plan', description: 'Plan mode — read-only (research & propose, no edits/commands)' },
+  { name: 'ask', description: 'Approval: ask before every edit and command' },
+  { name: 'auto', description: 'Approval: auto-approve edits, ask for commands' },
+  { name: 'full', description: 'Approval: full auto (sandboxed)' },
+  { name: 'help', description: 'List the available slash commands' },
   {
     name: 'review',
     description: 'Adversarial review of your uncommitted changes',
@@ -26,6 +32,14 @@ const BUILTIN_COMMANDS: Command[] = [
       'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
   }
 ]
+
+/** Map a policy-preset command name to its ApprovalPolicy. */
+const POLICY_COMMANDS: Record<string, ApprovalPolicy> = {
+  plan: 'plan',
+  ask: 'ask',
+  auto: 'auto-edit',
+  full: 'full-auto'
+}
 
 /** Pick a sensible default model: first provider that has a key and a model. */
 function defaultSelection(settings: AppSettings): SelectedModel | null {
@@ -357,13 +371,42 @@ export default function App(): JSX.Element {
     [settings, workspace, currentId, chat, refreshConversations]
   )
 
+  const onCompact = useCallback(async () => {
+    if (!currentId || !settings?.selected) return
+    chat.notify('Compacting conversation…')
+    const res = await window.api.compactConversation(
+      currentId,
+      settings.selected.providerId,
+      settings.selected.model
+    )
+    if (res.ok && res.messages) {
+      chat.reset(itemsFromMessages(res.messages))
+      chat.notify(res.summarized ? `Compacted ${res.summarized} earlier messages.` : 'Nothing to compact yet.')
+    } else if (res.ok) {
+      chat.notify('Nothing to compact yet.')
+    } else {
+      chat.notify(`Couldn't compact: ${res.error ?? 'unknown error'}`)
+    }
+  }, [currentId, settings, chat])
+
   const onCommand = useCallback(
     (cmd: Command) => {
       // Only built-in action commands reach here; custom (template) commands are
       // expanded into the composer by the Composer itself.
       if (cmd.name === 'new') void onNewChat()
+      else if (cmd.name === 'compact') void onCompact()
+      else if (cmd.name === 'help') {
+        chat.notify(
+          'Commands: ' + BUILTIN_COMMANDS.map((c) => `/${c.name}`).join('  ') +
+            (commands.length > BUILTIN_COMMANDS.length ? '  (+ custom from .houston/commands)' : '')
+        )
+      } else if (POLICY_COMMANDS[cmd.name]) {
+        const policy = POLICY_COMMANDS[cmd.name]
+        void onChangePolicy(policy)
+        chat.notify(`Approval mode: ${policy}`)
+      }
     },
-    [onNewChat]
+    [onNewChat, onCompact, onChangePolicy, chat, commands]
   )
 
   // Global keyboard shortcuts: Cmd/Ctrl+N new chat, Cmd/Ctrl+, settings,

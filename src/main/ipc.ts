@@ -16,6 +16,7 @@ import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
 import { startRun, cancelRun, resolveApproval } from './agent/loop'
 import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
+import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { loadCommands } from './agent/commands'
 import { realpathSync } from 'node:fs'
@@ -134,6 +135,11 @@ export function registerIpc(): void {
       createConversation(input)
   )
   ipcMain.handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
+  ipcMain.handle(
+    IPC.conversationCompact,
+    (_event, id: string, providerId: string, model: string) =>
+      compactConversationNow(id, providerId, model)
+  )
   ipcMain.handle(IPC.conversationDelete, (_event, id: string) => {
     deleteConversation(id)
   })
