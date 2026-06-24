@@ -39,6 +39,7 @@ export const IPC = {
   agentRetry: 'agent:retry',
   agentCancel: 'agent:cancel',
   agentApprove: 'agent:approve',
+  agentSetPolicy: 'agent:setPolicy',
   agentEvent: 'agent:event',
   checkpointRestore: 'checkpoint:restore',
   checkpointReapply: 'checkpoint:reapply'

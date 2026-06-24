@@ -15,7 +15,7 @@ import { sanitizeAttachments } from '@shared/images'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
-import { startRun, cancelRun, resolveApproval } from './agent/loop'
+import { startRun, cancelRun, resolveApproval, setRunPolicy } from './agent/loop'
 import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
@@ -288,6 +288,15 @@ export function registerIpc(): void {
     IPC.agentApprove,
     (_event, runId: string, callId: string, decision: ToolApprovalDecision) => {
       resolveApproval(runId, callId, decision)
+    }
+  )
+
+  // Change the approval policy of an in-flight run so a mode switch made while the
+  // agent is working takes effect on its next tool call, not just the next turn.
+  ipcMain.handle(
+    IPC.agentSetPolicy,
+    (_event, runId: string, policy: AppSettings['approvalPolicy']) => {
+      setRunPolicy(runId, policy)
     }
   )
 
