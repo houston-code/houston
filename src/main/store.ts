@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import type { AppSettings, ProviderConfig } from '@shared/types'
-import { defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
+import { backfillDefaultModels, defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 import { hasKey } from './secrets'
 
@@ -20,11 +20,18 @@ function settingsPath(): string {
 
 function migrate(raw: Partial<AppSettings>): AppSettings {
   const base = defaultSettings()
+  const fromVersion = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0
+  let providers =
+    Array.isArray(raw.providers) && raw.providers.length > 0 ? raw.providers : base.providers
+  // v2: backfill built-in default models (e.g. the GPT-5 family) added since this
+  // install last wrote its settings. Version-gated so it runs once per upgrade —
+  // a model the user deletes afterwards stays deleted instead of reappearing.
+  if (fromVersion < 2) providers = backfillDefaultModels(providers)
   const merged: AppSettings = {
     ...base,
     ...raw,
     schemaVersion: SETTINGS_SCHEMA_VERSION,
-    providers: Array.isArray(raw.providers) && raw.providers.length > 0 ? raw.providers : base.providers
+    providers
   }
   return merged
 }

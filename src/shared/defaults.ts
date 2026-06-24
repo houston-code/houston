@@ -1,6 +1,6 @@
 import type { AppSettings, ProviderConfig } from './types'
 
-export const SETTINGS_SCHEMA_VERSION = 1
+export const SETTINGS_SCHEMA_VERSION = 2
 
 /**
  * Default context-compaction threshold in tokens. Comfortable for large-context
@@ -55,12 +55,15 @@ export function defaultProviders(): ProviderConfig[] {
       kind: 'openai',
       label: 'OpenAI (GPT)',
       models: [
+        { id: 'gpt-5', label: 'GPT-5' },
+        { id: 'gpt-5-mini', label: 'GPT-5 mini' },
+        { id: 'gpt-5-nano', label: 'GPT-5 nano' },
         { id: 'gpt-4o', label: 'GPT-4o' },
         { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
         { id: 'o3', label: 'o3' },
         { id: 'o4-mini', label: 'o4-mini' }
       ],
-      defaultModel: 'gpt-4o',
+      defaultModel: 'gpt-5',
       requiresKey: true,
       hasKey: false,
       builtIn: true
@@ -100,6 +103,27 @@ export function defaultProviders(): ProviderConfig[] {
       builtIn: true
     }
   ]
+}
+
+/**
+ * Union newly-added built-in default models into a saved provider list, matched by
+ * provider id. The curated model lists are a starting point that grows as providers
+ * ship new models (e.g. GPT-5); this lets the settings migration backfill those into
+ * existing installs without clobbering a user's own edits or re-adding models they've
+ * deleted. Only providers whose id matches a built-in default are touched — custom
+ * endpoints and the local providers' empty lists are left exactly as the user left
+ * them. New default models are appended, so the user's ordering and `defaultModel`
+ * are preserved.
+ */
+export function backfillDefaultModels(saved: ProviderConfig[]): ProviderConfig[] {
+  const defaults = new Map(defaultProviders().map((p) => [p.id, p]))
+  return saved.map((p) => {
+    const def = defaults.get(p.id)
+    if (!def) return p
+    const have = new Set(p.models.map((m) => m.id))
+    const additions = def.models.filter((m) => !have.has(m.id))
+    return additions.length ? { ...p, models: [...p.models, ...additions] } : p
+  })
 }
 
 export function defaultSettings(): AppSettings {
