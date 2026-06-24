@@ -33,38 +33,42 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-  # Package the macOS app (.app + .dmg) for every PR that's set to auto-merge.
-  # We can't build on push-to-main: the auto-merge job merges with GITHUB_TOKEN,
-  # and GitHub won't trigger a new workflow run from a GITHUB_TOKEN push. Instead
-  # we build on the pull_request event, which checks out the merge ref (main + PR)
-  # — i.e. exactly the state that's about to land. electron-builder --mac only
-  # runs on macOS; macos-14 is arm64, matching the build target.
-  build-mac:
-    needs: test
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      - run: npm run dist
-      # Smoke-test the packaged app we just built: the spec launches
-      # release/mac-arm64/Houston.app via Playwright and asserts the renderer
-      # mounts — exercising the asar archive, bundled resources, and the
-      # main ↔ preload ↔ renderer IPC bridge end to end. macOS (the build target)
-      # has a display without xvfb. `test:e2e` rebuilds out/ first (cheap); the
-      # spec prefers the packaged app already present in release/.
-      - run: npm run test:e2e
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: houston-mac-arm64
-          path: |
-            release/*.dmg
-            release/mac*/Houston.app
-          if-no-files-found: error
+  # TEMPORARILY DISABLED — the macOS packaging job is commented out for now.
+  # Re-enable once we're ready to ship signed/notarized builds again (tracked in TODO.md).
+  # Nothing depends on `build-mac`, so disabling it leaves `test` and `auto-merge` intact.
+  #
+  # # Package the macOS app (.app + .dmg) for every PR that's set to auto-merge.
+  # # We can't build on push-to-main: the auto-merge job merges with GITHUB_TOKEN,
+  # # and GitHub won't trigger a new workflow run from a GITHUB_TOKEN push. Instead
+  # # we build on the pull_request event, which checks out the merge ref (main + PR)
+  # # — i.e. exactly the state that's about to land. electron-builder --mac only
+  # # runs on macOS; macos-14 is arm64, matching the build target.
+  # build-mac:
+  #   needs: test
+  #   if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
+  #   runs-on: macos-14
+  #   steps:
+  #     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  #     - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+  #       with:
+  #         node-version-file: '.nvmrc'
+  #         cache: npm
+  #     - run: npm ci
+  #     - run: npm run dist
+  #     # Smoke-test the packaged app we just built: the spec launches
+  #     # release/mac-arm64/Houston.app via Playwright and asserts the renderer
+  #     # mounts — exercising the asar archive, bundled resources, and the
+  #     # main ↔ preload ↔ renderer IPC bridge end to end. macOS (the build target)
+  #     # has a display without xvfb. `test:e2e` rebuilds out/ first (cheap); the
+  #     # spec prefers the packaged app already present in release/.
+  #     - run: npm run test:e2e
+  #     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+  #       with:
+  #         name: houston-mac-arm64
+  #         path: |
+  #           release/*.dmg
+  #           release/mac*/Houston.app
+  #         if-no-files-found: error
 
   auto-merge:
     needs: test
