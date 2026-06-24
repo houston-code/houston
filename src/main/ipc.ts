@@ -29,9 +29,27 @@ import {
   importConversation,
   organizeConversation,
   addUsage,
+  mergeRunningTotals,
   setMessages,
   updateConversationMeta
 } from './conversations'
+
+/**
+ * Persist a usage event's tokens/cost and rewrite it to carry the conversation's
+ * running cumulative totals (the agent loop reports only the latest turn). Shared
+ * by the start and retry handlers so their accounting can't drift — a missed field
+ * here silently broke cost tracking on retried turns once before. Non-usage events
+ * pass through untouched.
+ */
+export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentEvent {
+  if (e.type !== 'usage') return e
+  const total = addUsage(conversationId, {
+    inputTokens: e.inputTokens,
+    outputTokens: e.outputTokens,
+    cost: e.cost
+  })
+  return mergeRunningTotals(e, total)
+}
 
 /** Register every IPC handler the renderer can call. */
 export function registerIpc(): void {
@@ -172,18 +190,7 @@ export function registerIpc(): void {
   // Agent: fire-and-forget; progress is streamed back over IPC.agentEvent.
   ipcMain.handle(IPC.agentStart, async (event, req: AgentSendRequest) => {
     const send = (e: AgentEvent): void => {
-      // Persist usage and rewrite the event to carry the conversation's running
-      // cumulative totals (the loop reports only the latest turn).
-      if (e.type === 'usage') {
-        const total = addUsage(req.conversationId, {
-          inputTokens: e.inputTokens,
-          outputTokens: e.outputTokens,
-          cost: e.cost
-        })
-        if (total) {
-          e = { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens, cost: total.cost }
-        }
-      }
+      e = applyRunningUsage(req.conversationId, e)
       if (!event.sender.isDestroyed()) event.sender.send(IPC.agentEvent, e)
     }
 
@@ -226,13 +233,7 @@ export function registerIpc(): void {
       req: { runId: string; conversationId: string; providerId: string; model: string; approvalPolicy: AppSettings['approvalPolicy'] }
     ) => {
       const send = (e: AgentEvent): void => {
-        if (e.type === 'usage') {
-          const total = addUsage(req.conversationId, {
-            inputTokens: e.inputTokens,
-            outputTokens: e.outputTokens
-          })
-          if (total) e = { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens }
-        }
+        e = applyRunningUsage(req.conversationId, e)
         if (!event.sender.isDestroyed()) event.sender.send(IPC.agentEvent, e)
       }
       const conv = getConversation(req.conversationId)
