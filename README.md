@@ -223,7 +223,7 @@ Useful scripts:
 ```bash
 npm run build    # typecheck + bundle to out/
 npm test         # unit tests (vitest: node + jsdom projects)
-npm run test:e2e # Electron smoke test (Playwright; needs `npm run build` first)
+npm run test:e2e # Electron smoke test (Playwright; builds first)
 npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ```
 
@@ -234,7 +234,7 @@ npm run dist     # → release/Houston-<version>-arm64.dmg
 ```
 
 Every PR set to auto-merge also builds the `.app` + `.dmg` in CI (on a macOS
-runner, against the merged state), smoke-tests the built app with Playwright,
+runner, against the merged state), smoke-tests the packaged app with Playwright,
 and uploads the artifacts as `houston-mac-arm64` on the workflow run — grab a
 build from the **Actions** tab without building locally.
 

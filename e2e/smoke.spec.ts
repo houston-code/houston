@@ -1,24 +1,42 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import electronPath from 'electron'
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
 
-// In Node, importing `electron` yields the path to the executable, but its
-// published types describe the in-process API — cast to use it as the launcher.
-const EXECUTABLE = electronPath as unknown as string
+const ROOT = join(__dirname, '..')
 
-// The built main entry (`package.json#main`), relative to this file at `e2e/`.
-const MAIN_ENTRY = join(__dirname, '..', 'out', 'main', 'index.js')
+/**
+ * Decide what to launch. Prefer the packaged app from `npm run dist` (in
+ * `release/`): it runs the real artifact — the asar archive, bundled resources
+ * (e.g. the vendored ripgrep), and the `app.isPackaged` code paths. Fall back to
+ * the unpackaged `out/` bundle from `npm run build` for fast local runs. CI
+ * builds with `npm run dist`, so it always smoke-tests the packaged app.
+ */
+function resolveLaunch(): { executablePath: string; args: string[]; mode: string } {
+  for (const dir of ['mac-arm64', 'mac', 'mac-universal']) {
+    const bin = join(ROOT, 'release', dir, 'Houston.app', 'Contents', 'MacOS', 'Houston')
+    if (existsSync(bin)) return { executablePath: bin, args: [], mode: `packaged (${dir})` }
+  }
+  // In Node, importing `electron` yields the path to the executable, but its
+  // published types describe the in-process API — cast to use it as the launcher.
+  return {
+    executablePath: electronPath as unknown as string,
+    args: [join(ROOT, 'out', 'main', 'index.js')],
+    mode: 'unpackaged (out/)'
+  }
+}
 
 test('app boots and renders the UI', async () => {
-  const app: ElectronApplication = await electron.launch({
-    executablePath: EXECUTABLE,
-    args: [MAIN_ENTRY]
-  })
+  const { executablePath, args, mode } = resolveLaunch()
+  test.info().annotations.push({ type: 'launch-mode', description: mode })
+
+  const app: ElectronApplication = await electron.launch({ executablePath, args })
 
   try {
     const window = await app.firstWindow()
 
-    // The OS window title comes from index.html (no code overrides it).
+    // The window title is "Houston" — set both in index.html's <title> and on the
+    // BrowserWindow (`title: APP_NAME`) in src/main/index.ts.
     await expect(window).toHaveTitle('Houston')
 
     // The app shell only mounts after the renderer has round-tripped to the main
