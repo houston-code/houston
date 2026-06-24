@@ -49,7 +49,7 @@ function Popover({
   onClose,
   children
 }: {
-  anchorRef: RefObject<HTMLElement>
+  anchorRef: RefObject<HTMLElement | null>
   onClose: () => void
   children: ReactNode
 }): JSX.Element | null {

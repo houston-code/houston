@@ -114,7 +114,7 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
 
       const hadToolCalls = toolAcc.size > 0
       for (const acc of toolAcc.values()) {
-        let args: Record<string, unknown> = {}
+        let args: Record<string, unknown>
         try {
           args = acc.args ? JSON.parse(acc.args) : {}
         } catch {

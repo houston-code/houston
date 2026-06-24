@@ -8,7 +8,7 @@ const FOCUSABLE =
  * the first control on open, keep Tab/Shift+Tab within the dialog, close on
  * Escape, and restore focus to the previously-focused element on unmount.
  */
-export function useFocusTrap(ref: RefObject<HTMLElement>, onClose: () => void): void {
+export function useFocusTrap(ref: RefObject<HTMLElement | null>, onClose: () => void): void {
   useEffect(() => {
     const el = ref.current
     if (!el) return

@@ -150,7 +150,7 @@ async function expandImports(
       if (!trimmed) continue
       const abs = resolveImport(trimmed, baseDir, home)
       if (visited.has(abs)) continue
-      let content: string | null = null
+      let content: string | null
       try {
         content = await fs.readFile(abs, 'utf8')
       } catch {
