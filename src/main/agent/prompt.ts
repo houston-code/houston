@@ -26,6 +26,7 @@ You have these tools:
 - read_shell_output: read new output from a background shell
 - kill_shell: stop a background shell
 - web_fetch: fetch an http/https URL and read it as text (requires approval)
+- view_localhost: load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser and get back a screenshot plus the page's console output — use it to SEE and iterate on a web UI you built (requires approval)
 - web_search: search the web for current information (requires approval; needs a key in Settings)
 - todo_write: keep a task list for multi-step work
 - dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back)

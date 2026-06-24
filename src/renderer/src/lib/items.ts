@@ -28,6 +28,8 @@ export interface ToolItem {
   toolKind?: 'read' | 'write' | 'shell' | 'network' | 'mcp'
   status: ToolStatus
   output?: string
+  /** Images the tool produced (e.g. a view_localhost screenshot). */
+  images?: ImageAttachment[]
 }
 export interface NoticeItem {
   kind: 'notice'
@@ -99,7 +101,11 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         : e.output.startsWith('Denied') || e.output.startsWith('Blocked')
           ? 'denied'
           : 'error'
-      return updateTool(items, e.callId, { status, output: e.output })
+      return updateTool(items, e.callId, {
+        status,
+        output: e.output,
+        ...(e.images?.length ? { images: e.images } : {})
+      })
     }
     case 'compaction': {
       const finalized = finalizeStreaming(items)
@@ -151,9 +157,11 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
 
 /** Build display items from a saved conversation's message log. */
 export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
-  const resultByCallId = new Map<string, { output: string }>()
+  const resultByCallId = new Map<string, { output: string; images?: ImageAttachment[] }>()
   for (const m of messages) {
-    if (m.role === 'tool' && m.toolCallId) resultByCallId.set(m.toolCallId, { output: m.content })
+    if (m.role === 'tool' && m.toolCallId) {
+      resultByCallId.set(m.toolCallId, { output: m.content, images: m.images })
+    }
   }
 
   const items: DisplayItem[] = []
@@ -188,7 +196,8 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
           name: tc.name,
           args: tc.arguments,
           status,
-          output
+          output,
+          ...(res?.images?.length ? { images: res.images } : {})
         })
       }
     }

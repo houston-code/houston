@@ -40,6 +40,15 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Web search.** With a Tavily API key (set in Settings → *Web search*), the
   agent can `web_search` the web for current information. Like `web_fetch`, it
   requires approval since it leaves the machine.
+- **See its own localhost.** After starting a dev server (a background
+  `run_shell`), the agent can `view_localhost` to load the page in an offscreen
+  Electron window, screenshot it, and read back the browser console — closing the
+  build → look → fix loop without a human eyeballing the page. The screenshot
+  comes back through the same vision pipeline as pasted images, so a
+  vision-capable model views it directly, and it shows inline in the transcript.
+  Only loopback hosts (`localhost`, `127.0.0.1`, `::1`) are allowed — public URLs
+  go through `web_fetch` — and, being local network egress, it always prompts for
+  approval like `web_fetch`. Pass a `selector` to capture just one element.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message — no need to paste or describe where things live.
 - **Slash commands.** Type `/` for a command menu: `/new` starts a chat, `/review`
@@ -289,9 +298,11 @@ the agent loop and UI never depend on a specific provider.
 - **File tools are contained** to the workspace in code — any path that resolves
   outside the project root is rejected.
 - **Human in the loop.** Writes and shell commands require approval unless you
-  opt into a more autonomous policy. `web_fetch` network egress always prompts on
-  first use — even in *full auto* — since it leaves the machine; choose
-  *allow-for-the-run* to stop further prompts that run.
+  opt into a more autonomous policy. Network egress (`web_fetch`, `web_search`,
+  `view_localhost`) always prompts on first use — even in *full auto* — since it
+  leaves the machine; choose *allow-for-the-run* to stop further prompts that run.
+  `view_localhost` is restricted to loopback addresses and loads untrusted page
+  content in a sandboxed, isolated, no-Node window.
 - **Keys at rest** are encrypted via the OS Keychain; only ciphertext is written
   to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
 

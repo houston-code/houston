@@ -29,6 +29,7 @@ import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
 import { runSubAgent } from './subagent'
 import { reviewWorkspaceChanges } from './review'
+import { captureLocalhost } from './viewlocalhost'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills } from './skills'
@@ -217,7 +218,8 @@ export async function startRun(
           signal: abort.signal
         }),
       attachImage,
-      attachDocument
+      attachDocument,
+      captureLocalhost
     })
 
     /** True if a call is a read-only tool with no gating — safe to run concurrently. */
@@ -416,7 +418,14 @@ export async function startRun(
           })
         )
         for (const r of results) {
-          emit({ type: 'tool_result', callId: r.call.id, name: r.call.name, ok: r.ok, output: r.output })
+          emit({
+            type: 'tool_result',
+            callId: r.call.id,
+            name: r.call.name,
+            ok: r.ok,
+            output: r.output,
+            ...(r.images.length ? { images: r.images } : {})
+          })
           messages.push({
             role: 'tool',
             content: r.output,
@@ -534,7 +543,14 @@ export async function startRun(
           }
         }
 
-        emit({ type: 'tool_result', callId: call.id, name: call.name, ok, output })
+        emit({
+          type: 'tool_result',
+          callId: call.id,
+          name: call.name,
+          ok,
+          output,
+          ...(toolImages.length ? { images: toolImages } : {})
+        })
         messages.push({
           role: 'tool',
           content: output,

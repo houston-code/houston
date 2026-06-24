@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { getTool, toolSchemas, resolveInRoots, type ToolContext } from './tools'
 import { registerShell } from './shells'
+import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
+import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
 
 let workspace: string
 let ctx: ToolContext
@@ -38,6 +40,7 @@ describe('tool registry', () => {
       'run_shell',
       'search_files',
       'todo_write',
+      'view_localhost',
       'web_fetch',
       'web_search',
       'write_file'
@@ -399,6 +402,70 @@ describe('web_search', () => {
   it('requires a query', async () => {
     const withKey: ToolContext = { ...ctx, getSecret: () => 'tvly-x' }
     await expect(getTool('web_search')!.execute({}, withKey)).rejects.toThrow(/query is required/)
+  })
+})
+
+describe('view_localhost', () => {
+  const fakeCapture =
+    (over: Partial<LocalhostCapture> = {}) =>
+    async (input: CaptureInput): Promise<LocalhostCapture> => ({
+      png: Buffer.from('PNGBYTES'),
+      console: [],
+      title: 'Demo',
+      finalUrl: `${input.url}/`,
+      width: 1280,
+      height: 800,
+      ...over
+    })
+
+  it('attaches the screenshot and reports console + metadata', async () => {
+    const images: { mediaType: string; data: string }[] = []
+    const out = await getTool('view_localhost')!.execute(
+      { url: 'http://localhost:3000' },
+      { ...ctx, attachImage: (i) => images.push(i), captureLocalhost: fakeCapture({ console: ['ERROR: boom'] }) }
+    )
+    expect(images).toHaveLength(1)
+    expect(images[0].mediaType).toBe('image/png')
+    expect(out).toContain('Loaded http://localhost:3000/')
+    expect(out).toContain('"Demo"')
+    expect(out).toContain('attached below')
+    expect(out).toContain('ERROR: boom')
+  })
+
+  it('notes a selector that matched nothing', async () => {
+    const out = await getTool('view_localhost')!.execute(
+      { url: 'http://localhost:3000', selector: '.missing' },
+      { ...ctx, attachImage: () => {}, captureLocalhost: fakeCapture({ selectorMissed: true }) }
+    )
+    expect(out).toContain('matched nothing')
+  })
+
+  it('reports a screenshot over the attach cap without attaching it', async () => {
+    const images: { mediaType: string; data: string }[] = []
+    const out = await getTool('view_localhost')!.execute(
+      { url: 'http://localhost:3000' },
+      {
+        ...ctx,
+        attachImage: (i) => images.push(i),
+        captureLocalhost: fakeCapture({ png: Buffer.alloc(MAX_ATTACH_IMAGE_BYTES + 1) })
+      }
+    )
+    expect(images).toHaveLength(0)
+    expect(out).toContain('exceeds')
+  })
+
+  it('errors without a capture implementation in context', async () => {
+    await expect(run('view_localhost', { url: 'http://localhost:3000' })).rejects.toThrow(/not available/)
+  })
+
+  it('requires a url', async () => {
+    await expect(
+      getTool('view_localhost')!.execute({}, { ...ctx, captureLocalhost: fakeCapture() })
+    ).rejects.toThrow(/url is required/)
+  })
+
+  it('is a network tool so it stays approval-gated like web_fetch', () => {
+    expect(getTool('view_localhost')!.kind).toBe('network')
   })
 })
 
