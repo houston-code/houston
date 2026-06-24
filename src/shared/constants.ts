@@ -30,6 +30,7 @@ export const IPC = {
   conversationFork: 'conversation:fork',
   conversationDelete: 'conversation:delete',
   conversationExport: 'conversation:export',
+  conversationExportHtml: 'conversation:exportHtml',
   conversationImport: 'conversation:import',
   conversationOrganize: 'conversation:organize',
   // Agent

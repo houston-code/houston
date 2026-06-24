@@ -28,6 +28,7 @@ export interface SidebarProps {
   onDelete: (id: string) => void
   onFork: (id: string) => void
   onExport: (id: string) => void
+  onExportHtml: (id: string) => void
   onImport: () => void
   onOpenSettings: () => void
   onRename: (id: string, title: string) => void
@@ -266,6 +267,15 @@ function ConvRow({
               }}
             >
               ⤓ Export
+            </button>
+            <button
+              className="menu__item"
+              onClick={() => {
+                props.onExportHtml(conv.id)
+                close()
+              }}
+            >
+              ⤓ Export as HTML
             </button>
             <button
               className="menu__item menu__item--danger"

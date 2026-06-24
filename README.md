@@ -132,7 +132,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
-  JSON file and import it back (or onto another machine) from the sidebar.
+  JSON file and import it back (or onto another machine) from the sidebar, or
+  export it as a self-contained HTML file for sharing and reading offline.
   **Search** the sidebar to find a past chat by its title or anything said in it.
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
   direction without disturbing the original.
