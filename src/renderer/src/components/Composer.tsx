@@ -53,6 +53,7 @@ export function Composer({
   running,
   workspace,
   commands,
+  vision = true,
   onCommand,
   onSend,
   onCancel
@@ -61,6 +62,8 @@ export function Composer({
   running: boolean
   workspace: string | null
   commands: Command[]
+  /** Whether the selected model accepts image inputs; gates the paste/drop affordance. */
+  vision?: boolean
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
   onCancel: () => void
@@ -74,6 +77,12 @@ export function Composer({
   const [cmdDismissed, setCmdDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
 
+  // If the user switches to a model that can't see images, drop any pending
+  // attachments so they aren't silently sent to a model that will ignore them.
+  useEffect(() => {
+    if (!vision) setImages((prev) => (prev.length ? [] : prev))
+  }, [vision])
+
   const addFiles = async (files: File[]): Promise<void> => {
     const read = await Promise.all(files.map(readImageFile))
     const valid = read.filter((x): x is ImageAttachment => x !== null)
@@ -81,6 +90,7 @@ export function Composer({
   }
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
+    if (!vision) return // model can't see images — let the paste fall through as text
     const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
     if (files.length) {
       e.preventDefault()
@@ -89,6 +99,7 @@ export function Composer({
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
+    if (!vision) return
     const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'))
     if (files.length) {
       e.preventDefault()
@@ -311,7 +322,9 @@ export function Composer({
           placeholder={
             disabled
               ? 'Pick a model and project folder to start…'
-              : 'Ask Houston…  (@ file, / command, or drop/paste an image)'
+              : vision
+                ? 'Ask Houston…  (@ file, / command, or drop/paste an image)'
+                : 'Ask Houston…  (@ file or / command)'
           }
           value={text}
           disabled={disabled}

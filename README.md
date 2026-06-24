@@ -17,7 +17,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   custom endpoints and fetch live model lists in Settings.
 - **Image attachments.** Drag-drop or paste images (PNG/JPEG/GIF/WebP) into the
   composer to send them to a vision-capable model — screenshots, diagrams,
-  mockups. Thumbnails show inline and the images persist with the conversation.
+  mockups. The affordance is offered only when the selected model supports
+  vision. Thumbnails show inline and the images persist with the conversation.
   The agent can also `read_file` an image or PDF in the project and view it
   directly (full vision on Anthropic; other providers get a text placeholder).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,

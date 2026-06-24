@@ -81,6 +81,63 @@ export function contextWindowFor(model: string): number | null {
   return null
 }
 
+/** What a model can do beyond plain text, matched by family. */
+export interface ModelCapabilities {
+  /** Accepts image inputs (multimodal vision). */
+  vision: boolean
+  /** Has an extended-thinking / reasoning mode. */
+  reasoning: boolean
+}
+
+/**
+ * Best-effort capability flags for a model id, matched by family. Conservative:
+ * unknown / local models report no capabilities (all false), so callers gate
+ * rather than over-promise. Approximate — provider line-ups change over time.
+ *
+ * Vision: Claude 3+/4, GPT-4o / GPT-4.1, the o-series, GPT-5, Gemini 1.5 / 2.x.
+ * Reasoning: the o-series, GPT-5, Claude thinking-capable (3.7 & 4.x), and
+ * Gemini 2.5. The reasoning heuristics intentionally mirror the per-provider
+ * gates in main/providers/reasoning.ts so the UI and the API agree on which
+ * models actually accept a thinking/reasoning parameter.
+ */
+export function modelCapabilities(model: string): ModelCapabilities {
+  const m = model.toLowerCase()
+  return { vision: hasVision(m), reasoning: hasReasoning(m) }
+}
+
+function hasVision(m: string): boolean {
+  // Anthropic: Claude 3, 3.5, 3.7, and 4 families are all multimodal. (Claude 2
+  // and earlier were text-only, but those ids are long retired.)
+  if (m.includes('claude')) {
+    return !/claude-(instant|1|2)([^0-9]|$)/.test(m)
+  }
+  // OpenAI: GPT-4o, GPT-4.1, GPT-5, and the reasoning o-series accept images;
+  // legacy text-only gpt-4 / gpt-3.5 do not.
+  if (m.includes('gpt-4o') || m.includes('gpt-4.1') || m.includes('gpt-5')) return true
+  if (isOSeries(m)) return true
+  // Google: Gemini 1.5 and 2.x are multimodal; 1.0 (gemini-pro) was text-only.
+  if (m.includes('gemini')) return /gemini[^0-9]*(1\.5|2\.)/.test(m)
+  return false
+}
+
+function hasReasoning(m: string): boolean {
+  // OpenAI o-series and GPT-5 are reasoning models. Mirrors the heuristic in
+  // main/providers/reasoning.ts (openaiSupportsReasoning): an "o<digit>" or
+  // "gpt-5" at the start of the id.
+  if (/^(o\d|gpt-5)/.test(m)) return true
+  // Anthropic extended thinking — Claude 3.7 and the 4.x family. Mirrors
+  // anthropicSupportsThinking in main/providers/reasoning.ts.
+  if (/claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-)/.test(m)) return true
+  // Google: Gemini 2.5 ("thinking") models reason. Mirrors geminiSupportsThinking.
+  if (m.includes('gemini') && /2\.5|thinking/.test(m)) return true
+  return false
+}
+
+/** Matches the OpenAI reasoning o-series (o1 / o3 / o4) without false-positiving on words like "llama". */
+function isOSeries(m: string): boolean {
+  return /(^|[^a-z0-9])o[134](-[a-z]+)?([^a-z0-9]|$)/.test(m)
+}
+
 /**
  * Context fill as a whole-number percentage of the window, clamped to [0, 100].
  * Returns null when the window is unknown or there's nothing to show.

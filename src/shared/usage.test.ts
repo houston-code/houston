@@ -4,6 +4,7 @@ import {
   contextWindowFor,
   formatTokens,
   formatUsd,
+  modelCapabilities,
   modelPricing,
   turnCostUsd
 } from './usage'
@@ -114,5 +115,55 @@ describe('formatUsd', () => {
     expect(formatUsd(0.0042)).toBe('$0.0042')
     expect(formatUsd(0.071)).toBe('$0.071')
     expect(formatUsd(1.234)).toBe('$1.23')
+  })
+})
+
+describe('modelCapabilities', () => {
+  // [model id, vision, reasoning] — one row per family/generation we care about.
+  const table: Array<[string, boolean, boolean]> = [
+    // Anthropic Claude — multimodal from 3 onward; thinking from 3.7 / 4.x.
+    ['claude-opus-4-8', true, true],
+    ['claude-sonnet-4-6', true, true],
+    ['claude-3-7-sonnet', true, true],
+    ['claude-3-7-sonnet-20250219', true, true],
+    ['claude-3-5-sonnet-20241022', true, false],
+    ['claude-3-haiku-20240307', true, false], // Claude 3 Haiku: vision, no thinking
+    ['claude-haiku-4-5', true, true], // 4.x Haiku exposes extended thinking
+    ['claude-2.1', false, false], // legacy text-only
+    ['claude-instant-1.2', false, false],
+    // OpenAI GPT / o-series.
+    ['gpt-4o', true, false],
+    ['gpt-4o-mini', true, false],
+    ['gpt-4.1', true, false],
+    ['gpt-5', true, true],
+    ['o1-preview', true, true],
+    ['o3', true, true],
+    ['o4-mini', true, true],
+    ['gpt-4-turbo', false, false], // text-only legacy GPT-4
+    ['gpt-3.5-turbo', false, false],
+    // Google Gemini — multimodal from 1.5; thinking on 2.5.
+    ['gemini-2.5-pro', true, true],
+    ['gemini-2.5-flash', true, true],
+    ['gemini-2.0-flash', true, false],
+    ['gemini-1.5-pro', true, false],
+    ['gemini-pro', false, false], // 1.0 was text-only
+    // Unknown / local models report nothing.
+    ['llama-3.1-8b', false, false],
+    ['qwen2.5-coder', false, false],
+    ['', false, false]
+  ]
+
+  it.each(table)('maps %s to vision=%s reasoning=%s', (model, vision, reasoning) => {
+    expect(modelCapabilities(model)).toEqual({ vision, reasoning })
+  })
+
+  it('does not false-positive the o-series on ordinary words', () => {
+    expect(modelCapabilities('llama-3.1-8b').reasoning).toBe(false)
+    expect(modelCapabilities('codex').reasoning).toBe(false)
+  })
+
+  it('is case-insensitive', () => {
+    expect(modelCapabilities('Claude-Opus-4-8')).toEqual({ vision: true, reasoning: true })
+    expect(modelCapabilities('GPT-4O')).toEqual({ vision: true, reasoning: false })
   })
 })
