@@ -10,6 +10,7 @@ import type {
   ToolApprovalDecision
 } from '@shared/agent'
 import { validateImportedConversation, resolveImportWorkspace } from '@shared/conversation-io'
+import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments } from '@shared/images'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
@@ -165,6 +166,23 @@ export function registerIpc(): void {
     })
     if (res.canceled || !res.filePath) return null
     writeFileSync(res.filePath, JSON.stringify(conv, null, 2), 'utf8')
+    return res.filePath
+  })
+
+  // Export a conversation as a single self-contained HTML file (inline CSS, no
+  // external assets or scripts). Returns the path, or null if cancelled / unknown id.
+  ipcMain.handle(IPC.conversationExportHtml, async (event, id: string): Promise<string | null> => {
+    const conv = getConversation(id)
+    if (!conv) return null
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const safeTitle = conv.title.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'conversation'
+    const res = await dialog.showSaveDialog(win!, {
+      title: 'Export conversation as HTML',
+      defaultPath: `${safeTitle}.html`,
+      filters: [{ name: 'HTML', extensions: ['html'] }]
+    })
+    if (res.canceled || !res.filePath) return null
+    writeFileSync(res.filePath, conversationToHtml(conv), 'utf8')
     return res.filePath
   })
 

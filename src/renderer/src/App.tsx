@@ -215,6 +215,14 @@ export default function App(): JSX.Element {
     }
   }, [])
 
+  const onExportConversationHtml = useCallback(async (id: string) => {
+    try {
+      await window.api.exportConversationHtml(id)
+    } catch (e) {
+      alert(`Could not export conversation: ${(e as Error).message}`)
+    }
+  }, [])
+
   const onImportConversation = useCallback(async () => {
     try {
       const meta = await window.api.importConversation()
@@ -464,6 +472,7 @@ export default function App(): JSX.Element {
         onDelete={onDeleteConversation}
         onFork={onForkConversation}
         onExport={onExportConversation}
+        onExportHtml={onExportConversationHtml}
         onImport={onImportConversation}
         onOpenSettings={() => setSettingsOpen(true)}
         onRename={onRenameConversation}
