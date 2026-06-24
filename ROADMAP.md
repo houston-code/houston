@@ -111,3 +111,44 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 - **IDE integration.** VS Code / JetBrains extensions. Out of scope for a
   standalone desktop app, but listed for completeness.
+
+## Out of scope — non-goals
+
+These are Codex/Claude-Code capabilities that conflict with Houston's
+**local-first, bring-your-own-model** stance or require a hosted backend. They're
+deliberately **not** on the roadmap (recorded here so the gap analysis is honest
+and nothing is silently dropped):
+
+- **Subscription / OAuth sign-in (ChatGPT, Claude Pro/Max, GitHub Copilot).**
+  Houston is **bring-your-own-API-key** by design — keys are stored in the macOS
+  Keychain and used directly. Codex's `codex login` (ChatGPT OAuth, included
+  usage, workspace RBAC) and similar subscription auth are a different account /
+  billing model that doesn't fit a BYO-key local app.
+
+- **Cloud task delegation** (Codex `codex cloud`, parallel/best-of-N attempts,
+  isolated cloud sandboxes, `codex apply` of cloud diffs). Requires a hosted
+  execution backend and account; Houston runs entirely on the user's machine.
+
+- **First-class GitHub integration** (PR-creating bot, hosted code review on PRs,
+  "install GitHub app"). The agent already drives `git`/`gh` via `run_shell`
+  (network-gated). A built-in bot means OAuth/token handling + server-side review
+  — see also the GitHub-integration entry under *Deferred — larger effort*.
+
+- **Cross-platform execution sandbox (Linux/Windows/WSL2).** See *Windows / Linux
+  support* under *Deferred — larger effort* — shipping an unverified confinement
+  off-macOS would be a security regression.
+
+- **IDE / editor embedding and a terminal TUI** (VS Code/JetBrains extensions,
+  remote TUI, ~32 bundled terminal themes, vim keybindings, status line, terminal
+  title). Houston is a standalone GUI desktop app — it has its own themes, status
+  bar, and shortcuts; a terminal UX is a different product surface. (IDE extension
+  also listed under *Deferred — polish*.)
+
+- **Record & Replay / Computer-Use skill capture.** Turning a demonstrated
+  desktop workflow into a reusable skill needs OS-level computer-use automation,
+  outside a coding agent's remit.
+
+- **Enterprise / admin governance.** Org-managed controls such as forced login
+  method, allowed-web-search-mode policy, server-side feature-flag toggles, and
+  retention/residency enforcement assume a managed multi-tenant backend; Houston
+  is single-user and local.
