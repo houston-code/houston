@@ -60,11 +60,12 @@ run under Node, while the React renderer runs under jsdom with
 `.test.tsx` and render with `@testing-library/react`; hooks use `renderHook`.
 
 There's also an end-to-end smoke test in [`e2e/`](e2e/) that launches the real
-Electron app with Playwright and checks the UI mounts. It runs against the built
-bundle, so build first:
+Electron app with Playwright and checks the UI mounts. `npm run test:e2e` builds
+first, then prefers the packaged app from `npm run dist` (in `release/`) and
+falls back to the `out/` bundle:
 
 ```bash
-npm run build && npm run test:e2e
+npm run test:e2e
 ```
 
 ## Before opening a PR
