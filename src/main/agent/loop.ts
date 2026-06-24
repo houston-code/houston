@@ -27,6 +27,7 @@ import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
 import { isBlockedByPlan, needsApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
+import { formatFile } from './format'
 import { runSubAgent } from './subagent'
 import { reviewWorkspaceChanges } from './review'
 import { matchingHooks, runHooks } from './hooks'
@@ -525,7 +526,28 @@ export async function startRun(
                 abort.signal
               )
               if (post.message) output += `\n\n[PostToolUse hook]\n${post.message}`
-              // Snapshot the file's final content (after any hook, e.g. a formatter)
+              // Format-on-save (opt-in): after a successful write, run the matching
+              // formatter on the file the agent wrote, the way an editor would. It's
+              // best-effort — a missing binary or out-of-tree path is a silent no-op.
+              // Runs before recordResult so the re-snapshot captures the formatted
+              // content (and a revert/redo round-trips faithfully).
+              if (
+                ok &&
+                settings.formatOnSave &&
+                tool.kind === 'write' &&
+                typeof call.arguments.path === 'string'
+              ) {
+                try {
+                  await formatFile(call.arguments.path, {
+                    workspace,
+                    roots,
+                    signal: abort.signal
+                  })
+                } catch {
+                  // Formatting is best-effort; never fail the tool over it.
+                }
+              }
+              // Snapshot the file's final content (after any hook/formatter)
               // so the change can be faithfully redone after a revert.
               if (ok && tool.kind === 'write' && typeof call.arguments.path === 'string') {
                 await recordResult(runId, roots, call.arguments.path)

@@ -110,6 +110,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   hook's output is fed back to the agent — e.g. auto-format after every edit, or
   run tests after a write. Hooks run sandboxed to the project; the call's context
   is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT`.
+- **Format on save.** Turn on *Format on save* (Settings → *Tools & Permissions*)
+  and Houston runs the matching formatter on each file the agent writes — Prettier
+  for JS/TS/JSON/CSS/Markdown, `gofmt`, `rustfmt`, and `ruff`/`black` for Python.
+  It only fires when the formatter is installed, runs in the same sandbox as
+  `run_shell` (no network), and is off by default.
 - **Undo / redo a turn's file changes.** Houston snapshots each file before and
   after the agent writes it, so when a turn edits files a **Revert** button appears —
   one click restores everything that turn changed (and deletes files it created).

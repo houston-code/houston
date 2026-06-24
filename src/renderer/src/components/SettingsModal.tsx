@@ -481,6 +481,23 @@ export function SettingsModal({
                   + Add hook
                 </button>
 
+                <h3>Format on save</h3>
+                <label className="field field--checkbox">
+                  <input
+                    type="checkbox"
+                    checked={settings.formatOnSave ?? false}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, formatOnSave: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    After the agent writes a file, run the matching formatter on it (Prettier for
+                    JS/TS/JSON/CSS/Markdown, <code>gofmt</code>, <code>rustfmt</code>,{' '}
+                    <code>ruff</code>/<code>black</code> for Python). Only runs when the formatter is
+                    installed; off by default.
+                  </span>
+                </label>
+
                 <h3>MCP servers</h3>
                 <p className="field__hint">
                   Connect Model Context Protocol servers — a local <strong>stdio</strong> process or a
