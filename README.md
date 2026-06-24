@@ -23,8 +23,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   directly (full vision on Anthropic; other providers get a text placeholder).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
   `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `ast_grep`,
-  `run_shell`, `web_fetch`, `web_search`, and `todo_write` to actually do the
-  work — not just describe it. When a turn is all
+  `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`, and
+  `todo_write` to actually do the work — not just describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
   **resiliently** — if the model's snippet drifts from the file by indentation or

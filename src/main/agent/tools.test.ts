@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, realpathSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { getTool, toolSchemas, resolveInRoots, type ToolContext } from './tools'
 import { registerShell } from './shells'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
@@ -30,6 +30,8 @@ describe('tool registry', () => {
       'ast_grep',
       'dispatch_agent',
       'edit_file',
+      'git_diff',
+      'git_status',
       'glob',
       'kill_shell',
       'list_dir',
@@ -49,6 +51,61 @@ describe('tool registry', () => {
 
   it('review_changes errors without a review dispatcher in context', async () => {
     await expect(run('review_changes', {})).rejects.toThrow(/not available/)
+  })
+})
+
+describe('git tools', () => {
+  const git = (...args: string[]): void => {
+    spawnSync('git', args, { cwd: workspace, stdio: 'ignore' })
+  }
+  const gitAvailable = spawnSync('git', ['--version'], { stdio: 'ignore' }).status === 0
+  const maybe = gitAvailable ? it : it.skip
+
+  beforeEach(() => {
+    git('init', '-q')
+    git('config', 'user.email', 't@t.test')
+    git('config', 'user.name', 'T')
+    git('config', 'commit.gpgsign', 'false')
+    writeFileSync(join(workspace, 'a.txt'), 'one\n')
+    git('add', 'a.txt')
+    git('commit', '-qm', 'init')
+  })
+
+  maybe('git_status reports a modified and an untracked file', async () => {
+    writeFileSync(join(workspace, 'a.txt'), 'one\ntwo\n')
+    writeFileSync(join(workspace, 'new.txt'), 'x')
+    const out = await run('git_status', {})
+    expect(out).toMatch(/a\.txt/)
+    expect(out).toMatch(/new\.txt/)
+  })
+
+  maybe('git_diff shows a hunk for a modified file', async () => {
+    writeFileSync(join(workspace, 'a.txt'), 'one\ntwo\n')
+    const out = await run('git_diff', {})
+    expect(out).toMatch(/\+two/)
+  })
+
+  maybe('git_diff restricted to a path ignores other files', async () => {
+    writeFileSync(join(workspace, 'a.txt'), 'changed\n')
+    writeFileSync(join(workspace, 'b.txt'), 'other\n')
+    git('add', 'b.txt')
+    const out = await run('git_diff', { path: 'a.txt' })
+    expect(out).toMatch(/a\.txt/)
+    expect(out).not.toMatch(/b\.txt/)
+  })
+
+  maybe('rejects a path that escapes the workspace', async () => {
+    await expect(run('git_status', { path: '../escape' })).rejects.toThrow(/escapes the allowed roots/)
+  })
+
+  // SECURITY: a malicious repo-local .git/config must NOT be able to run code
+  // when the agent inspects it. We neutralize diff.external / textconv / ext.
+  maybe('does not execute a malicious diff.external from .git/config', async () => {
+    const sentinel = join(workspace, 'PWNED')
+    git('config', 'diff.external', `sh -c 'touch ${sentinel}' `)
+    writeFileSync(join(workspace, 'a.txt'), 'one\nmutated\n')
+    await run('git_diff', {})
+    expect(existsSync(sentinel)).toBe(false)
   })
 })
 
