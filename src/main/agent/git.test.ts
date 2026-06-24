@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { formatGitContext, gitContext, gitDiff, isSafeGitRef } from './git'
+import {
+  formatGitContext,
+  formatWorktreeContext,
+  gitContext,
+  gitDiff,
+  isSafeGitRef,
+  parseWorktreePorcelain,
+} from './git'
 
 describe('formatGitContext', () => {
   it('reports a clean tree', () => {
@@ -58,6 +65,144 @@ describe('gitContext', () => {
     }
     const s = await gitContext('/ws', exec)
     expect(s).toContain('branch "detached"')
+  })
+
+  it('appends worktree awareness when the repo has linked worktrees', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') return 'feature\n'
+      if (args[0] === 'status') return ''
+      if (args[0] === 'worktree') {
+        return [
+          'worktree /repo',
+          'HEAD aaa',
+          'branch refs/heads/main',
+          '',
+          'worktree /ws',
+          'HEAD bbb',
+          'branch refs/heads/feature',
+          '',
+        ].join('\n')
+      }
+      return ''
+    }
+    const s = await gitContext('/ws', exec)
+    expect(s).toContain('branch "feature"')
+    expect(s).toContain('main worktree is at "/repo"')
+    expect(s).toContain('/ws [feature] (current)')
+  })
+
+  it('omits worktree awareness for a single-worktree repo', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') return 'main\n'
+      if (args[0] === 'status') return ''
+      if (args[0] === 'worktree') return 'worktree /repo\nHEAD aaa\nbranch refs/heads/main\n'
+      return ''
+    }
+    const s = await gitContext('/repo', exec)
+    expect(s).not.toContain('worktree')
+    expect(s).not.toContain('Linked')
+  })
+
+  it('survives a worktree-list failure (old git)', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') return 'main\n'
+      if (args[0] === 'status') return ''
+      if (args[0] === 'worktree') throw new Error('unknown subcommand')
+      return ''
+    }
+    const s = await gitContext('/repo', exec)
+    expect(s).toContain('branch "main"')
+    expect(s).not.toContain('Linked worktrees')
+  })
+})
+
+describe('parseWorktreePorcelain', () => {
+  it('parses main + linked worktrees with branches', () => {
+    const out = [
+      'worktree /repo',
+      'HEAD aaa',
+      'branch refs/heads/main',
+      '',
+      'worktree /repo/wt-a',
+      'HEAD bbb',
+      'branch refs/heads/feat/x',
+      '',
+    ].join('\n')
+    const e = parseWorktreePorcelain(out)
+    expect(e).toEqual([
+      { path: '/repo', branch: 'main', detached: false, bare: false },
+      { path: '/repo/wt-a', branch: 'feat/x', detached: false, bare: false },
+    ])
+  })
+
+  it('flags detached and bare entries', () => {
+    const out = [
+      'worktree /repo',
+      'HEAD aaa',
+      'bare',
+      '',
+      'worktree /repo/wt-d',
+      'HEAD bbb',
+      'detached',
+      '',
+    ].join('\n')
+    const e = parseWorktreePorcelain(out)
+    expect(e[0]).toMatchObject({ path: '/repo', bare: true, branch: null })
+    expect(e[1]).toMatchObject({ path: '/repo/wt-d', detached: true, branch: null })
+  })
+
+  it('tolerates CRLF, trailing data, and unknown keys', () => {
+    const out = 'worktree /repo\r\nHEAD aaa\r\nbranch refs/heads/main\r\nlocked someone\r\n'
+    const e = parseWorktreePorcelain(out)
+    expect(e).toEqual([{ path: '/repo', branch: 'main', detached: false, bare: false }])
+  })
+
+  it('returns [] for empty output', () => {
+    expect(parseWorktreePorcelain('')).toEqual([])
+  })
+})
+
+describe('formatWorktreeContext', () => {
+  const main = { path: '/repo', branch: 'main', detached: false, bare: false }
+
+  it('returns "" for zero or one worktree', () => {
+    expect(formatWorktreeContext([], '/repo')).toBe('')
+    expect(formatWorktreeContext([main], '/repo')).toBe('')
+  })
+
+  it('lists linked worktrees and marks the current one', () => {
+    const entries = [
+      main,
+      { path: '/repo/wt-a', branch: 'feat/x', detached: false, bare: false },
+      { path: '/repo/wt-b', branch: null, detached: true, bare: false },
+    ]
+    const s = formatWorktreeContext(entries, '/repo/wt-a')
+    expect(s).toContain('3 worktrees')
+    expect(s).toContain('main worktree is at "/repo"')
+    expect(s).toContain('/repo/wt-a [feat/x] (current)')
+    expect(s).toContain('/repo/wt-b [detached]')
+    expect(s).not.toContain('/repo [main]') // main is not repeated in the linked list
+  })
+
+  it('marks current even with a trailing slash mismatch', () => {
+    const entries = [main, { path: '/repo/wt-a', branch: 'feat/x', detached: false, bare: false }]
+    const s = formatWorktreeContext(entries, '/repo/wt-a/')
+    expect(s).toContain('(current)')
+  })
+
+  it('truncates a long linked list', () => {
+    const entries = [
+      main,
+      ...Array.from({ length: 15 }, (_, i) => ({
+        path: `/repo/wt-${i}`,
+        branch: `b${i}`,
+        detached: false,
+        bare: false,
+      })),
+    ]
+    const s = formatWorktreeContext(entries, '/repo')
+    expect(s).toContain('16 worktrees')
+    expect(s).toContain('… and 5 more')
   })
 })
 
