@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AppSettings, ApprovalPolicy } from '@shared/types'
+import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
 import type { AgentEvent, AgentRunRequest } from '@shared/agent'
 
 /**
@@ -21,8 +21,6 @@ export interface HeadlessOptions {
   approvalPolicy: ApprovalPolicy
   json: boolean
 }
-
-const POLICIES: ApprovalPolicy[] = ['plan', 'ask', 'auto-edit', 'full-auto']
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
 function flagValue(argv: string[], i: number): { value?: string; next: number } {
@@ -72,7 +70,7 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
       i = next
     } else if (name === '--approval') {
       const { value, next } = flagValue(argv, i)
-      if (value && POLICIES.includes(value as ApprovalPolicy)) approvalPolicy = value as ApprovalPolicy
+      if (isApprovalPolicy(value)) approvalPolicy = value
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'

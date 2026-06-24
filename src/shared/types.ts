@@ -56,7 +56,19 @@ export interface ProviderConfig {
  * - auto-edit: auto-approve reads/edits inside the workspace, ask for shell commands
  * - full-auto: auto-approve everything (still sandboxed to the workspace)
  */
-export type ApprovalPolicy = 'plan' | 'ask' | 'auto-edit' | 'full-auto'
+/**
+ * The valid approval policies, in escalating-trust order. Single source of truth:
+ * the `ApprovalPolicy` type is derived from it, and runtime boundaries (CLI args,
+ * IPC) validate against it so an unknown value can't silently fail open.
+ */
+export const APPROVAL_POLICIES = ['plan', 'ask', 'auto-edit', 'full-auto'] as const
+
+export type ApprovalPolicy = (typeof APPROVAL_POLICIES)[number]
+
+/** Runtime guard: true when `v` is a known approval policy. */
+export function isApprovalPolicy(v: unknown): v is ApprovalPolicy {
+  return typeof v === 'string' && (APPROVAL_POLICIES as readonly string[]).includes(v)
+}
 
 /**
  * An MCP (Model Context Protocol) server Houston connects to — a local process

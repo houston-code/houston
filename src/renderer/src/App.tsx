@@ -318,13 +318,20 @@ export default function App(): JSX.Element {
     setSettings(fresh)
   }, [])
 
-  const onChangePolicy = useCallback(async (policy: ApprovalPolicy) => {
-    const fresh = await window.api.saveSettings({
-      ...(await window.api.getSettings()),
-      approvalPolicy: policy
-    })
-    setSettings(fresh)
-  }, [])
+  const onChangePolicy = useCallback(
+    async (policy: ApprovalPolicy) => {
+      // Push the change into an in-flight run so it takes effect on the agent's
+      // next tool call, not just the next turn. Persisting it (below) makes it the
+      // default for future runs. No-op if nothing is running.
+      chat.setPolicy(policy)
+      const fresh = await window.api.saveSettings({
+        ...(await window.api.getSettings()),
+        approvalPolicy: policy
+      })
+      setSettings(fresh)
+    },
+    [chat]
+  )
 
   const onChangeReasoning = useCallback(async (reasoningEffort: ReasoningEffort) => {
     const fresh = await window.api.saveSettings({

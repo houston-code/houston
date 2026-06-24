@@ -37,7 +37,7 @@ vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 
 // Imported after the mocks are registered.
-const { startRun, resolveApproval } = await import('./loop')
+const { startRun, resolveApproval, setRunPolicy } = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
 function scripted(turns: ProviderStreamEvent[][]): Provider {
@@ -288,5 +288,135 @@ describe('startRun', () => {
     const last = r.events.at(-1)
     expect(last?.type).toBe('error')
     expect((last as { message: string }).message).toContain('context window')
+  })
+
+  it('applies a mid-run loosening (ask → full-auto) to later tool calls', async () => {
+    // Two sequential single-write turns. Start under "ask"; when the first write
+    // prompts, flip the live policy to full-auto before answering. The second
+    // write must then auto-approve — no second prompt — and land on disk.
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: 'a' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: 'b' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const runId = 'run-loosen'
+    const events: AgentEvent[] = []
+    const send = (e: AgentEvent): void => {
+      events.push(e)
+      if (e.type === 'tool_approval') {
+        setTimeout(() => {
+          setRunPolicy(runId, 'full-auto') // live switch, before resolving the prompt
+          resolveApproval(runId, e.callId, 'allow')
+        }, 0)
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'do it' }]
+      },
+      send,
+      () => {}
+    )
+    expect(events.filter((e) => e.type === 'tool_approval')).toHaveLength(1) // only w1 prompted
+    expect(readFileSync(join(ws, 'one.txt'), 'utf8')).toBe('a')
+    expect(readFileSync(join(ws, 'two.txt'), 'utf8')).toBe('b')
+  })
+
+  it('applies a mid-run tightening (full-auto → plan) to block later writes', async () => {
+    // Start in full-auto so the first write runs without a prompt. On its result,
+    // switch to plan — the second write in the next turn must be blocked outright.
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: 'a' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: 'b' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const runId = 'run-tighten'
+    const events: AgentEvent[] = []
+    let flipped = false
+    const send = (e: AgentEvent): void => {
+      events.push(e)
+      // Switch to plan synchronously after the first write completes (between turns).
+      if (e.type === 'tool_result' && e.name === 'write_file' && !flipped) {
+        flipped = true
+        setRunPolicy(runId, 'plan')
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'do it' }]
+      },
+      send,
+      () => {}
+    )
+    expect(readFileSync(join(ws, 'one.txt'), 'utf8')).toBe('a') // first write landed
+    expect(existsSync(join(ws, 'two.txt'))).toBe(false) // second blocked by plan
+    const blocked = events.find(
+      (e) => e.type === 'tool_result' && e.name === 'write_file' && !e.ok
+    )
+    expect((blocked as { output: string }).output).toMatch(/Plan mode/)
+  })
+
+  it('rejects an unknown mid-run policy (fails closed, keeps prompting)', async () => {
+    // An off-list value must be ignored — the policy stays 'ask', so the second
+    // write still prompts rather than silently fading open to auto-approve.
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: 'a' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: 'b' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const runId = 'run-bogus'
+    const events: AgentEvent[] = []
+    const send = (e: AgentEvent): void => {
+      events.push(e)
+      if (e.type === 'tool_approval') {
+        setTimeout(() => {
+          setRunPolicy(runId, 'nonsense' as unknown as ApprovalPolicy)
+          resolveApproval(runId, e.callId, 'allow')
+        }, 0)
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'do it' }]
+      },
+      send,
+      () => {}
+    )
+    expect(events.filter((e) => e.type === 'tool_approval')).toHaveLength(2) // both still prompted
+    expect(readFileSync(join(ws, 'one.txt'), 'utf8')).toBe('a')
+    expect(readFileSync(join(ws, 'two.txt'), 'utf8')).toBe('b')
   })
 })

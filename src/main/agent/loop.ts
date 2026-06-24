@@ -10,6 +10,7 @@ import type {
   ToolApprovalDecision,
   ToolCall
 } from '@shared/agent'
+import { isApprovalPolicy, type ApprovalPolicy } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import { turnCostUsd } from '@shared/usage'
@@ -81,6 +82,13 @@ interface RunState {
   approvals: Map<string, (d: ToolApprovalDecision) => void>
   /** Flipped to true once the user chooses "always" — auto-approve the rest. */
   override: boolean
+  /**
+   * The live approval policy. Seeded from the run request, but mutable so a
+   * change made mid-run (e.g. the user switches the mode dropdown while the
+   * agent is working) takes effect on the *next* tool-permission check rather
+   * than only on the next turn. Read at call time everywhere policy is gated.
+   */
+  policy: ApprovalPolicy
 }
 
 const runs = new Map<string, RunState>()
@@ -102,6 +110,20 @@ export function resolveApproval(runId: string, callId: string, decision: ToolApp
   }
 }
 
+/**
+ * Update the active approval policy for an in-flight run. Subsequent tool calls
+ * in the same run are gated by the new policy immediately; finished or unknown
+ * runs are a no-op. A pending approval prompt is intentionally left as-is — the
+ * user answers it explicitly — but everything after it follows the new policy.
+ */
+export function setRunPolicy(runId: string, policy: ApprovalPolicy): void {
+  // Validate at the boundary: an unknown policy would fail *open* in needsApproval
+  // (a non-'ask' value auto-approves writes), so reject anything off the list.
+  if (!isApprovalPolicy(policy)) return
+  const run = runs.get(runId)
+  if (run) run.policy = policy
+}
+
 function waitForApproval(run: RunState, callId: string): Promise<ToolApprovalDecision> {
   return new Promise((resolve) => run.approvals.set(callId, resolve))
 }
@@ -117,7 +139,12 @@ export async function startRun(
 ): Promise<void> {
   const { runId } = req
   const abort = new AbortController()
-  const run: RunState = { abort, approvals: new Map(), override: false }
+  const run: RunState = {
+    abort,
+    approvals: new Map(),
+    override: false,
+    policy: req.approvalPolicy
+  }
   runs.set(runId, run)
 
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
@@ -154,6 +181,10 @@ export async function startRun(
     // projectConfig.ts for why.
     const projectConfig = await loadProjectConfig(workspace)
     const permissionRules = [...projectConfig.permissionRules, ...(settings.permissionRules ?? [])]
+    // The system prompt is built once and can't change mid-run, so plan-mode
+    // *guidance* is a snapshot of the starting policy. The runtime plan-mode
+    // *block* below reads `run.policy`, so toggling plan on/off mid-run still
+    // gates tool calls live — only the prose the model already saw is fixed.
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
     const skills = await loadSkills(workspace)
@@ -193,15 +224,16 @@ export async function startRun(
     // foreground run_shell calls so the agent gets "same terminal" behavior.
     const shellSession = createShellSession(workspace)
 
-    // Shared tool-execution context. `run.override` is read at call time so an
-    // "Allow for run" decision earlier in the turn takes effect.
+    // Shared tool-execution context. `run.policy` and `run.override` are read at
+    // call time so a mid-run policy change or an "Allow for run" decision earlier
+    // in the turn takes effect.
     const makeToolContext = (
       attachImage: (i: ImageAttachment) => void,
       attachDocument: (d: DocumentAttachment) => void
     ): ToolContext => ({
       workspace,
       roots,
-      allowNetwork: req.approvalPolicy === 'full-auto' || run.override,
+      allowNetwork: run.policy === 'full-auto' || run.override,
       signal: abort.signal,
       shellSession,
       getSecret: getKey,
@@ -521,7 +553,7 @@ export async function startRun(
         } else if (ruleAction === 'deny') {
           output = 'Denied by a permission rule.'
           ok = false
-        } else if (isBlockedByPlan(req.approvalPolicy, tool.kind)) {
+        } else if (isBlockedByPlan(run.policy, tool.kind)) {
           output =
             'Blocked: Houston is in Plan mode (read-only). Do not modify files or run commands. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
           ok = false
@@ -532,7 +564,7 @@ export async function startRun(
               ? false
               : ruleAction === 'ask'
                 ? true
-                : needsApproval(req.approvalPolicy, tool.kind, run.override)
+                : needsApproval(run.policy, tool.kind, run.override)
 
           let approved = true
           if (mustApprove) {

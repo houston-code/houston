@@ -24,6 +24,7 @@ function installApi() {
     approveTool: vi.fn((_runId: string, _callId: string, _decision: ToolApprovalDecision) =>
       Promise.resolve()
     ),
+    setAgentPolicy: vi.fn((_runId: string, _policy: string) => Promise.resolve()),
     restoreCheckpoint: vi.fn((_runId: string) => Promise.resolve(3)),
     reapplyCheckpoint: vi.fn((_runId: string) => Promise.resolve(2))
   }
@@ -183,7 +184,7 @@ describe('useChat', () => {
     expect(result.current.items).toHaveLength(itemsBefore)
   })
 
-  it('routes cancel and approve to the active run', async () => {
+  it('routes cancel, approve, and setPolicy to the active run', async () => {
     const { api } = installApi()
     const { result } = renderHook(() => useChat())
     const runId = await sendAndGetRunId(result, api)
@@ -191,8 +192,19 @@ describe('useChat', () => {
     act(() => result.current.approve('call-1', 'always'))
     expect(api.approveTool).toHaveBeenCalledWith(runId, 'call-1', 'always')
 
+    act(() => result.current.setPolicy('full-auto'))
+    expect(api.setAgentPolicy).toHaveBeenCalledWith(runId, 'full-auto')
+
     act(() => result.current.cancel())
     expect(api.cancelAgent).toHaveBeenCalledWith(runId)
+  })
+
+  it('setPolicy is a no-op when no run is active', () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat())
+
+    act(() => result.current.setPolicy('plan'))
+    expect(api.setAgentPolicy).not.toHaveBeenCalled()
   })
 
   it('reverts and re-applies a checkpoint through the bridge', async () => {

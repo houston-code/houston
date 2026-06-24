@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
-import type { AppSettings } from '@shared/types'
+import type { AppSettings, ApprovalPolicy } from '@shared/types'
 import type { Command } from '@shared/commands'
 import type {
   AgentEvent,
@@ -84,6 +84,9 @@ const api = {
   cancelAgent: (runId: string): Promise<void> => ipcRenderer.invoke(IPC.agentCancel, runId),
   approveTool: (runId: string, callId: string, decision: ToolApprovalDecision): Promise<void> =>
     ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision),
+  /** Change the approval policy of an in-flight run (live mode switch). */
+  setAgentPolicy: (runId: string, policy: ApprovalPolicy): Promise<void> =>
+    ipcRenderer.invoke(IPC.agentSetPolicy, runId, policy),
   /** Revert the file changes a run made. Returns the number of files restored. */
   restoreCheckpoint: (runId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.checkpointRestore, runId),
