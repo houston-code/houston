@@ -4,9 +4,11 @@ import type { McpServerConfig } from '@shared/types'
 import { mcpToolName } from '@shared/mcp'
 import { McpClient, type SpawnFn } from './client'
 import { McpHttpClient, type FetchFn } from './http-client'
+import { McpSseClient, type SseConnectFn, type SseEvent } from './sse-client'
 import {
   _setMcpClientFactory,
   _setMcpHttpClientFactory,
+  _setMcpSseClientFactory,
   disconnectAllMcp,
   getMcpToolDefs
 } from './manager'
@@ -75,10 +77,30 @@ function okHttpFetch(toolName = 'remote'): FetchFn {
   }
 }
 
+/** A fake SSE MCP server exposing one tool, answering POSTs over the stream. */
+function okSseClient(toolName = 'streamed'): McpSseClient {
+  let emit: ((e: SseEvent) => void) | null = null
+  const connect: SseConnectFn = (_url, _headers, handlers) => {
+    emit = handlers.onEvent
+    queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+    return { close: () => {} }
+  }
+  const fetch: FetchFn = async (_url, init) => {
+    const req = JSON.parse(init.body as string) as { id?: number; method: string }
+    if (req.id !== undefined) {
+      const result = req.method === 'tools/list' ? { tools: [{ name: toolName }] } : {}
+      queueMicrotask(() => emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) }))
+    }
+    return new Response('', { status: 202 })
+  }
+  return new McpSseClient(connect, fetch)
+}
+
 afterEach(() => {
   disconnectAllMcp()
   _setMcpClientFactory(null)
   _setMcpHttpClientFactory(null)
+  _setMcpSseClientFactory(null)
 })
 
 describe('mcp manager', () => {
@@ -138,5 +160,13 @@ describe('mcp manager', () => {
     const defs = await getMcpToolDefs([cfg({ id: 'web', command: '', url: 'https://x/mcp' })])
     expect(defs).toHaveLength(1)
     expect(defs[0].schema.name).toBe(mcpToolName('web', 'remote'))
+  })
+
+  it('connects an SSE server (transport: sse) and namespaces its tools', async () => {
+    _setMcpSseClientFactory(() => okSseClient('streamed'))
+    const defs = await getMcpToolDefs([
+      cfg({ id: 'live', transport: 'sse', command: '', url: 'https://x/sse' })
+    ])
+    expect(defs.map((d) => d.schema.name)).toEqual([mcpToolName('live', 'streamed')])
   })
 })

@@ -77,8 +77,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   to register a skill: its description is surfaced to the agent, which reads the
   full instructions on demand. Same shape as Claude Code's subagents and skills.
 - **MCP servers.** Connect Model Context Protocol servers in Settings — a local
-  **stdio** process or a remote **HTTP** endpoint (streamable HTTP, with optional
-  auth headers). Their tools are offered to the agent namespaced as
+  **stdio** process or a remote **HTTP** (streamable) or **SSE** endpoint (with
+  optional static bearer-token / custom auth headers). Their tools are offered to the agent namespaced as
   `mcp__<id>__<tool>` and always require approval. Point Houston at the
   filesystem, git, a hosted MCP service, or any other server to extend what the
   agent can do — the same extensibility model as Claude Code.

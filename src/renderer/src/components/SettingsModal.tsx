@@ -537,7 +537,8 @@ export function SettingsModal({
                 <h3>MCP servers</h3>
                 <p className="field__hint">
                   Connect Model Context Protocol servers — a local <strong>stdio</strong> process or a
-                  remote <strong>HTTP</strong> endpoint. Their tools are offered to the agent as{' '}
+                  remote <strong>HTTP</strong> or <strong>SSE</strong> endpoint (optionally
+                  authenticated with a bearer-token header). Their tools are offered to the agent as{' '}
                   <code>mcp__&lt;id&gt;__&lt;tool&gt;</code> and always require approval. stdio
                   commands run as you (not sandboxed), so only add servers you trust.
                 </p>
@@ -562,6 +563,7 @@ export function SettingsModal({
                         >
                           <option value="stdio">stdio</option>
                           <option value="http">http</option>
+                          <option value="sse">sse</option>
                         </select>
                         <label className="mcp-server__enabled" title="Enabled">
                           <input
@@ -577,7 +579,7 @@ export function SettingsModal({
                           ✕
                         </button>
                       </div>
-                      {transport === 'http' ? (
+                      {transport === 'http' || transport === 'sse' ? (
                         <>
                           <input
                             className="mcp-server__args"
