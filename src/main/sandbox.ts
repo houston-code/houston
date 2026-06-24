@@ -39,6 +39,10 @@ export interface SandboxRunResult {
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 1_000_000 // 1 MB cap per stream
+// Split the budget across both ends so the command echo / early errors AND the
+// trailing summary (e.g. `5 failed, 120 passed`) both survive truncation.
+const HEAD_BYTES = Math.floor(MAX_OUTPUT_BYTES / 2)
+const TAIL_BYTES = MAX_OUTPUT_BYTES - HEAD_BYTES
 
 /** Standard macOS developer bin dirs, including Homebrew (Apple Silicon + Intel). */
 const EXTRA_PATH_DIRS = [
@@ -117,11 +121,72 @@ export function sandboxAvailable(): boolean {
   return process.platform === 'darwin'
 }
 
-function appendCapped(buffers: Buffer[], current: number, chunk: Buffer): number {
-  if (current >= MAX_OUTPUT_BYTES) return current
-  const remaining = MAX_OUTPUT_BYTES - current
-  buffers.push(chunk.length > remaining ? chunk.subarray(0, remaining) : chunk)
-  return current + chunk.length
+/**
+ * Bounded capture that preserves BOTH ends of a stream: the first `head` bytes
+ * and the last `tail` bytes, with a `\n[... N bytes truncated ...]\n` marker in
+ * between once anything is dropped. Test runners and builds print the most
+ * actionable line (the failure summary) last, so a head-only cap throws away
+ * exactly what the agent needs; keeping the tail too costs the same budget.
+ *
+ * The tail is a rolling window over the chunk array — old leading chunks are
+ * shifted off (and the boundary chunk sliced) once the tail budget is exceeded,
+ * so memory stays bounded regardless of total output size.
+ */
+export class CappedOutput {
+  private readonly headChunks: Buffer[] = []
+  private readonly tailChunks: Buffer[] = []
+  private headLen = 0
+  private tailLen = 0
+  private total = 0
+
+  constructor(
+    private readonly head: number = HEAD_BYTES,
+    private readonly tail: number = TAIL_BYTES
+  ) {}
+
+  push(chunk: Buffer): void {
+    this.total += chunk.length
+    // Fill the head budget first; any overflow flows into the rolling tail.
+    if (this.headLen < this.head) {
+      const room = this.head - this.headLen
+      const forHead = chunk.subarray(0, room)
+      this.headChunks.push(forHead)
+      this.headLen += forHead.length
+      const rest = chunk.subarray(forHead.length)
+      if (rest.length > 0) this.pushTail(rest)
+    } else {
+      this.pushTail(chunk)
+    }
+  }
+
+  private pushTail(chunk: Buffer): void {
+    this.tailChunks.push(chunk)
+    this.tailLen += chunk.length
+    // Trim whole leading chunks while doing so still leaves the tail budget full.
+    while (this.tailChunks.length > 1 && this.tailLen - this.tailChunks[0].length >= this.tail) {
+      this.tailLen -= this.tailChunks.shift()!.length
+    }
+    const overflow = this.tailLen - this.tail
+    if (overflow > 0) {
+      this.tailChunks[0] = this.tailChunks[0].subarray(overflow)
+      this.tailLen -= overflow
+    }
+  }
+
+  /** Bytes discarded between the retained head and tail (0 if nothing dropped). */
+  get droppedBytes(): number {
+    return Math.max(0, this.total - this.headLen - this.tailLen)
+  }
+
+  toString(): string {
+    const head = Buffer.concat(this.headChunks).toString('utf8')
+    if (this.droppedBytes === 0) {
+      // Nothing dropped: head + tail are contiguous, so concatenation is exact.
+      return head + Buffer.concat(this.tailChunks).toString('utf8')
+    }
+    const tail = Buffer.concat(this.tailChunks).toString('utf8')
+    return `${head}\n[... ${this.droppedBytes} bytes truncated ...]\n${tail}`
+  }
 }
 
 /**
@@ -190,10 +255,8 @@ export function runSandboxed(opts: SandboxRunOptions): Promise<SandboxRunResult>
       signal: opts.signal
     })
 
-    const outChunks: Buffer[] = []
-    const errChunks: Buffer[] = []
-    let outLen = 0
-    let errLen = 0
+    const out = new CappedOutput()
+    const err = new CappedOutput()
     let timedOut = false
 
     const timer = setTimeout(() => {
@@ -201,20 +264,14 @@ export function runSandboxed(opts: SandboxRunOptions): Promise<SandboxRunResult>
       child.kill('SIGKILL')
     }, timeoutMs)
 
-    child.stdout.on('data', (c: Buffer) => {
-      outLen = appendCapped(outChunks, outLen, c)
-    })
-    child.stderr.on('data', (c: Buffer) => {
-      errLen = appendCapped(errChunks, errLen, c)
-    })
+    child.stdout.on('data', (c: Buffer) => out.push(c))
+    child.stderr.on('data', (c: Buffer) => err.push(c))
 
     const finish = (exitCode: number | null): void => {
       clearTimeout(timer)
-      const truncNote =
-        outLen > MAX_OUTPUT_BYTES || errLen > MAX_OUTPUT_BYTES ? '\n[output truncated]' : ''
       resolve({
-        stdout: Buffer.concat(outChunks).toString('utf8') + (outLen > MAX_OUTPUT_BYTES ? truncNote : ''),
-        stderr: Buffer.concat(errChunks).toString('utf8') + (errLen > MAX_OUTPUT_BYTES ? truncNote : ''),
+        stdout: out.toString(),
+        stderr: err.toString(),
         exitCode,
         timedOut,
         sandboxed: true
