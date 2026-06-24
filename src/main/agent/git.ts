@@ -11,6 +11,9 @@ import { execFile } from 'node:child_process'
 /** Max porcelain lines to include verbatim. */
 const MAX_STATUS_LINES = 20
 
+/** Max linked worktrees to list verbatim (keeps the prompt section bounded). */
+const MAX_WORKTREES = 10
+
 export type GitExec = (args: string[], cwd: string) => Promise<string>
 
 function runGit(args: string[], cwd: string): Promise<string> {
@@ -41,6 +44,69 @@ export function formatGitContext(branch: string | null, statusPorcelain: string)
   return out
 }
 
+/** One entry from `git worktree list --porcelain`. */
+export interface WorktreeEntry {
+  /** Absolute path of the worktree's working directory. */
+  path: string
+  /** Short branch name (e.g. "main"), or null when the worktree is detached/bare. */
+  branch: string | null
+  /** True for a detached-HEAD worktree (no branch checked out). */
+  detached: boolean
+  /** True for a bare repository entry. */
+  bare: boolean
+}
+
+/**
+ * Parse the output of `git worktree list --porcelain` into entries. Records are
+ * separated by blank lines; each is a set of `key value` lines (`worktree <path>`,
+ * `HEAD <sha>`, `branch refs/heads/<name>`, plus bare flags `detached`/`bare`).
+ * The first entry is always the main worktree. Pure; tolerant of unknown keys.
+ */
+export function parseWorktreePorcelain(out: string): WorktreeEntry[] {
+  const entries: WorktreeEntry[] = []
+  let cur: WorktreeEntry | null = null
+  for (const raw of out.split('\n')) {
+    const line = raw.replace(/\r$/, '')
+    if (line.startsWith('worktree ')) {
+      if (cur) entries.push(cur)
+      cur = { path: line.slice('worktree '.length).trim(), branch: null, detached: false, bare: false }
+    } else if (!cur) {
+      continue
+    } else if (line.startsWith('branch ')) {
+      cur.branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '')
+    } else if (line === 'detached') {
+      cur.detached = true
+    } else if (line === 'bare') {
+      cur.bare = true
+    }
+  }
+  if (cur) entries.push(cur)
+  return entries
+}
+
+/**
+ * Format the main-worktree path and linked-worktree list into a compact prompt
+ * line, or '' when the repo has only a single worktree (nothing worth surfacing).
+ * `workspace` is the current working directory, flagged in the list. Pure.
+ */
+export function formatWorktreeContext(entries: WorktreeEntry[], workspace: string): string {
+  // The first entry is the main worktree; "linked" worktrees are the rest.
+  const main = entries[0]
+  if (!main || entries.length <= 1) return ''
+  const norm = (p: string): string => p.replace(/\/+$/, '')
+  const ws = norm(workspace)
+  let out = `Git worktrees: this repo has ${entries.length} worktrees; main worktree is at "${main.path}".`
+  const linked = entries.slice(1)
+  const shown = linked.slice(0, MAX_WORKTREES).map((w) => {
+    const ref = w.bare ? 'bare' : w.detached ? 'detached' : (w.branch ?? 'detached')
+    const here = norm(w.path) === ws ? ' (current)' : ''
+    return `  ${w.path} [${ref}]${here}`
+  })
+  out += `\nLinked worktrees:\n${shown.join('\n')}`
+  if (linked.length > MAX_WORKTREES) out += `\n… and ${linked.length - MAX_WORKTREES} more`
+  return out
+}
+
 /** Read the workspace's git context, or '' if it isn't a git repo. `exec` is injectable for tests. */
 export async function gitContext(workspace: string, exec: GitExec = runGit): Promise<string> {
   let branch: string
@@ -56,7 +122,15 @@ export async function gitContext(workspace: string, exec: GitExec = runGit): Pro
   } catch {
     // status failed (e.g. detached/edge state) — still report the branch.
   }
-  return formatGitContext(branch, status)
+  let worktrees = ''
+  try {
+    const out = await exec(['worktree', 'list', '--porcelain'], workspace)
+    worktrees = formatWorktreeContext(parseWorktreePorcelain(out), workspace)
+  } catch {
+    // worktree listing is best-effort (old git, edge state) — omit it.
+  }
+  const base = formatGitContext(branch, status)
+  return worktrees ? `${base}\n${worktrees}` : base
 }
 
 /**
