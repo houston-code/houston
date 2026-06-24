@@ -44,6 +44,13 @@ const MAX_OUTPUT_BYTES = 1_000_000 // 1 MB cap per stream
 const HEAD_BYTES = Math.floor(MAX_OUTPUT_BYTES / 2)
 const TAIL_BYTES = MAX_OUTPUT_BYTES - HEAD_BYTES
 
+// Context bound for a *single tool result* handed back to the model — far tighter
+// than MAX_OUTPUT_BYTES. That 1 MB cap stops capture from exhausting memory, but
+// 1 MB of stdout is ~250k tokens: one runaway command (a screenful of `rm:
+// Operation not permitted`, an `npm install` log) would blow past the model's
+// context window in a single turn before any compaction can run. ~16k tokens.
+const MAX_TOOL_RESULT_BYTES = 64_000
+
 /** Standard macOS developer bin dirs, including Homebrew (Apple Silicon + Intel). */
 const EXTRA_PATH_DIRS = [
   '/opt/homebrew/bin',
@@ -187,6 +194,20 @@ export class CappedOutput {
     const tail = Buffer.concat(this.tailChunks).toString('utf8')
     return `${head}\n[... ${this.droppedBytes} bytes truncated ...]\n${tail}`
   }
+}
+
+/**
+ * Clamp an already-assembled tool-result string to the per-result context budget,
+ * preserving both ends with a truncation marker. Reuses `CappedOutput` so the
+ * marker format matches what per-stream streaming truncation already produces.
+ * The default budget is the production cap; `maxBytes` is a test seam.
+ */
+export function clampToolResult(text: string, maxBytes: number = MAX_TOOL_RESULT_BYTES): string {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text
+  const head = Math.floor(maxBytes / 2)
+  const cap = new CappedOutput(head, maxBytes - head)
+  cap.push(Buffer.from(text, 'utf8'))
+  return cap.toString()
 }
 
 /**

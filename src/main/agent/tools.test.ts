@@ -550,6 +550,21 @@ describe('background shell tools', () => {
     expect(out).toContain('done')
     expect(out).toContain('[exited with code 0]')
   })
+
+  // A runaway command must not be able to swamp the context window: the combined
+  // output is clamped to the per-result budget while the status marker survives.
+  it('read_shell_output clamps a huge buffer to keep the context bounded', async () => {
+    const child = spawn(process.execPath, [
+      '-e',
+      'process.stdout.write("Z".repeat(300000)); process.exit(0)'
+    ])
+    const id = registerShell('node', child)
+    await new Promise<void>((resolve) => child.on('close', () => resolve()))
+    const out = await run('read_shell_output', { shell_id: id })
+    expect(out).toMatch(/\[\.\.\. \d+ bytes truncated \.\.\.\]/) // truncated in the middle
+    expect(out).toContain('[exited with code 0]') // status marker survives
+    expect(out.length).toBeLessThan(200_000) // far below the 300k produced
+  })
 })
 
 describe('workspace containment', () => {

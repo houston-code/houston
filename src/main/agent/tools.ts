@@ -13,7 +13,7 @@ import {
   imageMediaTypeForPath,
   isPdfPath
 } from './attachments'
-import { runSandboxed, spawnSandboxed } from '../sandbox'
+import { clampToolResult, runSandboxed, spawnSandboxed } from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
 import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
@@ -636,9 +636,15 @@ const runShell: ToolDef = {
           allowNetwork: ctx.allowNetwork,
           signal: ctx.signal
         })
+    const segments: string[] = []
+    if (result.stdout) segments.push(result.stdout.trimEnd())
+    if (result.stderr) segments.push(result.stderr.trimEnd())
+    // Clamp the combined output to the context budget before the status markers,
+    // which are tiny and must always survive, so one runaway command can't swamp
+    // the window. (The 1 MB per-stream cap is only a memory bound; see sandbox.ts.)
     const parts: string[] = []
-    if (result.stdout) parts.push(result.stdout.trimEnd())
-    if (result.stderr) parts.push(result.stderr.trimEnd())
+    const body = clampToolResult(segments.join('\n'))
+    if (body) parts.push(body)
     if (result.timedOut) parts.push('[command timed out]')
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
     return parts.join('\n')
@@ -665,9 +671,14 @@ const readShellOutputTool: ToolDef = {
     if (!id) throw new Error('shell_id is required.')
     const r = readShellOutput(id, { full: args.full === true })
     if (!r.found) return `No background shell with id ${id}.`
+    const segments: string[] = []
+    if (r.stdout) segments.push(r.stdout.trimEnd())
+    if (r.stderr) segments.push(r.stderr.trimEnd())
+    // Same context-budget clamp as foreground run_shell — a `full:true` read can
+    // otherwise return the entire 2 MB rolling buffer (see shells.ts MAX_BUF).
     const parts: string[] = []
-    if (r.stdout) parts.push(r.stdout.trimEnd())
-    if (r.stderr) parts.push(r.stderr.trimEnd())
+    const body = clampToolResult(segments.join('\n'))
+    if (body) parts.push(body)
     parts.push(r.running ? '[still running]' : `[exited with code ${r.exitCode ?? 'killed'}]`)
     return parts.join('\n')
   }
