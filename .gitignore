@@ -7,6 +7,9 @@ out/
 dist/
 release/
 
+# TypeScript incremental build cache (rewritten on every tsc/typecheck run)
+*.tsbuildinfo
+
 # Playwright (e2e) artifacts
 test-results/
 playwright-report/
