@@ -128,7 +128,7 @@ export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Prom
     }
     throw new Error('Too many redirects.')
   } catch (e) {
-    if (ac.signal.aborted) throw new Error('Fetch timed out or was cancelled.')
+    if (ac.signal.aborted) throw new Error('Fetch timed out or was cancelled.', { cause: e })
     throw e
   } finally {
     clearTimeout(timer)

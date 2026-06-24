@@ -223,7 +223,7 @@ export async function searchContents(o: SearchOptions): Promise<string> {
   try {
     regex = new RegExp(o.pattern, o.ignoreCase ? 'i' : undefined)
   } catch (e) {
-    throw new Error(`Invalid regular expression: ${(e as Error).message}`)
+    throw new Error(`Invalid regular expression: ${(e as Error).message}`, { cause: e })
   }
   const out: string[] = []
   await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts)

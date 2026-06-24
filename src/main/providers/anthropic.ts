@@ -212,7 +212,7 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
         } else if (event.type === 'content_block_stop') {
           const buf = toolBuffers.get(event.index)
           if (buf) {
-            let args: Record<string, unknown> = {}
+            let args: Record<string, unknown>
             try {
               args = buf.json ? JSON.parse(buf.json) : {}
             } catch {

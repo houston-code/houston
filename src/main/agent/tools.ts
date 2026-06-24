@@ -271,7 +271,7 @@ function applyEdit(data: string, edit: EditSpec, index: number): string {
   try {
     return resolveEdit(data, oldStr, newStr, edit.replace_all === true).content
   } catch (e) {
-    throw new Error(`edit ${index + 1}: ${(e as Error).message}`)
+    throw new Error(`edit ${index + 1}: ${(e as Error).message}`, { cause: e })
   }
 }
 
