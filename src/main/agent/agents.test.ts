@@ -50,6 +50,24 @@ describe('loadAgents', () => {
     writeFileSync(join(ws, AGENTS_DIR, 'bad name.md'), 'x')
     expect(await loadAgents(ws)).toEqual([])
   })
+
+  it('parses a comma/space separated tools allow-list from front-matter', async () => {
+    writeAgent('reader', '---\ntools: read_file, glob list_dir\n---\nYou only read.')
+    const [a] = await loadAgents(ws)
+    expect(a.tools).toEqual(['read_file', 'glob', 'list_dir'])
+  })
+
+  it('leaves tools undefined when the front-matter field is absent', async () => {
+    writeAgent('plain', 'Just a prompt, no tools field.')
+    const [a] = await loadAgents(ws)
+    expect(a.tools).toBeUndefined()
+  })
+
+  it('treats an empty tools field as undefined', async () => {
+    writeAgent('blank', '---\ntools:\n---\nNo tools listed.')
+    const [a] = await loadAgents(ws)
+    expect(a.tools).toBeUndefined()
+  })
 })
 
 describe('loadSkills', () => {

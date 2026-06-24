@@ -19,10 +19,26 @@ export interface CustomAgent {
   description: string
   /** The agent's system prompt (front-matter stripped). */
   systemPrompt: string
+  /**
+   * Optional allow-list from front-matter `tools:` (comma/space separated).
+   * When present, narrows the read-only tools this agent may use; it can only
+   * restrict the default set, never grant write/shell/network access.
+   */
+  tools?: string[]
 }
 
 function firstLine(s: string): string {
   return (s.split('\n', 1)[0] ?? '').replace(/^#+\s*/, '').trim().slice(0, 100)
+}
+
+/** Parse a front-matter `tools:` field (comma/space separated) into a name list. */
+function parseTools(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined
+  const tools = value
+    .split(/[\s,]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+  return tools.length ? tools : undefined
 }
 
 export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
@@ -49,10 +65,12 @@ export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
     const { data, body } = parseFrontmatter(raw)
     const systemPrompt = (body || raw).slice(0, MAX_PROMPT_CHARS)
     if (!systemPrompt) continue
+    const tools = parseTools(data.tools)
     agents.push({
       name,
       description: data.description || firstLine(systemPrompt) || name,
-      systemPrompt
+      systemPrompt,
+      ...(tools ? { tools } : {})
     })
   }
   agents.sort((a, b) => a.name.localeCompare(b.name))

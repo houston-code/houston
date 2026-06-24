@@ -71,7 +71,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   telling you it's done. Same multi-agent shape as Claude Code's review.
 - **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
   a specialized read-only subagent (front-matter `description` + a system-prompt
-  body) — the main agent can dispatch it by name. Add a `.houston/skills/<name>/SKILL.md`
+  body) — the main agent can dispatch it by name. An optional front-matter `tools:`
+  list narrows which read-only tools that agent may use (it can only restrict the
+  default set, never grant write/shell/network). Add a `.houston/skills/<name>/SKILL.md`
   to register a skill: its description is surfaced to the agent, which reads the
   full instructions on demand. Same shape as Claude Code's subagents and skills.
 - **MCP servers.** Connect Model Context Protocol servers in Settings — a local

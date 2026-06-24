@@ -11,7 +11,18 @@ import { getTool } from './tools'
 
 /** Tools a subagent may use — local, read-only, no network egress. */
 export const SUBAGENT_TOOLS = ['read_file', 'list_dir', 'glob', 'search_files', 'ast_grep'] as const
-const SUBAGENT_TOOL_SET = new Set<string>(SUBAGENT_TOOLS)
+
+/**
+ * Resolve the tool names a subagent may use. A custom agent's declared `tools`
+ * can only *narrow* the read-only allow-list: any name not in SUBAGENT_TOOLS is
+ * dropped, and an absent/empty list falls back to the full default set. This
+ * keeps subagents read-only — there's no path to grant write/shell/network.
+ */
+function resolveSubAgentTools(allowed: string[] | undefined): readonly string[] {
+  if (!allowed?.length) return SUBAGENT_TOOLS
+  const narrowed = SUBAGENT_TOOLS.filter((t) => allowed.includes(t))
+  return narrowed.length ? narrowed : SUBAGENT_TOOLS
+}
 
 const MAX_SUBAGENT_ITERATIONS = 16
 const SUBAGENT_MAX_TOKENS = 4096
@@ -38,12 +49,19 @@ export interface SubAgentOptions {
   signal: AbortSignal
   /** A custom agent's system prompt to use instead of the default research one. */
   systemOverride?: string
+  /**
+   * A custom agent's declared tool allow-list. Intersected with SUBAGENT_TOOLS,
+   * so it can only narrow the read-only set, never expand it. Absent/empty => default.
+   */
+  tools?: string[]
 }
 
 /** Run a read-only subagent loop to completion and return its final report text. */
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const { provider, model, workspace, prompt, signal } = opts
-  const tools = SUBAGENT_TOOLS.map((name) => getTool(name)!.schema)
+  const allowedTools = resolveSubAgentTools(opts.tools)
+  const allowedToolSet = new Set<string>(allowedTools)
+  const tools = allowedTools.map((name) => getTool(name)!.schema)
   // A custom agent's prompt still gets the read-only constraints appended.
   const system = opts.systemOverride
     ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace)}`
@@ -80,7 +98,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     if (calls.length === 0) return text.trim() || '[subagent returned no answer]'
 
     for (const call of calls) {
-      const tool = SUBAGENT_TOOL_SET.has(call.name) ? getTool(call.name) : undefined
+      const tool = allowedToolSet.has(call.name) ? getTool(call.name) : undefined
       let output: string
       if (!tool) {
         output = `Tool not available to a read-only subagent: ${call.name}`

@@ -200,15 +200,18 @@ export async function startRun(
       signal: abort.signal,
       shellSession,
       getSecret: getKey,
-      dispatchSubAgent: (prompt, agentName) =>
-        runSubAgent({
+      dispatchSubAgent: (prompt, agentName) => {
+        const agent = agentName ? agentsByName.get(agentName) : undefined
+        return runSubAgent({
           provider,
           model: req.model,
           workspace,
           prompt,
           signal: abort.signal,
-          systemOverride: agentName ? agentsByName.get(agentName)?.systemPrompt : undefined
-        }),
+          systemOverride: agent?.systemPrompt,
+          tools: agent?.tools
+        })
+      },
       dispatchReview: (base) =>
         reviewWorkspaceChanges({
           provider,
