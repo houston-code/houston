@@ -10,7 +10,13 @@ import {
   rmSync
 } from 'node:fs'
 import { join } from 'node:path'
-import type { ChatMessage, Conversation, ConversationMeta, ConversationUsage } from '@shared/agent'
+import type {
+  AgentEvent,
+  ChatMessage,
+  Conversation,
+  ConversationMeta,
+  ConversationUsage
+} from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
@@ -175,6 +181,18 @@ export function addUsage(
   }
   write(conv)
   return conv.usage
+}
+
+/**
+ * Rewrite a usage event to carry the conversation's running cumulative totals
+ * (the agent loop reports only the latest turn). Pure: non-usage events and a
+ * null total pass through unchanged. Kept separate from the store write so the
+ * "send the running total, not the turn's own numbers" rule is unit-testable —
+ * every field (including `cost`) must be carried, or the meter drifts.
+ */
+export function mergeRunningTotals(e: AgentEvent, total: ConversationUsage | null): AgentEvent {
+  if (e.type !== 'usage' || !total) return e
+  return { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens, cost: total.cost }
 }
 
 /** Replace the message log for a conversation and bump updatedAt. */

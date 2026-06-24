@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { conversationMatches } from './conversations'
-import type { Conversation } from '@shared/agent'
+import { conversationMatches, mergeRunningTotals } from './conversations'
+import type { AgentEvent, Conversation, ConversationUsage } from '@shared/agent'
 
 const conv = (over: Partial<Conversation>): Conversation => ({
   id: 'c',
@@ -29,5 +29,34 @@ describe('conversationMatches', () => {
   it('returns false when nothing matches', () => {
     const c = conv({ title: 'hello', messages: [{ role: 'assistant', content: 'world' }] })
     expect(conversationMatches(c, 'zzz')).toBe(false)
+  })
+})
+
+describe('mergeRunningTotals', () => {
+  const usage = (over: Partial<Extract<AgentEvent, { type: 'usage' }>> = {}): AgentEvent => ({
+    runId: 'r',
+    type: 'usage',
+    inputTokens: 10,
+    outputTokens: 20,
+    cost: 0.05,
+    ...over
+  })
+  const total: ConversationUsage = { inputTokens: 100, outputTokens: 200, cost: 1.5 }
+
+  it('rewrites a usage event with the running totals (including cost)', () => {
+    const out = mergeRunningTotals(usage(), total)
+    // The cost field must be carried — sending the turn's own 0.05 instead of the
+    // cumulative 1.5 is the exact drift this guards against.
+    expect(out).toMatchObject({ inputTokens: 100, outputTokens: 200, cost: 1.5, runId: 'r' })
+  })
+
+  it('passes non-usage events through unchanged', () => {
+    const done: AgentEvent = { runId: 'r', type: 'done', stopReason: 'end_turn' }
+    expect(mergeRunningTotals(done, total)).toBe(done)
+  })
+
+  it('passes the event through when there is no stored total', () => {
+    const e = usage()
+    expect(mergeRunningTotals(e, null)).toBe(e)
   })
 })
