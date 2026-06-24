@@ -44,25 +44,32 @@ export interface ProviderConfig {
 export type ApprovalPolicy = 'plan' | 'ask' | 'auto-edit' | 'full-auto'
 
 /**
- * An MCP (Model Context Protocol) server Houston connects to — either a local
- * process over stdio, or a remote endpoint over streamable HTTP. Its tools are
- * exposed to the agent namespaced as `mcp__<id>__<tool>`. The server is
- * user-configured and trusted; its tool calls still require approval.
+ * An MCP (Model Context Protocol) server Houston connects to — a local process
+ * over stdio, or a remote endpoint over streamable HTTP or the legacy HTTP+SSE
+ * transport. Its tools are exposed to the agent namespaced as `mcp__<id>__<tool>`.
+ * The server is user-configured and trusted; its tool calls still require approval.
  */
 export interface McpServerConfig {
   /** Stable id, [\w-]+, used to namespace the server's tools. */
   id: string
   /** Display name (optional). */
   name?: string
-  /** Transport: a spawned local process ("stdio", default) or a remote HTTP endpoint. */
-  transport?: 'stdio' | 'http'
+  /**
+   * Transport: a spawned local process ("stdio", default), a remote streamable-HTTP
+   * endpoint ("http"), or the legacy HTTP+SSE endpoint ("sse"). "http"/"sse" use `url`.
+   */
+  transport?: 'stdio' | 'http' | 'sse'
   /** Executable to spawn (e.g. "npx"). stdio transport only. */
   command: string
   /** Arguments (e.g. ["-y", "@modelcontextprotocol/server-filesystem", "."]). stdio only. */
   args?: string[]
-  /** Endpoint URL for the streamable-HTTP transport (e.g. "https://host/mcp"). http only. */
+  /** Endpoint URL for the "http" (streamable) or "sse" transport (e.g. "https://host/mcp"). */
   url?: string
-  /** Extra HTTP headers to send (e.g. an Authorization token). http only. */
+  /**
+   * Extra HTTP headers sent on every request — e.g. a static bearer token
+   * (`Authorization: Bearer …`) or a custom auth header. http/sse only. This is
+   * fixed-header auth, not OAuth dynamic registration.
+   */
   headers?: Record<string, string>
   enabled: boolean
 }

@@ -3,6 +3,7 @@ import { mcpToolName } from '@shared/mcp'
 import type { ToolDef } from '../agent/tools'
 import { McpClient, type McpConnection } from './client'
 import { McpHttpClient } from './http-client'
+import { McpSseClient } from './sse-client'
 import { log } from '../logger'
 
 /**
@@ -10,8 +11,9 @@ import { log } from '../logger'
  * the agent as ToolDefs (namespaced, kind "mcp"). Connections are cached for the
  * app session and reused across runs; a server whose config changed is
  * reconnected, and one that's removed/disabled is closed. A server that fails to
- * connect is logged and skipped — it just contributes no tools. Both stdio
- * (spawned process) and streamable-HTTP (remote URL) transports are supported.
+ * connect is logged and skipped — it just contributes no tools. The stdio
+ * (spawned process), streamable-HTTP, and legacy HTTP+SSE (remote URL) transports
+ * are all supported.
  */
 
 interface Connection {
@@ -33,13 +35,27 @@ export function _setMcpHttpClientFactory(factory: (() => McpHttpClient) | null):
   createHttpClient = factory ?? (() => new McpHttpClient())
 }
 
-/** Whether a server is configured to use the HTTP transport. */
-function isHttp(c: McpServerConfig): boolean {
-  return c.transport === 'http' || (!c.command && !!c.url)
+/** Test seam: how SSE MCP clients are constructed (overridable in tests). */
+let createSseClient: () => McpSseClient = () => new McpSseClient()
+export function _setMcpSseClientFactory(factory: (() => McpSseClient) | null): void {
+  createSseClient = factory ?? (() => new McpSseClient())
+}
+
+type Transport = 'stdio' | 'http' | 'sse'
+
+/**
+ * The transport a server uses: honor an explicit `transport`, else infer from the
+ * shape — a `url` with no `command` means a remote server (streamable HTTP).
+ */
+function transportOf(c: McpServerConfig): Transport {
+  if (c.transport === 'sse') return 'sse'
+  if (c.transport === 'http') return 'http'
+  if (c.transport === 'stdio') return 'stdio'
+  return !c.command && c.url ? 'http' : 'stdio'
 }
 
 function configKey(c: McpServerConfig): string {
-  return JSON.stringify([isHttp(c) ? 'http' : 'stdio', c.command, c.args ?? [], c.url, c.headers ?? {}, c.enabled])
+  return JSON.stringify([transportOf(c), c.command, c.args ?? [], c.url, c.headers ?? {}, c.enabled])
 }
 
 // Serialize reconciliation so overlapping runs can't interleave on the shared
@@ -69,10 +85,12 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
     // changed or the cached client has since died (so calls don't hang on it).
     if (existing && existing.key === key && !existing.client.isClosed) continue
     if (existing) existing.client.close()
-    const http = isHttp(c)
-    const client: McpConnection = http ? createHttpClient() : createClient()
+    const transport = transportOf(c)
+    const client: McpConnection =
+      transport === 'http' ? createHttpClient() : transport === 'sse' ? createSseClient() : createClient()
     try {
-      if (http) await (client as McpHttpClient).connect({ url: c.url ?? '', headers: c.headers })
+      if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers: c.headers })
+      else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers: c.headers })
       else await (client as McpClient).connect({ command: c.command, args: c.args })
       connections.set(c.id, { key, client })
     } catch (e) {
