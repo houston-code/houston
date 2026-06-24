@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { DocumentAttachment, JSONSchema, ToolSchema } from '@shared/agent'
@@ -892,6 +893,90 @@ const reviewChanges: ToolDef = {
   }
 }
 
+// Config keys that let a repo-local .git/config run arbitrary commands when git
+// reads or diffs files (diff.external, textconv, fsmonitor, ext-diff, the `ext`
+// protocol). We neutralize all of them so inspecting an UNTRUSTED repo can't
+// execute code — these tools are kind:'read' and never prompt for approval.
+const GIT_HARDENING = [
+  '-c',
+  'core.fsmonitor=',
+  '-c',
+  'diff.external=',
+  '-c',
+  'protocol.ext.allow=never'
+]
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_EXTERNAL_DIFF: '',
+  GIT_PAGER: 'cat',
+  GIT_TERMINAL_PROMPT: '0'
+}
+
+/**
+ * Run a read-only git subcommand with execFile (an argument array — NO shell, so
+ * no injection) and config-driven execution neutralized. Returns combined output.
+ */
+function runReadGit(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(
+      'git',
+      [...GIT_HARDENING, '--no-pager', ...args],
+      { cwd, env: GIT_ENV, timeout: 10_000, maxBuffer: 4_000_000, windowsHide: true },
+      (err, stdout, stderr) => {
+        const out = `${stdout || ''}${stderr || ''}`.trim()
+        if (err && !out) resolve(`[git error: ${(err as Error).message}]`)
+        else resolve(out || '[no output]')
+      }
+    )
+  })
+}
+
+/** Validate an optional user path against the workspace; return ['--', path] argv or []. */
+function gitPathArgs(args: Record<string, unknown>, ctx: ToolContext): string[] {
+  const p = str(args, 'path')
+  if (!p) return []
+  resolveInRoots(rootsOf(ctx), p) // throws if it escapes the workspace
+  return ['--', p]
+}
+
+const gitStatus: ToolDef = {
+  kind: 'read',
+  summarize: (a) => `git status${str(a, 'path') ? ` ${str(a, 'path')}` : ''}`,
+  schema: {
+    name: 'git_status',
+    description:
+      'Show the working-tree status of the project git repository (staged, unstaged, and untracked changes). Read-only. Optionally restrict to a path.',
+    parameters: objectSchema(
+      { path: { type: 'string', description: 'Optional path within the project to restrict to.' } },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    return runReadGit(['status', ...gitPathArgs(args, ctx)], ctx.workspace)
+  }
+}
+
+const gitDiff: ToolDef = {
+  kind: 'read',
+  summarize: (a) => `git diff${str(a, 'path') ? ` ${str(a, 'path')}` : ''}`,
+  schema: {
+    name: 'git_diff',
+    description:
+      'Show uncommitted changes in the project git repository as a unified diff (both staged and unstaged). Read-only. Optionally restrict to a path.',
+    parameters: objectSchema(
+      { path: { type: 'string', description: 'Optional path within the project to restrict to.' } },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    return runReadGit(
+      ['diff', 'HEAD', '--no-color', '--no-ext-diff', '--no-textconv', ...gitPathArgs(args, ctx)],
+      ctx.workspace
+    )
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -910,7 +995,9 @@ export const TOOLS: ToolDef[] = [
   webSearch,
   todoWrite,
   dispatchAgent,
-  reviewChanges
+  reviewChanges,
+  gitStatus,
+  gitDiff
 ]
 
 export function toolSchemas(): ToolSchema[] {
