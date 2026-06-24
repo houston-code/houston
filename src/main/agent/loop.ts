@@ -12,7 +12,7 @@ import type {
 } from '@shared/agent'
 import { isApprovalPolicy, type ApprovalPolicy } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
-import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import { DEFAULT_COMPACTION_THRESHOLD, resolveShellOutputBudget } from '@shared/defaults'
 import { turnCostUsd } from '@shared/usage'
 import { getProvider, getSettings } from '../store'
 import { getKey } from '../secrets'
@@ -236,6 +236,7 @@ export async function startRun(
       allowNetwork: run.policy === 'full-auto' || run.override,
       signal: abort.signal,
       shellSession,
+      shellOutputMaxBytes: resolveShellOutputBudget(settings),
       getSecret: getKey,
       dispatchSubAgent: (prompt, agentName) => {
         const agent = agentName ? agentsByName.get(agentName) : undefined

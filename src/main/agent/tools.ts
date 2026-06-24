@@ -48,6 +48,8 @@ export interface ToolContext {
   captureLocalhost?: (input: CaptureInput) => Promise<LocalhostCapture>
   /** Persistent shell state (cwd + exported env) shared across run_shell calls in a run. */
   shellSession?: ShellSession
+  /** Max bytes of a single shell command's output kept in a tool result (context guard). */
+  shellOutputMaxBytes?: number
 }
 
 export interface ToolDef {
@@ -643,7 +645,7 @@ const runShell: ToolDef = {
     // which are tiny and must always survive, so one runaway command can't swamp
     // the window. (The 1 MB per-stream cap is only a memory bound; see sandbox.ts.)
     const parts: string[] = []
-    const body = clampToolResult(segments.join('\n'))
+    const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
     if (result.timedOut) parts.push('[command timed out]')
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
@@ -666,7 +668,7 @@ const readShellOutputTool: ToolDef = {
       ['shell_id']
     )
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const id = str(args, 'shell_id')
     if (!id) throw new Error('shell_id is required.')
     const r = readShellOutput(id, { full: args.full === true })
@@ -677,7 +679,7 @@ const readShellOutputTool: ToolDef = {
     // Same context-budget clamp as foreground run_shell — a `full:true` read can
     // otherwise return the entire 2 MB rolling buffer (see shells.ts MAX_BUF).
     const parts: string[] = []
-    const body = clampToolResult(segments.join('\n'))
+    const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
     parts.push(r.running ? '[still running]' : `[exited with code ${r.exitCode ?? 'killed'}]`)
     return parts.join('\n')
