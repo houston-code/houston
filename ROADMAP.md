@@ -39,6 +39,26 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   *Why deferred:* other platforms need their own confinement (Linux namespaces /
   `bwrap`, a container, or Windows job objects) before shell execution is safe.
 
+- **Code index / semantic (embeddings) search.** Houston searches the project
+  *live* — a bundled **ripgrep** (`search_files`) plus `glob` and the model's own
+  reasoning over what it reads — rather than building and maintaining a persistent
+  code index, a symbol/dependency repo-map, a tree-sitter parse tree, or an
+  embeddings/vector store for semantic retrieval. *Why this is deliberate, not
+  missing:* (1) a background index is a correctness liability in an agent that is
+  itself editing the tree mid-turn — it goes stale against the agent's own writes
+  and needs constant re-sync; (2) it's a heavyweight, always-on subsystem for a
+  single-user desktop app; (3) semantic search needs an embeddings provider + API
+  key, which cuts against bring-your-own-model and the local-first/privacy stance
+  (keys stay in the Keychain; nothing is shipped off-machine to be indexed). Modern
+  long-context models navigate unfamiliar code well from exact search +
+  `read_file` + `run_shell`, so an index mostly buys latency, not capability.
+  *If revisited:* prefer an opt-in, on-demand structural layer over a persistent
+  index — e.g. ast-grep (which [`binaries.ts`](src/main/binaries.ts) is already
+  set up to vendor) for structural/symbol queries, or a semantic-search **MCP
+  server** — both plug into the agent without baking an indexer into the core.
+  LSP-backed go-to-definition / find-references is the other large lever, tracked
+  under IDE integration below.
+
 ## Deferred — polish
 
 - **Clickable file paths in the transcript.** Linkify `path:line` references in the
