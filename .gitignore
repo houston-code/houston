@@ -1,5 +1,6 @@
-# Dependencies
-node_modules/
+# Dependencies (match the directory AND a stray `node_modules` symlink — a
+# trailing slash would only match a directory, letting a symlink slip through)
+node_modules
 
 # Build output
 out/
