@@ -173,7 +173,16 @@ export type AgentEvent =
       summary: string
       kind: 'read' | 'write' | 'shell' | 'network' | 'mcp'
     }
-  | { runId: string; type: 'tool_result'; callId: string; name: string; ok: boolean; output: string }
+  | {
+      runId: string
+      type: 'tool_result'
+      callId: string
+      name: string
+      ok: boolean
+      output: string
+      /** Images the tool produced (e.g. a view_localhost screenshot), shown in the transcript. */
+      images?: ImageAttachment[]
+    }
   | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
   | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' }

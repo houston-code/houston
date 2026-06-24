@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
+import { imageDataUrl } from '@shared/images'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { diffLines, diffStat, type DiffLine } from '@shared/diff'
 import type { ToolItem } from '../lib/items'
@@ -25,6 +26,7 @@ const TOOL_ICON: Record<string, string> = {
   read_shell_output: '›_',
   kill_shell: '›_',
   web_fetch: '@',
+  view_localhost: '▣',
   web_search: '⌕',
   todo_write: '☰'
 }
@@ -135,6 +137,14 @@ function ToolRow({
 
       {open && diff && diff.length > 0 && <DiffView diff={diff} />}
       {open && item.output && !isTodo && <pre className="tool-row__output">{item.output}</pre>}
+
+      {item.images && item.images.length > 0 && (
+        <div className="tool-row__images">
+          {item.images.map((img, i) => (
+            <img key={i} className="tool-row__image" src={imageDataUrl(img)} alt="screenshot" />
+          ))}
+        </div>
+      )}
 
       {awaiting && (
         <div className="tool-row__approval">

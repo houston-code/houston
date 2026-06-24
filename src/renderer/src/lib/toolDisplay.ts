@@ -64,6 +64,8 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Kill', target: str(a.shell_id) ?? str(a.id) ?? '', mono: true }
     case 'web_fetch':
       return { verb: 'Fetch', target: str(a.url) ?? '', mono: true }
+    case 'view_localhost':
+      return { verb: 'View', target: str(a.url) ?? '', mono: true }
     case 'web_search':
       return { verb: 'Search web', target: str(a.query) ?? '', mono: false }
     case 'todo_write':

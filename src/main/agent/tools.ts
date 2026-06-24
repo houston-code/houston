@@ -16,6 +16,7 @@ import { runSandboxed, spawnSandboxed } from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
 import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
+import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
 import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
@@ -42,6 +43,8 @@ export interface ToolContext {
   attachImage?: (img: ImageAttachment) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
   attachDocument?: (doc: DocumentAttachment) => void
+  /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */
+  captureLocalhost?: (input: CaptureInput) => Promise<LocalhostCapture>
   /** Persistent shell state (cwd + exported env) shared across run_shell calls in a run. */
   shellSession?: ShellSession
 }
@@ -706,6 +709,65 @@ const webFetch: ToolDef = {
   }
 }
 
+const viewLocalhost: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `View ${str(a, 'url')}`,
+  schema: {
+    name: 'view_localhost',
+    description:
+      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s console output. The screenshot is returned as an image you can view directly — so you can SEE the web UI you built and iterate on it, instead of guessing. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval.',
+    parameters: objectSchema(
+      {
+        url: { type: 'string', description: 'A loopback URL to load, e.g. "http://localhost:3000".' },
+        selector: {
+          type: 'string',
+          description:
+            'Optional CSS selector — screenshot just that element\'s bounding box instead of the whole viewport (e.g. "#app", ".hero").'
+        }
+      },
+      ['url']
+    )
+  },
+  async execute(args, ctx) {
+    const url = str(args, 'url')
+    if (!url) throw new Error('url is required.')
+    if (!ctx.captureLocalhost) throw new Error('view_localhost is not available in this context.')
+    const selector = str(args, 'selector') || undefined
+    const cap = await ctx.captureLocalhost({ url, selector, signal: ctx.signal })
+
+    const lines: string[] = []
+    lines.push(`Loaded ${cap.finalUrl}${cap.title ? ` — "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
+    if (cap.loadError) lines.push(`[load warning: ${cap.loadError}]`)
+    if (selector) {
+      lines.push(
+        cap.selectorMissed
+          ? `[selector "${selector}" matched nothing — captured the full viewport]`
+          : `[captured element matching "${selector}"]`
+      )
+    }
+
+    const bytes = cap.png.byteLength
+    if (bytes > MAX_ATTACH_IMAGE_BYTES) {
+      lines.push(
+        `[screenshot ${humanSize(bytes)} exceeds the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit — not shown]`
+      )
+    } else if (!ctx.attachImage) {
+      lines.push(`[screenshot ${humanSize(bytes)} captured — cannot be displayed in this context]`)
+    } else {
+      ctx.attachImage({ mediaType: 'image/png', data: cap.png.toString('base64') })
+      lines.push(`[screenshot (${humanSize(bytes)}) attached below for viewing]`)
+    }
+
+    lines.push('')
+    lines.push(
+      cap.console.length
+        ? `Console output (${cap.console.length} line${cap.console.length === 1 ? '' : 's'}):\n${cap.console.join('\n')}`
+        : 'Console output: (none)'
+    )
+    return lines.join('\n')
+  }
+}
+
 const todoWrite: ToolDef = {
   kind: 'read', // a scratchpad with no side effects on the project — never needs approval
   summarize: (a) => {
@@ -844,6 +906,7 @@ export const TOOLS: ToolDef[] = [
   readShellOutputTool,
   killShellTool,
   webFetch,
+  viewLocalhost,
   webSearch,
   todoWrite,
   dispatchAgent,

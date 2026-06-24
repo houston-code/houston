@@ -49,6 +49,14 @@ describe('describeTool', () => {
     })
   })
 
+  it('describes a localhost view by its URL', () => {
+    expect(describeTool(tool('view_localhost', { url: 'http://localhost:3000' }))).toEqual({
+      verb: 'View',
+      target: 'http://localhost:3000',
+      mono: true
+    })
+  })
+
   it('falls back to the tool name for unknown tools', () => {
     expect(describeTool(tool('mystery_tool', {})).verb).toBe('mystery_tool')
   })
