@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -31,7 +31,15 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { deleteKey, getKey, hasKey, hasStoredKey, setKey } from './secrets'
+import {
+  deleteKey,
+  getCredential,
+  getKey,
+  hasKey,
+  hasStoredKey,
+  setCredential,
+  setKey
+} from './secrets'
 
 beforeEach(() => {
   state.userData = mkdtempSync(join(tmpdir(), 'houston-secrets-'))
@@ -71,5 +79,53 @@ describe('secrets store', () => {
     expect(hasStoredKey('openai')).toBe(false)
     expect(hasKey('openai')).toBe(false)
     expect(getKey('openai')).toBeNull()
+  })
+
+  it('round-trips an api-key credential via getCredential/setCredential', () => {
+    setCredential('anthropic', { type: 'api-key', key: 'sk-test' })
+    expect(getCredential('anthropic')).toEqual({ type: 'api-key', key: 'sk-test' })
+    // getKey still returns the bare key for api-key credentials.
+    expect(getKey('anthropic')).toBe('sk-test')
+    expect(hasKey('anthropic')).toBe(true)
+  })
+
+  it('round-trips an oauth credential', () => {
+    const cred = {
+      type: 'oauth' as const,
+      access: 'access-tok',
+      refresh: 'refresh-tok',
+      expiresAt: 1_700_000_000_000
+    }
+    setCredential('anthropic', cred)
+    expect(getCredential('anthropic')).toEqual(cred)
+    expect(hasStoredKey('anthropic')).toBe(true)
+    expect(hasKey('anthropic')).toBe(true)
+  })
+
+  it('getKey returns the oauth access token for an oauth credential', () => {
+    setCredential('anthropic', {
+      type: 'oauth',
+      access: 'access-tok',
+      refresh: 'refresh-tok'
+    })
+    // Callers that only understand a bearer string keep working under OAuth.
+    expect(getKey('anthropic')).toBe('access-tok')
+  })
+
+  it('decodes a legacy bare-string key stored before the credential generalization', () => {
+    // Simulate the pre-generalization layout: ciphertext of the raw key, no JSON.
+    const legacyCiphertext = Buffer.from('v1:legacy-key', 'utf8').toString('base64')
+    writeFileSync(
+      join(state.userData, 'secrets.json'),
+      JSON.stringify({ keys: { openai: legacyCiphertext } })
+    )
+    expect(getKey('openai')).toBe('legacy-key')
+    expect(getCredential('openai')).toEqual({ type: 'api-key', key: 'legacy-key' })
+    expect(hasKey('openai')).toBe(true)
+  })
+
+  it('setKey writes a credential that getCredential reads back as api-key', () => {
+    setKey('openai', 'sk-y')
+    expect(getCredential('openai')).toEqual({ type: 'api-key', key: 'sk-y' })
   })
 })

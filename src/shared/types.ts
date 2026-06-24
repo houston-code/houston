@@ -9,6 +9,15 @@ import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
 
 export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'
 
+/**
+ * How a provider authenticates.
+ * - api-key: a static secret the user pastes in (the only flow wired up today).
+ * - oauth:   an OAuth token set (access/refresh) obtained via an interactive flow.
+ *            The credential store understands this shape, but the live flow is a
+ *            stub pending registered client IDs — see `src/main/oauth.ts`.
+ */
+export type AuthMethod = 'api-key' | 'oauth'
+
 export interface ModelOption {
   id: string
   label?: string
@@ -27,6 +36,12 @@ export interface ProviderConfig {
   defaultModel?: string
   /** Whether the provider needs an API key at all (local endpoints often don't). */
   requiresKey: boolean
+  /**
+   * How this provider authenticates. Defaults to `api-key` when absent. `oauth`
+   * selects the OAuth credential shape in the secrets store; the live OAuth flow
+   * is not yet implemented (see `src/main/oauth.ts`).
+   */
+  authMethod?: AuthMethod
   /** True when an encrypted key is stored for this provider. Derived, never persisted. */
   hasKey: boolean
   /** Built-in providers can't be deleted, only configured. */
