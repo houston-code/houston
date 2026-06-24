@@ -162,7 +162,9 @@ export async function startRun(
       rules.text,
       planMode,
       capabilities,
-      gitStatus
+      gitStatus,
+      req.providerId,
+      req.model
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     const mcpToolDefs = await getMcpToolDefs(settings.mcpServers)
