@@ -165,7 +165,13 @@ jobs:
       contents: write
       pull-requests: write
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Prefer an optional PAT (repo + workflow scopes) when present, else the
+      # default token. The default GITHUB_TOKEN cannot merge a PR that edits
+      # .github/workflows/** (GitHub blocks GitHub-App tokens from touching
+      # workflow files), so PRs that change CI need either AUTOMERGE_PAT or a
+      # manual merge. A PAT also revives the post-merge `push: [main]` run, since
+      # PAT pushes — unlike GITHUB_TOKEN pushes — do trigger workflows.
+      GH_TOKEN: ${{ secrets.AUTOMERGE_PAT || secrets.GITHUB_TOKEN }}
       PR: ${{ github.event.pull_request.number }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -224,8 +230,16 @@ jobs:
             # Validated state == landing state. Merge it. `gh pr merge` can exit
             # non-zero even when the merge happened (concurrent run, --delete-branch
             # hiccup), so confirm the PR's terminal state before deciding.
-            if gh pr merge "$PR" --merge --delete-branch; then
-              exit 0
+            if out=$(gh pr merge "$PR" --merge --delete-branch 2>&1); then
+              echo "$out"; exit 0
+            fi
+            echo "$out"
+            # The default GITHUB_TOKEN can't merge a PR that edits workflow files.
+            # Surface the fix instead of a generic error — the PR is fully
+            # validated above, so a manual merge here is safe.
+            if printf '%s' "$out" | grep -qi 'workflow.*permission'; then
+              echo "::error::PR #$PR edits .github/workflows/** and the current token lacks workflow scope, so it can't be auto-merged. CI has already validated the merge — merge it manually, or add an AUTOMERGE_PAT secret (repo + workflow scopes) to enable auto-merge for workflow PRs."
+              exit 1
             fi
             for check in 1 2 3 4 5; do
               state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN

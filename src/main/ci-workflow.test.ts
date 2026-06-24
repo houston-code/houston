@@ -54,4 +54,9 @@ describe('CI auto-merge gate', () => {
     expect(autoMergeJob).toContain('git rev-parse FETCH_HEAD')
     expect(autoMergeJob).toMatch(/!= "\$base"/)
   })
+
+  it('falls back to an optional PAT so workflow-editing PRs can auto-merge', () => {
+    // The default GITHUB_TOKEN can't merge PRs that touch .github/workflows/**.
+    expect(autoMergeJob).toMatch(/secrets\.AUTOMERGE_PAT \|\| secrets\.GITHUB_TOKEN/)
+  })
 })
