@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # The e2e suite drives Electron via Playwright's `_electron` launcher, never a
+  # bundled browser, so skip the large browser download `@playwright/test`'s
+  # postinstall would otherwise run during `npm ci`.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -45,6 +51,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run dist
+      # Smoke-test the bundle we just built: launch the real Electron app and
+      # assert the renderer mounts, exercising the main ↔ preload ↔ renderer IPC
+      # bridge end to end. `out/` is still present from `npm run dist`. Runs on
+      # macOS (the build target), where Electron has a display without xvfb.
+      - run: npm run test:e2e
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: houston-mac-arm64
