@@ -37,7 +37,19 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 - **Windows / Linux support.** The execution sandbox is macOS Seatbelt only.
   *Why deferred:* other platforms need their own confinement (Linux namespaces /
-  `bwrap`, a container, or Windows job objects) before shell execution is safe.
+  `bwrap`, a container, or Windows job objects) before shell execution is safe —
+  and shipping an unverified sandbox on a platform we can't test would be a
+  security regression, not a feature.
+
+- **Write-capable / multi-agent delegation.** Today `dispatch_agent` (and custom
+  `.houston/agents`) are deliberately **read-only** — a subagent can read/search
+  and report back, but can't edit, run commands, or use the network. Letting a
+  subagent act would need a nested agent loop with its own tool budget, approval
+  propagation back to the UI, and streamed sub-events. *Why deferred:* it's a
+  larger architecture change *and* a safety-surface expansion (an autonomous
+  sub-loop taking write/shell actions) that deserves its own design + consent UX
+  rather than being bolted on. Read-only delegation already covers the common
+  "investigate without polluting my context" case.
 
 - **Code index / semantic (embeddings) search.** Houston searches the project
   *live* — a bundled **ripgrep** (`search_files`) plus `glob` and the model's own
