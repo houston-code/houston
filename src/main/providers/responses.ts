@@ -77,7 +77,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
 
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
-      const reasoning = openaiResponsesReasoning(req.model, req.reasoningEffort)
+      const reasoning = openaiResponsesReasoning(req.model, req.reasoningEffort, req.reasoningSummary)
       const tools = toResponsesTools(req.tools)
 
       const params = {
@@ -86,7 +86,8 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         input: toResponsesInput(req.messages),
         stream: true,
         ...(tools ? { tools } : {}),
-        ...(reasoning ? { reasoning } : {})
+        ...(reasoning ? { reasoning } : {}),
+        ...(req.verbosity ? { text: { verbosity: req.verbosity } } : {})
       }
 
       const stream = await client.responses.create(

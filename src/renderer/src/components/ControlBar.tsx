@@ -24,7 +24,8 @@ const REASONING_LABEL: Record<ReasoningEffort, string> = {
   off: 'Think: off',
   low: 'Think: low',
   medium: 'Think: medium',
-  high: 'Think: high'
+  high: 'Think: high',
+  xhigh: 'Think: xhigh'
 }
 
 /**
