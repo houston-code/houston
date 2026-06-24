@@ -134,6 +134,12 @@ export interface AppSettings {
   permissionRules?: PermissionRule[]
   /** Shell hooks run before/after tool calls. */
   hooks?: Hook[]
+  /**
+   * Run the matching formatter (prettier/gofmt/rustfmt/ruff/black/…) on a file
+   * right after the agent writes it, the way an editor formats on save. Only fires
+   * when the formatter's binary is installed; off by default.
+   */
+  formatOnSave?: boolean
   /** MCP servers to connect to (stdio). Their tools are offered to the agent. */
   mcpServers?: McpServerConfig[]
   /** Extra directories (beyond the project folder) the agent may read and write. */

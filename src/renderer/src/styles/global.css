@@ -1480,6 +1480,20 @@ pre.diff {
   margin: 0 0 8px;
   line-height: 1.5;
 }
+.field--checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.field--checkbox input {
+  width: auto;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+.field--checkbox > span {
+  margin-bottom: 0;
+  line-height: 1.5;
+}
 .rule {
   display: flex;
   gap: 6px;
