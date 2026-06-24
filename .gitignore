@@ -6,6 +6,12 @@ out/
 dist/
 release/
 
+# Playwright (e2e) artifacts
+test-results/
+playwright-report/
+blob-report/
+/playwright/.cache/
+
 # Logs
 *.log
 npm-debug.log*

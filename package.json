@@ -18,6 +18,7 @@
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "icon": "node scripts/make-icon.mjs && bash scripts/make-icns.sh",
     "dist": "npm run build && electron-builder --mac --arm64",
     "dist:unpacked": "npm run build && electron-builder --mac --arm64 --dir"
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.61.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
