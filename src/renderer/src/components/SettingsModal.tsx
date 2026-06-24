@@ -356,6 +356,42 @@ export function SettingsModal({
                   />
                 </label>
 
+                <h3>Reasoning</h3>
+                <p className="field__hint">
+                  Reasoning effort is set per-chat in the control bar. These tune how the model&apos;s
+                  reasoning is reported and how long replies run (OpenAI Responses models).
+                </p>
+                <label className="field">
+                  <span>Reasoning summary</span>
+                  <select
+                    value={settings.reasoningSummary ?? 'auto'}
+                    onChange={(e) =>
+                      setSettings((s) => ({
+                        ...s,
+                        reasoningSummary: e.target.value as AppSettings['reasoningSummary']
+                      }))
+                    }
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="concise">Concise</option>
+                    <option value="detailed">Detailed</option>
+                    <option value="none">None</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Verbosity</span>
+                  <select
+                    value={settings.verbosity ?? 'medium'}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, verbosity: e.target.value as AppSettings['verbosity'] }))
+                    }
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+
                 <h3>Web search</h3>
                 <label className="field">
                   <span>

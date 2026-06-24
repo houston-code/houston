@@ -313,6 +313,8 @@ export async function startRun(
             messages: sendMessages,
             tools,
             reasoningEffort: settings.reasoningEffort,
+            reasoningSummary: settings.reasoningSummary,
+            verbosity: settings.verbosity,
             signal: abort.signal
           })) {
             if (ev.type === 'text') {

@@ -3,6 +3,7 @@ import {
   anthropicThinking,
   anthropicSupportsThinking,
   openaiReasoningEffort,
+  openaiResponsesReasoning,
   openaiSupportsReasoning,
   geminiThinkingBudget,
   geminiSupportsThinking,
@@ -47,6 +48,40 @@ describe('openai reasoning_effort', () => {
     expect(openaiReasoningEffort('gpt-4o', 'high')).toBeUndefined()
     expect(openaiReasoningEffort('o3', 'medium')).toBe('medium')
     expect(openaiReasoningEffort('o3', 'off')).toBeUndefined()
+  })
+
+  it('clamps xhigh to high for the Chat Completions path', () => {
+    expect(openaiReasoningEffort('gpt-5', 'xhigh')).toBe('high')
+  })
+})
+
+describe('openai Responses reasoning', () => {
+  it('passes xhigh through and defaults summary to auto', () => {
+    expect(openaiResponsesReasoning('gpt-5.1', 'xhigh')).toEqual({ effort: 'xhigh', summary: 'auto' })
+  })
+
+  it('honors an explicit summary mode and omits it when none', () => {
+    expect(openaiResponsesReasoning('o3', 'high', 'detailed')).toEqual({ effort: 'high', summary: 'detailed' })
+    expect(openaiResponsesReasoning('o3', 'high', 'none')).toEqual({ effort: 'high' })
+  })
+
+  it('is undefined when off or unsupported', () => {
+    expect(openaiResponsesReasoning('gpt-5', 'off')).toBeUndefined()
+    expect(openaiResponsesReasoning('gpt-4o', 'high')).toBeUndefined()
+  })
+})
+
+describe('xhigh clamping for providers without an xhigh tier', () => {
+  it('anthropic clamps xhigh to its high budget', () => {
+    const high = anthropicThinking('claude-opus-4-8', 'high')!
+    const xhigh = anthropicThinking('claude-opus-4-8', 'xhigh')!
+    expect(xhigh).toEqual(high)
+  })
+
+  it('gemini clamps xhigh to its high budget', () => {
+    expect(geminiThinkingBudget('gemini-2.5-pro', 'xhigh')).toBe(
+      geminiThinkingBudget('gemini-2.5-pro', 'high')
+    )
   })
 })
 

@@ -14,8 +14,18 @@ export interface ToolCall {
   arguments: Record<string, unknown>
 }
 
-/** How hard the model should "think" before answering. `off` disables it. */
-export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+/**
+ * How hard the model should "think" before answering. `off` disables it.
+ * `xhigh` is the maximum tier (OpenAI Responses on newer flagships); providers
+ * without an xhigh tier clamp it to `high`.
+ */
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh'
+
+/** How the model's reasoning summary is requested (OpenAI Responses API). */
+export type ReasoningSummary = 'auto' | 'concise' | 'detailed' | 'none'
+
+/** Response detail/length knob, distinct from reasoning effort (OpenAI Responses). */
+export type Verbosity = 'low' | 'medium' | 'high'
 
 /**
  * A block of model reasoning ("extended thinking"). For Anthropic these must be
@@ -82,6 +92,10 @@ export interface ChatRequest {
   maxTokens?: number
   /** Enable model reasoning at this effort (omit/`off` to disable). */
   reasoningEffort?: ReasoningEffort
+  /** How to request the reasoning summary (OpenAI Responses; `none` = no summary). */
+  reasoningSummary?: ReasoningSummary
+  /** Response verbosity (OpenAI Responses). */
+  verbosity?: Verbosity
   signal?: AbortSignal
 }
 

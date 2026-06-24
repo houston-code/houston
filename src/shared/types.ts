@@ -5,7 +5,7 @@
  * learns whether a provider *has* a key (`hasKey`), never the key itself.
  */
 
-import type { ReasoningEffort } from './agent'
+import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
 
 export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'
 
@@ -126,6 +126,10 @@ export interface AppSettings {
   hasWebSearchKey?: boolean
   /** How hard the model should think before answering (default `off`). */
   reasoningEffort?: ReasoningEffort
+  /** How to request the reasoning summary, OpenAI Responses (default `auto`). */
+  reasoningSummary?: ReasoningSummary
+  /** Response verbosity, OpenAI Responses (default the model's own default). */
+  verbosity?: Verbosity
   /** Fine-grained permission rules, consulted before the approval policy. */
   permissionRules?: PermissionRule[]
   /** Shell hooks run before/after tool calls. */

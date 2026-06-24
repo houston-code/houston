@@ -1,4 +1,4 @@
-import type { ReasoningEffort } from '@shared/agent'
+import type { ReasoningEffort, ReasoningSummary } from '@shared/agent'
 
 /**
  * Per-provider reasoning ("extended thinking") configuration. Each provider only
@@ -7,8 +7,15 @@ import type { ReasoningEffort } from '@shared/agent'
  * heuristic and returns `null`/`undefined` when reasoning shouldn't be sent.
  */
 
-function isOn(effort: ReasoningEffort | undefined): effort is 'low' | 'medium' | 'high' {
-  return effort === 'low' || effort === 'medium' || effort === 'high'
+type OnEffort = 'low' | 'medium' | 'high' | 'xhigh'
+
+function isOn(effort: ReasoningEffort | undefined): effort is OnEffort {
+  return effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh'
+}
+
+/** Providers without an `xhigh` tier clamp it to their maximum (`high`). */
+function clampToHigh(effort: OnEffort): 'low' | 'medium' | 'high' {
+  return effort === 'xhigh' ? 'high' : effort
 }
 
 /** Anthropic thinking token budgets per effort level. */
@@ -35,7 +42,7 @@ export function anthropicThinking(
   effort: ReasoningEffort | undefined
 ): { budgetTokens: number; maxTokens: number } | null {
   if (!isOn(effort) || !anthropicSupportsThinking(model)) return null
-  const budgetTokens = ANTHROPIC_BUDGET[effort]
+  const budgetTokens = ANTHROPIC_BUDGET[clampToHigh(effort)]
   return { budgetTokens, maxTokens: budgetTokens + ANTHROPIC_REPLY_HEADROOM }
 }
 
@@ -44,26 +51,33 @@ export function openaiSupportsReasoning(model: string): boolean {
   return /^(o\d|gpt-5)/i.test(model)
 }
 
-/** The `reasoning_effort` value to send, or undefined when off/unsupported. */
+/**
+ * The Chat Completions `reasoning_effort` value, or undefined when off/unsupported.
+ * Chat Completions tops out at `high`, so `xhigh` is clamped (only the Responses
+ * API path accepts `xhigh`).
+ */
 export function openaiReasoningEffort(
   model: string,
   effort: ReasoningEffort | undefined
 ): 'low' | 'medium' | 'high' | undefined {
   if (!isOn(effort) || !openaiSupportsReasoning(model)) return undefined
-  return effort
+  return clampToHigh(effort)
 }
 
 /**
- * Reasoning config for the OpenAI **Responses API**: the effort plus a request
- * for a reasoning summary (so the user can see the model's thinking). Returns
- * undefined when reasoning is off or the model doesn't support it.
+ * Reasoning config for the OpenAI **Responses API**: the effort (incl. `xhigh`)
+ * plus how to request the reasoning summary so the user can see the model's
+ * thinking. `summary: 'none'` omits the summary request. Returns undefined when
+ * reasoning is off or the model doesn't support it.
  */
 export function openaiResponsesReasoning(
   model: string,
-  effort: ReasoningEffort | undefined
-): { effort: 'low' | 'medium' | 'high'; summary: 'auto' } | undefined {
+  effort: ReasoningEffort | undefined,
+  summary?: ReasoningSummary
+): { effort: OnEffort; summary?: 'auto' | 'concise' | 'detailed' } | undefined {
   if (!isOn(effort) || !openaiSupportsReasoning(model)) return undefined
-  return { effort, summary: 'auto' }
+  if (summary === 'none') return { effort }
+  return { effort, summary: summary ?? 'auto' }
 }
 
 /** Gemini thinking budgets per effort level. */
@@ -84,5 +98,5 @@ export function geminiThinkingBudget(
   effort: ReasoningEffort | undefined
 ): number | undefined {
   if (!isOn(effort) || !geminiSupportsThinking(model)) return undefined
-  return GEMINI_BUDGET[effort]
+  return GEMINI_BUDGET[clampToHigh(effort)]
 }
