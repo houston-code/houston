@@ -156,6 +156,12 @@ export interface AppSettings {
    * 0 disables compaction. Lower it for small-context local models.
    */
   compactionThreshold?: number
+  /**
+   * Cap (bytes) on a single shell command's output fed back to the model, keeping
+   * both ends. Guards the context window from one runaway command. Must be > 0;
+   * falls back to DEFAULT_SHELL_OUTPUT_MAX_BYTES when unset or invalid.
+   */
+  shellOutputMaxBytes?: number
   /** True when a web-search (Tavily) API key is stored. Derived, never persisted. */
   hasWebSearchKey?: boolean
   /** How hard the model should think before answering (default `off`). */

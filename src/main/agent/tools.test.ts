@@ -565,6 +565,24 @@ describe('background shell tools', () => {
     expect(out).toContain('[exited with code 0]') // status marker survives
     expect(out.length).toBeLessThan(200_000) // far below the 300k produced
   })
+
+  // The budget is configurable per run via ToolContext.shellOutputMaxBytes
+  // (wired from settings.shellOutputMaxBytes in the agent loop).
+  it('read_shell_output honours a custom shellOutputMaxBytes from context', async () => {
+    const child = spawn(process.execPath, [
+      '-e',
+      'process.stdout.write("Q".repeat(2000)); process.exit(0)'
+    ])
+    const id = registerShell('node', child)
+    await new Promise<void>((resolve) => child.on('close', () => resolve()))
+    const out = await getTool('read_shell_output')!.execute(
+      { shell_id: id },
+      { ...ctx, shellOutputMaxBytes: 100 }
+    )
+    expect(out).toMatch(/\[\.\.\. \d+ bytes truncated \.\.\.\]/)
+    expect(out.length).toBeLessThan(500) // clamped to ~100, far below the 2000 produced
+    expect(out).toContain('[exited with code 0]')
+  })
 })
 
 describe('workspace containment', () => {

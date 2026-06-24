@@ -9,6 +9,27 @@ export const SETTINGS_SCHEMA_VERSION = 1
 export const DEFAULT_COMPACTION_THRESHOLD = 100_000
 
 /**
+ * Default cap (bytes) on a single shell command's output fed back to the model.
+ * Far tighter than the 1 MB per-stream capture cap in sandbox.ts: that one stops
+ * capture from exhausting memory, but 1 MB of stdout is ~250k tokens, so one
+ * runaway command (an `npm install` log, a screenful of `Operation not
+ * permitted`) would overflow the context window in a single turn before any
+ * compaction can run. Both ends are kept on truncation. ~16k tokens.
+ */
+export const DEFAULT_SHELL_OUTPUT_MAX_BYTES = 64_000
+
+/**
+ * Resolve the effective shell-output budget: a positive user override, otherwise
+ * the default. Guards against 0 / negatives, which would truncate everything.
+ */
+export function resolveShellOutputBudget(
+  settings: Pick<AppSettings, 'shellOutputMaxBytes'>
+): number {
+  const v = settings.shellOutputMaxBytes
+  return typeof v === 'number' && v > 0 ? Math.floor(v) : DEFAULT_SHELL_OUTPUT_MAX_BYTES
+}
+
+/**
  * Built-in providers seeded on first run. Model lists are starting points only —
  * users can edit them or fetch the live list from each provider in Settings.
  */
@@ -89,6 +110,7 @@ export function defaultSettings(): AppSettings {
     approvalPolicy: 'ask',
     recentWorkspaces: [],
     compactionThreshold: DEFAULT_COMPACTION_THRESHOLD,
+    shellOutputMaxBytes: DEFAULT_SHELL_OUTPUT_MAX_BYTES,
     reasoningEffort: 'off',
     permissionRules: [],
     hooks: [],

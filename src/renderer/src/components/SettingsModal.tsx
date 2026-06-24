@@ -9,7 +9,7 @@ import type {
   ProviderConfig
 } from '@shared/types'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
-import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import { DEFAULT_COMPACTION_THRESHOLD, DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 
 /** Settings groups shown as tabs in the left-hand nav. */
@@ -351,6 +351,25 @@ export function SettingsModal({
                       setSettings((s) => ({
                         ...s,
                         compactionThreshold: Math.max(0, Math.floor(Number(e.target.value) || 0))
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>
+                    Truncate a single command&apos;s output to this many bytes, keeping both ends
+                    (~4 bytes ≈ 1 token). Stops one runaway command from flooding the context
+                    window.
+                  </span>
+                  <input
+                    type="number"
+                    min={1000}
+                    step={1000}
+                    value={settings.shellOutputMaxBytes ?? DEFAULT_SHELL_OUTPUT_MAX_BYTES}
+                    onChange={(e) =>
+                      setSettings((s) => ({
+                        ...s,
+                        shellOutputMaxBytes: Math.max(1000, Math.floor(Number(e.target.value) || 0))
                       }))
                     }
                   />

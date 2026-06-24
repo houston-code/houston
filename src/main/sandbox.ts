@@ -3,6 +3,7 @@ import type { ChildProcess } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
 
 /**
  * macOS Seatbelt sandbox for the agent's shell execution.
@@ -43,13 +44,6 @@ const MAX_OUTPUT_BYTES = 1_000_000 // 1 MB cap per stream
 // trailing summary (e.g. `5 failed, 120 passed`) both survive truncation.
 const HEAD_BYTES = Math.floor(MAX_OUTPUT_BYTES / 2)
 const TAIL_BYTES = MAX_OUTPUT_BYTES - HEAD_BYTES
-
-// Context bound for a *single tool result* handed back to the model — far tighter
-// than MAX_OUTPUT_BYTES. That 1 MB cap stops capture from exhausting memory, but
-// 1 MB of stdout is ~250k tokens: one runaway command (a screenful of `rm:
-// Operation not permitted`, an `npm install` log) would blow past the model's
-// context window in a single turn before any compaction can run. ~16k tokens.
-const MAX_TOOL_RESULT_BYTES = 64_000
 
 /** Standard macOS developer bin dirs, including Homebrew (Apple Silicon + Intel). */
 const EXTRA_PATH_DIRS = [
@@ -200,9 +194,12 @@ export class CappedOutput {
  * Clamp an already-assembled tool-result string to the per-result context budget,
  * preserving both ends with a truncation marker. Reuses `CappedOutput` so the
  * marker format matches what per-stream streaming truncation already produces.
- * The default budget is the production cap; `maxBytes` is a test seam.
+ * Callers pass the user-configured budget; the default is the fallback.
  */
-export function clampToolResult(text: string, maxBytes: number = MAX_TOOL_RESULT_BYTES): string {
+export function clampToolResult(
+  text: string,
+  maxBytes: number = DEFAULT_SHELL_OUTPUT_MAX_BYTES
+): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text
   const head = Math.floor(maxBytes / 2)
   const cap = new CappedOutput(head, maxBytes - head)
