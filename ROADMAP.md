@@ -79,13 +79,16 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   IPC with an editor preference, and changes to the actively-evolving Markdown /
   tool-row renderers — more than a polish pass.
 
-- **`.gitignore`-aware `glob`.** `search_files` already respects `.gitignore` (it
-  uses ripgrep); the `glob` tool doesn't (it skips node_modules / dotfiles / build
-  dirs but not project-specific ignores). *Why deferred:* ripgrep's glob semantics
-  differ from `glob`'s current `minimatch` (recursive vs. shallow `*.json`), so
-  delegating would change the tool's contract, and a partial hand-rolled
-  `.gitignore` parser would only *half*-respect it. Low marginal value given the
-  existing dir/​dotfile skips and that search is already ignore-aware.
+- **`.gitignore`-aware search & `glob`.** Neither `search_files` nor `glob` honors
+  a project's `.gitignore`: both skip a fixed set (`node_modules`, `.git`,
+  `dist`/`out`/`build`, dotfiles, …) but not project-specific ignore rules.
+  `search_files` deliberately runs ripgrep with `--no-ignore` so its results match
+  the pure-JS fallback walk, rather than diverging depending on whether the
+  bundled ripgrep is in play. *Why deferred:* honoring `.gitignore` only on the
+  ripgrep path would make results depend on the runtime environment, and a
+  hand-rolled parser for the JS path would only *half*-respect it (nested
+  `.gitignore` files, negations, etc.). Low marginal value given the existing
+  dir/dotfile skips.
 
 - **Edit & resend a message.** Edit an earlier user message and re-run from that
   point (truncating the later turns). *Why deferred:* needs conversation-history
