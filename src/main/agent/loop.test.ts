@@ -419,4 +419,36 @@ describe('startRun', () => {
     expect(readFileSync(join(ws, 'one.txt'), 'utf8')).toBe('a')
     expect(readFileSync(join(ws, 'two.txt'), 'utf8')).toBe('b')
   })
+
+  it('re-reads the reasoning effort each model turn (mid-run thinking change goes live)', async () => {
+    // The provider records the effort it is sent per turn. After the first turn it
+    // swaps the settings object — as saveSettings does when the dropdown changes —
+    // to a higher effort. The second turn must be sent the new value, proving the
+    // reasoning level is read live each turn rather than snapshotted at run start.
+    // (We reassign h.settings rather than mutate a field so a snapshot-reading loop
+    // would keep the old object and fail — the mock returns h.settings by reference.)
+    writeFileSync(join(ws, 'x.txt'), 'hi')
+    const original = h.settings
+    try {
+      h.settings = { ...h.settings, reasoningEffort: 'low' }
+      const seen: unknown[] = []
+      const provider: Provider = {
+        async *streamChat(req) {
+          seen.push(req.reasoningEffort)
+          if (seen.length === 1) {
+            h.settings = { ...h.settings, reasoningEffort: 'high' } // user bumps thinking mid-run
+            yield { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'x.txt' } } }
+            yield { type: 'done', stopReason: 'tool_use' }
+            return
+          }
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      await run({ provider })
+      expect(seen).toEqual(['low', 'high'])
+    } finally {
+      h.settings = original
+    }
+  })
 })

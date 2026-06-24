@@ -341,6 +341,14 @@ export async function startRun(
 
       let sendMessages = [...summaryMsgs, ...messages.slice(cut)]
 
+      // Re-read the thinking controls fresh each model turn rather than using the
+      // run-start `settings` snapshot, so changing the reasoning level mid-run —
+      // via the dropdown (which persists through saveSettings) or settings.json —
+      // takes effect on the next turn. This mirrors the live approval policy; the
+      // natural granularity is per-turn because reasoning is a per-request param.
+      // Everything else stays snapshotted so a run's behavior is otherwise stable.
+      const { reasoningEffort, reasoningSummary, verbosity } = getSettings()
+
       let assistantText = ''
       let toolCalls: ToolCall[] = []
       let stopReason: StopReason = 'end_turn'
@@ -365,9 +373,9 @@ export async function startRun(
             system,
             messages: sendMessages,
             tools,
-            reasoningEffort: settings.reasoningEffort,
-            reasoningSummary: settings.reasoningSummary,
-            verbosity: settings.verbosity,
+            reasoningEffort,
+            reasoningSummary,
+            verbosity,
             signal: abort.signal
           })) {
             if (ev.type === 'text') {
