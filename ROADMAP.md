@@ -51,10 +51,11 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   rather than being bolted on. Read-only delegation already covers the common
   "investigate without polluting my context" case.
 
-- **Code index / semantic (embeddings) search.** Houston searches the project
-  *live* — a bundled **ripgrep** (`search_files`) plus `glob` and the model's own
+- **Persistent code index / semantic (embeddings) search.** Houston searches the
+  project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**
+  (`ast_grep`) for structural/AST queries, plus `glob` and the model's own
   reasoning over what it reads — rather than building and maintaining a persistent
-  code index, a symbol/dependency repo-map, a tree-sitter parse tree, or an
+  code index, a symbol/dependency repo-map, a cached tree-sitter parse tree, or an
   embeddings/vector store for semantic retrieval. *Why this is deliberate, not
   missing:* (1) a background index is a correctness liability in an agent that is
   itself editing the tree mid-turn — it goes stale against the agent's own writes
@@ -64,10 +65,12 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   (keys stay in the Keychain; nothing is shipped off-machine to be indexed). Modern
   long-context models navigate unfamiliar code well from exact search +
   `read_file` + `run_shell`, so an index mostly buys latency, not capability.
-  *If revisited:* prefer an opt-in, on-demand structural layer over a persistent
-  index — e.g. ast-grep (which [`binaries.ts`](src/main/binaries.ts) is already
-  set up to vendor) for structural/symbol queries, or a semantic-search **MCP
-  server** — both plug into the agent without baking an indexer into the core.
+  *What's shipped vs still deferred:* the opt-in, on-demand **structural** layer is
+  done — `ast_grep` vendors ast-grep (via [`binaries.ts`](src/main/binaries.ts))
+  for structural/symbol queries. What remains deferred is the persistent index
+  itself: a symbol/dependency repo-map, a cached tree-sitter parse tree, or an
+  embeddings/vector store for semantic retrieval (a semantic-search **MCP server**
+  is the natural way to add that without baking an indexer into the core).
   LSP-backed go-to-definition / find-references is the other large lever, tracked
   under IDE integration below.
 

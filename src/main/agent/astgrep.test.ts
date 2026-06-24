@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { resolveAstGrep, formatAstGrepMatches, runAstGrep, searchStructural } from './astgrep'
+import { resolveAstGrep, parseAstGrepStream, runAstGrep, searchStructural } from './astgrep'
+
+/** Build `--json=stream` output: one JSON object per line. */
+const stream = (objs: object[]): string => objs.map((o) => JSON.stringify(o)).join('\n') + '\n'
 
 describe('resolveAstGrep', () => {
   it('prefers the HOUSTON_AST_GREP override when it exists', () => {
@@ -31,37 +34,46 @@ describe('resolveAstGrep', () => {
   })
 })
 
-describe('formatAstGrepMatches', () => {
-  it('formats compact JSON into 1-based path:line:col: text entries', () => {
-    const json = JSON.stringify([
+describe('parseAstGrepStream', () => {
+  it('formats stream JSON into 1-based path:line:col: text entries', () => {
+    const out = stream([
       { file: 'src/a.ts', text: 'console.log(x)', range: { start: { line: 4, column: 2 } } },
       { file: 'src/b.ts', text: 'console.log(y)', range: { start: { line: 0, column: 0 } } }
     ])
-    expect(formatAstGrepMatches(json, 100)).toEqual([
+    expect(parseAstGrepStream(out, 100)).toEqual([
       'src/a.ts:5:3: console.log(x)',
       'src/b.ts:1:1: console.log(y)'
     ])
   })
 
   it('uses only the first line of a multi-line match and trims it', () => {
-    const json = JSON.stringify([
+    const out = stream([
       { file: 'a.ts', text: '  function f() {\n  return 1\n}', range: { start: { line: 0, column: 0 } } }
     ])
-    expect(formatAstGrepMatches(json, 100)).toEqual(['a.ts:1:1: function f() {'])
+    expect(parseAstGrepStream(out, 100)).toEqual(['a.ts:1:1: function f() {'])
   })
 
   it('respects the max limit', () => {
-    const json = JSON.stringify(
+    const out = stream(
       Array.from({ length: 5 }, (_, i) => ({ file: `f${i}.ts`, text: 'x', range: { start: { line: 0, column: 0 } } }))
     )
-    expect(formatAstGrepMatches(json, 2)).toHaveLength(2)
+    expect(parseAstGrepStream(out, 2)).toHaveLength(2)
   })
 
-  it('returns [] for empty or invalid input', () => {
-    expect(formatAstGrepMatches('', 100)).toEqual([])
-    expect(formatAstGrepMatches('not json', 100)).toEqual([])
-    expect(formatAstGrepMatches('{"not":"an array"}', 100)).toEqual([])
-    expect(formatAstGrepMatches('[]', 100)).toEqual([])
+  it('keeps complete lines and skips a truncated trailing line (the output-cap case)', () => {
+    const full = stream([
+      { file: 'a.ts', text: 'one', range: { start: { line: 0, column: 0 } } },
+      { file: 'b.ts', text: 'two', range: { start: { line: 1, column: 0 } } }
+    ])
+    // Simulate the 5MB cap cutting the stream mid-way through a third object.
+    const truncated = full + '{"file":"c.ts","text":"thr'
+    expect(parseAstGrepStream(truncated, 100)).toEqual(['a.ts:1:1: one', 'b.ts:2:1: two'])
+  })
+
+  it('returns [] for empty or all-garbled input', () => {
+    expect(parseAstGrepStream('', 100)).toEqual([])
+    expect(parseAstGrepStream('not json\n', 100)).toEqual([])
+    expect(parseAstGrepStream('\n\n', 100)).toEqual([])
   })
 })
 
@@ -148,5 +160,35 @@ describe('runAstGrep / searchStructural (ast-grep binary)', () => {
       max: 100
     })
     expect(res.error).toBeTruthy()
+  })
+
+  // ast-grep exits non-zero for a missing path but writes `[]`-ish output; make
+  // sure that surfaces as an error rather than a misleading "No matches found."
+  it.skipIf(!ag)('surfaces a non-existent search path as an error', async () => {
+    const res = await runAstGrep({
+      binPath: ag as string,
+      pattern: 'console.log($A)',
+      lang: 'ts',
+      cwd: workspace,
+      searchRel: 'does-not-exist',
+      max: 100
+    })
+    expect(res.error).toBeTruthy()
+  })
+
+  // Scope parity with search_files: both ignore .gitignore (search everything
+  // except SKIP_DIRS), so the two search tools return a consistent file set.
+  it.skipIf(!ag)('searches .gitignored files (parity with search_files)', async () => {
+    writeFileSync(join(workspace, '.gitignore'), 'generated.ts\n')
+    writeFileSync(join(workspace, 'generated.ts'), 'console.log(7)\n')
+    const out = await searchStructural({
+      pattern: 'console.log($A)',
+      lang: 'ts',
+      workspace,
+      searchRel: '.',
+      binPath: ag,
+      max: 100
+    })
+    expect(out).toContain('generated.ts:1:')
   })
 })

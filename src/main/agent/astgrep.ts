@@ -41,7 +41,7 @@ export function resolveAstGrep(opts: ResolveAgOptions = {}): string | null {
   return null
 }
 
-/** A single match from ast-grep's `--json=compact` output (fields we use). */
+/** A single match from ast-grep's `--json=stream` output (the fields we use). */
 interface AgMatch {
   file?: string
   text?: string
@@ -52,26 +52,31 @@ interface AgMatch {
 const clip = (s: string): string => (s.length > MAX_LINE ? s.slice(0, MAX_LINE) : s)
 
 /**
- * Format ast-grep's compact-JSON output into "path:line:col: text" entries.
- * ast-grep reports 0-based line/column, so we add 1 to match editor/grep
- * conventions. Returns [] on unparseable input.
+ * Parse ast-grep's `--json=stream` output (one JSON object per line) into
+ * "path:line:col: text" entries, keeping at most `max`. ast-grep reports 0-based
+ * line/column, so we add 1 to match editor/grep conventions.
+ *
+ * Parsing line by line means a truncated trailing line (from the output cap in
+ * runAstGrep) is simply skipped rather than poisoning the whole result — unlike
+ * a single `--json=compact` array, where a cut-off tail makes the entire parse
+ * fail and silently yields zero matches.
  */
-export function formatAstGrepMatches(json: string, max: number): string[] {
-  if (!json.trim()) return []
-  let parsed: AgMatch[]
-  try {
-    parsed = JSON.parse(json) as AgMatch[]
-  } catch {
-    return []
-  }
-  if (!Array.isArray(parsed)) return []
+export function parseAstGrepStream(stdout: string, max: number): string[] {
   const out: string[] = []
-  for (const m of parsed) {
+  for (const line of stdout.split('\n')) {
     if (out.length >= max) break
-    const line = (m.range?.start?.line ?? 0) + 1
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let m: AgMatch
+    try {
+      m = JSON.parse(trimmed) as AgMatch
+    } catch {
+      continue // incomplete/garbled line (e.g. a truncated tail) — skip it
+    }
+    const ln = (m.range?.start?.line ?? 0) + 1
     const col = (m.range?.start?.column ?? 0) + 1
     const text = (m.text ?? m.lines ?? '').split('\n')[0].trim()
-    out.push(`${m.file ?? '?'}:${line}:${col}: ${clip(text)}`)
+    out.push(`${m.file ?? '?'}:${ln}:${col}: ${clip(text)}`)
   }
   return out
 }
@@ -94,9 +99,12 @@ export interface AstGrepRunOptions {
  */
 export function runAstGrep(o: AstGrepRunOptions): Promise<{ matches: string[]; error?: string }> {
   return new Promise((resolve) => {
-    const args = ['run', '--pattern', o.pattern, '--lang', o.lang, '--json=compact']
-    // Exclude build/dependency dirs even in repos without a .gitignore (ast-grep
-    // respects .gitignore by default; --globs is belt-and-suspenders).
+    // --json=stream emits one JSON object per line (not one big array), so the
+    // output cap below can drop a trailing line without corrupting the rest.
+    // --no-ignore vcs matches search_files' scope — search everything except the
+    // SKIP_DIRS globs below — rather than silently honoring the repo's .gitignore
+    // (which would give the two search tools different file sets).
+    const args = ['run', '--pattern', o.pattern, '--lang', o.lang, '--no-ignore', 'vcs', '--json=stream']
     for (const d of SKIP_DIRS) args.push('--globs', `!${d}`)
     args.push('--', o.searchRel || '.')
 
@@ -117,13 +125,16 @@ export function runAstGrep(o: AstGrepRunOptions): Promise<{ matches: string[]; e
     })
     child.on('error', (e) => resolve({ matches: [], error: e.message }))
     child.on('close', (code) => {
-      // ast-grep exits 0 with `[]` when there are no matches; a non-zero exit
-      // with no JSON output means a bad pattern/language or other error.
-      if (code !== 0 && !out.trim()) {
-        resolve({ matches: [], error: err.trim() || `ast-grep exited with code ${code}` })
+      const matches = parseAstGrepStream(out, o.max)
+      // ast-grep exits non-zero both for "no matches" (exit 1, empty stderr) and
+      // for real failures like a bad language or a missing path (non-zero + a
+      // stderr message). Only the latter is an error; a clean no-match returns []
+      // and is reported as "No matches found." by the caller.
+      if (!matches.length && code !== 0 && err.trim()) {
+        resolve({ matches: [], error: err.trim() })
         return
       }
-      resolve({ matches: formatAstGrepMatches(out, o.max) })
+      resolve({ matches })
     })
   })
 }
