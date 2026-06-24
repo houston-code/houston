@@ -26,6 +26,12 @@ files:
 # prebuilt binaries; we copy just the arm64 binaries (the only build target) to
 # Resources/bin, where the main process resolves them via `process.resourcesPath`
 # (see src/main/binaries.ts).
+#
+# WARNING: electron-builder treats a missing `from:` source as a non-fatal
+# WARNING and copies nothing, so a build can succeed yet ship an app missing a
+# binary (e.g. when npm skips an optional platform sub-package). `npm run dist`
+# runs scripts/verify-bundled-binaries.mjs first to turn that into a hard failure;
+# keep every entry below covered by that check.
 extraResources:
   - from: node_modules/@vscode/ripgrep-darwin-arm64/bin/rg
     to: bin/rg
