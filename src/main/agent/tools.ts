@@ -19,6 +19,7 @@ import { fetchUrlAsText } from './webfetch'
 import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 import { resolveEdit } from './edit-match'
+import { bundledRipgrep } from '../binaries'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -340,7 +341,7 @@ const searchTool: ToolDef = {
   schema: {
     name: 'search_files',
     description:
-      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Uses ripgrep when available, otherwise a built-in scan. Skips node_modules, .git, and build output.',
+      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Uses a bundled ripgrep for speed, falling back to a built-in scan. Skips node_modules, .git, and build output.',
     parameters: objectSchema(
       {
         pattern: { type: 'string', description: 'A regular expression.' },
@@ -370,7 +371,9 @@ const searchTool: ToolDef = {
       workspace: ctx.workspace,
       searchRel: relative(ctx.workspace, startAbs) || '.',
       startAbs,
-      rgPath: resolveRipgrep(),
+      // Prefer the ripgrep we bundle with the packaged app; fall back to a
+      // ripgrep on PATH (dev) and then a pure-JS scan (rgPath: null).
+      rgPath: bundledRipgrep() ?? resolveRipgrep(),
       max: 100,
       signal: ctx.signal,
       ignoreCase: args.ignore_case === true,
