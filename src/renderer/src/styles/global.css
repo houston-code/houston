@@ -12,9 +12,16 @@
   --text-dim: #8b8e96;
   --accent: #4f8cff;
   --accent-hover: #74a4ff;
+  /* Filled accent buttons carry white text, so their background is deepened from
+     --accent (white on #4f8cff fails AA); --accent stays bright for rails/links. */
+  --accent-fill: #2f6fe0;
+  --accent-fill-hover: #2860d9;
   --danger: #e0626b;
   --ok: #43b884;
   --warn: #d99a2b;
+  /* Shadows read as noise on a near-black canvas — Graphite stays flat. */
+  --shadow-card: none;
+  --shadow-accent: none;
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
 }
@@ -33,18 +40,20 @@
   --text-dim: #6a655b;
   --accent: #4f46e5;
   --accent-hover: #4338ca;
+  /* The indigo accent is already dark enough for white text, so the button fill
+     equals --accent (white on #4f46e5 = 6.3:1). */
+  --accent-fill: #4f46e5;
+  --accent-fill-hover: #4338ca;
   /* danger/warn/ok are deepened vs. their dark-mode counterparts so small text
      (diff stats, the menu Delete item, pinned-chat name) clears WCAG AA on the
      warm elevated/hover surfaces, including on hover (--bg-hover #ece9e1). */
   --danger: #be1a1a;
   --ok: #0f6e30;
   --warn: #964306;
+  /* Soft warm elevation for cards, and an indigo glow for accent buttons/bubbles. */
+  --shadow-card: 0 1px 3px rgba(47, 40, 30, 0.08);
+  --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
 }
-/* Accent buttons use white text on the blue accent in light mode (better contrast). */
-:root[data-theme='light'] .btn--accent {
-  color: #ffffff;
-}
-
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
    and collapse transitions for users who are sensitive to motion. */
 @media (prefers-reduced-motion: reduce) {
@@ -142,13 +151,15 @@ body {
   cursor: default;
 }
 .btn--accent {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #0b1220;
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: #fff;
   font-weight: 600;
+  box-shadow: var(--shadow-accent);
 }
 .btn--accent:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-fill-hover);
+  border-color: var(--accent-fill-hover);
 }
 .btn--ok {
   border-color: var(--ok);
@@ -307,6 +318,7 @@ body {
 }
 .conv--active {
   background: var(--bg-input);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .conv__pin {
   color: var(--warn);
@@ -689,6 +701,15 @@ body {
   word-wrap: break-word;
   line-height: 1.5;
 }
+/* Daylight: the user's own messages read as accent-filled bubbles (white text
+   clears AA on the indigo accent). Graphite keeps the neutral bubble above —
+   white on the bright dark-mode accent would not meet contrast. */
+:root[data-theme='light'] .msg--user .msg__body {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-accent);
+}
 .msg--assistant .msg__body {
   line-height: 1.65;
 }
@@ -929,6 +950,7 @@ h6.md-h {
   border-radius: 11px;
   background: var(--bg-elevated);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 .tool-group--active {
   border-color: var(--border);
@@ -1183,6 +1205,7 @@ pre.diff {
 .composer__input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .composer__btn {
   height: 44px;
@@ -1385,6 +1408,7 @@ pre.diff {
   border-radius: 10px;
   padding: 12px;
   margin-bottom: 12px;
+  box-shadow: var(--shadow-card);
 }
 .provider__head {
   display: flex;
