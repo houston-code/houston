@@ -53,8 +53,13 @@ const api = {
     id: string,
     providerId: string,
     model: string
-  ): Promise<{ ok: boolean; summarized: number; messages?: ChatMessage[]; error?: string }> =>
-    ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
+  ): Promise<{
+    ok: boolean
+    summarized: number
+    messages?: ChatMessage[]
+    reason?: 'empty' | 'single-turn'
+    error?: string
+  }> => ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
   deleteConversation: (id: string): Promise<void> => ipcRenderer.invoke(IPC.conversationDelete, id),
   exportConversation: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExport, id),

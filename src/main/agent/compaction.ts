@@ -172,6 +172,44 @@ export function isContextOverflowError(err: unknown): boolean {
 }
 
 /**
+ * Pick a compaction cut by *token budget* rather than by counting whole user turns.
+ * Keeps as many of the most recent user turns as fit within `keepTailTokens` (never
+ * more than `maxKeepTurns`), but always keeps at least one whole turn and always
+ * leaves at least one earlier turn to summarize. This is what lets a long
+ * conversation with only two or three (large) user turns still be compacted —
+ * `findCompactionCut`'s fixed "keep the last 3 turns" rule refuses to compact those
+ * even when they're huge. Returns 0 when there's nothing to summarize away (a
+ * single user turn — it can't be split at a turn boundary).
+ *
+ * Like `findCompactionCut`, the cut always lands on a `user` boundary, so the kept
+ * tail begins a turn and the synthetic summary pair stays valid for every provider.
+ */
+export function findCompactionCutByBudget(
+  messages: ChatMessage[],
+  maxKeepTurns: number,
+  keepTailTokens: number
+): number {
+  const userIdx: number[] = []
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === 'user') userIdx.push(i)
+  }
+  if (userIdx.length <= 1) return 0 // one turn (or none) — nothing earlier to fold away
+  // Keep at most maxKeepTurns, and always leave >=1 turn for the head to summarize.
+  const maxKeep = Math.min(maxKeepTurns, userIdx.length - 1)
+  // Default to keeping just the last turn (smallest tail); widen to the largest
+  // number of recent turns whose tail still fits the budget.
+  let cut = userIdx[userIdx.length - 1]
+  for (let keep = maxKeep; keep >= 1; keep--) {
+    const start = userIdx[userIdx.length - keep]
+    if (estimateTokens('', messages.slice(start)) <= keepTailTokens) {
+      cut = start
+      break
+    }
+  }
+  return cut
+}
+
+/**
  * Build the messages for the summarization request: any prior summary (so it is
  * folded in rather than lost), then the head being summarized, then an
  * instruction. The head starts at a user boundary and ends at a turn boundary, so

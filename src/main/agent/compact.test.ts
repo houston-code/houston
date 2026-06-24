@@ -103,7 +103,7 @@ describe('compactConversationNow', () => {
     expect(h.saved).toEqual(out)
   })
 
-  it('does nothing when there is nothing old enough to compact', async () => {
+  it('does nothing when the whole conversation already fits the kept-tail budget', async () => {
     h.conv = { id: 'c2', workspace: '/w', messages: msgs }
     h.provider = {
       // eslint-disable-next-line require-yield
@@ -112,12 +112,51 @@ describe('compactConversationNow', () => {
       }
     }
     const res = await compactConversationNow('c2', 'anthropic', 'claude-test')
-    expect(res).toEqual({ ok: true, summarized: 0 })
+    expect(res).toEqual({ ok: true, summarized: 0, reason: 'empty' })
+    expect(h.saved).toBeNull()
+  })
+
+  it('compacts a long chat made of only a couple of large turns', async () => {
+    // The fixed keep-3 rule would refuse (≤3 user turns); the budget-aware cut must not.
+    const messages: ChatMessage[] = [
+      { role: 'user', content: `q0 ${'x'.repeat(400_000)}` }, // ~100k tokens
+      { role: 'assistant', content: 'a0' },
+      { role: 'user', content: 'q1 (small recent turn)' },
+      { role: 'assistant', content: 'a1' }
+    ]
+    h.conv = { id: 'c2b', workspace: '/w', messages }
+    h.provider = {
+      async *streamChat() {
+        yield { type: 'text', text: 'SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const res = await compactConversationNow('c2b', 'anthropic', 'claude-test')
+    expect(res.ok).toBe(true)
+    expect(res.summarized).toBe(2) // the big first turn folded away
+    expect(res.messages![0].content).toContain(COMPACTION_SUMMARY_PREFIX)
+    expect(res.messages!.slice(2)).toEqual(messages.slice(2)) // small recent turn kept verbatim
+  })
+
+  it('explains that a single huge turn cannot be compacted', async () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: `one giant request ${'x'.repeat(400_000)}` },
+      { role: 'assistant', content: 'a' }
+    ]
+    h.conv = { id: 'c2c', workspace: '/w', messages }
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        throw new Error('should not be called')
+      }
+    }
+    const res = await compactConversationNow('c2c', 'anthropic', 'claude-test')
+    expect(res).toEqual({ ok: true, summarized: 0, reason: 'single-turn' })
     expect(h.saved).toBeNull()
   })
 
   it('reports an empty-summary failure without persisting', async () => {
-    h.conv = { id: 'c3', workspace: '/w', messages: bigConversation(2, 1000) }
+    h.conv = { id: 'c3', workspace: '/w', messages: bigConversation(2, 40_000) }
     h.provider = {
       async *streamChat() {
         yield { type: 'text', text: '   ' } // whitespace only → empty after trim

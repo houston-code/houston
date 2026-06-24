@@ -412,6 +412,14 @@ export async function startRun(
         }
       }
 
+      // Some providers (notably local OpenAI-compatible servers) don't report token
+      // usage. Fall back to an estimate of what we actually sent so the context-size
+      // readout still reflects the current window instead of sitting at zero.
+      if (!turnInput) {
+        turnInput = estimateTokens(system, sendMessages) + toolTokens
+        lastInputTokens = turnInput
+      }
+
       if (turnInput || turnOutput) {
         emit({
           type: 'usage',
