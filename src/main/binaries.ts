@@ -32,3 +32,8 @@ export function resolveBundledBinary(name: string, opts: ResolveBundledOptions =
 export function bundledRipgrep(opts?: ResolveBundledOptions): string | null {
   return resolveBundledBinary('rg', opts)
 }
+
+/** Path to the bundled ast-grep binary, or null to fall back to PATH. */
+export function bundledAstGrep(opts?: ResolveBundledOptions): string | null {
+  return resolveBundledBinary('ast-grep', opts)
+}

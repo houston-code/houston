@@ -18,8 +18,9 @@ import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
 import { tavilySearch } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
+import { resolveAstGrep, searchStructural } from './astgrep'
 import { resolveEdit } from './edit-match'
-import { bundledRipgrep } from '../binaries'
+import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
@@ -477,6 +478,43 @@ const searchTool: ToolDef = {
   }
 }
 
+const astGrepTool: ToolDef = {
+  kind: 'read',
+  summarize: (a) => `Structural search ${str(a, 'pattern')}${str(a, 'lang') ? ` (${str(a, 'lang')})` : ''}`,
+  schema: {
+    name: 'ast_grep',
+    description:
+      'Structural (AST-aware) code search using ast-grep. Matches code by syntax-tree shape rather than text, so it ignores formatting/whitespace and supports meta-variables: $NAME matches one node, $$$ARGS matches a list. Examples: "console.log($A)", "function $F($$$) { $$$ }", "useEffect($CB, [])". Returns matching "path:line:col: text" entries. Prefer this over search_files when you want occurrences of a code *pattern* (calls, declarations, JSX elements) without regex false positives. Requires the language of the code.',
+    parameters: objectSchema(
+      {
+        pattern: {
+          type: 'string',
+          description: 'An ast-grep structural pattern, e.g. "console.log($A)" or "function $F($$$) { $$$ }".'
+        },
+        lang: {
+          type: 'string',
+          description: 'Language of the pattern/files: ts, tsx, js, jsx, py, rust, go, java, c, cpp, ruby, etc.'
+        },
+        path: { type: 'string', description: 'Subdirectory to search within (default project root).' }
+      },
+      ['pattern', 'lang']
+    )
+  },
+  async execute(args, ctx) {
+    const startAbs = resolveInRoots(rootsOf(ctx), str(args, 'path') || '.')
+    return searchStructural({
+      pattern: str(args, 'pattern'),
+      lang: str(args, 'lang'),
+      workspace: ctx.workspace,
+      searchRel: relative(ctx.workspace, startAbs) || '.',
+      // Prefer the ast-grep we bundle with the packaged app; fall back to one on PATH (dev).
+      binPath: bundledAstGrep() ?? resolveAstGrep(),
+      max: 100,
+      signal: ctx.signal
+    })
+  }
+}
+
 async function collectGlob(
   dir: string,
   base: string,
@@ -801,6 +839,7 @@ export const TOOLS: ToolDef[] = [
   listDir,
   globTool,
   searchTool,
+  astGrepTool,
   runShell,
   readShellOutputTool,
   killShellTool,

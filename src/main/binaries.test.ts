@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { join } from 'node:path'
-import { resolveBundledBinary, bundledRipgrep } from './binaries'
+import { resolveBundledBinary, bundledRipgrep, bundledAstGrep } from './binaries'
 
 describe('resolveBundledBinary', () => {
   it('returns the Resources/bin path when the binary exists', () => {
@@ -21,5 +21,11 @@ describe('resolveBundledBinary', () => {
     const resourcesPath = '/res'
     const expected = join(resourcesPath, 'bin', 'rg')
     expect(bundledRipgrep({ resourcesPath, exists: (p) => p === expected })).toBe(expected)
+  })
+
+  it('bundledAstGrep resolves the "ast-grep" binary under Resources/bin', () => {
+    const resourcesPath = '/res'
+    const expected = join(resourcesPath, 'bin', 'ast-grep')
+    expect(bundledAstGrep({ resourcesPath, exists: (p) => p === expected })).toBe(expected)
   })
 })

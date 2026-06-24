@@ -21,13 +21,16 @@ files:
   - package.json
 
 # Vendor CLI binaries into the app's Resources so search works fast out of the
-# box, independent of the user's PATH. `@vscode/ripgrep` is a build-time-only
-# (dev) dependency whose platform sub-package ships the prebuilt binary; we copy
-# just the arm64 binary (the only build target) to Resources/bin, where the main
-# process resolves it via `process.resourcesPath` (see src/main/binaries.ts).
+# box, independent of the user's PATH. `@vscode/ripgrep` and `@ast-grep/cli` are
+# build-time-only (dev) dependencies whose platform sub-packages ship the
+# prebuilt binaries; we copy just the arm64 binaries (the only build target) to
+# Resources/bin, where the main process resolves them via `process.resourcesPath`
+# (see src/main/binaries.ts).
 extraResources:
   - from: node_modules/@vscode/ripgrep-darwin-arm64/bin/rg
     to: bin/rg
+  - from: node_modules/@ast-grep/cli-darwin-arm64/ast-grep
+    to: bin/ast-grep
 
 # No native modules — skip the rebuild step. (The vendored binaries above are
 # standalone executables, not node addons, so there's nothing to rebuild.)
