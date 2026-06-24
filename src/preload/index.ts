@@ -9,7 +9,9 @@ import type {
   ChatMessage,
   Conversation,
   ConversationMeta,
-  ToolApprovalDecision
+  RepoInfo,
+  ToolApprovalDecision,
+  WorktreeRemoval
 } from '@shared/agent'
 
 /**
@@ -24,6 +26,9 @@ const api = {
     ipcRenderer.invoke(IPC.workspaceListFiles, workspace, query),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
+  /** Git repo info for the "new chat in a worktree" picker (or isRepo:false). */
+  getRepoInfo: (workspace: string): Promise<RepoInfo> =>
+    ipcRenderer.invoke(IPC.gitRepoInfo, workspace),
 
   // Settings
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),
@@ -46,6 +51,8 @@ const api = {
     workspace: string
     providerId: string
     model: string
+    /** When set, create a branch + worktree and run the chat there. */
+    worktree?: { branch: string; base?: string }
   }): Promise<Conversation> => ipcRenderer.invoke(IPC.conversationCreate, input),
   forkConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationFork, id),
@@ -60,7 +67,15 @@ const api = {
     reason?: 'empty' | 'single-turn'
     error?: string
   }> => ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
-  deleteConversation: (id: string): Promise<void> => ipcRenderer.invoke(IPC.conversationDelete, id),
+  /**
+   * Delete a conversation. Pass `removeWorktree` to also tear down a
+   * Houston-created worktree (safe by default — a dirty worktree / unmerged branch
+   * is kept unless `force`). Resolves with what happened to the worktree, or null.
+   */
+  deleteConversation: (
+    id: string,
+    opts?: { removeWorktree?: boolean; force?: boolean }
+  ): Promise<WorktreeRemoval | null> => ipcRenderer.invoke(IPC.conversationDelete, id, opts),
   exportConversation: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExport, id),
   exportConversationHtml: (id: string): Promise<string | null> =>

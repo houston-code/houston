@@ -25,6 +25,7 @@ export interface SidebarProps {
   currentId: string | null
   onSelect: (id: string) => void
   onNew: () => void
+  onNewWorktree: () => void
   onDelete: (id: string) => void
   onFork: (id: string) => void
   onExport: (id: string) => void
@@ -179,7 +180,15 @@ function ConvRow({
             {conv.title}
           </div>
         )}
-        <div className="conv__meta">{basename(conv.workspace)}</div>
+        <div className="conv__meta">
+          {conv.worktree ? (
+            <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
+              ⑂ {conv.worktree.branch}
+            </span>
+          ) : (
+            basename(conv.workspace)
+          )}
+        </div>
       </div>
 
       <div className="conv__menu-wrap">
@@ -386,9 +395,19 @@ export function Sidebar(props: SidebarProps): JSX.Element {
 
   return (
     <aside className="sidebar">
-      <button className="btn btn--accent sidebar__new" onClick={props.onNew}>
-        ＋ New chat
-      </button>
+      <div className="sidebar__new-row">
+        <button className="btn btn--accent sidebar__new" onClick={props.onNew}>
+          ＋ New chat
+        </button>
+        <button
+          className="btn btn--accent sidebar__new-worktree"
+          onClick={props.onNewWorktree}
+          title="New chat in a git worktree (isolated branch)"
+          aria-label="New chat in a git worktree"
+        >
+          ⑂
+        </button>
+      </div>
 
       <input
         className="sidebar__search"

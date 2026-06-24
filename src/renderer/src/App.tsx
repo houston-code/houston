@@ -16,6 +16,7 @@ import { ControlBar } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
 import { SettingsModal } from './components/SettingsModal'
+import { WorktreeDialog } from './components/WorktreeDialog'
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
@@ -56,6 +57,7 @@ export default function App(): JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [worktreeFor, setWorktreeFor] = useState<string | null>(null)
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
@@ -180,6 +182,33 @@ export default function App(): JSX.Element {
     if (ws) await newChatInWorkspace(ws)
   }, [workspace, newChatInWorkspace])
 
+  // Open the "new chat in a worktree" dialog, picking a folder first if none is active.
+  const onNewWorktree = useCallback(async () => {
+    const ws = workspace ?? (await window.api.pickWorkspace())
+    if (ws) setWorktreeFor(ws)
+  }, [workspace])
+
+  // Create a branch + worktree for the given repo folder and start a chat in it.
+  // Rejects (surfaced inline by the dialog) on a bad branch name or git failure.
+  const newChatInWorktree = useCallback(
+    async (branch: string, base: string) => {
+      if (!worktreeFor || !settings) return
+      const sel = settings.selected
+      const conv = await window.api.createConversation({
+        workspace: worktreeFor,
+        providerId: sel?.providerId ?? '',
+        model: sel?.model ?? '',
+        worktree: { branch, ...(base ? { base } : {}) }
+      })
+      setLastWorkspace(conv.workspace)
+      setCurrentId(conv.id)
+      chat.reset([])
+      setWorktreeFor(null)
+      await refreshConversations()
+    },
+    [worktreeFor, settings, chat, refreshConversations]
+  )
+
   const onChangeWorkspace = useCallback(async () => {
     const ws = await window.api.pickWorkspace()
     if (ws) await newChatInWorkspace(ws)
@@ -187,14 +216,29 @@ export default function App(): JSX.Element {
 
   const onDeleteConversation = useCallback(
     async (id: string) => {
-      await window.api.deleteConversation(id)
+      const conv = conversations.find((c) => c.id === id)
+      let removeWorktree = false
+      if (conv?.worktree) {
+        // The chat is deleted either way; the prompt only governs the worktree.
+        removeWorktree = window.confirm(
+          `Delete “${conv.title}”.\n\n` +
+            `Also remove its git worktree and branch “${conv.worktree.branch}”?\n\n` +
+            `OK — remove the worktree (any uncommitted or unmerged work is kept).\n` +
+            `Cancel — keep the worktree on disk.`
+        )
+      }
+      const res = await window.api.deleteConversation(
+        id,
+        conv?.worktree ? { removeWorktree } : undefined
+      )
+      if (removeWorktree && res?.message) alert(res.message)
       if (id === currentId) {
         setCurrentId(null)
         chat.reset([])
       }
       await refreshConversations()
     },
-    [currentId, chat, refreshConversations]
+    [conversations, currentId, chat, refreshConversations]
   )
 
   const onForkConversation = useCallback(
@@ -480,6 +524,7 @@ export default function App(): JSX.Element {
         currentId={currentId}
         onSelect={selectConversation}
         onNew={onNewChat}
+        onNewWorktree={onNewWorktree}
         onDelete={onDeleteConversation}
         onFork={onForkConversation}
         onExport={onExportConversation}
@@ -574,6 +619,14 @@ export default function App(): JSX.Element {
           initial={settings}
           onClose={() => setSettingsOpen(false)}
           onSaved={(s) => setSettings(s)}
+        />
+      )}
+
+      {worktreeFor && (
+        <WorktreeDialog
+          workspace={worktreeFor}
+          onClose={() => setWorktreeFor(null)}
+          onCreate={newChatInWorktree}
         />
       )}
     </div>

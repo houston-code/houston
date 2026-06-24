@@ -20,6 +20,7 @@ import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { loadCommands } from './agent/commands'
+import { getRepoInfo, createWorktree, removeWorktree } from './agent/worktree'
 import { realpathSync } from 'node:fs'
 import {
   listConversations,
@@ -96,6 +97,14 @@ export function registerIpc(): void {
     }
   )
 
+  // Git repo info for the "new chat in a worktree" picker: main worktree root,
+  // current branch, and local branches to pick a base from. Read-only; a non-repo
+  // folder just reports isRepo:false so the UI hides the worktree option.
+  ipcMain.handle(IPC.gitRepoInfo, async (_event, workspace: string) => {
+    if (!workspace) return { isRepo: false, root: '', currentBranch: null, branches: [] }
+    return getRepoInfo(workspace)
+  })
+
   // Custom slash commands from the workspace's .houston/commands directory.
   ipcMain.handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
@@ -132,8 +141,38 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.conversationGet, (_event, id: string) => getConversation(id))
   ipcMain.handle(
     IPC.conversationCreate,
-    (_event, input: { workspace: string; providerId: string; model: string }) =>
-      createConversation(input)
+    async (
+      _event,
+      input: {
+        workspace: string
+        providerId: string
+        model: string
+        /** When set, create a branch + worktree and run the chat there. */
+        worktree?: { branch: string; base?: string }
+      }
+    ) => {
+      if (input.worktree) {
+        // Create the branch + worktree first; the worktree becomes the workspace.
+        // Throws (surfaced to the renderer) on a bad branch name or git failure.
+        const wt = await createWorktree({
+          workspace: input.workspace,
+          branch: input.worktree.branch,
+          base: input.worktree.base
+        })
+        rememberWorkspace(wt.path)
+        return createConversation({
+          workspace: wt.path,
+          providerId: input.providerId,
+          model: input.model,
+          worktree: wt
+        })
+      }
+      return createConversation({
+        workspace: input.workspace,
+        providerId: input.providerId,
+        model: input.model
+      })
+    }
   )
   ipcMain.handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
   ipcMain.handle(
@@ -141,9 +180,20 @@ export function registerIpc(): void {
     (_event, id: string, providerId: string, model: string) =>
       compactConversationNow(id, providerId, model)
   )
-  ipcMain.handle(IPC.conversationDelete, (_event, id: string) => {
-    deleteConversation(id)
-  })
+  // Delete a conversation. When it owns a Houston-created worktree and the caller
+  // opts in, also tear the worktree down (safe by default: a dirty worktree or an
+  // unmerged branch is kept). Returns what happened to the worktree, or null.
+  ipcMain.handle(
+    IPC.conversationDelete,
+    async (_event, id: string, opts?: { removeWorktree?: boolean; force?: boolean }) => {
+      const conv = getConversation(id)
+      deleteConversation(id)
+      if (opts?.removeWorktree && conv?.worktree) {
+        return removeWorktree(conv.worktree, { force: opts.force })
+      }
+      return null
+    }
+  )
   // Rename / pin / move-to-group. Does not affect the recency ordering.
   ipcMain.handle(
     IPC.conversationOrganize,

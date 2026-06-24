@@ -16,6 +16,7 @@ export const IPC = {
   directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
   commandsList: 'commands:list',
+  gitRepoInfo: 'git:repoInfo',
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',

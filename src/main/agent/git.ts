@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process'
+import { isSafeGitRef } from '@shared/git'
+
+export { isSafeGitRef }
 
 /**
  * Lightweight git awareness: at the start of a run we read the workspace's
@@ -131,16 +134,6 @@ export async function gitContext(workspace: string, exec: GitExec = runGit): Pro
   }
   const base = formatGitContext(branch, status)
   return worktrees ? `${base}\n${worktrees}` : base
-}
-
-/**
- * Whether a ref is safe to pass to git as a positional revision. Refs are run via
- * execFile (no shell), so the only injection risk is a value that begins with `-`
- * being read as an *option* (e.g. `--output=<file>`, which would write a file).
- * Requiring a leading ref character and a conservative charset closes that.
- */
-export function isSafeGitRef(ref: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]*$/.test(ref)
 }
 
 /** The uncommitted change set for a workspace, used as input to a review. */

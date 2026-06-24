@@ -15,7 +15,8 @@ import type {
   ChatMessage,
   Conversation,
   ConversationMeta,
-  ConversationUsage
+  ConversationUsage,
+  ConversationWorktree
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 
@@ -52,6 +53,8 @@ export function createConversation(input: {
   workspace: string
   providerId: string
   model: string
+  /** When set, the chat runs in this Houston-created git worktree. */
+  worktree?: ConversationWorktree
 }): Conversation {
   const now = Date.now()
   const conv: Conversation = {
@@ -62,7 +65,8 @@ export function createConversation(input: {
     model: input.model,
     createdAt: now,
     updatedAt: now,
-    messages: []
+    messages: [],
+    ...(input.worktree ? { worktree: input.worktree } : {})
   }
   write(conv)
   return conv
