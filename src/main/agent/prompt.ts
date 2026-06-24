@@ -1,5 +1,29 @@
 import { basename } from 'node:path'
 
+/**
+ * A short, factual addendum tailored to the model family in use, or '' for
+ * families we don't special-case. Detection is intentionally permissive: it
+ * keys off the provider id (built-ins use a stable id) and the model name, so
+ * custom OpenAI-compatible endpoints pointing at GPT models are still covered.
+ */
+function modelFamilyAddendum(providerId?: string, model?: string): string {
+  const id = (providerId ?? '').toLowerCase()
+  const m = (model ?? '').toLowerCase()
+
+  // Local runtimes (Ollama, LM Studio) — usually smaller models that do better
+  // with tight, deliberate tool use.
+  if (id === 'ollama' || id === 'lmstudio') {
+    return 'You are running on a local model: prefer concise, deliberate tool use — one focused call at a time over many speculative ones.'
+  }
+
+  // OpenAI / GPT / codex family (incl. the o-series reasoning models).
+  if (id === 'openai' || m.includes('gpt') || m.includes('codex') || /^o[1-9]/.test(m)) {
+    return 'apply_patch is available for multi-file edits: prefer it when a single change spans several files.'
+  }
+
+  return ''
+}
+
 /** Build the coding-agent system prompt for a run. */
 export function buildSystemPrompt(
   workspace: string,
@@ -7,7 +31,9 @@ export function buildSystemPrompt(
   rules?: string,
   planMode?: boolean,
   capabilities?: string,
-  gitStatus?: string
+  gitStatus?: string,
+  providerId?: string,
+  model?: string
 ): string {
   const base = `You are Houston, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
 
@@ -55,6 +81,11 @@ Safety:
 - Refuse to write malware or help with clearly harmful or unauthorized intrusion. Defensive security, CTFs, and authorized testing are fine.`
 
   const sections = [base]
+
+  const familyAddendum = modelFamilyAddendum(providerId, model)
+  if (familyAddendum) {
+    sections.push(familyAddendum)
+  }
 
   if (gitStatus && gitStatus.trim()) {
     sections.push(gitStatus.trim())

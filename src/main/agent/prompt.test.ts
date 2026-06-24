@@ -44,4 +44,50 @@ describe('buildSystemPrompt', () => {
     expect(buildSystemPrompt('/tmp/x')).not.toContain('PLAN MODE')
     expect(buildSystemPrompt('/tmp/x', undefined, undefined, true)).toContain('PLAN MODE IS ON')
   })
+
+  describe('per-model addendum', () => {
+    const base = buildSystemPrompt('/tmp/x')
+
+    it('appends the apply_patch line for the OpenAI provider', () => {
+      const p = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'openai', 'gpt-4o')
+      expect(p).toContain('apply_patch is available for multi-file edits')
+      expect(p).not.toContain('local model')
+    })
+
+    it('appends the apply_patch line for GPT / codex / o-series model names on any provider', () => {
+      for (const model of ['gpt-4o', 'gpt-5-codex', 'codex-mini', 'o3', 'o4-mini']) {
+        const p = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'custom-endpoint', model)
+        expect(p, model).toContain('apply_patch is available for multi-file edits')
+      }
+    })
+
+    it('appends the concise-tool-use line for local (ollama / lmstudio) providers', () => {
+      for (const id of ['ollama', 'lmstudio']) {
+        const p = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, id, 'llama3')
+        expect(p, id).toContain('prefer concise, deliberate tool use')
+        expect(p, id).not.toContain('apply_patch is available')
+      }
+    })
+
+    it('adds no addendum for Anthropic / Gemini families', () => {
+      const anthropic = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'anthropic', 'claude-opus-4-8')
+      const gemini = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'gemini', 'gemini-2.5-pro')
+      expect(anthropic).not.toContain('apply_patch is available')
+      expect(anthropic).not.toContain('prefer concise, deliberate tool use')
+      expect(gemini).not.toContain('apply_patch is available')
+      expect(gemini).not.toContain('prefer concise, deliberate tool use')
+    })
+
+    it('leaves the base prompt byte-for-byte identical when no provider/model is given', () => {
+      // Same call as the rest of the suite — the new params are optional and inert by default.
+      expect(buildSystemPrompt('/tmp/x')).toBe(base)
+    })
+
+    it('only adds the addendum — the base prompt is otherwise unchanged', () => {
+      const openai = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'openai', 'gpt-4o')
+      const addendum = 'apply_patch is available for multi-file edits: prefer it when a single change spans several files.'
+      // Stripping the appended section (and its separator) recovers the unmodified base.
+      expect(openai).toBe(`${base}\n\n${addendum}`)
+    })
+  })
 })
