@@ -115,6 +115,24 @@ describe('useChat', () => {
     expect(result.current.checkpoint).toBeNull()
   })
 
+  it('applies usage events: sets totals, keeps prior values on falsy fields, drops stale', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    const runId = await sendAndGetRunId(result, api)
+
+    // The event carries cumulative totals, so the hook sets (not sums) them.
+    emit({ runId, type: 'usage', inputTokens: 1000, outputTokens: 200, cost: 0.02 })
+    expect(result.current.usage).toEqual({ context: 1000, output: 200, cost: 0.02 })
+
+    // A falsy field falls back to the previous value (the `|| prev` chain).
+    emit({ runId, type: 'usage', inputTokens: 0, outputTokens: 350, cost: 0 })
+    expect(result.current.usage).toEqual({ context: 1000, output: 350, cost: 0.02 })
+
+    // Usage from a stale run is dropped by the runId guard.
+    emit({ runId: 'stale', type: 'usage', inputTokens: 9999, outputTokens: 9999, cost: 9 })
+    expect(result.current.usage).toEqual({ context: 1000, output: 350, cost: 0.02 })
+  })
+
   it('stops running on done and flags errors on error', async () => {
     const { api, emit } = installApi()
     const { result } = renderHook(() => useChat())
@@ -130,6 +148,39 @@ describe('useChat', () => {
     emit({ runId: runId2, type: 'error', message: 'kaboom' })
     expect(result.current.running).toBe(false)
     expect(result.current.errored).toBe(true)
+  })
+
+  it('retry re-runs the turn with a fresh runId, adds no user item, and clears errored', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'error', message: 'boom' })
+    expect(result.current.errored).toBe(true)
+    const itemsBefore = result.current.items.length
+
+    await act(async () => {
+      await result.current.retry({
+        conversationId: 'c1',
+        providerId: 'anthropic',
+        model: 'claude',
+        approvalPolicy: 'ask'
+      })
+    })
+
+    expect(api.retryAgent).toHaveBeenCalledOnce()
+    const arg = api.retryAgent.mock.calls[0][0] as { runId: string; conversationId: string }
+    expect(arg).toMatchObject({
+      conversationId: 'c1',
+      providerId: 'anthropic',
+      model: 'claude',
+      approvalPolicy: 'ask'
+    })
+    expect(typeof arg.runId).toBe('string')
+    expect(arg.runId).not.toBe(runId) // a new run, not the failed one
+    expect(result.current.running).toBe(true)
+    expect(result.current.errored).toBe(false)
+    // retry must not append a new user message (the turn is already persisted).
+    expect(result.current.items).toHaveLength(itemsBefore)
   })
 
   it('routes cancel and approve to the active run', async () => {
