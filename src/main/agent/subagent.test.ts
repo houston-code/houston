@@ -23,6 +23,17 @@ function scriptedProvider(turns: ProviderStreamEvent[][]): Provider {
   }
 }
 
+/** Records the tool names offered on the first turn, then ends the turn. */
+function capturingProvider(seen: { tools: string[] }): Provider {
+  return {
+    async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+      seen.tools = (req.tools ?? []).map((t) => t.name)
+      yield { type: 'text', text: 'done' }
+      yield { type: 'done', stopReason: 'end_turn' }
+    }
+  }
+}
+
 describe('runSubAgent', () => {
   it('uses a read tool then returns the final report', async () => {
     writeFileSync(join(ws, 'note.txt'), 'the answer is 42')
@@ -90,5 +101,66 @@ describe('runSubAgent', () => {
       signal: new AbortController().signal
     })
     expect(report).toContain('boom')
+  })
+
+  it('offers the full default set when no tools allow-list is given', async () => {
+    const seen = { tools: [] as string[] }
+    await runSubAgent({
+      provider: capturingProvider(seen),
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: new AbortController().signal
+    })
+    expect(seen.tools).toEqual([...SUBAGENT_TOOLS])
+  })
+
+  it('narrows the offered tools to a declared allow-list', async () => {
+    const seen = { tools: [] as string[] }
+    await runSubAgent({
+      provider: capturingProvider(seen),
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: new AbortController().signal,
+      tools: ['read_file']
+    })
+    expect(seen.tools).toEqual(['read_file'])
+  })
+
+  it('drops unknown entries from the declared allow-list', async () => {
+    const seen = { tools: [] as string[] }
+    await runSubAgent({
+      provider: capturingProvider(seen),
+      model: 'm',
+      workspace: ws,
+      prompt: 'x',
+      signal: new AbortController().signal,
+      // write_file/run_shell are never in the read-only set, bogus is unknown.
+      tools: ['read_file', 'glob', 'write_file', 'run_shell', 'bogus']
+    })
+    expect(seen.tools).toEqual(['read_file', 'glob'])
+  })
+
+  it('refuses to execute a tool excluded by the allow-list', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'secret')
+    const provider = scriptedProvider([
+      [
+        { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'read note.txt',
+      signal: new AbortController().signal,
+      // read_file is excluded, so the call must be rejected, not executed.
+      tools: ['glob']
+    })
+    expect(report).toContain('Done.')
+    // The model only saw the rejection note, never the file contents.
   })
 })
