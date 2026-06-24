@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@shared/agent'
+import { contextWindowFor } from '@shared/usage'
 import { createProvider } from '../providers'
 import { getProvider } from '../store'
 import { getConversation, setMessages } from '../conversations'
@@ -8,8 +9,18 @@ import {
   buildSummaryMessages,
   buildSummaryRequestMessages,
   findCompactionCut,
+  findSummaryChunkCut,
   summarizationSystemPrompt
 } from './compaction'
+
+/**
+ * Fraction of the model's context window a single summarization request's input
+ * chunk may use. The rest is headroom for the prior summary, the instruction, the
+ * system prompt, and the summary output. Keeping each chunk well under the window
+ * is what lets `/compact` rescue a conversation that is *already* over the limit.
+ */
+const SUMMARY_CHUNK_FRACTION = 0.6
+const DEFAULT_SUMMARY_CHUNK_BUDGET = 100_000
 
 export interface CompactResult {
   ok: boolean
@@ -41,8 +52,8 @@ export async function compactConversationNow(
   const conv = getConversation(id)
   if (!conv) return { ok: false, summarized: 0, error: 'Conversation not found.' }
 
-  const cut = findCompactionCut(conv.messages, 0, KEEP_RECENT_USER_TURNS)
-  if (cut <= 0) return { ok: true, summarized: 0 }
+  const target = findCompactionCut(conv.messages, 0, KEEP_RECENT_USER_TURNS)
+  if (target <= 0) return { ok: true, summarized: 0 }
 
   const cfg = getProvider(providerId)
   if (!cfg) return { ok: false, summarized: 0, error: `Unknown provider: ${providerId}` }
@@ -54,25 +65,38 @@ export async function compactConversationNow(
     return { ok: false, summarized: 0, error: (e as Error).message }
   }
 
-  let text = ''
+  const window = contextWindowFor(model)
+  const budget = window ? Math.floor(window * SUMMARY_CHUNK_FRACTION) : DEFAULT_SUMMARY_CHUNK_BUDGET
+
+  // Summarize the head [0, target) in budget-bounded chunks, folding each result
+  // into a running summary. Chunking keeps any single summarization request from
+  // itself overflowing the window — essential when the conversation is already
+  // over the limit, where a one-shot summary of the whole head would just fail.
+  let summaryMsgs: ChatMessage[] = []
+  let cut = 0
   try {
-    for await (const ev of provider.streamChat({
-      model,
-      system: summarizationSystemPrompt,
-      messages: buildSummaryRequestMessages([], conv.messages.slice(0, cut)),
-      maxTokens: SUMMARY_MAX_TOKENS
-    })) {
-      if (ev.type === 'text') text += ev.text
-      else if (ev.type === 'error') throw new Error(ev.message)
+    while (cut < target) {
+      const next = findSummaryChunkCut(conv.messages, cut, target, budget)
+      let text = ''
+      for await (const ev of provider.streamChat({
+        model,
+        system: summarizationSystemPrompt,
+        messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next)),
+        maxTokens: SUMMARY_MAX_TOKENS
+      })) {
+        if (ev.type === 'text') text += ev.text
+        else if (ev.type === 'error') throw new Error(ev.message)
+      }
+      const summary = text.trim()
+      if (!summary) return { ok: false, summarized: 0, error: 'The model returned an empty summary.' }
+      summaryMsgs = buildSummaryMessages(summary)
+      cut = next
     }
   } catch (e) {
     return { ok: false, summarized: 0, error: (e as Error).message }
   }
 
-  const summary = text.trim()
-  if (!summary) return { ok: false, summarized: 0, error: 'The model returned an empty summary.' }
-
-  const messages = applyCompaction(conv.messages, cut, summary)
+  const messages = [...summaryMsgs, ...conv.messages.slice(target)]
   setMessages(id, messages)
-  return { ok: true, summarized: cut, messages }
+  return { ok: true, summarized: target, messages }
 }

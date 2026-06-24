@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@shared/agent'
 import {
   COMPACTION_SUMMARY_PREFIX,
+  DOCUMENT_TOKENS_ESTIMATE,
+  IMAGE_TOKENS_ESTIMATE,
   buildSummaryMessages,
   buildSummaryRequestMessages,
   estimateTokens,
-  findCompactionCut
+  findCompactionCut,
+  findForcedCompactionCut,
+  findSummaryChunkCut,
+  isContextOverflowError
 } from './compaction'
 
 /** A conversation of `turns` complete turns: user → assistant(tool) → tool → assistant. */
@@ -38,6 +43,107 @@ describe('estimateTokens', () => {
     ])
     const withoutTool = estimateTokens('', [{ role: 'assistant', content: '' }])
     expect(withTool).toBeGreaterThan(withoutTool + 90)
+  })
+
+  it('counts image and document attachments that barely touch text content', () => {
+    const base: ChatMessage = { role: 'user', content: 'see attached' }
+    const plain = estimateTokens('', [base])
+    const withImages = estimateTokens('', [
+      { ...base, images: [{ mediaType: 'image/png', data: 'x' }, { mediaType: 'image/png', data: 'y' }] }
+    ])
+    const withDoc = estimateTokens('', [{ ...base, documents: [{ mediaType: 'application/pdf', data: 'z' }] }])
+    expect(withImages).toBe(plain + 2 * IMAGE_TOKENS_ESTIMATE)
+    expect(withDoc).toBe(plain + DOCUMENT_TOKENS_ESTIMATE)
+  })
+})
+
+describe('findForcedCompactionCut', () => {
+  it('advances one user turn at a time toward the latest turn', () => {
+    const msgs = conversation(5) // user messages at indices 0,4,8,12,16
+    const a = findForcedCompactionCut(msgs, 0)
+    expect(a).toBe(4)
+    const b = findForcedCompactionCut(msgs, a)
+    expect(b).toBe(8)
+  })
+
+  it('never cuts away the final user turn (the request being sent)', () => {
+    const msgs = conversation(3) // user messages at 0, 4, 8
+    // From a cut that already keeps only the last two turns, it stops at the last.
+    expect(findForcedCompactionCut(msgs, 4)).toBe(8)
+    // Already keeping only the final turn — nothing left to compact away.
+    expect(findForcedCompactionCut(msgs, 8)).toBe(8)
+  })
+
+  it('cannot advance a single-turn conversation', () => {
+    const msgs = conversation(1) // one user turn at index 0
+    expect(findForcedCompactionCut(msgs, 0)).toBe(0)
+  })
+
+  it('lands on a user boundary so the kept tail stays valid', () => {
+    const msgs = conversation(4)
+    const cut = findForcedCompactionCut(msgs, 0)
+    expect(msgs[cut].role).toBe('user')
+    expect(msgs.slice(cut)[0].toolCallId).toBeUndefined()
+  })
+})
+
+describe('findSummaryChunkCut', () => {
+  // ~1k tokens of text per turn (4k chars / 4) so budgets are easy to reason about.
+  const big = (turns: number): ChatMessage[] => {
+    const msgs: ChatMessage[] = []
+    for (let t = 0; t < turns; t++) {
+      msgs.push({ role: 'user', content: 'x'.repeat(4000) })
+      msgs.push({ role: 'assistant', content: `a${t}` })
+    }
+    return msgs
+  }
+
+  it('packs as many whole turns as fit the budget', () => {
+    const msgs = big(5) // user turns at 0,2,4,6,8 — each ~1k tokens
+    const cut = findSummaryChunkCut(msgs, 0, msgs.length, 2500)
+    // Two turns (~2k) fit under 2500; a third would exceed it.
+    expect(cut).toBe(4)
+    expect(msgs[cut].role).toBe('user')
+  })
+
+  it('always advances at least one turn even if it exceeds the budget', () => {
+    const msgs = big(3)
+    const cut = findSummaryChunkCut(msgs, 0, msgs.length, 10) // budget below one turn
+    expect(cut).toBe(2) // the first turn, alone
+  })
+
+  it('walking it in a loop covers the whole head', () => {
+    const msgs = big(5)
+    const end = 8 // keep the last turn; summarize [0,8)
+    const cuts: number[] = []
+    let cur = 0
+    while (cur < end) {
+      cur = findSummaryChunkCut(msgs, cur, end, 2500)
+      cuts.push(cur)
+    }
+    expect(cuts.at(-1)).toBe(end)
+    expect(cuts.every((c, i) => i === 0 || c > cuts[i - 1])).toBe(true) // strictly increasing
+  })
+})
+
+describe('isContextOverflowError', () => {
+  it('detects the Anthropic, OpenAI, and Gemini overflow phrasings', () => {
+    expect(isContextOverflowError(new Error('prompt is too long: 212129 tokens > 200000 maximum'))).toBe(true)
+    expect(isContextOverflowError({ status: 400, message: 'context_length_exceeded' })).toBe(true)
+    expect(isContextOverflowError(new Error("This model's maximum context length is 128000 tokens"))).toBe(true)
+    expect(isContextOverflowError(new Error('Please reduce the length of the messages'))).toBe(true)
+    expect(isContextOverflowError(new Error('The input token count (300000) exceeds the maximum number of tokens'))).toBe(true)
+  })
+
+  it('does not flag unrelated errors', () => {
+    expect(isContextOverflowError(new Error('invalid api key'))).toBe(false)
+    expect(isContextOverflowError(new Error('old_string was not found'))).toBe(false)
+    expect(isContextOverflowError({ status: 429, message: 'rate limit exceeded' })).toBe(false)
+    expect(isContextOverflowError(new Error('Overloaded'))).toBe(false)
+  })
+
+  it('ignores overflow-sounding text on a non-4xx status (likely a server error)', () => {
+    expect(isContextOverflowError({ status: 500, message: 'token count exceeded internally' })).toBe(false)
   })
 })
 
