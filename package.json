@@ -21,8 +21,9 @@
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
     "icon": "node scripts/make-icon.mjs && bash scripts/make-icns.sh",
-    "dist": "npm run build && electron-builder --mac --arm64",
-    "dist:unpacked": "npm run build && electron-builder --mac --arm64 --dir"
+    "verify:resources": "node scripts/verify-bundled-binaries.mjs",
+    "dist": "npm run build && npm run verify:resources && electron-builder --mac --arm64",
+    "dist:unpacked": "npm run build && npm run verify:resources && electron-builder --mac --arm64 --dir"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",
