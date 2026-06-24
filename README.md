@@ -215,7 +215,7 @@ Useful scripts:
 
 ```bash
 npm run build    # typecheck + bundle to out/
-npm test         # unit tests (vitest)
+npm test         # unit tests (vitest: node + jsdom projects)
 npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ```
 
