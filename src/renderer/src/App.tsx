@@ -390,9 +390,13 @@ export default function App(): JSX.Element {
     )
     if (res.ok && res.messages) {
       chat.reset(itemsFromMessages(res.messages))
-      chat.notify(res.summarized ? `Compacted ${res.summarized} earlier messages.` : 'Nothing to compact yet.')
+      chat.notify(`Compacted ${res.summarized} earlier messages.`)
     } else if (res.ok) {
-      chat.notify('Nothing to compact yet.')
+      chat.notify(
+        res.reason === 'single-turn'
+          ? "This conversation is a single turn — there are no earlier turns to summarize. Start a new chat to free up context."
+          : 'Nothing to compact yet.'
+      )
     } else {
       chat.notify(`Couldn't compact: ${res.error ?? 'unknown error'}`)
     }

@@ -118,6 +118,17 @@ describe('startRun', () => {
     expect(assistant?.content).toBe('hello world')
   })
 
+  it('estimates context size when the provider reports no token usage', async () => {
+    // The scripted provider's `done` carries no usage; the loop should fall back to
+    // an estimate so the context-size readout never sits at zero (local models, etc.).
+    const r = await run({
+      turns: [[{ type: 'text', text: 'hi' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    const usage = r.events.find((e) => e.type === 'usage') as { inputTokens: number } | undefined
+    expect(usage).toBeTruthy()
+    expect(usage!.inputTokens).toBeGreaterThan(0)
+  })
+
   it('runs a read tool then finishes (reads from the workspace)', async () => {
     writeFileSync(join(ws, 'note.txt'), 'the secret')
     const r = await run({

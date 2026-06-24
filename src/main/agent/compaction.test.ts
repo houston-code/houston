@@ -8,6 +8,7 @@ import {
   buildSummaryRequestMessages,
   estimateTokens,
   findCompactionCut,
+  findCompactionCutByBudget,
   findForcedCompactionCut,
   findSummaryChunkCut,
   isContextOverflowError
@@ -54,6 +55,45 @@ describe('estimateTokens', () => {
     const withDoc = estimateTokens('', [{ ...base, documents: [{ mediaType: 'application/pdf', data: 'z' }] }])
     expect(withImages).toBe(plain + 2 * IMAGE_TOKENS_ESTIMATE)
     expect(withDoc).toBe(plain + DOCUMENT_TOKENS_ESTIMATE)
+  })
+})
+
+describe('findCompactionCutByBudget', () => {
+  // ~1k tokens per user turn (4k chars / 4) on the user message of each turn.
+  const turns = (n: number): ChatMessage[] => {
+    const msgs: ChatMessage[] = []
+    for (let t = 0; t < n; t++) {
+      msgs.push({ role: 'user', content: 'x'.repeat(4000) })
+      msgs.push({ role: 'assistant', content: `a${t}` })
+    }
+    return msgs
+  }
+
+  it('compacts a few large turns that the fixed keep-3 rule would refuse', () => {
+    const msgs = turns(3) // user turns at 0, 2, 4 — each ~1k tokens
+    // findCompactionCut keeps the last 3 user turns → refuses to compact 3 turns.
+    expect(findCompactionCut(msgs, 0, 3)).toBe(0)
+    // Budget-aware: a 1.5k budget can't hold all three, so it keeps fewer and compacts.
+    const cut = findCompactionCutByBudget(msgs, 3, 1500)
+    expect(cut).toBeGreaterThan(0)
+    expect(msgs[cut].role).toBe('user')
+  })
+
+  it('keeps more recent turns when they comfortably fit the budget', () => {
+    const msgs = turns(5) // user turns at 0,2,4,6,8
+    // A generous budget keeps the full maxKeepTurns (3) and summarizes the rest.
+    expect(findCompactionCutByBudget(msgs, 3, 1_000_000)).toBe(4)
+  })
+
+  it('keeps at least one turn when even a single turn exceeds the budget', () => {
+    const msgs = turns(3)
+    const cut = findCompactionCutByBudget(msgs, 3, 10) // budget below one turn
+    expect(cut).toBe(4) // the last user turn, alone
+  })
+
+  it('returns 0 for a single turn (nothing earlier to summarize)', () => {
+    expect(findCompactionCutByBudget(turns(1), 3, 1000)).toBe(0)
+    expect(findCompactionCutByBudget([], 3, 1000)).toBe(0)
   })
 })
 
