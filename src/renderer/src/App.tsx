@@ -3,6 +3,7 @@ import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@sha
 import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
+import { modelCapabilities } from '@shared/usage'
 import { applyTheme } from './lib/theme'
 import { shortcutFor } from './lib/shortcuts'
 import { statusText } from './lib/statusLine'
@@ -402,6 +403,10 @@ export default function App(): JSX.Element {
     selectedProvider && (!selectedProvider.requiresKey || selectedProvider.hasKey)
   )
   const canChat = Boolean(settings.selected && workspace && selectionReady)
+  // Only offer the image-attachment affordance when the selected model can see images.
+  const visionSupported = settings.selected
+    ? modelCapabilities(settings.selected.model).vision
+    : true
 
   return (
     <div className="app">
@@ -487,6 +492,7 @@ export default function App(): JSX.Element {
             running={chat.running}
             workspace={workspace}
             commands={commands}
+            vision={visionSupported}
             onCommand={onCommand}
             onSend={onSend}
             onCancel={chat.cancel}
