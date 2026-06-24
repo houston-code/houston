@@ -54,8 +54,8 @@ Add or update tests for non-trivial logic — especially anything touching the
 sandbox boundary, path containment, or provider message translation.
 
 Tests live next to the code as `*.test.ts(x)`. Vitest runs them in two projects
-(see [`vitest.workspace.ts`](vitest.workspace.ts)): main-process and shared code
-run under Node, while the React renderer runs under jsdom with
+(see `test.projects` in [`vitest.config.ts`](vitest.config.ts)): main-process and
+shared code run under Node, while the React renderer runs under jsdom with
 [Testing Library](https://testing-library.com/). Renderer component tests use
 `.test.tsx` and render with `@testing-library/react`; hooks use `renderHook`.
 
