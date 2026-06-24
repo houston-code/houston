@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, realpathSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -25,6 +25,7 @@ describe('tool registry', () => {
   it('exposes the expected tools', () => {
     expect(toolSchemas().map((t) => t.name).sort()).toEqual([
       'apply_patch',
+      'ast_grep',
       'dispatch_agent',
       'edit_file',
       'glob',
@@ -228,6 +229,27 @@ describe('list and search', () => {
     expect(await run('search_files', { pattern: 'hello', ignore_case: true, files_with_matches: true })).toBe(
       'a.ts'
     )
+  })
+
+  // The ast_grep tool resolves a bundled/PATH ast-grep at call time. Point it at
+  // the vendored binary so the full tool path (schema → execute → ast-grep) is
+  // exercised; skip if it can't be located on this platform.
+  const astGrepBin = [
+    join(process.cwd(), 'node_modules/@ast-grep/cli/ast-grep'),
+    join(process.cwd(), 'node_modules/.bin/ast-grep')
+  ].find((p) => existsSync(p))
+
+  it.skipIf(!astGrepBin)('runs a structural search via ast_grep', async () => {
+    const prev = process.env.HOUSTON_AST_GREP
+    process.env.HOUSTON_AST_GREP = astGrepBin
+    try {
+      await run('write_file', { path: 'src/app.ts', content: 'console.log(1)\nconst y = 2\n' })
+      const out = await run('ast_grep', { pattern: 'console.log($A)', lang: 'ts' })
+      expect(out).toContain('src/app.ts:1:')
+    } finally {
+      if (prev === undefined) delete process.env.HOUSTON_AST_GREP
+      else process.env.HOUSTON_AST_GREP = prev
+    }
   })
 })
 

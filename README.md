@@ -21,8 +21,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   The agent can also `read_file` an image or PDF in the project and view it
   directly (full vision on Anthropic; other providers get a text placeholder).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
-  `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `run_shell`, `web_fetch`,
-  `web_search`, and `todo_write` to actually do the work — not just describe it. When a turn is all
+  `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `ast_grep`,
+  `run_shell`, `web_fetch`, `web_search`, and `todo_write` to actually do the
+  work — not just describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
   **resiliently** — if the model's snippet drifts from the file by indentation or
@@ -30,6 +31,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   `search_files` ships with a bundled **ripgrep**, so fast content search works
   out of the box without anything installed on your PATH (it falls back to a
   built-in scan if the binary is ever unavailable).
+- **Structural code search.** `ast_grep` matches code by its **syntax tree**
+  rather than text, using a bundled [ast-grep](https://ast-grep.github.io)
+  binary. Meta-variables make it precise — `console.log($A)`,
+  `function $F($$$) { $$$ }`, `useEffect($CB, [])` — so the agent can find
+  calls, declarations, and JSX without the false positives of a regex. Pass the
+  language (`ts`, `tsx`, `py`, `rust`, …).
 - **Web search.** With a Tavily API key (set in Settings → *Web search*), the
   agent can `web_search` the web for current information. Like `web_fetch`, it
   requires approval since it leaves the machine.

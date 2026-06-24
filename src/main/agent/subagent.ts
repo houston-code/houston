@@ -10,7 +10,7 @@ import { getTool } from './tools'
  */
 
 /** Tools a subagent may use — local, read-only, no network egress. */
-export const SUBAGENT_TOOLS = ['read_file', 'list_dir', 'glob', 'search_files'] as const
+export const SUBAGENT_TOOLS = ['read_file', 'list_dir', 'glob', 'search_files', 'ast_grep'] as const
 const SUBAGENT_TOOL_SET = new Set<string>(SUBAGENT_TOOLS)
 
 const MAX_SUBAGENT_ITERATIONS = 16
@@ -18,7 +18,7 @@ const SUBAGENT_MAX_TOKENS = 4096
 
 /** Read-only constraints + reporting contract, shared by the default and custom agents. */
 function subAgentConstraints(workspace: string): string {
-  return `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files. You cannot edit files, run commands, or access the network.
+  return `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files, ast_grep. You cannot edit files, run commands, or access the network.
 
 Your final message is your entire report back to the calling agent — make it self-contained: include the concrete findings (file paths, key code, answers) it needs, not a narration of your steps. Be concise.`
 }

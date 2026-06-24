@@ -51,6 +51,11 @@ export function describeTool(item: ToolItem): ToolDescription {
       const where = str(a.path)
       return { verb: 'Search', target: where ? `${pat} in ${shortenPath(where)}` : pat, mono: true }
     }
+    case 'ast_grep': {
+      const pat = str(a.pattern) ?? ''
+      const where = str(a.path)
+      return { verb: 'Structural search', target: where ? `${pat} in ${shortenPath(where)}` : pat, mono: true }
+    }
     case 'run_shell':
       return { verb: 'Run', target: oneLine(str(a.command) ?? ''), mono: true }
     case 'read_shell_output':
