@@ -68,13 +68,15 @@ interface RunResult {
 /** Run a turn to completion. `onApproval` lets a test resolve approval prompts. */
 async function run(
   opts: {
-    turns: ProviderStreamEvent[][]
+    turns?: ProviderStreamEvent[][]
+    provider?: Provider
+    messages?: ChatMessage[]
     policy?: ApprovalPolicy
     userText?: string
     onApproval?: (callId: string, decide: (d: 'allow' | 'deny' | 'always') => void) => void
   }
 ): Promise<RunResult> {
-  h.provider = scripted(opts.turns)
+  h.provider = opts.provider ?? scripted(opts.turns ?? [])
   const runId = `run-${Math.round(Math.random() * 1e9)}`
   const events: AgentEvent[] = []
   let messages: ChatMessage[] = []
@@ -93,7 +95,7 @@ async function run(
       providerId: 'anthropic',
       model: 'claude-test',
       approvalPolicy: opts.policy ?? 'ask',
-      messages: [{ role: 'user', content: opts.userText ?? 'do it' }]
+      messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }]
     },
     send,
     (m) => {
@@ -216,5 +218,64 @@ describe('startRun', () => {
     const r = await run({ turns: [[{ type: 'error', message: 'invalid api key' }]] })
     expect(types(r)).not.toContain('retry')
     expect(types(r).at(-1)).toBe('error')
+  })
+
+  it('recovers from a context-overflow error by force-compacting older turns', async () => {
+    // Many older turns plus the current one. The first send overflows; the loop
+    // should summarize older turns and retry the (now smaller) request.
+    const history: ChatMessage[] = []
+    for (let t = 0; t < 4; t++) {
+      history.push({ role: 'user', content: `old question ${t}` })
+      history.push({ role: 'assistant', content: `old answer ${t}` })
+    }
+    history.push({ role: 'user', content: 'current question' })
+
+    let summarized = false
+    const mainSends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        // Summarization calls are the only ones that set maxTokens.
+        if (req.maxTokens != null) {
+          summarized = true
+          yield { type: 'text', text: 'COMPACTED SUMMARY' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        mainSends.push(req.messages)
+        if (mainSends.length === 1) {
+          yield { type: 'error', message: 'prompt is too long: 212129 tokens > 200000 maximum' }
+          return
+        }
+        yield { type: 'text', text: 'recovered' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+
+    const r = await run({ provider, messages: history })
+
+    expect(types(r)).toContain('compaction')
+    expect(types(r).at(-1)).toBe('done')
+    expect(r.messages.find((m) => m.role === 'assistant' && m.content === 'recovered')).toBeTruthy()
+    // A summarization happened, and the retried send led with the synthetic summary
+    // (older turns folded away) where the first, overflowing send did not.
+    expect(summarized).toBe(true)
+    expect(mainSends).toHaveLength(2)
+    expect(mainSends[0][0].content).not.toContain('COMPACTED SUMMARY')
+    expect(mainSends[1][0].content).toContain('COMPACTED SUMMARY')
+  })
+
+  it('surfaces a clear error when even the latest turn overflows the window', async () => {
+    // A single user turn — nothing older to compact away. The overflow can't be
+    // recovered, so the run should fail with a friendly, actionable message.
+    const provider: Provider = {
+      async *streamChat() {
+        yield { type: 'error', message: 'prompt is too long: 999999 tokens > 200000 maximum' }
+      }
+    }
+    const r = await run({ provider, messages: [{ role: 'user', content: 'huge paste' }] })
+    expect(types(r)).not.toContain('compaction')
+    const last = r.events.at(-1)
+    expect(last?.type).toBe('error')
+    expect((last as { message: string }).message).toContain('context window')
   })
 })

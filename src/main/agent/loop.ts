@@ -43,6 +43,8 @@ import {
   buildSummaryRequestMessages,
   estimateTokens,
   findCompactionCut,
+  findForcedCompactionCut,
+  isContextOverflowError,
   summarizationSystemPrompt
 } from './compaction'
 
@@ -251,6 +253,37 @@ export async function startRun(
     let summaryMsgs: ChatMessage[] = []
     let lastInputTokens = 0
 
+    // Tool schemas ride along on every request but aren't part of the message
+    // window; fold their (static) size into the estimate so compaction accounts for
+    // them. Real provider usage (lastInputTokens) supersedes the estimate once known.
+    const toolTokens = Math.ceil(JSON.stringify(tools).length / 4)
+
+    // Summarize messages[cut..newCut), fold the result into the synthetic summary,
+    // and advance `cut`. Shared by the proactive (pre-send, threshold-driven) path
+    // and the reactive (post-overflow) recovery path.
+    const compactTo = async (newCut: number): Promise<'ok' | 'aborted' | 'failed'> => {
+      if (newCut <= cut) return 'failed'
+      try {
+        const summary = await summarize(
+          provider,
+          req.model,
+          buildSummaryRequestMessages(summaryMsgs, messages.slice(cut, newCut)),
+          abort.signal
+        )
+        if (!summary) return 'failed'
+        // Messages folded into the summary *this round* (a count, which is what the
+        // renderer shows) — not the absolute tail-start index.
+        const compactedNow = newCut - cut
+        summaryMsgs = buildSummaryMessages(summary)
+        cut = newCut
+        lastInputTokens = 0
+        emit({ type: 'compaction', summarized: compactedNow })
+        return 'ok'
+      } catch {
+        return abort.signal.aborted ? 'aborted' : 'failed'
+      }
+    }
+
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
@@ -262,39 +295,19 @@ export async function startRun(
       // sent to the provider shrinks.
       if (threshold > 0) {
         const windowNow = [...summaryMsgs, ...messages.slice(cut)]
-        const size = Math.max(estimateTokens(system, windowNow), lastInputTokens)
+        const size = Math.max(estimateTokens(system, windowNow) + toolTokens, lastInputTokens)
         if (size > threshold) {
           const newCut = findCompactionCut(messages, cut, KEEP_RECENT_USER_TURNS)
-          if (newCut > cut) {
-            try {
-              const summary = await summarize(
-                provider,
-                req.model,
-                buildSummaryRequestMessages(summaryMsgs, messages.slice(cut, newCut)),
-                abort.signal
-              )
-              if (summary) {
-                // Messages folded into the summary *this round* (a count, which is
-                // what the renderer shows) — not the absolute tail-start index.
-                const compactedNow = newCut - cut
-                summaryMsgs = buildSummaryMessages(summary)
-                cut = newCut
-                lastInputTokens = 0
-                emit({ type: 'compaction', summarized: compactedNow })
-              }
-            } catch {
-              if (abort.signal.aborted) {
-                emit({ type: 'done', stopReason: 'aborted' })
-                return
-              }
-              // Summarization failed — keep going with the full window rather than
-              // breaking the run. The turn may still fit, or surface a provider error.
-            }
+          // Summarization failure is non-fatal: keep going with the full window —
+          // the turn may still fit, or the provider error path will recover below.
+          if (newCut > cut && (await compactTo(newCut)) === 'aborted') {
+            emit({ type: 'done', stopReason: 'aborted' })
+            return
           }
         }
       }
 
-      const sendMessages = [...summaryMsgs, ...messages.slice(cut)]
+      let sendMessages = [...summaryMsgs, ...messages.slice(cut)]
 
       let assistantText = ''
       let toolCalls: ToolCall[] = []
@@ -351,6 +364,33 @@ export async function startRun(
         } catch (e) {
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
+            return
+          }
+          // Context overflow: the request is simply too big for the window. Retrying
+          // it unchanged is futile and failing the run is worse than shrinking it, so
+          // (when nothing has streamed) force a compaction step and retry with fewer
+          // verbatim turns. Independent of the user's compaction threshold — an
+          // unsendable request must shrink regardless.
+          if (!emitted && isContextOverflowError(e)) {
+            const forcedCut = findForcedCompactionCut(messages, cut)
+            const outcome = forcedCut > cut ? await compactTo(forcedCut) : 'failed'
+            if (outcome === 'aborted') {
+              emit({ type: 'done', stopReason: 'aborted' })
+              return
+            }
+            if (outcome === 'ok') {
+              sendMessages = [...summaryMsgs, ...messages.slice(cut)]
+              attempt = -1 // reset the transient-retry budget for the smaller request
+              continue streaming
+            }
+            // Even the latest turn alone won't fit — no compaction can save it.
+            emit({
+              type: 'error',
+              message:
+                "The conversation is too large for this model's context window, even after " +
+                'compacting older messages. Start a new conversation, remove large attachments, ' +
+                'or switch to a model with a larger context window.'
+            })
             return
           }
           // Can't safely retry once output has streamed, or if it's not transient.

@@ -17,6 +17,16 @@ export const KEEP_RECENT_USER_TURNS = 3
 /** Tokens to allow the summary itself to consume. */
 export const SUMMARY_MAX_TOKENS = 2048
 
+/**
+ * Rough per-attachment token costs. Attachments contribute (almost) nothing to a
+ * message's text `content`, so without these the estimate ignores them entirely —
+ * a handful of images can silently push the real request past the window. These
+ * are deliberately generous (an Anthropic image tops out near ~1600 tokens) so we
+ * compact a little early rather than overflow.
+ */
+export const IMAGE_TOKENS_ESTIMATE = 1600
+export const DOCUMENT_TOKENS_ESTIMATE = 3000
+
 export const COMPACTION_SUMMARY_PREFIX =
   'Summary of the earlier conversation (older messages were compacted to save context):'
 
@@ -45,13 +55,18 @@ const SUMMARY_INSTRUCTION =
  */
 export function estimateTokens(system: string, messages: ChatMessage[]): number {
   let chars = system.length
+  let attachmentTokens = 0
   for (const m of messages) {
     chars += m.content.length
     for (const tc of m.toolCalls ?? []) {
       chars += tc.name.length + JSON.stringify(tc.arguments).length
     }
+    // Images/documents barely touch `content` but cost real tokens; count them
+    // explicitly so the estimate doesn't badly undershoot when a turn carries them.
+    attachmentTokens += (m.images?.length ?? 0) * IMAGE_TOKENS_ESTIMATE
+    attachmentTokens += (m.documents?.length ?? 0) * DOCUMENT_TOKENS_ESTIMATE
   }
-  return Math.ceil(chars / 4) + messages.length * 4
+  return Math.ceil(chars / 4) + messages.length * 4 + attachmentTokens
 }
 
 /**
@@ -75,6 +90,85 @@ export function findCompactionCut(
   if (userIdx.length <= keepRecentUserTurns) return currentCut
   const cut = userIdx[userIdx.length - keepRecentUserTurns]
   return cut > currentCut ? cut : currentCut
+}
+
+/**
+ * Pick the next cut for *forced* compaction — the recovery path taken when the
+ * provider rejects a request for exceeding its context window. Unlike
+ * `findCompactionCut`, which preserves a comfortable tail, this advances the cut
+ * by a single user turn at a time, all the way down to keeping only the latest
+ * turn. Returns `currentCut` unchanged when nothing more can be summarized away
+ * (the latest turn alone overflows — no compaction can save it).
+ */
+export function findForcedCompactionCut(messages: ChatMessage[], currentCut: number): number {
+  let lastUser = -1
+  let next = -1
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role !== 'user') continue
+    lastUser = i
+    if (next === -1 && i > currentCut) next = i
+  }
+  // Never cut away the final user turn — that is the request we're trying to send.
+  if (next === -1 || next >= lastUser) {
+    return lastUser > currentCut ? lastUser : currentCut
+  }
+  return next
+}
+
+/**
+ * For incremental summarization of an over-long head, pick the furthest user-turn
+ * boundary `cut` in (start, end] whose chunk `messages[start..cut)` is estimated to
+ * fit within `budgetTokens`. Always advances by at least one whole turn, so a single
+ * turn larger than the budget still makes progress (summarized in its own chunk).
+ * This lets a head that is itself bigger than the context window be summarized in
+ * pieces, none of which can overflow the window on its own.
+ */
+export function findSummaryChunkCut(
+  messages: ChatMessage[],
+  start: number,
+  end: number,
+  budgetTokens: number
+): number {
+  let chars = 0
+  let attachmentTokens = 0
+  let count = 0
+  let cut = -1
+  let firstBoundary = -1
+  for (let i = start; i < end; i++) {
+    const m = messages[i]
+    chars += m.content.length
+    for (const tc of m.toolCalls ?? []) chars += tc.name.length + JSON.stringify(tc.arguments).length
+    attachmentTokens += (m.images?.length ?? 0) * IMAGE_TOKENS_ESTIMATE
+    attachmentTokens += (m.documents?.length ?? 0) * DOCUMENT_TOKENS_ESTIMATE
+    count++
+    // A turn boundary sits before a `user` message (the start of a turn) or at `end`.
+    const boundary = i + 1
+    if (boundary !== end && messages[boundary].role !== 'user') continue
+    if (firstBoundary === -1) firstBoundary = boundary
+    const size = Math.ceil(chars / 4) + count * 4 + attachmentTokens
+    if (size <= budgetTokens) cut = boundary
+    else break
+  }
+  if (cut !== -1) return cut
+  return firstBoundary !== -1 ? firstBoundary : end
+}
+
+/**
+ * Whether a provider error means "the prompt exceeds the model's context window".
+ * Wording differs by provider, so match the distinctive phrases:
+ *   - Anthropic: "prompt is too long: N tokens > M maximum"
+ *   - OpenAI:    "context_length_exceeded" / "maximum context length is N tokens"
+ *   - Gemini:    "the input token count ... exceeds the maximum number of tokens"
+ * All three report it as a 400; the status guard keeps the broad "exceeds…tokens"
+ * alternative from matching an unrelated server-side message.
+ */
+export function isContextOverflowError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status
+  if (typeof status === 'number' && status !== 400 && status !== 422) return false
+  const msg = String((err as { message?: unknown })?.message ?? err).toLowerCase()
+  return /prompt is too long|context[ _-]?length|context[ _-]?window|context_length_exceeded|maximum context|too many tokens|token count[^.]*exceed|exceed[^.]*(?:context|tokens?|maximum)|reduce the (?:length|number of (?:messages|tokens))/.test(
+    msg
+  )
 }
 
 /**
