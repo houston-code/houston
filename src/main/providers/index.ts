@@ -3,6 +3,7 @@ import type { ProviderConfig } from '@shared/types'
 import { getKey, hasStoredKey } from '../secrets'
 import { createAnthropicProvider, listAnthropicModels } from './anthropic'
 import { createOpenAIProvider, listOpenAIModels } from './openai'
+import { createResponsesProvider } from './responses'
 import { createGeminiProvider, listGeminiModels } from './gemini'
 
 export class ProviderError extends Error {}
@@ -25,7 +26,12 @@ export function createProvider(config: ProviderConfig): Provider {
     case 'anthropic':
       return createAnthropicProvider(key ?? '', config.baseUrl)
     case 'openai':
-      return createOpenAIProvider(key, config.baseUrl)
+      // Native OpenAI uses the Responses API (GPT-5/o-series path). A custom base
+      // URL means a proxy/gateway that may only speak Chat Completions, so fall
+      // back to the Chat Completions adapter there.
+      return config.baseUrl
+        ? createOpenAIProvider(key, config.baseUrl)
+        : createResponsesProvider(key)
     case 'openai-compatible':
       return createOpenAIProvider(key, config.baseUrl)
     case 'gemini':

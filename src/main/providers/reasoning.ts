@@ -53,6 +53,19 @@ export function openaiReasoningEffort(
   return effort
 }
 
+/**
+ * Reasoning config for the OpenAI **Responses API**: the effort plus a request
+ * for a reasoning summary (so the user can see the model's thinking). Returns
+ * undefined when reasoning is off or the model doesn't support it.
+ */
+export function openaiResponsesReasoning(
+  model: string,
+  effort: ReasoningEffort | undefined
+): { effort: 'low' | 'medium' | 'high'; summary: 'auto' } | undefined {
+  if (!isOn(effort) || !openaiSupportsReasoning(model)) return undefined
+  return { effort, summary: 'auto' }
+}
+
 /** Gemini thinking budgets per effort level. */
 const GEMINI_BUDGET: Record<'low' | 'medium' | 'high', number> = {
   low: 4096,
