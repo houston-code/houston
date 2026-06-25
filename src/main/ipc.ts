@@ -20,6 +20,7 @@ import { listModels } from './providers'
 import { cancelRun, resolveApproval, resolveQuestion, setRunPolicy } from './agent/loop'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, type DrainIO } from './agent/drain'
+import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
@@ -63,6 +64,24 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
   const ev = applyRunningUsage(conversationId, e)
   if (!sender.isDestroyed()) sender.send(IPC.agentEvent, ev)
+  maybeNotify(sender, conversationId, ev)
+}
+
+/**
+ * Fire a native desktop notification for a notable agent event (turn finished,
+ * approval/question needed, error) when Houston isn't focused. Cheap gates first —
+ * the setting being off, or an event that never notifies — so streaming deltas
+ * don't pay for the conversation lookup. Every agent event flows through emitEvent,
+ * so this also covers queued follow-up runs.
+ */
+function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent): void {
+  if (getSettings().desktopNotifications === false) return
+  if (!notificationFor(e)) return
+  const conv = getConversation(conversationId)
+  notifyAgentEvent(e, BrowserWindow.fromWebContents(sender), {
+    enabled: true,
+    workspaceName: workspaceLabel(conv?.workspace)
+  })
 }
 
 /** Push a conversation's updated queue to the renderer (used after an auto-flush). */

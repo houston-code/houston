@@ -685,6 +685,20 @@ export function SettingsModal({
                     <option value="light">Light</option>
                   </select>
                 </label>
+                <h3>Notifications</h3>
+                <label className="field field--checkbox">
+                  <input
+                    type="checkbox"
+                    checked={settings.desktopNotifications ?? true}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, desktopNotifications: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    Show a desktop notification when the agent finishes a turn, needs approval, or
+                    asks a question while Houston isn’t the focused window. On by default.
+                  </span>
+                </label>
               </>
             )}
           </div>
