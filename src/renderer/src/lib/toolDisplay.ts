@@ -83,9 +83,14 @@ export type RenderNode =
   | { kind: 'notice'; id: string; item: NoticeItem }
   | { kind: 'toolgroup'; id: string; items: ToolItem[] }
 
+/** Tool names that are pure navigation noise and never get their own row. */
+const HIDDEN_TOOLS = new Set(['list_dir'])
+
 /**
  * Fold consecutive tool items into a single tool group, leaving text and notices
- * as standalone nodes. Grouping is what reclaims the vertical space.
+ * as standalone nodes. Grouping is what reclaims the vertical space. Navigation-
+ * only tools (`list_dir`) are dropped outright — they tell the reader nothing the
+ * surrounding reads and edits don't already imply.
  */
 export function groupItems(items: DisplayItem[]): RenderNode[] {
   const nodes: RenderNode[] = []
@@ -100,6 +105,7 @@ export function groupItems(items: DisplayItem[]): RenderNode[] {
 
   for (const item of items) {
     if (item.kind === 'tool') {
+      if (HIDDEN_TOOLS.has(item.name)) continue
       if (!group) group = []
       group.push(item)
       continue
@@ -113,12 +119,40 @@ export function groupItems(items: DisplayItem[]): RenderNode[] {
   return nodes
 }
 
-/** A one-line summary of a finished tool group, shown when it is collapsed. */
-export function groupSummary(items: ToolItem[]): string {
-  const verbs = items.map((it) => describeTool(it).verb)
-  const counts = new Map<string, number>()
-  for (const v of verbs) counts.set(v, (counts.get(v) ?? 0) + 1)
-  return [...counts.entries()]
-    .map(([v, n]) => (n > 1 ? `${v} ×${n}` : v))
-    .join(' · ')
+/**
+ * A run of tool calls within a group: either a single tool (rendered with its own
+ * diff/output) or a fold of consecutive `read_file` calls shown as "Read N files".
+ */
+export type ToolRun =
+  | { kind: 'single'; id: string; item: ToolItem }
+  | { kind: 'reads'; id: string; items: ToolItem[] }
+
+/**
+ * Collapse consecutive `read_file` calls inside a group into one aggregate run, so
+ * a burst of reads renders as a single "Read N files" row instead of N rows. A lone
+ * read stays a normal row, and every other tool — edits, shells, searches — keeps
+ * its own row so its diff or output is never hidden behind a count.
+ */
+export function foldReadRuns(items: ToolItem[]): ToolRun[] {
+  const runs: ToolRun[] = []
+  let reads: ToolItem[] | null = null
+
+  const flush = (): void => {
+    if (!reads) return
+    if (reads.length >= 2) runs.push({ kind: 'reads', id: `r-${reads[0].id}`, items: reads })
+    else runs.push({ kind: 'single', id: reads[0].id, item: reads[0] })
+    reads = null
+  }
+
+  for (const item of items) {
+    if (item.name === 'read_file') {
+      if (!reads) reads = []
+      reads.push(item)
+      continue
+    }
+    flush()
+    runs.push({ kind: 'single', id: item.id, item })
+  }
+  flush()
+  return runs
 }
