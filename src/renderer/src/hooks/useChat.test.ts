@@ -260,6 +260,42 @@ describe('useChat', () => {
     expect(result.current.items).toHaveLength(0)
   })
 
+  it('adopt re-attaches to an in-flight run and restores the running state', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+
+    // Simulate re-opening a conversation whose run is still active in main: reset
+    // rebuilds the transcript (running=false), then adopt re-attaches to the run.
+    act(() => result.current.reset([{ kind: 'user', id: 'u1', text: 'still going' }]))
+    expect(result.current.running).toBe(false)
+
+    act(() => result.current.adopt('live-run'))
+    expect(result.current.running).toBe(true)
+    expect(result.current.errored).toBe(false)
+
+    // Events from the adopted run now flow again, and controls route back to it.
+    emit({ runId: 'live-run', type: 'tool_result', callId: 'a', name: 'write_file', ok: true, output: 'wrote' })
+    expect(result.current.checkpoint).toEqual({ runId: 'live-run', files: 1, reverted: false })
+
+    act(() => result.current.cancel())
+    expect(api.cancelAgent).toHaveBeenCalledWith('live-run')
+
+    // The adopted run finishing clears the running state.
+    emit({ runId: 'live-run', type: 'done', stopReason: 'end_turn' })
+    expect(result.current.running).toBe(false)
+  })
+
+  it('drops events from other runs after adopting a specific run', async () => {
+    const { emit } = installApi()
+    const { result } = renderHook(() => useChat())
+
+    act(() => result.current.adopt('live-run'))
+    // An event from a different (e.g. previously viewed) run must be ignored.
+    emit({ runId: 'other-run', type: 'tool_result', callId: 'x', name: 'write_file', ok: true, output: 'ok' })
+    expect(result.current.checkpoint).toBeNull()
+    expect(result.current.running).toBe(true)
+  })
+
   it('reset clears the transcript and seeds usage', async () => {
     const { api } = installApi()
     const { result } = renderHook(() => useChat())

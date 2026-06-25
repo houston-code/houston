@@ -187,7 +187,13 @@ export default function App(): JSX.Element {
 
   const selectConversation = useCallback(
     async (id: string) => {
-      const conv = await window.api.getConversation(id)
+      // Fetch the persisted conversation and any live run for it together, so the
+      // reset + adopt below happen back-to-back in one render (no flicker where the
+      // composer shows Send for a conversation whose run is still going).
+      const [conv, activeRunId] = await Promise.all([
+        window.api.getConversation(id),
+        window.api.getActiveRun(id)
+      ])
       if (!conv) return
       setCurrentId(id)
       setLastWorkspace(conv.workspace)
@@ -201,6 +207,9 @@ export default function App(): JSX.Element {
             }
           : null
       )
+      // A run for this conversation is still in flight in the main process —
+      // re-adopt it so the composer shows Stop and events/approvals reconnect.
+      if (activeRunId) chat.adopt(activeRunId)
     },
     [chat]
   )

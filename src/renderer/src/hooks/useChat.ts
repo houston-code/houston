@@ -48,6 +48,13 @@ export interface ChatController {
   reapplyCheckpoint: () => Promise<number>
   /** Replace the transcript and (optionally) seed usage, e.g. when switching conversations. */
   reset: (items: DisplayItem[], usage?: SessionUsage | null) => void
+  /**
+   * Re-attach to a run already in flight in the main process — e.g. after
+   * switching back to a conversation whose run kept going in the background.
+   * Restores the running UI (Stop button) and routes subsequent events,
+   * approvals, and cancel back to that run. Call after {@link reset}.
+   */
+  adopt: (runId: string) => void
   /** Append a transient notice to the transcript (e.g. slash-command feedback). */
   notify: (text: string, tone?: 'info' | 'error') => void
 }
@@ -191,6 +198,12 @@ export function useChat(conversationId: string | null = null): ChatController {
     runIdRef.current = null
   }, [])
 
+  const adopt = useCallback((runId: string) => {
+    runIdRef.current = runId
+    setRunning(true)
+    setErrored(false)
+  }, [])
+
   const notify = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
     setItems((prev) => [...prev, { kind: 'notice', id: crypto.randomUUID(), text, tone }])
   }, [])
@@ -210,6 +223,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     revertCheckpoint,
     reapplyCheckpoint,
     reset,
+    adopt,
     notify
   }
 }

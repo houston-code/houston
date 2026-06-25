@@ -39,7 +39,8 @@ vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 
 // Imported after the mocks are registered.
-const { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy } = await import('./loop')
+const { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy, activeRunForConversation } =
+  await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
 function scripted(turns: ProviderStreamEvent[][]): Provider {
@@ -473,6 +474,114 @@ describe('startRun', () => {
     } finally {
       h.settings = original
     }
+  })
+})
+
+describe('one run per conversation', () => {
+  it('rejects a second run while one is already in flight on the same conversation', async () => {
+    // Run A's first turn blocks on a gate we control, so it stays active while we
+    // attempt run B on the same conversation. Without the guard, both would call
+    // onMessages and interleave their writes to the conversation's message log.
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    h.provider = {
+      async *streamChat() {
+        await gate
+        yield { type: 'text', text: 'A finished' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+
+    const conversationId = 'conv-guard'
+    const eventsA: AgentEvent[] = []
+    // startRun runs synchronously up to its first await, so by the time this call
+    // returns its promise the conversation is already registered as active.
+    const startA = startRun(
+      {
+        runId: 'run-A',
+        conversationId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      (e) => eventsA.push(e),
+      () => {}
+    )
+    expect(activeRunForConversation(conversationId)).toBe('run-A')
+
+    // Run B targets the same conversation — it must be refused, not run.
+    const eventsB: AgentEvent[] = []
+    let bWroteMessages = false
+    await startRun(
+      {
+        runId: 'run-B',
+        conversationId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'again' }]
+      },
+      (e) => eventsB.push(e),
+      () => {
+        bWroteMessages = true
+      }
+    )
+
+    // B emitted a single error addressed to itself and never touched the log.
+    expect(eventsB).toHaveLength(1)
+    expect(eventsB[0]).toMatchObject({ runId: 'run-B', type: 'error' })
+    expect(bWroteMessages).toBe(false)
+    // A is still the live run for the conversation.
+    expect(activeRunForConversation(conversationId)).toBe('run-A')
+
+    // Let A finish and confirm the conversation's slot is freed afterwards.
+    release()
+    await startA
+    expect(eventsA.at(-1)).toMatchObject({ type: 'done' })
+    expect(activeRunForConversation(conversationId)).toBeNull()
+  })
+
+  it('frees the conversation slot after a run ends so the next run can start', async () => {
+    const conversationId = 'conv-sequential'
+    h.provider = scripted([[{ type: 'text', text: 'first' }, { type: 'done', stopReason: 'end_turn' }]])
+    await startRun(
+      {
+        runId: 'run-1',
+        conversationId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'one' }]
+      },
+      () => {},
+      () => {}
+    )
+    expect(activeRunForConversation(conversationId)).toBeNull()
+
+    // A fresh run on the same conversation now succeeds (no stale lock).
+    h.provider = scripted([[{ type: 'text', text: 'second' }, { type: 'done', stopReason: 'end_turn' }]])
+    const events: AgentEvent[] = []
+    await startRun(
+      {
+        runId: 'run-2',
+        conversationId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'two' }]
+      },
+      (e) => events.push(e),
+      () => {}
+    )
+    expect(events.some((e) => e.type === 'text')).toBe(true)
+    expect(events.at(-1)).toMatchObject({ type: 'done' })
   })
 })
 

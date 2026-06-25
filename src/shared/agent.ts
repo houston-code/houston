@@ -188,6 +188,13 @@ export interface Conversation extends ConversationMeta {
 /** Internal input to the agent loop. */
 export interface AgentRunRequest {
   runId: string
+  /**
+   * The conversation this run belongs to, when started from the UI. Used to keep
+   * at most one live run per conversation (two would interleave their persisted
+   * `setMessages` writes and corrupt the log). Omitted for one-shot headless runs,
+   * which have no conversation and can't collide.
+   */
+  conversationId?: string
   workspace: string
   providerId: string
   model: string

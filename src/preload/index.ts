@@ -133,6 +133,13 @@ const api = {
   /** Change the approval policy of an in-flight run (live mode switch). */
   setAgentPolicy: (runId: string, policy: ApprovalPolicy): Promise<void> =>
     ipcRenderer.invoke(IPC.agentSetPolicy, runId, policy),
+  /**
+   * The runId of the live run for a conversation, or null. Used to re-adopt a
+   * backgrounded run when its conversation is re-opened, instead of starting a
+   * second concurrent run.
+   */
+  getActiveRun: (conversationId: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.agentActiveRun, conversationId),
   /** Revert the file changes a run made. Returns the number of files restored. */
   restoreCheckpoint: (runId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.checkpointRestore, runId),

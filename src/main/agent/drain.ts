@@ -30,7 +30,10 @@ export async function runAndDrain(
     else if (e.type === 'done') terminal = e.stopReason === 'aborted' ? 'aborted' : 'natural'
     io.emit(conversationId, e)
   }
-  await startRun(runReq, send, (msgs) => setMessages(conversationId, msgs))
+  // Tag the run with its conversation so the loop enforces one live run per
+  // conversation (a second would interleave its setMessages writes and corrupt
+  // the log). The slot is freed when this run ends, before any queue drain below.
+  await startRun({ ...runReq, conversationId }, send, (msgs) => setMessages(conversationId, msgs))
   if (terminal === 'natural') drainQueue(io, conversationId)
 }
 

@@ -98,6 +98,24 @@ interface RunState {
 
 const runs = new Map<string, RunState>()
 
+/**
+ * conversationId -> the runId currently executing on it. A conversation may have
+ * at most one live run: a second concurrent run would interleave its persisted
+ * `setMessages` writes with the first's and corrupt the message log. Populated in
+ * {@link startRun} and cleared when the run ends.
+ */
+const runsByConversation = new Map<string, string>()
+
+/**
+ * The runId of the run currently executing on a conversation, or null if none is
+ * active. The renderer uses this to re-adopt a backgrounded run when its
+ * conversation is re-opened (show Stop, reconnect events/approvals) instead of
+ * starting a second one.
+ */
+export function activeRunForConversation(conversationId: string): string | null {
+  return runsByConversation.get(conversationId) ?? null
+}
+
 export function cancelRun(runId: string): void {
   const run = runs.get(runId)
   if (!run) return
@@ -155,7 +173,17 @@ export async function startRun(
   send: (e: AgentEvent) => void,
   onMessages?: (messages: ChatMessage[]) => void
 ): Promise<void> {
-  const { runId } = req
+  const { runId, conversationId } = req
+
+  // Safety net against concurrent runs on one conversation: their interleaved
+  // onMessages writes would corrupt the persisted log. The UI also guards this
+  // (it re-adopts a live run on re-open rather than starting a new one), but a
+  // second start must fail loudly here regardless of how it was triggered.
+  if (conversationId && runsByConversation.has(conversationId)) {
+    send({ runId, type: 'error', message: 'A run is already in progress for this conversation.' })
+    return
+  }
+
   const abort = new AbortController()
   const run: RunState = {
     abort,
@@ -165,6 +193,7 @@ export async function startRun(
     policy: req.approvalPolicy
   }
   runs.set(runId, run)
+  if (conversationId) runsByConversation.set(conversationId, runId)
 
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void =>
@@ -758,5 +787,10 @@ export async function startRun(
     emit({ type: 'done', stopReason: 'end_turn' })
   } finally {
     runs.delete(runId)
+    // Only clear the conversation's slot if it still points at this run, so a
+    // (guarded-against, but defensive) later run can't have its entry removed.
+    if (conversationId && runsByConversation.get(conversationId) === runId) {
+      runsByConversation.delete(conversationId)
+    }
   }
 }
