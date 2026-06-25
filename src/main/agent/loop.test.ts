@@ -193,6 +193,22 @@ describe('startRun', () => {
     expect((result as { output: string }).output).toMatch(/Plan mode/)
   })
 
+  it('blocks a mutating GitHub tool (gh_pr_create) in plan mode without prompting', async () => {
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'g1', name: 'gh_pr_create', arguments: { title: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ]
+    })
+    // blockedInPlan short-circuits before approval — no network prompt, no run.
+    expect(types(r)).not.toContain('tool_approval')
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect((result as { output: string }).output).toMatch(/Plan mode/)
+  })
+
   it('runs an all-reads turn concurrently and returns results for each call', async () => {
     writeFileSync(join(ws, 'a.txt'), 'AAA')
     writeFileSync(join(ws, 'b.txt'), 'BBB')

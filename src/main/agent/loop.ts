@@ -37,6 +37,7 @@ import { loadAgents } from './agents'
 import { loadSkills } from './skills'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
+import { githubContext, resolveGh, runGh } from './github'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -190,7 +191,9 @@ export async function startRun(
     const skills = await loadSkills(workspace)
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(agents, skills)
-    const gitStatus = await gitContext(workspace)
+    // Git + GitHub awareness folded into the prompt. githubContext is a pure PATH
+    // probe (no network), so the run start never triggers unapproved egress.
+    const gitStatus = [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
     const system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
@@ -224,6 +227,11 @@ export async function startRun(
     // foreground run_shell calls so the agent gets "same terminal" behavior.
     const shellSession = createShellSession(workspace)
 
+    // Resolve `gh` once for the run; the GitHub tools fall back to their own
+    // resolution (and a guiding error) when it isn't installed.
+    const ghPath = resolveGh()
+    const ghExec = ghPath ? runGh(ghPath) : undefined
+
     // Shared tool-execution context. `run.policy` and `run.override` are read at
     // call time so a mid-run policy change or an "Allow for run" decision earlier
     // in the turn takes effect.
@@ -237,6 +245,7 @@ export async function startRun(
       signal: abort.signal,
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
+      ghExec,
       getSecret: getKey,
       dispatchSubAgent: (prompt, agentName) => {
         const agent = agentName ? agentsByName.get(agentName) : undefined
@@ -562,9 +571,12 @@ export async function startRun(
         } else if (ruleAction === 'deny') {
           output = 'Denied by a permission rule.'
           ok = false
-        } else if (isBlockedByPlan(run.policy, tool.kind)) {
+        } else if (
+          isBlockedByPlan(run.policy, tool.kind) ||
+          (run.policy === 'plan' && tool.blockedInPlan === true)
+        ) {
           output =
-            'Blocked: Houston is in Plan mode (read-only). Do not modify files or run commands. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
+            'Blocked: Houston is in Plan mode (read-only). Do not modify files, run commands, or change remote/PR state. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
           ok = false
         } else {
           // A permission rule can force-allow or force-ask; otherwise the policy decides.

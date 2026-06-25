@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, realpathSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { getTool, toolSchemas, resolveInRoots, type ToolContext } from './tools'
+import { getTool, toolSchemas, resolveInRoots, formatPrList, formatPrView, type ToolContext } from './tools'
+import type { GhResult } from './github'
 import { registerShell } from './shells'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
@@ -30,6 +31,11 @@ describe('tool registry', () => {
       'ast_grep',
       'dispatch_agent',
       'edit_file',
+      'gh_pr_checkout',
+      'gh_pr_comment',
+      'gh_pr_create',
+      'gh_pr_list',
+      'gh_pr_view',
       'git_diff',
       'git_status',
       'glob',
@@ -627,5 +633,142 @@ describe('resolveInRoots (multi-root containment)', () => {
 
   it('does not treat a sibling with a shared prefix as inside', () => {
     expect(() => resolveInRoots(['/ws'], '/ws-evil/x')).toThrow(/escapes the allowed roots/)
+  })
+})
+
+describe('github (gh) tools', () => {
+  const ok = (stdout: string): GhResult => ({ ok: true, stdout, stderr: '', code: 0 })
+  const fail = (stderr: string, code = 1): GhResult => ({ ok: false, stdout: '', stderr, code })
+
+  /** A ctx whose ghExec records the argv it was called with and returns a canned result. */
+  function ghCtx(result: GhResult | ((argv: string[]) => GhResult)): {
+    ctx: ToolContext
+    calls: string[][]
+  } {
+    const calls: string[][] = []
+    const ctx: ToolContext = {
+      workspace,
+      allowNetwork: true,
+      ghExec: async (argv) => {
+        calls.push(argv)
+        return typeof result === 'function' ? result(argv) : result
+      }
+    }
+    return { ctx, calls }
+  }
+
+  it('marks mutating PR tools as blocked in plan mode, read-only ones as not', () => {
+    expect(getTool('gh_pr_create')!.blockedInPlan).toBe(true)
+    expect(getTool('gh_pr_comment')!.blockedInPlan).toBe(true)
+    expect(getTool('gh_pr_checkout')!.blockedInPlan).toBe(true)
+    expect(getTool('gh_pr_list')!.blockedInPlan).toBeUndefined()
+    expect(getTool('gh_pr_view')!.blockedInPlan).toBeUndefined()
+  })
+
+  it('all gh tools are network-kind (always prompt for approval)', () => {
+    for (const n of ['gh_pr_create', 'gh_pr_list', 'gh_pr_view', 'gh_pr_comment', 'gh_pr_checkout']) {
+      expect(getTool(n)!.kind).toBe('network')
+    }
+  })
+
+  it('gh_pr_create builds a safe argv and returns the PR url', async () => {
+    const { ctx, calls } = ghCtx(ok('https://github.com/o/r/pull/7'))
+    const out = await getTool('gh_pr_create')!.execute(
+      { title: 'Fix bug', body: 'Body', base: 'main', draft: true },
+      ctx
+    )
+    expect(out).toBe('https://github.com/o/r/pull/7')
+    expect(calls[0]).toEqual([
+      'pr',
+      'create',
+      '--title',
+      'Fix bug',
+      '--body',
+      'Body',
+      '--base',
+      'main',
+      '--draft'
+    ])
+  })
+
+  it('gh_pr_create rejects an option-like base ref (no injection)', async () => {
+    const { ctx } = ghCtx(ok(''))
+    await expect(
+      getTool('gh_pr_create')!.execute({ title: 'x', base: '--upload-pack=evil' }, ctx)
+    ).rejects.toThrow(/Invalid base/)
+  })
+
+  it('gh_pr_create requires a title', async () => {
+    const { ctx } = ghCtx(ok(''))
+    await expect(getTool('gh_pr_create')!.execute({ title: '  ' }, ctx)).rejects.toThrow(/title is required/)
+  })
+
+  it('gh_pr_comment requires a positive integer number when given', async () => {
+    const { ctx } = ghCtx(ok('done'))
+    await expect(
+      getTool('gh_pr_comment')!.execute({ number: 0, body: 'hi' }, ctx)
+    ).rejects.toThrow(/positive integer/)
+  })
+
+  it('gh_pr_checkout requires a number', async () => {
+    const { ctx } = ghCtx(ok('Switched'))
+    await expect(getTool('gh_pr_checkout')!.execute({}, ctx)).rejects.toThrow(/required/)
+  })
+
+  it('gh_pr_list formats the JSON result', async () => {
+    const json = JSON.stringify([
+      { number: 3, title: 'A', state: 'OPEN', isDraft: false, headRefName: 'feat/a', url: 'u3', author: { login: 'me' } }
+    ])
+    const { ctx, calls } = ghCtx(ok(json))
+    const out = await getTool('gh_pr_list')!.execute({ state: 'open', limit: 5 }, ctx)
+    expect(out).toBe('#3 [open] A (feat/a by me) u3')
+    expect(calls[0]).toContain('--json')
+    expect(calls[0]).toContain('5')
+  })
+
+  it('surfaces a gh failure (e.g. not authenticated) as a useful message', async () => {
+    const { ctx } = ghCtx(fail('gh auth login required', 4))
+    const out = await getTool('gh_pr_view')!.execute({ number: 1 }, ctx)
+    expect(out).toMatch(/gh failed \(exit 4\): gh auth login required/)
+  })
+})
+
+describe('gh output formatters', () => {
+  it('formatPrList renders drafts and an empty list', () => {
+    expect(formatPrList('[]')).toBe('No matching pull requests.')
+    const one = formatPrList(
+      JSON.stringify([
+        { number: 9, title: 'WIP', state: 'OPEN', isDraft: true, headRefName: 'b', url: 'u', author: {} }
+      ])
+    )
+    expect(one).toBe('#9 [draft] WIP (b) u')
+  })
+
+  it('formatPrView renders a summary block with stats', () => {
+    const out = formatPrView(
+      JSON.stringify({
+        number: 2,
+        title: 'T',
+        state: 'OPEN',
+        isDraft: false,
+        url: 'url',
+        headRefName: 'feat',
+        baseRefName: 'main',
+        author: { login: 'a' },
+        additions: 10,
+        deletions: 2,
+        changedFiles: 3,
+        body: 'Hello'
+      })
+    )
+    expect(out).toContain('#2 T [open]')
+    expect(out).toContain('feat → main · by a')
+    expect(out).toContain('3 file(s), +10 −2')
+    expect(out).toContain('Hello')
+  })
+
+  it('formatters fall back to raw text on non-JSON input', () => {
+    expect(formatPrList('not json')).toBe('not json')
+    expect(formatPrView('')).toBe('[no output]')
   })
 })
