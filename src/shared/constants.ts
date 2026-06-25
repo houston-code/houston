@@ -48,6 +48,12 @@ export const IPC = {
   agentRespondQuestion: 'agent:respondQuestion',
   agentSetPolicy: 'agent:setPolicy',
   agentEvent: 'agent:event',
+  // Queued input (messages typed while a run is in progress)
+  agentQueueAdd: 'agent:queue:add',
+  agentQueueRemove: 'agent:queue:remove',
+  agentQueueClear: 'agent:queue:clear',
+  agentQueueList: 'agent:queue:list',
+  agentQueueChanged: 'agent:queue:changed',
   checkpointRestore: 'checkpoint:restore',
   checkpointReapply: 'checkpoint:reapply'
 } as const

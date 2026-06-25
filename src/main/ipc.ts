@@ -1,4 +1,5 @@
 import { ipcMain, dialog, app, BrowserWindow } from 'electron'
+import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
@@ -9,13 +10,16 @@ import type {
   ConversationMeta,
   ToolApprovalDecision
 } from '@shared/agent'
+import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import { validateImportedConversation, resolveImportWorkspace } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments } from '@shared/images'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
-import { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy } from './agent/loop'
+import { cancelRun, resolveApproval, resolveQuestion, setRunPolicy } from './agent/loop'
+import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
+import { runAndDrain, type DrainIO } from './agent/drain'
 import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
@@ -53,6 +57,29 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
     cost: e.cost
   })
   return mergeRunningTotals(e, total)
+}
+
+/** Stream one agent event to the renderer, persisting usage totals along the way. */
+function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
+  const ev = applyRunningUsage(conversationId, e)
+  if (!sender.isDestroyed()) sender.send(IPC.agentEvent, ev)
+}
+
+/** Push a conversation's updated queue to the renderer (used after an auto-flush). */
+function emitQueueChanged(
+  sender: WebContents,
+  conversationId: string,
+  items: QueuedInputMeta[]
+): void {
+  if (!sender.isDestroyed()) sender.send(IPC.agentQueueChanged, { conversationId, items })
+}
+
+/** Bind the run/queue orchestrator's output to a specific renderer. */
+function makeIo(sender: WebContents): DrainIO {
+  return {
+    emit: (conversationId, e) => emitEvent(sender, conversationId, e),
+    emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items)
+  }
 }
 
 /** Register every IPC handler the renderer can call. */
@@ -194,6 +221,8 @@ export function registerIpc(): void {
     IPC.conversationDelete,
     async (_event, id: string, opts?: { removeWorktree?: boolean; force?: boolean }) => {
       const conv = getConversation(id)
+      // Drop any buffered follow-ups so a deleted chat's queue can't linger in memory.
+      clearQueue(id)
       deleteConversation(id)
       if (opts?.removeWorktree && conv?.worktree) {
         return removeWorktree(conv.worktree, { force: opts.force })
@@ -270,14 +299,13 @@ export function registerIpc(): void {
 
   // Agent: fire-and-forget; progress is streamed back over IPC.agentEvent.
   ipcMain.handle(IPC.agentStart, async (event, req: AgentSendRequest) => {
-    const send = (e: AgentEvent): void => {
-      e = applyRunningUsage(req.conversationId, e)
-      if (!event.sender.isDestroyed()) event.sender.send(IPC.agentEvent, e)
-    }
-
     const conv = getConversation(req.conversationId)
     if (!conv) {
-      send({ runId: req.runId, type: 'error', message: 'Conversation not found.' })
+      emitEvent(event.sender, req.conversationId, {
+        runId: req.runId,
+        type: 'error',
+        message: 'Conversation not found.'
+      })
       return
     }
 
@@ -291,18 +319,14 @@ export function registerIpc(): void {
     setMessages(conv.id, messages)
     updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
 
-    void startRun(
-      {
-        runId: req.runId,
-        workspace: conv.workspace,
-        providerId: req.providerId,
-        model: req.model,
-        approvalPolicy: req.approvalPolicy,
-        messages
-      },
-      send,
-      (msgs) => setMessages(conv.id, msgs)
-    )
+    void runAndDrain(makeIo(event.sender), conv.id, {
+      runId: req.runId,
+      workspace: conv.workspace,
+      providerId: req.providerId,
+      model: req.model,
+      approvalPolicy: req.approvalPolicy,
+      messages
+    })
   })
 
   // Re-run the last turn after a failure: run on the conversation's existing
@@ -313,33 +337,45 @@ export function registerIpc(): void {
       event,
       req: { runId: string; conversationId: string; providerId: string; model: string; approvalPolicy: AppSettings['approvalPolicy'] }
     ) => {
-      const send = (e: AgentEvent): void => {
-        e = applyRunningUsage(req.conversationId, e)
-        if (!event.sender.isDestroyed()) event.sender.send(IPC.agentEvent, e)
-      }
       const conv = getConversation(req.conversationId)
       if (!conv) {
-        send({ runId: req.runId, type: 'error', message: 'Conversation not found.' })
+        emitEvent(event.sender, req.conversationId, {
+          runId: req.runId,
+          type: 'error',
+          message: 'Conversation not found.'
+        })
         return
       }
-      void startRun(
-        {
-          runId: req.runId,
-          workspace: conv.workspace,
-          providerId: req.providerId,
-          model: req.model,
-          approvalPolicy: req.approvalPolicy,
-          messages: conv.messages
-        },
-        send,
-        (msgs) => setMessages(conv.id, msgs)
-      )
+      void runAndDrain(makeIo(event.sender), conv.id, {
+        runId: req.runId,
+        workspace: conv.workspace,
+        providerId: req.providerId,
+        model: req.model,
+        approvalPolicy: req.approvalPolicy,
+        messages: conv.messages
+      })
     }
   )
 
   ipcMain.handle(IPC.agentCancel, (_event, runId: string) => {
     cancelRun(runId)
   })
+
+  // Queued input: buffer messages typed mid-run, dispatched (combined) when the
+  // conversation's run finishes naturally. The renderer updates its bar from the
+  // returned list; main pushes IPC.agentQueueChanged when an auto-flush empties it.
+  ipcMain.handle(IPC.agentQueueAdd, (_event, req: QueueAddRequest): QueuedInputMeta[] =>
+    addToQueue(req)
+  )
+  ipcMain.handle(IPC.agentQueueRemove, (_event, conversationId: string, id: string): QueuedInputMeta[] =>
+    removeFromQueue(conversationId, id)
+  )
+  ipcMain.handle(IPC.agentQueueClear, (_event, conversationId: string): QueuedInputMeta[] =>
+    clearQueue(conversationId)
+  )
+  ipcMain.handle(IPC.agentQueueList, (_event, conversationId: string): QueuedInputMeta[] =>
+    listQueue(conversationId)
+  )
 
   ipcMain.handle(
     IPC.agentApprove,

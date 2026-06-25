@@ -116,7 +116,9 @@ export function Composer({
     () => (cmdPrefix === null ? [] : matchCommands(commands, cmdPrefix)),
     [cmdPrefix, commands]
   )
-  const showCmdMenu = !cmdDismissed && cmdMatches.length > 0
+  // While a run is active, messages are queued verbatim — the command menu would
+  // only mislead (Enter queues the text instead of running a command).
+  const showCmdMenu = !cmdDismissed && cmdMatches.length > 0 && !running
 
   // Query workspace files for the active @-mention (debounced).
   useEffect(() => {
@@ -184,28 +186,33 @@ export function Composer({
 
   const submit = (): void => {
     const trimmed = text.trim()
-    if ((!trimmed && images.length === 0) || disabled || running) return
-    // Slash commands only when there are no attachments (a message with images
-    // is always sent as a normal message).
-    const parsed = images.length === 0 ? parseSlashCommand(trimmed) : null
-    if (parsed) {
-      const cmd = resolveCommand(commands, parsed.name)
-      if (cmd) {
-        if (cmd.template) {
-          // Custom command: expand into the composer so the (workspace-supplied)
-          // prompt is visible and editable before the user sends it.
-          const expanded = expandTemplate(cmd.template, parsed.args)
-          setText(expanded)
-          resetMenus()
-          focusEnd(expanded.length)
-        } else {
-          onCommand(cmd, parsed.args)
-          setText('')
-          resetMenus()
+    if ((!trimmed && images.length === 0) || disabled) return
+    // While a run is in progress the message is queued verbatim as the next
+    // input (the app combines all queued messages when the run finishes), so
+    // slash commands aren't interpreted — they'd be sent as a prompt anyway.
+    if (!running) {
+      // Slash commands only when there are no attachments (a message with images
+      // is always sent as a normal message).
+      const parsed = images.length === 0 ? parseSlashCommand(trimmed) : null
+      if (parsed) {
+        const cmd = resolveCommand(commands, parsed.name)
+        if (cmd) {
+          if (cmd.template) {
+            // Custom command: expand into the composer so the (workspace-supplied)
+            // prompt is visible and editable before the user sends it.
+            const expanded = expandTemplate(cmd.template, parsed.args)
+            setText(expanded)
+            resetMenus()
+            focusEnd(expanded.length)
+          } else {
+            onCommand(cmd, parsed.args)
+            setText('')
+            resetMenus()
+          }
+          return
         }
-        return
+        // Unknown command — fall through and send it as a normal message.
       }
-      // Unknown command — fall through and send it as a normal message.
     }
     onSend(trimmed, images.length ? images : undefined)
     setText('')
@@ -322,9 +329,11 @@ export function Composer({
           placeholder={
             disabled
               ? 'Pick a model and project folder to start…'
-              : vision
-                ? 'Ask Houston…  (@ file, / command, or drop/paste an image)'
-                : 'Ask Houston…  (@ file or / command)'
+              : running
+                ? 'Queue a follow-up…  (sent when the current run finishes)'
+                : vision
+                  ? 'Ask Houston…  (@ file, / command, or drop/paste an image)'
+                  : 'Ask Houston…  (@ file or / command)'
           }
           value={text}
           disabled={disabled}
@@ -335,9 +344,19 @@ export function Composer({
         />
       </div>
       {running ? (
-        <button className="btn btn--danger composer__btn" onClick={onCancel}>
-          Stop
-        </button>
+        <>
+          <button
+            className="btn btn--accent composer__btn"
+            onClick={submit}
+            disabled={disabled || (!text.trim() && images.length === 0)}
+            title="Queue this message — it’s sent when the current run finishes"
+          >
+            Queue
+          </button>
+          <button className="btn btn--danger composer__btn" onClick={onCancel}>
+            Stop
+          </button>
+        </>
       ) : (
         <button
           className="btn btn--accent composer__btn"

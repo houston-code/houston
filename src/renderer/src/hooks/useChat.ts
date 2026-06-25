@@ -54,16 +54,40 @@ export interface ChatController {
 
 const WRITE_TOOLS = new Set(['write_file', 'edit_file'])
 
-export function useChat(): ChatController {
+export function useChat(conversationId: string | null = null): ChatController {
   const [items, setItems] = useState<DisplayItem[]>([])
   const [running, setRunning] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null)
   const [errored, setErrored] = useState(false)
   const runIdRef = useRef<string | null>(null)
+  // The open conversation, so we can adopt a main-initiated follow-up run (queued
+  // input) that targets it and ignore background runs on other conversations.
+  const convIdRef = useRef<string | null>(conversationId)
+  convIdRef.current = conversationId
 
   useEffect(() => {
     return window.api.onAgentEvent((e: AgentEvent) => {
+      if (e.type === 'turn_start') {
+        // The main process auto-started a follow-up turn from the queue. Adopt it
+        // only when it's for the conversation we're viewing; otherwise it's a
+        // background run whose result we'll see from disk on next open.
+        if (e.conversationId !== convIdRef.current) return
+        runIdRef.current = e.runId
+        setRunning(true)
+        setErrored(false)
+        setCheckpoint(null)
+        setItems((prev) => [
+          ...prev,
+          {
+            kind: 'user',
+            id: `u-${e.runId}`,
+            text: e.userText,
+            ...(e.images?.length ? { images: e.images } : {})
+          }
+        ])
+        return
+      }
       if (e.runId !== runIdRef.current) return
       if (e.type === 'usage') {
         // The main process accumulates and persists; the event carries the

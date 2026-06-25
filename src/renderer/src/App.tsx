@@ -9,6 +9,7 @@ import { shortcutFor } from './lib/shortcuts'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
 import { useChat } from './hooks/useChat'
+import { useInputQueue } from './hooks/useInputQueue'
 import { itemsFromMessages } from './lib/items'
 import { Sidebar } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
@@ -72,7 +73,7 @@ export default function App(): JSX.Element {
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
-  const chat = useChat()
+  const chat = useChat(currentId)
 
   const refreshConversations = useCallback(async () => {
     setConversations(await window.api.listConversations())
@@ -135,6 +136,39 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+
+  // Start a turn immediately with the given text/images, creating a conversation
+  // first if this is the very first message.
+  const sendNow = useCallback(
+    async (text: string, images?: ImageAttachment[]) => {
+      if (!settings?.selected || !workspace) return
+      let convId = currentId
+      if (!convId) {
+        const conv = await window.api.createConversation({
+          workspace,
+          providerId: settings.selected.providerId,
+          model: settings.selected.model
+        })
+        convId = conv.id
+        setCurrentId(conv.id)
+      }
+      await chat.send({
+        conversationId: convId,
+        userText: text,
+        images,
+        providerId: settings.selected.providerId,
+        model: settings.selected.model,
+        approvalPolicy: settings.approvalPolicy
+      })
+      void refreshConversations()
+    },
+    [settings, workspace, currentId, chat, refreshConversations]
+  )
+
+  // Messages typed while a run is active are buffered (in the main process, keyed
+  // by conversation) and sent combined as the next turn when the run finishes —
+  // surviving navigation to other chats. This is the open conversation's view.
+  const queue = useInputQueue(currentId)
 
   // Load the workspace's custom slash commands (alongside the built-ins).
   useEffect(() => {
@@ -417,29 +451,19 @@ export default function App(): JSX.Element {
   }, [chat])
 
   const onSend = useCallback(
-    async (text: string, images?: ImageAttachment[]) => {
-      if (!settings?.selected || !workspace) return
-      let convId = currentId
-      if (!convId) {
-        const conv = await window.api.createConversation({
-          workspace,
+    (text: string, images?: ImageAttachment[]) => {
+      // Defer messages typed mid-run; main combines and sends them when it ends.
+      if (chat.running && settings?.selected) {
+        queue.enqueue({
+          text,
+          images,
           providerId: settings.selected.providerId,
-          model: settings.selected.model
+          model: settings.selected.model,
+          approvalPolicy: settings.approvalPolicy
         })
-        convId = conv.id
-        setCurrentId(conv.id)
-      }
-      await chat.send({
-        conversationId: convId,
-        userText: text,
-        images,
-        providerId: settings.selected.providerId,
-        model: settings.selected.model,
-        approvalPolicy: settings.approvalPolicy
-      })
-      void refreshConversations()
+      } else void sendNow(text, images)
     },
-    [settings, workspace, currentId, chat, refreshConversations]
+    [chat.running, settings, queue, sendNow]
   )
 
   // Hand off PR creation to the agent: close the panel and send the standing
@@ -603,6 +627,37 @@ export default function App(): JSX.Element {
                 ↶ Revert
               </button>
             )}
+          </div>
+        )}
+
+        {queue.queued.length > 0 && (
+          <div className="queue-bar">
+            <span className="queue-bar__label">
+              {queue.queued.length} queued · sent when this run finishes
+            </span>
+            <ul className="queue-bar__items">
+              {queue.queued.map((q) => {
+                const label =
+                  q.text.trim() ||
+                  (q.imageCount ? `🖼 ${q.imageCount} image${q.imageCount === 1 ? '' : 's'}` : '')
+                return (
+                  <li key={q.id} className="queue-chip" title={label}>
+                    <span className="queue-chip__text">{label}</span>
+                    <button
+                      className="queue-chip__remove"
+                      title="Remove from queue"
+                      aria-label="Remove from queue"
+                      onClick={() => queue.remove(q.id)}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+            <button className="btn btn--sm" onClick={queue.clear}>
+              Clear
+            </button>
           </div>
         )}
 
