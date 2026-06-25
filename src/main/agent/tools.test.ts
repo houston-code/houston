@@ -42,6 +42,7 @@ describe('tool registry', () => {
       'kill_shell',
       'list_dir',
       'multi_edit',
+      'pr_sweep',
       'read_file',
       'read_shell_output',
       'review_changes',
@@ -730,6 +731,40 @@ describe('github (gh) tools', () => {
     const { ctx } = ghCtx(fail('gh auth login required', 4))
     const out = await getTool('gh_pr_view')!.execute({ number: 1 }, ctx)
     expect(out).toMatch(/gh failed \(exit 4\): gh auth login required/)
+  })
+})
+
+describe('pr_sweep tool', () => {
+  it('is a read-kind scratchpad (no approval, not blocked in plan)', () => {
+    expect(getTool('pr_sweep')!.kind).toBe('read')
+    expect(getTool('pr_sweep')!.blockedInPlan).toBeUndefined()
+  })
+
+  it('echoes a formatted board for valid input', async () => {
+    const out = await run('pr_sweep', {
+      mode: 'author',
+      items: [
+        { task: 'A', status: 'pr_open', branch: 'feat/a', pr: '#1' },
+        { task: 'B', status: 'pending' }
+      ]
+    })
+    expect(out).toContain('PR sweep (author): 2 items')
+    expect(out).toContain('[PR] A (feat/a #1)')
+    expect(out).toContain('[ ] B')
+  })
+
+  it('rejects an invalid mode', async () => {
+    await expect(run('pr_sweep', { mode: 'rebase', items: [] })).rejects.toThrow(/mode must be one of/)
+  })
+
+  it('rejects a malformed item', async () => {
+    await expect(
+      run('pr_sweep', { mode: 'process', items: [{ task: 'x', status: 'huh' }] })
+    ).rejects.toThrow(/status must be one of/)
+  })
+
+  it('summarizes a cleared board', async () => {
+    expect(await run('pr_sweep', { mode: 'process', items: [] })).toBe('Cleared the process PR sweep.')
   })
 })
 

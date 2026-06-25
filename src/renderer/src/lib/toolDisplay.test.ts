@@ -57,6 +57,25 @@ describe('describeTool', () => {
     })
   })
 
+  it('describes a PR sweep by its mode', () => {
+    expect(describeTool(tool('pr_sweep', { mode: 'author' }))).toEqual({
+      verb: 'PR sweep',
+      target: 'author',
+      mono: false
+    })
+  })
+
+  it('describes gh PR tools, coercing a numeric PR ref to #N', () => {
+    expect(describeTool(tool('gh_pr_create', { title: 'Fix it' }))).toEqual({
+      verb: 'Open PR',
+      target: 'Fix it',
+      mono: false
+    })
+    expect(describeTool(tool('gh_pr_view', { number: 7 })).target).toBe('#7')
+    expect(describeTool(tool('gh_pr_view', {})).target).toBe('(current)')
+    expect(describeTool(tool('gh_pr_checkout', { number: 9 })).target).toBe('#9')
+  })
+
   it('falls back to the tool name for unknown tools', () => {
     expect(describeTool(tool('mystery_tool', {})).verb).toBe('mystery_tool')
   })

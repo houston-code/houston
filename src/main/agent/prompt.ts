@@ -55,6 +55,7 @@ You have these tools:
 - view_localhost: load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser and get back a screenshot plus the page's console output — use it to SEE and iterate on a web UI you built (requires approval)
 - web_search: search the web for current information (requires approval; needs a key in Settings)
 - todo_write: keep a task list for multi-step work
+- pr_sweep: track a multi-PR sweep board — author new PRs from a list of tasks, or process a batch of existing open PRs (the todo_write idea, specialized per PR; pair it with the gh_pr_* tools)
 - dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back)
 - review_changes: run an adversarial, multi-agent review of your uncommitted changes (correctness, security, quality) in separate contexts, then verify the findings and report the confirmed ones
 - gh_pr_create / gh_pr_list / gh_pr_view / gh_pr_comment / gh_pr_checkout: work with GitHub pull requests via the gh CLI (open, list, inspect, comment on, and check out PRs). Each requires approval (network); the mutating ones are refused in plan mode. Push the branch before gh_pr_create.
