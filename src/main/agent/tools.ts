@@ -5,6 +5,7 @@ import { minimatch } from 'minimatch'
 import type { DocumentAttachment, JSONSchema, ToolSchema } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
+import { isSafeGitRef } from '@shared/git'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 import {
   MAX_ATTACH_IMAGE_BYTES,
@@ -24,6 +25,7 @@ import { resolveAstGrep, searchStructural } from './astgrep'
 import { resolveEdit } from './edit-match'
 import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
+import { resolveGh, runGh, type GhExec } from './github'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -50,11 +52,20 @@ export interface ToolContext {
   shellSession?: ShellSession
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
   shellOutputMaxBytes?: number
+  /** Run a `gh` subcommand (injected by the loop; falls back to PATH resolution). */
+  ghExec?: GhExec
 }
 
 export interface ToolDef {
   schema: ToolSchema
   kind: ToolKind
+  /**
+   * Blocked outright in plan mode, regardless of `kind`. Use for tools that
+   * mutate remote/repo state through the network (e.g. opening a PR, posting a
+   * comment, switching branches) — `kind:'network'` alone only prompts, but plan
+   * mode is read-only, so these must be refused like a write/shell call.
+   */
+  blockedInPlan?: boolean
   /** Short human-readable description of a specific call, for the approval UI. */
   summarize: (args: Record<string, unknown>) => string
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>
@@ -990,6 +1001,290 @@ const gitDiff: ToolDef = {
   }
 }
 
+// ---- GitHub (gh CLI) ------------------------------------------------------
+
+const MAX_GH_OUTPUT_CHARS = 30_000
+
+/**
+ * Resolve the gh runner for a call: the loop-injected one, else a freshly
+ * resolved binary. Throws a guiding error (surfaced as a failed tool call) when
+ * `gh` isn't installed, so the model can tell the user how to fix it.
+ */
+function ghRunner(ctx: ToolContext): GhExec {
+  if (ctx.ghExec) return ctx.ghExec
+  const ghPath = resolveGh()
+  if (!ghPath) {
+    throw new Error(
+      'The GitHub CLI (gh) was not found. Install it from https://cli.github.com and run `gh auth login`, then try again.'
+    )
+  }
+  return runGh(ghPath)
+}
+
+/** Turn a gh result into tool output: stdout on success, a useful error otherwise. */
+function ghOutput(r: { ok: boolean; stdout: string; stderr: string; code: number | null }): string {
+  if (r.ok) {
+    const out = r.stdout.trim() || '[no output]'
+    return out.length > MAX_GH_OUTPUT_CHARS
+      ? `${out.slice(0, MAX_GH_OUTPUT_CHARS)}\n[truncated]`
+      : out
+  }
+  const detail = (r.stderr.trim() || r.stdout.trim() || `gh exited with code ${r.code ?? 'null'}`).slice(
+    0,
+    MAX_GH_OUTPUT_CHARS
+  )
+  // gh's own auth error is actionable; pass it through verbatim.
+  return `gh failed (exit ${r.code ?? 'null'}): ${detail}`
+}
+
+/** Validate an optional positional PR number into argv (`["12"]`) or `[]`. */
+function prNumberArgs(args: Record<string, unknown>, required = false): string[] {
+  const v = args.number
+  if (v === undefined || v === null || v === '') {
+    if (required) throw new Error('number (the PR number) is required.')
+    return []
+  }
+  const n = typeof v === 'number' ? v : Number(v)
+  if (!Number.isInteger(n) || n <= 0) throw new Error('number must be a positive integer.')
+  return [String(n)]
+}
+
+/** Validate an optional git ref (branch) flag, rejecting option-like injection. */
+function refFlag(args: Record<string, unknown>, key: string, flag: string): string[] {
+  const v = str(args, key)
+  if (!v) return []
+  if (!isSafeGitRef(v)) throw new Error(`Invalid ${key}: "${v}" is not a valid branch/ref name.`)
+  return [flag, v]
+}
+
+const ghPrCreate: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Open PR: ${str(a, 'title') || '(no title)'}`,
+  schema: {
+    name: 'gh_pr_create',
+    description:
+      'Open a GitHub pull request for the current branch using the gh CLI. The branch must already be pushed to the remote (push it first with run_shell, e.g. `git push -u origin <branch>`). Requires approval (network) and is refused in plan mode. Returns the new PR URL.',
+    parameters: objectSchema(
+      {
+        title: { type: 'string', description: 'PR title.' },
+        body: { type: 'string', description: 'PR description (Markdown). Omit for an empty body.' },
+        base: {
+          type: 'string',
+          description: 'Base branch to merge into (e.g. "main"). Defaults to the repo default branch.'
+        },
+        head: {
+          type: 'string',
+          description: 'Head branch the PR is opened from. Defaults to the current branch.'
+        },
+        draft: { type: 'boolean', description: 'Open as a draft PR (default false).' }
+      },
+      ['title']
+    )
+  },
+  async execute(args, ctx) {
+    const title = str(args, 'title')
+    if (!title.trim()) throw new Error('title is required.')
+    const argv = ['pr', 'create', '--title', title, '--body', str(args, 'body')]
+    argv.push(...refFlag(args, 'base', '--base'))
+    argv.push(...refFlag(args, 'head', '--head'))
+    if (args.draft === true) argv.push('--draft')
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
+const ghPrList: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `List PRs${str(a, 'state') ? ` (${str(a, 'state')})` : ''}`,
+  schema: {
+    name: 'gh_pr_list',
+    description:
+      'List pull requests in the current repository via the gh CLI. Returns "#<number> [state] <title> (<headBranch> by <author>) <url>" per PR. Requires approval (network).',
+    parameters: objectSchema(
+      {
+        state: {
+          type: 'string',
+          enum: ['open', 'closed', 'merged', 'all'],
+          description: 'Which PRs to list (default open).'
+        },
+        limit: { type: 'number', description: 'Max PRs to return (1–100, default 30).' },
+        author: { type: 'string', description: 'Filter by author login (e.g. "@me" for yours).' },
+        label: { type: 'string', description: 'Filter by label.' },
+        base: { type: 'string', description: 'Filter by base branch.' }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    const stateRaw = str(args, 'state') || 'open'
+    const state = ['open', 'closed', 'merged', 'all'].includes(stateRaw) ? stateRaw : 'open'
+    const limit = Math.min(100, Math.max(1, Math.floor(num(args, 'limit') ?? 30)))
+    const argv = [
+      'pr',
+      'list',
+      '--state',
+      state,
+      '--limit',
+      String(limit),
+      '--json',
+      'number,title,state,isDraft,headRefName,url,author'
+    ]
+    const author = str(args, 'author')
+    if (author) argv.push('--author', author)
+    const label = str(args, 'label')
+    if (label) argv.push('--label', label)
+    argv.push(...refFlag(args, 'base', '--base'))
+
+    const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
+    if (!r.ok) return ghOutput(r)
+    return formatPrList(r.stdout)
+  }
+}
+
+interface PrSummary {
+  number: number
+  title: string
+  state: string
+  isDraft: boolean
+  headRefName: string
+  url: string
+  author?: { login?: string }
+}
+
+/** Render `gh pr list --json` output into compact one-line-per-PR text. Pure. */
+export function formatPrList(json: string): string {
+  let prs: PrSummary[]
+  try {
+    prs = JSON.parse(json) as PrSummary[]
+  } catch {
+    return json.trim() || '[no output]'
+  }
+  if (!Array.isArray(prs) || prs.length === 0) return 'No matching pull requests.'
+  return prs
+    .map((p) => {
+      const tag = p.isDraft ? 'draft' : (p.state || '').toLowerCase()
+      const who = p.author?.login ? ` by ${p.author.login}` : ''
+      return `#${p.number} [${tag}] ${p.title} (${p.headRefName}${who}) ${p.url}`
+    })
+    .join('\n')
+}
+
+const ghPrView: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `View PR ${str(a, 'number') || '(current branch)'}`,
+  schema: {
+    name: 'gh_pr_view',
+    description:
+      "View a pull request's details (title, state, author, body, file stats) via the gh CLI. Omit number to view the PR for the current branch. Set diff:true to also include the unified diff. Read-only, but requires approval (network).",
+    parameters: objectSchema(
+      {
+        number: { type: 'number', description: 'PR number. Omit to use the current branch\'s PR.' },
+        diff: { type: 'boolean', description: 'Also include the PR diff (default false).' }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    const positional = prNumberArgs(args)
+    const run = ghRunner(ctx)
+    const viewArgs = [
+      'pr',
+      'view',
+      ...positional,
+      '--json',
+      'number,title,state,isDraft,url,headRefName,baseRefName,author,additions,deletions,changedFiles,body'
+    ]
+    const r = await run(viewArgs, ctx.workspace, ctx.signal)
+    if (!r.ok) return ghOutput(r)
+    let out = formatPrView(r.stdout)
+    if (args.diff === true) {
+      const d = await run(['pr', 'diff', ...positional], ctx.workspace, ctx.signal)
+      const body = d.ok ? d.stdout.trim() : `[could not load diff: ${d.stderr.trim()}]`
+      const capped =
+        body.length > MAX_GH_OUTPUT_CHARS ? `${body.slice(0, MAX_GH_OUTPUT_CHARS)}\n[diff truncated]` : body
+      out += `\n\n--- diff ---\n${capped}`
+    }
+    return out
+  }
+}
+
+interface PrDetail {
+  number: number
+  title: string
+  state: string
+  isDraft: boolean
+  url: string
+  headRefName: string
+  baseRefName: string
+  author?: { login?: string }
+  additions?: number
+  deletions?: number
+  changedFiles?: number
+  body?: string
+}
+
+/** Render `gh pr view --json` output into a readable summary block. Pure. */
+export function formatPrView(json: string): string {
+  let p: PrDetail
+  try {
+    p = JSON.parse(json) as PrDetail
+  } catch {
+    return json.trim() || '[no output]'
+  }
+  const tag = p.isDraft ? 'draft' : (p.state || '').toLowerCase()
+  const lines = [
+    `#${p.number} ${p.title} [${tag}]`,
+    `${p.headRefName} → ${p.baseRefName}${p.author?.login ? ` · by ${p.author.login}` : ''}`,
+    `${p.changedFiles ?? 0} file(s), +${p.additions ?? 0} −${p.deletions ?? 0}`,
+    p.url
+  ]
+  if (p.body && p.body.trim()) lines.push('', p.body.trim())
+  return lines.join('\n')
+}
+
+const ghPrComment: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Comment on PR ${str(a, 'number') || '(current branch)'}`,
+  schema: {
+    name: 'gh_pr_comment',
+    description:
+      'Post a comment on a GitHub pull request via the gh CLI. Omit number to comment on the current branch\'s PR. Requires approval (network) and is refused in plan mode.',
+    parameters: objectSchema(
+      {
+        number: { type: 'number', description: 'PR number. Omit to use the current branch\'s PR.' },
+        body: { type: 'string', description: 'The comment body (Markdown).' }
+      },
+      ['body']
+    )
+  },
+  async execute(args, ctx) {
+    const body = str(args, 'body')
+    if (!body.trim()) throw new Error('body is required.')
+    const argv = ['pr', 'comment', ...prNumberArgs(args), '--body', body]
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
+const ghPrCheckout: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Checkout PR ${str(a, 'number')}`,
+  schema: {
+    name: 'gh_pr_checkout',
+    description:
+      'Check out a GitHub pull request branch locally via the gh CLI (fetches the branch and switches the working tree to it). Use it to review or update an existing PR. Requires approval (network) and is refused in plan mode. Note: this switches the current checkout — commit or stash your work first.',
+    parameters: objectSchema(
+      { number: { type: 'number', description: 'The PR number to check out.' } },
+      ['number']
+    )
+  },
+  async execute(args, ctx) {
+    const argv = ['pr', 'checkout', ...prNumberArgs(args, true)]
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -1010,7 +1305,12 @@ export const TOOLS: ToolDef[] = [
   dispatchAgent,
   reviewChanges,
   gitStatus,
-  gitDiff
+  gitDiff,
+  ghPrCreate,
+  ghPrList,
+  ghPrView,
+  ghPrComment,
+  ghPrCheckout
 ]
 
 export function toolSchemas(): ToolSchema[] {

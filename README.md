@@ -23,8 +23,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   directly (full vision on Anthropic; other providers get a text placeholder).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
   `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `ast_grep`,
-  `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`, and
-  `todo_write` to actually do the work — not just describe it. When a turn is all
+  `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
+  `gh_pr_*` (pull requests), and `todo_write` to actually do the work — not just
+  describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
   **resiliently** — if the model's snippet drifts from the file by indentation or
@@ -177,6 +178,17 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   Pick the new branch name and the base to branch from; the worktree is kept out
   of the parent repo's `git status` via `.git/info/exclude`. Deleting the chat
   offers to remove the worktree too (uncommitted or unmerged work is always kept).
+- **GitHub pull requests (first-class).** When the [`gh` CLI](https://cli.github.com)
+  is installed and authenticated (`gh auth login`), Houston gets dedicated
+  pull-request tools — `gh_pr_create`, `gh_pr_list`, `gh_pr_view`,
+  `gh_pr_comment`, and `gh_pr_checkout` — so the agent can open a PR for the
+  current branch, browse and inspect open PRs (with their diff), comment, and
+  check one out to work on it. Same approach as Claude Code: it drives your local
+  `gh`, so no token is stored in the app and `gh` owns the credentials. Each call
+  is **network**-gated (always prompts for approval) and the mutating ones
+  (create / comment / checkout) are refused in plan mode. Houston also tells the
+  agent in its system prompt when `gh` is available, so it reaches for these
+  instead of raw shell `gh`.
 - **Project-aware.** Houston loads a small rules hierarchy into the system prompt —
   your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
   `CLAUDE.md` at its root, then any `AGENTS.md` / `CLAUDE.md` found in

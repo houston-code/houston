@@ -21,11 +21,6 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   public surface and packaging separate from the Electron app. One-shot headless
   runs (`Houston -p "<prompt>"`, see the README) already cover scripting/CI.
 
-- **GitHub integration (first-class).** Built-in PR creation/review and a "install
-  GitHub app" flow. *Why deferred:* the agent can already drive `git` and `gh`
-  through `run_shell` (network-gated), which covers most needs. A first-class
-  integration means OAuth/token handling and PR UI — its own feature.
-
 - **Mid-run resume after a crash/restart.** Re-enter an interrupted tool loop
   exactly where it stopped. *Why deferred:* conversations already persist
   incrementally and you can continue by sending a new message; true auto-resume
@@ -129,10 +124,15 @@ and nothing is silently dropped):
   isolated cloud sandboxes, `codex apply` of cloud diffs). Requires a hosted
   execution backend and account; Houston runs entirely on the user's machine.
 
-- **First-class GitHub integration** (PR-creating bot, hosted code review on PRs,
-  "install GitHub app"). The agent already drives `git`/`gh` via `run_shell`
-  (network-gated). A built-in bot means OAuth/token handling + server-side review
-  — see also the GitHub-integration entry under *Deferred — larger effort*.
+- **Hosted GitHub bot / "install GitHub app".** A *server-side* PR-creating bot,
+  hosted code review that runs on GitHub's infrastructure, or an "install GitHub
+  app" OAuth flow. *What ships instead:* first-class pull-request tools
+  (`gh_pr_create` / `gh_pr_list` / `gh_pr_view` / `gh_pr_comment` /
+  `gh_pr_checkout`) that drive the user's local `gh` CLI — no hosted backend, no
+  app-level token storage (`gh` owns auth), which keeps Houston local-first. The
+  remaining non-goal is specifically the
+  *hosted* bot/app side, which needs a multi-tenant backend and an OAuth app
+  registration that don't fit a single-user desktop app.
 
 - **Cross-platform execution sandbox (Linux/Windows/WSL2).** See *Windows / Linux
   support* under *Deferred — larger effort* — shipping an unverified confinement
