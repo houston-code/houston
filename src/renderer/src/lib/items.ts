@@ -1,4 +1,10 @@
-import { COMPACTION_SUMMARY_PREFIX, type AgentEvent, type ChatMessage } from '@shared/agent'
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  type AgentEvent,
+  type ChatMessage,
+  type QuestionOption
+} from '@shared/agent'
+import { ASK_USER_TOOL } from '@shared/constants'
 import type { ImageAttachment } from '@shared/images'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
@@ -43,8 +49,35 @@ export interface NoticeItem {
   text: string
   tone: 'error' | 'info'
 }
+export interface QuestionItem {
+  kind: 'question'
+  id: string // callId
+  question: string
+  options: QuestionOption[]
+  multiSelect?: boolean
+  /** The user's answer once given; undefined while the question is still open. */
+  answer?: string
+}
 
-export type DisplayItem = UserItem | AssistantItem | ToolItem | NoticeItem
+export type DisplayItem = UserItem | AssistantItem | ToolItem | NoticeItem | QuestionItem
+
+/** Parse a tool call's `options` argument into display options (string[] or {label,…}[]). */
+function optionsFromArgs(raw: unknown): QuestionOption[] {
+  if (!Array.isArray(raw)) return []
+  const out: QuestionOption[] = []
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      if (item.trim()) out.push({ label: item.trim() })
+    } else if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>
+      const label = typeof rec.label === 'string' ? rec.label.trim() : ''
+      if (!label) continue
+      const description = typeof rec.description === 'string' ? rec.description.trim() : ''
+      out.push(description ? { label, description } : { label })
+    }
+  }
+  return out
+}
 
 let counter = 0
 const nextId = (): string => `i${Date.now().toString(36)}-${counter++}`
@@ -94,6 +127,8 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'tool_start': {
       const finalized = finalizeStreaming(items)
+      // ask_user surfaces as an interactive question card (below), not a tool row.
+      if (e.name === ASK_USER_TOOL) return finalized
       const exists = finalized.some((it) => it.kind === 'tool' && it.id === e.callId)
       if (exists) return updateTool(finalized, e.callId, { status: 'running', args: e.args })
       return [
@@ -101,7 +136,26 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         { kind: 'tool', id: e.callId, name: e.name, args: e.args, status: 'running' }
       ]
     }
+    case 'tool_question': {
+      const finalized = finalizeStreaming(items)
+      return [
+        ...finalized,
+        {
+          kind: 'question',
+          id: e.callId,
+          question: e.question,
+          options: e.options,
+          ...(e.multiSelect ? { multiSelect: true } : {})
+        }
+      ]
+    }
     case 'tool_result': {
+      // An ask_user result carries the answer — fold it into the question card.
+      if (e.name === ASK_USER_TOOL) {
+        return items.map((it) =>
+          it.kind === 'question' && it.id === e.callId ? { ...it, answer: e.output } : it
+        )
+      }
       const status: ToolStatus = e.ok
         ? 'done'
         : e.output.startsWith('Denied') || e.output.startsWith('Blocked')
@@ -189,6 +243,18 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
       }
       for (const tc of m.toolCalls ?? []) {
         const res = resultByCallId.get(tc.id)
+        // ask_user is shown as a (now-answered) question card, not a tool row.
+        if (tc.name === ASK_USER_TOOL) {
+          items.push({
+            kind: 'question',
+            id: tc.id,
+            question: typeof tc.arguments.question === 'string' ? tc.arguments.question : '',
+            options: optionsFromArgs(tc.arguments.options),
+            ...(tc.arguments.multiSelect === true ? { multiSelect: true } : {}),
+            ...(res?.output ? { answer: res.output } : {})
+          })
+          continue
+        }
         const output = res?.output
         const status: ToolStatus = !output
           ? 'done'

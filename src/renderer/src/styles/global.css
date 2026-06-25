@@ -1132,6 +1132,121 @@ h6.md-h {
   border: 1px solid var(--border);
 }
 
+/* ---- ask_user question card ---- */
+.question {
+  margin: 6px 0;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow-accent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.question--answered {
+  border-color: var(--border);
+  box-shadow: none;
+  gap: 8px;
+}
+.question__prompt-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.question__text {
+  font-size: 14px;
+  color: var(--text);
+}
+.question__text p:first-child {
+  margin-top: 0;
+}
+.question__text p:last-child {
+  margin-bottom: 0;
+}
+.question__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.question__option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+  padding: 8px 11px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
+}
+.question__option:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+.question__option--on {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: #fff;
+}
+.question__check {
+  flex-shrink: 0;
+}
+.question__option-label {
+  font-weight: 500;
+}
+.question__option-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.question__option--on .question__option-desc {
+  color: rgba(255, 255, 255, 0.82);
+}
+.question__custom {
+  display: flex;
+  gap: 8px;
+}
+.question__custom-input {
+  flex: 1;
+  padding: 7px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.question__custom-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.question__answer {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.question__answer-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ok);
+}
+.question__answer-text {
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 /* ---- Diff (edit_file / write_file) ---- */
 .diff-stat {
   display: inline-flex;

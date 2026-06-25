@@ -553,7 +553,7 @@ export default function App(): JSX.Element {
             )}
           </div>
         ) : (
-          <Transcript items={chat.items} onApprove={chat.approve} />
+          <Transcript items={chat.items} onApprove={chat.approve} onAnswer={chat.answerQuestion} />
         )}
 
         {chat.errored && !chat.running && currentId && (

@@ -99,6 +99,9 @@ const api = {
   cancelAgent: (runId: string): Promise<void> => ipcRenderer.invoke(IPC.agentCancel, runId),
   approveTool: (runId: string, callId: string, decision: ToolApprovalDecision): Promise<void> =>
     ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision),
+  /** Answer a pending `ask_user` question. */
+  answerQuestion: (runId: string, callId: string, answer: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.agentRespondQuestion, runId, callId, answer),
   /** Change the approval policy of an in-flight run (live mode switch). */
   setAgentPolicy: (runId: string, policy: ApprovalPolicy): Promise<void> =>
     ipcRenderer.invoke(IPC.agentSetPolicy, runId, policy),

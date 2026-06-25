@@ -4,7 +4,14 @@
  * instead of eight fat cards. Pure logic, unit-tested; the rendering lives in
  * `ToolGroup.tsx`.
  */
-import type { AssistantItem, DisplayItem, NoticeItem, ToolItem, UserItem } from './items'
+import type {
+  AssistantItem,
+  DisplayItem,
+  NoticeItem,
+  QuestionItem,
+  ToolItem,
+  UserItem
+} from './items'
 
 export interface ToolDescription {
   /** Short action label, e.g. "Read", "Run", "Search". */
@@ -100,6 +107,7 @@ export type RenderNode =
   | { kind: 'user'; id: string; item: UserItem }
   | { kind: 'assistant'; id: string; item: AssistantItem }
   | { kind: 'notice'; id: string; item: NoticeItem }
+  | { kind: 'question'; id: string; item: QuestionItem }
   | { kind: 'toolgroup'; id: string; items: ToolItem[] }
 
 /** Tool names that are pure navigation noise and never get their own row. */
@@ -133,6 +141,7 @@ export function groupItems(items: DisplayItem[]): RenderNode[] {
     if (item.kind === 'user') nodes.push({ kind: 'user', id: item.id, item })
     else if (item.kind === 'assistant') nodes.push({ kind: 'assistant', id: item.id, item })
     else if (item.kind === 'notice') nodes.push({ kind: 'notice', id: item.id, item })
+    else if (item.kind === 'question') nodes.push({ kind: 'question', id: item.id, item })
   }
   flush()
   return nodes

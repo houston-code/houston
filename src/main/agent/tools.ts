@@ -2,7 +2,13 @@ import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
-import type { DocumentAttachment, JSONSchema, ToolSchema } from '@shared/agent'
+import type {
+  AgentQuestion,
+  DocumentAttachment,
+  JSONSchema,
+  QuestionOption,
+  ToolSchema
+} from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
 import {
@@ -12,7 +18,7 @@ import {
   parseSweepMode
 } from '@shared/sweep'
 import { isSafeGitRef } from '@shared/git'
-import { WEB_SEARCH_KEY_ID } from '@shared/constants'
+import { ASK_USER_TOOL, WEB_SEARCH_KEY_ID } from '@shared/constants'
 import {
   MAX_ATTACH_IMAGE_BYTES,
   MAX_PDF_BYTES,
@@ -60,6 +66,8 @@ export interface ToolContext {
   shellOutputMaxBytes?: number
   /** Run a `gh` subcommand (injected by the loop; falls back to PATH resolution). */
   ghExec?: GhExec
+  /** Ask the user a structured question and resolve with their answer (injected by the loop). */
+  askUser?: (q: AgentQuestion) => Promise<string>
 }
 
 export interface ToolDef {
@@ -1349,6 +1357,83 @@ const ghPrCheckout: ToolDef = {
   }
 }
 
+export const ASK_USER_NAME = ASK_USER_TOOL
+
+/**
+ * Normalize the model's `options` argument into clean QuestionOptions. Models
+ * sometimes send a plain string array and sometimes `{label, description}`
+ * objects; accept both and drop anything without a usable label.
+ */
+function parseQuestionOptions(raw: unknown): QuestionOption[] {
+  if (!Array.isArray(raw)) return []
+  const out: QuestionOption[] = []
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      const label = item.trim()
+      if (label) out.push({ label })
+    } else if (item && typeof item === 'object') {
+      const rec = item as Record<string, unknown>
+      const label = typeof rec.label === 'string' ? rec.label.trim() : ''
+      if (!label) continue
+      const description = typeof rec.description === 'string' ? rec.description.trim() : ''
+      out.push(description ? { label, description } : { label })
+    }
+  }
+  return out
+}
+
+const askUser: ToolDef = {
+  kind: 'read',
+  summarize: (a) => `Ask: ${str(a, 'question')}`,
+  schema: {
+    name: ASK_USER_NAME,
+    description:
+      'Ask the user a question and wait for their answer before continuing. Use this to resolve a ' +
+      'genuine ambiguity or get a decision only the user can make (which option, which approach, a ' +
+      'missing detail) — not for routine narration or confirmations you can infer. Offer 2–4 concise ' +
+      'options; the user may also type their own answer. Returns the user’s answer as text. Available ' +
+      'in Plan mode, so use it to settle open questions before presenting a plan.',
+    parameters: objectSchema(
+      {
+        question: {
+          type: 'string',
+          description: 'The question to ask. Be specific and concise.'
+        },
+        options: {
+          type: 'array',
+          description: 'Suggested answers (2–4 recommended). The user can also type a custom answer.',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Short option text the user selects.' },
+              description: {
+                type: 'string',
+                description: 'Optional one-line explanation of what choosing this option means.'
+              }
+            },
+            required: ['label'],
+            additionalProperties: false
+          }
+        },
+        multiSelect: {
+          type: 'boolean',
+          description: 'Allow the user to select more than one option (default false).'
+        }
+      },
+      ['question']
+    )
+  },
+  async execute(args, ctx) {
+    if (!ctx.askUser) throw new Error('Asking the user is not available in this context.')
+    const question = str(args, 'question').trim()
+    if (!question) throw new Error('question is required.')
+    const options = parseQuestionOptions(args.options)
+    const multiSelect = args.multiSelect === true
+    const answer = await ctx.askUser({ question, options, multiSelect })
+    return answer.trim() ? answer : '[The user did not provide an answer.]'
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -1367,6 +1452,7 @@ export const TOOLS: ToolDef[] = [
   webSearch,
   todoWrite,
   prSweep,
+  askUser,
   dispatchAgent,
   reviewChanges,
   gitStatus,
