@@ -5,7 +5,7 @@ import { registerIpc } from './ipc'
 import { killAllShells } from './agent/shells'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
-import { initAutoUpdate } from './updater'
+import { initUpdates } from './updater'
 import { log } from './logger'
 import { getSettings } from './store'
 import { startRun, resolveApproval } from './agent/loop'
@@ -89,7 +89,7 @@ if (headless) {
     log.info(`Houston ${app.getVersion()} starting`)
     registerIpc()
     createWindow()
-    initAutoUpdate()
+    initUpdates()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

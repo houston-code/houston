@@ -15,6 +15,10 @@ export const ASK_USER_TOOL = 'ask_user'
 export const IPC = {
   // App / system
   appGetVersion: 'app:getVersion',
+  // Updates
+  updateCheck: 'update:check',
+  updateWhatsNew: 'update:whatsNew',
+  updateAvailable: 'update:available',
   // Workspace
   workspacePick: 'workspace:pick',
   directoryPick: 'directory:pick',

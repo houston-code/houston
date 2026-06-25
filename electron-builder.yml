@@ -46,8 +46,15 @@ asar: true
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns
+  # `dmg` is the human download / first install. `zip` is what electron-updater
+  # actually pulls on macOS to update an installed app — without it, the published
+  # latest-mac.yml has nothing the updater can fetch and auto-update never fires.
+  # Both share the same generated update metadata; the zip also gets a .blockmap
+  # for differential downloads.
   target:
     - target: dmg
+      arch: arm64
+    - target: zip
       arch: arm64
   # No Apple Developer ID on this machine — build an ad-hoc (unsigned) app.
   # To notarize later, set identity to your Developer ID and configure notarize.

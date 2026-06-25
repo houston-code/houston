@@ -302,8 +302,12 @@ npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ## Build a DMG
 
 ```bash
-npm run dist     # → release/Houston-<version>-arm64.dmg
+npm run dist     # → release/Houston-<version>-arm64.dmg (+ .zip, .blockmap, latest-mac.yml)
 ```
+
+The `.dmg` is the human download; the `.zip` (+ `.blockmap`) and `latest-mac.yml`
+are what `electron-updater` uses to auto-update an installed app (see
+[Updates](#updates)).
 
 Every PR set to auto-merge also builds the `.app` + `.dmg` in CI (on a macOS
 runner, against the merged state), smoke-tests the packaged app with Playwright,
@@ -312,20 +316,31 @@ build from the **Actions** tab without building locally.
 
 ## Updates
 
-Packaged builds check for updates on launch via `electron-updater`, against the
-GitHub Releases feed configured in [`electron-builder.yml`](electron-builder.yml)
-(`publish:`), and log when a newer version is available. (No-op in dev; set
-`HOUSTON_DISABLE_UPDATER=1` to turn it off.)
+Packaged builds check for updates via `electron-updater`, against the GitHub
+Releases feed configured in [`electron-builder.yml`](electron-builder.yml)
+(`publish:`). The check runs on launch and on demand from **Settings → Appearance
+→ Updates** ("Check for updates"); when a newer version exists, a persistent
+banner appears at the top of the window until you dismiss it or update. (No-op in
+dev; set `HOUSTON_DISABLE_UPDATER=1` to turn it off.)
+
+After you install a newer build and relaunch, a small **What's new** popup shows a
+1–2 line summary of that version's changes — sourced from the bundled
+[`RELEASE_HIGHLIGHTS`](src/shared/update.ts) map, so add an entry there whenever
+you bump the version in `package.json`.
 
 It does **not** auto-download or silently install: this build is unsigned, so
 there's no Developer ID signature for `electron-updater` to verify against, and
 silently installing remote packages would make the release pipeline an RCE
-boundary. Grab the newer DMG from **Releases** manually. Once the app is
-[signed + notarized](#signing--notarization), enable `autoDownload` /
+boundary. The banner therefore links to **Releases** to download manually. Once
+the app is [signed + notarized](#signing--notarization), enable `autoDownload` /
 `autoInstallOnAppQuit` in [`src/main/updater.ts`](src/main/updater.ts) so the
-signature check is meaningful. Update metadata is published by running
-`npm run dist` with a `GH_TOKEN` and `--publish`, or by attaching the DMG and the
-generated `latest-mac.yml` to a release.
+signature check is meaningful and the banner can install in place.
+
+Update metadata is published by running `npm run dist` with a `GH_TOKEN` and
+`--publish`, or by attaching the artifacts to a release manually. On macOS the
+updater pulls the **`.zip`** (the `.dmg` is the human first-install), so a release
+needs the `.zip`, its `.blockmap`, and the generated `latest-mac.yml` — all
+produced by `npm run dist`.
 
 ## Architecture
 

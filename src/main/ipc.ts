@@ -14,6 +14,7 @@ import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import { validateImportedConversation, resolveImportWorkspace } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments } from '@shared/images'
+import { checkForUpdates, takePendingWhatsNew } from './updater'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
@@ -104,6 +105,10 @@ function makeIo(sender: WebContents): DrainIO {
 /** Register every IPC handler the renderer can call. */
 export function registerIpc(): void {
   ipcMain.handle(IPC.appGetVersion, () => app.getVersion())
+
+  // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
+  ipcMain.handle(IPC.updateCheck, () => checkForUpdates())
+  ipcMain.handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
 
   ipcMain.handle(IPC.workspacePick, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
