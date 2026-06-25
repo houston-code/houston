@@ -24,8 +24,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
   `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `ast_grep`,
   `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
-  `gh_pr_*` (pull requests), and `todo_write` to actually do the work — not just
-  describe it. When a turn is all
+  `gh_pr_*` (pull requests), `todo_write`, and `pr_sweep` to actually do the
+  work — not just describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
   **resiliently** — if the model's snippet drifts from the file by indentation or
@@ -189,6 +189,15 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   (create / comment / checkout) are refused in plan mode. Houston also tells the
   agent in its system prompt when `gh` is available, so it reaches for these
   instead of raw shell `gh`.
+- **PR sweeps.** For batch pull-request work the agent keeps a `pr_sweep` board —
+  the same scratchpad idea as the task list, specialized per PR — rendered live in
+  the transcript with each item's status, branch, and PR link. Two modes:
+  **author** (turn a list of tasks into PRs: branch → change → push → open) and
+  **process** (work a batch of existing open PRs: check out → review/fix →
+  update). It tracks the plan; the real work happens through the `gh_pr_*`,
+  worktree, and file tools. Like the task list, the board lives in the
+  conversation — it's recorded as tool use in the message log, so it persists with
+  the chat and needs no separate store.
 - **Project-aware.** Houston loads a small rules hierarchy into the system prompt —
   your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
   `CLAUDE.md` at its root, then any `AGENTS.md` / `CLAUDE.md` found in

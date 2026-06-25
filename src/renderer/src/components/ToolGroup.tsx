@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { parseTodosSafe, type Todo } from '@shared/todos'
+import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
 import { diffLines, diffStat, type DiffLine } from '@shared/diff'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
@@ -28,10 +29,25 @@ const TOOL_ICON: Record<string, string> = {
   web_fetch: '@',
   view_localhost: '▣',
   web_search: '⌕',
-  todo_write: '☰'
+  todo_write: '☰',
+  pr_sweep: '⇄',
+  gh_pr_create: '⌥',
+  gh_pr_list: '@',
+  gh_pr_view: '@',
+  gh_pr_comment: '@',
+  gh_pr_checkout: '@'
 }
 
 const TODO_MARK: Record<Todo['status'], string> = { pending: '○', in_progress: '◐', completed: '●' }
+
+const SWEEP_MARK: Record<SweepItemStatus, string> = {
+  pending: '○',
+  in_progress: '◐',
+  pushed: '↑',
+  pr_open: '◑',
+  done: '●',
+  failed: '✕'
+}
 
 function iconFor(item: ToolItem): string {
   return TOOL_ICON[item.name] ?? KIND_ICON[item.toolKind ?? ''] ?? '·'
@@ -87,6 +103,8 @@ function ToolRow({
 }): JSX.Element {
   const todos = item.name === 'todo_write' ? parseTodosSafe(item.args?.todos) : []
   const isTodo = item.name === 'todo_write' && todos.length > 0
+  const sweep = item.name === 'pr_sweep' ? parseSweepItemsSafe(item.args?.items) : []
+  const isSweep = item.name === 'pr_sweep' && sweep.length > 0
   const diff = diffFor(item)
   const stat = diff && diff.length > 0 ? diffStat(diff) : null
   const { verb, target, mono } = describeTool(item)
@@ -94,8 +112,8 @@ function ToolRow({
 
   // Open the diff/output by default while a change is awaiting approval.
   const [open, setOpen] = useState(awaiting)
-  // Todo rows render their checklist inline, so they have nothing extra to expand.
-  const expandable = !isTodo && Boolean((diff && diff.length > 0) || item.output)
+  // Todo/sweep rows render their list inline, so they have nothing extra to expand.
+  const expandable = !isTodo && !isSweep && Boolean((diff && diff.length > 0) || item.output)
   const toggle = (): void => {
     if (expandable) setOpen((v) => !v)
   }
@@ -135,8 +153,22 @@ function ToolRow({
         </ul>
       )}
 
+      {isSweep && (
+        <ul className="todo-list sweep-list">
+          {sweep.map((s: SweepItem, i: number) => (
+            <li key={i} className={`todo sweep sweep--${s.status}`}>
+              <span className="todo__mark">{SWEEP_MARK[s.status]}</span>
+              <span className="todo__text">{s.task}</span>
+              {s.branch && <span className="sweep__chip sweep__chip--branch">{s.branch}</span>}
+              {s.pr && <span className="sweep__chip sweep__chip--pr">{s.pr}</span>}
+              {s.note && <span className="sweep__note">{s.note}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+
       {open && diff && diff.length > 0 && <DiffView diff={diff} />}
-      {open && item.output && !isTodo && <pre className="tool-row__output">{item.output}</pre>}
+      {open && item.output && !isTodo && !isSweep && <pre className="tool-row__output">{item.output}</pre>}
 
       {item.images && item.images.length > 0 && (
         <div className="tool-row__images">

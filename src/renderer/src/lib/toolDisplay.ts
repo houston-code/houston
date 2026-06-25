@@ -31,6 +31,13 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined
 }
 
+/** A PR number (number or numeric string) rendered as "#N", or undefined. */
+function prRef(v: unknown): string | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return `#${v}`
+  if (typeof v === 'string' && v.trim()) return v.startsWith('#') ? v : `#${v}`
+  return undefined
+}
+
 /** A concise verb + target for a tool call, used in the compact row. */
 export function describeTool(item: ToolItem): ToolDescription {
   const a = item.args ?? {}
@@ -70,6 +77,18 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Search web', target: str(a.query) ?? '', mono: false }
     case 'todo_write':
       return { verb: 'Plan', target: '', mono: false }
+    case 'pr_sweep':
+      return { verb: 'PR sweep', target: str(a.mode) ?? '', mono: false }
+    case 'gh_pr_create':
+      return { verb: 'Open PR', target: str(a.title) ?? '', mono: false }
+    case 'gh_pr_list':
+      return { verb: 'List PRs', target: str(a.state) ?? 'open', mono: false }
+    case 'gh_pr_view':
+      return { verb: 'View PR', target: prRef(a.number) ?? '(current)', mono: false }
+    case 'gh_pr_comment':
+      return { verb: 'Comment PR', target: prRef(a.number) ?? '(current)', mono: false }
+    case 'gh_pr_checkout':
+      return { verb: 'Checkout PR', target: prRef(a.number) ?? '', mono: false }
     default:
       return { verb: item.name, target: item.summary ?? str(a.path) ?? str(a.url) ?? '', mono: true }
   }

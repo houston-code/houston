@@ -5,6 +5,12 @@ import { minimatch } from 'minimatch'
 import type { DocumentAttachment, JSONSchema, ToolSchema } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
+import {
+  formatSweepList,
+  formatSweepSummary,
+  parseSweepItems,
+  parseSweepMode
+} from '@shared/sweep'
 import { isSafeGitRef } from '@shared/git'
 import { WEB_SEARCH_KEY_ID } from '@shared/constants'
 import {
@@ -836,6 +842,64 @@ const todoWrite: ToolDef = {
   }
 }
 
+const prSweep: ToolDef = {
+  kind: 'read', // a scratchpad with no side effects on the project — never needs approval
+  summarize: (a) => {
+    try {
+      return formatSweepSummary(parseSweepMode(a.mode), parseSweepItems(a.items))
+    } catch {
+      return 'Update PR sweep'
+    }
+  },
+  schema: {
+    name: 'pr_sweep',
+    description:
+      'Plan and track a multi-PR sweep — a board, like todo_write but specialized for working a batch of pull requests. Pass the FULL list of items every time (it replaces the previous one); keep exactly one item "in_progress" and advance each item\'s status as you go. This tool only records state — it has no side effects; you do the real work with the other tools.\n\nTwo modes:\n- "author": turn each task into its own PR. For each item: create a branch (e.g. `git worktree add` or `git checkout -b` via run_shell), make the change, commit, push the branch (`git push -u origin <branch>`), then gh_pr_create. Status flow: pending → in_progress → pushed → pr_open → done (or failed). Record the branch and the PR url as you get them.\n- "process": work a list of existing open PRs (find them with gh_pr_list). For each item: gh_pr_checkout the PR, review/fix it (run_shell/review_changes), commit, push, gh_pr_comment if needed, then mark done. Record the PR reference.\n\nWork items one at a time, update this board after each meaningful step, and put a short note on anything that fails or needs the user.',
+    parameters: objectSchema(
+      {
+        mode: {
+          type: 'string',
+          enum: ['author', 'process'],
+          description: '"author" to create new PRs from tasks; "process" to work existing PRs.'
+        },
+        items: {
+          type: 'array',
+          description: 'The full sweep board, replacing any previous one.',
+          items: {
+            type: 'object',
+            properties: {
+              task: {
+                type: 'string',
+                description: 'What this item is — the task to author, or the existing PR to process.'
+              },
+              status: {
+                type: 'string',
+                enum: ['pending', 'in_progress', 'pushed', 'pr_open', 'done', 'failed'],
+                description: 'Current status of this item.'
+              },
+              branch: {
+                type: 'string',
+                description: 'The branch worked on (author) or the PR head branch (process).'
+              },
+              pr: { type: 'string', description: 'PR reference once known — a number, "#123", or a URL.' },
+              note: { type: 'string', description: 'Short note: a blocker, what was done, or why it failed.' }
+            },
+            required: ['task', 'status'],
+            additionalProperties: false
+          }
+        }
+      },
+      ['mode', 'items']
+    )
+  },
+  async execute(args) {
+    const mode = parseSweepMode(args.mode)
+    const items = parseSweepItems(args.items)
+    const summary = formatSweepSummary(mode, items)
+    return items.length ? `${summary}\n${formatSweepList(items)}` : summary
+  }
+}
+
 const webSearch: ToolDef = {
   kind: 'network',
   summarize: (a) => `Search the web: ${str(a, 'query')}`,
@@ -1302,6 +1366,7 @@ export const TOOLS: ToolDef[] = [
   viewLocalhost,
   webSearch,
   todoWrite,
+  prSweep,
   dispatchAgent,
   reviewChanges,
   gitStatus,
