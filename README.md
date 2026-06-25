@@ -181,7 +181,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   (staged and unstaged) plus untracked files — each file expandable with a
   red/green line diff and a `+/−` stat. It's working-tree scoped (all uncommitted
   changes, not just the current chat's edits); read-only and hardened, the same
-  way the agent's `git_diff` tool is.
+  way the agent's `git_diff` tool is. A **Create PR** action hands off to the
+  agent — it commits, pushes, and opens the pull request through the same
+  `gh_pr_*` tools and approval gate, so the panel never drives git itself.
 - **Start a chat in its own worktree.** The **⑂** button next to *New chat* spins
   up a fresh git branch in an isolated worktree under `.houston/worktrees/`, and
   runs the chat there — so the agent's edits never touch your current checkout.
