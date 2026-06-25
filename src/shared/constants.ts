@@ -7,6 +7,10 @@ export const APP_NAME = 'Houston'
 /** Secrets-store id under which the web-search (Tavily) API key is kept. */
 export const WEB_SEARCH_KEY_ID = 'web-search'
 
+/** Name of the tool that asks the user a structured question. Shared so the main
+ * process, the loop, and the renderer agree on the one string. */
+export const ASK_USER_TOOL = 'ask_user'
+
 /** IPC channel names. Keep in one place so main + preload + renderer agree. */
 export const IPC = {
   // App / system
@@ -41,6 +45,7 @@ export const IPC = {
   agentRetry: 'agent:retry',
   agentCancel: 'agent:cancel',
   agentApprove: 'agent:approve',
+  agentRespondQuestion: 'agent:respondQuestion',
   agentSetPolicy: 'agent:setPolicy',
   agentEvent: 'agent:event',
   checkpointRestore: 'checkpoint:restore',

@@ -208,6 +208,22 @@ export interface AgentSendRequest {
 
 export type ToolApprovalDecision = 'allow' | 'deny' | 'always'
 
+/** One suggested answer to an `ask_user` question. */
+export interface QuestionOption {
+  /** Short text the user selects. */
+  label: string
+  /** Optional one-line explanation of what this option means. */
+  description?: string
+}
+
+/** A structured question the agent asks the user via the `ask_user` tool. */
+export interface AgentQuestion {
+  question: string
+  options: QuestionOption[]
+  /** Allow selecting more than one option (default false). */
+  multiSelect?: boolean
+}
+
 /** Events streamed from a running agent to the renderer. */
 export type AgentEvent =
   | { runId: string; type: 'text'; delta: string }
@@ -230,6 +246,14 @@ export type AgentEvent =
       output: string
       /** Images the tool produced (e.g. a view_localhost screenshot), shown in the transcript. */
       images?: ImageAttachment[]
+    }
+  | {
+      runId: string
+      type: 'tool_question'
+      callId: string
+      question: string
+      options: QuestionOption[]
+      multiSelect?: boolean
     }
   | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'retry'; attempt: number; max: number; message: string }

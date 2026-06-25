@@ -6,6 +6,7 @@ import { groupItems } from '../lib/toolDisplay'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
 import { ToolGroup } from './ToolGroup'
+import { QuestionCard } from './QuestionCard'
 import { Markdown } from './Markdown'
 
 function UserBubble({
@@ -89,10 +90,12 @@ function AssistantMessage({
 
 export function Transcript({
   items,
-  onApprove
+  onApprove,
+  onAnswer
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
+  onAnswer: (callId: string, answer: string) => void
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -152,6 +155,8 @@ export function Transcript({
                 )
               case 'toolgroup':
                 return <ToolGroup key={node.id} items={node.items} onApprove={onApprove} />
+              case 'question':
+                return <QuestionCard key={node.id} item={node.item} onAnswer={onAnswer} />
               case 'notice':
                 return (
                   <div key={node.id} className={`notice notice--${node.item.tone}`}>

@@ -21,7 +21,7 @@ import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig } from './projectConfig'
-import { getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
+import { ASK_USER_NAME, getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
 import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
@@ -83,6 +83,8 @@ async function summarize(
 interface RunState {
   abort: AbortController
   approvals: Map<string, (d: ToolApprovalDecision) => void>
+  /** Pending `ask_user` questions, keyed by callId, resolved with the user's answer. */
+  questions: Map<string, (answer: string) => void>
   /** Flipped to true once the user chooses "always" — auto-approve the rest. */
   override: boolean
   /**
@@ -101,6 +103,9 @@ export function cancelRun(runId: string): void {
   if (!run) return
   for (const resolve of run.approvals.values()) resolve('deny')
   run.approvals.clear()
+  // Unblock any pending question so its tool call returns instead of hanging.
+  for (const resolve of run.questions.values()) resolve('[The user stopped the agent without answering.]')
+  run.questions.clear()
   run.abort.abort()
 }
 
@@ -110,6 +115,16 @@ export function resolveApproval(runId: string, callId: string, decision: ToolApp
   if (run && resolve) {
     run.approvals.delete(callId)
     resolve(decision)
+  }
+}
+
+/** Deliver the user's answer to a pending `ask_user` question. */
+export function resolveQuestion(runId: string, callId: string, answer: string): void {
+  const run = runs.get(runId)
+  const resolve = run?.questions.get(callId)
+  if (run && resolve) {
+    run.questions.delete(callId)
+    resolve(answer)
   }
 }
 
@@ -145,6 +160,7 @@ export async function startRun(
   const run: RunState = {
     abort,
     approvals: new Map(),
+    questions: new Map(),
     override: false,
     policy: req.approvalPolicy
   }
@@ -257,6 +273,7 @@ export async function startRun(
     // call time so a mid-run policy change or an "Allow for run" decision earlier
     // in the turn takes effect.
     const makeToolContext = (
+      callId: string,
       attachImage: (i: ImageAttachment) => void,
       attachDocument: (d: DocumentAttachment) => void
     ): ToolContext => ({
@@ -268,6 +285,20 @@ export async function startRun(
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
       ghExec,
       getSecret: getKey,
+      // Ask the user a structured question and block until they answer. The
+      // resolver is registered before the event is emitted so a fast reply can't
+      // race ahead of it; cancelRun resolves any still-pending question.
+      askUser: (q) =>
+        new Promise<string>((resolve) => {
+          run.questions.set(callId, resolve)
+          emit({
+            type: 'tool_question',
+            callId,
+            question: q.question,
+            options: q.options,
+            ...(q.multiSelect ? { multiSelect: true } : {})
+          })
+        }),
       dispatchSubAgent: (prompt, agentName) => {
         const agent = agentName ? agentsByName.get(agentName) : undefined
         return runSubAgent({
@@ -295,6 +326,9 @@ export async function startRun(
 
     /** True if a call is a read-only tool with no gating — safe to run concurrently. */
     const isParallelCall = (call: ToolCall): boolean => {
+      // ask_user blocks on a human; keep it sequential so its prompt never appears
+      // in the middle of a concurrent read batch.
+      if (call.name === ASK_USER_NAME) return false
       const tool = lookupTool(call.name)
       if (!tool) return false
       const ruleAction = matchRule(
@@ -535,6 +569,7 @@ export async function startRun(
               output = await lookupTool(call.name)!.execute(
                 call.arguments,
                 makeToolContext(
+                  call.id,
                   (i) => images.push(i),
                   (d) => documents.push(d)
                 )
@@ -649,6 +684,7 @@ export async function startRun(
                 output = await tool.execute(
                   call.arguments,
                   makeToolContext(
+                    call.id,
                     (img) => toolImages.push(img),
                     (doc) => toolDocs.push(doc)
                   )

@@ -39,7 +39,7 @@ vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 
 // Imported after the mocks are registered.
-const { startRun, resolveApproval, setRunPolicy } = await import('./loop')
+const { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy } = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
 function scripted(turns: ProviderStreamEvent[][]): Provider {
@@ -77,6 +77,7 @@ async function run(
     policy?: ApprovalPolicy
     userText?: string
     onApproval?: (callId: string, decide: (d: 'allow' | 'deny' | 'always') => void) => void
+    onQuestion?: (callId: string, answer: (a: string) => void) => void
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -89,6 +90,9 @@ async function run(
       // Respond on a later tick — the loop registers the approval resolver on the
       // line *after* it emits tool_approval, just as the real renderer replies async.
       setTimeout(() => opts.onApproval!(e.callId, (d) => resolveApproval(runId, e.callId, d)), 0)
+    }
+    if (e.type === 'tool_question' && opts.onQuestion) {
+      setTimeout(() => opts.onQuestion!(e.callId, (a) => resolveQuestion(runId, e.callId, a)), 0)
     }
   }
   await startRun(
@@ -528,5 +532,73 @@ describe('lazy MCP tool loading', () => {
     expect(seen[0]).toContain('srv:tool0')
     expect(seen[0]).toContain('srv:tool2')
     expect(seen[0]).not.toContain('find_tools')
+  })
+})
+
+describe('ask_user', () => {
+  it('emits a question, waits for the answer, and feeds it back to the model', async () => {
+    const r = await run({
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'q1',
+              name: 'ask_user',
+              arguments: { question: 'Which database?', options: ['SQLite', 'Postgres'] }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Using Postgres.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onQuestion: (_callId, answer) => answer('Postgres')
+    })
+
+    const q = r.events.find((e) => e.type === 'tool_question') as
+      | { question: string; options: { label: string }[] }
+      | undefined
+    expect(q?.question).toBe('Which database?')
+    expect(q?.options).toEqual([{ label: 'SQLite' }, { label: 'Postgres' }])
+    // The answer comes back as the ask_user tool result and is persisted for the model.
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'ask_user') as
+      | { output: string }
+      | undefined
+    expect(result?.output).toBe('Postgres')
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'ask_user')
+    expect(toolMsg?.content).toBe('Postgres')
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('unblocks a pending question when the run is cancelled', async () => {
+    // Drive startRun directly so the runId is in scope to cancel: with no answer,
+    // the question must still resolve (via cancelRun) instead of hanging forever.
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'q1', name: 'ask_user', arguments: { question: 'Wait?' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ]
+    ])
+    const runId = 'run-cancel-question'
+    const events: AgentEvent[] = []
+    const send = (e: AgentEvent): void => {
+      events.push(e)
+      if (e.type === 'tool_question') setTimeout(() => cancelRun(runId), 0)
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send
+    )
+    const result = events.find((e) => e.type === 'tool_result' && e.name === 'ask_user') as
+      | { output: string }
+      | undefined
+    expect(result?.output).toContain('stopped the agent')
   })
 })

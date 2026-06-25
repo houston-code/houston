@@ -24,8 +24,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
   `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `ast_grep`,
   `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
-  `gh_pr_*` (pull requests), `todo_write`, and `pr_sweep` to actually do the
-  work — not just describe it. When a turn is all
+  `gh_pr_*` (pull requests), `todo_write`, `pr_sweep`, and `ask_user` to actually
+  do the work — not just describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
   **resiliently** — if the model's snippet drifts from the file by indentation or

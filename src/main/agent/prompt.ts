@@ -55,6 +55,7 @@ You have these tools:
 - view_localhost: load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser and get back a screenshot plus the page's console output — use it to SEE and iterate on a web UI you built (requires approval)
 - web_search: search the web for current information (requires approval; needs a key in Settings)
 - todo_write: keep a task list for multi-step work
+- ask_user: ask the user a question and wait for their answer — use it to resolve a real ambiguity or a decision only they can make (which option/approach, a missing detail), not for routine confirmations; offer a few options. Works in plan mode.
 - pr_sweep: track a multi-PR sweep board — author new PRs from a list of tasks, or process a batch of existing open PRs (the todo_write idea, specialized per PR; pair it with the gh_pr_* tools)
 - dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back)
 - review_changes: run an adversarial, multi-agent review of your uncommitted changes (correctness, security, quality) in separate contexts, then verify the findings and report the confirmed ones

@@ -15,7 +15,7 @@ import { sanitizeAttachments } from '@shared/images'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
-import { startRun, cancelRun, resolveApproval, setRunPolicy } from './agent/loop'
+import { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy } from './agent/loop'
 import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
@@ -345,6 +345,14 @@ export function registerIpc(): void {
     IPC.agentApprove,
     (_event, runId: string, callId: string, decision: ToolApprovalDecision) => {
       resolveApproval(runId, callId, decision)
+    }
+  )
+
+  // Deliver the user's answer to a pending ask_user question.
+  ipcMain.handle(
+    IPC.agentRespondQuestion,
+    (_event, runId: string, callId: string, answer: string) => {
+      resolveQuestion(runId, callId, answer)
     }
   )
 

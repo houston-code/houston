@@ -38,6 +38,8 @@ export interface ChatController {
   retry: (params: RetryParams) => Promise<void>
   cancel: () => void
   approve: (callId: string, decision: ToolApprovalDecision) => void
+  /** Answer a pending `ask_user` question from the in-flight run. */
+  answerQuestion: (callId: string, answer: string) => void
   /** Change the approval policy of the in-flight run, if any (live mode switch). */
   setPolicy: (policy: ApprovalPolicy) => void
   /** Revert the current checkpoint's file changes. Returns the count restored. */
@@ -133,6 +135,10 @@ export function useChat(): ChatController {
     if (runIdRef.current) void window.api.approveTool(runIdRef.current, callId, decision)
   }, [])
 
+  const answerQuestion = useCallback((callId: string, answer: string) => {
+    if (runIdRef.current) void window.api.answerQuestion(runIdRef.current, callId, answer)
+  }, [])
+
   const setPolicy = useCallback((policy: ApprovalPolicy) => {
     if (runIdRef.current) void window.api.setAgentPolicy(runIdRef.current, policy)
   }, [])
@@ -175,6 +181,7 @@ export function useChat(): ChatController {
     retry,
     cancel,
     approve,
+    answerQuestion,
     setPolicy,
     revertCheckpoint,
     reapplyCheckpoint,

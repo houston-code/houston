@@ -28,6 +28,7 @@ describe('tool registry', () => {
   it('exposes the expected tools', () => {
     expect(toolSchemas().map((t) => t.name).sort()).toEqual([
       'apply_patch',
+      'ask_user',
       'ast_grep',
       'dispatch_agent',
       'edit_file',
@@ -58,6 +59,57 @@ describe('tool registry', () => {
 
   it('review_changes errors without a review dispatcher in context', async () => {
     await expect(run('review_changes', {})).rejects.toThrow(/not available/)
+  })
+})
+
+describe('ask_user', () => {
+  it('is a read tool that is allowed in plan mode', () => {
+    const tool = getTool('ask_user')!
+    expect(tool.kind).toBe('read')
+    expect(tool.blockedInPlan).toBeFalsy()
+  })
+
+  it('errors without an askUser handler in context', async () => {
+    await expect(run('ask_user', { question: 'pick one' })).rejects.toThrow(/not available/)
+  })
+
+  it('requires a question', async () => {
+    const withAsk: ToolContext = { ...ctx, askUser: async () => 'x' }
+    await expect(getTool('ask_user')!.execute({ question: '  ' }, withAsk)).rejects.toThrow(
+      /question is required/
+    )
+  })
+
+  it('passes the question and normalized options to askUser and returns the answer', async () => {
+    let received: unknown
+    const withAsk: ToolContext = {
+      ...ctx,
+      askUser: async (q) => {
+        received = q
+        return 'Postgres'
+      }
+    }
+    const out = await getTool('ask_user')!.execute(
+      {
+        question: 'Which database?',
+        // Mixed string + object options, plus a junk entry that must be dropped.
+        options: ['SQLite', { label: 'Postgres', description: 'Scales better' }, { foo: 1 }],
+        multiSelect: false
+      },
+      withAsk
+    )
+    expect(out).toBe('Postgres')
+    expect(received).toEqual({
+      question: 'Which database?',
+      multiSelect: false,
+      options: [{ label: 'SQLite' }, { label: 'Postgres', description: 'Scales better' }]
+    })
+  })
+
+  it('falls back to a placeholder when the user gives an empty answer', async () => {
+    const withAsk: ToolContext = { ...ctx, askUser: async () => '   ' }
+    const out = await getTool('ask_user')!.execute({ question: 'anything?' }, withAsk)
+    expect(out).toContain('did not provide an answer')
   })
 })
 
