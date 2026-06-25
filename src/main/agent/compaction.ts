@@ -1,4 +1,7 @@
-import type { ChatMessage } from '@shared/agent'
+import { COMPACTION_SUMMARY_PREFIX, type ChatMessage } from '@shared/agent'
+
+// Re-exported from shared so existing main-process imports/tests keep their path.
+export { COMPACTION_SUMMARY_PREFIX }
 
 /**
  * Context compaction. Long sessions otherwise grow the message log without bound
@@ -26,9 +29,6 @@ export const SUMMARY_MAX_TOKENS = 2048
  */
 export const IMAGE_TOKENS_ESTIMATE = 1600
 export const DOCUMENT_TOKENS_ESTIMATE = 3000
-
-export const COMPACTION_SUMMARY_PREFIX =
-  'Summary of the earlier conversation (older messages were compacted to save context):'
 
 const COMPACTION_ACK =
   'Understood. I have the summary of the earlier conversation above and will continue from the current state.'

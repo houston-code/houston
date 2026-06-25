@@ -1,4 +1,4 @@
-import type { AgentEvent, ChatMessage } from '@shared/agent'
+import { COMPACTION_SUMMARY_PREFIX, type AgentEvent, type ChatMessage } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
@@ -10,6 +10,12 @@ export interface UserItem {
   id: string
   text: string
   images?: ImageAttachment[]
+  /**
+   * True for the synthetic summary turn written by context compaction. Its body is
+   * model-authored markdown, so the transcript renders it through `Markdown` rather
+   * than as plain user text.
+   */
+  isSummary?: boolean
 }
 export interface AssistantItem {
   kind: 'assistant'
@@ -172,7 +178,8 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
           kind: 'user',
           id: nextId(),
           text: m.content,
-          ...(m.images?.length ? { images: m.images } : {})
+          ...(m.images?.length ? { images: m.images } : {}),
+          ...(m.content.startsWith(COMPACTION_SUMMARY_PREFIX) ? { isSummary: true } : {})
         })
       }
     } else if (m.role === 'assistant') {
