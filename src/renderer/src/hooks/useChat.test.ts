@@ -230,6 +230,36 @@ describe('useChat', () => {
     expect(result.current.checkpoint).toMatchObject({ runId, reverted: false })
   })
 
+  it('adopts a turn_start for the open conversation: adds the user bubble and runs', async () => {
+    const { emit } = installApi()
+    const { result } = renderHook(() => useChat('c1'))
+    expect(result.current.running).toBe(false)
+
+    // The main process auto-started a follow-up turn from the queue for c1.
+    emit({ runId: 'r-flush', type: 'turn_start', conversationId: 'c1', userText: 'do A\n\ndo B' })
+
+    expect(result.current.running).toBe(true)
+    expect(result.current.errored).toBe(false)
+    expect(result.current.items).toHaveLength(1)
+    expect(result.current.items[0]).toMatchObject({ kind: 'user', text: 'do A\n\ndo B' })
+
+    // Subsequent events for the adopted run are now processed.
+    emit({ runId: 'r-flush', type: 'text', delta: 'hi' })
+    expect(result.current.items.some((i) => i.kind === 'assistant')).toBe(true)
+    emit({ runId: 'r-flush', type: 'done', stopReason: 'end_turn' })
+    expect(result.current.running).toBe(false)
+  })
+
+  it('ignores a turn_start for a different conversation', async () => {
+    const { emit } = installApi()
+    const { result } = renderHook(() => useChat('c1'))
+
+    emit({ runId: 'r-bg', type: 'turn_start', conversationId: 'other', userText: 'background work' })
+
+    expect(result.current.running).toBe(false)
+    expect(result.current.items).toHaveLength(0)
+  })
+
   it('reset clears the transcript and seeds usage', async () => {
     const { api } = installApi()
     const { result } = renderHook(() => useChat())

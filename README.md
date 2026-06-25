@@ -59,6 +59,15 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   Any Markdown file in `.houston/commands/` becomes a custom command — its
   contents are a prompt template (`$ARGUMENTS` is filled in with whatever you type
   after the command name).
+- **Queue follow-ups while it works.** Keep typing while a run is in progress and
+  your message is queued instead of interrupting it — the **Stop** button is joined
+  by **Queue**. Line up as many as you like (a bar above the composer lists them,
+  and you can drop any or clear them all); when the turn finishes they're combined
+  into one next message and sent automatically. The queue is per-chat and lives in
+  the background, so a follow-up still fires when its chat's run finishes even after
+  you've switched to another conversation. If the turn fails or you stop it, the
+  queue is held — retry (or send) it deliberately rather than firing onto a broken
+  turn.
 - **Research subagents.** The agent can `dispatch_agent` to hand a focused,
   read-only question to a subagent with its own fresh context. The subagent
   reads, globs, and searches the project and reports back — keeping the main

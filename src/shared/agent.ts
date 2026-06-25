@@ -255,6 +255,17 @@ export type AgentEvent =
       options: QuestionOption[]
       multiSelect?: boolean
     }
+  | {
+      // Emitted by the main process when it auto-starts a follow-up turn from the
+      // queued-input buffer (messages typed while the previous turn was running).
+      // Carries the conversation so a renderer viewing it can render the user
+      // bubble and adopt the run; renderers on other conversations ignore it.
+      runId: string
+      type: 'turn_start'
+      conversationId: string
+      userText: string
+      images?: ImageAttachment[]
+    }
   | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
   | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' }

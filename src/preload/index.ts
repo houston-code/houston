@@ -14,6 +14,7 @@ import type {
   ToolApprovalDecision,
   WorktreeRemoval
 } from '@shared/agent'
+import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 
 /**
  * The bridge object exposed to the renderer as `window.api`.
@@ -101,6 +102,29 @@ const api = {
     approvalPolicy: AgentSendRequest['approvalPolicy']
   }): Promise<void> => ipcRenderer.invoke(IPC.agentRetry, req),
   cancelAgent: (runId: string): Promise<void> => ipcRenderer.invoke(IPC.agentCancel, runId),
+  /** Queue a message typed while a run is active; returns the conversation's updated queue. */
+  queueInput: (req: QueueAddRequest): Promise<QueuedInputMeta[]> =>
+    ipcRenderer.invoke(IPC.agentQueueAdd, req),
+  /** Drop one queued message; returns the conversation's updated queue. */
+  dequeueInput: (conversationId: string, id: string): Promise<QueuedInputMeta[]> =>
+    ipcRenderer.invoke(IPC.agentQueueRemove, conversationId, id),
+  /** Discard a conversation's queued messages; returns the (empty) queue. */
+  clearQueue: (conversationId: string): Promise<QueuedInputMeta[]> =>
+    ipcRenderer.invoke(IPC.agentQueueClear, conversationId),
+  /** Read a conversation's current queue (e.g. when opening it). */
+  listQueue: (conversationId: string): Promise<QueuedInputMeta[]> =>
+    ipcRenderer.invoke(IPC.agentQueueList, conversationId),
+  /** Subscribe to main-initiated queue changes (an auto-flush). Returns an unsubscribe fn. */
+  onQueueChanged: (
+    cb: (payload: { conversationId: string; items: QueuedInputMeta[] }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: { conversationId: string; items: QueuedInputMeta[] }
+    ): void => cb(payload)
+    ipcRenderer.on(IPC.agentQueueChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.agentQueueChanged, listener)
+  },
   approveTool: (runId: string, callId: string, decision: ToolApprovalDecision): Promise<void> =>
     ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision),
   /** Answer a pending `ask_user` question. */
