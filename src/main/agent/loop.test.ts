@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ChatMessage, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ApprovalPolicy } from '@shared/types'
+import type { ToolDef } from './tools'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
   provider: null as Provider | null,
+  mcpDefs: [] as ToolDef[],
   settings: {
     compactionThreshold: 0,
     reasoningEffort: 'off',
@@ -32,7 +34,7 @@ vi.mock('../store', () => ({
 }))
 vi.mock('../secrets', () => ({ getKey: () => null }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
-vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => [] }))
+vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
 vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 
@@ -57,6 +59,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
+  h.mcpDefs = []
   vi.restoreAllMocks()
 })
 
@@ -466,5 +469,64 @@ describe('startRun', () => {
     } finally {
       h.settings = original
     }
+  })
+})
+
+describe('lazy MCP tool loading', () => {
+  const mcpDef = (i: number): ToolDef => ({
+    kind: 'mcp',
+    summarize: () => `srv:tool${i}`,
+    schema: {
+      name: `srv:tool${i}`,
+      description: `MCP tool number ${i}.`,
+      parameters: { type: 'object', properties: {} }
+    },
+    execute: () => Promise.resolve(`ran tool${i}`)
+  })
+
+  /** A provider that records the tool names offered on each request. */
+  function recorder(turns: ProviderStreamEvent[][]): { provider: Provider; seen: string[][] } {
+    const seen: string[][] = []
+    let i = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        seen.push((req.tools ?? []).map((t) => t.name))
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        for (const ev of turn) yield ev
+      }
+    }
+    return { provider, seen }
+  }
+
+  it('defers MCP schemas above the threshold and reveals them via find_tools', async () => {
+    // 20 connected MCP tools (> MCP_LAZY_THRESHOLD) — dumping all of them on every
+    // request is exactly the context bloat we avoid.
+    h.mcpDefs = Array.from({ length: 20 }, (_, i) => mcpDef(i))
+    const { provider, seen } = recorder([
+      [
+        { type: 'tool_call', call: { id: 'c1', name: 'find_tools', arguments: { query: 'tool3' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+
+    await run({ provider })
+
+    // First request: no MCP tool schemas, but the find_tools meta-tool is offered.
+    expect(seen[0]).toContain('find_tools')
+    expect(seen[0].some((n) => n.startsWith('srv:tool'))).toBe(false)
+    // Second request: the tool revealed by find_tools now rides along; the other
+    // 19 stay deferred.
+    expect(seen[1]).toContain('srv:tool3')
+    expect(seen[1]).not.toContain('srv:tool0')
+  })
+
+  it('sends every MCP schema as-is at or below the threshold', async () => {
+    h.mcpDefs = Array.from({ length: 3 }, (_, i) => mcpDef(i))
+    const { provider, seen } = recorder([[{ type: 'done', stopReason: 'end_turn' }]])
+    await run({ provider })
+    expect(seen[0]).toContain('srv:tool0')
+    expect(seen[0]).toContain('srv:tool2')
+    expect(seen[0]).not.toContain('find_tools')
   })
 })
