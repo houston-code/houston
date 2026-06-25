@@ -15,6 +15,7 @@ import type {
   WorktreeRemoval
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
+import type { UpdateCheckResult, WhatsNew } from '@shared/update'
 
 /**
  * The bridge object exposed to the renderer as `window.api`.
@@ -151,6 +152,23 @@ const api = {
     const listener = (_event: IpcRendererEvent, payload: AgentEvent): void => cb(payload)
     ipcRenderer.on(IPC.agentEvent, listener)
     return () => ipcRenderer.removeListener(IPC.agentEvent, listener)
+  },
+
+  // Updates
+  /** Manually check the update feed (also broadcasts onUpdateAvailable when newer). */
+  checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(IPC.updateCheck),
+  /** Pending post-restart "What's new" highlights, consumed once. */
+  getWhatsNew: (): Promise<WhatsNew | null> => ipcRenderer.invoke(IPC.updateWhatsNew),
+  /** Subscribe to the on-launch auto-check finding a newer version. Returns an unsubscribe fn. */
+  onUpdateAvailable: (
+    cb: (payload: Extract<UpdateCheckResult, { status: 'available' }>) => void
+  ): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: Extract<UpdateCheckResult, { status: 'available' }>
+    ): void => cb(payload)
+    ipcRenderer.on(IPC.updateAvailable, listener)
+    return () => ipcRenderer.removeListener(IPC.updateAvailable, listener)
   }
 }
 

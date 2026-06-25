@@ -19,6 +19,9 @@ import { Composer } from './components/Composer'
 import { SettingsModal } from './components/SettingsModal'
 import { WorktreeDialog } from './components/WorktreeDialog'
 import { DiffPanel } from './components/DiffPanel'
+import { UpdateBanner } from './components/UpdateBanner'
+import { WhatsNewModal } from './components/WhatsNewModal'
+import type { UpdateCheckResult, WhatsNew } from '@shared/update'
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
@@ -73,6 +76,10 @@ export default function App(): JSX.Element {
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
+  const [update, setUpdate] = useState<Extract<UpdateCheckResult, { status: 'available' }> | null>(
+    null
+  )
+  const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
   const chat = useChat(currentId)
 
   const refreshConversations = useCallback(async () => {
@@ -95,6 +102,16 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (!chat.running) void refreshConversations()
   }, [chat.running, refreshConversations])
+
+  // Updates: subscribe to the on-launch auto-check, and pull any one-shot
+  // "What's new" staged after an upgrade-and-relaunch.
+  useEffect(() => {
+    const unsubscribe = window.api.onUpdateAvailable(setUpdate)
+    void window.api.getWhatsNew().then((wn) => {
+      if (wn) setWhatsNew(wn)
+    })
+    return unsubscribe
+  }, [])
 
   // Apply the color theme whenever it changes, and follow the OS while on "system".
   const theme = settings?.theme ?? 'system'
@@ -599,6 +616,8 @@ export default function App(): JSX.Element {
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
         />
 
+        <UpdateBanner update={update} onDismiss={() => setUpdate(null)} />
+
         {chat.items.length === 0 ? (
           <div className="welcome">
             <h1>Houston</h1>
@@ -725,6 +744,8 @@ export default function App(): JSX.Element {
           creating={chat.running}
         />
       )}
+
+      <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />
     </div>
   )
 }

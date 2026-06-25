@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import type { UpdateCheckResult } from '@shared/update'
 import type {
   AppSettings,
   Hook,
@@ -66,6 +67,23 @@ export function SettingsModal({
   const [newUrl, setNewUrl] = useState('')
   const modalRef = useRef<HTMLDivElement>(null)
   useFocusTrap(modalRef, onClose)
+
+  // Updates section: current version + manual "Check for updates".
+  const [version, setVersion] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null)
+  useEffect(() => {
+    void window.api.getVersion().then(setVersion)
+  }, [])
+  const checkForUpdates = async (): Promise<void> => {
+    setChecking(true)
+    setUpdateResult(null)
+    try {
+      setUpdateResult(await window.api.checkForUpdates())
+    } finally {
+      setChecking(false)
+    }
+  }
 
   const patchProvider = (id: string, patch: Partial<ProviderConfig>): void => {
     setSettings((s) => ({
@@ -699,6 +717,32 @@ export function SettingsModal({
                     asks a question while Houston isn’t the focused window. On by default.
                   </span>
                 </label>
+                <h3>Updates</h3>
+                <div className="updates-row">
+                  <span className="updates-row__version">
+                    Houston {version || '—'}
+                  </span>
+                  <button className="btn btn--sm" onClick={() => void checkForUpdates()} disabled={checking}>
+                    {checking ? 'Checking…' : 'Check for updates'}
+                  </button>
+                </div>
+                {updateResult && (
+                  <p className="updates-status">
+                    {updateResult.status === 'available' && (
+                      <>
+                        Houston <strong>{updateResult.latestVersion}</strong> is available.{' '}
+                        <a href={updateResult.releaseUrl} target="_blank" rel="noreferrer">
+                          Download
+                        </a>
+                      </>
+                    )}
+                    {updateResult.status === 'up-to-date' && 'You’re on the latest version.'}
+                    {updateResult.status === 'disabled' &&
+                      'Update checks run only in packaged builds.'}
+                    {updateResult.status === 'error' &&
+                      `Couldn’t check for updates: ${updateResult.message}`}
+                  </p>
+                )}
               </>
             )}
           </div>
