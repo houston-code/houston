@@ -8,7 +8,8 @@ import type {
   ReasoningBlock,
   StopReason,
   ToolApprovalDecision,
-  ToolCall
+  ToolCall,
+  ToolSchema
 } from '@shared/agent'
 import { isApprovalPolicy, type ApprovalPolicy } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
@@ -23,6 +24,7 @@ import { loadProjectConfig } from './projectConfig'
 import { getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
 import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
+import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead } from './scheduling'
 import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
 import { isBlockedByPlan, needsApproval } from './approval'
@@ -205,10 +207,29 @@ export async function startRun(
       req.model
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
+    // When a lot of MCP tools are connected, sending every schema on every turn
+    // bloats the context window (and bills BYO-model users) for tools the model
+    // may never touch. Above a threshold we defer them: the model gets a compact
+    // catalog via a `find_tools` meta-tool and loads only what it needs, which
+    // then rides along on later turns. At/below the threshold nothing changes.
     const mcpToolDefs = await getMcpToolDefs(settings.mcpServers)
-    const tools = [...toolSchemas(), ...mcpToolDefs.map((d) => d.schema)]
+    const lazyMcp = mcpToolDefs.length > MCP_LAZY_THRESHOLD
+    const revealedMcp = new Set<string>()
+    const findTools = lazyMcp ? makeFindToolsDef(mcpToolDefs, revealedMcp) : null
     const lookupTool = (name: string): ToolDef | undefined =>
-      getTool(name) ?? mcpToolDefs.find((d) => d.schema.name === name)
+      getTool(name) ??
+      (findTools && name === findTools.schema.name ? findTools : undefined) ??
+      mcpToolDefs.find((d) => d.schema.name === name)
+    // The schemas advertised to the model this turn: built-ins, plus either every
+    // MCP schema (small setups) or just find_tools + already-revealed MCP tools
+    // (lazy). Recomputed each turn so tools revealed via find_tools then appear.
+    const buildTools = (): ToolSchema[] => [
+      ...toolSchemas(),
+      ...(findTools ? [findTools.schema] : []),
+      ...mcpToolDefs
+        .filter((d) => !lazyMcp || revealedMcp.has(d.schema.name))
+        .map((d) => d.schema)
+    ]
     const messages: ChatMessage[] = [...req.messages]
 
     // Allowed roots: the workspace plus any configured additional directories
@@ -295,11 +316,6 @@ export async function startRun(
     let summaryMsgs: ChatMessage[] = []
     let lastInputTokens = 0
 
-    // Tool schemas ride along on every request but aren't part of the message
-    // window; fold their (static) size into the estimate so compaction accounts for
-    // them. Real provider usage (lastInputTokens) supersedes the estimate once known.
-    const toolTokens = Math.ceil(JSON.stringify(tools).length / 4)
-
     // Summarize messages[cut..newCut), fold the result into the synthetic summary,
     // and advance `cut`. Shared by the proactive (pre-send, threshold-driven) path
     // and the reactive (post-overflow) recovery path.
@@ -331,6 +347,13 @@ export async function startRun(
         emit({ type: 'done', stopReason: 'aborted' })
         return
       }
+
+      // The tool schemas for this turn. Recomputed each iteration because lazy MCP
+      // loading grows the set as find_tools reveals tools. They ride along on every
+      // request but aren't part of the message window, so fold their size into the
+      // compaction estimate; real provider usage supersedes it once known.
+      const tools = buildTools()
+      const toolTokens = Math.ceil(JSON.stringify(tools).length / 4)
 
       // Compact older turns before they overflow the model's context window. The
       // visible transcript (persisted `messages`) is untouched — only the window

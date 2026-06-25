@@ -82,7 +82,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   optional static bearer-token / custom auth headers). Their tools are offered to the agent namespaced as
   `mcp__<id>__<tool>` and always require approval. Point Houston at the
   filesystem, git, a hosted MCP service, or any other server to extend what the
-  agent can do — the same extensibility model as Claude Code.
+  agent can do — the same extensibility model as Claude Code. When a lot of MCP
+  tools are connected, Houston **loads their schemas lazily**: above a threshold
+  the agent gets a compact catalog plus a `find_tools` meta-tool and pulls in only
+  the tool definitions it needs, instead of paying to send every schema on every
+  request (which matters when you bring your own metered API key).
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.
