@@ -10,9 +10,13 @@ const h = vi.hoisted(() => ({
   startRun: vi.fn(),
   getConversation: vi.fn(),
   setMessages: vi.fn(),
-  updateConversationMeta: vi.fn()
+  updateConversationMeta: vi.fn(),
+  maybeGenerateTitle: vi.fn(() => Promise.resolve())
 }))
 vi.mock('./loop', () => ({ startRun: h.startRun }))
+// Auto-titling has its own tests (title.test.ts); here we only assert drain wires it
+// up on a natural completion, so stub it out rather than reaching the provider/store.
+vi.mock('./title', () => ({ maybeGenerateTitle: h.maybeGenerateTitle }))
 vi.mock('../conversations', () => ({
   getConversation: h.getConversation,
   setMessages: h.setMessages,
@@ -102,6 +106,7 @@ describe('runAndDrain', () => {
 
     expect(h.startRun).toHaveBeenCalledTimes(1)
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
+    expect(h.maybeGenerateTitle).not.toHaveBeenCalled() // no auto-title on error
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A']) // still held
     clearQueue(cid)
   })
@@ -117,6 +122,7 @@ describe('runAndDrain', () => {
 
     expect(h.startRun).toHaveBeenCalledTimes(1)
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
+    expect(h.maybeGenerateTitle).not.toHaveBeenCalled() // no auto-title on abort
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A'])
     clearQueue(cid)
   })
@@ -132,5 +138,10 @@ describe('runAndDrain', () => {
     expect(h.startRun).toHaveBeenCalledTimes(1)
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
     expect(sink.emitQueueChanged).not.toHaveBeenCalled()
+    // The natural completion still triggers a one-shot auto-title for this run.
+    expect(h.maybeGenerateTitle).toHaveBeenCalledTimes(1)
+    expect(h.maybeGenerateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: cid, providerId: 'anthropic', model: 'claude' })
+    )
   })
 })

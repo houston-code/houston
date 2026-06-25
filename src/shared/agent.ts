@@ -166,6 +166,10 @@ export interface ConversationMeta {
   pinned?: boolean
   /** Id of the custom group (see AppSettings.chatGroups) this chat belongs to. */
   groupId?: string
+  /** Set once the user explicitly renames the chat — auto-titling never overwrites it. */
+  titleCustom?: boolean
+  /** Set once a model-summarized title has been produced, so it's generated at most once. */
+  titleGenerated?: boolean
   /** Present when this chat runs in a git worktree Houston created for it. */
   worktree?: ConversationWorktree
 }

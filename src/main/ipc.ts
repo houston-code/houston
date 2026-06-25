@@ -100,11 +100,17 @@ function emitQueueChanged(
   if (!sender.isDestroyed()) sender.send(IPC.agentQueueChanged, { conversationId, items })
 }
 
+/** Push a conversation's freshly model-generated title to the renderer. */
+function emitTitleChanged(sender: WebContents, conversationId: string, title: string): void {
+  if (!sender.isDestroyed()) sender.send(IPC.conversationTitleChanged, { id: conversationId, title })
+}
+
 /** Bind the run/queue orchestrator's output to a specific renderer. */
 function makeIo(sender: WebContents): DrainIO {
   return {
     emit: (conversationId, e) => emitEvent(sender, conversationId, e),
-    emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items)
+    emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
+    emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
   }
 }
 

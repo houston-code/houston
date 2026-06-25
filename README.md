@@ -174,6 +174,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   **Search** the sidebar to find a past chat by its title or anything said in it.
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
   direction without disturbing the original.
+- **Auto-named chats.** A new chat shows the first message as a placeholder, then —
+  once the first turn finishes — the conversation's own model writes a short,
+  specific title to replace it (the new title appears in the sidebar live). Renaming
+  a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
   and groups persist across restarts.

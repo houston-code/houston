@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { conversationMatches, mergeRunningTotals } from './conversations'
+import { conversationMatches, mergeRunningTotals, needsGeneratedTitle } from './conversations'
 import type { AgentEvent, Conversation, ConversationUsage } from '@shared/agent'
 
 const conv = (over: Partial<Conversation>): Conversation => ({
@@ -29,6 +29,29 @@ describe('conversationMatches', () => {
   it('returns false when nothing matches', () => {
     const c = conv({ title: 'hello', messages: [{ role: 'assistant', content: 'world' }] })
     expect(conversationMatches(c, 'zzz')).toBe(false)
+  })
+})
+
+describe('needsGeneratedTitle', () => {
+  const userMsg = { role: 'user', content: 'hello' } as const
+
+  it('is eligible for a fresh chat that has a user message', () => {
+    expect(needsGeneratedTitle(conv({ messages: [userMsg] }))).toBe(true)
+  })
+
+  it('is not eligible before any user message exists', () => {
+    expect(needsGeneratedTitle(conv({ messages: [] }))).toBe(false)
+    expect(needsGeneratedTitle(conv({ messages: [{ role: 'assistant', content: 'hi' }] }))).toBe(
+      false
+    )
+  })
+
+  it('never re-titles a chat the user has manually renamed', () => {
+    expect(needsGeneratedTitle(conv({ messages: [userMsg], titleCustom: true }))).toBe(false)
+  })
+
+  it('generates at most once (skips when a title was already generated)', () => {
+    expect(needsGeneratedTitle(conv({ messages: [userMsg], titleGenerated: true }))).toBe(false)
   })
 })
 
