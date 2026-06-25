@@ -4,7 +4,7 @@ import { imageDataUrl } from '@shared/images'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { diffLines, diffStat, type DiffLine } from '@shared/diff'
 import type { ToolItem } from '../lib/items'
-import { describeTool } from '../lib/toolDisplay'
+import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 
 const MAX_DIFF_LINES = 300
 
@@ -163,6 +163,48 @@ function ToolRow({
   )
 }
 
+/** The status a fold of reads shows: the most attention-worthy across the run. */
+function combinedStatus(items: ToolItem[]): ToolItem['status'] {
+  if (items.some((it) => it.status === 'running')) return 'running'
+  if (items.some((it) => it.status === 'awaiting-approval')) return 'awaiting-approval'
+  if (items.some((it) => it.status === 'error')) return 'error'
+  if (items.some((it) => it.status === 'denied')) return 'denied'
+  return 'done'
+}
+
+/** A fold of consecutive reads: one "Read N files" row that expands to the list. */
+function ReadAggregateRow({ items }: { items: ToolItem[] }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const status = combinedStatus(items)
+  return (
+    <div className={`tool-row tool-row--${status}`}>
+      <div className="tool-row__head tool-row__head--clickable" onClick={() => setOpen((v) => !v)}>
+        <StatusGlyph status={status} />
+        <span className="tool-row__icon">○</span>
+        <span className="tool-row__verb">Read</span>
+        <span className="tool-row__target">{items.length} files</span>
+        <span className="tool-row__spacer" />
+        <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <ul className="tool-reads">
+          {items.map((it) => {
+            const { target } = describeTool(it)
+            return (
+              <li key={it.id} className="tool-reads__item">
+                <StatusGlyph status={it.status} />
+                <span className="tool-reads__path" title={target}>
+                  {target}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function ToolGroup({
   items,
   onApprove
@@ -171,11 +213,16 @@ export function ToolGroup({
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
 }): JSX.Element {
   const active = items.some((it) => it.status === 'awaiting-approval' || it.status === 'running')
+  const runs = foldReadRuns(items)
   return (
     <div className={`tool-group${active ? ' tool-group--active' : ''}`}>
-      {items.map((it) => (
-        <ToolRow key={it.id} item={it} onApprove={onApprove} />
-      ))}
+      {runs.map((run) =>
+        run.kind === 'reads' ? (
+          <ReadAggregateRow key={run.id} items={run.items} />
+        ) : (
+          <ToolRow key={run.id} item={run.item} onApprove={onApprove} />
+        )
+      )}
     </div>
   )
 }

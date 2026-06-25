@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DisplayItem, ToolItem } from './items'
-import { describeTool, groupItems, groupSummary, shortenPath } from './toolDisplay'
+import { describeTool, foldReadRuns, groupItems, shortenPath } from './toolDisplay'
 
 function tool(name: string, args: Record<string, unknown>, id = name): ToolItem {
   return { kind: 'tool', id, name, args, status: 'done' }
@@ -93,15 +93,46 @@ describe('groupItems', () => {
   it('returns an empty list for no items', () => {
     expect(groupItems([])).toEqual([])
   })
+
+  it('drops list_dir items but keeps the reads around them grouped', () => {
+    const items: DisplayItem[] = [
+      tool('list_dir', { path: '.' }, 'l1'),
+      tool('read_file', { path: 'a' }, 't1'),
+      tool('list_dir', { path: 'src' }, 'l2'),
+      tool('read_file', { path: 'b' }, 't2')
+    ]
+    const nodes = groupItems(items)
+    expect(nodes).toHaveLength(1)
+    const group = nodes[0]
+    expect(group.kind === 'toolgroup' && group.items.map((i) => i.name)).toEqual([
+      'read_file',
+      'read_file'
+    ])
+  })
+
+  it('omits a group made entirely of list_dir calls', () => {
+    const items: DisplayItem[] = [tool('list_dir', { path: '.' }, 'l1'), asst]
+    expect(groupItems(items).map((n) => n.kind)).toEqual(['assistant'])
+  })
 })
 
-describe('groupSummary', () => {
-  it('counts repeated verbs', () => {
-    const items = [
+describe('foldReadRuns', () => {
+  it('folds a run of consecutive reads into one aggregate', () => {
+    const runs = foldReadRuns([
       tool('read_file', { path: 'a' }, 't1'),
       tool('read_file', { path: 'b' }, 't2'),
       tool('run_shell', { command: 'ls' }, 't3')
-    ]
-    expect(groupSummary(items)).toBe('Read ×2 · Run')
+    ])
+    expect(runs.map((r) => r.kind)).toEqual(['reads', 'single'])
+    expect(runs[0].kind === 'reads' && runs[0].items).toHaveLength(2)
+  })
+
+  it('keeps a lone read as a single row and never folds non-reads', () => {
+    const runs = foldReadRuns([
+      tool('read_file', { path: 'a' }, 't1'),
+      tool('edit_file', { path: 'b' }, 't2'),
+      tool('read_file', { path: 'c' }, 't3')
+    ])
+    expect(runs.map((r) => r.kind)).toEqual(['single', 'single', 'single'])
   })
 })
