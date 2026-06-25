@@ -17,6 +17,7 @@ export const IPC = {
   workspaceListFiles: 'workspace:listFiles',
   commandsList: 'commands:list',
   gitRepoInfo: 'git:repoInfo',
+  workingTreeChanges: 'workingTree:changes',
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',

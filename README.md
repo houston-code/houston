@@ -176,6 +176,12 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Git-aware.** If the project is a git repo, Houston folds the current branch
   and a short working-tree status into the agent's context each turn, so it knows
   what branch it's on and what's already modified without having to run git first.
+- **Changes panel.** The **⤓ Changes** button in the title bar opens a slide-over
+  diff of every uncommitted change in the working tree — the tracked diff vs HEAD
+  (staged and unstaged) plus untracked files — each file expandable with a
+  red/green line diff and a `+/−` stat. It's working-tree scoped (all uncommitted
+  changes, not just the current chat's edits); read-only and hardened, the same
+  way the agent's `git_diff` tool is.
 - **Start a chat in its own worktree.** The **⑂** button next to *New chat* spins
   up a fresh git branch in an isolated worktree under `.houston/worktrees/`, and
   runs the chat there — so the agent's edits never touch your current checkout.

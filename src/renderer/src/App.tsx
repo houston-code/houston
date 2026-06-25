@@ -17,6 +17,7 @@ import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
 import { SettingsModal } from './components/SettingsModal'
 import { WorktreeDialog } from './components/WorktreeDialog'
+import { DiffPanel } from './components/DiffPanel'
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
@@ -57,6 +58,7 @@ export default function App(): JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [changesOpen, setChangesOpen] = useState(false)
   const [worktreeFor, setWorktreeFor] = useState<string | null>(null)
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
@@ -486,6 +488,7 @@ export default function App(): JSX.Element {
         setSettingsOpen(true)
       } else if (action === 'escape') {
         if (settingsOpen) setSettingsOpen(false)
+        else if (changesOpen) setChangesOpen(false)
         else if (chat.running) chat.cancel()
       }
     }
@@ -494,7 +497,7 @@ export default function App(): JSX.Element {
     // chat.cancel is stable (useCallback); depending on the whole `chat` object
     // would re-subscribe every render. The fields we read are listed explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onNewChat, settingsOpen, chat.running, chat.cancel])
+  }, [onNewChat, settingsOpen, changesOpen, chat.running, chat.cancel])
 
   if (!settings) {
     return <div className="loading">Loading…</div>
@@ -541,7 +544,10 @@ export default function App(): JSX.Element {
       />
 
       <div className="main">
-        <Titlebar title={currentConv?.title ?? 'Houston'} />
+        <Titlebar
+          title={currentConv?.title ?? 'Houston'}
+          onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
+        />
 
         {chat.items.length === 0 ? (
           <div className="welcome">
@@ -628,6 +634,10 @@ export default function App(): JSX.Element {
           onClose={() => setWorktreeFor(null)}
           onCreate={newChatInWorktree}
         />
+      )}
+
+      {changesOpen && (
+        <DiffPanel workspace={workspace} onClose={() => setChangesOpen(false)} />
       )}
     </div>
   )

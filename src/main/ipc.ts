@@ -21,6 +21,7 @@ import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { loadCommands } from './agent/commands'
 import { getRepoInfo, createWorktree, removeWorktree } from './agent/worktree'
+import { collectWorkingTreeChanges } from './agent/workingTree'
 import { realpathSync } from 'node:fs'
 import {
   listConversations,
@@ -104,6 +105,12 @@ export function registerIpc(): void {
     if (!workspace) return { isRepo: false, root: '', currentBranch: null, branches: [] }
     return getRepoInfo(workspace)
   })
+
+  // All uncommitted working-tree changes (tracked diff vs HEAD + untracked files)
+  // for the Changes panel. Read-only and hardened; a non-repo yields isRepo:false.
+  ipcMain.handle(IPC.workingTreeChanges, async (_event, workspace: string) =>
+    collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
+  )
 
   // Custom slash commands from the workspace's .houston/commands directory.
   ipcMain.handle(IPC.commandsList, async (_event, workspace: string) => {

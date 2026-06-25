@@ -3,6 +3,7 @@ import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
 import type { AppSettings, ApprovalPolicy } from '@shared/types'
 import type { Command } from '@shared/commands'
+import type { WorkingTreeChanges } from '@shared/workingTree'
 import type {
   AgentEvent,
   AgentSendRequest,
@@ -29,6 +30,9 @@ const api = {
   /** Git repo info for the "new chat in a worktree" picker (or isRepo:false). */
   getRepoInfo: (workspace: string): Promise<RepoInfo> =>
     ipcRenderer.invoke(IPC.gitRepoInfo, workspace),
+  /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
+  getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
+    ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
 
   // Settings
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),
