@@ -44,6 +44,15 @@ const POLICY_COMMANDS: Record<string, ApprovalPolicy> = {
   full: 'full-auto'
 }
 
+/**
+ * The message the Changes panel's "Create PR" button hands to the agent. The
+ * renderer never drives git/gh itself — it asks the agent to do the commit →
+ * push → open-PR flow with its existing tools, under the normal approval gate.
+ */
+const CREATE_PR_PROMPT = `Create a GitHub pull request for my current changes.
+
+If there are uncommitted changes, stage and commit them with a clear, conventional commit message. If I'm currently on the default branch (main or master), create a new feature branch first. Push the branch to origin, then open a pull request against the default branch using the gh_pr_create tool, and reply with the PR link. Briefly summarize what the PR contains.`
+
 /** Pick a sensible default model: first provider that has a key and a model. */
 function defaultSelection(settings: AppSettings): SelectedModel | null {
   if (settings.selected) return settings.selected
@@ -433,6 +442,14 @@ export default function App(): JSX.Element {
     [settings, workspace, currentId, chat, refreshConversations]
   )
 
+  // Hand off PR creation to the agent: close the panel and send the standing
+  // prompt as a normal turn, so the commit/push/open-PR flow runs through the
+  // agent's tools and approval gate rather than the renderer touching git.
+  const onCreatePr = useCallback(() => {
+    setChangesOpen(false)
+    void onSend(CREATE_PR_PROMPT)
+  }, [onSend])
+
   const onCompact = useCallback(async () => {
     if (!currentId || !settings?.selected) return
     chat.notify('Compacting conversation…')
@@ -637,7 +654,12 @@ export default function App(): JSX.Element {
       )}
 
       {changesOpen && (
-        <DiffPanel workspace={workspace} onClose={() => setChangesOpen(false)} />
+        <DiffPanel
+          workspace={workspace}
+          onClose={() => setChangesOpen(false)}
+          onCreatePr={canChat ? onCreatePr : undefined}
+          creating={chat.running}
+        />
       )}
     </div>
   )

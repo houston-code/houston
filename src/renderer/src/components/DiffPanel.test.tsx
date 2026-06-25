@@ -83,4 +83,25 @@ describe('DiffPanel', () => {
     fireEvent.click(container.querySelector('.drawer-overlay')!)
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('hands off to the agent when Create PR is clicked', async () => {
+    installApi(sampleChanges)
+    const onCreatePr = vi.fn()
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onCreatePr={onCreatePr} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Create PR/ }))
+    expect(onCreatePr).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables Create PR while a run is in progress', async () => {
+    installApi(sampleChanges)
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onCreatePr={vi.fn()} creating />)
+    expect(await screen.findByRole('button', { name: /Create PR/ })).toBeDisabled()
+  })
+
+  it('hides Create PR when there are no changes', async () => {
+    installApi({ isRepo: true, branch: 'main', files: [], added: 0, removed: 0 })
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onCreatePr={vi.fn()} />)
+    expect(await screen.findByText('No uncommitted changes.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Create PR/ })).not.toBeInTheDocument()
+  })
 })

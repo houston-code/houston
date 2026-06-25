@@ -65,13 +65,21 @@ function FileSection({ file, defaultOpen }: { file: FileDiff; defaultOpen: boole
  * A slide-over panel listing every uncommitted change in the workspace's working
  * tree (tracked diff vs HEAD + untracked files). Working-tree scoped — it shows
  * all uncommitted changes, not only what the current chat touched.
+ *
+ * `onCreatePr`, when provided, renders a "Create PR" action that hands the work
+ * off to the agent (commit → push → open PR via its existing tools) rather than
+ * the renderer driving git directly; `creating` disables it while a run is busy.
  */
 export function DiffPanel({
   workspace,
-  onClose
+  onClose,
+  onCreatePr,
+  creating = false
 }: {
   workspace: string | null
   onClose: () => void
+  onCreatePr?: () => void
+  creating?: boolean
 }): JSX.Element {
   const [data, setData] = useState<WorkingTreeChanges | null>(null)
   const [loading, setLoading] = useState(false)
@@ -158,6 +166,27 @@ export function DiffPanel({
             </>
           )}
         </div>
+
+        {onCreatePr && data?.isRepo && files.length > 0 && (
+          <footer className="changes-panel__foot">
+            <span className="changes-panel__foot-hint">
+              Hands off to the agent to commit, push, and open a PR.
+            </span>
+            <button
+              type="button"
+              className="btn btn--sm btn--accent"
+              onClick={onCreatePr}
+              disabled={creating}
+              title={
+                creating
+                  ? 'Wait for the current run to finish'
+                  : 'Ask the agent to create a pull request from these changes'
+              }
+            >
+              Create PR…
+            </button>
+          </footer>
+        )}
       </aside>
     </div>
   )
