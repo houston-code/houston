@@ -99,6 +99,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.
+- **Desktop notifications.** Wander off during a long turn — Houston fires a
+  native notification when the agent finishes, needs approval, or asks a question
+  while the window isn't focused, and clicking it brings the app back. On by
+  default; toggle it in Settings → *Appearance*.
 - **Rich transcript.** Replies render as full **Markdown** — headings, lists,
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,

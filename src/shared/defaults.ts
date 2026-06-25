@@ -140,6 +140,7 @@ export function defaultSettings(): AppSettings {
     hooks: [],
     mcpServers: [],
     additionalRoots: [],
+    desktopNotifications: true,
     theme: 'system'
   }
 }
