@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ToolApprovalDecision } from '@shared/agent'
+import { COMPACTION_SUMMARY_PREFIX, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import type { DisplayItem } from '../lib/items'
 import { groupItems } from '../lib/toolDisplay'
@@ -8,7 +8,29 @@ import { isNearBottom } from '../lib/scroll'
 import { ToolGroup } from './ToolGroup'
 import { Markdown } from './Markdown'
 
-function UserBubble({ text, images }: { text: string; images?: ImageAttachment[] }): JSX.Element {
+function UserBubble({
+  text,
+  images,
+  isSummary
+}: {
+  text: string
+  images?: ImageAttachment[]
+  isSummary?: boolean
+}): JSX.Element {
+  // The compaction summary is model-authored markdown, not user input. Render it as
+  // a labeled, full-width block with its body parsed as markdown rather than the
+  // right-aligned plain-text bubble used for the user's own turns.
+  if (isSummary) {
+    const body = text.slice(COMPACTION_SUMMARY_PREFIX.length).trimStart()
+    return (
+      <div className="msg msg--summary">
+        <div className="msg__summary-label">🗜 Summary of earlier conversation</div>
+        <div className="msg__body">
+          <Markdown text={body} />
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="msg msg--user">
       <div className="msg__body">
@@ -111,7 +133,14 @@ export function Transcript({
           {nodes.map((node) => {
             switch (node.kind) {
               case 'user':
-                return <UserBubble key={node.id} text={node.item.text} images={node.item.images} />
+                return (
+                  <UserBubble
+                    key={node.id}
+                    text={node.item.text}
+                    images={node.item.images}
+                    isSummary={node.item.isSummary}
+                  />
+                )
               case 'assistant':
                 return (
                   <AssistantMessage

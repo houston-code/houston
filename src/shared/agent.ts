@@ -63,6 +63,14 @@ export interface ChatMessage {
   toolName?: string
 }
 
+/**
+ * Prefix on the synthetic `user` message that stands in for a compacted head (see
+ * `buildSummaryMessages`). Lives here in shared so the renderer can recognize the
+ * summary turn and render its markdown body, without reaching into main-process code.
+ */
+export const COMPACTION_SUMMARY_PREFIX =
+  'Summary of the earlier conversation (older messages were compacted to save context):'
+
 export interface ToolSchema {
   name: string
   description: string
