@@ -92,6 +92,15 @@ const api = {
     id: string,
     patch: { title?: string; pinned?: boolean; groupId?: string | null }
   ): Promise<void> => ipcRenderer.invoke(IPC.conversationOrganize, id, patch),
+  /** Subscribe to main-pushed title updates (a chat got a model-generated title). Returns an unsubscribe fn. */
+  onConversationTitleChanged: (
+    cb: (payload: { id: string; title: string }) => void
+  ): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { id: string; title: string }): void =>
+      cb(payload)
+    ipcRenderer.on(IPC.conversationTitleChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.conversationTitleChanged, listener)
+  },
 
   // Agent
   startAgent: (req: AgentSendRequest): Promise<void> => ipcRenderer.invoke(IPC.agentStart, req),

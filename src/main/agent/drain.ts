@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentEvent, AgentRunRequest, ChatMessage } from '@shared/agent'
 import { combineQueued, type QueuedInputMeta } from '@shared/queue'
 import { startRun } from './loop'
+import { maybeGenerateTitle } from './title'
 import { takeQueue } from './queue'
 import { getConversation, setMessages, updateConversationMeta } from '../conversations'
 
@@ -11,6 +12,8 @@ export interface DrainIO {
   emit: (conversationId: string, e: AgentEvent) => void
   /** Push a conversation's updated queue to the renderer (after an auto-flush). */
   emitQueueChanged: (conversationId: string, items: QueuedInputMeta[]) => void
+  /** Push a conversation's freshly model-generated title to the renderer (live sidebar update). */
+  emitTitleChanged?: (conversationId: string, title: string) => void
 }
 
 /**
@@ -34,7 +37,17 @@ export async function runAndDrain(
   // conversation (a second would interleave its setMessages writes and corrupt
   // the log). The slot is freed when this run ends, before any queue drain below.
   await startRun({ ...runReq, conversationId }, send, (msgs) => setMessages(conversationId, msgs))
-  if (terminal === 'natural') drainQueue(io, conversationId)
+  if (terminal === 'natural') {
+    // Upgrade the placeholder title to a model-written summary (once per chat).
+    // Fire-and-forget: it must not delay the queue drain or the turn's completion.
+    void maybeGenerateTitle({
+      conversationId,
+      providerId: runReq.providerId,
+      model: runReq.model,
+      onTitle: (title) => io.emitTitleChanged?.(conversationId, title)
+    })
+    drainQueue(io, conversationId)
+  }
 }
 
 /** Dispatch a conversation's queued messages as one combined follow-up turn. */

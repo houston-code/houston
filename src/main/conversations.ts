@@ -86,6 +86,8 @@ export function forkConversation(id: string): Conversation | null {
   const src = read(id)
   if (!src) return null
   const fork = forkConversationData(src, randomUUID(), Date.now())
+  // The "(fork)" title is intentional — leave it be rather than re-summarizing.
+  fork.titleGenerated = true
   write(fork)
   return fork
 }
@@ -111,7 +113,9 @@ export function importConversation(
     model: data.model ?? resolved.model,
     createdAt: now,
     updatedAt: now,
-    messages: data.messages
+    messages: data.messages,
+    // The import carries its own title — don't re-summarize over it.
+    titleGenerated: true
   }
   write(conv)
   return conv
@@ -157,12 +161,38 @@ export function searchConversations(query: string): ConversationMeta[] {
   return metas.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
-/** Derive a title from the first user message. */
+/** Derive a placeholder title from the first user message (shown until the model
+ * writes a summarized one — see {@link needsGeneratedTitle}). */
 function deriveTitle(messages: ChatMessage[]): string | null {
   const first = messages.find((m) => m.role === 'user')
   if (!first) return null
   const text = first.content.trim().replace(/\s+/g, ' ')
   return text.length > 60 ? `${text.slice(0, 57)}…` : text || null
+}
+
+/**
+ * Whether a conversation is eligible for a model-generated title: it has a user
+ * message to summarize, the user hasn't given it a custom title, and one hasn't
+ * already been generated. Pure so it's unit-testable without the store.
+ */
+export function needsGeneratedTitle(conv: Conversation): boolean {
+  if (conv.titleCustom || conv.titleGenerated) return false
+  return conv.messages.some((m) => m.role === 'user')
+}
+
+/**
+ * Persist a model-generated title, returning whether it actually took. Re-checks
+ * eligibility against the freshly-read conversation so a manual rename that landed
+ * while the title was generating still wins. Does NOT bump `updatedAt` — a title
+ * arriving a beat after the turn shouldn't reorder the sidebar.
+ */
+export function setGeneratedTitle(id: string, title: string): boolean {
+  const conv = read(id)
+  if (!conv || !needsGeneratedTitle(conv)) return false
+  conv.title = title
+  conv.titleGenerated = true
+  write(conv)
+  return true
 }
 
 /**
@@ -234,7 +264,11 @@ export function organizeConversation(
 ): void {
   const conv = read(id)
   if (!conv) return
-  if (typeof patch.title === 'string' && patch.title.trim()) conv.title = patch.title.trim()
+  if (typeof patch.title === 'string' && patch.title.trim()) {
+    conv.title = patch.title.trim()
+    // A deliberate rename is sacred: never auto-title over it.
+    conv.titleCustom = true
+  }
   if (typeof patch.pinned === 'boolean') conv.pinned = patch.pinned
   if (patch.groupId !== undefined) {
     if (patch.groupId === null) delete conv.groupId
