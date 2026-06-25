@@ -17,7 +17,13 @@ import { sanitizeAttachments } from '@shared/images'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
-import { cancelRun, resolveApproval, resolveQuestion, setRunPolicy } from './agent/loop'
+import {
+  cancelRun,
+  resolveApproval,
+  resolveQuestion,
+  setRunPolicy,
+  activeRunForConversation
+} from './agent/loop'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, type DrainIO } from './agent/drain'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
@@ -328,6 +334,21 @@ export function registerIpc(): void {
       return
     }
 
+    // Refuse a second run while one is already active for this conversation —
+    // before appending the user message, so a rejected send doesn't leave an
+    // orphan turn in the log. Mid-run input is normally buffered via the queue,
+    // and the renderer re-adopts a live run on re-open; this is the backstop for
+    // any path that slips past those.
+    if (activeRunForConversation(conv.id)) {
+      emitEvent(event.sender, conv.id, {
+        runId: req.runId,
+        type: 'error',
+        message:
+          'This conversation already has a run in progress. Wait for it to finish or stop it before sending again.'
+      })
+      return
+    }
+
     const images = sanitizeAttachments(req.images)
     const userMessage: ChatMessage = {
       role: 'user',
@@ -362,6 +383,16 @@ export function registerIpc(): void {
           runId: req.runId,
           type: 'error',
           message: 'Conversation not found.'
+        })
+        return
+      }
+      // Same single-run-per-conversation guard as agentStart (see there).
+      if (activeRunForConversation(conv.id)) {
+        emitEvent(event.sender, conv.id, {
+          runId: req.runId,
+          type: 'error',
+          message:
+            'This conversation already has a run in progress. Wait for it to finish or stop it before retrying.'
         })
         return
       }
@@ -418,6 +449,13 @@ export function registerIpc(): void {
     (_event, runId: string, policy: AppSettings['approvalPolicy']) => {
       setRunPolicy(runId, policy)
     }
+  )
+
+  // The runId of the live run for a conversation, or null. The renderer queries
+  // this when re-opening a conversation so it can re-adopt a still-running run
+  // (show Stop, reconnect events/approvals) instead of starting a second one.
+  ipcMain.handle(IPC.agentActiveRun, (_event, conversationId: string): string | null =>
+    activeRunForConversation(conversationId)
   )
 
   // Revert the file changes a run made (restore each touched file to its pre-turn state).

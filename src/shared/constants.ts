@@ -47,6 +47,8 @@ export const IPC = {
   agentApprove: 'agent:approve',
   agentRespondQuestion: 'agent:respondQuestion',
   agentSetPolicy: 'agent:setPolicy',
+  /** Query the runId of the live run for a conversation (or null) to re-adopt it. */
+  agentActiveRun: 'agent:activeRun',
   agentEvent: 'agent:event',
   // Queued input (messages typed while a run is in progress)
   agentQueueAdd: 'agent:queue:add',
