@@ -1,0 +1,164 @@
+import { useCallback, useEffect, useState } from 'react'
+import type { FileChangeStatus, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
+import { DiffView } from './DiffView'
+
+/** Single-letter badge + accessible label per change status. */
+const STATUS: Record<FileChangeStatus, { mark: string; label: string }> = {
+  added: { mark: 'A', label: 'added' },
+  modified: { mark: 'M', label: 'modified' },
+  deleted: { mark: 'D', label: 'deleted' },
+  renamed: { mark: 'R', label: 'renamed' },
+  untracked: { mark: 'U', label: 'untracked' }
+}
+
+/** Below this many files the list starts fully expanded; above it, collapsed. */
+const AUTO_EXPAND_LIMIT = 8
+
+function FileSection({ file, defaultOpen }: { file: FileDiff; defaultOpen: boolean }): JSX.Element {
+  const [open, setOpen] = useState(defaultOpen)
+  const s = STATUS[file.status]
+  return (
+    <div className="changes-file">
+      <button
+        type="button"
+        className="changes-file__head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>
+        <span className={`changes-file__badge changes-file__badge--${file.status}`} title={s.label}>
+          {s.mark}
+        </span>
+        <span className="changes-file__path" title={file.path}>
+          {file.oldPath && file.oldPath !== file.path && (
+            <span className="changes-file__old">{file.oldPath} → </span>
+          )}
+          {file.path}
+        </span>
+        <span className="tool-row__spacer" />
+        {(file.added > 0 || file.removed > 0) && (
+          <span className="diff-stat">
+            <span className="diff-stat__add">+{file.added}</span>
+            <span className="diff-stat__del">−{file.removed}</span>
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="changes-file__body">
+          {file.note ? (
+            <p className="changes-file__note">{file.note}</p>
+          ) : (
+            file.hunks.map((h, i) => (
+              <div key={i} className="changes-hunk">
+                <div className="changes-hunk__header">{h.header}</div>
+                <DiffView diff={h.lines} />
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A slide-over panel listing every uncommitted change in the workspace's working
+ * tree (tracked diff vs HEAD + untracked files). Working-tree scoped — it shows
+ * all uncommitted changes, not only what the current chat touched.
+ */
+export function DiffPanel({
+  workspace,
+  onClose
+}: {
+  workspace: string | null
+  onClose: () => void
+}): JSX.Element {
+  const [data, setData] = useState<WorkingTreeChanges | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!workspace) {
+      setData({ isRepo: false, branch: null, files: [], added: 0, removed: 0 })
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      setData(await window.api.getWorkingTreeChanges(workspace))
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }, [workspace])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const files = data?.files ?? []
+  const defaultOpen = files.length <= AUTO_EXPAND_LIMIT
+
+  return (
+    <div className="drawer-overlay" onClick={onClose}>
+      <aside
+        className="drawer changes-panel"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Working-tree changes"
+      >
+        <header className="changes-panel__head">
+          <div className="changes-panel__titles">
+            <h2 className="changes-panel__title">Changes</h2>
+            <p className="changes-panel__scope">
+              All uncommitted changes in the working tree{data?.branch ? ` on ${data.branch}` : ''} —
+              not limited to this chat.
+            </p>
+          </div>
+          {data?.isRepo && (data.added > 0 || data.removed > 0) && (
+            <span className="diff-stat changes-panel__total">
+              <span className="diff-stat__add">+{data.added}</span>
+              <span className="diff-stat__del">−{data.removed}</span>
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => void load()}
+            disabled={loading}
+            title="Refresh"
+          >
+            ⟳
+          </button>
+          <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </header>
+
+        <div className="changes-panel__body">
+          {error ? (
+            <p className="changes-panel__empty">Couldn’t read changes: {error}</p>
+          ) : loading && !data ? (
+            <p className="changes-panel__empty">Loading…</p>
+          ) : !workspace ? (
+            <p className="changes-panel__empty">Open a chat in a project to see its changes.</p>
+          ) : data && !data.isRepo ? (
+            <p className="changes-panel__empty">This workspace isn’t a git repository.</p>
+          ) : files.length === 0 ? (
+            <p className="changes-panel__empty">No uncommitted changes.</p>
+          ) : (
+            <>
+              {files.map((f) => (
+                <FileSection key={`${f.status}:${f.path}`} file={f} defaultOpen={defaultOpen} />
+              ))}
+              {data?.truncated && (
+                <p className="changes-panel__empty">Some untracked files were omitted.</p>
+              )}
+            </>
+          )}
+        </div>
+      </aside>
+    </div>
+  )
+}

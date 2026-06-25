@@ -1,5 +1,4 @@
 import { promises as fs } from 'node:fs'
-import { execFile } from 'node:child_process'
 import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { DocumentAttachment, JSONSchema, ToolSchema } from '@shared/agent'
@@ -32,6 +31,7 @@ import { resolveEdit } from './edit-match'
 import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
+import { runReadGit } from './gitRead'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -979,45 +979,6 @@ const reviewChanges: ToolDef = {
     if (!ctx.dispatchReview) throw new Error('Review is not available in this context.')
     return ctx.dispatchReview(str(args, 'base') || undefined)
   }
-}
-
-// Config keys that let a repo-local .git/config run arbitrary commands when git
-// reads or diffs files (diff.external, textconv, fsmonitor, ext-diff, the `ext`
-// protocol). We neutralize all of them so inspecting an UNTRUSTED repo can't
-// execute code — these tools are kind:'read' and never prompt for approval.
-const GIT_HARDENING = [
-  '-c',
-  'core.fsmonitor=',
-  '-c',
-  'diff.external=',
-  '-c',
-  'protocol.ext.allow=never'
-]
-const GIT_ENV = {
-  ...process.env,
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_EXTERNAL_DIFF: '',
-  GIT_PAGER: 'cat',
-  GIT_TERMINAL_PROMPT: '0'
-}
-
-/**
- * Run a read-only git subcommand with execFile (an argument array — NO shell, so
- * no injection) and config-driven execution neutralized. Returns combined output.
- */
-function runReadGit(args: string[], cwd: string): Promise<string> {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      [...GIT_HARDENING, '--no-pager', ...args],
-      { cwd, env: GIT_ENV, timeout: 10_000, maxBuffer: 4_000_000, windowsHide: true },
-      (err, stdout, stderr) => {
-        const out = `${stdout || ''}${stderr || ''}`.trim()
-        if (err && !out) resolve(`[git error: ${(err as Error).message}]`)
-        else resolve(out || '[no output]')
-      }
-    )
-  })
 }
 
 /** Validate an optional user path against the workspace; return ['--', path] argv or []. */

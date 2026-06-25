@@ -6,8 +6,7 @@ import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shar
 import { diffLines, diffStat, type DiffLine } from '@shared/diff'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
-
-const MAX_DIFF_LINES = 300
+import { DiffView } from './DiffView'
 
 const KIND_ICON: Record<string, string> = {
   read: '○',
@@ -76,22 +75,6 @@ const GLYPH: Record<Exclude<ToolItem['status'], 'running'>, string> = {
 function StatusGlyph({ status }: { status: ToolItem['status'] }): JSX.Element {
   if (status === 'running') return <span className="tool-row__spinner" aria-label="running" />
   return <span className={`tool-row__glyph tool-row__glyph--${status}`}>{GLYPH[status]}</span>
-}
-
-function DiffView({ diff }: { diff: DiffLine[] }): JSX.Element {
-  return (
-    <pre className="diff">
-      {diff.slice(0, MAX_DIFF_LINES).map((l, i) => (
-        <div key={i} className={`diff__line diff__line--${l.type}`}>
-          <span className="diff__sign">{l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' '}</span>
-          <span className="diff__text">{l.text || ' '}</span>
-        </div>
-      ))}
-      {diff.length > MAX_DIFF_LINES && (
-        <div className="diff__more">… {diff.length - MAX_DIFF_LINES} more lines</div>
-      )}
-    </pre>
-  )
 }
 
 function ToolRow({
