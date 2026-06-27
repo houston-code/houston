@@ -76,6 +76,36 @@ export function augmentPath(
   return [...current, ...added].join(delimiter)
 }
 
+/**
+ * Shared cache dir for package managers, inside the temp area the Seatbelt profile
+ * already makes writable. Package managers default their caches to $HOME (`~/.npm`,
+ * `~/.cache`, …), which is OUTSIDE the workspace — so a plain `npm install` fails
+ * on the cache *write* (EPERM), not on anything real. Redirecting the cache here
+ * lets installs actually succeed (and persists the cache across runs).
+ */
+export function pkgCacheDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.TMPDIR ?? tmpdir(), 'houston-pkg-cache')
+}
+
+/**
+ * Environment for a sandboxed command: the augmented PATH plus package-manager
+ * cache redirects into {@link pkgCacheDir}. Only the cache *write* location moves —
+ * real HOME config (`~/.npmrc` auth tokens, `~/.gitconfig`) stays readable, since
+ * the profile allows reads everywhere. The agent can still override any of these
+ * per command (e.g. `npm install --cache …`).
+ */
+export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const cache = pkgCacheDir(baseEnv)
+  return {
+    ...baseEnv,
+    PATH: augmentPath(baseEnv),
+    npm_config_cache: join(cache, 'npm'),
+    YARN_CACHE_FOLDER: join(cache, 'yarn'),
+    PIP_CACHE_DIR: join(cache, 'pip'),
+    XDG_CACHE_HOME: join(cache, 'xdg')
+  }
+}
+
 /** Escape a path for safe embedding inside an SBPL double-quoted literal. */
 function sbplPath(p: string): string {
   let real = p
@@ -247,7 +277,7 @@ export function spawnSandboxed(opts: {
   const baseEnv = opts.env ?? process.env
   const child = spawn('sandbox-exec', args, {
     cwd: opts.cwd,
-    env: { ...baseEnv, PATH: augmentPath(baseEnv) },
+    env: sandboxEnv(baseEnv),
     detached: true
   })
   if (opts.signal) {
@@ -289,7 +319,7 @@ export function runSandboxed(
     // hits only the `sandbox-exec` wrapper and leaves orphaned grandchildren alive.
     const child = spawnFn('sandbox-exec', args, {
       cwd: opts.cwd,
-      env: { ...baseEnv, PATH: augmentPath(baseEnv) },
+      env: sandboxEnv(baseEnv),
       detached: true
     })
 

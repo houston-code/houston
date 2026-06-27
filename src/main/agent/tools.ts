@@ -642,6 +642,37 @@ export function networkBlockHint(
   return NETWORK_ERROR_RE.test(output) ? NETWORK_BLOCKED_HINT : ''
 }
 
+/**
+ * Signatures of a filesystem write the sandbox denied — most commonly a tool
+ * writing to its $HOME cache (`~/.npm`, `~/.cache`, …), which is outside the
+ * writable roots. Deliberately excludes a bare "operation not permitted" (that
+ * also covers blocked `sudo`/exec), matching only write-shaped errno/messages.
+ */
+const SANDBOX_WRITE_ERROR_RE = /\beperm\b|\beacces\b|permission denied|read-only file system/i
+
+/** The hint appended to a failure that looks like the sandbox denied a write. */
+export const SANDBOX_WRITE_BLOCKED_HINT =
+  '[note: the sandbox only allows writes inside the project and temp dirs. A write was denied — usually a ' +
+  'tool writing to your home dir (e.g. ~/.npm, ~/.cache, ~/.config). Package-manager caches (npm/pip/yarn) ' +
+  'are already redirected to a writable temp dir; if a tool still needs to write elsewhere, point it at a ' +
+  'path inside the project.]'
+
+/**
+ * Return {@link SANDBOX_WRITE_BLOCKED_HINT} when a *failed* command looks like it
+ * failed because the sandbox denied a filesystem write — so the agent fixes the
+ * path instead of reporting the action as impossible. Skips network failures
+ * (those get {@link NETWORK_BLOCKED_HINT}) and successes, so the two never collide.
+ */
+export function sandboxWriteBlockHint(
+  result: { exitCode: number | null; timedOut?: boolean },
+  output: string
+): string {
+  const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
+  if (!failed) return ''
+  if (NETWORK_ERROR_RE.test(output)) return ''
+  return SANDBOX_WRITE_ERROR_RE.test(output) ? SANDBOX_WRITE_BLOCKED_HINT : ''
+}
+
 const runShell: ToolDef = {
   kind: 'shell',
   summarize: (a) => (a.background === true ? `${str(a, 'command')} (background)` : str(a, 'command')),
@@ -708,8 +739,14 @@ const runShell: ToolDef = {
     if (body) parts.push(body)
     if (result.timedOut) parts.push('[command timed out]')
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
+    // At most one diagnostic hint: a network-blocked failure, else a sandbox
+    // write-denied failure (e.g. a package manager's cache write to ~/.npm).
     const netHint = networkBlockHint(ctx.allowNetwork, result, body)
     if (netHint) parts.push(netHint)
+    else {
+      const writeHint = sandboxWriteBlockHint(result, body)
+      if (writeHint) parts.push(writeHint)
+    }
     return parts.join('\n')
   }
 }
