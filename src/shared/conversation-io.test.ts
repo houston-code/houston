@@ -138,6 +138,7 @@ describe('forkConversationData', () => {
     createdAt: 1,
     updatedAt: 2,
     pinned: true,
+    archived: true,
     groupId: 'g1',
     usage: { inputTokens: 10, outputTokens: 20, cost: 0.01 },
     messages: [{ role: 'user', content: 'hi' }]
@@ -151,9 +152,10 @@ describe('forkConversationData', () => {
     expect(fork.updatedAt).toBe(99)
   })
 
-  it('clears pin and group so the fork lands in the default list', () => {
+  it('clears pin, archive, and group so the fork lands in the default list', () => {
     const fork = forkConversationData(src, 'new-id', 99)
     expect(fork.pinned).toBeUndefined()
+    expect(fork.archived).toBeUndefined()
     expect(fork.groupId).toBeUndefined()
   })
 

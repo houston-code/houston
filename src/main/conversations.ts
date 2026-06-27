@@ -260,7 +260,7 @@ export function updateConversationMeta(
  */
 export function organizeConversation(
   id: string,
-  patch: { title?: string; pinned?: boolean; groupId?: string | null }
+  patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
 ): void {
   const conv = read(id)
   if (!conv) return
@@ -270,6 +270,11 @@ export function organizeConversation(
     conv.titleCustom = true
   }
   if (typeof patch.pinned === 'boolean') conv.pinned = patch.pinned
+  if (typeof patch.archived === 'boolean') {
+    if (patch.archived) conv.archived = true
+    // Drop the flag entirely when unarchiving so it doesn't linger as `false`.
+    else delete conv.archived
+  }
   if (patch.groupId !== undefined) {
     if (patch.groupId === null) delete conv.groupId
     else conv.groupId = patch.groupId

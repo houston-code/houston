@@ -323,7 +323,11 @@ export function registerIpc(): void {
   // Rename / pin / move-to-group. Does not affect the recency ordering.
   ipcMain.handle(
     IPC.conversationOrganize,
-    (_event, id: string, patch: { title?: string; pinned?: boolean; groupId?: string | null }) => {
+    (
+      _event,
+      id: string,
+      patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+    ) => {
       organizeConversation(id, patch)
     }
   )

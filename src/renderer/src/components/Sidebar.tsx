@@ -9,6 +9,9 @@ function basename(p: string): string {
   return parts[parts.length - 1] || p
 }
 
+/** Which chats the sidebar shows: live chats ("active") or archived ones. */
+export type ConversationStatusFilter = 'active' | 'archived'
+
 export interface SidebarProps {
   conversations: ConversationMeta[]
   groups: ChatGroup[]
@@ -29,6 +32,12 @@ export interface SidebarProps {
   onOpenSettings: () => void
   onRename: (id: string, title: string) => void
   onSetPinned: (id: string, pinned: boolean) => void
+  onSetArchived: (id: string, archived: boolean) => void
+  /** Current status filter, and a setter for the filter control. */
+  statusFilter: ConversationStatusFilter
+  onStatusFilterChange: (filter: ConversationStatusFilter) => void
+  /** Total counts per status (from the full list), shown beside the filter options. */
+  statusCounts: { active: number; archived: number }
   onMove: (id: string, groupId: string | null) => void
   onCreateGroup: () => Promise<string>
   onRenameGroup: (groupId: string, name: string) => void
@@ -118,6 +127,11 @@ function ConvRow({
           </div>
         )}
         <div className="conv__meta">
+          {/* Tag archived chats only when they surface outside the Archived view
+              (i.e. in search results), so the active list isn't noisy. */}
+          {conv.archived && props.statusFilter === 'active' && (
+            <span className="conv__tag" title="Archived">Archived</span>
+          )}
           {conv.worktree ? (
             <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
               ⑂ {conv.worktree.branch}
@@ -168,6 +182,15 @@ function ConvRow({
               }}
             >
               ⑂ Fork
+            </button>
+            <button
+              className="menu__item"
+              onClick={() => {
+                props.onSetArchived(conv.id, !conv.archived)
+                close()
+              }}
+            >
+              {conv.archived ? '⊞ Unarchive' : '⊟ Archive'}
             </button>
             <div className="menu__sep" />
             <div className="menu__label">Move to</div>
@@ -322,6 +345,85 @@ function GroupHeader({
   )
 }
 
+/** Funnel button beside the search box that filters the chat list by status. */
+function FilterButton({
+  filter,
+  counts,
+  onChange
+}: {
+  filter: ConversationStatusFilter
+  counts: { active: number; archived: number }
+  onChange: (filter: ConversationStatusFilter) => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  // "active" is the default view; anything else counts as a filter being applied.
+  const filtered = filter !== 'active'
+  const options: { key: ConversationStatusFilter; label: string; count: number }[] = [
+    { key: 'active', label: 'Active', count: counts.active },
+    { key: 'archived', label: 'Archived', count: counts.archived }
+  ]
+
+  return (
+    <div className="conv__menu-wrap">
+      <button
+        ref={btnRef}
+        className={`sidebar__filter ${filtered ? 'sidebar__filter--on' : ''}`}
+        title="Filter chats"
+        aria-label="Filter chats"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <svg
+          className="sidebar__filter-icon"
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path
+            d="M2.5 4h11L9.5 8.6v4.1l-3 1.3V8.6z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        </svg>
+        {filtered && <span className="sidebar__filter-dot" />}
+      </button>
+      {open && (
+        <Popover
+          anchorRef={btnRef}
+          onClose={() => setOpen(false)}
+          role="menu"
+          ariaLabel="Filter by status"
+        >
+          <div className="menu__label">Status</div>
+          {options.map((o) => (
+            <button
+              key={o.key}
+              role="menuitemradio"
+              aria-checked={filter === o.key}
+              className="menu__item"
+              onClick={() => {
+                onChange(o.key)
+                setOpen(false)
+              }}
+            >
+              {filter === o.key ? '● ' : '○ '}
+              {o.label}
+              <span className="menu__item-count">{o.count}</span>
+            </button>
+          ))}
+        </Popover>
+      )}
+    </div>
+  )
+}
+
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
   const sections = buildSidebarSections(conversations, groups)
@@ -376,19 +478,30 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         ＋ New chat
       </button>
 
-      <input
-        className="sidebar__search"
-        type="search"
-        placeholder="Search chats…"
-        aria-label="Search conversations"
-        value={props.search}
-        onChange={(e) => props.onSearch(e.target.value)}
-      />
+      <div className="sidebar__searchrow">
+        <input
+          className="sidebar__search"
+          type="search"
+          placeholder="Search chats…"
+          aria-label="Search conversations"
+          value={props.search}
+          onChange={(e) => props.onSearch(e.target.value)}
+        />
+        <FilterButton
+          filter={props.statusFilter}
+          counts={props.statusCounts}
+          onChange={props.onStatusFilterChange}
+        />
+      </div>
 
       <div className="sidebar__list">
         {conversations.length === 0 && (
           <div className="sidebar__empty">
-            {props.search ? 'No matching conversations.' : 'No conversations yet.'}
+            {props.search
+              ? 'No matching conversations.'
+              : props.statusFilter === 'archived'
+                ? 'No archived chats.'
+                : 'No conversations yet.'}
           </div>
         )}
 

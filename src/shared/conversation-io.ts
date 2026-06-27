@@ -112,6 +112,7 @@ export function forkConversationData(src: Conversation, id: string, now: number)
     messages: src.messages.map((m) => ({ ...m }))
   }
   delete fork.pinned
+  delete fork.archived
   delete fork.groupId
   return fork
 }
