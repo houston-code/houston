@@ -11,7 +11,8 @@ import type { SandboxBackend, ShellLaunch } from './contract'
  * AppContainer are coarse and toolchain-hostile; Windows Sandbox is Pro-only and VM-
  * heavy). So `run_shell` runs UNCONFINED here and the backend reports `sandboxed: false`
  * — the approval gate then requires explicit consent (it is never silently auto-approved),
- * and the structured file tools' JS containment still holds on every OS.
+ * and the structured file tools' JS containment still holds on every OS. The full
+ * rationale (each rejected option + the future path) lives in docs/sandboxing.md.
  *
  * The agent's commands are bash-flavored, so we prefer a real `bash.exe` (Git for
  * Windows) when present — the existing POSIX command path and session threading work

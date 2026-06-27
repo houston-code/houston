@@ -116,7 +116,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   when available. **Windows** has no broadly-available equivalent, so shell commands run
   unconfined — and the app says so: the command is reported as not sandboxed and is never
   silently auto-approved (you must explicitly allow each one, even in full-auto). The
-  structured file tools stay confined to the project on every platform.
+  structured file tools stay confined to the project on every platform. See
+  [docs/sandboxing.md](docs/sandboxing.md) for the per-platform model and why
+  AppContainer / Windows Sandbox aren't a fit for confining arbitrary build commands.
 - **Background processes.** `run_shell` can start long-running commands (dev
   servers, watchers) in the background and return immediately; the agent polls
   them with `read_shell_output` and stops them with `kill_shell`. They're killed
