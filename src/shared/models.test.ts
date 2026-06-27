@@ -3,71 +3,90 @@ import type { ModelOption } from './types'
 import { naturalCompare, sortedModels } from './models'
 
 const ids = (ms: ModelOption[]): string[] => ms.map((m) => m.id)
+const m = (...xs: string[]): ModelOption[] => xs.map((id) => ({ id }))
 
 describe('naturalCompare', () => {
   it('orders numeric segments by value, not lexically', () => {
-    expect([{ id: 'v10' }, { id: 'v2' }].sort((a, b) => naturalCompare(a.id, b.id)).map((m) => m.id)).toEqual([
-      'v2',
-      'v10'
-    ])
+    expect(['v10', 'v2'].sort(naturalCompare)).toEqual(['v2', 'v10'])
   })
 })
 
 describe('sortedModels', () => {
-  it('restores the curated default order regardless of stored order', () => {
-    // How an upgraded install looks: the migration appended GPT-5 to the bottom.
-    const stored: ModelOption[] = [
-      { id: 'gpt-4o' },
-      { id: 'gpt-4o-mini' },
-      { id: 'o3' },
-      { id: 'o4-mini' },
-      { id: 'gpt-5' },
-      { id: 'gpt-5-mini' },
-      { id: 'gpt-5-nano' }
-    ]
+  it('groups a family together and orders it newest-version first (Opus 4.8 before 4.7)', () => {
+    // Stored as the curated defaults are: opus split around sonnet/haiku.
+    const stored = m('claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'claude-opus-4-7')
+    expect(ids(sortedModels('anthropic', stored))).toEqual([
+      'claude-opus-4-8',
+      'claude-opus-4-7', // grouped with its family, newest first
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5'
+    ])
+  })
+
+  it('orders OpenAI families most-advanced first, with sizes and o-series version-descending', () => {
+    const stored = m('gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano')
     expect(ids(sortedModels('openai', stored))).toEqual([
       'gpt-5',
       'gpt-5-mini',
-      'gpt-5-nano',
+      'gpt-5-nano', // base < mini < nano within the family
       'gpt-4o',
       'gpt-4o-mini',
-      'o3',
-      'o4-mini'
+      'o4-mini', // o-series after the GPT-4 line, newest (o4) before o3
+      'o3'
+    ])
+  })
+
+  it('keeps Gemini tiers grouped (pro before flash) and newest version first', () => {
+    const stored = m('gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite')
+    expect(ids(sortedModels('gemini', stored))).toEqual([
+      'gemini-2.5-pro', // pro tier leads
+      // then the flash family, newest version first; within a version, base before lite.
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash'
+    ])
+  })
+
+  it('does not treat the "mini" inside "gemini" as a size', () => {
+    // If "mini" matched, gemini-2.5-pro would rank as a small size and sort oddly.
+    const stored = m('gemini-2.5-flash', 'gemini-2.5-pro')
+    expect(ids(sortedModels('gemini', stored))).toEqual(['gemini-2.5-pro', 'gemini-2.5-flash'])
+  })
+
+  it('sorts unrecognized models after known families, grouped by stem, newest first', () => {
+    const stored = m('llama-2', 'gpt-5', 'qwen-2.5', 'llama-3')
+    expect(ids(sortedModels('openai-compatible', stored))).toEqual([
+      'gpt-5', // known family first
+      'llama-3', // llama grouped, newest version first
+      'llama-2',
+      'qwen-2.5'
+    ])
+  })
+
+  it('groups local-model families together rather than interleaving by version', () => {
+    const stored = m('qwen-2.5', 'llama-3.1', 'qwen-3', 'llama-2')
+    // llama family (3.1, 2) then qwen family (3, 2.5) — families contiguous, not
+    // interleaved by version across families.
+    expect(ids(sortedModels('openai-compatible', stored))).toEqual([
+      'llama-3.1',
+      'llama-2',
+      'qwen-3',
+      'qwen-2.5'
     ])
   })
 
   it('does not mutate the input array', () => {
-    const stored: ModelOption[] = [{ id: 'o4-mini' }, { id: 'gpt-5' }]
+    const stored = m('o4-mini', 'gpt-5')
     const before = ids(stored)
     sortedModels('openai', stored)
     expect(ids(stored)).toEqual(before)
   })
 
-  it('places unrecognized (fetched/custom) models after the curated ones, in natural order', () => {
+  it('falls back to the label for ordering when ids tie', () => {
     const stored: ModelOption[] = [
-      { id: 'zeta-model' },
-      { id: 'gpt-5' },
-      { id: 'alpha-model' },
-      { id: 'gpt-4o' }
+      { id: 'x', label: 'Banana' },
+      { id: 'x', label: 'Apple' }
     ]
-    expect(ids(sortedModels('openai', stored))).toEqual([
-      'gpt-5', // curated, first
-      'gpt-4o', // curated, after gpt-5
-      'alpha-model', // unknown, natural order
-      'zeta-model'
-    ])
-  })
-
-  it('natural-sorts everything for a provider with no curated defaults (e.g. a local endpoint)', () => {
-    const stored: ModelOption[] = [{ id: 'qwen2.5' }, { id: 'llama-3.1' }, { id: 'llama-3.10' }]
-    expect(ids(sortedModels('ollama', stored))).toEqual(['llama-3.1', 'llama-3.10', 'qwen2.5'])
-  })
-
-  it('uses the label for ordering unknown models when present', () => {
-    const stored: ModelOption[] = [
-      { id: 'b', label: 'Apple' },
-      { id: 'a', label: 'Banana' }
-    ]
-    expect(ids(sortedModels('custom', stored))).toEqual(['b', 'a'])
+    expect(sortedModels('openai-compatible', stored).map((o) => o.label)).toEqual(['Apple', 'Banana'])
   })
 })
