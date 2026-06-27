@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties
 } from 'react'
+import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, ReasoningEffort, RepoInfo } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
@@ -15,7 +16,11 @@ import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
 import { branchNameError, suggestBranch } from './lib/worktree'
 import { applyTheme } from './lib/theme'
-import { shortcutFor } from './lib/shortcuts'
+import { matchShortcut, isEditableTarget, isMacPlatform, shortcutHint } from './lib/shortcuts'
+import { chatAtIndex, cycleChatId } from './lib/sessionNav'
+import { nextApprovalPolicy } from './lib/policyCycle'
+import { resolveShortcuts } from './lib/keybindingOverrides'
+import type { PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
 import {
@@ -30,10 +35,10 @@ import {
 import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
-import { itemsFromMessages } from './lib/items'
+import { itemsFromMessages, lastUserText } from './lib/items'
 import { Sidebar } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
-import { ControlBar } from './components/ControlBar'
+import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
 import { UpdateBanner } from './components/UpdateBanner'
@@ -52,6 +57,13 @@ const TerminalDock = lazy(() =>
 const WhatsNewModal = lazy(() =>
   import('./components/WhatsNewModal').then((m) => ({ default: m.WhatsNewModal }))
 )
+const ShortcutsHelp = lazy(() =>
+  import('./components/ShortcutsHelp').then((m) => ({ default: m.ShortcutsHelp }))
+)
+const CommandPalette = lazy(() =>
+  import('./components/CommandPalette').then((m) => ({ default: m.CommandPalette }))
+)
+const FindBar = lazy(() => import('./components/FindBar').then((m) => ({ default: m.FindBar })))
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
@@ -116,6 +128,10 @@ export default function App(): JSX.Element {
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteSeed, setPaletteSeed] = useState('')
+  const [findOpen, setFindOpen] = useState(false)
   // Worktree setup for a not-yet-started chat (shown inline in the control bar).
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
   const [worktreeMode, setWorktreeMode] = useState(true)
@@ -726,11 +742,193 @@ export default function App(): JSX.Element {
     [onNewChat, onCompact, onChangePolicy, chat, commands]
   )
 
-  // Global keyboard shortcuts: Cmd/Ctrl+N new chat, Cmd/Ctrl+, settings,
-  // Esc to stop a run or close the settings dialog.
+  // ---- Keyboard shortcuts, command palette, mode cycling ----
+
+  const mac = useMemo(() => isMacPlatform(), [])
+
+  // The effective shortcut registry: built-in defaults with the user's overrides
+  // applied. Drives global matching, the help overlay, and palette key hints.
+  const shortcuts = useMemo(() => resolveShortcuts(settings?.keybindings), [settings?.keybindings])
+
+  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the currently visible list.
+  const jumpToChat = useCallback(
+    (index: number) => {
+      const id = chatAtIndex(visibleConversations, index)
+      if (id && id !== currentId) void selectConversation(id)
+    },
+    [visibleConversations, currentId, selectConversation]
+  )
+
+  const cycleChat = useCallback(
+    (dir: 1 | -1) => {
+      const id = cycleChatId(visibleConversations, currentId, dir)
+      if (id && id !== currentId) void selectConversation(id)
+    },
+    [visibleConversations, currentId, selectConversation]
+  )
+
+  // Shift+Tab steps to the next approval mode and confirms it in the transcript
+  // (the ControlBar's mode selector also reflects the change).
+  const cyclePolicy = useCallback(() => {
+    if (!settings) return
+    const next = nextApprovalPolicy(settings.approvalPolicy)
+    void onChangePolicy(next)
+    chat.notify(`Approval mode: ${POLICY_LABEL[next]}`)
+    // chat.notify is stable (useCallback in useChat); depend on it explicitly rather
+    // than the whole `chat`, which changes identity every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, onChangePolicy, chat.notify])
+
+  // The command palette's flat, searchable item list: app actions, approval modes,
+  // the available models, and every chat as a switch target.
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    const base = (p: string): string => p.replace(/\/+$/, '').split('/').pop() || p
+    const items: PaletteItem[] = []
+    items.push(
+      {
+        id: 'act-new-chat',
+        title: 'New chat',
+        section: 'Actions',
+        hint: shortcutHint('new-chat', mac, shortcuts),
+        keywords: 'create start',
+        run: () => void onNewChat()
+      },
+      {
+        id: 'act-toggle-sidebar',
+        title: sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar',
+        section: 'Actions',
+        hint: shortcutHint('toggle-sidebar', mac, shortcuts),
+        run: toggleSidebar
+      },
+      {
+        id: 'act-toggle-terminal',
+        title: 'Toggle terminal',
+        section: 'Actions',
+        hint: shortcutHint('toggle-terminal', mac, shortcuts),
+        keywords: 'shell console',
+        run: toggleTerminal
+      },
+      {
+        id: 'act-change-folder',
+        title: 'Open a different project folder',
+        section: 'Actions',
+        keywords: 'workspace directory cwd',
+        run: () => void onChangeWorkspace()
+      },
+      {
+        id: 'act-import',
+        title: 'Import chat from file',
+        section: 'Actions',
+        run: () => void onImportConversation()
+      },
+      {
+        id: 'act-find',
+        title: 'Find in conversation',
+        section: 'Actions',
+        hint: shortcutHint('find-in-chat', mac, shortcuts),
+        keywords: 'search',
+        run: () => setFindOpen(true)
+      },
+      {
+        id: 'act-help',
+        title: 'Keyboard shortcuts',
+        section: 'Actions',
+        hint: shortcutHint('show-help', mac, shortcuts),
+        run: () => setHelpOpen(true)
+      },
+      {
+        id: 'act-settings',
+        title: 'Open settings',
+        section: 'Actions',
+        hint: shortcutHint('open-settings', mac, shortcuts),
+        run: () => setSettingsOpen(true)
+      }
+    )
+    if (workspace) {
+      items.push({
+        id: 'act-changes',
+        title: 'Show working-tree changes',
+        section: 'Actions',
+        keywords: 'diff git pr',
+        run: () => setChangesOpen(true)
+      })
+    }
+    if (currentId) {
+      items.push({
+        id: 'act-compact',
+        title: 'Compact conversation',
+        section: 'Actions',
+        keywords: 'summarize context',
+        run: () => void onCompact()
+      })
+    }
+    for (const p of APPROVAL_POLICIES) {
+      items.push({
+        id: `mode-${p}`,
+        title: POLICY_LABEL[p],
+        section: 'Approval mode',
+        keywords: `policy ${p}`,
+        hint: settings?.approvalPolicy === p ? '✓ current' : undefined,
+        run: () => void onChangePolicy(p)
+      })
+    }
+    for (const prov of settings?.providers ?? []) {
+      for (const m of prov.models) {
+        const current =
+          settings?.selected?.providerId === prov.id && settings?.selected?.model === m.id
+        items.push({
+          id: `model-${prov.id}-${m.id}`,
+          title: `Use ${m.label ?? m.id}`,
+          subtitle: prov.label,
+          section: 'Model',
+          keywords: `${m.id} ${prov.id}`,
+          hint: current ? '✓ current' : undefined,
+          run: () => void onSelectModel({ providerId: prov.id, model: m.id })
+        })
+      }
+    }
+    for (const c of conversations) {
+      if (c.id === currentId) continue
+      items.push({
+        id: `chat-${c.id}`,
+        title: c.title || 'Untitled chat',
+        subtitle: base(c.workspace),
+        section: 'Switch chat',
+        run: () => void selectConversation(c.id)
+      })
+    }
+    return items
+  }, [
+    mac,
+    shortcuts,
+    workspace,
+    currentId,
+    sidebarCollapsed,
+    settings?.approvalPolicy,
+    settings?.providers,
+    settings?.selected,
+    conversations,
+    onNewChat,
+    toggleSidebar,
+    toggleTerminal,
+    onChangeWorkspace,
+    onImportConversation,
+    onCompact,
+    onChangePolicy,
+    onSelectModel,
+    selectConversation
+  ])
+
+  // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
+  // ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab cycle mode, ⌘F find, ⌘⇧M model,
+  // ⌘/ or ? help, ⌃` terminal, Esc to stop a run / close a dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const action = shortcutFor(e)
+      // Plain-character shortcuts (e.g. `?`) must not fire while typing in a field;
+      // mod-bearing chords (⌘…) still work everywhere, and Esc is always allowed.
+      const inEditable = isEditableTarget(e.target)
+      if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape') return
+      const action = matchShortcut(e, shortcuts)
       // Keys typed inside the terminal belong to the shell (Esc → vim, etc.).
       // Only the terminal toggle is honoured there; everything else passes through.
       const inTerminal =
@@ -739,6 +937,17 @@ export default function App(): JSX.Element {
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
+      } else if (action === 'command-palette') {
+        e.preventDefault()
+        setPaletteSeed('')
+        setPaletteOpen((v) => !v)
+      } else if (action === 'switch-model') {
+        e.preventDefault()
+        setPaletteSeed('model')
+        setPaletteOpen(true)
+      } else if (action === 'find-in-chat') {
+        e.preventDefault()
+        setFindOpen(true)
       } else if (action === 'open-settings') {
         e.preventDefault()
         setSettingsOpen(true)
@@ -748,8 +957,31 @@ export default function App(): JSX.Element {
       } else if (action === 'toggle-terminal') {
         e.preventDefault()
         toggleTerminal()
+      } else if (action === 'show-help') {
+        e.preventDefault()
+        setHelpOpen((v) => !v)
+      } else if (action === 'select-chat-n') {
+        e.preventDefault()
+        jumpToChat(Number(e.key) - 1)
+      } else if (action === 'next-chat') {
+        e.preventDefault()
+        cycleChat(1)
+      } else if (action === 'prev-chat') {
+        e.preventDefault()
+        cycleChat(-1)
+      } else if (action === 'cycle-mode') {
+        // Shift+Tab is reverse-focus in dialogs — let their focus trap (or the find
+        // bar) have it; only hijack it for mode-cycling in the main chat view.
+        if (paletteOpen || helpOpen || settingsOpen || changesOpen || findOpen) return
+        e.preventDefault()
+        cyclePolicy()
       } else if (action === 'escape') {
-        if (settingsOpen) setSettingsOpen(false)
+        // The open overlays own their own Esc (focus trap), so this mainly handles
+        // Esc with nothing focused — still ordered most-recent-first defensively.
+        if (paletteOpen) setPaletteOpen(false)
+        else if (helpOpen) setHelpOpen(false)
+        else if (findOpen) setFindOpen(false)
+        else if (settingsOpen) setSettingsOpen(false)
         else if (changesOpen) setChangesOpen(false)
         else if (chat.running) chat.cancel()
       }
@@ -759,7 +991,22 @@ export default function App(): JSX.Element {
     // chat.cancel is stable (useCallback); depending on the whole `chat` object
     // would re-subscribe every render. The fields we read are listed explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onNewChat, toggleSidebar, toggleTerminal, settingsOpen, changesOpen, chat.running, chat.cancel])
+  }, [
+    onNewChat,
+    toggleSidebar,
+    toggleTerminal,
+    jumpToChat,
+    cycleChat,
+    cyclePolicy,
+    shortcuts,
+    paletteOpen,
+    helpOpen,
+    findOpen,
+    settingsOpen,
+    changesOpen,
+    chat.running,
+    chat.cancel
+  ])
 
   if (!settings) {
     return <div className="loading">Loading…</div>
@@ -844,6 +1091,15 @@ export default function App(): JSX.Element {
         />
 
         <UpdateBanner update={update} onDismiss={() => setUpdate(null)} />
+
+        {findOpen && (
+          <Suspense fallback={null}>
+            <FindBar
+              getRoot={() => document.querySelector<HTMLElement>('.transcript')}
+              onClose={() => setFindOpen(false)}
+            />
+          </Suspense>
+        )}
 
         {chat.items.length === 0 ? (
           <div className="welcome">
@@ -954,6 +1210,7 @@ export default function App(): JSX.Element {
             workspace={workspace}
             commands={commands}
             vision={visionSupported}
+            lastUserMessage={lastUserText(chat.items)}
             onCommand={onCommand}
             onSend={onSend}
             onCancel={chat.cancel}
@@ -986,6 +1243,16 @@ export default function App(): JSX.Element {
         )}
 
         {whatsNew && <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />}
+
+        {helpOpen && <ShortcutsHelp shortcuts={shortcuts} onClose={() => setHelpOpen(false)} />}
+
+        {paletteOpen && (
+          <CommandPalette
+            items={paletteItems}
+            initialQuery={paletteSeed}
+            onClose={() => setPaletteOpen(false)}
+          />
+        )}
       </Suspense>
     </div>
   )

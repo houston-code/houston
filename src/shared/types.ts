@@ -201,6 +201,13 @@ export interface AppSettings {
   sidebarWidth?: number
   /** Whether the sidebar is collapsed to a thin rail. */
   sidebarCollapsed?: boolean
+  /**
+   * User keyboard-shortcut overrides, keyed by shortcut id (see the renderer's
+   * shortcut registry). A chord string (e.g. "mod+k") rebinds the shortcut; null
+   * disables it; an absent key keeps the default. Only customizable (single-chord,
+   * global) shortcuts appear here.
+   */
+  keybindings?: Record<string, string | null>
   /** Height (px) of the integrated terminal panel. */
   terminalHeight?: number
   /** Whether the integrated terminal panel is open. */

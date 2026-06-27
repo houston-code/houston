@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Command } from '@shared/commands'
 import { Composer } from './Composer'
 
@@ -90,5 +90,86 @@ describe('Composer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(props.onCancel).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Composer prompt-history recall', () => {
+  beforeEach(() => localStorage.clear())
+
+  const sendPrompt = (text: string): void => {
+    const input = type(text)
+    fireEvent.keyDown(input, { key: 'Enter' })
+  }
+
+  it('recalls previous prompts with Up (newest first) and walks back/forward', () => {
+    render(<Composer {...baseProps()} />)
+    sendPrompt('first prompt')
+    sendPrompt('second prompt')
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(input.value).toBe('') // cleared after sending
+
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('second prompt')
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('first prompt')
+    // Clamps at the oldest.
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('first prompt')
+
+    // Down walks forward, then restores the (empty) draft past the newest.
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(input.value).toBe('second prompt')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(input.value).toBe('')
+  })
+
+  it('does not recall when the field already has a draft (Up moves the caret instead)', () => {
+    render(<Composer {...baseProps()} />)
+    sendPrompt('history entry')
+
+    const input = type('half-written')
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('half-written') // untouched
+  })
+
+  it('does nothing on Up when there is no history', () => {
+    render(<Composer {...baseProps()} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('')
+  })
+})
+
+describe('Composer edit-last-message (Esc Esc)', () => {
+  it('recalls the last user message on double-Esc when the field is empty', () => {
+    render(<Composer {...baseProps({ lastUserMessage: 'the previous question' })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('the previous question')
+  })
+
+  it('does not recall on a single Esc', () => {
+    render(<Composer {...baseProps({ lastUserMessage: 'the previous question' })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('')
+  })
+
+  it('leaves a non-empty draft untouched on double-Esc', () => {
+    render(<Composer {...baseProps({ lastUserMessage: 'the previous question' })} />)
+    const input = type('half-written thought')
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('half-written thought')
+  })
+
+  it('is a no-op when there is no last message', () => {
+    render(<Composer {...baseProps()} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('')
   })
 })

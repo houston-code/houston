@@ -155,8 +155,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready / Responding… / Running a tool / Awaiting approval) and the active
   model.
-- **Keyboard shortcuts.** ⌘N new chat, ⌘, settings, ⌘B collapse/expand the
-  sidebar, and Esc to stop a running turn or close the settings dialog.
+- **Keyboard shortcuts.** A ⌘K command palette, ⌘N new chat, ⌘1–9 / ⌃Tab to switch
+  chats, Shift+Tab to cycle approval mode, ⌘F find-in-conversation, ⌘⇧M to switch
+  model, ↑/↓ to recall earlier prompts, Esc Esc to edit your last message, and Esc
+  to stop a running turn. Press ⌘/ (or ?) for the full list; rebind any of them
+  under Settings → Keyboard.
 - **Accessible.** The Settings dialog is a proper focus-trapped `dialog` (focus
   moves in on open and restores on close, Tab stays inside, Esc closes), and all
   animations honor the OS *reduce motion* setting.

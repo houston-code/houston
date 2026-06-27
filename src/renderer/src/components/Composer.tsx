@@ -9,6 +9,12 @@ import {
 } from 'react'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
+  appendPromptHistory,
+  historyDown,
+  historyUp,
+  loadPromptHistory
+} from '../lib/promptHistory'
+import {
   expandTemplate,
   matchCommands,
   parseSlashCommand,
@@ -48,12 +54,16 @@ function readImageFile(file: File): Promise<ImageAttachment | null> {
   })
 }
 
+/** Max gap between the two Esc presses that recalls the last message. */
+const DOUBLE_ESC_MS = 500
+
 export function Composer({
   disabled,
   running,
   workspace,
   commands,
   vision = true,
+  lastUserMessage,
   onCommand,
   onSend,
   onCancel
@@ -64,6 +74,8 @@ export function Composer({
   commands: Command[]
   /** Whether the selected model accepts image inputs; gates the paste/drop affordance. */
   vision?: boolean
+  /** Text of the most recent user turn — recalled into the field on Esc Esc (empty field). */
+  lastUserMessage?: string
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
   onCancel: () => void
@@ -76,6 +88,14 @@ export function Composer({
   const [cmdIndex, setCmdIndex] = useState(0)
   const [cmdDismissed, setCmdDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  // Prompt-history recall (Up/Down when the field is empty). `histPos` is null when
+  // not navigating, otherwise an index into the snapshot taken when recall began;
+  // `histDraft` preserves whatever was typed before recall so Down can restore it.
+  const histSnapshot = useRef<string[]>([])
+  const histDraft = useRef('')
+  const [histPos, setHistPos] = useState<number | null>(null)
+  // Timestamp of the last Escape, for detecting the Esc-Esc "edit last message" chord.
+  const lastEscAt = useRef(0)
 
   // If the user switches to a model that can't see images, drop any pending
   // attachments so they aren't silently sent to a model that will ignore them.
@@ -148,6 +168,8 @@ export function Composer({
     setMention(mentionBeforeCursor(value.slice(0, cursor)))
     setCmdDismissed(false)
     setCmdIndex(0)
+    // Editing the field leaves history-recall mode; the text is a fresh draft now.
+    setHistPos(null)
   }
 
   const focusEnd = (caret: number): void => {
@@ -158,6 +180,16 @@ export function Composer({
         el.setSelectionRange(caret, caret)
       }
     })
+  }
+
+  // Show the history entry at `pos`, or restore the pre-recall draft when `pos`
+  // reaches the end (the live-draft sentinel).
+  const showHistory = (snapshot: string[], pos: number): void => {
+    const atDraft = pos >= snapshot.length
+    const value = atDraft ? histDraft.current : snapshot[pos]
+    setText(value)
+    setHistPos(atDraft ? null : pos)
+    focusEnd(value.length)
   }
 
   const chooseMention = (path: string): void => {
@@ -182,6 +214,7 @@ export function Composer({
     setSuggestions([])
     setCmdDismissed(false)
     setCmdIndex(0)
+    setHistPos(null)
   }
 
   const submit = (): void => {
@@ -205,6 +238,7 @@ export function Composer({
             resetMenus()
             focusEnd(expanded.length)
           } else {
+            appendPromptHistory(trimmed)
             onCommand(cmd, parsed.args)
             setText('')
             resetMenus()
@@ -214,6 +248,7 @@ export function Composer({
         // Unknown command — fall through and send it as a normal message.
       }
     }
+    if (trimmed) appendPromptHistory(trimmed)
     onSend(trimmed, images.length ? images : undefined)
     setText('')
     setImages([])
@@ -232,7 +267,7 @@ export function Composer({
         setCmdIndex((i) => (i - 1 + cmdMatches.length) % cmdMatches.length)
         return
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         chooseCommand(cmdMatches[cmdIndex])
         return
@@ -253,7 +288,7 @@ export function Composer({
         setMentionIndex((i) => (i - 1 + suggestions.length) % suggestions.length)
         return
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         chooseMention(suggestions[mentionIndex])
         return
@@ -262,6 +297,48 @@ export function Composer({
         e.preventDefault()
         setMention(null)
         setSuggestions([])
+        return
+      }
+    }
+    // Esc Esc on an empty field recalls the last user message for editing (the
+    // edit-previous-message convention). A single Esc still falls through to the
+    // app handler (stop the run / close a dialog).
+    if (e.key === 'Escape' && !showCmdMenu && !showMentionMenu) {
+      const now = Date.now()
+      const isDouble = now - lastEscAt.current <= DOUBLE_ESC_MS
+      lastEscAt.current = now
+      if (isDouble && text.trim() === '' && lastUserMessage) {
+        e.preventDefault()
+        setHistPos(null)
+        setText(lastUserMessage)
+        focusEnd(lastUserMessage.length)
+      }
+      return
+    }
+
+    // Prompt-history recall with Up/Down — only when no menu is open. Recall starts
+    // from an empty field (so Up still moves the caret in a non-empty draft) and,
+    // once started, Up/Down walk through history until Down returns to the draft.
+    if (!showCmdMenu && !showMentionMenu) {
+      if (e.key === 'ArrowUp') {
+        if (histPos !== null) {
+          e.preventDefault()
+          showHistory(histSnapshot.current, historyUp(histSnapshot.current.length, histPos))
+          return
+        }
+        if (text.trim() === '') {
+          const snapshot = loadPromptHistory()
+          if (snapshot.length > 0) {
+            histSnapshot.current = snapshot
+            histDraft.current = text
+            e.preventDefault()
+            showHistory(snapshot, historyUp(snapshot.length, snapshot.length))
+            return
+          }
+        }
+      } else if (e.key === 'ArrowDown' && histPos !== null) {
+        e.preventDefault()
+        showHistory(histSnapshot.current, historyDown(histSnapshot.current.length, histPos))
         return
       }
     }

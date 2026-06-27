@@ -15,7 +15,7 @@ function basename(p: string): string {
   return parts[parts.length - 1] || p
 }
 
-const POLICY_LABEL: Record<ApprovalPolicy, string> = {
+export const POLICY_LABEL: Record<ApprovalPolicy, string> = {
   plan: 'Plan mode (read-only)',
   ask: 'Ask every time',
   'auto-edit': 'Auto-approve edits',

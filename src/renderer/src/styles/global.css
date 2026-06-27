@@ -642,6 +642,8 @@ body.is-resizing {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  /* Positioning context for the floating find bar. */
+  position: relative;
 }
 /* ---- Titlebar (slim, draggable) ---- */
 .titlebar {
@@ -2250,6 +2252,255 @@ pre.diff {
   justify-content: flex-end;
   gap: 8px;
   border-top: 1px solid var(--border);
+}
+
+/* ---- Keyboard-shortcuts help overlay ---- */
+.shortcuts-help {
+  width: 480px;
+}
+.shortcuts-help__group {
+  margin-bottom: 18px;
+}
+.shortcuts-help__group:last-child {
+  margin-bottom: 0;
+}
+.shortcuts-help__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.shortcuts-help__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+}
+.shortcuts-help__label {
+  color: var(--text);
+  font-size: 13px;
+}
+.shortcuts-help__keys {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.shortcuts-help__or {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-right: 2px;
+}
+/* A keycap, e.g. ⌘K. Also reusable anywhere a binding hint is shown. */
+.kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ---- Command palette (⌘K) ---- */
+.command-palette {
+  /* Float near the top rather than dead-centre, the way command palettes do. */
+  align-self: start;
+  margin-top: 12vh;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.command-palette__input {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  padding: 14px 16px;
+  outline: none;
+}
+.command-palette__input::placeholder {
+  color: var(--text-dim);
+}
+.command-palette__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  flex: 1;
+}
+.command-palette__section {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  padding: 8px 10px 4px;
+}
+.command-palette__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.command-palette__row.is-active {
+  background: var(--bg-input);
+}
+.command-palette__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+.command-palette__subtitle {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.command-palette__hint {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.command-palette__empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.command-palette__footer {
+  display: flex;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.command-palette__footer .kbd {
+  min-width: 0;
+  padding: 1px 5px;
+}
+
+/* ---- Keyboard-shortcut editor (Settings → Keyboard) ---- */
+.keybind-hint {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 0 0 14px;
+}
+.keybind-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 14px;
+}
+.keybind-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.keybind-row__label {
+  color: var(--text);
+  font-size: 13px;
+}
+.keybind-row__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.keybind-row__capture {
+  cursor: pointer;
+  min-width: 64px;
+}
+.keybind-row__capture.is-recording {
+  border-color: var(--accent, #6ea8fe);
+  color: var(--accent, #6ea8fe);
+}
+
+/* ---- Find in conversation (⌘F) ---- */
+.find-bar {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
+}
+.find-bar__input {
+  width: 200px;
+  border: none;
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  outline: none;
+}
+.find-bar__input::placeholder {
+  color: var(--text-dim);
+}
+.find-bar__count {
+  min-width: 46px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.find-bar__btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.find-bar__btn:hover:not(:disabled) {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.find-bar__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Match highlighting via the CSS Custom Highlight API (focus-independent). */
+::highlight(houston-find) {
+  background: rgba(250, 204, 21, 0.35);
+}
+::highlight(houston-find-active) {
+  background: rgba(250, 204, 21, 0.85);
+  color: #1a1a1a;
 }
 
 .provider {
