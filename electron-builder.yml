@@ -16,9 +16,17 @@ directories:
 
 # out/ holds the bundled main/preload/renderer. electron-builder additionally
 # bundles production dependencies from package.json automatically.
+#
+# The provider SDKs (openai, @anthropic-ai/sdk, @google/genai) ship the runtime
+# JS alongside ~17 MB of source maps, ~6 MB of .d.ts type declarations, and raw
+# .ts sources — none of which the running app loads. Drop them from the asar so
+# users don't download dead weight. We do NOT strip .mjs: @google/genai is an
+# ESM package whose runtime entry is .mjs.
 files:
   - out/**/*
   - package.json
+  - '!node_modules/**/*.{map,d.ts,d.mts,d.cts}'
+  - '!node_modules/**/*.ts' # raw TypeScript sources (e.g. openai/src); never executed
 
 # Vendor CLI binaries into the app's Resources so search works fast out of the
 # box, independent of the user's PATH. `@vscode/ripgrep` and `@ast-grep/cli` are
