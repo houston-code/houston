@@ -3,18 +3,18 @@ import { createOpenAIProvider, listOpenAIModels } from './openai'
 
 // Integration test against a local OpenAI-compatible server (e.g. Ollama).
 //
-// OPT-IN ONLY: it runs solely when CODERPRO_TEST_OPENAI_BASE is set. It used to
+// OPT-IN ONLY: it runs solely when HOUSTON_TEST_OPENAI_BASE is set. It used to
 // auto-detect a reachable http://localhost:11434, which made the suite
 // non-hermetic — it skipped in CI (nothing listening) but could *fail* on a
 // contributor's machine that happened to have a server up that didn't speak the
 // expected protocol or lacked the hard-coded model. Tests must not change
 // behavior based on ambient state, so we require an explicit opt-in instead.
 //
-//   CODERPRO_TEST_OPENAI_BASE=http://localhost:11434/v1 npm test
+//   HOUSTON_TEST_OPENAI_BASE=http://localhost:11434/v1 npm test
 //   # optionally pin a model; otherwise the first one the server lists is used:
-//   CODERPRO_TEST_OPENAI_MODEL=llama3:latest
-const BASE = process.env.CODERPRO_TEST_OPENAI_BASE
-const MODEL = process.env.CODERPRO_TEST_OPENAI_MODEL
+//   HOUSTON_TEST_OPENAI_MODEL=llama3:latest
+const BASE = process.env.HOUSTON_TEST_OPENAI_BASE
+const MODEL = process.env.HOUSTON_TEST_OPENAI_MODEL
 
 async function reachable(base: string): Promise<boolean> {
   try {
