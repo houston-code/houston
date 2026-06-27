@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { sep } from 'node:path'
+import { join, sep } from 'node:path'
 import { EventEmitter } from 'node:events'
 import {
   augmentPath,
@@ -130,10 +130,12 @@ describe('sandboxEnv', () => {
   })
 
   it('keeps the cache under the temp area (sandbox-writable), never $HOME', () => {
+    // Use join() on both sides so this is correct on Windows (where the path
+    // separator and join semantics differ from POSIX).
     const cache = pkgCacheDir({ TMPDIR: '/tmp' })
-    expect(cache.startsWith(`/tmp${sep}`)).toBe(true)
+    expect(cache).toBe(join('/tmp', 'houston-pkg-cache'))
     const env = sandboxEnv({ HOME: '/Users/me', TMPDIR: '/tmp' })
-    expect(env.npm_config_cache).not.toMatch(/\/Users\/me/) // not ~/.npm — that's the EPERM we fix
+    expect(env.npm_config_cache).not.toMatch(/Users[/\\]me/) // not ~/.npm — that's the EPERM we fix
   })
 
   it('preserves other env vars and augments PATH', () => {
