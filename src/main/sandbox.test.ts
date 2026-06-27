@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { delimiter } from 'node:path'
+import { delimiter, sep } from 'node:path'
 import { EventEmitter } from 'node:events'
 import {
   augmentPath,
   CappedOutput,
   clampToolResult,
+  pkgCacheDir,
   runSandboxed,
+  sandboxEnv,
   type SandboxRunOptions
 } from './sandbox'
 
@@ -108,6 +110,30 @@ describe('CappedOutput', () => {
     expect(out.startsWith('HEAD')).toBe(true)
     expect(out.endsWith('TAIL')).toBe(true)
     expect(cap.droppedBytes).toBe(20)
+  })
+})
+
+describe('sandboxEnv', () => {
+  it('redirects package-manager caches into the writable temp cache dir', () => {
+    const env = sandboxEnv({ PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' })
+    const cache = pkgCacheDir({ TMPDIR: '/tmp' })
+    expect(env.npm_config_cache).toBe(`${cache}${sep}npm`)
+    expect(env.YARN_CACHE_FOLDER).toBe(`${cache}${sep}yarn`)
+    expect(env.PIP_CACHE_DIR).toBe(`${cache}${sep}pip`)
+    expect(env.XDG_CACHE_HOME).toBe(`${cache}${sep}xdg`)
+  })
+
+  it('keeps the cache under the temp area (sandbox-writable), never $HOME', () => {
+    const cache = pkgCacheDir({ TMPDIR: '/tmp' })
+    expect(cache.startsWith(`/tmp${sep}`)).toBe(true)
+    const env = sandboxEnv({ HOME: '/Users/me', TMPDIR: '/tmp' })
+    expect(env.npm_config_cache).not.toMatch(/\/Users\/me/) // not ~/.npm — that's the EPERM we fix
+  })
+
+  it('preserves other env vars and augments PATH', () => {
+    const env = sandboxEnv({ PATH: '/usr/bin', FOO: 'bar', TMPDIR: '/tmp' })
+    expect(env.FOO).toBe('bar')
+    expect(env.PATH).toContain('/usr/bin')
   })
 })
 

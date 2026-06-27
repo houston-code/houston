@@ -11,6 +11,8 @@ import {
   formatPrView,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
+  sandboxWriteBlockHint,
+  SANDBOX_WRITE_BLOCKED_HINT,
   type ToolContext
 } from './tools'
 import type { GhResult } from './github'
@@ -872,6 +874,42 @@ describe('networkBlockHint', () => {
     expect(networkBlockHint(false, { exitCode: null }, 'dial tcp: lookup api: no route to host')).toBe(
       NETWORK_BLOCKED_HINT
     )
+  })
+})
+
+describe('sandboxWriteBlockHint', () => {
+  const failed = { exitCode: 1 as number | null }
+  const npmEperm =
+    'npm error code EPERM\nnpm error syscall open\nnpm error path /Users/me/.npm/_cacache/tmp/x'
+
+  it('hints when a failed command hit a sandbox-denied write (npm cache EPERM)', () => {
+    expect(sandboxWriteBlockHint(failed, npmEperm)).toBe(SANDBOX_WRITE_BLOCKED_HINT)
+  })
+
+  it('matches pip-style "Permission denied" and a read-only filesystem', () => {
+    expect(sandboxWriteBlockHint(failed, "PermissionError: [Errno 13] Permission denied: '/x'")).toBe(
+      SANDBOX_WRITE_BLOCKED_HINT
+    )
+    expect(sandboxWriteBlockHint(failed, 'touch: /etc/x: Read-only file system')).toBe(
+      SANDBOX_WRITE_BLOCKED_HINT
+    )
+  })
+
+  it('stays silent when the command succeeded', () => {
+    expect(sandboxWriteBlockHint({ exitCode: 0 }, npmEperm)).toBe('')
+  })
+
+  it('defers to the network hint for a network failure (no double-hint)', () => {
+    // A socket "operation not permitted" is network, not a write — must not fire here.
+    expect(sandboxWriteBlockHint(failed, 'connect: Operation not permitted (socket)')).toBe('')
+  })
+
+  it('stays silent for a blocked sudo / bare "operation not permitted" (not a write)', () => {
+    expect(sandboxWriteBlockHint(failed, '/usr/bin/sudo: Operation not permitted')).toBe('')
+  })
+
+  it('stays silent for an unrelated failure', () => {
+    expect(sandboxWriteBlockHint(failed, 'error: test "foo" failed: expected 1 got 2')).toBe('')
   })
 })
 
