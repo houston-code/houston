@@ -155,7 +155,6 @@ export function ControlBar({
               ? `${formatTokens(usage.context)}/${formatTokens(ctxWindow!)} · ${pct}%`
               : `${formatTokens(usage.context)} ctx`}{' '}
             · {formatTokens(usage.output)} out
-            {usage.cost > 0 && <> · {formatUsd(usage.cost)}</>}
           </span>
         </span>
       )}
