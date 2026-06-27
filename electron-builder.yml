@@ -68,19 +68,18 @@ mac:
   # latest-mac.yml has nothing the updater can fetch and auto-update never fires.
   # Both share the same generated update metadata; the zip also gets a .blockmap
   # for differential downloads.
-  # Both arm64 (Apple Silicon) and x64 (Intel) are built. Each arch builds on its own
+  # Both arm64 (Apple Silicon) and x64 (Intel) are built, but each arch builds on its own
   # native runner — node-pty is a native addon and the vendored rg/ast-grep are per-arch,
-  # so neither cross-compiles. The CLI arch flag in each `dist:mac*` script selects which
-  # of these the run produces (`--arm64` → arm64 only, `--x64` → x64 only).
+  # so neither cross-compiles. Arch is therefore selected by the CLI flag in each
+  # `dist:mac*` script (`--arm64` → arm64, `--x64` → x64) and deliberately NOT pinned
+  # here: electron-builder merges a target's explicit `arch:` list ON TOP of the
+  # CLI-requested arch (computeArchToTargetNamesMap), so listing both arm64 and x64 would
+  # force every build to attempt both — and the cross-arch leg then fails in the afterPack
+  # hook, since npm only installs the host-arch rg/ast-grep sub-packages. Leaving arch
+  # unset lets the CLI flag alone decide which single arch the run produces.
   target:
-    - target: dmg
-      arch:
-        - arm64
-        - x64
-    - target: zip
-      arch:
-        - arm64
-        - x64
+    - dmg
+    - zip
   # No Apple Developer ID on this machine — build an ad-hoc (unsigned) app.
   # To notarize later, set identity to your Developer ID Application cert, set
   # hardenedRuntime: true, add a notarize block, and flip updater.ts to auto-install.
