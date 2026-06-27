@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { delimiter, sep } from 'node:path'
+import { sep } from 'node:path'
 import { EventEmitter } from 'node:events'
 import {
   augmentPath,
@@ -13,34 +13,43 @@ import {
 import type { SandboxBackend, SandboxRunOptions } from './contract'
 
 describe('augmentPath', () => {
-  const minimalPath = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter)
+  // Pin the platform so these assertions are deterministic on every CI leg (incl. Windows).
+  const minimalPath = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':')
 
-  it('appends Homebrew and ~/.local/bin when they exist', () => {
-    const out = augmentPath({ PATH: minimalPath, HOME: '/Users/me' }, () => true).split(delimiter)
+  it('appends Homebrew and ~/.local/bin when they exist (POSIX)', () => {
+    const out = augmentPath({ PATH: minimalPath, HOME: '/Users/me' }, () => true, 'darwin').split(':')
     expect(out).toContain('/opt/homebrew/bin')
     expect(out).toContain('/opt/homebrew/sbin')
     expect(out).toContain('/Users/me/.local/bin')
   })
 
-  it('preserves inherited entries first and does not duplicate them', () => {
-    const out = augmentPath({ PATH: minimalPath }, () => true).split(delimiter)
+  it('preserves inherited entries first and does not duplicate them (POSIX)', () => {
+    const out = augmentPath({ PATH: minimalPath }, () => true, 'darwin').split(':')
     expect(out.slice(0, 4)).toEqual(['/usr/bin', '/bin', '/usr/sbin', '/sbin'])
     expect(out.filter((d) => d === '/usr/bin')).toHaveLength(1) // /usr/bin is also a candidate
   })
 
-  it('adds nothing when the extra dirs do not exist', () => {
-    expect(augmentPath({ PATH: minimalPath }, () => false)).toBe(minimalPath)
+  it('adds nothing when the extra dirs do not exist (POSIX)', () => {
+    expect(augmentPath({ PATH: minimalPath }, () => false, 'darwin')).toBe(minimalPath)
   })
 
-  it('builds a PATH from scratch when none is inherited', () => {
-    const out = augmentPath({ HOME: '/Users/me' }, () => true).split(delimiter)
+  it('builds a PATH from scratch when none is inherited (POSIX)', () => {
+    const out = augmentPath({ HOME: '/Users/me' }, () => true, 'darwin').split(':')
     expect(out).toContain('/opt/homebrew/bin')
     expect(out).not.toContain('') // no empty segments
   })
 
-  it('omits ~/.local/bin when HOME is unset', () => {
-    const out = augmentPath({ PATH: '/usr/bin' }, () => true)
+  it('omits ~/.local/bin when HOME is unset (POSIX)', () => {
+    const out = augmentPath({ PATH: '/usr/bin' }, () => true, 'darwin')
     expect(out).not.toMatch(/\.local\/bin/)
+  })
+
+  it('leaves the inherited PATH untouched on Windows (no POSIX dirs, no ~/.local/bin)', () => {
+    const winPath = ['C:\\Windows\\System32', 'C:\\Program Files\\Git\\bin'].join(';')
+    const out = augmentPath({ PATH: winPath, HOME: 'C:\\Users\\me' }, () => true, 'win32')
+    expect(out).toBe(winPath)
+    expect(out).not.toContain('/opt/homebrew/bin')
+    expect(out).not.toContain('.local')
   })
 })
 
@@ -198,7 +207,14 @@ describe('runWithBackend — honest sandboxed flag', () => {
     id: sandboxed ? 'seatbelt' : 'none',
     sandboxed,
     confinesNetwork: sandboxed,
-    buildLaunch: ({ command }) => ({ file, args: ['-c', command], detached: true, windowsHide: false })
+    supportsSession: true,
+    buildLaunch: ({ command }) => ({
+      file,
+      args: ['-c', command],
+      detached: true,
+      windowsHide: false,
+      supportsSession: true
+    })
   })
 
   const baseOpts = (over: Partial<SandboxRunOptions> = {}): SandboxRunOptions => ({

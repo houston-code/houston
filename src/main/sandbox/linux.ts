@@ -192,11 +192,12 @@ export const BubblewrapBackend: SandboxBackend = {
   id: 'bubblewrap',
   sandboxed: true,
   confinesNetwork: true,
+  supportsSession: true,
   buildLaunch({ command, roots, allowNetwork, cwd }): ShellLaunch {
     const shell = bwrapShell()
     const writableRoots = dedupeExisting(roots.length ? roots : [cwd])
     const tmpDirs = dedupeExisting(linuxTmpDirs())
     const args = buildBwrapArgs({ roots: writableRoots, tmpDirs, allowNetwork, command, cwd, shell })
-    return { file: 'bwrap', args, detached: true, windowsHide: false }
+    return { file: 'bwrap', args, detached: true, windowsHide: false, supportsSession: true }
   }
 }

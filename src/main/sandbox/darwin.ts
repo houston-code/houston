@@ -56,13 +56,15 @@ export const SeatbeltBackend: SandboxBackend = {
   id: 'seatbelt',
   sandboxed: true,
   confinesNetwork: true,
+  supportsSession: true,
   buildLaunch({ command, roots, allowNetwork }): ShellLaunch {
     const profile = buildSeatbeltProfile(roots, allowNetwork)
     return {
       file: 'sandbox-exec',
       args: ['-p', profile, '/bin/bash', '-c', command],
       detached: true,
-      windowsHide: false
+      windowsHide: false,
+      supportsSession: true
     }
   }
 }

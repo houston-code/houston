@@ -25,7 +25,13 @@ import {
   imageMediaTypeForPath,
   isPdfPath
 } from './attachments'
-import { clampToolResult, runSandboxed, sandboxAvailable, spawnSandboxed } from '../sandbox'
+import {
+  backendSupportsSession,
+  clampToolResult,
+  runSandboxed,
+  sandboxAvailable,
+  spawnSandboxed
+} from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
 import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
@@ -719,7 +725,9 @@ const runShell: ToolDef = {
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
 
-    const result = ctx.shellSession
+    // Route through the persistent session only when the backend's shell can run the
+    // bash prelude (`cd`/env threading). On a cmd.exe fallback it can't, so run directly.
+    const result = ctx.shellSession && backendSupportsSession()
       ? await runInSession({
           command,
           session: ctx.shellSession,

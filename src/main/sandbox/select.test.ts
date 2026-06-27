@@ -48,9 +48,9 @@ describe('selectBackend', () => {
     expect(b.sandboxed).toBe(false)
   })
 
-  it('falls back to the unconfined backend on windows', () => {
+  it('picks the (unconfined) Windows backend on windows', () => {
     const b = selectBackend({ platform: 'win32', exists: () => true })
-    expect(b.id).toBe('none')
+    expect(b.id).toBe('windows')
     expect(b.sandboxed).toBe(false)
   })
 })

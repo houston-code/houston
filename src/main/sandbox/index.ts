@@ -38,6 +38,7 @@ export {
 export { buildSeatbeltProfile, SeatbeltBackend } from './darwin'
 export { UnsandboxedBackend, unsandboxedLaunch } from './unsandboxed'
 export { BubblewrapBackend } from './linux'
+export { WindowsBackend, makeWindowsBackend, resolveWindowsBash, windowsLaunch } from './windows'
 export { selectBackend, sandboxAvailable } from './select'
 
 /** The confinement backend chosen for this host, resolved once at module load. */
@@ -67,6 +68,11 @@ export function spawnSandboxedEx(opts: SandboxSpawnOptions): {
 /** Whether the active backend enforces an OS sandbox on this host. */
 export function isSandboxed(): boolean {
   return backend.sandboxed
+}
+
+/** Whether the active backend's shell supports the bash session prelude (cmd.exe → false). */
+export function backendSupportsSession(): boolean {
+  return backend.supportsSession
 }
 
 /** Stable id of the active backend (for startup logging / diagnostics). */
