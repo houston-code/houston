@@ -21,6 +21,19 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   public surface and packaging separate from the Electron app. One-shot headless
   runs (`Houston -p "<prompt>"`, see the README) already cover scripting/CI.
 
+- **SSRF hardening: pin resolved IPs (DNS-rebinding).** The network-egress tools
+  (`web_fetch`, `view_localhost`) validate the URL's *host literal* — `web_fetch`
+  blocks private/loopback/metadata IPs and re-checks on each redirect hop;
+  `view_localhost` allows only loopback and additionally blocks subresource
+  requests to private/LAN/metadata hosts. A hostname that *resolves* to a private
+  or metadata IP (e.g. `169.254.169.254`), or one that re-resolves between the
+  check and the connect (classic DNS-rebinding), is not yet caught. *Why deferred:*
+  needs resolving the host up front and pinning the connection to the vetted IP
+  across redirects — different plumbing for Node's `fetch` (`web_fetch`) vs
+  Electron's network stack (`view_localhost`) — so it's a cross-cutting change
+  worth doing for both at once rather than per-tool. In practice the host-literal
+  checks already stop the common cases.
+
 - **Mid-run resume after a crash/restart.** Re-enter an interrupted tool loop
   exactly where it stopped. *Why deferred:* conversations already persist
   incrementally and you can continue by sending a new message; true auto-resume
