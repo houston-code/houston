@@ -204,12 +204,14 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   way the agent's `git_diff` tool is. A **Create PR** action hands off to the
   agent — it commits, pushes, and opens the pull request through the same
   `gh_pr_*` tools and approval gate, so the panel never drives git itself.
-- **Start a chat in its own worktree.** The **⑂** button next to *New chat* spins
-  up a fresh git branch in an isolated worktree under `.houston/worktrees/`, and
-  runs the chat there — so the agent's edits never touch your current checkout.
-  Pick the new branch name and the base to branch from; the worktree is kept out
-  of the parent repo's `git status` via `.git/info/exclude`. Deleting the chat
-  offers to remove the worktree too (uncommitted or unmerged work is always kept).
+- **Start a chat in its own worktree.** Every new chat in a git repo defaults to
+  running in a fresh, isolated worktree on its own branch — so the agent's edits
+  never touch your current checkout. Right after the folder picker in the control
+  bar you choose the base branch to fork from and name the new branch (or untick
+  *New worktree* to work in the repo directly); the worktree is created on your
+  first message, under `.houston/worktrees/` and kept out of the parent repo's
+  `git status` via `.git/info/exclude`. Deleting the chat offers to remove the
+  worktree too (uncommitted or unmerged work is always kept).
 - **GitHub repos, PRs, issues & CI (first-class).** When the [`gh` CLI](https://cli.github.com)
   is installed and authenticated (`gh auth login`), Houston gets dedicated tools
   for the whole GitHub loop:

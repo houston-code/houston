@@ -9,10 +9,11 @@ import {
   type CSSProperties
 } from 'react'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
-import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
+import type { ConversationMeta, ReasoningEffort, RepoInfo } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
+import { branchNameError, suggestBranch } from './lib/worktree'
 import { applyTheme } from './lib/theme'
 import { shortcutFor } from './lib/shortcuts'
 import { statusText } from './lib/statusLine'
@@ -43,9 +44,6 @@ import type { UpdateCheckResult, WhatsNew } from '@shared/update'
 // alone is the largest component in the renderer.
 const SettingsModal = lazy(() =>
   import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
-)
-const WorktreeDialog = lazy(() =>
-  import('./components/WorktreeDialog').then((m) => ({ default: m.WorktreeDialog }))
 )
 const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })))
 const TerminalDock = lazy(() =>
@@ -104,7 +102,11 @@ export default function App(): JSX.Element {
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
-  const [worktreeFor, setWorktreeFor] = useState<string | null>(null)
+  // Worktree setup for a not-yet-started chat (shown inline in the control bar).
+  const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
+  const [worktreeMode, setWorktreeMode] = useState(true)
+  const [branchName, setBranchName] = useState('')
+  const [baseBranch, setBaseBranch] = useState('')
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
@@ -204,18 +206,53 @@ export default function App(): JSX.Element {
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
 
+  // For a not-yet-started chat, load the workspace's git info and seed fresh
+  // worktree defaults: a new worktree (on for git repos), a suggested branch
+  // name, and the current branch as the base. Re-runs when the folder changes.
+  useEffect(() => {
+    if (currentId !== null || !workspace) {
+      setRepoInfo(null)
+      return
+    }
+    let cancelled = false
+    void window.api.getRepoInfo(workspace).then((info) => {
+      if (cancelled) return
+      setRepoInfo(info)
+      setWorktreeMode(info.isRepo)
+      setBranchName(suggestBranch())
+      setBaseBranch(info.currentBranch ?? '')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [currentId, workspace])
+
+  // Whether the first message of this new chat will spin up a worktree.
+  const creatingWorktree = currentId === null && worktreeMode && repoInfo?.isRepo === true
+
   // Start a turn immediately with the given text/images, creating a conversation
-  // first if this is the very first message.
+  // first if this is the very first message — in a fresh worktree when set up.
   const sendNow = useCallback(
     async (text: string, images?: ImageAttachment[]) => {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
-        const conv = await window.api.createConversation({
-          workspace,
-          providerId: settings.selected.providerId,
-          model: settings.selected.model
-        })
+        let conv: Awaited<ReturnType<typeof window.api.createConversation>>
+        try {
+          conv = await window.api.createConversation({
+            workspace,
+            providerId: settings.selected.providerId,
+            model: settings.selected.model,
+            ...(creatingWorktree
+              ? { worktree: { branch: branchName.trim(), ...(baseBranch ? { base: baseBranch } : {}) } }
+              : {})
+          })
+        } catch (e) {
+          // Worktree/branch creation failed (e.g. a branch appeared since we last
+          // checked) — surface it and keep the user on the new-chat screen.
+          chat.notify(`Couldn't start the chat: ${(e as Error).message}`, 'error')
+          return
+        }
         convId = conv.id
         setCurrentId(conv.id)
       }
@@ -229,7 +266,7 @@ export default function App(): JSX.Element {
       })
       void refreshConversations()
     },
-    [settings, workspace, currentId, chat, refreshConversations]
+    [settings, workspace, currentId, creatingWorktree, branchName, baseBranch, chat, refreshConversations]
   )
 
   // Messages typed while a run is active are buffered (in the main process, keyed
@@ -281,59 +318,28 @@ export default function App(): JSX.Element {
     [chat]
   )
 
-  const newChatInWorkspace = useCallback(
-    async (ws: string) => {
-      if (!settings) return
-      const sel = settings.selected
-      const conv = await window.api.createConversation({
-        workspace: ws,
-        providerId: sel?.providerId ?? '',
-        model: sel?.model ?? ''
-      })
+  // Enter the "new chat" screen for a workspace WITHOUT creating a conversation
+  // yet. The chat — and its worktree, when the control-bar toggle is on — is
+  // created lazily on the first message (see sendNow), so the worktree controls
+  // are picked first. New worktree is the default for git repos.
+  const enterNewChat = useCallback(
+    (ws: string) => {
       setLastWorkspace(ws)
-      setCurrentId(conv.id)
+      setCurrentId(null)
       chat.reset([])
-      await refreshConversations()
     },
-    [settings, chat, refreshConversations]
+    [chat]
   )
 
   const onNewChat = useCallback(async () => {
     const ws = workspace ?? (await window.api.pickWorkspace())
-    if (ws) await newChatInWorkspace(ws)
-  }, [workspace, newChatInWorkspace])
-
-  // Open the "new chat in a worktree" dialog, picking a folder first if none is active.
-  const onNewWorktree = useCallback(async () => {
-    const ws = workspace ?? (await window.api.pickWorkspace())
-    if (ws) setWorktreeFor(ws)
-  }, [workspace])
-
-  // Create a branch + worktree for the given repo folder and start a chat in it.
-  // Rejects (surfaced inline by the dialog) on a bad branch name or git failure.
-  const newChatInWorktree = useCallback(
-    async (branch: string, base: string) => {
-      if (!worktreeFor || !settings) return
-      const sel = settings.selected
-      const conv = await window.api.createConversation({
-        workspace: worktreeFor,
-        providerId: sel?.providerId ?? '',
-        model: sel?.model ?? '',
-        worktree: { branch, ...(base ? { base } : {}) }
-      })
-      setLastWorkspace(conv.workspace)
-      setCurrentId(conv.id)
-      chat.reset([])
-      setWorktreeFor(null)
-      await refreshConversations()
-    },
-    [worktreeFor, settings, chat, refreshConversations]
-  )
+    if (ws) enterNewChat(ws)
+  }, [workspace, enterNewChat])
 
   const onChangeWorkspace = useCallback(async () => {
     const ws = await window.api.pickWorkspace()
-    if (ws) await newChatInWorkspace(ws)
-  }, [newChatInWorkspace])
+    if (ws) enterNewChat(ws)
+  }, [enterNewChat])
 
   const onDeleteConversation = useCallback(
     async (id: string) => {
@@ -757,7 +763,11 @@ export default function App(): JSX.Element {
   const selectionReady = Boolean(
     selectedProvider && (!selectedProvider.requiresKey || selectedProvider.hasKey)
   )
-  const canChat = Boolean(settings.selected && workspace && selectionReady)
+  // Block sending while a worktree is being set up with an invalid/taken branch,
+  // so the failure is caught before the message is consumed.
+  const worktreeBlocked =
+    creatingWorktree && branchNameError(branchName, repoInfo?.branches ?? []) !== null
+  const canChat = Boolean(settings.selected && workspace && selectionReady && !worktreeBlocked)
   // Only offer the image-attachment affordance when the selected model can see images.
   const visionSupported = settings.selected
     ? modelCapabilities(settings.selected.model).vision
@@ -784,7 +794,6 @@ export default function App(): JSX.Element {
         onToggleCollapse={toggleSidebar}
         onSelect={selectConversation}
         onNew={onNewChat}
-        onNewWorktree={onNewWorktree}
         onDelete={onDeleteConversation}
         onFork={onForkConversation}
         onExport={onExportConversation}
@@ -833,6 +842,12 @@ export default function App(): JSX.Element {
             {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
             {workspace && !settings.selected && (
               <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>
+            )}
+            {workspace && settings.selected && creatingWorktree && (
+              <p className="welcome__hint">
+                Your first message starts a new worktree on{' '}
+                <code>{branchName.trim() || 'a new branch'}</code> (off {baseBranch || 'current'}).
+              </p>
             )}
           </div>
         ) : (
@@ -913,6 +928,15 @@ export default function App(): JSX.Element {
             selected={settings.selected}
             workspace={workspace}
             usage={chat.usage}
+            newChat={currentId === null}
+            repoInfo={repoInfo}
+            worktreeMode={worktreeMode}
+            branchName={branchName}
+            baseBranch={baseBranch}
+            currentWorktree={currentConv?.worktree}
+            onToggleWorktree={setWorktreeMode}
+            onChangeBranchName={setBranchName}
+            onChangeBaseBranch={setBaseBranch}
             onSelectModel={onSelectModel}
             onChangePolicy={onChangePolicy}
             onChangeReasoning={onChangeReasoning}
@@ -944,14 +968,6 @@ export default function App(): JSX.Element {
             initial={settings}
             onClose={() => setSettingsOpen(false)}
             onSaved={(s) => setSettings(s)}
-          />
-        )}
-
-        {worktreeFor && (
-          <WorktreeDialog
-            workspace={worktreeFor}
-            onClose={() => setWorktreeFor(null)}
-            onCreate={newChatInWorktree}
           />
         )}
 
