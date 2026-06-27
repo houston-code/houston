@@ -71,7 +71,13 @@ export function formatUsd(n: number): string {
  */
 export function contextWindowFor(model: string): number | null {
   const m = model.toLowerCase()
-  if (m.includes('claude')) return 200_000
+  if (m.includes('claude')) {
+    // Opus 4.6/4.7/4.8, Sonnet 4.6, and Fable/Mythos ship a 1M-token window as the
+    // standard (and default) window — GA, standard-priced, no beta header required.
+    // Haiku 4.5 and older Claude families remain at 200K.
+    if (/opus-4-[678]|sonnet-4-6|fable|mythos/.test(m)) return 1_000_000
+    return 200_000
+  }
   if (m.includes('gemini')) return 1_000_000
   if (m.includes('gpt-4.1')) return 1_000_000
   if (m.includes('gpt-4o')) return 128_000

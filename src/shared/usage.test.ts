@@ -41,8 +41,15 @@ describe('formatTokens', () => {
 })
 
 describe('contextWindowFor', () => {
-  it('knows the Claude / Gemini / GPT families', () => {
-    expect(contextWindowFor('claude-opus-4-8')).toBe(200_000)
+  it('gives 1M-window Claude families their full window and the rest 200K', () => {
+    expect(contextWindowFor('claude-opus-4-8')).toBe(1_000_000)
+    expect(contextWindowFor('claude-opus-4-7')).toBe(1_000_000)
+    expect(contextWindowFor('claude-sonnet-4-6')).toBe(1_000_000)
+    expect(contextWindowFor('claude-haiku-4-5')).toBe(200_000) // Haiku 4.5 stays at 200K
+    expect(contextWindowFor('claude-3-5-sonnet-20241022')).toBe(200_000) // older Claude
+  })
+
+  it('knows the Gemini / GPT families', () => {
     expect(contextWindowFor('gemini-2.5-pro')).toBe(1_000_000)
     expect(contextWindowFor('gpt-4o')).toBe(128_000)
     expect(contextWindowFor('gpt-4o-mini')).toBe(128_000)
