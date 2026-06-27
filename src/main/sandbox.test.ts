@@ -7,6 +7,7 @@ import {
   clampToolResult,
   pkgCacheDir,
   runSandboxed,
+  sandboxAvailable,
   sandboxEnv,
   type SandboxRunOptions
 } from './sandbox'
@@ -40,6 +41,22 @@ describe('augmentPath', () => {
   it('omits ~/.local/bin when HOME is unset', () => {
     const out = augmentPath({ PATH: '/usr/bin' }, () => true)
     expect(out).not.toMatch(/\.local\/bin/)
+  })
+})
+
+describe('sandboxAvailable', () => {
+  it('is true only on macOS with the sandbox-exec binary present', () => {
+    expect(sandboxAvailable('darwin', (p) => p === '/usr/bin/sandbox-exec')).toBe(true)
+  })
+
+  it('is false on macOS when the sandbox-exec binary is missing', () => {
+    // A Seatbelt-less macOS — the comment used to claim this was checked; now it is.
+    expect(sandboxAvailable('darwin', () => false)).toBe(false)
+  })
+
+  it('is false on non-macOS platforms regardless of any binary', () => {
+    expect(sandboxAvailable('linux', () => true)).toBe(false)
+    expect(sandboxAvailable('win32', () => true)).toBe(false)
   })
 })
 
@@ -196,7 +213,12 @@ describe('runSandboxed', () => {
   it('captures stdout/stderr/exit code and settles on stdio close', async () => {
     const child = makeFakeChild()
     const killTree = vi.fn()
-    const p = runSandboxed(baseOpts(), { spawn: fakeSpawn(child), killTree, drainMs: 50 })
+    const p = runSandboxed(baseOpts(), {
+      spawn: fakeSpawn(child),
+      killTree,
+      drainMs: 50,
+      available: () => true
+    })
 
     child.stdout.emit('data', Buffer.from('hello '))
     child.stderr.emit('data', Buffer.from('warn'))
@@ -213,6 +235,24 @@ describe('runSandboxed', () => {
       sandboxed: true
     })
     expect(killTree).not.toHaveBeenCalled()
+  })
+
+  it('reports sandboxed:false honestly when the sandbox is not in effect', async () => {
+    // The result must not claim confinement that isn't there — the approval path
+    // and the run_shell output key off this to avoid silent unconfined execution.
+    const child = makeFakeChild()
+    const p = runSandboxed(baseOpts(), {
+      spawn: fakeSpawn(child),
+      killTree: vi.fn(),
+      drainMs: 50,
+      available: () => false
+    })
+    child.exitCode = 0
+    child.emit('exit', 0)
+    child.emit('close', 0)
+
+    const res = await p
+    expect(res.sandboxed).toBe(false)
   })
 
   it('spawns the command detached so the whole tree is killable', () => {
@@ -271,7 +311,8 @@ describe('runSandboxed', () => {
     const p = runSandboxed(baseOpts({ signal: ac.signal }), {
       spawn: fakeSpawn(child),
       killTree,
-      drainMs: 10
+      drainMs: 10,
+      available: () => true
     })
 
     ac.abort()
@@ -303,5 +344,7 @@ describe('runSandboxed', () => {
     expect(res.exitCode).toBeNull()
     expect(res.stderr).toContain('ENOENT')
     expect(res.stdout).toBe('')
+    // The sandboxed process never started, so the run was not confined.
+    expect(res.sandboxed).toBe(false)
   })
 })

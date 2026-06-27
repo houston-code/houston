@@ -147,9 +147,19 @@ ${allowNetwork ? '(allow network*)' : '; network denied'}
 `
 }
 
-/** Whether the macOS sandbox-exec binary is present. */
-export function sandboxAvailable(): boolean {
-  return process.platform === 'darwin'
+/**
+ * Whether the macOS Seatbelt sandbox is actually usable here: we are on macOS
+ * *and* the `sandbox-exec` binary exists on disk. This is the single source of
+ * truth for "is arbitrary shell confined right now" — the approval path reads it
+ * to decide whether full-auto may auto-approve shell, and the run result reports
+ * it as `SandboxRunResult.sandboxed`. When it is false, a shell command would run
+ * unconfined (or not at all), so it must never be silently auto-approved.
+ */
+export function sandboxAvailable(
+  platform: NodeJS.Platform = process.platform,
+  exists: (p: string) => boolean = existsSync
+): boolean {
+  return platform === 'darwin' && exists('/usr/bin/sandbox-exec')
 }
 
 /**
@@ -296,6 +306,8 @@ export interface RunSandboxedDeps {
   spawn?: typeof spawn
   killTree?: (child: ChildProcess) => void
   drainMs?: number
+  /** Whether the Seatbelt sandbox is in effect (defaults to {@link sandboxAvailable}). */
+  available?: () => boolean
 }
 
 export function runSandboxed(
@@ -305,6 +317,9 @@ export function runSandboxed(
   const spawnFn = deps.spawn ?? spawn
   const killTree = deps.killTree ?? killProcessTree
   const drainMs = deps.drainMs ?? STDIO_DRAIN_MS
+  // Whether Seatbelt actually confines this run — reported honestly so callers
+  // (and ultimately the approval path) never assume confinement that isn't there.
+  const sandboxed = (deps.available ?? sandboxAvailable)()
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const profile = buildSeatbeltProfile(opts.roots ?? [opts.workspace], opts.allowNetwork)
 
@@ -340,7 +355,7 @@ export function runSandboxed(
       clearTimeout(timer)
       if (drainTimer) clearTimeout(drainTimer)
       cleanupAbort()
-      resolve({ stdout: out.toString(), stderr: err.toString(), exitCode, timedOut, sandboxed: true })
+      resolve({ stdout: out.toString(), stderr: err.toString(), exitCode, timedOut, sandboxed })
     }
 
     // Force settlement even if 'exit'/'close' never fire — e.g. a backgrounded
@@ -380,7 +395,9 @@ export function runSandboxed(
         stderr: `Failed to launch sandboxed process: ${e.message}`,
         exitCode: null,
         timedOut,
-        sandboxed: true
+        // The sandboxed process never started (e.g. `sandbox-exec` missing), so
+        // this run was not confined — say so rather than claiming a sandbox.
+        sandboxed: false
       })
     })
 

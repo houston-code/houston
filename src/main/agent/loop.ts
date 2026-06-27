@@ -28,6 +28,7 @@ import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead } from './scheduling'
 import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
 import { isBlockedByPlan, needsApproval } from './approval'
+import { sandboxAvailable } from '../sandbox'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
 import { formatFile } from './format'
@@ -672,7 +673,7 @@ export async function startRun(
               ? false
               : ruleAction === 'ask'
                 ? true
-                : needsApproval(run.policy, tool.kind, run.override)
+                : needsApproval(run.policy, tool.kind, run.override, sandboxAvailable())
 
           let approved = true
           if (mustApprove) {

@@ -25,7 +25,7 @@ import {
   imageMediaTypeForPath,
   isPdfPath
 } from './attachments'
-import { clampToolResult, runSandboxed, spawnSandboxed } from '../sandbox'
+import { clampToolResult, runSandboxed, sandboxAvailable, spawnSandboxed } from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
 import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
@@ -650,6 +650,16 @@ export function networkBlockHint(
  */
 const SANDBOX_WRITE_ERROR_RE = /\beperm\b|\beacces\b|permission denied|read-only file system/i
 
+/**
+ * Surfaced when a command runs WITHOUT the Seatbelt sandbox confining it (e.g.
+ * `sandbox-exec` is missing). run_shell's description and the system prompt both
+ * promise sandboxing, so when that promise can't be kept the agent must be told —
+ * silence would let it (and the user) assume confinement that isn't there.
+ */
+export const UNSANDBOXED_SHELL_NOTE =
+  '[warning: this command did NOT run inside the macOS sandbox — it executed with your full user ' +
+  'privileges, not confined to the project directory. The Seatbelt sandbox was unavailable.]'
+
 /** The hint appended to a failure that looks like the sandbox denied a write. */
 export const SANDBOX_WRITE_BLOCKED_HINT =
   '[note: the sandbox only allows writes inside the project and temp dirs. A write was denied — usually a ' +
@@ -705,7 +715,8 @@ const runShell: ToolDef = {
         signal: ctx.signal
       })
       const id = registerShell(command, child)
-      return `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
+      const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
+      return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
 
     const result = ctx.shellSession
@@ -747,6 +758,9 @@ const runShell: ToolDef = {
       const writeHint = sandboxWriteBlockHint(result, body)
       if (writeHint) parts.push(writeHint)
     }
+    // Honest signal: if the command ran unconfined, say so — run_shell's contract
+    // promises a sandbox, and approval auto-approves shell on that premise.
+    if (!result.sandboxed) parts.push(UNSANDBOXED_SHELL_NOTE)
     return parts.join('\n')
   }
 }
