@@ -72,6 +72,23 @@ jobs:
       # active, so even a subtle probe/selection mismatch fails the job.
       - run: HOUSTON_REQUIRE_SANDBOX=1 npx vitest run src/main/sandbox/conformance.test.ts
 
+  # Exercise the Windows execution backend for REAL (the macOS-bound developer can't run
+  # it locally). Scoped to the sandbox suite — the broader Node suite has macOS-shaped
+  # tests that have never run on Windows; this leg proves the Windows backend's declared
+  # contract (sandboxed:false, commands run, exit codes, timeout teardown) against the
+  # runner's bundled Git Bash. windows-latest ships Git for Windows + an MSVC toolchain
+  # (so node-pty's postinstall rebuild succeeds).
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run src/main/sandbox
+
   # TEMPORARILY DISABLED — the macOS packaging job is commented out for now.
   # Re-enable once we're ready to ship signed/notarized builds again (tracked in TODO.md).
   # Nothing depends on `build-mac`, so disabling it leaves `test` and `auto-merge` intact.
@@ -110,7 +127,7 @@ jobs:
   #         if-no-files-found: error
 
   auto-merge:
-    needs: [test, linux-sandbox]
+    needs: [test, linux-sandbox, test-windows]
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
     runs-on: ubuntu-latest
     # A PR opened *and* labeled at once can spawn two CI runs for the same PR (see

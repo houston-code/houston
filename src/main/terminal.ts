@@ -55,6 +55,7 @@ const DEFAULT_ROWS = 24
 const terminals = new Map<string, Terminal>()
 
 function defaultShell(): string {
+  if (process.platform === 'win32') return process.env.ComSpec || 'powershell.exe'
   return process.env.SHELL || '/bin/zsh'
 }
 

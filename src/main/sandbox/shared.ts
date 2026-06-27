@@ -2,7 +2,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { join } from 'node:path'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
 import type {
   SandboxBackend,
@@ -34,21 +34,31 @@ const EXTRA_PATH_DIRS = [
 /**
  * A GUI-launched macOS app inherits a minimal PATH (often just
  * `/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew and other user-installed tools
- * the agent reaches for via `run_shell` aren't found. Append the standard
- * developer bin dirs (and `~/.local/bin`) that actually exist on disk, without
- * disturbing the precedence of whatever PATH was already inherited. Non-existent
- * candidates are filtered out, so this is harmless on non-macOS hosts.
+ * the agent reaches for via `run_shell` aren't found. Append the standard developer
+ * bin dirs (and `~/.local/bin`) that actually exist on disk, without disturbing the
+ * precedence of whatever PATH was already inherited.
+ *
+ * Windows is left untouched: a GUI-launched Windows app inherits the full user PATH
+ * from the registry (the macOS minimal-PATH problem doesn't replicate), and the POSIX
+ * dirs / `~/.local/bin` are meaningless there. Non-existent candidates are filtered
+ * out, so this is harmless on Linux too (Homebrew dirs simply don't exist).
  */
 export function augmentPath(
   env: NodeJS.ProcessEnv = process.env,
-  exists: (p: string) => boolean = existsSync
+  exists: (p: string) => boolean = existsSync,
+  platform: NodeJS.Platform = process.platform
 ): string {
+  if (platform === 'win32') return env.PATH ?? ''
+  // POSIX-only past this point — the PATH delimiter is ':' (node:path's host-dependent
+  // delimiter would be ';' when this runs on a Windows CI host, so use the literal).
+  const POSIX_DELIM = ':'
   const candidates = [...EXTRA_PATH_DIRS]
-  if (env.HOME) candidates.push(join(env.HOME, '.local', 'bin'))
-  const current = (env.PATH ?? '').split(delimiter).filter(Boolean)
+  // POSIX literal (node:path.join would use backslashes when run on a Windows CI host).
+  if (env.HOME) candidates.push(`${env.HOME}/.local/bin`)
+  const current = (env.PATH ?? '').split(POSIX_DELIM).filter(Boolean)
   const seen = new Set(current)
   const added = candidates.filter((d) => !seen.has(d) && exists(d))
-  return [...current, ...added].join(delimiter)
+  return [...current, ...added].join(POSIX_DELIM)
 }
 
 /**

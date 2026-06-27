@@ -3,6 +3,7 @@ import type { SandboxBackend } from './contract'
 import { SeatbeltBackend } from './darwin'
 import { BubblewrapBackend, probeBwrapUsable } from './linux'
 import { UnsandboxedBackend } from './unsandboxed'
+import { WindowsBackend } from './windows'
 
 /**
  * Choose the confinement backend for the running host, and report — honestly —
@@ -30,10 +31,13 @@ export function sandboxAvailable(deps: SelectDeps = {}): boolean {
   return false
 }
 
-/** Pick the confinement backend; falls back to the unconfined backend when none enforces. */
+/** Pick the confinement backend; falls back to an unconfined backend when none enforces. */
 export function selectBackend(deps: SelectDeps = {}): SandboxBackend {
   const platform = deps.platform ?? process.platform
   if (platform === 'darwin' && sandboxAvailable(deps)) return SeatbeltBackend
   if (platform === 'linux' && sandboxAvailable(deps)) return BubblewrapBackend
+  // Windows has no enforceable OS sandbox; its backend resolves a shell (bash/cmd) and
+  // reports sandboxed:false. Other POSIX hosts fall back to the bare /bin/bash backend.
+  if (platform === 'win32') return WindowsBackend
   return UnsandboxedBackend
 }

@@ -80,6 +80,12 @@ export interface ShellLaunch {
   detached: boolean
   /** Hide the spawned console window on Windows (no-op elsewhere). */
   windowsHide: boolean
+  /**
+   * Whether this launch can run the bash session prelude (`cd`/env threading across
+   * run_shell calls). True for bash-family shells; false for cmd.exe, where the
+   * POSIX prelude can't run — callers route around the session then.
+   */
+  supportsSession: boolean
 }
 
 /**
@@ -89,11 +95,13 @@ export interface ShellLaunch {
  */
 export interface SandboxBackend {
   /** Stable id for logs/UI/tests. */
-  readonly id: 'seatbelt' | 'bubblewrap' | 'none'
+  readonly id: 'seatbelt' | 'bubblewrap' | 'windows' | 'none'
   /** Whether this backend actually confines the filesystem on this host. */
   readonly sandboxed: boolean
   /** Whether this backend can enforce the `allowNetwork: false` network gate. */
   readonly confinesNetwork: boolean
+  /** Whether this backend's shell supports the bash session prelude (see ShellLaunch). */
+  readonly supportsSession: boolean
   /**
    * Build the argv + spawn flags to launch `command` under this backend. `cwd` is the
    * working directory (some backends, e.g. bubblewrap, must set it inside the sandbox);

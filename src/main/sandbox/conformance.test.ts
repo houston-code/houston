@@ -38,7 +38,9 @@ function sq(p: string): string {
   return `'${p.replace(/'/g, `'\\''`)}'`
 }
 
-describe(`sandbox conformance [backend=${backend.id} sandboxed=${enforces}]`, () => {
+// Skipped on Windows: these assertions are POSIX-shell / POSIX-path shaped. The Windows
+// backend is exercised by windows.conformance.test.ts instead.
+describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${backend.id} sandboxed=${enforces}]`, () => {
   // Belt-and-suspenders for the dedicated CI leg that is SUPPOSED to exercise a real
   // OS sandbox: assert the confining backend was actually selected, so a misconfigured
   // runner (e.g. bubblewrap installed but unprivileged userns blocked) fails LOUDLY
