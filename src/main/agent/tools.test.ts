@@ -9,6 +9,9 @@ import {
   resolveInRoots,
   formatPrList,
   formatPrView,
+  formatIssueList,
+  formatChecks,
+  formatRunList,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
   type ToolContext
@@ -41,12 +44,19 @@ describe('tool registry', () => {
       'ast_grep',
       'dispatch_agent',
       'edit_file',
+      'gh_issue_comment',
+      'gh_issue_create',
+      'gh_issue_list',
+      'gh_issue_view',
       'gh_pr_checkout',
+      'gh_pr_checks',
       'gh_pr_comment',
       'gh_pr_create',
       'gh_pr_list',
       'gh_pr_view',
       'gh_repo_create',
+      'gh_run_list',
+      'gh_run_view',
       'git_diff',
       'git_status',
       'glob',
@@ -841,6 +851,177 @@ describe('github (gh) tools', () => {
     await expect(
       getTool('gh_repo_create')!.execute({ name: '--source=/etc' }, ctx)
     ).rejects.toThrow(/Invalid name/)
+  })
+
+  it('classifies the new tools (network-kind; create/comment blocked in plan)', () => {
+    for (const n of [
+      'gh_issue_list',
+      'gh_issue_view',
+      'gh_issue_create',
+      'gh_issue_comment',
+      'gh_pr_checks',
+      'gh_run_list',
+      'gh_run_view'
+    ]) {
+      expect(getTool(n)!.kind).toBe('network')
+    }
+    expect(getTool('gh_issue_create')!.blockedInPlan).toBe(true)
+    expect(getTool('gh_issue_comment')!.blockedInPlan).toBe(true)
+    expect(getTool('gh_issue_list')!.blockedInPlan).toBeUndefined()
+    expect(getTool('gh_pr_checks')!.blockedInPlan).toBeUndefined()
+    expect(getTool('gh_run_view')!.blockedInPlan).toBeUndefined()
+  })
+
+  it('gh_issue_list builds a safe argv with filters and formats the result', async () => {
+    const json = JSON.stringify([
+      {
+        number: 12,
+        title: 'Bug',
+        state: 'OPEN',
+        url: 'u12',
+        labels: [{ name: 'bug' }, { name: 'p1' }],
+        author: { login: 'me' }
+      }
+    ])
+    const { ctx, calls } = ghCtx(ok(json))
+    const out = await getTool('gh_issue_list')!.execute(
+      { state: 'open', limit: 5, label: 'bug', assignee: '@me' },
+      ctx
+    )
+    expect(out).toBe('#12 [open] Bug {bug, p1} by me u12')
+    expect(calls[0]).toEqual([
+      'issue',
+      'list',
+      '--state',
+      'open',
+      '--limit',
+      '5',
+      '--json',
+      'number,title,state,url,labels,author',
+      '--assignee',
+      '@me',
+      '--label',
+      'bug'
+    ])
+  })
+
+  it('gh_issue_view requires a number and supports comments', async () => {
+    const { ctx, calls } = ghCtx(ok('issue body'))
+    await expect(getTool('gh_issue_view')!.execute({}, ctx)).rejects.toThrow(/required/)
+    const out = await getTool('gh_issue_view')!.execute({ number: 7, comments: true }, ctx)
+    expect(out).toBe('issue body')
+    expect(calls[0]).toEqual(['issue', 'view', '7', '--comments'])
+  })
+
+  it('gh_issue_create requires a title and builds argv with labels/assignees', async () => {
+    const { ctx, calls } = ghCtx(ok('https://github.com/o/r/issues/9'))
+    await expect(getTool('gh_issue_create')!.execute({ title: '  ' }, ctx)).rejects.toThrow(
+      /title is required/
+    )
+    const out = await getTool('gh_issue_create')!.execute(
+      { title: 'Crash', body: 'steps', label: 'bug', assignee: '@me' },
+      ctx
+    )
+    expect(out).toBe('https://github.com/o/r/issues/9')
+    expect(calls[0]).toEqual([
+      'issue',
+      'create',
+      '--title',
+      'Crash',
+      '--body',
+      'steps',
+      '--label',
+      'bug',
+      '--assignee',
+      '@me'
+    ])
+  })
+
+  it('gh_issue_comment requires a number and a body', async () => {
+    const { ctx, calls } = ghCtx(ok('commented'))
+    await expect(getTool('gh_issue_comment')!.execute({ body: 'hi' }, ctx)).rejects.toThrow(/required/)
+    await expect(getTool('gh_issue_comment')!.execute({ number: 3, body: ' ' }, ctx)).rejects.toThrow(
+      /body is required/
+    )
+    await getTool('gh_issue_comment')!.execute({ number: 3, body: 'looks good' }, ctx)
+    expect(calls[0]).toEqual(['issue', 'comment', '3', '--body', 'looks good'])
+  })
+
+  it('gh_pr_checks formats the rollup even when gh exits non-zero (failing/pending)', async () => {
+    const json = JSON.stringify([
+      { name: 'test', bucket: 'pass', state: 'SUCCESS', link: 'l1', workflow: 'CI' },
+      { name: 'lint', bucket: 'fail', state: 'FAILURE', link: 'l2', workflow: 'CI' }
+    ])
+    // gh pr checks exits non-zero when a check fails — the tool must still format
+    // the JSON that came back on stdout rather than reporting a gh failure.
+    const { ctx, calls } = ghCtx({ ok: false, stdout: json, stderr: '', code: 1 })
+    const out = await getTool('gh_pr_checks')!.execute({ number: 5 }, ctx)
+    expect(out).toContain('Checks: 1 pass, 1 fail')
+    expect(out).toContain('[fail] lint l2')
+    expect(calls[0]).toEqual(['pr', 'checks', '5', '--json', 'name,state,bucket,link,workflow'])
+  })
+
+  it('gh_run_list builds argv and formats run summaries', async () => {
+    const json = JSON.stringify([
+      {
+        databaseId: 42,
+        displayTitle: 'Fix bug',
+        status: 'completed',
+        conclusion: 'success',
+        headBranch: 'feat/x',
+        workflowName: 'CI',
+        event: 'push'
+      }
+    ])
+    const { ctx, calls } = ghCtx(ok(json))
+    const out = await getTool('gh_run_list')!.execute({ limit: 10, branch: 'feat/x', status: 'success' }, ctx)
+    expect(out).toBe('42 [success] CI: Fix bug (feat/x)')
+    expect(calls[0]).toEqual([
+      'run',
+      'list',
+      '--limit',
+      '10',
+      '--json',
+      'databaseId,displayTitle,status,conclusion,headBranch,workflowName,event',
+      '--branch',
+      'feat/x',
+      '--status',
+      'success'
+    ])
+  })
+
+  it('gh_run_view requires a run id and supports log_failed', async () => {
+    const { ctx, calls } = ghCtx(ok('failed step logs'))
+    await expect(getTool('gh_run_view')!.execute({}, ctx)).rejects.toThrow(/run_id .* is required/)
+    const out = await getTool('gh_run_view')!.execute({ run_id: 42, log_failed: true }, ctx)
+    expect(out).toBe('failed step logs')
+    expect(calls[0]).toEqual(['run', 'view', '42', '--log-failed'])
+  })
+})
+
+describe('gh formatters', () => {
+  it('formatIssueList handles empty and unparseable input', () => {
+    expect(formatIssueList('[]')).toBe('No matching issues.')
+    expect(formatIssueList('not json')).toBe('not json')
+  })
+
+  it('formatChecks summarizes buckets and reports an empty set', () => {
+    expect(formatChecks('[]')).toBe('No checks reported for this pull request.')
+    const out = formatChecks(
+      JSON.stringify([
+        { name: 'a', bucket: 'pass' },
+        { name: 'b', bucket: 'pending' }
+      ])
+    )
+    expect(out).toContain('Checks: 1 pass, 1 pending')
+  })
+
+  it('formatRunList shows in-progress status and an empty set', () => {
+    expect(formatRunList('[]')).toBe('No workflow runs found.')
+    const out = formatRunList(
+      JSON.stringify([{ databaseId: 7, displayTitle: 'WIP', status: 'in_progress', headBranch: 'm' }])
+    )
+    expect(out).toBe('7 [in_progress] WIP (m)')
   })
 })
 

@@ -1106,16 +1106,21 @@ function ghOutput(r: { ok: boolean; stdout: string; stderr: string; code: number
   return `gh failed (exit ${r.code ?? 'null'}): ${detail}`
 }
 
-/** Validate an optional positional PR number into argv (`["12"]`) or `[]`. */
-function prNumberArgs(args: Record<string, unknown>, required = false): string[] {
-  const v = args.number
+/** Validate an optional positive-integer arg (PR/issue/run number) into argv (`["12"]`) or `[]`. */
+function intArg(args: Record<string, unknown>, key: string, label: string, required = false): string[] {
+  const v = args[key]
   if (v === undefined || v === null || v === '') {
-    if (required) throw new Error('number (the PR number) is required.')
+    if (required) throw new Error(`${label} is required.`)
     return []
   }
   const n = typeof v === 'number' ? v : Number(v)
-  if (!Number.isInteger(n) || n <= 0) throw new Error('number must be a positive integer.')
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`${label} must be a positive integer.`)
   return [String(n)]
+}
+
+/** Validate an optional positional PR number into argv (`["12"]`) or `[]`. */
+function prNumberArgs(args: Record<string, unknown>, required = false): string[] {
+  return intArg(args, 'number', 'number (the PR number)', required)
 }
 
 /** Validate an optional git ref (branch) flag, rejecting option-like injection. */
@@ -1429,6 +1434,305 @@ const ghRepoCreate: ToolDef = {
   }
 }
 
+interface IssueSummary {
+  number: number
+  title: string
+  state: string
+  url: string
+  author?: { login?: string }
+  labels?: { name?: string }[]
+}
+
+/** Render `gh issue list --json` output into compact one-line-per-issue text. Pure. */
+export function formatIssueList(json: string): string {
+  let issues: IssueSummary[]
+  try {
+    issues = JSON.parse(json) as IssueSummary[]
+  } catch {
+    return json.trim() || '[no output]'
+  }
+  if (!Array.isArray(issues) || issues.length === 0) return 'No matching issues.'
+  return issues
+    .map((i) => {
+      const tag = (i.state || '').toLowerCase()
+      const who = i.author?.login ? ` by ${i.author.login}` : ''
+      const names = (i.labels ?? []).map((l) => l.name).filter(Boolean)
+      const labels = names.length ? ` {${names.join(', ')}}` : ''
+      return `#${i.number} [${tag}] ${i.title}${labels}${who} ${i.url}`
+    })
+    .join('\n')
+}
+
+const ghIssueList: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `List issues${str(a, 'state') ? ` (${str(a, 'state')})` : ''}`,
+  schema: {
+    name: 'gh_issue_list',
+    description:
+      'List issues in the current repository via the gh CLI. Returns "#<number> [state] <title> {labels} by <author> <url>" per issue. Requires approval (network).',
+    parameters: objectSchema(
+      {
+        state: {
+          type: 'string',
+          enum: ['open', 'closed', 'all'],
+          description: 'Which issues to list (default open).'
+        },
+        limit: { type: 'number', description: 'Max issues to return (1–100, default 30).' },
+        author: { type: 'string', description: 'Filter by author login (e.g. "@me" for yours).' },
+        assignee: { type: 'string', description: 'Filter by assignee login (e.g. "@me").' },
+        label: { type: 'string', description: 'Filter by label.' }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    const stateRaw = str(args, 'state') || 'open'
+    const state = ['open', 'closed', 'all'].includes(stateRaw) ? stateRaw : 'open'
+    const limit = Math.min(100, Math.max(1, Math.floor(num(args, 'limit') ?? 30)))
+    const argv = ['issue', 'list', '--state', state, '--limit', String(limit), '--json', 'number,title,state,url,labels,author']
+    const author = str(args, 'author')
+    if (author) argv.push('--author', author)
+    const assignee = str(args, 'assignee')
+    if (assignee) argv.push('--assignee', assignee)
+    const label = str(args, 'label')
+    if (label) argv.push('--label', label)
+    const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
+    if (!r.ok) return ghOutput(r)
+    return formatIssueList(r.stdout)
+  }
+}
+
+const ghIssueView: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `View issue ${str(a, 'number')}`,
+  schema: {
+    name: 'gh_issue_view',
+    description:
+      'View a GitHub issue (title, state, author, labels, body) via the gh CLI. Set comments:true to include the comment thread. Read-only, but requires approval (network).',
+    parameters: objectSchema(
+      {
+        number: { type: 'number', description: 'The issue number.' },
+        comments: { type: 'boolean', description: 'Also include the comment thread (default false).' }
+      },
+      ['number']
+    )
+  },
+  async execute(args, ctx) {
+    const argv = ['issue', 'view', ...intArg(args, 'number', 'number (the issue number)', true)]
+    if (args.comments === true) argv.push('--comments')
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
+const ghIssueCreate: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Create issue: ${str(a, 'title') || '(no title)'}`,
+  schema: {
+    name: 'gh_issue_create',
+    description:
+      'Open a new GitHub issue via the gh CLI. Requires approval (network) and is refused in plan mode. Returns the new issue URL.',
+    parameters: objectSchema(
+      {
+        title: { type: 'string', description: 'Issue title.' },
+        body: { type: 'string', description: 'Issue body (Markdown). Omit for an empty body.' },
+        label: { type: 'string', description: 'Comma-separated labels to apply (each must already exist in the repo).' },
+        assignee: { type: 'string', description: 'Comma-separated assignees (use "@me" for yourself).' }
+      },
+      ['title']
+    )
+  },
+  async execute(args, ctx) {
+    const title = str(args, 'title')
+    if (!title.trim()) throw new Error('title is required.')
+    const argv = ['issue', 'create', '--title', title, '--body', str(args, 'body')]
+    const label = str(args, 'label')
+    if (label) argv.push('--label', label)
+    const assignee = str(args, 'assignee')
+    if (assignee) argv.push('--assignee', assignee)
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
+const ghIssueComment: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Comment on issue ${str(a, 'number')}`,
+  schema: {
+    name: 'gh_issue_comment',
+    description:
+      'Post a comment on a GitHub issue via the gh CLI. Requires approval (network) and is refused in plan mode.',
+    parameters: objectSchema(
+      {
+        number: { type: 'number', description: 'The issue number.' },
+        body: { type: 'string', description: 'The comment body (Markdown).' }
+      },
+      ['number', 'body']
+    )
+  },
+  async execute(args, ctx) {
+    const body = str(args, 'body')
+    if (!body.trim()) throw new Error('body is required.')
+    const argv = ['issue', 'comment', ...intArg(args, 'number', 'number (the issue number)', true), '--body', body]
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
+interface CheckRun {
+  name?: string
+  state?: string
+  bucket?: string
+  link?: string
+  workflow?: string
+}
+
+/**
+ * Render `gh pr checks --json` output into a rollup + one line per check. Pure.
+ * `gh pr checks` exits non-zero when checks are pending/failing, so the caller
+ * passes stdout here regardless of exit code — a fail/pending state is data.
+ */
+export function formatChecks(json: string): string {
+  let checks: CheckRun[]
+  try {
+    checks = JSON.parse(json) as CheckRun[]
+  } catch {
+    return json.trim() || '[no output]'
+  }
+  if (!Array.isArray(checks) || checks.length === 0) return 'No checks reported for this pull request.'
+  const counts: Record<string, number> = {}
+  for (const c of checks) {
+    const b = (c.bucket || c.state || 'unknown').toLowerCase()
+    counts[b] = (counts[b] ?? 0) + 1
+  }
+  const rollup = Object.entries(counts)
+    .map(([k, v]) => `${v} ${k}`)
+    .join(', ')
+  const lines = checks.map((c) => {
+    const status = (c.bucket || c.state || 'unknown').toLowerCase()
+    const name = c.name || c.workflow || 'check'
+    const link = c.link ? ` ${c.link}` : ''
+    return `[${status}] ${name}${link}`
+  })
+  return [`Checks: ${rollup}`, ...lines].join('\n')
+}
+
+const ghPrChecks: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `PR checks ${str(a, 'number') || '(current branch)'}`,
+  schema: {
+    name: 'gh_pr_checks',
+    description:
+      "Show the CI check (status) rollup for a pull request via the gh CLI. Omit number to use the current branch's PR. Use it to see whether CI passed before relying on a PR. Read-only, but requires approval (network).",
+    parameters: objectSchema(
+      { number: { type: 'number', description: 'PR number. Omit to use the current branch\'s PR.' } },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    const argv = ['pr', 'checks', ...prNumberArgs(args), '--json', 'name,state,bucket,link,workflow']
+    const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
+    // gh exits non-zero when checks fail/are pending; that's informational, so
+    // format whatever JSON came back and only fall through to the error path when
+    // there's genuinely no output (e.g. not authenticated, or no PR for the branch).
+    return r.stdout.trim() ? formatChecks(r.stdout) : ghOutput(r)
+  }
+}
+
+interface RunSummary {
+  databaseId?: number
+  displayTitle?: string
+  status?: string
+  conclusion?: string
+  headBranch?: string
+  workflowName?: string
+  event?: string
+}
+
+/** Render `gh run list --json` output into compact one-line-per-run text. Pure. */
+export function formatRunList(json: string): string {
+  let runs: RunSummary[]
+  try {
+    runs = JSON.parse(json) as RunSummary[]
+  } catch {
+    return json.trim() || '[no output]'
+  }
+  if (!Array.isArray(runs) || runs.length === 0) return 'No workflow runs found.'
+  return runs
+    .map((r) => {
+      const outcome = r.status === 'completed' ? r.conclusion || 'completed' : r.status || 'unknown'
+      const wf = r.workflowName ? `${r.workflowName}: ` : ''
+      return `${r.databaseId ?? '?'} [${outcome}] ${wf}${r.displayTitle ?? ''} (${r.headBranch ?? ''})`
+    })
+    .join('\n')
+}
+
+const ghRunList: ToolDef = {
+  kind: 'network',
+  summarize: () => 'List CI runs',
+  schema: {
+    name: 'gh_run_list',
+    description:
+      'List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns "<run-id> [status] <workflow>: <title> (<branch>)" per run — use a run-id with gh_run_view to inspect it. Requires approval (network).',
+    parameters: objectSchema(
+      {
+        limit: { type: 'number', description: 'Max runs to return (1–50, default 20).' },
+        branch: { type: 'string', description: 'Filter by branch name.' },
+        workflow: { type: 'string', description: 'Filter by workflow name or file (e.g. "ci.yml").' },
+        status: {
+          type: 'string',
+          enum: ['queued', 'in_progress', 'completed', 'success', 'failure', 'cancelled'],
+          description: 'Filter by run status or conclusion.'
+        }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    const limit = Math.min(50, Math.max(1, Math.floor(num(args, 'limit') ?? 20)))
+    const argv = [
+      'run',
+      'list',
+      '--limit',
+      String(limit),
+      '--json',
+      'databaseId,displayTitle,status,conclusion,headBranch,workflowName,event'
+    ]
+    argv.push(...refFlag(args, 'branch', '--branch'))
+    const workflow = str(args, 'workflow')
+    if (workflow) argv.push('--workflow', workflow)
+    const status = str(args, 'status')
+    if (status) argv.push('--status', status)
+    const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
+    if (!r.ok) return ghOutput(r)
+    return formatRunList(r.stdout)
+  }
+}
+
+const ghRunView: ToolDef = {
+  kind: 'network',
+  summarize: (a) => `View CI run ${str(a, 'run_id')}`,
+  schema: {
+    name: 'gh_run_view',
+    description:
+      'View a GitHub Actions workflow run (its jobs and their status) via the gh CLI. Set log_failed:true to print the logs of only the failed steps — the fastest way to diagnose a CI failure. Get run ids from gh_run_list. Read-only, but requires approval (network).',
+    parameters: objectSchema(
+      {
+        run_id: { type: 'number', description: 'The run id (databaseId from gh_run_list).' },
+        log_failed: {
+          type: 'boolean',
+          description: 'Print the logs of the failed steps instead of the run summary (default false).'
+        }
+      },
+      ['run_id']
+    )
+  },
+  async execute(args, ctx) {
+    const argv = ['run', 'view', ...intArg(args, 'run_id', 'run_id (the run id)', true)]
+    if (args.log_failed === true) argv.push('--log-failed')
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
 export const ASK_USER_NAME = ASK_USER_TOOL
 
 /**
@@ -1534,7 +1838,14 @@ export const TOOLS: ToolDef[] = [
   ghPrView,
   ghPrComment,
   ghPrCheckout,
-  ghRepoCreate
+  ghPrChecks,
+  ghRepoCreate,
+  ghIssueList,
+  ghIssueView,
+  ghIssueCreate,
+  ghIssueComment,
+  ghRunList,
+  ghRunView
 ]
 
 export function toolSchemas(): ToolSchema[] {

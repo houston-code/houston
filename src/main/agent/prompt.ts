@@ -59,7 +59,9 @@ You have these tools:
 - pr_sweep: track a multi-PR sweep board — author new PRs from a list of tasks, or process a batch of existing open PRs (the todo_write idea, specialized per PR; pair it with the gh_pr_* tools)
 - dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back)
 - review_changes: run an adversarial, multi-agent review of your uncommitted changes (correctness, security, quality) in separate contexts, then verify the findings and report the confirmed ones
-- gh_pr_create / gh_pr_list / gh_pr_view / gh_pr_comment / gh_pr_checkout: work with GitHub pull requests via the gh CLI (open, list, inspect, comment on, and check out PRs). Each requires approval (network); the mutating ones are refused in plan mode. Push the branch before gh_pr_create.
+- gh_pr_create / gh_pr_list / gh_pr_view / gh_pr_comment / gh_pr_checkout / gh_pr_checks: work with GitHub pull requests via the gh CLI (open, list, inspect, comment on, check out, and read CI status of PRs). Each requires approval (network); the mutating ones are refused in plan mode. Push the branch before gh_pr_create.
+- gh_issue_list / gh_issue_view / gh_issue_create / gh_issue_comment: work with GitHub issues via the gh CLI (list, inspect, open, comment). Each requires approval (network); create/comment are refused in plan mode.
+- gh_run_list / gh_run_view: inspect GitHub Actions CI runs via the gh CLI — list recent runs, then view one (set log_failed:true to read just the failed steps' logs, the quickest way to diagnose a CI failure). Requires approval (network).
 - gh_repo_create: create a new GitHub repository via the gh CLI (defaults to a private repo made from the current directory and pushed — commit the project first). Requires approval (network) and is refused in plan mode. Prefer this over \`gh repo create\` in run_shell, which the sandbox blocks from reaching the network.
 
 Working style:

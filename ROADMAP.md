@@ -128,8 +128,10 @@ and nothing is silently dropped):
   hosted code review that runs on GitHub's infrastructure, or an "install GitHub
   app" OAuth flow. *What ships instead:* first-class pull-request tools
   (`gh_pr_create` / `gh_pr_list` / `gh_pr_view` / `gh_pr_comment` /
-  `gh_pr_checkout`), `gh_repo_create` for new repositories, and the `pr_sweep`
-  board (batch-author PRs from tasks, or
+  `gh_pr_checkout` / `gh_pr_checks`), issue tools (`gh_issue_list` /
+  `gh_issue_view` / `gh_issue_create` / `gh_issue_comment`), CI-run tools
+  (`gh_run_list` / `gh_run_view`), `gh_repo_create` for new repositories, and the
+  `pr_sweep` board (batch-author PRs from tasks, or
   process a batch of existing PRs), all driving the user's local `gh` CLI — no
   hosted backend, no app-level token storage (`gh` owns auth), which keeps
   Houston local-first. The remaining non-goal is specifically the
