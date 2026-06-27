@@ -16,17 +16,21 @@ export function isBlockedByPlan(policy: ApprovalPolicy, kind: ToolKind): boolean
  * Decide whether a tool call must be approved by the user before it runs.
  *
  * - `override` ("Allow for run") auto-approves everything for the rest of the run.
- * - Network egress always prompts on first use — even in full-auto — because it
- *   leaves the machine and runs outside the Seatbelt sandbox. The user can still
- *   pick "Allow for run" on that prompt to stop further network prompts.
- * - Shell auto-approval in full-auto is premised on the Seatbelt sandbox confining
- *   the command to the project. When `sandboxed` is false the sandbox is NOT in
- *   effect, so an arbitrary command would run with the user's full privileges —
- *   always prompt then, even in full-auto, rather than executing unconfined.
- *   (Reads/writes don't rely on the sandbox: the structured file tools enforce
- *   their own containment in JS, so the signal only gates shell.)
- * - Otherwise: full-auto approves everything; reads never prompt; writes prompt
- *   only under the strict "ask" policy; shell always prompts.
+ * - Network egress and MCP always prompt on first use — even in full-auto — because
+ *   they leave the machine / run outside the sandbox. The user can still pick "Allow
+ *   for run" on that prompt to stop further prompts.
+ * - Shell auto-approval in full-auto is premised on the sandbox confining the command
+ *   to the project. When `sandboxed` is false the sandbox is NOT in effect, so an
+ *   arbitrary command would run with the user's full privileges — prompt then, even
+ *   in full-auto, rather than executing unconfined. (Reads/writes don't rely on the
+ *   sandbox: the structured file tools enforce their own containment in JS.)
+ * - Otherwise: full-auto approves everything; reads never prompt; writes prompt only
+ *   under the strict "ask" policy; shell always prompts.
+ *
+ * This is the policy primitive. The loop-level {@link decideApproval} is the stricter
+ * gate that also weighs permission rules and the per-run unconfined-shell consent —
+ * there, neither a generic override nor an allow-rule silently bypasses an unconfined
+ * shell command.
  */
 export function needsApproval(
   policy: ApprovalPolicy,
@@ -44,4 +48,50 @@ export function needsApproval(
   if (kind === 'read') return false
   if (kind === 'write') return policy === 'ask' // auto-edit auto-approves writes
   return true // shell
+}
+
+/** A permission rule's verdict for a specific tool call, or null when no rule matched. */
+export type RuleAction = 'allow' | 'ask' | 'deny' | null
+
+export interface ApprovalInputs {
+  /** The matched permission rule's action, or null. */
+  ruleAction: RuleAction
+  policy: ApprovalPolicy
+  kind: ToolKind
+  /** Generic "Allow for run" set by an earlier approval this run. */
+  override: boolean
+  /** Whether the active sandbox backend OS-confines shell execution on this host. */
+  shellSandboxed: boolean
+  /** Per-run consent specifically to run UNCONFINED shell ("Allow for run" on such a prompt). */
+  shellUnsandboxedOverride: boolean
+}
+
+/**
+ * The full approval decision for one tool call, folding in permission rules, the
+ * policy, and — critically — the honest sandbox status.
+ *
+ * On a confining host (`shellSandboxed === true`, e.g. macOS) this is exactly the
+ * prior behavior: a permission `allow` rule or a generic override skips the prompt.
+ *
+ * On a NON-confining host, shell is the one kind where neither a permission `allow`
+ * rule nor a generic "Allow for run" (which may have been granted for an unrelated
+ * tool, or authored on a machine where shell *was* sandboxed) substitutes for
+ * conscious consent to run unconfined. Such a command always prompts until the user
+ * grants the unconfined-shell-specific override.
+ */
+export function decideApproval(inputs: ApprovalInputs): {
+  mustApprove: boolean
+  unsandboxedShell: boolean
+} {
+  const { ruleAction, policy, kind, override, shellSandboxed, shellUnsandboxedOverride } = inputs
+
+  if (kind === 'shell' && !shellSandboxed) {
+    return { mustApprove: !shellUnsandboxedOverride, unsandboxedShell: true }
+  }
+  if (ruleAction === 'allow') return { mustApprove: false, unsandboxedShell: false }
+  if (ruleAction === 'ask') return { mustApprove: true, unsandboxedShell: false }
+  return {
+    mustApprove: needsApproval(policy, kind, override, shellSandboxed),
+    unsandboxedShell: false
+  }
 }

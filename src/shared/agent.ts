@@ -255,6 +255,12 @@ export type AgentEvent =
       name: string
       summary: string
       kind: 'read' | 'write' | 'shell' | 'network' | 'mcp'
+      /**
+       * Present and `false` only when this is a shell command about to run WITHOUT an
+       * OS sandbox (no enforceable confinement on this host) — lets the approval UI warn
+       * that the command runs unconfined. Absent on confining hosts (e.g. macOS).
+       */
+      sandboxed?: boolean
     }
   | {
       runId: string

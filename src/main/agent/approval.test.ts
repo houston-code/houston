@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isBlockedByPlan, needsApproval } from './approval'
+import { decideApproval, isBlockedByPlan, needsApproval, type ApprovalInputs } from './approval'
 
 describe('needsApproval', () => {
   it('auto-approves everything once "Allow for run" (override) is set', () => {
@@ -15,7 +15,7 @@ describe('needsApproval', () => {
     expect(needsApproval('full-auto', 'network', false)).toBe(true)
   })
 
-  it('full-auto approves local reads/writes/shell', () => {
+  it('full-auto approves local reads/writes/shell (when shell is sandboxed)', () => {
     expect(needsApproval('full-auto', 'read', false)).toBe(false)
     expect(needsApproval('full-auto', 'write', false)).toBe(false)
     expect(needsApproval('full-auto', 'shell', false)).toBe(false)
@@ -42,8 +42,8 @@ describe('needsApproval', () => {
   })
 
   it('never silently auto-approves shell when the sandbox is NOT in effect', () => {
-    // The whole premise for auto-approving shell is Seatbelt confinement. Without
-    // it, an arbitrary command runs with full user privileges — prompt every time.
+    // The whole premise for auto-approving shell is sandbox confinement. Without it,
+    // an arbitrary command runs with full user privileges — prompt every time.
     for (const policy of ['ask', 'auto-edit', 'full-auto'] as const) {
       expect(needsApproval(policy, 'shell', false, false)).toBe(true)
     }
@@ -54,12 +54,14 @@ describe('needsApproval', () => {
   })
 
   it('lets an explicit "Allow for run" override win even when unsandboxed', () => {
-    // The user opted into running unconfined for the rest of the run.
+    // At the policy-primitive level the user opted into running unconfined for the
+    // run. (The stricter loop gate, decideApproval, does NOT let a *generic* override
+    // — one granted for an unrelated tool — bypass unconfined shell; see below.)
     expect(needsApproval('full-auto', 'shell', true, false)).toBe(false)
   })
 
   it('does not let the sandbox signal gate non-shell kinds (JS-enforced containment)', () => {
-    // Reads/writes don't rely on Seatbelt; the structured file tools contain them.
+    // Reads/writes don't rely on the sandbox; the structured file tools contain them.
     expect(needsApproval('full-auto', 'read', false, false)).toBe(false)
     expect(needsApproval('full-auto', 'write', false, false)).toBe(false)
     expect(needsApproval('auto-edit', 'write', false, false)).toBe(false)
@@ -84,5 +86,85 @@ describe('isBlockedByPlan', () => {
         expect(isBlockedByPlan(policy, kind)).toBe(false)
       }
     }
+  })
+})
+
+describe('decideApproval', () => {
+  const base = (over: Partial<ApprovalInputs> = {}): ApprovalInputs => ({
+    ruleAction: null,
+    policy: 'ask',
+    kind: 'read',
+    override: false,
+    shellSandboxed: true,
+    shellUnsandboxedOverride: false,
+    ...over
+  })
+
+  describe('on a confining host (shellSandboxed=true) — prior behavior preserved', () => {
+    it('an allow rule skips the prompt', () => {
+      expect(decideApproval(base({ ruleAction: 'allow', kind: 'shell' }))).toEqual({
+        mustApprove: false,
+        unsandboxedShell: false
+      })
+    })
+
+    it('an ask rule forces the prompt', () => {
+      expect(decideApproval(base({ ruleAction: 'ask', kind: 'read' })).mustApprove).toBe(true)
+    })
+
+    it('a generic override auto-approves shell', () => {
+      expect(decideApproval(base({ kind: 'shell', override: true })).mustApprove).toBe(false)
+    })
+
+    it('full-auto auto-approves sandboxed shell', () => {
+      expect(decideApproval(base({ kind: 'shell', policy: 'full-auto' })).mustApprove).toBe(false)
+    })
+
+    it('shell under ask prompts', () => {
+      expect(decideApproval(base({ kind: 'shell', policy: 'ask' })).mustApprove).toBe(true)
+    })
+  })
+
+  describe('on a NON-confining host (shellSandboxed=false) — the unconfined-shell gate', () => {
+    it('flags shell as unsandboxed and prompts by default', () => {
+      expect(decideApproval(base({ kind: 'shell', shellSandboxed: false }))).toEqual({
+        mustApprove: true,
+        unsandboxedShell: true
+      })
+    })
+
+    it('an allow permission rule does NOT bypass the prompt (the key regression fix)', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', shellSandboxed: false, ruleAction: 'allow' }))
+      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+    })
+
+    it('a generic override (granted for an unrelated tool) does NOT bypass the prompt', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', shellSandboxed: false, override: true })).mustApprove
+      ).toBe(true)
+    })
+
+    it('full-auto does NOT bypass the prompt', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', shellSandboxed: false, policy: 'full-auto' }))
+          .mustApprove
+      ).toBe(true)
+    })
+
+    it('only the unconfined-shell-specific override bypasses it', () => {
+      expect(
+        decideApproval(
+          base({ kind: 'shell', shellSandboxed: false, shellUnsandboxedOverride: true })
+        )
+      ).toEqual({ mustApprove: false, unsandboxedShell: true })
+    })
+
+    it('non-shell kinds are unaffected by the unconfined-shell gate', () => {
+      expect(
+        decideApproval(base({ kind: 'write', shellSandboxed: false, policy: 'auto-edit' }))
+      ).toEqual({ mustApprove: false, unsandboxedShell: false })
+      expect(decideApproval(base({ kind: 'read', shellSandboxed: false })).mustApprove).toBe(false)
+    })
   })
 })

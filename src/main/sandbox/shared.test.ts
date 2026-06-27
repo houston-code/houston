@@ -6,11 +6,11 @@ import {
   CappedOutput,
   clampToolResult,
   pkgCacheDir,
-  runSandboxed,
-  sandboxAvailable,
-  sandboxEnv,
-  type SandboxRunOptions
-} from './sandbox'
+  planKill,
+  runWithBackend,
+  sandboxEnv
+} from './shared'
+import type { SandboxBackend, SandboxRunOptions } from './contract'
 
 describe('augmentPath', () => {
   const minimalPath = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter)
@@ -41,22 +41,6 @@ describe('augmentPath', () => {
   it('omits ~/.local/bin when HOME is unset', () => {
     const out = augmentPath({ PATH: '/usr/bin' }, () => true)
     expect(out).not.toMatch(/\.local\/bin/)
-  })
-})
-
-describe('sandboxAvailable', () => {
-  it('is true only on macOS with the sandbox-exec binary present', () => {
-    expect(sandboxAvailable('darwin', (p) => p === '/usr/bin/sandbox-exec')).toBe(true)
-  })
-
-  it('is false on macOS when the sandbox-exec binary is missing', () => {
-    // A Seatbelt-less macOS — the comment used to claim this was checked; now it is.
-    expect(sandboxAvailable('darwin', () => false)).toBe(false)
-  })
-
-  it('is false on non-macOS platforms regardless of any binary', () => {
-    expect(sandboxAvailable('linux', () => true)).toBe(false)
-    expect(sandboxAvailable('win32', () => true)).toBe(false)
   })
 })
 
@@ -91,8 +75,6 @@ describe('CappedOutput', () => {
 
   it('rolls the tail window across chunk boundaries, keeping the last bytes', () => {
     const cap = new CappedOutput(2, 4)
-    // Head fills with "AB"; the rest streams in many small chunks. Only the last
-    // 4 bytes of the post-head stream should remain in the tail.
     cap.push(Buffer.from('AB'))
     for (const ch of 'CDEFGHIJ') cap.push(Buffer.from(ch))
     const out = cap.toString()
@@ -106,16 +88,14 @@ describe('CappedOutput', () => {
     const head = 'compiling...\n'
     const tail = '\n5 failed, 120 passed'
     cap.push(Buffer.from(head))
-    // > 1 MB of noise in the middle, in many chunks like a real stream.
     const filler = Buffer.from('x'.repeat(64 * 1024))
     for (let written = 0; written < 1_500_000; written += filler.length) cap.push(filler)
     cap.push(Buffer.from(tail))
 
     const out = cap.toString()
-    expect(out.startsWith(head)).toBe(true) // command echo / early output survives
-    expect(out.endsWith(tail)).toBe(true) // the actionable summary survives
+    expect(out.startsWith(head)).toBe(true)
+    expect(out.endsWith(tail)).toBe(true)
     expect(out).toMatch(MARKER)
-    // Retained output stays within the 1 MB budget (plus the short marker line).
     expect(out.length).toBeLessThanOrEqual(1_000_000 + 64)
     expect(cap.droppedBytes).toBeGreaterThan(0)
   })
@@ -165,8 +145,8 @@ describe('clampToolResult', () => {
   it('keeps both ends with a truncation marker when over budget', () => {
     const text = 'START' + 'x'.repeat(1000) + 'END'
     const out = clampToolResult(text, 20)
-    expect(out.startsWith('START')).toBe(true) // command echo / early errors survive
-    expect(out.endsWith('END')).toBe(true) // trailing summary survives
+    expect(out.startsWith('START')).toBe(true)
+    expect(out.endsWith('END')).toBe(true)
     expect(out).toMatch(MARKER)
     expect(out.length).toBeLessThan(text.length)
   })
@@ -178,9 +158,22 @@ describe('clampToolResult', () => {
   })
 })
 
-describe('runSandboxed', () => {
-  // A stand-in for the `sandbox-exec` ChildProcess: an EventEmitter with stdio
-  // emitters and a settable exitCode, so tests can drive exit/close/error/data.
+describe('planKill', () => {
+  it('SIGKILLs the negative pid (process group) on non-Windows hosts', () => {
+    expect(planKill('darwin', 4242)).toEqual({ kind: 'group', target: -4242 })
+    expect(planKill('linux', 4242)).toEqual({ kind: 'group', target: -4242 })
+  })
+
+  it('uses taskkill /T /F on Windows (negative-pid group kill is invalid there)', () => {
+    expect(planKill('win32', 4242)).toEqual({
+      kind: 'taskkill',
+      file: 'taskkill',
+      args: ['/pid', '4242', '/T', '/F']
+    })
+  })
+})
+
+describe('runWithBackend — honest sandboxed flag', () => {
   function makeFakeChild(pid = 4242): any {
     const child: any = new EventEmitter()
     child.pid = pid
@@ -191,7 +184,6 @@ describe('runSandboxed', () => {
     return child
   }
 
-  // A fake `spawn` that always returns `child` and records how it was called.
   function fakeSpawn(child: any): any {
     const calls: any[] = []
     const fn: any = (cmd: string, args: string[], options: any) => {
@@ -202,6 +194,13 @@ describe('runSandboxed', () => {
     return fn
   }
 
+  const fakeBackend = (sandboxed: boolean, file = 'wrapper'): SandboxBackend => ({
+    id: sandboxed ? 'seatbelt' : 'none',
+    sandboxed,
+    confinesNetwork: sandboxed,
+    buildLaunch: ({ command }) => ({ file, args: ['-c', command], detached: true, windowsHide: false })
+  })
+
   const baseOpts = (over: Partial<SandboxRunOptions> = {}): SandboxRunOptions => ({
     command: 'echo hi',
     cwd: '/tmp',
@@ -210,141 +209,40 @@ describe('runSandboxed', () => {
     ...over
   })
 
-  it('captures stdout/stderr/exit code and settles on stdio close', async () => {
+  it('reports result.sandboxed = backend.sandboxed (true)', async () => {
     const child = makeFakeChild()
-    const killTree = vi.fn()
-    const p = runSandboxed(baseOpts(), {
-      spawn: fakeSpawn(child),
-      killTree,
-      drainMs: 50,
-      available: () => true
-    })
-
-    child.stdout.emit('data', Buffer.from('hello '))
-    child.stderr.emit('data', Buffer.from('warn'))
-    child.exitCode = 0
-    child.emit('exit', 0)
-    child.emit('close', 0)
-
-    const res = await p
-    expect(res).toEqual({
-      stdout: 'hello ',
-      stderr: 'warn',
-      exitCode: 0,
-      timedOut: false,
-      sandboxed: true
-    })
-    expect(killTree).not.toHaveBeenCalled()
-  })
-
-  it('reports sandboxed:false honestly when the sandbox is not in effect', async () => {
-    // The result must not claim confinement that isn't there — the approval path
-    // and the run_shell output key off this to avoid silent unconfined execution.
-    const child = makeFakeChild()
-    const p = runSandboxed(baseOpts(), {
+    const p = runWithBackend(fakeBackend(true), baseOpts(), {
       spawn: fakeSpawn(child),
       killTree: vi.fn(),
-      drainMs: 50,
-      available: () => false
+      drainMs: 20
     })
-    child.exitCode = 0
-    child.emit('exit', 0)
     child.emit('close', 0)
-
-    const res = await p
-    expect(res.sandboxed).toBe(false)
+    expect((await p).sandboxed).toBe(true)
   })
 
-  it('spawns the command detached so the whole tree is killable', () => {
+  it('reports result.sandboxed = backend.sandboxed (false) — honest on unconfined hosts', async () => {
+    const child = makeFakeChild()
+    const p = runWithBackend(fakeBackend(false), baseOpts(), {
+      spawn: fakeSpawn(child),
+      killTree: vi.fn(),
+      drainMs: 20
+    })
+    child.emit('close', 0)
+    expect((await p).sandboxed).toBe(false)
+  })
+
+  it('launches the backend-provided file and spawns detached', () => {
     const child = makeFakeChild()
     const spawn = fakeSpawn(child)
-    runSandboxed(baseOpts(), { spawn, killTree: vi.fn(), drainMs: 50 })
-    expect(spawn.calls[0].cmd).toBe('sandbox-exec')
+    runWithBackend(fakeBackend(false, 'my-wrapper'), baseOpts(), {
+      spawn,
+      killTree: vi.fn(),
+      drainMs: 20
+    })
+    expect(spawn.calls[0].cmd).toBe('my-wrapper')
     expect(spawn.calls[0].options.detached).toBe(true)
-    // The abort plumbing must not be delegated to spawn's own signal option,
-    // which would only kill the wrapper, not the process tree.
+    // Abort is handled by killTree, never delegated to spawn's own signal option
+    // (which would kill only the wrapper, not the tree).
     expect(spawn.calls[0].options.signal).toBeUndefined()
-  })
-
-  // Regression: the hang that froze the "Build a web app…" chat. On timeout the
-  // wrapper is killed but an orphaned grandchild (npm/node) keeps the stdout pipe
-  // open, so 'close' never fires. The call must still settle via the drain backstop.
-  it('settles on timeout even when stdio never closes (orphaned pipe)', async () => {
-    const child = makeFakeChild()
-    const killTree = vi.fn()
-    const p = runSandboxed(baseOpts({ timeoutMs: 10 }), {
-      spawn: fakeSpawn(child),
-      killTree,
-      drainMs: 10
-    })
-
-    child.stdout.emit('data', Buffer.from('npm install starting'))
-    // Intentionally never emit 'exit' or 'close' — the grandchild holds the pipe.
-
-    const res = await p
-    expect(res.timedOut).toBe(true)
-    expect(res.stdout).toContain('npm install starting')
-    expect(killTree).toHaveBeenCalledWith(child)
-  })
-
-  it('settles shortly after exit when an orphan holds the pipe open (no close)', async () => {
-    const child = makeFakeChild()
-    const killTree = vi.fn()
-    const p = runSandboxed(baseOpts(), { spawn: fakeSpawn(child), killTree, drainMs: 10 })
-
-    child.stdout.emit('data', Buffer.from('done'))
-    child.exitCode = 0
-    child.emit('exit', 0) // wrapper exits; a backgrounded child keeps stdout open
-    // 'close' intentionally never emitted
-
-    const res = await p
-    expect(res.exitCode).toBe(0)
-    expect(res.timedOut).toBe(false)
-    expect(res.stdout).toBe('done')
-    expect(killTree).not.toHaveBeenCalled()
-  })
-
-  it('kills the whole process tree when the run is aborted', async () => {
-    const child = makeFakeChild()
-    const killTree = vi.fn()
-    const ac = new AbortController()
-    const p = runSandboxed(baseOpts({ signal: ac.signal }), {
-      spawn: fakeSpawn(child),
-      killTree,
-      drainMs: 10,
-      available: () => true
-    })
-
-    ac.abort()
-    expect(killTree).toHaveBeenCalledWith(child)
-
-    child.emit('exit', null) // tree dies from the kill
-    const res = await p
-    expect(res.sandboxed).toBe(true)
-  })
-
-  it('kills the tree immediately when the signal is already aborted', () => {
-    const child = makeFakeChild()
-    const killTree = vi.fn()
-    runSandboxed(baseOpts({ signal: AbortSignal.abort() }), {
-      spawn: fakeSpawn(child),
-      killTree,
-      drainMs: 10
-    })
-    expect(killTree).toHaveBeenCalledWith(child)
-  })
-
-  it('resolves with an error message when the process fails to launch', async () => {
-    const child = makeFakeChild()
-    const p = runSandboxed(baseOpts(), { spawn: fakeSpawn(child), killTree: vi.fn(), drainMs: 10 })
-
-    child.emit('error', new Error('spawn sandbox-exec ENOENT'))
-
-    const res = await p
-    expect(res.exitCode).toBeNull()
-    expect(res.stderr).toContain('ENOENT')
-    expect(res.stdout).toBe('')
-    // The sandboxed process never started, so the run was not confined.
-    expect(res.sandboxed).toBe(false)
   })
 })
