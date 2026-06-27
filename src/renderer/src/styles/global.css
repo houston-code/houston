@@ -449,6 +449,13 @@ body.is-resizing {
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
+/* The insertion line marking where a dragged chat will land within a section. */
+.conv-drop-line {
+  height: 2px;
+  margin: -1px 8px;
+  border-radius: 2px;
+  background: var(--accent);
+}
 
 /* ---- Section / group headers ---- */
 .section-head {

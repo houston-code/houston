@@ -180,6 +180,14 @@ export interface ConversationMeta {
   archived?: boolean
   /** Id of the custom group (see AppSettings.chatGroups) this chat belongs to. */
   groupId?: string
+  /**
+   * Manual sort position within its sidebar section (group / ungrouped), set by
+   * drag-to-reorder. Lower sorts higher. Absent until the user reorders that
+   * section, in which case the chat falls back to recency ordering. The value is
+   * only meaningful within one section, so it is cleared whenever the chat
+   * changes section (pin / archive / group move).
+   */
+  order?: number
   /** Set once the user explicitly renames the chat — auto-titling never overwrites it. */
   titleCustom?: boolean
   /** Set once a model-summarized title has been produced, so it's generated at most once. */

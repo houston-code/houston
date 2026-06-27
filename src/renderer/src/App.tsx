@@ -490,6 +490,14 @@ export default function App(): JSX.Element {
     [refreshConversations]
   )
 
+  const onReorderConversations = useCallback(
+    async (orderedIds: string[], move?: { id: string; groupId: string | null }) => {
+      await window.api.reorderConversations(orderedIds, move)
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
   // ---- Custom groups (persisted in settings) ----
 
   const saveGroups = useCallback(async (next: ChatGroup[]) => {
@@ -1098,6 +1106,7 @@ export default function App(): JSX.Element {
         onStatusFilterChange={setStatusFilter}
         statusCounts={statusCounts}
         onMove={onMoveConversation}
+        onReorder={onReorderConversations}
         onCreateGroup={onCreateGroup}
         onRenameGroup={onRenameGroup}
         onDeleteGroup={onDeleteGroup}

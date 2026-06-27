@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { createEvent, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
@@ -41,6 +41,7 @@ function baseProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     onStatusFilterChange: vi.fn(),
     statusCounts: { active: 0, archived: 0 },
     onMove: vi.fn(),
+    onReorder: vi.fn(),
     onCreateGroup: vi.fn().mockResolvedValue('grp-new'),
     onRenameGroup: vi.fn(),
     onDeleteGroup: vi.fn(),
@@ -499,8 +500,46 @@ function startConvDrag(title: string): ReturnType<typeof makeDataTransfer> {
 const sectionOf = (label: string): HTMLElement =>
   screen.getByText(label).closest('.section') as HTMLElement
 
+/**
+ * jsdom gives every element a zero-size rect, so the drop-slot math (which reads
+ * row geometry) can't tell rows apart. Stamp each row a 40px-tall rect stacked
+ * top-to-bottom so a `clientY` can target a specific gap.
+ */
+function stackRowRects(section: HTMLElement): void {
+  section.querySelectorAll('.conv').forEach((el, i) => {
+    ;(el as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: i * 40,
+        height: 40,
+        bottom: i * 40 + 40,
+        left: 0,
+        right: 0,
+        width: 0,
+        x: 0,
+        y: i * 40,
+        toJSON: () => ({})
+      }) as DOMRect
+  })
+}
+
+/**
+ * Fire a drag event carrying both a DataTransfer and a vertical pointer
+ * position. jsdom's DragEvent fallback drops `clientY` from the init, so we set
+ * it on the event object directly (React reads it off the native event).
+ */
+function fireDrag(
+  type: 'dragOver' | 'drop',
+  target: HTMLElement,
+  dataTransfer: ReturnType<typeof makeDataTransfer>,
+  clientY: number
+): void {
+  const event = createEvent[type](target, { dataTransfer })
+  Object.defineProperty(event, 'clientY', { value: clientY })
+  fireEvent(target, event)
+}
+
 describe('Sidebar — drag a chat onto a group', () => {
-  it('dropping a chat onto a group fires onMove with that group id', () => {
+  it('dropping a chat onto a group reorders it into that group', () => {
     const props = baseProps({
       groups: [{ id: 'g1', name: 'Work' }],
       conversations: [makeConv({ id: 'a', title: 'Alpha' })]
@@ -508,8 +547,9 @@ describe('Sidebar — drag a chat onto a group', () => {
     render(<Sidebar {...props} />)
 
     const dataTransfer = startConvDrag('Alpha')
-    fireEvent.drop(sectionOf('Work'), { dataTransfer })
-    expect(props.onMove).toHaveBeenCalledWith('a', 'g1')
+    fireEvent.drop(sectionOf('Work'), { dataTransfer, clientY: 0 })
+    // The empty group's new order is just the dragged chat, moved into g1.
+    expect(props.onReorder).toHaveBeenCalledWith(['a'], { id: 'a', groupId: 'g1' })
   })
 
   it('dropping into an empty group works (the drop target is the whole section)', () => {
@@ -521,8 +561,8 @@ describe('Sidebar — drag a chat onto a group', () => {
 
     const dataTransfer = startConvDrag('Alpha')
     // The empty group's only body is the "Drop a chat here…" hint.
-    fireEvent.drop(sectionOf('Empty Group'), { dataTransfer })
-    expect(props.onMove).toHaveBeenCalledWith('a', 'g1')
+    fireEvent.drop(sectionOf('Empty Group'), { dataTransfer, clientY: 0 })
+    expect(props.onReorder).toHaveBeenCalledWith(['a'], { id: 'a', groupId: 'g1' })
   })
 
   it('dropping a grouped chat onto Ungrouped removes it from its group', () => {
@@ -537,30 +577,76 @@ describe('Sidebar — drag a chat onto a group', () => {
     render(<Sidebar {...props} />)
 
     const dataTransfer = startConvDrag('Alpha')
-    fireEvent.drop(sectionOf('Ungrouped'), { dataTransfer })
-    expect(props.onMove).toHaveBeenCalledWith('a', null)
+    const section = sectionOf('Ungrouped')
+    stackRowRects(section)
+    // Drop below the loose chat → Alpha joins Ungrouped after it, group cleared.
+    fireDrag('drop', section, dataTransfer, 100)
+    expect(props.onReorder).toHaveBeenCalledWith(['b', 'a'], { id: 'a', groupId: null })
   })
 
-  it('highlights a droppable section while a chat is dragged over it', () => {
+  it('reorders within a group by dropping at the pointed slot', () => {
     const props = baseProps({
       groups: [{ id: 'g1', name: 'Work' }],
-      conversations: [makeConv({ id: 'a', title: 'Alpha' })]
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', updatedAt: 3 }),
+        makeConv({ id: 'b', title: 'Beta', groupId: 'g1', updatedAt: 2 }),
+        makeConv({ id: 'c', title: 'Gamma', groupId: 'g1', updatedAt: 1 })
+      ]
     })
     render(<Sidebar {...props} />)
 
-    const dataTransfer = startConvDrag('Alpha')
+    // Rows render a, b, c (recency). Drag Gamma to the very top.
     const section = sectionOf('Work')
-    expect(section).not.toHaveClass('section--drop')
-
-    fireEvent.dragOver(section, { dataTransfer })
-    expect(section).toHaveClass('section--drop')
-
-    // Leaving the section clears the highlight.
-    fireEvent.dragLeave(section, { dataTransfer, relatedTarget: document.body })
-    expect(section).not.toHaveClass('section--drop')
+    stackRowRects(section)
+    const dataTransfer = startConvDrag('Gamma')
+    fireDrag('drop', section, dataTransfer, 2)
+    // Same group, so no cross-section move — just the new in-section order.
+    expect(props.onReorder).toHaveBeenCalledWith(['c', 'a', 'b'], undefined)
   })
 
-  it('does not highlight the Pinned section (pinning is independent of groups)', () => {
+  it('does not persist a no-op drop (chat dropped back onto its own slot)', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', updatedAt: 2 }),
+        makeConv({ id: 'b', title: 'Beta', groupId: 'g1', updatedAt: 1 })
+      ]
+    })
+    render(<Sidebar {...props} />)
+
+    const section = sectionOf('Work')
+    stackRowRects(section)
+    const dataTransfer = startConvDrag('Alpha')
+    // Drop within Alpha's own row → order unchanged → nothing to persist.
+    fireDrag('drop', section, dataTransfer, 10)
+    expect(props.onReorder).not.toHaveBeenCalled()
+  })
+
+  it('shows a drop indicator at the slot the chat would land in', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1', updatedAt: 2 }),
+        makeConv({ id: 'b', title: 'Beta', groupId: 'g1', updatedAt: 1 })
+      ]
+    })
+    const { container } = render(<Sidebar {...props} />)
+
+    const section = sectionOf('Work')
+    stackRowRects(section)
+    const dataTransfer = startConvDrag('Beta')
+    expect(container.querySelector('.conv-drop-line')).toBeNull()
+
+    fireDrag('dragOver', section, dataTransfer, 2)
+    expect(section).toHaveClass('section--drop')
+    expect(container.querySelector('.conv-drop-line')).not.toBeNull()
+
+    fireEvent.dragLeave(section, { dataTransfer, relatedTarget: document.body })
+    expect(section).not.toHaveClass('section--drop')
+    expect(container.querySelector('.conv-drop-line')).toBeNull()
+  })
+
+  it('does not accept drops on the Pinned section (pinning is independent of groups)', () => {
     const props = baseProps({
       conversations: [
         makeConv({ id: 'p', title: 'Pinned chat', pinned: true }),
@@ -574,7 +660,7 @@ describe('Sidebar — drag a chat onto a group', () => {
     fireEvent.dragOver(pinned, { dataTransfer })
     expect(pinned).not.toHaveClass('section--drop')
     fireEvent.drop(pinned, { dataTransfer })
-    expect(props.onMove).not.toHaveBeenCalled()
+    expect(props.onReorder).not.toHaveBeenCalled()
   })
 
   it('makes chat rows draggable but not while renaming', () => {
