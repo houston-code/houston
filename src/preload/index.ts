@@ -199,6 +199,13 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.terminalCloseActive, listener)
   },
 
+  /** Subscribe to the native menu's "Settings…" item. Returns an unsubscribe fn. */
+  onOpenSettings: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(IPC.menuOpenSettings, listener)
+    return () => ipcRenderer.removeListener(IPC.menuOpenSettings, listener)
+  },
+
   // Updates
   /** Manually check the update feed (also broadcasts onUpdateAvailable when newer). */
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(IPC.updateCheck),

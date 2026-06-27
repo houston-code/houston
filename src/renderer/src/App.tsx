@@ -201,6 +201,9 @@ export default function App(): JSX.Element {
     return unsubscribe
   }, [])
 
+  // Open the Settings modal when chosen from the native app menu (macOS ⌘,).
+  useEffect(() => window.api.onOpenSettings(() => setSettingsOpen(true)), [])
+
   // Apply the color theme whenever it changes, and follow the OS while on "system".
   const theme = settings?.theme ?? 'system'
   useEffect(() => {

@@ -19,6 +19,8 @@ export const IPC = {
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',
   updateAvailable: 'update:available',
+  /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
+  menuOpenSettings: 'menu:openSettings',
   // Workspace
   workspacePick: 'workspace:pick',
   directoryPick: 'directory:pick',

@@ -1,6 +1,7 @@
 import { Menu, BrowserWindow } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
-import { IPC } from '@shared/constants'
+import { APP_NAME, IPC } from '@shared/constants'
+import { checkForUpdatesFromMenu } from './updater'
 
 /**
  * The application menu. Houston previously relied on Electron's default menu,
@@ -8,6 +9,12 @@ import { IPC } from '@shared/constants'
  * that one item so ⌘W closes the active *terminal tab* when the integrated
  * terminal is focused (the behaviour every editor/terminal has), and only closes
  * the window otherwise. Every other entry keeps its standard role.
+ *
+ * On macOS the app submenu is built explicitly (rather than the `appMenu` role)
+ * so it carries native "Settings…" (⌘,) and "Check for Updates…" items — the
+ * former opens the in-app Settings modal over IPC, the latter runs the same feed
+ * check as the in-Settings button. Both render on every macOS architecture; there
+ * is no arch-specific gating.
  */
 
 /** Whether the integrated terminal currently holds focus in the renderer. The
@@ -37,10 +44,41 @@ function onCloseShortcut(): void {
   }
 }
 
+/** Ask the renderer to open the Settings modal (native menu → in-app UI). */
+function onOpenSettings(): void {
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  win?.webContents.send(IPC.menuOpenSettings)
+}
+
+/**
+ * The macOS app submenu, built by hand so it carries Settings… and Check for
+ * Updates… alongside the standard roles. On macOS the first menu's label is always
+ * the app name regardless of what we pass, but a label is required by the type.
+ */
+function macAppMenu(): MenuItemConstructorOptions {
+  return {
+    label: APP_NAME,
+    submenu: [
+      { role: 'about' },
+      { type: 'separator' },
+      { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: onOpenSettings },
+      { label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() },
+      { type: 'separator' },
+      { role: 'services' },
+      { type: 'separator' },
+      { role: 'hide' },
+      { role: 'hideOthers' },
+      { role: 'unhide' },
+      { type: 'separator' },
+      { role: 'quit' }
+    ]
+  }
+}
+
 export function buildAppMenu(): void {
   const isMac = process.platform === 'darwin'
   const template: MenuItemConstructorOptions[] = [
-    ...(isMac ? [{ role: 'appMenu' as const }] : []),
+    ...(isMac ? [macAppMenu()] : []),
     {
       label: 'File',
       submenu: [
