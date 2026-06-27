@@ -48,6 +48,7 @@ import {
   deleteConversation,
   importConversation,
   organizeConversation,
+  reorderConversations,
   addUsage,
   mergeRunningTotals,
   setMessages,
@@ -329,6 +330,13 @@ export function registerIpc(): void {
       patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
     ) => {
       organizeConversation(id, patch)
+    }
+  )
+  // Drag-to-reorder within a sidebar section. Also does not affect recency.
+  ipcMain.handle(
+    IPC.conversationReorder,
+    (_event, orderedIds: string[], move?: { id: string; groupId: string | null }) => {
+      reorderConversations(orderedIds, move)
     }
   )
 

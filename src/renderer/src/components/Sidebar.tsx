@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { Fragment, useEffect, useRef, useState, type DragEvent } from 'react'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
-import { buildSidebarSections, type SidebarSection } from '../lib/chatGroups'
+import {
+  buildSidebarSections,
+  dropIndexForY,
+  reorderedIds,
+  type SidebarSection
+} from '../lib/chatGroups'
 import { Icon } from './Icon'
 import { Popover } from './Popover'
 
@@ -47,6 +52,12 @@ export interface SidebarProps {
   /** Total counts per status (from the full list), shown beside the filter options. */
   statusCounts: { active: number; archived: number }
   onMove: (id: string, groupId: string | null) => void
+  /**
+   * Persist a drag-to-reorder. `orderedIds` is the target section's chats in
+   * their new top-to-bottom order; `move` is set when the drag also crossed into
+   * a different group (or out to ungrouped).
+   */
+  onReorder: (orderedIds: string[], move?: { id: string; groupId: string | null }) => void
   onCreateGroup: () => Promise<string>
   onRenameGroup: (groupId: string, name: string) => void
   onDeleteGroup: (groupId: string) => void
@@ -431,11 +442,21 @@ function FilterButton({
   )
 }
 
+/** Pointer location → drop slot, read from the section's currently rendered rows. */
+function dropIndexFromEvent(section: Element, clientY: number): number {
+  const rows = Array.from(section.querySelectorAll<HTMLElement>('.conv'))
+  return dropIndexForY(
+    rows.map((r) => r.getBoundingClientRect()),
+    clientY
+  )
+}
+
 /**
  * One sidebar section (Pinned / a group / Ungrouped) plus its rows. Group and
- * Ungrouped sections double as drop targets: dragging a chat onto a group moves
- * it in; dropping onto Ungrouped removes it from its group. Pinned is not a drop
- * target — pinning is independent of grouping.
+ * Ungrouped sections double as drop targets for drag-to-reorder: a chat can be
+ * dropped at a precise slot to reposition it, and dropping a chat from another
+ * section both moves it in and places it. A drop indicator marks where it will
+ * land. Pinned is not a drop target — pinning is independent of grouping.
  */
 function SidebarSectionView({
   section,
@@ -455,34 +476,50 @@ function SidebarSectionView({
   setRenamingGroup: (id: string | null) => void
 }): JSX.Element {
   const { groups } = props
-  const [dragOver, setDragOver] = useState(false)
+  // Slot the drop indicator sits at while dragging over this section, or null.
+  const [dropAt, setDropAt] = useState<number | null>(null)
 
   const droppable = section.kind === 'group' || section.kind === 'ungrouped'
   // Group sections move the chat into the group; Ungrouped clears its group.
   const targetGroupId = section.kind === 'group' ? section.id : null
+  const rowCount = section.conversations.length
 
   const onDragOver = (e: DragEvent): void => {
     if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return // not one of our chat drags
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    if (!dragOver) setDragOver(true)
+    setDropAt(dropIndexFromEvent(e.currentTarget, e.clientY))
   }
   const onDragLeave = (e: DragEvent): void => {
     // dragleave also fires when crossing into child rows; only clear the
-    // highlight once the pointer truly leaves the section.
+    // indicator once the pointer truly leaves the section.
     if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
-    setDragOver(false)
+    setDropAt(null)
   }
   const onDrop = (e: DragEvent): void => {
     e.preventDefault()
-    setDragOver(false)
-    const id = e.dataTransfer.getData(CONV_DRAG_MIME) || e.dataTransfer.getData('text/plain')
-    if (id) props.onMove(id, targetGroupId)
+    setDropAt(null)
+    const draggedId =
+      e.dataTransfer.getData(CONV_DRAG_MIME) || e.dataTransfer.getData('text/plain')
+    if (!draggedId) return
+
+    const index = dropIndexFromEvent(e.currentTarget, e.clientY)
+    const currentIds = section.conversations.map((c) => c.id)
+    const orderedIds = reorderedIds(currentIds, draggedId, index)
+
+    const dragged = props.conversations.find((c) => c.id === draggedId)
+    const fromGroup = dragged?.groupId ?? null
+    const move = fromGroup !== targetGroupId ? { id: draggedId, groupId: targetGroupId } : undefined
+
+    // Same section, same arrangement → nothing to persist.
+    if (!move && orderedIds.length === currentIds.length && orderedIds.every((id, i) => id === currentIds[i]))
+      return
+    props.onReorder(orderedIds, move)
   }
 
   return (
     <div
-      className={`section ${dragOver ? 'section--drop' : ''}`}
+      className={`section ${dropAt !== null ? 'section--drop' : ''}`}
       onDragOver={droppable ? onDragOver : undefined}
       onDragLeave={droppable ? onDragLeave : undefined}
       onDrop={droppable ? onDrop : undefined}
@@ -497,20 +534,25 @@ function SidebarSectionView({
         />
       )}
       {!section.collapsed &&
-        section.conversations.map((c) => (
-          <ConvRow
-            key={c.id}
-            conv={c}
-            active={c.id === currentId}
-            groups={groups}
-            props={props}
-            renaming={renamingConv === c.id}
-            onStartRename={() => setRenamingConv(c.id)}
-            onStopRename={() => setRenamingConv(null)}
-            onStartRenameGroup={(id) => setRenamingGroup(id)}
-          />
+        section.conversations.map((c, i) => (
+          <Fragment key={c.id}>
+            {dropAt === i && <div className="conv-drop-line" aria-hidden="true" />}
+            <ConvRow
+              conv={c}
+              active={c.id === currentId}
+              groups={groups}
+              props={props}
+              renaming={renamingConv === c.id}
+              onStartRename={() => setRenamingConv(c.id)}
+              onStopRename={() => setRenamingConv(null)}
+              onStartRenameGroup={(id) => setRenamingGroup(id)}
+            />
+          </Fragment>
         ))}
-      {section.kind === 'group' && !section.collapsed && section.conversations.length === 0 && (
+      {!section.collapsed && rowCount > 0 && dropAt === rowCount && (
+        <div className="conv-drop-line" aria-hidden="true" />
+      )}
+      {section.kind === 'group' && !section.collapsed && rowCount === 0 && (
         <div className="section__empty">Drop a chat here, or use the ⋯ menu</div>
       )}
     </div>

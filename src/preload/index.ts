@@ -92,6 +92,12 @@ const api = {
     id: string,
     patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
   ): Promise<void> => ipcRenderer.invoke(IPC.conversationOrganize, id, patch),
+  /** Persist a drag-to-reorder: `orderedIds` is the section's chats top-to-bottom;
+   *  `move` carries the dragged chat's new group when the drag crossed sections. */
+  reorderConversations: (
+    orderedIds: string[],
+    move?: { id: string; groupId: string | null }
+  ): Promise<void> => ipcRenderer.invoke(IPC.conversationReorder, orderedIds, move),
   /** Subscribe to main-pushed title updates (a chat got a model-generated title). Returns an unsubscribe fn. */
   onConversationTitleChanged: (
     cb: (payload: { id: string; title: string }) => void

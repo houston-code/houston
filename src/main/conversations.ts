@@ -269,6 +269,14 @@ export function organizeConversation(
     // A deliberate rename is sacred: never auto-title over it.
     conv.titleCustom = true
   }
+  // Moving between sections (pin / archive / group) invalidates the manual sort
+  // position, which is only meaningful within a single section. Drop it so the
+  // chat falls back to recency until reordered in its new home.
+  const changesSection =
+    typeof patch.pinned === 'boolean' ||
+    typeof patch.archived === 'boolean' ||
+    patch.groupId !== undefined
+  if (changesSection) delete conv.order
   if (typeof patch.pinned === 'boolean') conv.pinned = patch.pinned
   if (typeof patch.archived === 'boolean') {
     if (patch.archived) conv.archived = true
@@ -280,4 +288,38 @@ export function organizeConversation(
     else conv.groupId = patch.groupId
   }
   write(conv)
+}
+
+/**
+ * Persist a drag-to-reorder within a sidebar section. `orderedIds` is the
+ * section's chats in their new top-to-bottom order; each is stamped with its
+ * index as `order`. When the drag also crossed sections, `move` carries the
+ * dragged chat's new group (`null` = ungrouped). Like {@link organizeConversation}
+ * this never bumps `updatedAt`, so reordering doesn't disturb recency elsewhere.
+ */
+export function reorderConversations(
+  orderedIds: string[],
+  move?: { id: string; groupId: string | null }
+): void {
+  orderedIds.forEach((id, index) => {
+    const conv = read(id)
+    if (!conv) return
+    let changed = false
+    if (conv.order !== index) {
+      conv.order = index
+      changed = true
+    }
+    if (move && move.id === id) {
+      if (move.groupId === null) {
+        if (conv.groupId !== undefined) {
+          delete conv.groupId
+          changed = true
+        }
+      } else if (conv.groupId !== move.groupId) {
+        conv.groupId = move.groupId
+        changed = true
+      }
+    }
+    if (changed) write(conv)
+  })
 }

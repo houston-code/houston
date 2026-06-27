@@ -48,6 +48,7 @@ export const IPC = {
   conversationExportHtml: 'conversation:exportHtml',
   conversationImport: 'conversation:import',
   conversationOrganize: 'conversation:organize',
+  conversationReorder: 'conversation:reorder',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
   // Agent
