@@ -339,9 +339,14 @@ body.is-resizing {
   width: 100%;
   margin-bottom: 10px;
 }
-.sidebar__search {
-  width: 100%;
+.sidebar__searchrow {
+  display: flex;
+  gap: 6px;
   margin-bottom: 10px;
+}
+.sidebar__search {
+  flex: 1;
+  min-width: 0;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text);
@@ -353,6 +358,62 @@ body.is-resizing {
 .sidebar__search:focus {
   outline: none;
   border-color: var(--accent);
+}
+/* Funnel button beside the search box; turns accent when a non-default filter is on. */
+.sidebar__filter {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sidebar__filter-icon {
+  display: block;
+}
+.sidebar__filter:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+.sidebar__filter--on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.sidebar__filter-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1.5px solid var(--bg-elevated);
+}
+/* Count trailing each status option in the filter menu. */
+.menu__item-count {
+  margin-left: 14px;
+  float: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+/* "Archived" tag shown on an archived chat when it surfaces in search results. */
+.conv__tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--warn);
+  vertical-align: 1px;
 }
 .sidebar__list {
   flex: 1;

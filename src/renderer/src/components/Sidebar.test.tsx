@@ -36,6 +36,10 @@ function baseProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     onOpenSettings: vi.fn(),
     onRename: vi.fn(),
     onSetPinned: vi.fn(),
+    onSetArchived: vi.fn(),
+    statusFilter: 'active',
+    onStatusFilterChange: vi.fn(),
+    statusCounts: { active: 0, archived: 0 },
     onMove: vi.fn(),
     onCreateGroup: vi.fn().mockResolvedValue('grp-new'),
     onRenameGroup: vi.fn(),
@@ -276,6 +280,77 @@ describe('Sidebar — row overflow menu', () => {
     openConvMenu('Alpha')
     fireEvent.click(screen.getByText('☆ Unpin'))
     expect(props.onSetPinned).toHaveBeenCalledWith('a', false)
+  })
+
+  it('archives an active chat from the ⋯ menu', () => {
+    const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
+    render(<Sidebar {...props} />)
+
+    openConvMenu('Alpha')
+    fireEvent.click(screen.getByText('⊟ Archive'))
+    expect(props.onSetArchived).toHaveBeenCalledWith('a', true)
+  })
+
+  it('shows "Unarchive" for an archived chat and unarchives it', () => {
+    const props = baseProps({
+      statusFilter: 'archived',
+      conversations: [makeConv({ id: 'a', title: 'Alpha', archived: true })]
+    })
+    render(<Sidebar {...props} />)
+
+    openConvMenu('Alpha')
+    fireEvent.click(screen.getByText('⊞ Unarchive'))
+    expect(props.onSetArchived).toHaveBeenCalledWith('a', false)
+  })
+})
+
+describe('Sidebar — status filter', () => {
+  it('switches to the archived view from the filter popover', () => {
+    const props = baseProps({ statusCounts: { active: 3, archived: 2 } })
+    render(<Sidebar {...props} />)
+
+    fireEvent.click(screen.getByLabelText('Filter chats'))
+    // The popover lists both statuses with their counts.
+    expect(screen.getByText('○ Archived')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('○ Archived'))
+    expect(props.onStatusFilterChange).toHaveBeenCalledWith('archived')
+  })
+
+  it('flags the filter button as active when not on the default view', () => {
+    const props = baseProps({ statusFilter: 'archived' })
+    render(<Sidebar {...props} />)
+    expect(screen.getByLabelText('Filter chats')).toHaveClass('sidebar__filter--on')
+  })
+
+  it('leaves the filter button unflagged on the default active view', () => {
+    const props = baseProps({ statusFilter: 'active' })
+    render(<Sidebar {...props} />)
+    expect(screen.getByLabelText('Filter chats')).not.toHaveClass('sidebar__filter--on')
+  })
+
+  it('tags an archived chat that surfaces in the active view (e.g. via search)', () => {
+    // In the active view, an archived chat only appears through search; it gets a
+    // tag so it's distinguishable from live chats.
+    const props = baseProps({
+      statusFilter: 'active',
+      search: 'alp',
+      conversations: [makeConv({ id: 'a', title: 'Alpha', archived: true })]
+    })
+    render(<Sidebar {...props} />)
+
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    expect(within(row).getByText('Archived')).toBeInTheDocument()
+  })
+
+  it('does not tag archived chats in the archived view', () => {
+    const props = baseProps({
+      statusFilter: 'archived',
+      conversations: [makeConv({ id: 'a', title: 'Alpha', archived: true })]
+    })
+    render(<Sidebar {...props} />)
+
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    expect(within(row).queryByText('Archived')).not.toBeInTheDocument()
   })
 })
 

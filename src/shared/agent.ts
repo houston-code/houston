@@ -172,6 +172,12 @@ export interface ConversationMeta {
   updatedAt: number
   /** Pinned chats float to a "Pinned" section at the top of the sidebar. */
   pinned?: boolean
+  /**
+   * Archived chats are hidden from the default "Active" sidebar view and only
+   * shown when the status filter is switched to "Archived". Group membership is
+   * preserved, so an archived chat rejoins its group when unarchived.
+   */
+  archived?: boolean
   /** Id of the custom group (see AppSettings.chatGroups) this chat belongs to. */
   groupId?: string
   /** Set once the user explicitly renames the chat — auto-titling never overwrites it. */

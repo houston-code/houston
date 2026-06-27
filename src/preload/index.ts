@@ -90,7 +90,7 @@ const api = {
     ipcRenderer.invoke(IPC.conversationImport),
   organizeConversation: (
     id: string,
-    patch: { title?: string; pinned?: boolean; groupId?: string | null }
+    patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
   ): Promise<void> => ipcRenderer.invoke(IPC.conversationOrganize, id, patch),
   /** Subscribe to main-pushed title updates (a chat got a model-generated title). Returns an unsubscribe fn. */
   onConversationTitleChanged: (

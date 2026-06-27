@@ -36,7 +36,7 @@ import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPane
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { itemsFromMessages, lastUserText } from './lib/items'
-import { Sidebar } from './components/Sidebar'
+import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
@@ -140,6 +140,8 @@ export default function App(): JSX.Element {
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
+  // Sidebar status filter: "active" hides archived chats; "archived" shows only them.
+  const [statusFilter, setStatusFilter] = useState<ConversationStatusFilter>('active')
   const [update, setUpdate] = useState<Extract<UpdateCheckResult, { status: 'available' }> | null>(
     null
   )
@@ -234,9 +236,20 @@ export default function App(): JSX.Element {
     }
   }, [search])
 
-  const visibleConversations = useMemo(
-    () => (matchIds ? conversations.filter((c) => matchIds.has(c.id)) : conversations),
-    [conversations, matchIds]
+  const visibleConversations = useMemo(() => {
+    // Search spans both active and archived chats, so an explicit query bypasses
+    // the status filter entirely; archived hits are tagged in the sidebar.
+    if (matchIds) return conversations.filter((c) => matchIds.has(c.id))
+    return conversations.filter((c) => (statusFilter === 'archived' ? !!c.archived : !c.archived))
+  }, [conversations, matchIds, statusFilter])
+
+  // Counts for the sidebar's status filter, taken from the full (unfiltered) list.
+  const statusCounts = useMemo(
+    () => ({
+      active: conversations.filter((c) => !c.archived).length,
+      archived: conversations.filter((c) => !!c.archived).length
+    }),
+    [conversations]
   )
 
   const currentConv = useMemo(
@@ -456,6 +469,14 @@ export default function App(): JSX.Element {
   const onSetPinned = useCallback(
     async (id: string, pinned: boolean) => {
       await window.api.organizeConversation(id, { pinned })
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  const onSetArchived = useCallback(
+    async (id: string, archived: boolean) => {
+      await window.api.organizeConversation(id, { archived })
       await refreshConversations()
     },
     [refreshConversations]
@@ -1072,6 +1093,10 @@ export default function App(): JSX.Element {
         onOpenSettings={() => setSettingsOpen(true)}
         onRename={onRenameConversation}
         onSetPinned={onSetPinned}
+        onSetArchived={onSetArchived}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        statusCounts={statusCounts}
         onMove={onMoveConversation}
         onCreateGroup={onCreateGroup}
         onRenameGroup={onRenameGroup}
