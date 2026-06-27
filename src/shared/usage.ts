@@ -72,10 +72,12 @@ export function formatUsd(n: number): string {
 export function contextWindowFor(model: string): number | null {
   const m = model.toLowerCase()
   if (m.includes('claude')) {
-    // Opus 4.6/4.7/4.8, Sonnet 4.6, and Fable/Mythos ship a 1M-token window as the
-    // standard (and default) window — GA, standard-priced, no beta header required.
-    // Haiku 4.5 and older Claude families remain at 200K.
-    if (/opus-4-[678]|sonnet-4-6|fable|mythos/.test(m)) return 1_000_000
+    // Opus and Sonnet 4.6+ (incl. 5.x and beyond), plus Fable/Mythos, ship a 1M-token
+    // window as the standard (and default) window — GA, standard-priced, no beta
+    // header required. The version ranges keep future minor/major bumps (Opus 4.9,
+    // Opus 5) on 1M instead of falling back. Haiku and older Claude families (3.x,
+    // and Opus/Sonnet ≤4.5) remain at 200K.
+    if (/opus-(4-[6-9]|[5-9])|sonnet-(4-[6-9]|[5-9])|fable|mythos/.test(m)) return 1_000_000
     return 200_000
   }
   if (m.includes('gemini')) return 1_000_000
@@ -84,7 +86,8 @@ export function contextWindowFor(model: string): number | null {
   if (m.includes('gpt-4o')) return 128_000
   if (m.includes('gpt-4')) return 128_000
   if (m.includes('gpt-3.5')) return 16_385
-  if (/(^|[^a-z0-9])o[134]([^a-z0-9]|$)/.test(m)) return 200_000 // o1 / o3 / o4 reasoning models
+  // o-series reasoning models (o1, o3, o4, o5, …); `o\d` so future ones aren't pinned.
+  if (/(^|[^a-z0-9])o\d([^a-z0-9]|$)/.test(m)) return 200_000
   return null
 }
 
