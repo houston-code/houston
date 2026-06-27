@@ -8,6 +8,7 @@ import { isNearBottom } from '../lib/scroll'
 import { ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
 import { Markdown } from './Markdown'
+import { Icon } from './Icon'
 
 function UserBubble({
   text,
@@ -81,7 +82,7 @@ function AssistantMessage({
       )}
       {!streaming && text.trim() !== '' && (
         <button className="msg__copy" onClick={copy} title="Copy message">
-          {copied ? '✓' : '⧉'}
+          <Icon name={copied ? 'check' : 'copy'} />
         </button>
       )}
     </div>

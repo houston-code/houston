@@ -122,15 +122,16 @@ describe('Transcript', () => {
     renderTranscript([assistantItem({ text: 'final answer', streaming: false })])
 
     const button = screen.getByTitle('Copy message')
-    // Idle state shows the copy glyph, not the success check.
-    expect(button).toHaveTextContent('⧉')
+    // Idle state shows the copy icon, not the success check.
+    expect(button.querySelector('[data-icon="copy"]')).toBeInTheDocument()
+    expect(button.querySelector('[data-icon="check"]')).not.toBeInTheDocument()
 
     fireEvent.click(button)
 
     // The exact message text is what gets copied.
     expect(copyText).toHaveBeenCalledWith('final answer')
-    // After the copy resolves the button flips to the ✓ "copied" affordance.
-    await waitFor(() => expect(button).toHaveTextContent('✓'))
+    // After the copy resolves the button flips to the "copied" check affordance.
+    await waitFor(() => expect(button.querySelector('[data-icon="check"]')).toBeInTheDocument())
   })
 
   it('leaves the copy button in its idle state when copying fails', async () => {
@@ -142,10 +143,10 @@ describe('Transcript', () => {
     fireEvent.click(button)
 
     expect(copyText).toHaveBeenCalledWith('final answer')
-    // A failed copy must not claim success — the affordance stays the idle glyph.
+    // A failed copy must not claim success — the affordance stays the idle icon.
     await Promise.resolve()
-    expect(button).toHaveTextContent('⧉')
-    expect(button).not.toHaveTextContent('✓')
+    expect(button.querySelector('[data-icon="copy"]')).toBeInTheDocument()
+    expect(button.querySelector('[data-icon="check"]')).not.toBeInTheDocument()
   })
 
   it('renders a tool row with its verb and target', () => {

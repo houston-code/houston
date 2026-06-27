@@ -263,7 +263,7 @@ describe('Sidebar — row overflow menu', () => {
     expect(props.onFork).toHaveBeenCalledWith('a')
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('⤓ Export'))
+    fireEvent.click(screen.getByText('Export'))
     expect(props.onExport).toHaveBeenCalledWith('a')
 
     openConvMenu('Alpha')
@@ -287,7 +287,7 @@ describe('Sidebar — row overflow menu', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('⊟ Archive'))
+    fireEvent.click(screen.getByText('Archive'))
     expect(props.onSetArchived).toHaveBeenCalledWith('a', true)
   })
 
@@ -299,7 +299,7 @@ describe('Sidebar — row overflow menu', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('⊞ Unarchive'))
+    fireEvent.click(screen.getByText('Unarchive'))
     expect(props.onSetArchived).toHaveBeenCalledWith('a', false)
   })
 })
@@ -391,9 +391,9 @@ describe('Sidebar — export / import', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('⤓ Export as HTML'))
+    fireEvent.click(screen.getByText('Export as HTML'))
     expect(props.onExportHtml).toHaveBeenCalledWith('a')
-    // Plain "⤓ Export" stays distinct and was not invoked.
+    // Plain "Export" stays distinct and was not invoked.
     expect(props.onExport).not.toHaveBeenCalled()
   })
 
@@ -401,7 +401,7 @@ describe('Sidebar — export / import', () => {
     const props = baseProps()
     render(<Sidebar {...props} />)
 
-    fireEvent.click(screen.getByText('⤒ Import chat'))
+    fireEvent.click(screen.getByText('Import chat'))
     expect(props.onImport).toHaveBeenCalledOnce()
   })
 })
@@ -450,7 +450,7 @@ describe('Sidebar — moving chats between groups', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('⤴ Remove from group'))
+    fireEvent.click(screen.getByText('Remove from group'))
     expect(props.onMove).toHaveBeenCalledWith('a', null)
   })
 
@@ -462,7 +462,7 @@ describe('Sidebar — moving chats between groups', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    expect(screen.queryByText('⤴ Remove from group')).not.toBeInTheDocument()
+    expect(screen.queryByText('Remove from group')).not.toBeInTheDocument()
   })
 })
 
