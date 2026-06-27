@@ -5,10 +5,16 @@ copyright: Copyright © 2026 Houston contributors
 # Update feed for electron-updater. electron-builder generates the update
 # metadata (latest-mac.yml) alongside the DMG; publishing a GitHub Release with
 # those assets is what lets packaged apps auto-update from it.
+#
+# Distribution is a SEPARATE PUBLIC repo (source stays private). A public feed means the
+# packaged app fetches updates with NO embedded token — pointing this at the private source
+# repo would force shipping a credential in the client. Releases are pushed here only by the
+# "Release - publish" workflow, using a PAT with contents:write on this repo
+# (GH_RELEASES_TOKEN); the default GITHUB_TOKEN can't write a different repo.
 publish:
   provider: github
   owner: piyushvijay
-  repo: houston
+  repo: houston-releases
 
 directories:
   buildResources: build
