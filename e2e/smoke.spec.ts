@@ -67,7 +67,7 @@ test('integrated terminal opens and round-trips through a PTY', async () => {
     // Open the terminal from the top-right titlebar action. This is also the real
     // test that node-pty loaded under Electron's ABI — a mismatch would have
     // crashed the app on boot (terminal.ts imports node-pty at module load).
-    await window.getByRole('button', { name: 'Terminal' }).click()
+    await window.getByRole('button', { name: 'Terminal', exact: true }).click()
 
     // A tab and the xterm surface mount.
     await expect(window.locator('.terminal-tab').first()).toBeVisible()
@@ -77,6 +77,14 @@ test('integrated terminal opens and round-trips through a PTY', async () => {
     // rendered proves the renderer ↔ main ↔ node-pty pipe works end to end.
     await window.locator('.terminal-view').click()
     await window.keyboard.type('echo PTYOK')
+    await expect(window.locator('.terminal-dock')).toContainText('PTYOK')
+
+    // Hide the panel and reopen it — the session and its scrollback must survive
+    // (the dock stays mounted, hidden via CSS, rather than being torn down).
+    await window.getByRole('button', { name: 'Terminal', exact: true }).click()
+    await expect(window.locator('.terminal-view .xterm')).toBeHidden()
+    await window.getByRole('button', { name: 'Terminal', exact: true }).click()
+    await expect(window.locator('.terminal-view .xterm')).toBeVisible()
     await expect(window.locator('.terminal-dock')).toContainText('PTYOK')
   } finally {
     await app.close()

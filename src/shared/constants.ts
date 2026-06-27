@@ -72,7 +72,11 @@ export const IPC = {
   /** Main → renderer: a chunk of terminal output (coalesced). */
   terminalData: 'terminal:data',
   /** Main → renderer: a terminal's shell exited. */
-  terminalExit: 'terminal:exit'
+  terminalExit: 'terminal:exit',
+  /** Renderer → main: terminal focus gained/lost (drives Cmd+W routing). */
+  terminalFocusChanged: 'terminal:focusChanged',
+  /** Main → renderer: Cmd+W while the terminal is focused — close the active tab. */
+  terminalCloseActive: 'terminal:closeActive'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

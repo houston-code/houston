@@ -117,6 +117,9 @@ export default function App(): JSX.Element {
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [terminalOpen, setTerminalOpen] = useState(false)
+  // Latches true on first open and stays mounted thereafter (hidden via CSS when
+  // closed) so terminal sessions and scrollback survive hide/show.
+  const [terminalMounted, setTerminalMounted] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
   const appRef = useRef<HTMLDivElement>(null)
   const chat = useChat(currentId)
@@ -137,7 +140,10 @@ export default function App(): JSX.Element {
       if (s.sidebarCollapsed) setSidebarCollapsed(true)
       if (typeof s.terminalHeight === 'number')
         setTerminalHeight(clampTerminalHeight(s.terminalHeight))
-      if (s.terminalOpen) setTerminalOpen(true)
+      if (s.terminalOpen) {
+        setTerminalOpen(true)
+        setTerminalMounted(true)
+      }
       await refreshConversations()
     })()
   }, [refreshConversations])
@@ -598,6 +604,7 @@ export default function App(): JSX.Element {
   const toggleTerminal = useCallback(() => {
     setTerminalOpen((open) => {
       const next = !open
+      if (next) setTerminalMounted(true)
       void persistTerminal({ terminalOpen: next })
       return next
     })
@@ -906,10 +913,11 @@ export default function App(): JSX.Element {
           </div>
         )}
 
-        {terminalOpen && (
+        {terminalMounted && (
           <Suspense fallback={null}>
             <TerminalDock
               workspace={workspace}
+              visible={terminalOpen}
               onResizeMouseDown={onTerminalResizeMouseDown}
               onClose={toggleTerminal}
             />

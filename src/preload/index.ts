@@ -191,6 +191,15 @@ const api = {
     ipcRenderer.on(IPC.terminalExit, listener)
     return () => ipcRenderer.removeListener(IPC.terminalExit, listener)
   },
+  /** Tell main whether the terminal is focused, so ⌘W can route to the tab. */
+  setTerminalFocused: (focused: boolean): void =>
+    ipcRenderer.send(IPC.terminalFocusChanged, focused),
+  /** Subscribe to the "close active terminal tab" signal (⌘W while focused). */
+  onTerminalCloseActive: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(IPC.terminalCloseActive, listener)
+    return () => ipcRenderer.removeListener(IPC.terminalCloseActive, listener)
+  },
 
   // Updates
   /** Manually check the update feed (also broadcasts onUpdateAvailable when newer). */
