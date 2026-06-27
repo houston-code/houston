@@ -86,6 +86,11 @@ export function ControlBar({
   const showWorktreeEditor = newChat && repoInfo?.isRepo === true
   const branchError = showWorktreeEditor && worktreeMode ? branchNameError(branchName, repoInfo.branches) : null
 
+  // Always label the folder control with the repo (main worktree) name, never the
+  // per-chat worktree directory — so it reads "myrepo", not "houston/feat-x".
+  const repoRoot = repoInfo?.isRepo ? repoInfo.root : currentWorktree?.repoRoot
+  const folderLabel = repoRoot ? basename(repoRoot) : workspace ? basename(workspace) : null
+
   const ctxWindow = selected ? contextWindowFor(selected.model) : null
   const pct = usage ? contextPercent(usage.context, ctxWindow) : null
   const meterClass = pct === null ? '' : pct >= 95 ? ' usage__fill--danger' : pct >= 80 ? ' usage__fill--warn' : ''
@@ -98,11 +103,31 @@ export function ControlBar({
         title="Change project folder"
       >
         <span className="control__icon">📁</span>
-        <span className="control__text">{workspace ? basename(workspace) : 'Choose folder…'}</span>
+        <span className="control__text">{folderLabel ?? 'Choose folder…'}</span>
       </button>
 
       {showWorktreeEditor && (
         <div className="control-bar__wt">
+          {worktreeMode && (
+            <select
+              className="control control--select"
+              value={baseBranch}
+              title="Base the new branch on"
+              aria-label="Base branch"
+              onChange={(e) => onChangeBaseBranch(e.target.value)}
+            >
+              {repoInfo.currentBranch && !repoInfo.branches.includes(repoInfo.currentBranch) && (
+                <option value={repoInfo.currentBranch}>{repoInfo.currentBranch} (current)</option>
+              )}
+              {repoInfo.branches.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                  {b === repoInfo.currentBranch ? ' (current)' : ''}
+                </option>
+              ))}
+            </select>
+          )}
+
           <label
             className="control control--check"
             title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
@@ -116,40 +141,18 @@ export function ControlBar({
           </label>
 
           {worktreeMode && (
-            <>
-              <select
-                className="control control--select"
-                value={baseBranch}
-                title="Base the new branch on"
-                aria-label="Base branch"
-                onChange={(e) => onChangeBaseBranch(e.target.value)}
-              >
-                {repoInfo.currentBranch && !repoInfo.branches.includes(repoInfo.currentBranch) && (
-                  <option value={repoInfo.currentBranch}>
-                    from {repoInfo.currentBranch} (current)
-                  </option>
-                )}
-                {repoInfo.branches.map((b) => (
-                  <option key={b} value={b}>
-                    from {b}
-                    {b === repoInfo.currentBranch ? ' (current)' : ''}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                className="control control--input"
-                value={branchName}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                placeholder="new-branch-name"
-                title={branchError ?? 'New branch / worktree name'}
-                aria-label="New branch name"
-                aria-invalid={branchError !== null}
-                onChange={(e) => onChangeBranchName(e.target.value)}
-              />
-            </>
+            <input
+              className="control control--input"
+              value={branchName}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              placeholder="new-branch-name"
+              title={branchError ?? 'New branch / worktree name'}
+              aria-label="New branch name"
+              aria-invalid={branchError !== null}
+              onChange={(e) => onChangeBranchName(e.target.value)}
+            />
           )}
         </div>
       )}

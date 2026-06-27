@@ -134,6 +134,51 @@ describe('ControlBar', () => {
     expect((screen.getByLabelText('Base branch') as HTMLSelectElement).value).toBe('main')
   })
 
+  it('lists base branches without a "from" prefix', () => {
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />)
+    expect(screen.getByRole('option', { name: 'main (current)' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'develop' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /^from / })).not.toBeInTheDocument()
+  })
+
+  it('shows the base picker before the New worktree toggle', () => {
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />)
+    const base = screen.getByLabelText('Base branch')
+    const toggle = screen.getByText('⑂ New worktree')
+    // DOCUMENT_POSITION_FOLLOWING (4) means `toggle` comes after `base`.
+    expect(base.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('labels the folder control with the repo name, not the worktree directory', () => {
+    // New chat started from inside a worktree: workspace is the worktree path, but
+    // repoInfo.root points at the main repo — the control should show the repo.
+    render(
+      <ControlBar
+        {...baseProps()}
+        workspace="/Users/me/projects/houston/.houston/worktrees/feat-x"
+        newChat={true}
+        repoInfo={{ ...repo, root: '/Users/me/projects/myrepo' }}
+      />
+    )
+    expect(screen.getByTitle('Change project folder')).toHaveTextContent('myrepo')
+  })
+
+  it('labels the folder control from the worktree repoRoot for an existing worktree chat', () => {
+    render(
+      <ControlBar
+        {...baseProps()}
+        workspace="/Users/me/projects/houston/.houston/worktrees/feat-x"
+        newChat={false}
+        currentWorktree={{
+          path: '/Users/me/projects/houston/.houston/worktrees/feat-x',
+          branch: 'houston/feat',
+          repoRoot: '/Users/me/projects/houston'
+        }}
+      />
+    )
+    expect(screen.getByTitle('Change project folder')).toHaveTextContent('houston')
+  })
+
   it('hides the branch fields when the worktree toggle is off', () => {
     render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={false} />)
     expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
