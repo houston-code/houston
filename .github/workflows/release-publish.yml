@@ -117,9 +117,8 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          # Pull just this version's section out of CHANGELOG.md (## v<version> … up to the
-          # next "## v" heading) to use as the GitHub Release body.
-          node -e "const fs=require('fs');const v=process.argv[1];const c=fs.existsSync('CHANGELOG.md')?fs.readFileSync('CHANGELOG.md','utf8'):'';const re=new RegExp('^## v'+v.replace(/[.]/g,'\\\\.')+'[^\\n]*\\n([\\s\\S]*?)(?=\\n## v|$)','m');const m=re.exec(c);fs.writeFileSync('release-notes.md',(m?m[1]:'Release v'+v).trim()+'\n')" "$version"
+          # Pull just this version's section out of CHANGELOG.md to use as the Release body.
+          VERSION="$version" node scripts/extract-changelog-section.mjs > release-notes.md
       - name: Tag source repo at released commit
         run: |
           git config user.name "github-actions[bot]"
