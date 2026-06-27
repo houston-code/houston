@@ -83,6 +83,26 @@ describe('TerminalDock', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('reports not-focused to main while hidden (so ⌘W closes the window)', async () => {
+    renderDock({ visible: false })
+    await act(async () => {})
+    expect(api.setTerminalFocused).toHaveBeenCalledWith(false)
+    // Hidden panel must never auto-open / claim focus.
+    expect(api.createTerminal).not.toHaveBeenCalled()
+  })
+
+  it('reports not-focused after the last tab is closed', async () => {
+    renderDock({ onClose: vi.fn() })
+    await screen.findByTestId('view-t1')
+    api.setTerminalFocused.mockClear()
+
+    await act(async () => {
+      screen.getByLabelText('Close Terminal 1').click()
+    })
+    // tabs went to 0 → flag cleared so ⌘W now closes the window, not a dead tab.
+    expect(api.setTerminalFocused).toHaveBeenCalledWith(false)
+  })
+
   it('reports focus enter/leave to main for ⌘W routing', async () => {
     const { container } = renderDock()
     await screen.findByTestId('view-t1')
