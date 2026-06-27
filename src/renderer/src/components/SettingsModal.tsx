@@ -707,6 +707,24 @@ export function SettingsModal({
                   </span>
                 </label>
 
+                <h3>Diagnostics on save</h3>
+                <label className="field field--checkbox">
+                  <input
+                    type="checkbox"
+                    checked={settings.diagnosticsOnSave ?? false}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, diagnosticsOnSave: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    After the agent writes a file, run a fast checker on it (<code>eslint</code> for
+                    JS/TS, <code>ruff</code>/<code>pyflakes</code> for Python, <code>gofmt</code> for
+                    Go) and show any problems to the agent so it can self-correct in the same turn.
+                    Read-only — never edits the file. Only runs when the checker is installed; off by
+                    default.
+                  </span>
+                </label>
+
                 <h3>MCP servers</h3>
                 <p className="field__hint">
                   Connect Model Context Protocol servers — a local <strong>stdio</strong> process or a

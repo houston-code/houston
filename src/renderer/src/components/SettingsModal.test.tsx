@@ -228,12 +228,23 @@ describe('SettingsModal', () => {
     const { onSaved } = renderModal({ formatOnSave: false })
     fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
 
-    // With no MCP servers configured, format-on-save is the only checkbox here.
-    const checkbox = screen.getByRole('checkbox')
+    const checkbox = screen.getByRole('checkbox', { name: /run the matching formatter/i })
     expect(checkbox).not.toBeChecked()
     fireEvent.click(checkbox)
     expect(checkbox).toBeChecked()
     // The toggle is local state until the footer Save; onSaved hasn't fired yet.
+    expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  it('toggles the diagnostics-on-save option under the Tools tab', () => {
+    installApi()
+    const { onSaved } = renderModal({ diagnosticsOnSave: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+
+    const checkbox = screen.getByRole('checkbox', { name: /run a fast checker/i })
+    expect(checkbox).not.toBeChecked()
+    fireEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
     expect(onSaved).not.toHaveBeenCalled()
   })
 
