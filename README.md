@@ -154,8 +154,8 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready / Responding… / Running a tool / Awaiting approval) and the active
   model.
-- **Keyboard shortcuts.** ⌘N new chat, ⌘, settings, and Esc to stop a running
-  turn or close the settings dialog.
+- **Keyboard shortcuts.** ⌘N new chat, ⌘, settings, ⌘B collapse/expand the
+  sidebar, and Esc to stop a running turn or close the settings dialog.
 - **Accessible.** The Settings dialog is a proper focus-trapped `dialog` (focus
   moves in on open and restores on close, Tab stays inside, Esc closes), and all
   animations honor the OS *reduce motion* setting.
@@ -180,7 +180,9 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
-  and groups persist across restarts.
+  and groups persist across restarts. **Resize** the sidebar by dragging its right
+  edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
+  shortcut or the « toggle — the chosen width and collapsed state are remembered.
 - **Long sessions stay in budget.** When a conversation grows past a configurable
   token threshold, Houston automatically summarizes the older turns so it never
   overflows the model's context window. The full transcript stays on screen —

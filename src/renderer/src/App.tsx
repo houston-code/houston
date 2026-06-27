@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
@@ -8,6 +8,15 @@ import { applyTheme } from './lib/theme'
 import { shortcutFor } from './lib/shortcuts'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
+import {
+  clampSidebarWidth,
+  SIDEBAR_COLLAPSE_AT,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_NUDGE_STEP,
+  SIDEBAR_RAIL_WIDTH
+} from './lib/sidebar'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { itemsFromMessages } from './lib/items'
@@ -80,6 +89,9 @@ export default function App(): JSX.Element {
     null
   )
   const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const appRef = useRef<HTMLDivElement>(null)
   const chat = useChat(currentId)
 
   const refreshConversations = useCallback(async () => {
@@ -94,6 +106,8 @@ export default function App(): JSX.Element {
       setSettings(withSel)
       if (sel && !s.selected) void window.api.saveSettings(withSel)
       if (s.recentWorkspaces[0]) setLastWorkspace(s.recentWorkspaces[0])
+      if (typeof s.sidebarWidth === 'number') setSidebarWidth(clampSidebarWidth(s.sidebarWidth))
+      if (s.sidebarCollapsed) setSidebarCollapsed(true)
       await refreshConversations()
     })()
   }, [refreshConversations])
@@ -464,6 +478,79 @@ export default function App(): JSX.Element {
     setSettings(fresh)
   }, [])
 
+  // ---- Sidebar sizing (resizable + collapsible, persisted) ----
+
+  const persistSidebar = useCallback(
+    async (patch: Pick<Partial<AppSettings>, 'sidebarWidth' | 'sidebarCollapsed'>) => {
+      const fresh = await window.api.saveSettings({ ...(await window.api.getSettings()), ...patch })
+      setSettings(fresh)
+    },
+    []
+  )
+
+  // Commit a (clamped) width to state + settings — used at drag end, on a keyboard
+  // nudge, and for double-click-to-reset.
+  const commitSidebarWidth = useCallback(
+    (px: number) => {
+      const w = clampSidebarWidth(px)
+      setSidebarWidth(w)
+      void persistSidebar({ sidebarWidth: w })
+    },
+    [persistSidebar]
+  )
+
+  const setSidebarCollapsedPersisted = useCallback(
+    (collapsed: boolean) => {
+      setSidebarCollapsed(collapsed)
+      void persistSidebar({ sidebarCollapsed: collapsed })
+    },
+    [persistSidebar]
+  )
+
+  const toggleSidebar = useCallback(
+    () => setSidebarCollapsedPersisted(!sidebarCollapsed),
+    [sidebarCollapsed, setSidebarCollapsedPersisted]
+  )
+
+  // Drag the divider: update the grid column live by writing the CSS variable
+  // straight to the DOM (so the long chat list doesn't re-render each mousemove),
+  // then commit to state/settings on release. Releasing past the collapse
+  // threshold hides the sidebar instead of pinning it at the minimum width.
+  const onResizerMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const left = appRef.current?.getBoundingClientRect().left ?? 0
+      document.body.classList.add('is-resizing')
+      const onMove = (ev: MouseEvent): void => {
+        appRef.current?.style.setProperty('--sidebar-w', `${clampSidebarWidth(ev.clientX - left)}px`)
+      }
+      const onUp = (ev: MouseEvent): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        document.body.classList.remove('is-resizing')
+        const raw = ev.clientX - left
+        if (raw < SIDEBAR_COLLAPSE_AT) setSidebarCollapsedPersisted(true)
+        else commitSidebarWidth(raw)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [commitSidebarWidth, setSidebarCollapsedPersisted]
+  )
+
+  const onResizerKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        commitSidebarWidth(sidebarWidth - SIDEBAR_NUDGE_STEP)
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        commitSidebarWidth(sidebarWidth + SIDEBAR_NUDGE_STEP)
+      }
+    },
+    [commitSidebarWidth, sidebarWidth]
+  )
+
   const onRevert = useCallback(async () => {
     const n = await chat.revertCheckpoint()
     if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
@@ -561,6 +648,9 @@ export default function App(): JSX.Element {
       } else if (action === 'open-settings') {
         e.preventDefault()
         setSettingsOpen(true)
+      } else if (action === 'toggle-sidebar') {
+        e.preventDefault()
+        toggleSidebar()
       } else if (action === 'escape') {
         if (settingsOpen) setSettingsOpen(false)
         else if (changesOpen) setChangesOpen(false)
@@ -572,7 +662,7 @@ export default function App(): JSX.Element {
     // chat.cancel is stable (useCallback); depending on the whole `chat` object
     // would re-subscribe every render. The fields we read are listed explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onNewChat, settingsOpen, changesOpen, chat.running, chat.cancel])
+  }, [onNewChat, toggleSidebar, settingsOpen, changesOpen, chat.running, chat.cancel])
 
   if (!settings) {
     return <div className="loading">Loading…</div>
@@ -593,13 +683,21 @@ export default function App(): JSX.Element {
     : true
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      ref={appRef}
+      style={
+        { '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px` } as CSSProperties
+      }
+    >
       <Sidebar
         conversations={visibleConversations}
         groups={search ? [] : settings.chatGroups ?? []}
         search={search}
         onSearch={setSearch}
         currentId={currentId}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebar}
         onSelect={selectConversation}
         onNew={onNewChat}
         onNewWorktree={onNewWorktree}
@@ -617,6 +715,22 @@ export default function App(): JSX.Element {
         onDeleteGroup={onDeleteGroup}
         onToggleGroupCollapsed={onToggleGroupCollapsed}
       />
+
+      {!sidebarCollapsed && (
+        <div
+          className="sidebar__resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          aria-valuenow={sidebarWidth}
+          aria-valuemin={SIDEBAR_MIN_WIDTH}
+          aria-valuemax={SIDEBAR_MAX_WIDTH}
+          tabIndex={0}
+          onMouseDown={onResizerMouseDown}
+          onKeyDown={onResizerKeyDown}
+          onDoubleClick={() => commitSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
+        />
+      )}
 
       <div className="main">
         <Titlebar

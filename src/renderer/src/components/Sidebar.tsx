@@ -23,6 +23,10 @@ export interface SidebarProps {
   search: string
   onSearch: (query: string) => void
   currentId: string | null
+  /** Whether the sidebar is collapsed to a thin rail. */
+  collapsed: boolean
+  /** Toggle collapsed ⇄ expanded. */
+  onToggleCollapse: () => void
   onSelect: (id: string) => void
   onNew: () => void
   onNewWorktree: () => void
@@ -393,8 +397,49 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     void props.onCreateGroup().then((id) => setRenamingGroup(id))
   }
 
+  // Collapsed: a thin rail with just the expand toggle and the most-used actions.
+  if (props.collapsed) {
+    return (
+      <aside className="sidebar sidebar--collapsed">
+        <button
+          className="sidebar__rail-btn"
+          onClick={props.onToggleCollapse}
+          title="Expand sidebar (⌘B)"
+          aria-label="Expand sidebar"
+        >
+          »
+        </button>
+        <button
+          className="sidebar__rail-btn"
+          onClick={props.onNew}
+          title="New chat"
+          aria-label="New chat"
+        >
+          ＋
+        </button>
+        <div className="sidebar__rail-spacer" />
+        <button
+          className="sidebar__rail-btn"
+          onClick={props.onOpenSettings}
+          title="Settings"
+          aria-label="Settings"
+        >
+          ⚙︎
+        </button>
+      </aside>
+    )
+  }
+
   return (
     <aside className="sidebar">
+      <button
+        className="sidebar__collapse"
+        onClick={props.onToggleCollapse}
+        title="Collapse sidebar (⌘B)"
+        aria-label="Collapse sidebar"
+      >
+        «
+      </button>
       <div className="sidebar__new-row">
         <button className="btn btn--accent sidebar__new" onClick={props.onNew}>
           ＋ New chat

@@ -193,4 +193,11 @@ export interface AppSettings {
   theme?: 'system' | 'dark' | 'light'
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
+  /**
+   * Width (px) of the left sidebar. Clamped to [SIDEBAR_MIN_WIDTH,
+   * SIDEBAR_MAX_WIDTH] on read; falls back to SIDEBAR_DEFAULT_WIDTH when unset.
+   */
+  sidebarWidth?: number
+  /** Whether the sidebar is collapsed to a thin rail. */
+  sidebarCollapsed?: boolean
 }

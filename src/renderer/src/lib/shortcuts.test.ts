@@ -13,6 +13,11 @@ describe('shortcutFor', () => {
     expect(shortcutFor({ key: 'N', metaKey: false, ctrlKey: true })).toBe('new-chat')
   })
 
+  it('maps Cmd/Ctrl+B to toggle-sidebar', () => {
+    expect(shortcutFor(ev('b', true))).toBe('toggle-sidebar')
+    expect(shortcutFor({ key: 'B', metaKey: false, ctrlKey: true })).toBe('toggle-sidebar')
+  })
+
   it('maps Cmd/Ctrl+comma to open-settings', () => {
     expect(shortcutFor(ev(',', true))).toBe('open-settings')
   })

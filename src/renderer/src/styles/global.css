@@ -188,14 +188,16 @@ body {
 /* ---- Layout ---- */
 .app {
   display: grid;
-  grid-template-columns: 248px 1fr;
+  grid-template-columns: var(--sidebar-w, 248px) 1fr;
   grid-template-rows: 100%;
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 
 /* ---- Sidebar ---- */
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -208,6 +210,97 @@ body {
 }
 .sidebar > * {
   -webkit-app-region: no-drag;
+}
+
+/* Draggable divider straddling the sidebar/main boundary. Sits in the grid
+   container so it can follow the column edge via the same --sidebar-w variable. */
+.sidebar__resizer {
+  position: absolute;
+  top: 0;
+  left: var(--sidebar-w, 248px);
+  width: 8px;
+  height: 100%;
+  margin-left: -4px;
+  z-index: 20;
+  cursor: col-resize;
+  -webkit-app-region: no-drag;
+}
+.sidebar__resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 100%;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.sidebar__resizer:hover::after,
+.sidebar__resizer:focus-visible::after,
+body.is-resizing .sidebar__resizer::after {
+  background: var(--accent);
+}
+.sidebar__resizer:focus-visible {
+  outline: none;
+}
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Collapse toggle, tucked into the top band on the right. */
+.sidebar__collapse {
+  position: absolute;
+  top: 9px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sidebar__collapse:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ---- Collapsed rail ---- */
+.sidebar--collapsed {
+  align-items: center;
+  gap: 6px;
+  padding: 38px 6px 10px;
+}
+.sidebar__rail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sidebar__rail-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sidebar__rail-spacer {
+  flex: 1;
 }
 .sidebar__new-row {
   display: flex;
