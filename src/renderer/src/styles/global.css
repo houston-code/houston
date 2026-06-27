@@ -599,9 +599,7 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: 7px;
-  max-width: 768px;
   width: 100%;
-  margin: 0 auto;
   padding: 9px 24px 0;
 }
 .control-bar__spacer {
@@ -702,9 +700,8 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: 760px;
   width: 100%;
-  margin: 0 auto 4px;
+  margin: 0 0 4px;
   padding: 6px 24px;
   font-size: 12px;
   color: var(--text-dim);
@@ -718,9 +715,8 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: 760px;
   width: 100%;
-  margin: 0 auto 4px;
+  margin: 0 0 4px;
   padding: 6px 24px;
   font-size: 12px;
   color: var(--text-dim);
@@ -915,9 +911,7 @@ body.is-resizing {
   padding: 22px 0 28px;
 }
 .transcript__inner {
-  max-width: 768px;
   width: 100%;
-  margin: 0 auto;
   padding: 0 24px;
   display: flex;
   flex-direction: column;
@@ -1809,9 +1803,7 @@ pre.diff {
   align-items: flex-end;
   flex-shrink: 0;
   padding: 10px 24px 16px;
-  max-width: 768px;
   width: 100%;
-  margin: 0 auto;
 }
 .composer__input {
   flex: 1;
