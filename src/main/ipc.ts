@@ -29,6 +29,7 @@ import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queu
 import { runAndDrain, type DrainIO } from './agent/drain'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
+import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { loadCommands } from './agent/commands'
@@ -478,4 +479,18 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.checkpointReapply, (_event, runId: string): Promise<number> =>
     reapplyCheckpoint(runId)
   )
+
+  // ---- Integrated terminal (PTY-backed) ----
+
+  // Spawn a terminal; output/exit are pushed back to the creating webContents.
+  ipcMain.handle(
+    IPC.terminalCreate,
+    (event, opts: { cwd?: string; cols?: number; rows?: number }): string =>
+      createTerminal(event.sender, opts ?? {})
+  )
+  ipcMain.handle(IPC.terminalInput, (_event, id: string, data: string) => writeTerminal(id, data))
+  ipcMain.handle(IPC.terminalResize, (_event, id: string, cols: number, rows: number) =>
+    resizeTerminal(id, cols, rows)
+  )
+  ipcMain.handle(IPC.terminalKill, (_event, id: string): boolean => killTerminal(id))
 }

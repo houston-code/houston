@@ -163,6 +163,35 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.agentEvent, listener)
   },
 
+  // Integrated terminal (PTY-backed)
+  /** Spawn a terminal; resolves with its id. Output arrives via onTerminalData. */
+  createTerminal: (opts: { cwd?: string; cols?: number; rows?: number }): Promise<string> =>
+    ipcRenderer.invoke(IPC.terminalCreate, opts),
+  /** Send user input (keystrokes / pasted text) to a terminal. */
+  writeTerminal: (id: string, data: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.terminalInput, id, data),
+  /** Tell a terminal its rendered grid size changed. */
+  resizeTerminal: (id: string, cols: number, rows: number): Promise<void> =>
+    ipcRenderer.invoke(IPC.terminalResize, id, cols, rows),
+  /** Kill a terminal's shell. */
+  killTerminal: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.terminalKill, id),
+  /** Subscribe to a terminal's streamed output. Returns an unsubscribe fn. */
+  onTerminalData: (cb: (payload: { id: string; data: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { id: string; data: string }): void =>
+      cb(payload)
+    ipcRenderer.on(IPC.terminalData, listener)
+    return () => ipcRenderer.removeListener(IPC.terminalData, listener)
+  },
+  /** Subscribe to terminal-exit notifications. Returns an unsubscribe fn. */
+  onTerminalExit: (cb: (payload: { id: string; exitCode: number }) => void): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: { id: string; exitCode: number }
+    ): void => cb(payload)
+    ipcRenderer.on(IPC.terminalExit, listener)
+    return () => ipcRenderer.removeListener(IPC.terminalExit, listener)
+  },
+
   // Updates
   /** Manually check the update feed (also broadcasts onUpdateAvailable when newer). */
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke(IPC.updateCheck),

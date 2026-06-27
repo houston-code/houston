@@ -26,6 +26,7 @@ import {
   SIDEBAR_NUDGE_STEP,
   SIDEBAR_RAIL_WIDTH
 } from './lib/sidebar'
+import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { itemsFromMessages } from './lib/items'
@@ -47,6 +48,9 @@ const WorktreeDialog = lazy(() =>
   import('./components/WorktreeDialog').then((m) => ({ default: m.WorktreeDialog }))
 )
 const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })))
+const TerminalDock = lazy(() =>
+  import('./components/TerminalDock').then((m) => ({ default: m.TerminalDock }))
+)
 const WhatsNewModal = lazy(() =>
   import('./components/WhatsNewModal').then((m) => ({ default: m.WhatsNewModal }))
 )
@@ -110,6 +114,8 @@ export default function App(): JSX.Element {
   const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
   const appRef = useRef<HTMLDivElement>(null)
   const chat = useChat(currentId)
 
@@ -127,6 +133,9 @@ export default function App(): JSX.Element {
       if (s.recentWorkspaces[0]) setLastWorkspace(s.recentWorkspaces[0])
       if (typeof s.sidebarWidth === 'number') setSidebarWidth(clampSidebarWidth(s.sidebarWidth))
       if (s.sidebarCollapsed) setSidebarCollapsed(true)
+      if (typeof s.terminalHeight === 'number')
+        setTerminalHeight(clampTerminalHeight(s.terminalHeight))
+      if (s.terminalOpen) setTerminalOpen(true)
       await refreshConversations()
     })()
   }, [refreshConversations])
@@ -570,6 +579,51 @@ export default function App(): JSX.Element {
     [commitSidebarWidth, sidebarWidth]
   )
 
+  // ---- Integrated terminal (toggle + resizable height, persisted) ----
+
+  const persistTerminal = useCallback(
+    async (patch: Pick<Partial<AppSettings>, 'terminalHeight' | 'terminalOpen'>) => {
+      const fresh = await window.api.saveSettings({ ...(await window.api.getSettings()), ...patch })
+      setSettings(fresh)
+    },
+    []
+  )
+
+  const toggleTerminal = useCallback(() => {
+    setTerminalOpen((open) => {
+      const next = !open
+      void persistTerminal({ terminalOpen: next })
+      return next
+    })
+  }, [persistTerminal])
+
+  // Drag the panel's top edge: update the height CSS variable live (no re-render of
+  // the transcript while dragging), then commit to state/settings on release.
+  // Dragging up grows the panel, so height increases as the cursor's Y decreases.
+  const onTerminalResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const startY = e.clientY
+      const startH = terminalHeight
+      document.body.classList.add('is-resizing')
+      const onMove = (ev: MouseEvent): void => {
+        const h = clampTerminalHeight(startH + (startY - ev.clientY))
+        appRef.current?.style.setProperty('--terminal-h', `${h}px`)
+      }
+      const onUp = (ev: MouseEvent): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        document.body.classList.remove('is-resizing')
+        const h = clampTerminalHeight(startH + (startY - ev.clientY))
+        setTerminalHeight(h)
+        void persistTerminal({ terminalHeight: h })
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [terminalHeight, persistTerminal]
+  )
+
   const onRevert = useCallback(async () => {
     const n = await chat.revertCheckpoint()
     if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
@@ -661,6 +715,11 @@ export default function App(): JSX.Element {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       const action = shortcutFor(e)
+      // Keys typed inside the terminal belong to the shell (Esc → vim, etc.).
+      // Only the terminal toggle is honoured there; everything else passes through.
+      const inTerminal =
+        e.target instanceof HTMLElement && e.target.closest('.terminal-dock') !== null
+      if (inTerminal && action !== 'toggle-terminal') return
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
@@ -670,6 +729,9 @@ export default function App(): JSX.Element {
       } else if (action === 'toggle-sidebar') {
         e.preventDefault()
         toggleSidebar()
+      } else if (action === 'toggle-terminal') {
+        e.preventDefault()
+        toggleTerminal()
       } else if (action === 'escape') {
         if (settingsOpen) setSettingsOpen(false)
         else if (changesOpen) setChangesOpen(false)
@@ -681,7 +743,7 @@ export default function App(): JSX.Element {
     // chat.cancel is stable (useCallback); depending on the whole `chat` object
     // would re-subscribe every render. The fields we read are listed explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onNewChat, toggleSidebar, settingsOpen, changesOpen, chat.running, chat.cancel])
+  }, [onNewChat, toggleSidebar, toggleTerminal, settingsOpen, changesOpen, chat.running, chat.cancel])
 
   if (!settings) {
     return <div className="loading">Loading…</div>
@@ -706,7 +768,10 @@ export default function App(): JSX.Element {
       className="app"
       ref={appRef}
       style={
-        { '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px` } as CSSProperties
+        {
+          '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`,
+          '--terminal-h': `${terminalHeight}px`
+        } as CSSProperties
       }
     >
       <Sidebar
@@ -755,6 +820,8 @@ export default function App(): JSX.Element {
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
+          onToggleTerminal={toggleTerminal}
+          terminalOpen={terminalOpen}
         />
 
         <UpdateBanner update={update} onDismiss={() => setUpdate(null)} />
@@ -828,6 +895,16 @@ export default function App(): JSX.Element {
               Clear
             </button>
           </div>
+        )}
+
+        {terminalOpen && (
+          <Suspense fallback={null}>
+            <TerminalDock
+              workspace={workspace}
+              onResizeMouseDown={onTerminalResizeMouseDown}
+              onClose={toggleTerminal}
+            />
+          </Suspense>
         )}
 
         <div className="dock">
