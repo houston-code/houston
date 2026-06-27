@@ -54,9 +54,10 @@ describe('ControlBar', () => {
     const modelSelect = screen.getByTitle('Model') as HTMLSelectElement
     expect(modelSelect.value).toBe('anthropic::claude-opus')
 
-    // Labelled and unlabelled (id-only) models both appear...
-    expect(screen.getByRole('option', { name: 'Claude Opus' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'claude-haiku' })).toBeInTheDocument()
+    // Labelled and unlabelled (id-only) models both appear, each annotated with its
+    // context window (these synthetic ids resolve to the 200K default).
+    expect(screen.getByRole('option', { name: /Claude Opus/ })).toHaveTextContent('200k')
+    expect(screen.getByRole('option', { name: /claude-haiku/ })).toBeInTheDocument()
     // ...grouped by provider, with a "(no key)" hint on the keyless one.
     expect(screen.getByRole('group', { name: 'Anthropic' })).toBeInTheDocument()
     expect(screen.getByRole('group', { name: 'Local (no key)' })).toBeInTheDocument()
