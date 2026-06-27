@@ -43,6 +43,19 @@ export function toResponsesInput(messages: ChatMessage[]): InputItem[] {
       }
     } else if (m.role === 'tool') {
       input.push({ type: 'function_call_output', call_id: m.toolCallId ?? '', output: m.content })
+      // A function_call_output's output is text-only, so images a tool produced
+      // (e.g. a view_localhost screenshot) follow as a user turn — the documented
+      // way to hand a tool's image to the model.
+      if (m.images?.length) {
+        input.push({
+          role: 'user',
+          content: m.images.map((img) => ({
+            type: 'input_image',
+            image_url: imageDataUrl(img),
+            detail: 'auto'
+          }))
+        })
+      }
     }
   }
   return input

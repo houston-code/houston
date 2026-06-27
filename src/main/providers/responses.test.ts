@@ -41,6 +41,25 @@ describe('toResponsesInput', () => {
     ])
   })
 
+  it('follows a tool result that has images with a user input_image turn', () => {
+    const msgs: ChatMessage[] = [
+      {
+        role: 'tool',
+        content: 'Loaded http://localhost:3000/',
+        toolCallId: 'call_1',
+        toolName: 'view_localhost',
+        images: [{ mediaType: 'image/png', data: 'SHOT' }]
+      }
+    ]
+    expect(toResponsesInput(msgs)).toEqual([
+      { type: 'function_call_output', call_id: 'call_1', output: 'Loaded http://localhost:3000/' },
+      {
+        role: 'user',
+        content: [{ type: 'input_image', image_url: 'data:image/png;base64,SHOT', detail: 'auto' }]
+      }
+    ])
+  })
+
   it('emits an empty input_text for a contentless user turn (never empty content)', () => {
     expect(toResponsesInput([{ role: 'user', content: '' }])).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: '' }] }

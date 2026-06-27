@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import { geminiThinkingBudget } from './reasoning'
 
-function toGeminiContents(messages: ChatMessage[]): Content[] {
+export function toGeminiContents(messages: ChatMessage[]): Content[] {
   const out: Content[] = []
   for (const m of messages) {
     if (m.role === 'user') {
@@ -33,6 +33,17 @@ function toGeminiContents(messages: ChatMessage[]): Content[] {
           }
         ]
       })
+      // A functionResponse part is text/JSON, and mixing it with other part types
+      // in one turn is rejected — so images a tool produced (e.g. a view_localhost
+      // screenshot) follow as their own user turn for vision-capable models.
+      if (m.images?.length) {
+        out.push({
+          role: 'user',
+          parts: m.images.map((img) => ({
+            inlineData: { mimeType: img.mediaType, data: img.data }
+          }))
+        })
+      }
     }
   }
   return out
