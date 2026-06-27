@@ -40,7 +40,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned to ubuntu-22.04 (glibc 2.35 = our documented Linux floor), not
+          # ubuntu-latest: node-pty compiles here, so the runner's glibc sets the shipped
+          # app's minimum. Matches the other workflows' Linux legs. See ci.yml's `build`.
+          - os: ubuntu-22.04
             dist: dist:linux
             artifact: nightly-linux-x64
           - os: macos-14
