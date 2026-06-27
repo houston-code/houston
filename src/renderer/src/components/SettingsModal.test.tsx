@@ -16,6 +16,9 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   const pickDirectory = vi.fn(() => Promise.resolve('/picked/dir'))
   const getVersion = vi.fn(() => Promise.resolve('1.2.3'))
   const checkForUpdates = vi.fn(() => Promise.resolve({ status: 'up-to-date', currentVersion: '1.2.3' }))
+  const getIntegrations = vi.fn(() =>
+    Promise.resolve({ gh: { installed: false, authenticated: false }, formatters: [] })
+  )
   const api = {
     saveSettings,
     setKey,
@@ -24,6 +27,7 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
     pickDirectory,
     getVersion,
     checkForUpdates,
+    getIntegrations,
     ...overrides
   }
   window.api = api as unknown as typeof window.api
@@ -118,6 +122,43 @@ describe('SettingsModal', () => {
     expect(screen.getByRole('heading', { name: 'Permissions' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '+ Add rule' })).toBeInTheDocument()
+  })
+
+  it('shows the optional-integrations status and how to enable gh when missing', async () => {
+    installApi({
+      getIntegrations: vi.fn(() =>
+        Promise.resolve({
+          gh: { installed: false, authenticated: false },
+          formatters: [
+            { bin: 'prettier', installed: true, languages: ['ts'] },
+            { bin: 'gofmt', installed: false, languages: ['go'] }
+          ]
+        })
+      )
+    })
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+
+    expect(screen.getByRole('heading', { name: 'Optional integrations' })).toBeInTheDocument()
+    // gh is absent → warn status + an enable hint linking to the install page.
+    await waitFor(() => expect(screen.getByText('Not found')).toBeInTheDocument())
+    expect(screen.getByText('cli.github.com')).toBeInTheDocument()
+    // Formatter rollup reflects the injected statuses (1 of 2 found).
+    expect(screen.getByText('1 of 2 found')).toBeInTheDocument()
+  })
+
+  it('reports gh as signed in when installed and authenticated', async () => {
+    installApi({
+      getIntegrations: vi.fn(() =>
+        Promise.resolve({ gh: { installed: true, authenticated: true }, formatters: [] })
+      )
+    })
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+
+    await waitFor(() => expect(screen.getByText('Installed & signed in')).toBeInTheDocument())
+    // No enable hint when it's already usable.
+    expect(screen.queryByText('cli.github.com')).not.toBeInTheDocument()
   })
 
   it('adds a permission rule when "+ Add rule" is clicked', () => {

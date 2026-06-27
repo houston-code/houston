@@ -158,11 +158,14 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   with no `require`/`process`/network, hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
-- **Format on save.** Turn on *Format on save* (Settings → *Tools & Permissions*)
-  and Houston runs the matching formatter on each file the agent writes — Prettier
-  for JS/TS/JSON/CSS/Markdown, `gofmt`, `rustfmt`, and `ruff`/`black` for Python.
-  It only fires when the formatter is installed, runs in the same sandbox as
-  `run_shell` (no network), and is off by default.
+- **Format on save (optional).** Turn on *Format on save* (Settings → *Tools &
+  Permissions*) and Houston runs the matching formatter on each file the agent writes —
+  Prettier for JS/TS/JSON/CSS/Markdown, `gofmt`, `rustfmt`, and `ruff`/`black` for
+  Python. The formatters are **optional, not bundled**: install the ones you want on
+  your `PATH` and Houston uses them when present (it silently skips a file when its
+  formatter is missing). Settings → *Tools & Permissions* → *Optional integrations*
+  shows which it detects. Runs in the same sandbox as `run_shell` (no network); off by
+  default.
 - **Undo / redo a turn's file changes.** Houston snapshots each file before and
   after the agent writes it, so when a turn edits files a **Revert** button appears —
   one click restores everything that turn changed (and deletes files it created).
@@ -233,9 +236,10 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   first message, under `.houston/worktrees/` and kept out of the parent repo's
   `git status` via `.git/info/exclude`. Deleting the chat offers to remove the
   worktree too (uncommitted or unmerged work is always kept).
-- **GitHub repos, PRs, issues & CI (first-class).** When the [`gh` CLI](https://cli.github.com)
-  is installed and authenticated (`gh auth login`), Houston gets dedicated tools
-  for the whole GitHub loop:
+- **GitHub repos, PRs, issues & CI (first-class).** The [`gh` CLI](https://cli.github.com)
+  is an **optional, not-bundled** integration — without it these tools simply aren't
+  offered and everything else works. When it's installed and authenticated
+  (`gh auth login`), Houston gets dedicated tools for the whole GitHub loop:
   - **Pull requests** — `gh_pr_create`, `gh_pr_list`, `gh_pr_view` (with diff),
     `gh_pr_comment`, `gh_pr_checkout`, and `gh_pr_checks` (CI status rollup).
   - **Issues** — `gh_issue_list`, `gh_issue_view` (with comments),
@@ -253,7 +257,8 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   raw `gh` in `run_shell`, which the sandbox blocks from the network unless the
   run is full-auto or you pick "Allow for run." Houston tells the agent in its
   system prompt when `gh` is available, so it reaches for these instead of raw
-  shell `gh`.
+  shell `gh`. Settings → *Tools & Permissions* → *Optional integrations* shows whether
+  `gh` is detected and signed in, with a one-line hint on how to enable it.
 - **PR sweeps.** For batch pull-request work the agent keeps a `pr_sweep` board —
   the same scratchpad idea as the task list, specialized per PR — rendered live in
   the transcript with each item's status, branch, and PR link. Two modes:
