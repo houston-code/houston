@@ -610,6 +610,38 @@ const globTool: ToolDef = {
   }
 }
 
+/**
+ * Signatures of a network failure in a failed command's output — DNS, socket,
+ * and TLS errors as the common tools (git/gh, curl, npm/pip, language runtimes)
+ * surface them. Used only to *explain* an already-failed command, so a loose
+ * match is fine: it never changes what runs.
+ */
+const NETWORK_ERROR_RE =
+  /could ?n.?t resolve host|name (?:or service not known|resolution)|temporary failure in name resolution|getaddrinfo|network is (?:unreachable|down)|no route to host|connection (?:refused|reset|timed out)|failed to connect|dial tcp|operation not permitted.*(?:socket|connect)|socket.*operation not permitted|tls handshake|enotfound|econnrefused|eai_again/i
+
+/** The hint appended to a network-looking failure that ran without network access. */
+export const NETWORK_BLOCKED_HINT =
+  '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible — choose "Allow for run" on the approval ' +
+  'prompt, or switch the run to full-auto, to grant network for the rest of the run, then retry.]'
+
+/**
+ * Return {@link NETWORK_BLOCKED_HINT} when a *failed* shell command that ran
+ * without network looks like it failed *because* of the missing network — so the
+ * agent explains the fix instead of reporting the action as impossible. Returns
+ * '' when network was allowed, the command succeeded, or the failure is unrelated.
+ */
+export function networkBlockHint(
+  allowNetwork: boolean,
+  result: { exitCode: number | null; timedOut?: boolean },
+  output: string
+): string {
+  if (allowNetwork) return ''
+  const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
+  if (!failed) return ''
+  return NETWORK_ERROR_RE.test(output) ? NETWORK_BLOCKED_HINT : ''
+}
+
 const runShell: ToolDef = {
   kind: 'shell',
   summarize: (a) => (a.background === true ? `${str(a, 'command')} (background)` : str(a, 'command')),
@@ -670,10 +702,14 @@ const runShell: ToolDef = {
     // which are tiny and must always survive, so one runaway command can't swamp
     // the window. (The 1 MB per-stream cap is only a memory bound; see sandbox.ts.)
     const parts: string[] = []
+    // Clamp first; the network-error scan then runs over the bounded text (errors
+    // surface in stderr, which the both-ends clamp keeps), not a multi-MB blob.
     const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
     if (result.timedOut) parts.push('[command timed out]')
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
+    const netHint = networkBlockHint(ctx.allowNetwork, result, body)
+    if (netHint) parts.push(netHint)
     return parts.join('\n')
   }
 }
@@ -1318,6 +1354,81 @@ const ghPrCheckout: ToolDef = {
   }
 }
 
+/** Validate a `gh repo create` name ("name" or "owner/name"), rejecting option-like injection. */
+function repoNameArg(args: Record<string, unknown>): string {
+  const name = str(args, 'name').trim()
+  if (!name) throw new Error('name (the repository name, optionally "owner/name") is required.')
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(name)) {
+    throw new Error(`Invalid name: "${name}" is not a valid repository name (use "name" or "owner/name").`)
+  }
+  return name
+}
+
+const ghRepoCreate: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Create GitHub repo: ${str(a, 'name') || '(no name)'}`,
+  schema: {
+    name: 'gh_repo_create',
+    description:
+      'Create a new GitHub repository via the gh CLI. By default it creates a PRIVATE repo from the current ' +
+      'project directory (adds it as the "origin" remote) and pushes the existing commits — so commit your work ' +
+      'first (the directory must be a git repo with at least one commit; run `git init && git add -A && git commit` ' +
+      'via run_shell if needed). Set source:false to instead create an empty remote repo with no local wiring. ' +
+      'Requires approval (network) and is refused in plan mode. Returns the new repository URL.',
+    parameters: objectSchema(
+      {
+        name: {
+          type: 'string',
+          description: 'Repository name, or "owner/name" to create under an org/user you can access.'
+        },
+        visibility: {
+          type: 'string',
+          enum: ['private', 'public', 'internal'],
+          description: 'Repository visibility (default private).'
+        },
+        description: { type: 'string', description: 'Short repository description.' },
+        source: {
+          type: 'boolean',
+          description:
+            'Create from the current project directory and add it as the "origin" remote (default true). The ' +
+            'directory must be a git repo with at least one commit.'
+        },
+        push: {
+          type: 'boolean',
+          description: 'Push the existing local commits to the new repo after creating it (default true; requires source).'
+        },
+        clone: {
+          type: 'boolean',
+          description: 'Clone the new (empty) repo into the project directory (default false; only when source is false).'
+        }
+      },
+      ['name']
+    )
+  },
+  async execute(args, ctx) {
+    const name = repoNameArg(args)
+    const visRaw = str(args, 'visibility') || 'private'
+    const visibility = ['private', 'public', 'internal'].includes(visRaw) ? visRaw : 'private'
+    // Default to the in-project flow (source + push); `--source`/`--clone` are
+    // mutually exclusive in gh and `--push` requires `--source`, so gate them.
+    const source = args.source !== false
+    const push = source && args.push !== false
+    const clone = !source && args.clone === true
+
+    const argv = ['repo', 'create', name, `--${visibility}`]
+    const description = str(args, 'description')
+    if (description) argv.push('--description', description)
+    if (source) {
+      argv.push('--source', '.')
+      if (push) argv.push('--push')
+    } else if (clone) {
+      argv.push('--clone')
+    }
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
 export const ASK_USER_NAME = ASK_USER_TOOL
 
 /**
@@ -1422,7 +1533,8 @@ export const TOOLS: ToolDef[] = [
   ghPrList,
   ghPrView,
   ghPrComment,
-  ghPrCheckout
+  ghPrCheckout,
+  ghRepoCreate
 ]
 
 export function toolSchemas(): ToolSchema[] {

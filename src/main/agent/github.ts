@@ -108,9 +108,11 @@ export function githubContext(resolve: () => string | null = resolveGh): string 
   return (
     'GitHub: the `gh` CLI is available. Use the gh_pr_* tools (gh_pr_create, ' +
     'gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout) to work with pull ' +
-    'requests instead of raw `gh` shell commands — each requires approval ' +
-    '(network egress). gh_pr_create needs the branch pushed first (e.g. ' +
-    '`git push -u origin <branch>` via run_shell). If a call reports you are not ' +
+    'requests, and gh_repo_create to create a new repository, instead of raw `gh` ' +
+    'shell commands — each requires approval (network egress). gh_pr_create needs ' +
+    'the branch pushed first (e.g. `git push -u origin <branch>` via run_shell); ' +
+    'gh_repo_create defaults to a private repo made from the current directory and ' +
+    'pushed, so commit the project first. If a call reports you are not ' +
     'authenticated, tell the user to run `gh auth login`.'
   )
 }

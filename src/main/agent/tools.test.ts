@@ -3,7 +3,16 @@ import { mkdtempSync, rmSync, realpathSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { getTool, toolSchemas, resolveInRoots, formatPrList, formatPrView, type ToolContext } from './tools'
+import {
+  getTool,
+  toolSchemas,
+  resolveInRoots,
+  formatPrList,
+  formatPrView,
+  networkBlockHint,
+  NETWORK_BLOCKED_HINT,
+  type ToolContext
+} from './tools'
 import type { GhResult } from './github'
 import { registerShell } from './shells'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
@@ -37,6 +46,7 @@ describe('tool registry', () => {
       'gh_pr_create',
       'gh_pr_list',
       'gh_pr_view',
+      'gh_repo_create',
       'git_diff',
       'git_status',
       'glob',
@@ -783,6 +793,85 @@ describe('github (gh) tools', () => {
     const { ctx } = ghCtx(fail('gh auth login required', 4))
     const out = await getTool('gh_pr_view')!.execute({ number: 1 }, ctx)
     expect(out).toMatch(/gh failed \(exit 4\): gh auth login required/)
+  })
+
+  it('gh_repo_create is a network tool, blocked in plan mode', () => {
+    expect(getTool('gh_repo_create')!.kind).toBe('network')
+    expect(getTool('gh_repo_create')!.blockedInPlan).toBe(true)
+  })
+
+  it('gh_repo_create defaults to a private repo from the current dir, pushed', async () => {
+    const { ctx, calls } = ghCtx(ok('https://github.com/me/proj'))
+    const out = await getTool('gh_repo_create')!.execute({ name: 'proj' }, ctx)
+    expect(out).toBe('https://github.com/me/proj')
+    expect(calls[0]).toEqual(['repo', 'create', 'proj', '--private', '--source', '.', '--push'])
+  })
+
+  it('gh_repo_create honors visibility, description, and owner/name', async () => {
+    const { ctx, calls } = ghCtx(ok('https://github.com/org/proj'))
+    await getTool('gh_repo_create')!.execute(
+      { name: 'org/proj', visibility: 'public', description: 'hi', push: false },
+      ctx
+    )
+    expect(calls[0]).toEqual([
+      'repo',
+      'create',
+      'org/proj',
+      '--public',
+      '--description',
+      'hi',
+      '--source',
+      '.'
+    ])
+  })
+
+  it('gh_repo_create with source:false makes an empty remote (no --source/--push)', async () => {
+    const { ctx, calls } = ghCtx(ok('https://github.com/me/empty'))
+    await getTool('gh_repo_create')!.execute({ name: 'empty', source: false, clone: true }, ctx)
+    expect(calls[0]).toEqual(['repo', 'create', 'empty', '--private', '--clone'])
+  })
+
+  it('gh_repo_create requires a name', async () => {
+    const { ctx } = ghCtx(ok(''))
+    await expect(getTool('gh_repo_create')!.execute({ name: '  ' }, ctx)).rejects.toThrow(/name .* is required/)
+  })
+
+  it('gh_repo_create rejects an option-like name (no injection)', async () => {
+    const { ctx } = ghCtx(ok(''))
+    await expect(
+      getTool('gh_repo_create')!.execute({ name: '--source=/etc' }, ctx)
+    ).rejects.toThrow(/Invalid name/)
+  })
+})
+
+describe('networkBlockHint', () => {
+  const failed = { exitCode: 128 as number | null }
+  const dnsErr = 'fatal: unable to access: Could not resolve host: github.com'
+
+  it('hints when a no-network command fails with a network error', () => {
+    expect(networkBlockHint(false, failed, dnsErr)).toBe(NETWORK_BLOCKED_HINT)
+  })
+
+  it('stays silent when network was allowed', () => {
+    expect(networkBlockHint(true, failed, dnsErr)).toBe('')
+  })
+
+  it('stays silent when the command succeeded', () => {
+    expect(networkBlockHint(false, { exitCode: 0 }, dnsErr)).toBe('')
+  })
+
+  it('stays silent for a non-network failure', () => {
+    expect(networkBlockHint(false, failed, 'error: test "foo" failed: expected 1 got 2')).toBe('')
+  })
+
+  it('matches common runtimes (npm ENOTFOUND, curl connect, killed proc)', () => {
+    expect(networkBlockHint(false, failed, 'npm error code ENOTFOUND')).toBe(NETWORK_BLOCKED_HINT)
+    expect(networkBlockHint(false, failed, 'curl: (7) Failed to connect to example.com')).toBe(
+      NETWORK_BLOCKED_HINT
+    )
+    expect(networkBlockHint(false, { exitCode: null }, 'dial tcp: lookup api: no route to host')).toBe(
+      NETWORK_BLOCKED_HINT
+    )
   })
 })
 
