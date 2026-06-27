@@ -843,12 +843,6 @@ export default function App(): JSX.Element {
             {workspace && !settings.selected && (
               <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>
             )}
-            {workspace && settings.selected && creatingWorktree && (
-              <p className="welcome__hint">
-                Your first message starts a new worktree on{' '}
-                <code>{branchName.trim() || 'a new branch'}</code> (off {baseBranch || 'current'}).
-              </p>
-            )}
           </div>
         ) : (
           <Transcript items={chat.items} onApprove={chat.approve} onAnswer={chat.answerQuestion} />
