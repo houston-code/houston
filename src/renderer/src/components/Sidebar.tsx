@@ -1,9 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import { buildSidebarSections, type SidebarSection } from '../lib/chatGroups'
 import { Icon } from './Icon'
 import { Popover } from './Popover'
+
+/**
+ * Custom drag payload carried when a chat row is dragged onto a group. A
+ * dedicated MIME (rather than bare text/plain) lets drop targets recognise our
+ * own chat drags and ignore unrelated drags (e.g. files into the composer).
+ */
+const CONV_DRAG_MIME = 'application/x-houston-conv-id'
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/')
@@ -109,6 +116,13 @@ function ConvRow({
   return (
     <div
       className={`conv ${active ? 'conv--active' : ''}`}
+      // Renaming swaps in a text input; dragging would hijack its selection.
+      draggable={!renaming}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData(CONV_DRAG_MIME, conv.id)
+        e.dataTransfer.setData('text/plain', conv.id)
+      }}
       onClick={() => !renaming && props.onSelect(conv.id)}
     >
       {conv.pinned && <span className="conv__pin" title="Pinned">★</span>}
@@ -417,6 +431,92 @@ function FilterButton({
   )
 }
 
+/**
+ * One sidebar section (Pinned / a group / Ungrouped) plus its rows. Group and
+ * Ungrouped sections double as drop targets: dragging a chat onto a group moves
+ * it in; dropping onto Ungrouped removes it from its group. Pinned is not a drop
+ * target — pinning is independent of grouping.
+ */
+function SidebarSectionView({
+  section,
+  props,
+  currentId,
+  renamingConv,
+  renamingGroup,
+  setRenamingConv,
+  setRenamingGroup
+}: {
+  section: SidebarSection
+  props: SidebarProps
+  currentId: string | null
+  renamingConv: string | null
+  renamingGroup: string | null
+  setRenamingConv: (id: string | null) => void
+  setRenamingGroup: (id: string | null) => void
+}): JSX.Element {
+  const { groups } = props
+  const [dragOver, setDragOver] = useState(false)
+
+  const droppable = section.kind === 'group' || section.kind === 'ungrouped'
+  // Group sections move the chat into the group; Ungrouped clears its group.
+  const targetGroupId = section.kind === 'group' ? section.id : null
+
+  const onDragOver = (e: DragEvent): void => {
+    if (!e.dataTransfer.types.includes(CONV_DRAG_MIME)) return // not one of our chat drags
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (!dragOver) setDragOver(true)
+  }
+  const onDragLeave = (e: DragEvent): void => {
+    // dragleave also fires when crossing into child rows; only clear the
+    // highlight once the pointer truly leaves the section.
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDragOver(false)
+  }
+  const onDrop = (e: DragEvent): void => {
+    e.preventDefault()
+    setDragOver(false)
+    const id = e.dataTransfer.getData(CONV_DRAG_MIME) || e.dataTransfer.getData('text/plain')
+    if (id) props.onMove(id, targetGroupId)
+  }
+
+  return (
+    <div
+      className={`section ${dragOver ? 'section--drop' : ''}`}
+      onDragOver={droppable ? onDragOver : undefined}
+      onDragLeave={droppable ? onDragLeave : undefined}
+      onDrop={droppable ? onDrop : undefined}
+    >
+      {section.kind === 'ungrouped' && groups.length === 0 ? null : (
+        <GroupHeader
+          section={section}
+          props={props}
+          renaming={renamingGroup === section.id}
+          onStartRename={() => setRenamingGroup(section.id)}
+          onStopRename={() => setRenamingGroup(null)}
+        />
+      )}
+      {!section.collapsed &&
+        section.conversations.map((c) => (
+          <ConvRow
+            key={c.id}
+            conv={c}
+            active={c.id === currentId}
+            groups={groups}
+            props={props}
+            renaming={renamingConv === c.id}
+            onStartRename={() => setRenamingConv(c.id)}
+            onStopRename={() => setRenamingConv(null)}
+            onStartRenameGroup={(id) => setRenamingGroup(id)}
+          />
+        ))}
+      {section.kind === 'group' && !section.collapsed && section.conversations.length === 0 && (
+        <div className="section__empty">Drop a chat here, or use the ⋯ menu</div>
+      )}
+    </div>
+  )
+}
+
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
   const sections = buildSidebarSections(conversations, groups)
@@ -499,34 +599,16 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         )}
 
         {sections.map((section) => (
-          <div key={section.id} className="section">
-            {section.kind === 'ungrouped' && groups.length === 0 ? null : (
-              <GroupHeader
-                section={section}
-                props={props}
-                renaming={renamingGroup === section.id}
-                onStartRename={() => setRenamingGroup(section.id)}
-                onStopRename={() => setRenamingGroup(null)}
-              />
-            )}
-            {!section.collapsed &&
-              section.conversations.map((c) => (
-                <ConvRow
-                  key={c.id}
-                  conv={c}
-                  active={c.id === currentId}
-                  groups={groups}
-                  props={props}
-                  renaming={renamingConv === c.id}
-                  onStartRename={() => setRenamingConv(c.id)}
-                  onStopRename={() => setRenamingConv(null)}
-                  onStartRenameGroup={(id) => setRenamingGroup(id)}
-                />
-              ))}
-            {section.kind === 'group' && !section.collapsed && section.conversations.length === 0 && (
-              <div className="section__empty">Drop chats here from the ⋯ menu</div>
-            )}
-          </div>
+          <SidebarSectionView
+            key={section.id}
+            section={section}
+            props={props}
+            currentId={currentId}
+            renamingConv={renamingConv}
+            renamingGroup={renamingGroup}
+            setRenamingConv={setRenamingConv}
+            setRenamingGroup={setRenamingGroup}
+          />
         ))}
       </div>
 
