@@ -82,10 +82,24 @@ const POLICY_COMMANDS: Record<string, ApprovalPolicy> = {
  * The message the Changes panel's "Create PR" button hands to the agent. The
  * renderer never drives git/gh itself — it asks the agent to do the commit →
  * push → open-PR flow with its existing tools, under the normal approval gate.
+ *
+ * The branch logic is the crux: a fresh change opens an independent PR against
+ * the default branch, but when the current branch already has an open PR the new
+ * change is stacked on top — head branched off the current tip, base pointed at
+ * that PR's branch — so the new PR's diff shows only the increment, never the
+ * earlier PR's commits.
  */
-const CREATE_PR_PROMPT = `Create a GitHub pull request for my current changes.
+const CREATE_PR_PROMPT = `Create a GitHub pull request for my current changes, using git and the gh_pr_create tool. Never check out or commit to the default branch directly — it may be checked out in another worktree.
 
-If there are uncommitted changes, stage and commit them with a clear, conventional commit message. If I'm currently on the default branch (main or master), create a new feature branch first. Push the branch to origin, then open a pull request against the default branch using the gh_pr_create tool, and reply with the PR link. Briefly summarize what the PR contains.`
+1. Run \`git fetch origin\` and identify the repository's default branch (e.g. main).
+2. Choose the PR's head branch:
+   - If I'm currently on the default branch, OR the current branch already has an open PR (check with \`gh pr list --head <current-branch>\`): create a new branch off the current tip and use that as the head.
+   - Otherwise: use the current branch as the head.
+3. Stage and commit the changes on that head branch with a clear, conventional commit message, then push it to origin.
+4. Open the PR with gh_pr_create, choosing the base branch:
+   - If the current branch already had an open PR, this change is stacked on it — set base to that PR's branch, so the new PR's diff shows only these changes and not the earlier PR's.
+   - Otherwise set base to the default branch.
+5. Reply with the PR link and a short summary, and say whether you opened an independent PR or stacked it on top of which PR/branch.`
 
 /** Pick a sensible default model: first provider that has a key and a model. */
 function defaultSelection(settings: AppSettings): SelectedModel | null {
