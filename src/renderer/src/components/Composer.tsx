@@ -9,6 +9,12 @@ import {
 } from 'react'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
+  appendPromptHistory,
+  historyDown,
+  historyUp,
+  loadPromptHistory
+} from '../lib/promptHistory'
+import {
   expandTemplate,
   matchCommands,
   parseSlashCommand,
@@ -76,6 +82,12 @@ export function Composer({
   const [cmdIndex, setCmdIndex] = useState(0)
   const [cmdDismissed, setCmdDismissed] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  // Prompt-history recall (Up/Down when the field is empty). `histPos` is null when
+  // not navigating, otherwise an index into the snapshot taken when recall began;
+  // `histDraft` preserves whatever was typed before recall so Down can restore it.
+  const histSnapshot = useRef<string[]>([])
+  const histDraft = useRef('')
+  const [histPos, setHistPos] = useState<number | null>(null)
 
   // If the user switches to a model that can't see images, drop any pending
   // attachments so they aren't silently sent to a model that will ignore them.
@@ -148,6 +160,8 @@ export function Composer({
     setMention(mentionBeforeCursor(value.slice(0, cursor)))
     setCmdDismissed(false)
     setCmdIndex(0)
+    // Editing the field leaves history-recall mode; the text is a fresh draft now.
+    setHistPos(null)
   }
 
   const focusEnd = (caret: number): void => {
@@ -158,6 +172,16 @@ export function Composer({
         el.setSelectionRange(caret, caret)
       }
     })
+  }
+
+  // Show the history entry at `pos`, or restore the pre-recall draft when `pos`
+  // reaches the end (the live-draft sentinel).
+  const showHistory = (snapshot: string[], pos: number): void => {
+    const atDraft = pos >= snapshot.length
+    const value = atDraft ? histDraft.current : snapshot[pos]
+    setText(value)
+    setHistPos(atDraft ? null : pos)
+    focusEnd(value.length)
   }
 
   const chooseMention = (path: string): void => {
@@ -182,6 +206,7 @@ export function Composer({
     setSuggestions([])
     setCmdDismissed(false)
     setCmdIndex(0)
+    setHistPos(null)
   }
 
   const submit = (): void => {
@@ -205,6 +230,7 @@ export function Composer({
             resetMenus()
             focusEnd(expanded.length)
           } else {
+            appendPromptHistory(trimmed)
             onCommand(cmd, parsed.args)
             setText('')
             resetMenus()
@@ -214,6 +240,7 @@ export function Composer({
         // Unknown command — fall through and send it as a normal message.
       }
     }
+    if (trimmed) appendPromptHistory(trimmed)
     onSend(trimmed, images.length ? images : undefined)
     setText('')
     setImages([])
@@ -262,6 +289,32 @@ export function Composer({
         e.preventDefault()
         setMention(null)
         setSuggestions([])
+        return
+      }
+    }
+    // Prompt-history recall with Up/Down — only when no menu is open. Recall starts
+    // from an empty field (so Up still moves the caret in a non-empty draft) and,
+    // once started, Up/Down walk through history until Down returns to the draft.
+    if (!showCmdMenu && !showMentionMenu) {
+      if (e.key === 'ArrowUp') {
+        if (histPos !== null) {
+          e.preventDefault()
+          showHistory(histSnapshot.current, historyUp(histSnapshot.current.length, histPos))
+          return
+        }
+        if (text.trim() === '') {
+          const snapshot = loadPromptHistory()
+          if (snapshot.length > 0) {
+            histSnapshot.current = snapshot
+            histDraft.current = text
+            e.preventDefault()
+            showHistory(snapshot, historyUp(snapshot.length, snapshot.length))
+            return
+          }
+        }
+      } else if (e.key === 'ArrowDown' && histPos !== null) {
+        e.preventDefault()
+        showHistory(histSnapshot.current, historyDown(histSnapshot.current.length, histPos))
         return
       }
     }
