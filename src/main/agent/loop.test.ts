@@ -17,7 +17,9 @@ const h = vi.hoisted(() => ({
     hooks: [],
     mcpServers: [],
     additionalRoots: []
-  } as Record<string, unknown>
+  } as Record<string, unknown>,
+  // Records every plugin lifecycle event the loop fires, for assertions.
+  pluginEvents: [] as Array<{ event: string; payload: unknown }>
 }))
 
 vi.mock('../store', () => ({
@@ -37,6 +39,20 @@ vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
 vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
+// Stub the plugin loader with a host that records every event the loop fires, so
+// we can assert the lifecycle hooks (onUserMessage/onToolStart/onToolResult) fire
+// at the right points. The real loader/host is covered in plugins.test.ts.
+vi.mock('./plugins', () => ({
+  loadPlugins: async () => ({
+    has: () => true,
+    get size() {
+      return 1
+    },
+    emit: async (event: string, payload: unknown) => {
+      h.pluginEvents.push({ event, payload })
+    }
+  })
+}))
 
 // Imported after the mocks are registered.
 const { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy, activeRunForConversation } =
@@ -57,6 +73,7 @@ let ws: string
 
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loop-'))
+  h.pluginEvents = []
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -709,5 +726,33 @@ describe('ask_user', () => {
       | { output: string }
       | undefined
     expect(result?.output).toContain('stopped the agent')
+  })
+
+  it('fires plugin lifecycle hooks: onUserMessage, then onToolStart/onToolResult around a tool', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    await run({
+      policy: 'full-auto',
+      userText: 'read the note',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const events = h.pluginEvents.map((e) => e.event)
+    // onUserMessage fires first (before any model turn), then the tool's lifecycle.
+    expect(events[0]).toBe('onUserMessage')
+    expect(events).toContain('onToolStart')
+    expect(events).toContain('onToolResult')
+    expect(events.indexOf('onToolStart')).toBeLessThan(events.indexOf('onToolResult'))
+
+    const userMsg = h.pluginEvents.find((e) => e.event === 'onUserMessage')
+    expect(userMsg?.payload).toEqual({ text: 'read the note' })
+    const start = h.pluginEvents.find((e) => e.event === 'onToolStart')
+    expect(start?.payload).toMatchObject({ tool: 'read_file', input: { path: 'note.txt' } })
+    const toolResult = h.pluginEvents.find((e) => e.event === 'onToolResult')
+    expect(toolResult?.payload).toMatchObject({ tool: 'read_file', ok: true })
   })
 })

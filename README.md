@@ -149,6 +149,13 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   hook's output is fed back to the agent — e.g. auto-format after every edit, or
   run tests after a write. Hooks run sandboxed to the project; the call's context
   is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT`.
+- **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
+  lifecycle hooks — `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
+  fn)` — for logging, metrics, or notifications. Plugins are local trusted files
+  (the same trust model as hooks/agents/skills): each runs in an isolated context
+  with no `require`/`process`/network, hooks can't block or alter a call, and a
+  throwing or slow plugin is caught and ignored. To *block* a tool, use a
+  *PreToolUse* shell hook instead.
 - **Format on save.** Turn on *Format on save* (Settings → *Tools & Permissions*)
   and Houston runs the matching formatter on each file the agent writes — Prettier
   for JS/TS/JSON/CSS/Markdown, `gofmt`, `rustfmt`, and `ruff`/`black` for Python.
