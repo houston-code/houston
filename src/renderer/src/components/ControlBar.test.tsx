@@ -65,11 +65,17 @@ function baseProps() {
 }
 
 describe('ControlBar', () => {
-  it('renders the model options and reflects the current selection', () => {
+  it('reflects the current selection and lists models grouped by provider when opened', () => {
     render(<ControlBar {...baseProps()} />)
 
-    const modelSelect = screen.getByTitle('Model') as HTMLSelectElement
-    expect(modelSelect.value).toBe('anthropic::claude-opus')
+    // The trigger shows the selected model and its context window.
+    const trigger = screen.getByTitle('Model')
+    expect(trigger).toHaveTextContent('Claude Opus')
+    expect(trigger).toHaveTextContent('200k')
+
+    // Options only exist once the menu is opened.
+    expect(screen.queryByRole('option', { name: /claude-haiku/ })).not.toBeInTheDocument()
+    fireEvent.click(trigger)
 
     // Labelled and unlabelled (id-only) models both appear, each annotated with its
     // context window (these synthetic ids resolve to the 200K default).
@@ -84,7 +90,8 @@ describe('ControlBar', () => {
     const props = baseProps()
     render(<ControlBar {...props} />)
 
-    fireEvent.change(screen.getByTitle('Model'), { target: { value: 'anthropic::claude-haiku' } })
+    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('option', { name: /claude-haiku/ }))
 
     expect(props.onSelectModel).toHaveBeenCalledWith({ providerId: 'anthropic', model: 'claude-haiku' })
   })
