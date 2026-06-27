@@ -55,6 +55,15 @@ export function TerminalDock({
     })
   }, [activeId, handleCloseTab])
 
+  // The terminal is only a ⌘W target when it's actually on screen with a tab.
+  // Authoritatively clear the focus flag whenever the panel is hidden or empty —
+  // removing a focused xterm from the DOM doesn't reliably fire a bubbling blur,
+  // which would otherwise leave the flag stuck true and make ⌘W (with no terminal
+  // open) try to close a non-existent tab instead of the window.
+  useEffect(() => {
+    if (!visible || tabs.length === 0) window.api.setTerminalFocused(false)
+  }, [visible, tabs.length])
+
   return (
     <div
       className="terminal-dock"
