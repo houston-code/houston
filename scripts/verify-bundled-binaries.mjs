@@ -1,51 +1,56 @@
 #!/usr/bin/env node
 // Guard against shipping a packaged app that's silently missing a vendored CLI
-// binary. We copy `rg` (ripgrep) and `ast-grep` into the app's Resources/bin via
-// electron-builder `extraResources` (see electron-builder.yml) so search and
-// structural search work out of the box, independent of the user's PATH.
+// binary. The `afterPack` hook (scripts/copy-bundled-binaries.mjs) copies the
+// per-(os,arch) `rg`/`ast-grep` into Resources/bin so search/structural-search work
+// out of the box. But electron-builder treats a missing copy source as nothing more
+// than a warning, and a stale/corrupt npm cache can make `npm ci` skip an optional
+// platform sub-package without erroring — yielding an app with no search binaries.
 //
-// The trap: electron-builder treats a missing `extraResources` `from:` source as
-// a WARNING — it logs `file source doesn't exist` and copies nothing, yet the
-// build still succeeds. The result is a Houston.app with no Resources/bin/ast-grep
-// (structural search silently unavailable) or no rg (search degraded).
-//
-// A source goes missing when npm skips the optional platform sub-package that
-// ships the prebuilt binary (e.g. `@ast-grep/cli-darwin-arm64`). The lockfile
-// pins it correctly with matching os/cpu, so on a clean install it's present —
-// but a stale/corrupt `~/.npm` cache (a long-standing npm optional-dependency
-// flake) can make `npm ci` skip it without erroring.
-//
-// This script runs immediately before `electron-builder` in the `dist` /
-// `dist:unpacked` npm scripts. It reads every extraResources entry from
-// electron-builder.yml and asserts each `from:` source exists as a non-empty
-// file. If one is missing it attempts a targeted, version-pinned reinstall of the
-// owning package and, only if it's still missing, FAILS the build with actionable
-// remediation — so this class of bug can never silently regress again.
+// This script runs immediately before `electron-builder` in the `dist*` npm scripts.
+// It consults the SAME BINARY_MAP the afterPack hook uses (single source of truth) for
+// the platform+arch(es) this build targets, asserts each source exists as a non-empty
+// file, attempts a targeted version-pinned reinstall if not, and FAILS the build with
+// actionable remediation if any is still missing.
 
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { BINARY_MAP } from './copy-bundled-binaries.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
 
+/** Map Node's process.platform to electron-builder's electronPlatformName. */
+const PLATFORM = { darwin: 'darwin', linux: 'linux', win32: 'win32' }
+
 /**
- * Normalize the `extraResources` list from a parsed electron-builder config into
- * `{ from, to }` objects. electron-builder accepts either a bare string (used as
- * both from and to) or a `{ from, to }` object; we only care about `from`.
+ * The `(platform, arch)` keys this build targets. Defaults to the host platform + host
+ * arch — the only sub-package npm is guaranteed to have installed on this runner.
+ * Cross-arch builds (a second runner) pass explicit `--arch` flags.
  */
-export function extractExtraResources(config) {
-  const entries = Array.isArray(config?.extraResources) ? config.extraResources : []
-  return entries
-    .map((e) => (typeof e === 'string' ? { from: e, to: e } : e))
-    .filter((e) => e && typeof e.from === 'string')
+export function targetKeys({ platform = process.platform, archs = [process.arch] } = {}) {
+  const p = PLATFORM[platform]
+  if (!p) throw new Error(`verify-bundled-binaries: unsupported platform "${platform}"`)
+  return archs.map((a) => `${p}-${a}`)
+}
+
+/** The `{ key, pkg, from }` vendored-binary sources to verify for a set of target keys. */
+export function expectedSources(keys) {
+  const out = []
+  for (const key of keys) {
+    const entry = BINARY_MAP[key]
+    if (!entry) throw new Error(`verify-bundled-binaries: no binary map for target "${key}"`)
+    for (const b of Object.values(entry)) {
+      out.push({ key, pkg: b.pkg, from: `node_modules/${b.pkg}/${b.file}` })
+    }
+  }
+  return out
 }
 
 /**
  * A source is "present" when it exists and, for files, is non-empty — a 0-byte
- * binary is as broken as a missing one. Directories are accepted as-is. `fs` is
- * injectable so this stays unit-testable.
+ * binary is as broken as a missing one. `fs` is injectable so this stays unit-testable.
  */
 export function sourceIsPresent(absFrom, { exists = existsSync, stat = statSync } = {}) {
   if (!exists(absFrom)) return false
@@ -55,20 +60,6 @@ export function sourceIsPresent(absFrom, { exists = existsSync, stat = statSync 
   } catch {
     return false
   }
-}
-
-/**
- * Derive the owning npm package name from a `node_modules/...` path so we can
- * reinstall just that package. Handles scoped packages (`@scope/name`) and nested
- * `node_modules` (takes the last segment). Returns null for non-node_modules paths.
- */
-export function packageFromResourcePath(from) {
-  const marker = 'node_modules/'
-  const idx = from.lastIndexOf(marker)
-  if (idx === -1) return null
-  const rest = from.slice(idx + marker.length).split('/').filter(Boolean)
-  if (rest.length === 0) return null
-  return rest[0].startsWith('@') && rest.length > 1 ? `${rest[0]}/${rest[1]}` : rest[0]
 }
 
 /** Look up a package's exact version from package-lock.json, or null if absent. */
@@ -82,10 +73,10 @@ function lockedVersion(pkg) {
 }
 
 /**
- * Best-effort, version-pinned reinstall of a single package. We pin the version
- * from the lockfile so the platform binary matches its parent CLI exactly, and
- * use --force so npm installs it even when its optional-dependency bookkeeping
- * would otherwise skip it. --no-save keeps package.json / package-lock untouched.
+ * Best-effort, version-pinned reinstall of a single package. Pin the version from the
+ * lockfile so the platform binary matches its parent CLI exactly; --force installs it
+ * even when npm's optional-dependency bookkeeping would skip it; --no-save keeps
+ * package.json / package-lock untouched.
  */
 function tryRepair(pkg) {
   const version = lockedVersion(pkg)
@@ -105,45 +96,42 @@ function tryRepair(pkg) {
   }
 }
 
+/** Parse repeatable `--arch <a>` and optional `--platform <p>` flags. */
+export function parseArgs(argv) {
+  const archs = []
+  let platform
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--arch' && argv[i + 1]) archs.push(argv[++i])
+    else if (argv[i] === '--platform' && argv[i + 1]) platform = argv[++i]
+  }
+  return { platform, archs: archs.length ? archs : undefined }
+}
+
 async function main() {
-  const ymlPath = join(ROOT, 'electron-builder.yml')
+  const { platform, archs } = parseArgs(process.argv.slice(2))
+  const keys = targetKeys({ platform: platform ?? process.platform, archs: archs ?? [process.arch] })
+  const sources = expectedSources(keys)
 
-  let yaml
-  try {
-    yaml = (await import('js-yaml')).default
-  } catch {
-    console.error('verify-bundled-binaries: js-yaml not found (it ships with electron-builder). Run `npm ci`.')
-    process.exit(1)
-  }
+  const missing = sources.filter((s) => !sourceIsPresent(join(ROOT, s.from)))
 
-  const resources = extractExtraResources(yaml.load(readFileSync(ymlPath, 'utf8')))
-  if (resources.length === 0) {
-    console.error('verify-bundled-binaries: no extraResources found in electron-builder.yml — nothing to verify.')
-    process.exit(1)
-  }
-
-  const missing = resources.filter((r) => !sourceIsPresent(join(ROOT, r.from)))
-
-  // Self-heal: a missing source is almost always an un-installed optional
-  // platform package. Reinstall each owning package once, then re-check.
+  // Self-heal: a missing source is almost always an un-installed optional platform
+  // package. Reinstall each owning package once, then re-check.
   if (missing.length > 0) {
     console.warn(`verify-bundled-binaries: ${missing.length} vendored source(s) missing — attempting repair…`)
     const repaired = new Set()
-    for (const r of missing) {
-      const pkg = packageFromResourcePath(r.from)
-      if (pkg && !repaired.has(pkg)) {
-        repaired.add(pkg)
-        tryRepair(pkg)
+    for (const s of missing) {
+      if (!repaired.has(s.pkg)) {
+        repaired.add(s.pkg)
+        tryRepair(s.pkg)
       }
     }
   }
 
-  const stillMissing = resources.filter((r) => !sourceIsPresent(join(ROOT, r.from)))
+  const stillMissing = sources.filter((s) => !sourceIsPresent(join(ROOT, s.from)))
   if (stillMissing.length > 0) {
-    console.error('\n✗ Packaging aborted — these extraResources sources are missing:\n')
-    for (const r of stillMissing) {
-      const pkg = packageFromResourcePath(r.from)
-      console.error(`  • ${r.from}  →  Resources/${r.to}${pkg ? `   (provided by ${pkg})` : ''}`)
+    console.error('\n✗ Packaging aborted — these vendored binary sources are missing:\n')
+    for (const s of stillMissing) {
+      console.error(`  • ${s.from}  (target ${s.key}, provided by ${s.pkg})`)
     }
     console.error(
       '\nThe usual cause is npm skipping an optional platform package (a known npm\n' +
@@ -151,17 +139,16 @@ async function main() {
         '  npm cache clean --force\n' +
         '  rm -rf node_modules\n' +
         '  npm ci\n\n' +
-        'Without this gate, electron-builder would only WARN and ship an app missing these binaries.\n'
+        'Without this gate, the build would only WARN and ship an app missing these binaries.\n'
     )
     process.exit(1)
   }
 
-  console.log(`✓ verify-bundled-binaries: all ${resources.length} extraResources source(s) present:`)
-  for (const r of resources) console.log(`    ${r.from} → Resources/${r.to}`)
+  console.log(`✓ verify-bundled-binaries: all ${sources.length} source(s) present for ${keys.join(', ')}:`)
+  for (const s of sources) console.log(`    ${s.from}`)
 }
 
-// Run only when invoked directly (`node scripts/verify-bundled-binaries.mjs`),
-// not when imported by the unit test.
+// Run only when invoked directly, not when imported by the unit test.
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main()
 }

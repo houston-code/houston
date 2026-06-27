@@ -89,42 +89,59 @@ jobs:
       - run: npm ci
       - run: npx vitest run src/main/sandbox
 
-  # TEMPORARILY DISABLED — the macOS packaging job is commented out for now.
-  # Re-enable once we're ready to ship signed/notarized builds again (tracked in TODO.md).
-  # Nothing depends on `build-mac`, so disabling it leaves `test` and `auto-merge` intact.
-  #
-  # # Package the macOS app (.app + .dmg) for every PR that's set to auto-merge.
-  # # We can't build on push-to-main: the auto-merge job merges with GITHUB_TOKEN,
-  # # and GitHub won't trigger a new workflow run from a GITHUB_TOKEN push. Instead
-  # # we build on the pull_request event, which checks out the merge ref (main + PR)
-  # # — i.e. exactly the state that's about to land. electron-builder --mac only
-  # # runs on macOS; macos-14 is arm64, matching the build target.
-  # build-mac:
-  #   needs: test
-  #   if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
-  #   runs-on: macos-14
-  #   steps:
-  #     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-  #     - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-  #       with:
-  #         node-version-file: '.nvmrc'
-  #         cache: npm
-  #     - run: npm ci
-  #     - run: npm run dist
-  #     # Smoke-test the packaged app we just built: the spec launches
-  #     # release/mac-arm64/Houston.app via Playwright and asserts the renderer
-  #     # mounts — exercising the asar archive, bundled resources, and the
-  #     # main ↔ preload ↔ renderer IPC bridge end to end. macOS (the build target)
-  #     # has a display without xvfb. `test:e2e` rebuilds out/ first (cheap); the
-  #     # spec prefers the packaged app already present in release/.
-  #     - run: npm run test:e2e
-  #     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-  #       with:
-  #         name: houston-mac-arm64
-  #         path: |
-  #           release/*.dmg
-  #           release/mac*/Houston.app
-  #         if-no-files-found: error
+  # Package the app for each OS (macOS arm64, Windows x64, Linux x64) on every PR set
+  # to auto-merge. Cross-compilation is impossible — native node-pty + per-(os,arch)
+  # rg/ast-grep binaries — so each OS builds its own artifacts on its own runner. We
+  # build on the pull_request event (which checks out the merge ref = the state about
+  # to land); a push-to-main build can't run because the auto-merge job pushes with
+  # GITHUB_TOKEN, which doesn't trigger a new workflow run. This job validates that
+  # packaging + the afterPack vendored-binary copy succeed everywhere; it is NOT in
+  # auto-merge's `needs` (a packaging flake shouldn't wedge the merge queue — the unit/
+  # conformance legs are the gate). x64 mac + arm64 win/linux are follow-ups (each needs
+  # its own runner).
+  build:
+    needs: test
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            dist: dist:mac
+            artifact: houston-mac-arm64
+          - os: windows-latest
+            dist: dist:win
+            artifact: houston-win-x64
+          - os: ubuntu-latest
+            dist: dist:linux
+            artifact: houston-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - run: npm run ${{ matrix.dist }}
+      # Smoke-test the packaged macOS app: the spec launches the built .app via
+      # Playwright (_electron) and asserts the renderer mounts — exercising the asar
+      # archive, the afterPack vendored binaries, and the main ↔ preload ↔ renderer
+      # bridge end to end. macOS has a display without xvfb; Windows/Linux e2e is a
+      # follow-up (Linux needs xvfb), and the package build itself is the smoke test there.
+      - if: matrix.os == 'macos-14'
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*-setup.exe
+            release/*.AppImage
+            release/*.deb
+            release/latest*.yml
+          if-no-files-found: error
 
   auto-merge:
     needs: [test, linux-sandbox, test-windows]

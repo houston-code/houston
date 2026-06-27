@@ -22,6 +22,14 @@ describe('resolveAstGrep', () => {
     )
   })
 
+  it('looks for ast-grep.exe on PATH on Windows', () => {
+    const dir = 'C:\\tools'
+    const exists = (p: string): boolean => p === join(dir, 'ast-grep.exe')
+    expect(resolveAstGrep({ platform: 'win32', env: { PATH: dir }, exists, candidates: [] })).toBe(
+      join(dir, 'ast-grep.exe')
+    )
+  })
+
   it('falls back to a known candidate dir', () => {
     const exists = (p: string): boolean => p === '/opt/homebrew/bin/ast-grep'
     expect(

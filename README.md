@@ -1,11 +1,12 @@
 # Houston
 
-A **coding agent for macOS** — **bring your own model**. Point it at Claude, GPT,
+A **cross-platform coding agent** — **bring your own model**. Point it at Claude, GPT,
 Gemini, any OpenAI-compatible API, or a local model (Ollama / LM Studio), give it
 a project folder, and let it read, edit, search, and run code — every action gated
-by an approval flow and confined to a macOS sandbox.
+by an approval flow and, where the OS supports it, confined to a sandbox.
 
-Built with Electron + React + TypeScript. Apple Silicon (arm64).
+Built with Electron + React + TypeScript. Runs on macOS (Apple Silicon), Linux (x64),
+and Windows (x64).
 
 ![Houston icon](build/icon.png)
 
@@ -108,9 +109,14 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,
   expandable for output and diffs) instead of a wall of cards.
-- **Sandboxed execution.** Shell commands run under the macOS **Seatbelt**
-  sandbox (`sandbox-exec`), confined to the project directory: writes outside the
-  project and (by default) network access are blocked.
+- **Sandboxed execution (per-platform, honest).** Shell commands run under the host's
+  OS sandbox where one exists, confined to the project directory — writes outside the
+  project and (by default) network access are blocked. On **macOS** that's **Seatbelt**
+  (`sandbox-exec`); on **Linux** it's **bubblewrap** (an unprivileged user namespace),
+  when available. **Windows** has no broadly-available equivalent, so shell commands run
+  unconfined — and the app says so: the command is reported as not sandboxed and is never
+  silently auto-approved (you must explicitly allow each one, even in full-auto). The
+  structured file tools stay confined to the project on every platform.
 - **Background processes.** `run_shell` can start long-running commands (dev
   servers, watchers) in the background and return immediately; the agent polls
   them with `read_shell_output` and stops them with `kill_shell`. They're killed
@@ -263,20 +269,28 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   model, project folder, approval policy and thinking controls live there too —
   down by the composer, where you're typing.
 
-## Install (prebuilt DMG)
+## Install (prebuilt binaries)
 
-Download `Houston-<version>-arm64.dmg`, open it, and drag **Houston** to
-Applications.
+Grab the artifact for your platform:
 
-> **The build is unsigned** (no Apple Developer ID). The first time you open it,
-> macOS Gatekeeper will warn you. Either:
-> - Right-click the app → **Open** → **Open**, or
-> - Remove the quarantine attribute:
->   ```bash
->   xattr -dr com.apple.quarantine "/Applications/Houston.app"
->   ```
+| Platform | Download | Auto-updates? |
+|----------|----------|---------------|
+| macOS (Apple Silicon) | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
+| Windows (x64) | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
+| Linux (x64) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
+| Linux (x64) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
+
+> **The builds are unsigned.** First-run warnings to expect:
+> - **macOS** — Gatekeeper warns. Right-click the app → **Open** → **Open**, or remove
+>   quarantine: `xattr -dr com.apple.quarantine "/Applications/Houston.app"`.
+> - **Windows** — SmartScreen warns until the installer is signed with an Authenticode
+>   cert. Click **More info** → **Run anyway**.
+> - **Linux** — AppImage/deb are unsigned (conventional).
 >
-> To ship a signed + notarized build, see [Signing & notarization](#signing--notarization).
+> The bundled `ast-grep` is glibc-only, so the Linux build needs a glibc distro
+> (Debian/Ubuntu/Fedora/etc.); musl distros (Alpine) aren't supported.
+>
+> To ship a signed + notarized macOS build, see [Signing & notarization](#signing--notarization).
 
 ## First run
 
@@ -324,20 +338,26 @@ npm run test:e2e # Electron smoke test (Playwright; builds first)
 npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ```
 
-## Build a DMG
+## Build a release
+
+Each OS builds its own artifacts — native modules (`node-pty`) and the per-platform
+`rg`/`ast-grep` binaries can't be cross-compiled, so you build on the target OS:
 
 ```bash
-npm run dist     # → release/Houston-<version>-arm64.dmg (+ .zip, .blockmap, latest-mac.yml)
+npm run dist:mac    # macOS arm64 → .dmg + .zip (+ latest-mac.yml)   — run on macOS
+npm run dist:win    # Windows x64 → -setup.exe + .zip (+ latest.yml) — run on Windows
+npm run dist:linux  # Linux x64   → .AppImage + .deb (+ latest-linux.yml) — run on Linux
 ```
 
-The `.dmg` is the human download; the `.zip` (+ `.blockmap`) and `latest-mac.yml`
-are what `electron-updater` uses to auto-update an installed app (see
-[Updates](#updates)).
+The human download is the `.dmg` / `-setup.exe` / `.AppImage`; the `.zip` / nsis /
+AppImage feeds (+ `latest-*.yml`) are what `electron-updater` uses to auto-update an
+installed app (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
+fails if a vendored binary is missing, so a build can't silently ship without search.
 
-Every PR set to auto-merge also builds the `.app` + `.dmg` in CI (on a macOS
-runner, against the merged state), smoke-tests the packaged app with Playwright,
-and uploads the artifacts as `houston-mac-arm64` on the workflow run — grab a
-build from the **Actions** tab without building locally.
+Every PR set to auto-merge also builds all three platforms in CI (each on its own
+runner, against the merged state), smoke-tests the packaged macOS app with Playwright,
+and uploads the artifacts (`houston-mac-arm64` / `houston-win-x64` / `houston-linux-x64`)
+on the workflow run — grab a build from the **Actions** tab without building locally.
 
 ## Updates
 
