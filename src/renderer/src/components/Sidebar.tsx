@@ -1,16 +1,8 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-  type RefObject
-} from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useRef, useState } from 'react'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import { buildSidebarSections, type SidebarSection } from '../lib/chatGroups'
+import { Popover } from './Popover'
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/')
@@ -42,66 +34,6 @@ export interface SidebarProps {
   onRenameGroup: (groupId: string, name: string) => void
   onDeleteGroup: (groupId: string) => void
   onToggleGroupCollapsed: (groupId: string) => void
-}
-
-/**
- * A dismiss-on-outside-click / Escape menu, portaled to the body and anchored to
- * its trigger with fixed positioning so the sidebar's scroll container can't clip
- * it. Right-aligned to the trigger; flips above when near the viewport bottom.
- */
-function Popover({
-  anchorRef,
-  onClose,
-  children
-}: {
-  anchorRef: RefObject<HTMLElement | null>
-  onClose: () => void
-  children: ReactNode
-}): JSX.Element | null {
-  const ref = useRef<HTMLDivElement>(null)
-  const [style, setStyle] = useState<CSSProperties | null>(null)
-
-  useLayoutEffect(() => {
-    const a = anchorRef.current?.getBoundingClientRect()
-    if (!a) return
-    const openUp = a.bottom > window.innerHeight - 260
-    setStyle({
-      position: 'fixed',
-      right: Math.max(8, window.innerWidth - a.right),
-      ...(openUp ? { bottom: window.innerHeight - a.top + 4 } : { top: a.bottom + 4 })
-    })
-  }, [anchorRef])
-
-  useEffect(() => {
-    const onDoc = (e: MouseEvent): void => {
-      if (
-        ref.current &&
-        !ref.current.contains(e.target as Node) &&
-        !anchorRef.current?.contains(e.target as Node)
-      ) {
-        onClose()
-      }
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    window.addEventListener('resize', onClose)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-      window.removeEventListener('resize', onClose)
-    }
-  }, [onClose, anchorRef])
-
-  if (!style) return null
-  return createPortal(
-    <div className="menu" ref={ref} style={style} onClick={(e) => e.stopPropagation()}>
-      {children}
-    </div>,
-    document.body
-  )
 }
 
 /** A single-line input used for renaming a chat or a group in place. */

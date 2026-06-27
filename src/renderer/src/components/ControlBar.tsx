@@ -8,6 +8,7 @@ import {
   type SessionUsage
 } from '@shared/usage'
 import { branchNameError } from '../lib/worktree'
+import { ModelPicker } from './ModelPicker'
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/')
@@ -80,7 +81,6 @@ export function ControlBar({
 }): JSX.Element {
   const provider = settings.providers.find((p) => p.id === selected?.providerId)
   const needsKey = provider?.requiresKey && !provider.hasKey
-  const value = selected ? `${selected.providerId}::${selected.model}` : ''
 
   // The worktree editor only makes sense for a fresh chat in a git repo.
   const showWorktreeEditor = newChat && repoInfo?.isRepo === true
@@ -163,36 +163,7 @@ export function ControlBar({
         </span>
       )}
 
-      <select
-        className="control control--select"
-        value={value}
-        title="Model"
-        onChange={(e) => {
-          const [providerId, model] = e.target.value.split('::')
-          if (providerId && model) onSelectModel({ providerId, model })
-        }}
-      >
-        <option value="" disabled>
-          Select a model…
-        </option>
-        {settings.providers.map((p) => (
-          <optgroup key={p.id} label={`${p.label}${p.requiresKey && !p.hasKey ? ' (no key)' : ''}`}>
-            {p.models.length === 0 && (
-              <option value="" disabled>
-                — no models configured —
-              </option>
-            )}
-            {p.models.map((m) => {
-              const win = contextWindowFor(m.id)
-              return (
-                <option key={`${p.id}::${m.id}`} value={`${p.id}::${m.id}`}>
-                  {(m.label ?? m.id) + (win ? ` · ${formatTokens(win)}` : '')}
-                </option>
-              )
-            })}
-          </optgroup>
-        ))}
-      </select>
+      <ModelPicker settings={settings} selected={selected} onSelect={onSelectModel} />
 
       <select
         className="control control--select"

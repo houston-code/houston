@@ -79,6 +79,7 @@ export function contextWindowFor(model: string): number | null {
     return 200_000
   }
   if (m.includes('gemini')) return 1_000_000
+  if (m.includes('gpt-5')) return 400_000
   if (m.includes('gpt-4.1')) return 1_000_000
   if (m.includes('gpt-4o')) return 128_000
   if (m.includes('gpt-4')) return 128_000
