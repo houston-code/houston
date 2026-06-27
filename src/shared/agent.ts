@@ -154,6 +154,14 @@ export interface WorktreeRemoval {
   message?: string
 }
 
+/** Outcome of a delete-conversation request, after the confirmation prompt. */
+export interface DeleteConversationResult {
+  /** False when the user cancelled the confirmation — nothing was deleted. */
+  deleted: boolean
+  /** What happened to the worktree, when one was torn down. */
+  worktree?: WorktreeRemoval | null
+}
+
 export interface ConversationMeta {
   id: string
   title: string
