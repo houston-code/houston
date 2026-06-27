@@ -27,10 +27,10 @@ import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead } from './scheduling'
 import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
-import { isBlockedByPlan, needsApproval } from './approval'
-import { sandboxAvailable } from '../sandbox'
+import { isBlockedByPlan, decideApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
+import { isSandboxed } from '../sandbox'
 import { formatFile } from './format'
 import { runSubAgent } from './subagent'
 import { reviewWorkspaceChanges } from './review'
@@ -88,6 +88,14 @@ interface RunState {
   questions: Map<string, (answer: string) => void>
   /** Flipped to true once the user chooses "always" — auto-approve the rest. */
   override: boolean
+  /**
+   * Per-run consent specifically to run UNCONFINED shell commands. On a host with no
+   * enforceable sandbox, a generic `override` (granted for an unrelated tool) does NOT
+   * substitute for this — the first unconfined shell command still prompts, surfacing
+   * that there is no OS sandbox. Only "Allow for run" on such a prompt sets this. Stays
+   * false (and unused) on confining hosts like macOS.
+   */
+  shellUnsandboxedOverride: boolean
   /**
    * The live approval policy. Seeded from the run request, but mutable so a
    * change made mid-run (e.g. the user switches the mode dropdown while the
@@ -191,6 +199,7 @@ export async function startRun(
     approvals: new Map(),
     questions: new Map(),
     override: false,
+    shellUnsandboxedOverride: false,
     policy: req.approvalPolicy
   }
   runs.set(runId, run)
@@ -667,13 +676,17 @@ export async function startRun(
             'Blocked: Houston is in Plan mode (read-only). Do not modify files, run commands, or change remote/PR state. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
           ok = false
         } else {
-          // A permission rule can force-allow or force-ask; otherwise the policy decides.
-          const mustApprove =
-            ruleAction === 'allow'
-              ? false
-              : ruleAction === 'ask'
-                ? true
-                : needsApproval(run.policy, tool.kind, run.override, sandboxAvailable())
+          // A permission rule can force-allow or force-ask; otherwise the policy
+          // decides — folding in the honest sandbox status so unconfined shell on a
+          // host without an enforceable sandbox is never silently auto-approved.
+          const { mustApprove, unsandboxedShell } = decideApproval({
+            ruleAction,
+            policy: run.policy,
+            kind: tool.kind,
+            override: run.override,
+            shellSandboxed: isSandboxed(),
+            shellUnsandboxedOverride: run.shellUnsandboxedOverride
+          })
 
           let approved = true
           if (mustApprove) {
@@ -682,10 +695,16 @@ export async function startRun(
               callId: call.id,
               name: call.name,
               summary: tool.summarize(call.arguments),
-              kind: tool.kind
+              kind: tool.kind,
+              ...(unsandboxedShell ? { sandboxed: false } : {})
             })
             const decision = await waitForApproval(run, call.id)
-            if (decision === 'always') run.override = true
+            if (decision === 'always') {
+              run.override = true
+              // "Allow for run" on an unconfined-shell prompt is the conscious consent
+              // to keep running unsandboxed; a generic override never sets this.
+              if (unsandboxedShell) run.shellUnsandboxedOverride = true
+            }
             approved = decision !== 'deny'
           }
 

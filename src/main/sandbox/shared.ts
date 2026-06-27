@@ -1,42 +1,16 @@
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
-
-/**
- * macOS Seatbelt sandbox for the agent's shell execution.
- *
- * Commands run under `sandbox-exec` with a generated SBPL profile that:
- *   - denies everything by default
- *   - allows reading the filesystem (compilers/tools need system headers, etc.)
- *   - allows writing ONLY inside the workspace and temp directories
- *   - allows or denies network access per the approval policy
- *
- * This is the OS-native sandbox mechanism on macOS. It is the boundary
- * for arbitrary shell commands; structured file tools enforce containment in JS.
- */
-
-export interface SandboxRunOptions {
-  command: string
-  cwd: string
-  workspace: string
-  /** Extra writable roots beyond the workspace (e.g. added directories). */
-  roots?: string[]
-  allowNetwork: boolean
-  timeoutMs?: number
-  signal?: AbortSignal
-  env?: NodeJS.ProcessEnv
-}
-
-export interface SandboxRunResult {
-  stdout: string
-  stderr: string
-  exitCode: number | null
-  timedOut: boolean
-  sandboxed: boolean
-}
+import type {
+  SandboxBackend,
+  SandboxRunOptions,
+  SandboxRunResult,
+  SandboxSpawnOptions,
+  RunSandboxedDeps
+} from './contract'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 1_000_000 // 1 MB cap per stream
@@ -62,7 +36,8 @@ const EXTRA_PATH_DIRS = [
  * `/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew and other user-installed tools
  * the agent reaches for via `run_shell` aren't found. Append the standard
  * developer bin dirs (and `~/.local/bin`) that actually exist on disk, without
- * disturbing the precedence of whatever PATH was already inherited.
+ * disturbing the precedence of whatever PATH was already inherited. Non-existent
+ * candidates are filtered out, so this is harmless on non-macOS hosts.
  */
 export function augmentPath(
   env: NodeJS.ProcessEnv = process.env,
@@ -77,11 +52,11 @@ export function augmentPath(
 }
 
 /**
- * Shared cache dir for package managers, inside the temp area the Seatbelt profile
- * already makes writable. Package managers default their caches to $HOME (`~/.npm`,
- * `~/.cache`, …), which is OUTSIDE the workspace — so a plain `npm install` fails
- * on the cache *write* (EPERM), not on anything real. Redirecting the cache here
- * lets installs actually succeed (and persists the cache across runs).
+ * Shared cache dir for package managers, inside the temp area the sandbox makes
+ * writable. Package managers default their caches to $HOME (`~/.npm`, `~/.cache`,
+ * …), which is OUTSIDE the workspace — so a plain `npm install` fails on the cache
+ * *write* (EPERM), not on anything real. Redirecting the cache here lets installs
+ * actually succeed (and persists the cache across runs).
  */
 export function pkgCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.TMPDIR ?? tmpdir(), 'houston-pkg-cache')
@@ -104,62 +79,6 @@ export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
     PIP_CACHE_DIR: join(cache, 'pip'),
     XDG_CACHE_HOME: join(cache, 'xdg')
   }
-}
-
-/** Escape a path for safe embedding inside an SBPL double-quoted literal. */
-function sbplPath(p: string): string {
-  let real = p
-  try {
-    real = realpathSync(p)
-  } catch {
-    // Path may not exist yet; fall back to the raw path.
-  }
-  return real.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-}
-
-export function buildSeatbeltProfile(roots: string | string[], allowNetwork: boolean): string {
-  const rootList = (Array.isArray(roots) ? roots : [roots]).filter(Boolean)
-  const tmp = sbplPath(tmpdir())
-  const writableRoots = rootList.map((r) => `  (subpath "${sbplPath(r)}")`).join('\n')
-
-  return `(version 1)
-(deny default)
-(allow process-exec)
-(allow process-fork)
-(allow signal (target self))
-(allow sysctl-read)
-(allow mach-lookup)
-(allow file-read*)
-(allow file-write*
-${writableRoots}
-  (subpath "${tmp}")
-  (subpath "/private/tmp")
-  (subpath "/private/var/tmp"))
-(allow file-write-data
-  (literal "/dev/null")
-  (literal "/dev/zero")
-  (literal "/dev/stdout")
-  (literal "/dev/stderr")
-  (literal "/dev/dtracehelper")
-  (literal "/dev/urandom")
-  (literal "/dev/random"))
-${allowNetwork ? '(allow network*)' : '; network denied'}
-`
-}
-
-/**
- * Whether the macOS Seatbelt sandbox is actually usable here: we are on macOS
- * *and* the `sandbox-exec` binary exists on disk. This is the single source of
- * truth for "is arbitrary shell confined right now" — the approval path reads it
- * to decide whether full-auto may auto-approve shell, and the run result reports
- * it as `SandboxRunResult.sandboxed`. When it is false, a shell command would run
- * unconfined (or not at all), so it must never be silently auto-approved.
- */
-export function sandboxAvailable(
-  platform: NodeJS.Platform = process.platform,
-  exists: (p: string) => boolean = existsSync
-): boolean {
-  return platform === 'darwin' && exists('/usr/bin/sandbox-exec')
 }
 
 /**
@@ -247,16 +166,45 @@ export function clampToolResult(
   return cap.toString()
 }
 
+export type KillPlan =
+  | { kind: 'taskkill'; file: 'taskkill'; args: string[] }
+  | { kind: 'group'; target: number }
+
 /**
- * SIGKILL a child and its descendants. Background shells are spawned `detached`
- * so the child leads its own process group; killing the negative pid reaps the
- * whole tree (a dev server's child processes, not just the bash wrapper).
+ * How to reap a process tree on a given platform. Pure so the per-platform branch
+ * is unit-testable without spawning real processes.
+ *  - POSIX: the child was spawned `detached`, leading its own process group; SIGKILL
+ *    the negative pid (`target`) to reap the whole tree (a dev server's children, not
+ *    just the bash wrapper).
+ *  - Windows: no POSIX process groups; `taskkill /T /F` walks and kills the tree by
+ *    parent-pid. `process.kill(-pid)` is invalid on Windows and must NOT be tried.
  */
+export function planKill(platform: NodeJS.Platform, pid: number): KillPlan {
+  if (platform === 'win32') {
+    return { kind: 'taskkill', file: 'taskkill', args: ['/pid', String(pid), '/T', '/F'] }
+  }
+  return { kind: 'group', target: -pid }
+}
+
+/** SIGKILL a child and its descendants (see {@link planKill}). */
 export function killProcessTree(child: ChildProcess): void {
   const pid = child.pid
   if (pid === undefined) return
+  const plan = planKill(process.platform, pid)
+  if (plan.kind === 'taskkill') {
+    try {
+      execFileSync(plan.file, plan.args, { stdio: 'ignore' })
+    } catch {
+      try {
+        child.kill()
+      } catch {
+        // already gone
+      }
+    }
+    return
+  }
   try {
-    process.kill(-pid, 'SIGKILL')
+    process.kill(plan.target, 'SIGKILL')
   } catch {
     try {
       child.kill('SIGKILL')
@@ -266,76 +214,71 @@ export function killProcessTree(child: ChildProcess): void {
   }
 }
 
+/** Grace period after the process exits (or is killed) for final stdio to flush
+ *  before the call settles. Bounds how long a wedged/orphaned pipe can stall us. */
+const STDIO_DRAIN_MS = 250
+
 /**
- * Spawn a sandboxed command WITHOUT awaiting it — used for background shells the
- * agent starts and polls later. Same Seatbelt profile and PATH augmentation as
- * `runSandboxed`; the caller owns output capture. Spawned `detached` so the whole
- * process tree can be killed together. If a `signal` is given, aborting it (e.g.
- * the user cancelling the run) kills the tree.
+ * Spawn a backend-wrapped command WITHOUT awaiting it — used for background shells
+ * the caller polls later. Same env augmentation as {@link runWithBackend}; the
+ * caller owns output capture. Returns the child plus the backend's honest
+ * `sandboxed` flag so callers can surface whether the spawn was confined.
  */
-export function spawnSandboxed(opts: {
-  command: string
-  cwd: string
-  workspace: string
-  roots?: string[]
-  allowNetwork: boolean
-  env?: NodeJS.ProcessEnv
-  signal?: AbortSignal
-}): ChildProcess {
-  const profile = buildSeatbeltProfile(opts.roots ?? [opts.workspace], opts.allowNetwork)
-  const args = ['-p', profile, '/bin/bash', '-c', opts.command]
+export function spawnWithBackend(
+  backend: SandboxBackend,
+  opts: SandboxSpawnOptions
+): { child: ChildProcess; sandboxed: boolean } {
+  const launch = backend.buildLaunch({
+    command: opts.command,
+    roots: opts.roots ?? [opts.workspace],
+    allowNetwork: opts.allowNetwork
+  })
   const baseEnv = opts.env ?? process.env
-  const child = spawn('sandbox-exec', args, {
+  const child = spawn(launch.file, launch.args, {
     cwd: opts.cwd,
     env: sandboxEnv(baseEnv),
-    detached: true
+    detached: launch.detached,
+    windowsHide: launch.windowsHide
   })
   if (opts.signal) {
     if (opts.signal.aborted) killProcessTree(child)
     else opts.signal.addEventListener('abort', () => killProcessTree(child), { once: true })
   }
-  return child
+  return { child, sandboxed: backend.sandboxed }
 }
 
-/** Grace period after the process exits (or is killed) for final stdio to flush
- *  before the call settles. Bounds how long a wedged/orphaned pipe can stall us. */
-const STDIO_DRAIN_MS = 250
-
-/** Injectable seams for `runSandboxed` (real implementations used in production). */
-export interface RunSandboxedDeps {
-  spawn?: typeof spawn
-  killTree?: (child: ChildProcess) => void
-  drainMs?: number
-  /** Whether the Seatbelt sandbox is in effect (defaults to {@link sandboxAvailable}). */
-  available?: () => boolean
-}
-
-export function runSandboxed(
+/**
+ * Run a backend-wrapped command to completion with timeout, both-ends output
+ * capping, and whole-tree kill on timeout/abort. The spawn/capture/timeout/drain
+ * state machine is identical for every backend; only the argv (via
+ * `backend.buildLaunch`) and the honest `sandboxed` flag differ.
+ */
+export function runWithBackend(
+  backend: SandboxBackend,
   opts: SandboxRunOptions,
   deps: RunSandboxedDeps = {}
 ): Promise<SandboxRunResult> {
   const spawnFn = deps.spawn ?? spawn
   const killTree = deps.killTree ?? killProcessTree
   const drainMs = deps.drainMs ?? STDIO_DRAIN_MS
-  // Whether Seatbelt actually confines this run — reported honestly so callers
-  // (and ultimately the approval path) never assume confinement that isn't there.
-  const sandboxed = (deps.available ?? sandboxAvailable)()
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const profile = buildSeatbeltProfile(opts.roots ?? [opts.workspace], opts.allowNetwork)
-
-  // sandbox-exec -p <profile> /bin/bash -c <command>
-  const args = ['-p', profile, '/bin/bash', '-c', opts.command]
+  const launch = backend.buildLaunch({
+    command: opts.command,
+    roots: opts.roots ?? [opts.workspace],
+    allowNetwork: opts.allowNetwork
+  })
 
   const baseEnv = opts.env ?? process.env
 
   return new Promise((resolve) => {
-    // `detached` puts the command in its own process group so `killTree` can reap
-    // the whole tree (bash + npm + node + …) on timeout/abort. Without it, a kill
-    // hits only the `sandbox-exec` wrapper and leaves orphaned grandchildren alive.
-    const child = spawnFn('sandbox-exec', args, {
+    // `detached` (POSIX) puts the command in its own process group so `killTree`
+    // can reap the whole tree on timeout/abort. Without it, a kill hits only the
+    // wrapper and leaves orphaned grandchildren alive.
+    const child = spawnFn(launch.file, launch.args, {
       cwd: opts.cwd,
       env: sandboxEnv(baseEnv),
-      detached: true
+      detached: launch.detached,
+      windowsHide: launch.windowsHide
     })
 
     const out = new CappedOutput()
@@ -355,7 +298,13 @@ export function runSandboxed(
       clearTimeout(timer)
       if (drainTimer) clearTimeout(drainTimer)
       cleanupAbort()
-      resolve({ stdout: out.toString(), stderr: err.toString(), exitCode, timedOut, sandboxed })
+      resolve({
+        stdout: out.toString(),
+        stderr: err.toString(),
+        exitCode,
+        timedOut,
+        sandboxed: backend.sandboxed
+      })
     }
 
     // Force settlement even if 'exit'/'close' never fire — e.g. a backgrounded
@@ -395,9 +344,7 @@ export function runSandboxed(
         stderr: `Failed to launch sandboxed process: ${e.message}`,
         exitCode: null,
         timedOut,
-        // The sandboxed process never started (e.g. `sandbox-exec` missing), so
-        // this run was not confined — say so rather than claiming a sandbox.
-        sandboxed: false
+        sandboxed: backend.sandboxed
       })
     })
 

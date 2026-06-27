@@ -13,6 +13,7 @@ import { log } from './logger'
 import { getSettings } from './store'
 import { startRun, resolveApproval } from './agent/loop'
 import { parseHeadlessArgs, runHeadless } from './headless'
+import { activeBackendId, isSandboxed } from './sandbox'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
 // don't force-exit: in a GUI app a stray async error shouldn't kill the window.
@@ -112,6 +113,7 @@ if (headless) {
 } else {
   app.whenReady().then(() => {
     log.info(`Houston ${app.getVersion()} starting`)
+    log.info(`sandbox backend = ${activeBackendId()} (sandboxed=${isSandboxed()})`)
     registerIpc()
     buildAppMenu()
     createWindow()
