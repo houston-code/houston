@@ -28,23 +28,15 @@ files:
   - '!node_modules/**/*.{map,d.ts,d.mts,d.cts}'
   - '!node_modules/**/*.ts' # raw TypeScript sources (e.g. openai/src); never executed
 
-# Vendor CLI binaries into the app's Resources so search works fast out of the
-# box, independent of the user's PATH. `@vscode/ripgrep` and `@ast-grep/cli` are
-# build-time-only (dev) dependencies whose platform sub-packages ship the
-# prebuilt binaries; we copy just the arm64 binaries (the only build target) to
-# Resources/bin, where the main process resolves them via `process.resourcesPath`
-# (see src/main/binaries.ts).
-#
-# WARNING: electron-builder treats a missing `from:` source as a non-fatal
-# WARNING and copies nothing, so a build can succeed yet ship an app missing a
-# binary (e.g. when npm skips an optional platform sub-package). `npm run dist`
-# runs scripts/verify-bundled-binaries.mjs first to turn that into a hard failure;
-# keep every entry below covered by that check.
-extraResources:
-  - from: node_modules/@vscode/ripgrep-darwin-arm64/bin/rg
-    to: bin/rg
-  - from: node_modules/@ast-grep/cli-darwin-arm64/ast-grep
-    to: bin/ast-grep
+# Vendor the per-(os,arch) CLI binaries (`rg`, `ast-grep`) into the app's Resources/bin
+# so search/structural-search work out of the box, independent of the user's PATH. We
+# use an afterPack hook rather than static `extraResources`: a single electron-builder
+# config is shared across all arches of a platform and `extraResources` `from:` paths
+# can't vary by arch, so a multi-arch run would copy the wrong-arch binary. The hook
+# (scripts/copy-bundled-binaries.mjs) fires once per (platform, arch) and copies exactly
+# the right binary, hard-failing if a sub-package is missing. `npm run dist*` first runs
+# scripts/verify-bundled-binaries.mjs to assert the sources exist before packaging.
+afterPack: ./scripts/copy-bundled-binaries.mjs
 
 # node-pty is a native addon (the integrated terminal's PTY backend), so let
 # electron-builder rebuild native modules against the bundled Electron ABI. The
@@ -70,10 +62,38 @@ mac:
     - target: zip
       arch: arm64
   # No Apple Developer ID on this machine — build an ad-hoc (unsigned) app.
-  # To notarize later, set identity to your Developer ID and configure notarize.
+  # To notarize later, set identity to your Developer ID Application cert, set
+  # hardenedRuntime: true, add a notarize block, and flip updater.ts to auto-install.
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
+  # Each CI runner builds its own host arch (arm64 here; native node-pty + per-arch rg/
+  # ast-grep can't cross-compile). x64 (Intel) mac is a follow-up once an x64 runner exists.
+
+win:
+  icon: build/icon.ico
+  # nsis = human installer; zip = the differential-download artifact the updater pulls
+  # (Windows nsis updates read latest.yml). windows-latest is x64; arm64 Windows is a
+  # follow-up (needs a windows-11-arm runner).
+  target:
+    - target: nsis
+      arch: x64
+    - target: zip
+      arch: x64
+  # Unsigned for now → SmartScreen warns on first run until an Authenticode (OV/EV) cert
+  # signs the installer. Seam: set CSC_LINK + CSC_KEY_PASSWORD (or signtoolOptions) when one exists.
+
+linux:
+  icon: build/icon.png
+  category: Development
+  # AppImage = portable + the ONLY Linux target electron-updater can auto-update (reads
+  # latest-linux.yml). deb = native Debian/Ubuntu install but does NOT auto-update. The
+  # bundled ast-grep has no musl variant, so builds require a glibc runner (ubuntu is fine).
+  target:
+    - target: AppImage
+      arch: x64
+    - target: deb
+      arch: x64
 
 dmg:
   title: ${productName} ${version}
@@ -85,3 +105,26 @@ dmg:
       y: 220
       type: link
       path: /Applications
+
+nsis:
+  oneClick: false # show the install dir / progress — less alarming than a silent install
+  perMachine: false # per-user install → no UAC elevation prompt
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+deb:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # Runtime deps for an Electron app on Debian/Ubuntu; pin so a minimal container has them.
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0

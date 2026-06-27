@@ -19,6 +19,14 @@ describe('resolveRipgrep', () => {
     )
   })
 
+  it('looks for rg.exe on PATH on Windows', () => {
+    const dir = 'C:\\tools'
+    const exists = (p: string): boolean => p === join(dir, 'rg.exe')
+    expect(
+      resolveRipgrep({ platform: 'win32', env: { PATH: dir }, exists, candidates: [] })
+    ).toBe(join(dir, 'rg.exe'))
+  })
+
   it('falls back to a known candidate dir', () => {
     const exists = (p: string): boolean => p === '/opt/homebrew/bin/rg'
     expect(

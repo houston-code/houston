@@ -83,6 +83,11 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
   }
   try {
     const autoUpdater = configureUpdater()
+    // Cross-platform note: electron-updater reads the running platform's metadata feed
+    // automatically (latest-mac.yml / latest.yml / latest-linux.yml). On Linux it only
+    // works for the AppImage build (it keys off the APPIMAGE env var); a `.deb` install
+    // throws here and is caught below → "error" (the user updates via their package
+    // manager or a manual re-download). That degradation is expected, not a bug.
     const result = await autoUpdater.checkForUpdates()
     if (result?.isUpdateAvailable) {
       const payload = {

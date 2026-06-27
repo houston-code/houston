@@ -25,6 +25,9 @@
     "icon": "node scripts/make-icon.mjs && bash scripts/make-icns.sh",
     "verify:resources": "node scripts/verify-bundled-binaries.mjs",
     "dist": "npm run build && npm run verify:resources && electron-builder --mac --arm64",
+    "dist:mac": "npm run build && npm run verify:resources && electron-builder --mac --arm64",
+    "dist:win": "npm run build && npm run verify:resources -- --platform win32 --arch x64 && electron-builder --win --x64",
+    "dist:linux": "npm run build && npm run verify:resources -- --platform linux --arch x64 && electron-builder --linux --x64",
     "dist:unpacked": "npm run build && npm run verify:resources && electron-builder --mac --arm64 --dir"
   },
   "dependencies": {

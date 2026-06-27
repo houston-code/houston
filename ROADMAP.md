@@ -30,11 +30,12 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   concurrently. *Why deferred:* concurrent writes/commands need conflict handling
   and a concurrent (rather than sequential) approval UI.
 
-- **Windows / Linux support.** The execution sandbox is macOS Seatbelt only.
-  *Why deferred:* other platforms need their own confinement (Linux namespaces /
-  `bwrap`, a container, or Windows job objects) before shell execution is safe —
-  and shipping an unverified sandbox on a platform we can't test would be a
-  security regression, not a feature.
+- **Additional build targets.** The cross-platform execution backends and builds have
+  shipped (macOS Seatbelt, Linux bubblewrap, Windows — see the README). The remaining
+  gap is *more arches/installers*, each of which just needs its own CI runner: x64
+  (Intel) macOS, arm64 Windows (`windows-11-arm`), arm64 Linux, and an `.rpm` target.
+  Code-signing (Windows Authenticode, macOS Developer ID + notarization) is the other
+  follow-up so first-run SmartScreen/Gatekeeper warnings go away.
 
 - **Write-capable / multi-agent delegation.** Today `dispatch_agent` (and custom
   `.houston/agents`) are deliberately **read-only** — a subagent can read/search
@@ -158,10 +159,6 @@ and nothing is silently dropped):
   Houston entirely on the user's machine. The remaining non-goal is specifically the
   *hosted* bot/app side, which needs a multi-tenant backend and an OAuth app
   registration that don't fit a single-user desktop app.
-
-- **Cross-platform execution sandbox (Linux/Windows/WSL2).** See *Windows / Linux
-  support* under *Deferred — larger effort* — shipping an unverified confinement
-  off-macOS would be a security regression.
 
 - **IDE / editor embedding and a terminal TUI** (VS Code/JetBrains extensions,
   remote TUI, ~32 bundled terminal themes, vim keybindings, status line, terminal

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
 import { promises as fs, existsSync } from 'node:fs'
-import { join, relative, delimiter } from 'node:path'
+import { join, relative } from 'node:path'
 import { minimatch } from 'minimatch'
+import { withExeSuffix } from '../binaries'
 
 /**
  * Content search for the `search_files` tool. Uses ripgrep when a binary can be
@@ -30,6 +31,8 @@ export interface ResolveRgOptions {
   env?: NodeJS.ProcessEnv
   candidates?: string[]
   exists?: (p: string) => boolean
+  /** Platform override (defaults to process.platform); injected in tests. */
+  platform?: NodeJS.Platform
 }
 
 /** Locate a ripgrep binary (HOUSTON_RG override, then PATH, then common dirs), or null. */
@@ -37,10 +40,13 @@ export function resolveRipgrep(opts: ResolveRgOptions = {}): string | null {
   const env = opts.env ?? process.env
   const exists = opts.exists ?? existsSync
   const candidates = opts.candidates ?? RG_CANDIDATES
+  const platform = opts.platform ?? process.platform
+  const name = withExeSuffix('rg', platform) // rg.exe on Windows
+  const pathDelim = platform === 'win32' ? ';' : ':' // not node:path delimiter (host-dependent)
   const override = env.HOUSTON_RG
   if (override && exists(override)) return override
-  for (const dir of (env.PATH ?? '').split(delimiter)) {
-    if (dir && exists(join(dir, 'rg'))) return join(dir, 'rg')
+  for (const dir of (env.PATH ?? '').split(pathDelim)) {
+    if (dir && exists(join(dir, name))) return join(dir, name)
   }
   for (const c of candidates) if (exists(c)) return c
   return null
