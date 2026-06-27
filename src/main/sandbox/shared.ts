@@ -91,6 +91,31 @@ export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   }
 }
 
+/** Standard absolute locations a real `bash` lives at, in preference order. `/bin/bash`
+ *  is the norm; `/usr/bin/bash` and `/usr/local/bin/bash` cover distros / hand-built
+ *  installs where `/bin` isn't the canonical bindir. */
+const BASH_PATHS = ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash']
+
+/**
+ * Resolve a POSIX shell for the agent's bash-flavored commands: a real `bash` from
+ * {@link BASH_PATHS}, else POSIX `/bin/sh` as a last resort. `isBash` tells callers
+ * whether the bash-only session prelude can run (it can't under plain `/bin/sh`), so
+ * `supportsSession` stays honest — the same contract the Windows backend uses for its
+ * `cmd.exe` fallback.
+ *
+ * zsh is deliberately NOT a fallback: the agent's commands are bash-flavored, and zsh's
+ * default word-splitting differs from bash (it doesn't split unquoted parameter
+ * expansions), so it would silently mis-run commands rather than fail loudly. `/bin/sh`
+ * at least executes them with POSIX semantics.
+ */
+export function resolvePosixShell(exists: (p: string) => boolean = existsSync): {
+  shell: string
+  isBash: boolean
+} {
+  const bash = BASH_PATHS.find(exists)
+  return bash ? { shell: bash, isBash: true } : { shell: '/bin/sh', isBash: false }
+}
+
 /**
  * Bounded capture that preserves BOTH ends of a stream: the first `head` bytes
  * and the last `tail` bytes, with a `\n[... N bytes truncated ...]\n` marker in

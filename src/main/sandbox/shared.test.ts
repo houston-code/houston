@@ -7,6 +7,7 @@ import {
   clampToolResult,
   pkgCacheDir,
   planKill,
+  resolvePosixShell,
   runWithBackend,
   sandboxEnv,
   windowsKillCommands
@@ -168,6 +169,31 @@ describe('clampToolResult', () => {
     const out = clampToolResult('y'.repeat(500_000))
     expect(out).toMatch(MARKER)
     expect(out.length).toBeLessThanOrEqual(64_000 + 64) // budget + short marker line
+  })
+})
+
+describe('resolvePosixShell', () => {
+  it('prefers /bin/bash when present (isBash → session prelude usable)', () => {
+    expect(resolvePosixShell((p) => p === '/bin/bash')).toEqual({ shell: '/bin/bash', isBash: true })
+  })
+
+  it('finds bash outside /bin (e.g. /usr/bin/bash) when /bin/bash is absent', () => {
+    expect(resolvePosixShell((p) => p === '/usr/bin/bash')).toEqual({
+      shell: '/usr/bin/bash',
+      isBash: true
+    })
+    expect(resolvePosixShell((p) => p === '/usr/local/bin/bash')).toEqual({
+      shell: '/usr/local/bin/bash',
+      isBash: true
+    })
+  })
+
+  it('falls back to POSIX /bin/sh (NOT zsh) and reports isBash false when no bash exists', () => {
+    expect(resolvePosixShell(() => false)).toEqual({ shell: '/bin/sh', isBash: false })
+  })
+
+  it('honors the /bin/bash preference order when several bash paths exist', () => {
+    expect(resolvePosixShell(() => true).shell).toBe('/bin/bash')
   })
 })
 

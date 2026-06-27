@@ -130,6 +130,10 @@ describe('bwrapShell', () => {
     expect(bwrapShell((p) => p === '/bin/bash')).toBe('/bin/bash')
     expect(bwrapShell(() => false)).toBe('/bin/sh')
   })
+
+  it('finds bash outside /bin (e.g. /usr/bin/bash) before dropping to /bin/sh', () => {
+    expect(bwrapShell((p) => p === '/usr/bin/bash')).toBe('/usr/bin/bash')
+  })
 })
 
 describe('probeBwrapUsable', () => {
