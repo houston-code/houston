@@ -53,6 +53,45 @@ describe('notificationFor', () => {
       notificationFor({ runId: 'r', type: 'usage', inputTokens: 1, outputTokens: 2, cost: 0 })
     ).toBeNull()
   })
+
+  it('pings when a pull request is opened or merged', () => {
+    expect(
+      notificationFor({
+        runId: 'r',
+        type: 'tool_result',
+        callId: 'c',
+        name: 'gh_pr_create',
+        ok: true,
+        output: 'https://github.com/acme/houston/pull/42'
+      })
+    ).toEqual({ title: 'Houston', body: 'Opened pull request #42' })
+    expect(
+      notificationFor(
+        {
+          runId: 'r',
+          type: 'tool_result',
+          callId: 'c',
+          name: 'gh_pr_view',
+          ok: true,
+          output: '#42 Title [merged]\nfeat → main\nhttps://github.com/acme/houston/pull/42'
+        },
+        'houston'
+      )
+    ).toEqual({ title: 'Houston · houston', body: 'Pull request #42 merged' })
+  })
+
+  it('stays quiet for ordinary tool results', () => {
+    expect(
+      notificationFor({
+        runId: 'r',
+        type: 'tool_result',
+        callId: 'c',
+        name: 'read_file',
+        ok: true,
+        output: 'file contents'
+      })
+    ).toBeNull()
+  })
 })
 
 describe('workspaceLabel', () => {

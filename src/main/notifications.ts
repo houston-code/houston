@@ -2,12 +2,14 @@ import { Notification, type BrowserWindow } from 'electron'
 import { basename } from 'node:path'
 import type { AgentEvent } from '@shared/agent'
 import { APP_NAME } from '@shared/constants'
+import { prNoticeFromToolResult } from '@shared/prNotice'
 
 /**
  * Native desktop notifications for agent events. We ping the user when a turn
- * finishes or the agent needs them (approval / question / error) *while Houston
- * isn't the focused window* — so they can wander off during a long turn and get
- * pulled back when it matters, without being nagged while they're already watching.
+ * finishes, the agent needs them (approval / question / error), or a pull request
+ * is opened/merged — *while Houston isn't the focused window* — so they can wander
+ * off during a long turn and get pulled back when it matters, without being nagged
+ * while they're already watching.
  *
  * `notificationFor` is pure (no Electron) so the "which events are worth a ping"
  * policy is unit-tested; `notifyAgentEvent` adds the focus gate and the OS call.
@@ -36,6 +38,16 @@ export function notificationFor(e: AgentEvent, workspaceName?: string): NotifySp
       return { title: `${APP_NAME} has a question${where}`, body: e.question }
     case 'error':
       return { title: `${APP_NAME} hit a problem${where}`, body: e.message }
+    case 'tool_result': {
+      // A PR opening or merging (from gh_pr_create / gh_pr_view) is worth a ping.
+      const pr = prNoticeFromToolResult(e.name, e.ok, e.output)
+      if (!pr) return null
+      const num = pr.number ? ` #${pr.number}` : ''
+      return {
+        title: `${APP_NAME}${where}`,
+        body: pr.event === 'created' ? `Opened pull request${num}` : `Pull request${num} merged`
+      }
+    }
     default:
       return null
   }

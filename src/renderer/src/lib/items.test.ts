@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { COMPACTION_SUMMARY_PREFIX, type AgentEvent, type ChatMessage } from '@shared/agent'
-import { itemsFromMessages, reduceEvent, type QuestionItem, type UserItem } from './items'
+import {
+  itemsFromMessages,
+  reduceEvent,
+  type NoticeItem,
+  type QuestionItem,
+  type ToolItem,
+  type UserItem
+} from './items'
 
 describe('itemsFromMessages', () => {
   it('flags the compaction summary turn so it renders as markdown', () => {
@@ -88,5 +95,64 @@ describe('reduceEvent — ask_user', () => {
     })
     const q = items.find((i): i is QuestionItem => i.kind === 'question')
     expect(q?.answer).toBe('A')
+  })
+})
+
+describe('PR lifecycle notices', () => {
+  it('appends a created-PR notice after a gh_pr_create result (live)', () => {
+    let items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_start',
+      callId: 'p1',
+      name: 'gh_pr_create',
+      args: { title: 'x' }
+    })
+    items = reduceEvent(items, {
+      runId: 'r',
+      type: 'tool_result',
+      callId: 'p1',
+      name: 'gh_pr_create',
+      ok: true,
+      output: 'https://github.com/acme/houston/pull/42'
+    })
+    const tool = items.find((i): i is ToolItem => i.kind === 'tool')
+    expect(tool?.status).toBe('done')
+    const notice = items.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(notice?.text).toContain('Opened pull request #42')
+  })
+
+  it('does not add a notice for an ordinary tool result', () => {
+    const items = reduceEvent(
+      [{ kind: 'tool', id: 'r1', name: 'read_file', status: 'running' }],
+      { runId: 'r', type: 'tool_result', callId: 'r1', name: 'read_file', ok: true, output: 'hi' }
+    )
+    expect(items.some((i) => i.kind === 'notice')).toBe(false)
+  })
+
+  it('rebuilds created + merged notices from the saved log', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'p1', name: 'gh_pr_create', arguments: { title: 'x' } }]
+      },
+      { role: 'tool', toolCallId: 'p1', toolName: 'gh_pr_create', content: 'https://x/pull/9' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'p2', name: 'gh_pr_view', arguments: { number: 9 } }]
+      },
+      {
+        role: 'tool',
+        toolCallId: 'p2',
+        toolName: 'gh_pr_view',
+        content: '#9 Title [merged]\nfeat → main\nhttps://x/pull/9'
+      }
+    ]
+    const notices = itemsFromMessages(messages).filter((i): i is NoticeItem => i.kind === 'notice')
+    expect(notices.map((n) => n.text)).toEqual([
+      expect.stringContaining('Opened pull request #9'),
+      expect.stringContaining('Pull request #9 merged')
+    ])
   })
 })

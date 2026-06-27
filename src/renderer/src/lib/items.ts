@@ -6,6 +6,7 @@ import {
 } from '@shared/agent'
 import { ASK_USER_TOOL } from '@shared/constants'
 import type { ImageAttachment } from '@shared/images'
+import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
@@ -161,11 +162,17 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         : e.output.startsWith('Denied') || e.output.startsWith('Blocked')
           ? 'denied'
           : 'error'
-      return updateTool(items, e.callId, {
+      const updated = updateTool(items, e.callId, {
         status,
         output: e.output,
         ...(e.images?.length ? { images: e.images } : {})
       })
+      // Highlight a PR opening/merging as its own notice, above the tool row.
+      const pr = prNoticeFromToolResult(e.name, e.ok, e.output)
+      if (pr) {
+        return [...updated, { kind: 'notice', id: nextId(), text: prNoticeText(pr), tone: 'info' }]
+      }
+      return updated
     }
     case 'compaction': {
       const finalized = finalizeStreaming(items)
@@ -272,6 +279,11 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
           output,
           ...(res?.images?.length ? { images: res.images } : {})
         })
+        // Mirror the live transcript: a PR opening/merging gets its own notice.
+        const pr = output ? prNoticeFromToolResult(tc.name, status === 'done', output) : null
+        if (pr) {
+          items.push({ kind: 'notice', id: nextId(), text: prNoticeText(pr), tone: 'info' })
+        }
       }
     }
   }

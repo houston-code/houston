@@ -713,8 +713,9 @@ export function SettingsModal({
                     }
                   />
                   <span>
-                    Show a desktop notification when the agent finishes a turn, needs approval, or
-                    asks a question while Houston isn’t the focused window. On by default.
+                    Show a desktop notification when the agent finishes a turn, needs approval,
+                    asks a question, or opens/merges a pull request while Houston isn’t the focused
+                    window. On by default.
                   </span>
                 </label>
                 <h3>Updates</h3>

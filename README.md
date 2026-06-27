@@ -100,9 +100,11 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.
 - **Desktop notifications.** Wander off during a long turn — Houston fires a
-  native notification when the agent finishes, needs approval, or asks a question
-  while the window isn't focused, and clicking it brings the app back. On by
-  default; toggle it in Settings → *Appearance*.
+  native notification when the agent finishes, needs approval, asks a question, or
+  opens/merges a pull request while the window isn't focused, and clicking it
+  brings the app back. PR events also show inline in the transcript: a notice
+  banner when `gh_pr_create` opens a PR and when a `gh_pr_view` shows it merged.
+  On by default; toggle it in Settings → *Appearance*.
 - **Rich transcript.** Replies render as full **Markdown** — headings, lists,
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,
