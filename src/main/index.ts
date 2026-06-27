@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
 import { loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { registerIpc } from './ipc'
+import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
 import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
@@ -112,6 +113,7 @@ if (headless) {
   app.whenReady().then(() => {
     log.info(`Houston ${app.getVersion()} starting`)
     registerIpc()
+    buildAppMenu()
     createWindow()
     initUpdates()
 

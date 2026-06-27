@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useTerminals } from '../hooks/useTerminals'
 import { TerminalView } from './TerminalView'
 
@@ -7,29 +7,66 @@ import { TerminalView } from './TerminalView'
  * a tab bar and one xterm view per tab. Lazy-loaded (xterm.js is heavy) so it
  * only enters the bundle when the user first opens the terminal.
  *
- * Height is owned by App (persisted to settings); the top edge is a drag handle
- * that calls back into App's resize logic.
+ * It stays mounted once opened and is hidden via `visible` (CSS display) rather
+ * than unmounted, so terminal sessions and scrollback survive hide/show. Height
+ * is owned by App (persisted to settings); the top edge is a drag handle.
  */
 export function TerminalDock({
   workspace,
+  visible,
   onResizeMouseDown,
   onClose
 }: {
   workspace: string | null
+  visible: boolean
   onResizeMouseDown: (e: React.MouseEvent) => void
   onClose: () => void
 }): JSX.Element {
   const { tabs, activeId, addTab, closeTab, setActive } = useTerminals(workspace)
+  // Guards against double-spawning while the async addTab is in flight.
+  const opening = useRef(false)
 
-  // Open a first terminal automatically when the panel mounts with none.
+  // Ensure there's a terminal whenever the panel is shown and empty — covers the
+  // first open and reopening after every tab was closed.
   useEffect(() => {
-    if (tabs.length === 0) void addTab()
-    // Only on mount — afterwards the user manages tabs explicitly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (visible && tabs.length === 0 && !opening.current) {
+      opening.current = true
+      void addTab().finally(() => {
+        opening.current = false
+      })
+    }
+  }, [visible, tabs.length, addTab])
+
+  // Close a tab; if it was the last one, hide the whole panel instead of leaving
+  // an empty shell (reopening will spawn a fresh terminal).
+  const handleCloseTab = useCallback(
+    (id: string) => {
+      const wasLast = tabs.length <= 1
+      closeTab(id)
+      if (wasLast) onClose()
+    },
+    [tabs.length, closeTab, onClose]
+  )
+
+  // ⌘W while the terminal is focused: main asks us to close the active tab.
+  useEffect(() => {
+    return window.api.onTerminalCloseActive(() => {
+      if (activeId) handleCloseTab(activeId)
+    })
+  }, [activeId, handleCloseTab])
 
   return (
-    <div className="terminal-dock">
+    <div
+      className="terminal-dock"
+      style={{ display: visible ? 'flex' : 'none' }}
+      // Report focus to main so ⌘W routes to the active tab while typing here.
+      onFocus={() => window.api.setTerminalFocused(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          window.api.setTerminalFocused(false)
+        }
+      }}
+    >
       <div
         className="terminal-dock__resizer"
         role="separator"
@@ -60,7 +97,7 @@ export function TerminalDock({
                 aria-label={`Close ${t.title}`}
                 onClick={(e) => {
                   e.stopPropagation()
-                  closeTab(t.id)
+                  handleCloseTab(t.id)
                 }}
               >
                 ✕
@@ -98,7 +135,9 @@ export function TerminalDock({
               className="terminal-dock__pane"
               style={{ display: t.id === activeId ? 'block' : 'none' }}
             >
-              <TerminalView id={t.id} active={t.id === activeId} />
+              {/* "active" drives focus/refit; gate on panel visibility so a hidden
+                  panel never steals focus and a reshown one refits to its size. */}
+              <TerminalView id={t.id} active={visible && t.id === activeId} />
             </div>
           ))
         )}

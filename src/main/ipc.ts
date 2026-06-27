@@ -30,6 +30,7 @@ import { runAndDrain, type DrainIO } from './agent/drain'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
+import { setTerminalFocused } from './menu'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { loadCommands } from './agent/commands'
@@ -493,4 +494,7 @@ export function registerIpc(): void {
     resizeTerminal(id, cols, rows)
   )
   ipcMain.handle(IPC.terminalKill, (_event, id: string): boolean => killTerminal(id))
+  // Fire-and-forget focus signal so the ⌘W menu handler knows whether to close
+  // the active terminal tab or the window.
+  ipcMain.on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
 }
