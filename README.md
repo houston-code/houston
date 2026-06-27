@@ -207,17 +207,22 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   Pick the new branch name and the base to branch from; the worktree is kept out
   of the parent repo's `git status` via `.git/info/exclude`. Deleting the chat
   offers to remove the worktree too (uncommitted or unmerged work is always kept).
-- **GitHub pull requests (first-class).** When the [`gh` CLI](https://cli.github.com)
+- **GitHub repos & pull requests (first-class).** When the [`gh` CLI](https://cli.github.com)
   is installed and authenticated (`gh auth login`), Houston gets dedicated
   pull-request tools — `gh_pr_create`, `gh_pr_list`, `gh_pr_view`,
   `gh_pr_comment`, and `gh_pr_checkout` — so the agent can open a PR for the
   current branch, browse and inspect open PRs (with their diff), comment, and
-  check one out to work on it. Same approach as Claude Code: it drives your local
-  `gh`, so no token is stored in the app and `gh` owns the credentials. Each call
-  is **network**-gated (always prompts for approval) and the mutating ones
-  (create / comment / checkout) are refused in plan mode. Houston also tells the
-  agent in its system prompt when `gh` is available, so it reaches for these
-  instead of raw shell `gh`.
+  check one out to work on it. `gh_repo_create` rounds this out: it creates a new
+  repository (private by default, made from the current project directory and
+  pushed) without leaving the app. Same approach as Claude Code: it drives your
+  local `gh`, so no token is stored in the app and `gh` owns the credentials.
+  Each call is **network**-gated (always prompts for approval) and the mutating
+  ones (PR create / comment / checkout, repo create) are refused in plan mode.
+  Because these tools run `gh` *outside* the shell sandbox, they reach the
+  network on approval — unlike a raw `gh` in `run_shell`, which the sandbox blocks
+  from the network unless the run is full-auto or you pick "Allow for run."
+  Houston tells the agent in its system prompt when `gh` is available, so it
+  reaches for these instead of raw shell `gh`.
 - **PR sweeps.** For batch pull-request work the agent keeps a `pr_sweep` board —
   the same scratchpad idea as the task list, specialized per PR — rendered live in
   the transcript with each item's status, branch, and PR link. Two modes:

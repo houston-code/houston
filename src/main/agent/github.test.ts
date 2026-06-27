@@ -54,9 +54,10 @@ describe('runGh', () => {
 })
 
 describe('githubContext', () => {
-  it('advertises the gh_pr_* tools when gh is present', () => {
+  it('advertises the gh_pr_* and gh_repo_create tools when gh is present', () => {
     const ctx = githubContext(() => '/opt/homebrew/bin/gh')
     expect(ctx).toContain('gh_pr_create')
+    expect(ctx).toContain('gh_repo_create')
     expect(ctx).toContain('gh auth login')
   })
 
