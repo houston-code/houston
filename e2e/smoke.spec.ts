@@ -50,6 +50,40 @@ test('app boots and renders the UI', async () => {
   }
 })
 
+test('integrated terminal opens and round-trips through a PTY', async () => {
+  const { executablePath, args, mode } = resolveLaunch()
+  test.info().annotations.push({ type: 'launch-mode', description: mode })
+
+  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
+  const app: ElectronApplication = await electron.launch({
+    executablePath,
+    args: [...args, `--user-data-dir=${userDataDir}`]
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await expect(window.locator('.app')).toBeVisible()
+
+    // Open the terminal from the top-right titlebar action. This is also the real
+    // test that node-pty loaded under Electron's ABI — a mismatch would have
+    // crashed the app on boot (terminal.ts imports node-pty at module load).
+    await window.getByRole('button', { name: 'Terminal' }).click()
+
+    // A tab and the xterm surface mount.
+    await expect(window.locator('.terminal-tab').first()).toBeVisible()
+    await expect(window.locator('.terminal-view .xterm')).toBeVisible()
+
+    // Focus the terminal and type. The PTY echoes input back, so seeing the text
+    // rendered proves the renderer ↔ main ↔ node-pty pipe works end to end.
+    await window.locator('.terminal-view').click()
+    await window.keyboard.type('echo PTYOK')
+    await expect(window.locator('.terminal-dock')).toContainText('PTYOK')
+  } finally {
+    await app.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
 test('sidebar collapses to a rail and expands again', async () => {
   const { executablePath, args, mode } = resolveLaunch()
   test.info().annotations.push({ type: 'launch-mode', description: mode })

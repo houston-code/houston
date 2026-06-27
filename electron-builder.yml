@@ -46,10 +46,15 @@ extraResources:
   - from: node_modules/@ast-grep/cli-darwin-arm64/ast-grep
     to: bin/ast-grep
 
-# No native modules — skip the rebuild step. (The vendored binaries above are
-# standalone executables, not node addons, so there's nothing to rebuild.)
-npmRebuild: false
+# node-pty is a native addon (the integrated terminal's PTY backend), so let
+# electron-builder rebuild native modules against the bundled Electron ABI. The
+# vendored binaries above are standalone executables, not node addons.
+npmRebuild: true
 asar: true
+# The native .node addon can't be loaded from inside the asar archive — unpack
+# node-pty so its prebuilt binary is a real file on disk at runtime.
+asarUnpack:
+  - node_modules/node-pty/**
 
 mac:
   category: public.app-category.developer-tools

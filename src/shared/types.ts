@@ -201,4 +201,8 @@ export interface AppSettings {
   sidebarWidth?: number
   /** Whether the sidebar is collapsed to a thin rail. */
   sidebarCollapsed?: boolean
+  /** Height (px) of the integrated terminal panel. */
+  terminalHeight?: number
+  /** Whether the integrated terminal panel is open. */
+  terminalOpen?: boolean
 }

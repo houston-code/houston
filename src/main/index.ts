@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
 import { registerIpc } from './ipc'
 import { killAllShells } from './agent/shells'
+import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
@@ -101,9 +102,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Don't leave the agent's background shells running after the app exits.
+// Don't leave the agent's background shells or terminals running after the app exits.
 app.on('will-quit', () => {
   killAllShells()
+  killAllTerminals()
   clearCheckpoints()
   disconnectAllMcp()
 })

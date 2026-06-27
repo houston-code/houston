@@ -22,6 +22,14 @@ describe('shortcutFor', () => {
     expect(shortcutFor(ev(',', true))).toBe('open-settings')
   })
 
+  it('maps Ctrl+backtick to toggle-terminal', () => {
+    expect(shortcutFor({ key: '`', metaKey: false, ctrlKey: true })).toBe('toggle-terminal')
+  })
+
+  it('does not map Cmd+backtick (Ctrl only) to toggle-terminal', () => {
+    expect(shortcutFor({ key: '`', metaKey: true, ctrlKey: false })).toBeNull()
+  })
+
   it('maps Escape to escape (no modifier needed)', () => {
     expect(shortcutFor(ev('Escape'))).toBe('escape')
   })

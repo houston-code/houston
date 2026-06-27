@@ -63,7 +63,16 @@ export const IPC = {
   agentQueueList: 'agent:queue:list',
   agentQueueChanged: 'agent:queue:changed',
   checkpointRestore: 'checkpoint:restore',
-  checkpointReapply: 'checkpoint:reapply'
+  checkpointReapply: 'checkpoint:reapply',
+  // Integrated terminal (PTY-backed; see main/terminal.ts)
+  terminalCreate: 'terminal:create',
+  terminalInput: 'terminal:input',
+  terminalResize: 'terminal:resize',
+  terminalKill: 'terminal:kill',
+  /** Main → renderer: a chunk of terminal output (coalesced). */
+  terminalData: 'terminal:data',
+  /** Main → renderer: a terminal's shell exited. */
+  terminalExit: 'terminal:exit'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
