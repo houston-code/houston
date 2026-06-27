@@ -276,7 +276,7 @@ Grab the artifact for your platform:
 | Platform | Minimum OS | Download | Auto-updates? |
 |----------|------------|----------|---------------|
 | macOS (Apple Silicon) | macOS 12 Monterey | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
-| macOS (Intel) | macOS 12 Monterey | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | **No** — re-download to update |
+| macOS (Intel) | macOS 12 Monterey | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
 | Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
 | Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
@@ -291,11 +291,12 @@ Grab the artifact for your platform:
 > The bundled `ast-grep` is glibc-only, so the Linux build needs a glibc distro
 > (Debian/Ubuntu/Fedora/etc.); musl distros (Alpine) aren't supported.
 >
-> **Intel macs don't auto-update.** arm64 and Intel build on separate runners, and
-> electron-builder emits one `latest-mac.yml` per build — letting both publish it would
-> clobber the arm64 feed and break the updater ([electron-builder#5592](https://github.com/electron-userland/electron-builder/issues/5592)).
-> So arm64 owns auto-update; the Intel build ships its `.dmg`/`.zip` for manual
-> re-download (like the Linux `.deb`). Intel auto-update is a planned follow-up.
+> **Both mac arches auto-update from one feed.** arm64 and Intel build on separate
+> runners, and electron-builder emits one `latest-mac.yml` per build — naively publishing
+> both would clobber one another ([electron-builder#5592](https://github.com/electron-userland/electron-builder/issues/5592)).
+> So the release pipeline merges the x64 files into the arm64 feed
+> ([`scripts/merge-mac-update-yml.mjs`](scripts/merge-mac-update-yml.mjs)) and publishes a
+> single `latest-mac.yml`; the updater picks the entry matching each Mac's architecture.
 >
 > To ship a signed + notarized macOS build, see [Signing & notarization](#signing--notarization).
 

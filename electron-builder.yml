@@ -87,11 +87,13 @@ mac:
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
-  # NOTE on auto-update: arm64 and x64 build on separate runners, and electron-builder
-  # writes a single `latest-mac.yml` per build — two mac arches would clobber each other's
-  # feed (electron-builder#5592), breaking the updater. So arm64 owns the update feed and
-  # the Intel build publishes only its .dmg/.zip (manual re-download, like the Linux .deb).
-  # Intel auto-update is a follow-up (per-arch channel file or a merged universal build).
+  # NOTE on auto-update: arm64 and x64 build on separate runners, and electron-builder writes
+  # a single `latest-mac.yml` per build — naively publishing both clobbers one another's feed
+  # (electron-builder#5592). So both arches auto-update from ONE merged feed: the arm64 leg
+  # publishes its `latest-mac.yml`, then the x64 leg merges its files into it (scripts/
+  # merge-mac-update-yml.mjs) and re-publishes. MacUpdater self-selects per arch from the
+  # `files` list (filterFilesForArch: arm64 entries on Apple Silicon, the rest on Intel).
+  # See `.github/workflows/release-publish.yml`.
 
 win:
   icon: build/icon.ico
