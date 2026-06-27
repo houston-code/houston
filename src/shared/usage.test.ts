@@ -41,9 +41,29 @@ describe('formatTokens', () => {
 })
 
 describe('contextWindowFor', () => {
-  it('knows the Claude / Gemini / GPT families', () => {
-    expect(contextWindowFor('claude-opus-4-8')).toBe(200_000)
+  it('gives 1M-window Claude families their full window and the rest 200K', () => {
+    expect(contextWindowFor('claude-opus-4-8')).toBe(1_000_000)
+    expect(contextWindowFor('claude-opus-4-7')).toBe(1_000_000)
+    expect(contextWindowFor('claude-sonnet-4-6')).toBe(1_000_000)
+    expect(contextWindowFor('claude-haiku-4-5')).toBe(200_000) // Haiku 4.5 stays at 200K
+    expect(contextWindowFor('claude-3-5-sonnet-20241022')).toBe(200_000) // older Claude
+  })
+
+  it('keeps future Opus/Sonnet minor and major bumps on the 1M window', () => {
+    expect(contextWindowFor('claude-opus-4-9')).toBe(1_000_000)
+    expect(contextWindowFor('claude-opus-5')).toBe(1_000_000)
+    expect(contextWindowFor('claude-sonnet-4-7')).toBe(1_000_000)
+    expect(contextWindowFor('claude-sonnet-5')).toBe(1_000_000)
+    // But a new Haiku, and Opus/Sonnet at/below 4.5, stay at 200K.
+    expect(contextWindowFor('claude-haiku-5')).toBe(200_000)
+    expect(contextWindowFor('claude-sonnet-4-5')).toBe(200_000)
+  })
+
+  it('knows the Gemini / GPT families', () => {
     expect(contextWindowFor('gemini-2.5-pro')).toBe(1_000_000)
+    expect(contextWindowFor('gpt-5')).toBe(400_000)
+    expect(contextWindowFor('gpt-5-mini')).toBe(400_000)
+    expect(contextWindowFor('gpt-5-nano')).toBe(400_000)
     expect(contextWindowFor('gpt-4o')).toBe(128_000)
     expect(contextWindowFor('gpt-4o-mini')).toBe(128_000)
     expect(contextWindowFor('gpt-4.1')).toBe(1_000_000)
@@ -54,7 +74,10 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('o3')).toBe(200_000)
     expect(contextWindowFor('o4-mini')).toBe(200_000)
     expect(contextWindowFor('o1-preview')).toBe(200_000)
+    expect(contextWindowFor('o5')).toBe(200_000) // future o-series isn't pinned to o1/3/4
+    expect(contextWindowFor('o5-mini')).toBe(200_000)
     expect(contextWindowFor('llama3-8b')).toBeNull() // the "o" in a word must not match
+    expect(contextWindowFor('gpt-4o')).toBe(128_000) // the "o" in 4o isn't the o-series
   })
 
   it('returns null for unknown / local models', () => {
@@ -82,8 +105,9 @@ describe('contextPercent', () => {
 
 describe('modelPricing', () => {
   it('matches Claude / GPT / Gemini families', () => {
-    expect(modelPricing('claude-opus-4-8')).toEqual({ input: 15, output: 75 })
+    expect(modelPricing('claude-opus-4-8')).toEqual({ input: 5, output: 25 })
     expect(modelPricing('claude-sonnet-4-6')).toEqual({ input: 3, output: 15 })
+    expect(modelPricing('claude-haiku-4-5')).toEqual({ input: 1, output: 5 })
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6 })
     expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5 })
     expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10 })
@@ -97,8 +121,8 @@ describe('modelPricing', () => {
 
 describe('turnCostUsd', () => {
   it('prices input and output tokens per million', () => {
-    // 1M in + 1M out on Opus = 15 + 75
-    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 1_000_000)).toBeCloseTo(90, 6)
+    // 1M in + 1M out on Opus = 5 + 25
+    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 1_000_000)).toBeCloseTo(30, 6)
     // 10k in + 2k out on gpt-4o-mini = 0.0015 + 0.0012
     expect(turnCostUsd('gpt-4o-mini', 10_000, 2_000)).toBeCloseTo(0.0027, 6)
   })

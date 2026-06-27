@@ -18,6 +18,7 @@ export type ShortcutId =
   | 'switch-model'
   | 'find-in-chat'
   | 'toggle-sidebar'
+  | 'toggle-terminal'
   | 'open-settings'
   | 'show-help'
   | 'escape'
@@ -124,6 +125,12 @@ export const SHORTCUTS: ShortcutDef[] = [
     id: 'toggle-sidebar',
     chords: [{ key: 'b', mod: true }],
     label: 'Toggle sidebar',
+    category: 'General'
+  },
+  {
+    id: 'toggle-terminal',
+    chords: [{ key: '`', ctrl: true }],
+    label: 'Toggle the integrated terminal',
     category: 'General'
   },
   {

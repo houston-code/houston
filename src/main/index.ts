@@ -1,8 +1,11 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, shell, screen, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
+import { loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { registerIpc } from './ipc'
+import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
+import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
@@ -27,9 +30,16 @@ app.setName(APP_NAME)
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
+  // Fill the primary display's work area on a fresh install; restore the user's
+  // saved bounds once they've resized or moved the window (see window-state.ts).
+  const bounds = pickStartupBounds(
+    loadWindowState(),
+    screen.getPrimaryDisplay().workArea,
+    screen.getAllDisplays().map((d) => d.workArea)
+  )
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 820,
+    ...bounds,
     minWidth: 720,
     minHeight: 560,
     show: false,
@@ -45,6 +55,21 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // Remember the window's position and size after the user resizes or moves it,
+  // so the next launch reopens exactly there instead of refilling the desktop.
+  // Debounced to coalesce the stream of events a drag produces into one write.
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+  const rememberBounds = (): void => {
+    if (!mainWindow || mainWindow.isFullScreen()) return
+    if (saveTimer) clearTimeout(saveTimer)
+    const win = mainWindow
+    saveTimer = setTimeout(() => {
+      if (!win.isDestroyed()) saveWindowState(win.getBounds())
+    }, 400)
+  }
+  mainWindow.on('resize', rememberBounds)
+  mainWindow.on('move', rememberBounds)
 
   // Open external links in the user's browser, never in-app.
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -88,6 +113,7 @@ if (headless) {
   app.whenReady().then(() => {
     log.info(`Houston ${app.getVersion()} starting`)
     registerIpc()
+    buildAppMenu()
     createWindow()
     initUpdates()
 
@@ -101,9 +127,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Don't leave the agent's background shells running after the app exits.
+// Don't leave the agent's background shells or terminals running after the app exits.
 app.on('will-quit', () => {
   killAllShells()
+  killAllTerminals()
   clearCheckpoints()
   disconnectAllMcp()
 })

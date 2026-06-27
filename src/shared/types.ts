@@ -208,4 +208,8 @@ export interface AppSettings {
    * global) shortcuts appear here.
    */
   keybindings?: Record<string, string | null>
+  /** Height (px) of the integrated terminal panel. */
+  terminalHeight?: number
+  /** Whether the integrated terminal panel is open. */
+  terminalOpen?: boolean
 }

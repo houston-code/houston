@@ -10,9 +10,9 @@ import type {
   ChatMessage,
   Conversation,
   ConversationMeta,
+  DeleteConversationResult,
   RepoInfo,
-  ToolApprovalDecision,
-  WorktreeRemoval
+  ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import type { UpdateCheckResult, WhatsNew } from '@shared/update'
@@ -74,14 +74,12 @@ const api = {
     error?: string
   }> => ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
   /**
-   * Delete a conversation. Pass `removeWorktree` to also tear down a
-   * Houston-created worktree (safe by default — a dirty worktree / unmerged branch
-   * is kept unless `force`). Resolves with what happened to the worktree, or null.
+   * Delete a conversation. Shows a native confirmation dialog (a three-way choice
+   * when the chat owns a Houston-created worktree, which can outlive the chat).
+   * Resolves with whether the delete happened and what became of the worktree.
    */
-  deleteConversation: (
-    id: string,
-    opts?: { removeWorktree?: boolean; force?: boolean }
-  ): Promise<WorktreeRemoval | null> => ipcRenderer.invoke(IPC.conversationDelete, id, opts),
+  deleteConversation: (id: string): Promise<DeleteConversationResult> =>
+    ipcRenderer.invoke(IPC.conversationDelete, id),
   exportConversation: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExport, id),
   exportConversationHtml: (id: string): Promise<string | null> =>
@@ -161,6 +159,44 @@ const api = {
     const listener = (_event: IpcRendererEvent, payload: AgentEvent): void => cb(payload)
     ipcRenderer.on(IPC.agentEvent, listener)
     return () => ipcRenderer.removeListener(IPC.agentEvent, listener)
+  },
+
+  // Integrated terminal (PTY-backed)
+  /** Spawn a terminal; resolves with its id. Output arrives via onTerminalData. */
+  createTerminal: (opts: { cwd?: string; cols?: number; rows?: number }): Promise<string> =>
+    ipcRenderer.invoke(IPC.terminalCreate, opts),
+  /** Send user input (keystrokes / pasted text) to a terminal. */
+  writeTerminal: (id: string, data: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.terminalInput, id, data),
+  /** Tell a terminal its rendered grid size changed. */
+  resizeTerminal: (id: string, cols: number, rows: number): Promise<void> =>
+    ipcRenderer.invoke(IPC.terminalResize, id, cols, rows),
+  /** Kill a terminal's shell. */
+  killTerminal: (id: string): Promise<boolean> => ipcRenderer.invoke(IPC.terminalKill, id),
+  /** Subscribe to a terminal's streamed output. Returns an unsubscribe fn. */
+  onTerminalData: (cb: (payload: { id: string; data: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { id: string; data: string }): void =>
+      cb(payload)
+    ipcRenderer.on(IPC.terminalData, listener)
+    return () => ipcRenderer.removeListener(IPC.terminalData, listener)
+  },
+  /** Subscribe to terminal-exit notifications. Returns an unsubscribe fn. */
+  onTerminalExit: (cb: (payload: { id: string; exitCode: number }) => void): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: { id: string; exitCode: number }
+    ): void => cb(payload)
+    ipcRenderer.on(IPC.terminalExit, listener)
+    return () => ipcRenderer.removeListener(IPC.terminalExit, listener)
+  },
+  /** Tell main whether the terminal is focused, so ⌘W can route to the tab. */
+  setTerminalFocused: (focused: boolean): void =>
+    ipcRenderer.send(IPC.terminalFocusChanged, focused),
+  /** Subscribe to the "close active terminal tab" signal (⌘W while focused). */
+  onTerminalCloseActive: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on(IPC.terminalCloseActive, listener)
+    return () => ipcRenderer.removeListener(IPC.terminalCloseActive, listener)
   },
 
   // Updates

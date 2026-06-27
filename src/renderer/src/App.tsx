@@ -10,10 +10,11 @@ import {
 } from 'react'
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
-import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
+import type { ConversationMeta, ReasoningEffort, RepoInfo } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
+import { branchNameError, suggestBranch } from './lib/worktree'
 import { applyTheme } from './lib/theme'
 import { matchShortcut, isEditableTarget, isMacPlatform, shortcutHint } from './lib/shortcuts'
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
@@ -31,6 +32,7 @@ import {
   SIDEBAR_NUDGE_STEP,
   SIDEBAR_RAIL_WIDTH
 } from './lib/sidebar'
+import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { itemsFromMessages, lastUserText } from './lib/items'
@@ -48,10 +50,10 @@ import type { UpdateCheckResult, WhatsNew } from '@shared/update'
 const SettingsModal = lazy(() =>
   import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
 )
-const WorktreeDialog = lazy(() =>
-  import('./components/WorktreeDialog').then((m) => ({ default: m.WorktreeDialog }))
-)
 const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })))
+const TerminalDock = lazy(() =>
+  import('./components/TerminalDock').then((m) => ({ default: m.TerminalDock }))
+)
 const WhatsNewModal = lazy(() =>
   import('./components/WhatsNewModal').then((m) => ({ default: m.WhatsNewModal }))
 )
@@ -92,10 +94,24 @@ const POLICY_COMMANDS: Record<string, ApprovalPolicy> = {
  * The message the Changes panel's "Create PR" button hands to the agent. The
  * renderer never drives git/gh itself — it asks the agent to do the commit →
  * push → open-PR flow with its existing tools, under the normal approval gate.
+ *
+ * The branch logic is the crux: a fresh change opens an independent PR against
+ * the default branch, but when the current branch already has an open PR the new
+ * change is stacked on top — head branched off the current tip, base pointed at
+ * that PR's branch — so the new PR's diff shows only the increment, never the
+ * earlier PR's commits.
  */
-const CREATE_PR_PROMPT = `Create a GitHub pull request for my current changes.
+const CREATE_PR_PROMPT = `Create a GitHub pull request for my current changes, using git and the gh_pr_create tool. Never check out or commit to the default branch directly — it may be checked out in another worktree.
 
-If there are uncommitted changes, stage and commit them with a clear, conventional commit message. If I'm currently on the default branch (main or master), create a new feature branch first. Push the branch to origin, then open a pull request against the default branch using the gh_pr_create tool, and reply with the PR link. Briefly summarize what the PR contains.`
+1. Run \`git fetch origin\` and identify the repository's default branch (e.g. main).
+2. Choose the PR's head branch:
+   - If I'm currently on the default branch, OR the current branch already has an open PR (check with \`gh pr list --head <current-branch>\`): create a new branch off the current tip and use that as the head.
+   - Otherwise: use the current branch as the head.
+3. Stage and commit the changes on that head branch with a clear, conventional commit message, then push it to origin.
+4. Open the PR with gh_pr_create, choosing the base branch:
+   - If the current branch already had an open PR, this change is stacked on it — set base to that PR's branch, so the new PR's diff shows only these changes and not the earlier PR's.
+   - Otherwise set base to the default branch.
+5. Reply with the PR link and a short summary, and say whether you opened an independent PR or stacked it on top of which PR/branch.`
 
 /** Pick a sensible default model: first provider that has a key and a model. */
 function defaultSelection(settings: AppSettings): SelectedModel | null {
@@ -116,7 +132,11 @@ export default function App(): JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteSeed, setPaletteSeed] = useState('')
   const [findOpen, setFindOpen] = useState(false)
-  const [worktreeFor, setWorktreeFor] = useState<string | null>(null)
+  // Worktree setup for a not-yet-started chat (shown inline in the control bar).
+  const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
+  const [worktreeMode, setWorktreeMode] = useState(true)
+  const [branchName, setBranchName] = useState('')
+  const [baseBranch, setBaseBranch] = useState('')
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
@@ -126,6 +146,11 @@ export default function App(): JSX.Element {
   const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  // Latches true on first open and stays mounted thereafter (hidden via CSS when
+  // closed) so terminal sessions and scrollback survive hide/show.
+  const [terminalMounted, setTerminalMounted] = useState(false)
+  const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
   const appRef = useRef<HTMLDivElement>(null)
   const chat = useChat(currentId)
 
@@ -143,6 +168,12 @@ export default function App(): JSX.Element {
       if (s.recentWorkspaces[0]) setLastWorkspace(s.recentWorkspaces[0])
       if (typeof s.sidebarWidth === 'number') setSidebarWidth(clampSidebarWidth(s.sidebarWidth))
       if (s.sidebarCollapsed) setSidebarCollapsed(true)
+      if (typeof s.terminalHeight === 'number')
+        setTerminalHeight(clampTerminalHeight(s.terminalHeight))
+      if (s.terminalOpen) {
+        setTerminalOpen(true)
+        setTerminalMounted(true)
+      }
       await refreshConversations()
     })()
   }, [refreshConversations])
@@ -211,18 +242,53 @@ export default function App(): JSX.Element {
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
 
+  // For a not-yet-started chat, load the workspace's git info and seed fresh
+  // worktree defaults: a new worktree (on for git repos), a suggested branch
+  // name, and the current branch as the base. Re-runs when the folder changes.
+  useEffect(() => {
+    if (currentId !== null || !workspace) {
+      setRepoInfo(null)
+      return
+    }
+    let cancelled = false
+    void window.api.getRepoInfo(workspace).then((info) => {
+      if (cancelled) return
+      setRepoInfo(info)
+      setWorktreeMode(info.isRepo)
+      setBranchName(suggestBranch())
+      setBaseBranch(info.currentBranch ?? '')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [currentId, workspace])
+
+  // Whether the first message of this new chat will spin up a worktree.
+  const creatingWorktree = currentId === null && worktreeMode && repoInfo?.isRepo === true
+
   // Start a turn immediately with the given text/images, creating a conversation
-  // first if this is the very first message.
+  // first if this is the very first message — in a fresh worktree when set up.
   const sendNow = useCallback(
     async (text: string, images?: ImageAttachment[]) => {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
-        const conv = await window.api.createConversation({
-          workspace,
-          providerId: settings.selected.providerId,
-          model: settings.selected.model
-        })
+        let conv: Awaited<ReturnType<typeof window.api.createConversation>>
+        try {
+          conv = await window.api.createConversation({
+            workspace,
+            providerId: settings.selected.providerId,
+            model: settings.selected.model,
+            ...(creatingWorktree
+              ? { worktree: { branch: branchName.trim(), ...(baseBranch ? { base: baseBranch } : {}) } }
+              : {})
+          })
+        } catch (e) {
+          // Worktree/branch creation failed (e.g. a branch appeared since we last
+          // checked) — surface it and keep the user on the new-chat screen.
+          chat.notify(`Couldn't start the chat: ${(e as Error).message}`, 'error')
+          return
+        }
         convId = conv.id
         setCurrentId(conv.id)
       }
@@ -236,7 +302,7 @@ export default function App(): JSX.Element {
       })
       void refreshConversations()
     },
-    [settings, workspace, currentId, chat, refreshConversations]
+    [settings, workspace, currentId, creatingWorktree, branchName, baseBranch, chat, refreshConversations]
   )
 
   // Messages typed while a run is active are buffered (in the main process, keyed
@@ -288,102 +354,43 @@ export default function App(): JSX.Element {
     [chat]
   )
 
-  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the currently visible list.
-  const jumpToChat = useCallback(
-    (index: number) => {
-      const id = chatAtIndex(visibleConversations, index)
-      if (id && id !== currentId) void selectConversation(id)
-    },
-    [visibleConversations, currentId, selectConversation]
-  )
-
-  const cycleChat = useCallback(
-    (dir: 1 | -1) => {
-      const id = cycleChatId(visibleConversations, currentId, dir)
-      if (id && id !== currentId) void selectConversation(id)
-    },
-    [visibleConversations, currentId, selectConversation]
-  )
-
-  const newChatInWorkspace = useCallback(
-    async (ws: string) => {
-      if (!settings) return
-      const sel = settings.selected
-      const conv = await window.api.createConversation({
-        workspace: ws,
-        providerId: sel?.providerId ?? '',
-        model: sel?.model ?? ''
-      })
+  // Enter the "new chat" screen for a workspace WITHOUT creating a conversation
+  // yet. The chat — and its worktree, when the control-bar toggle is on — is
+  // created lazily on the first message (see sendNow), so the worktree controls
+  // are picked first. New worktree is the default for git repos.
+  const enterNewChat = useCallback(
+    (ws: string) => {
       setLastWorkspace(ws)
-      setCurrentId(conv.id)
+      setCurrentId(null)
       chat.reset([])
-      await refreshConversations()
     },
-    [settings, chat, refreshConversations]
+    [chat]
   )
 
   const onNewChat = useCallback(async () => {
     const ws = workspace ?? (await window.api.pickWorkspace())
-    if (ws) await newChatInWorkspace(ws)
-  }, [workspace, newChatInWorkspace])
-
-  // Open the "new chat in a worktree" dialog, picking a folder first if none is active.
-  const onNewWorktree = useCallback(async () => {
-    const ws = workspace ?? (await window.api.pickWorkspace())
-    if (ws) setWorktreeFor(ws)
-  }, [workspace])
-
-  // Create a branch + worktree for the given repo folder and start a chat in it.
-  // Rejects (surfaced inline by the dialog) on a bad branch name or git failure.
-  const newChatInWorktree = useCallback(
-    async (branch: string, base: string) => {
-      if (!worktreeFor || !settings) return
-      const sel = settings.selected
-      const conv = await window.api.createConversation({
-        workspace: worktreeFor,
-        providerId: sel?.providerId ?? '',
-        model: sel?.model ?? '',
-        worktree: { branch, ...(base ? { base } : {}) }
-      })
-      setLastWorkspace(conv.workspace)
-      setCurrentId(conv.id)
-      chat.reset([])
-      setWorktreeFor(null)
-      await refreshConversations()
-    },
-    [worktreeFor, settings, chat, refreshConversations]
-  )
+    if (ws) enterNewChat(ws)
+  }, [workspace, enterNewChat])
 
   const onChangeWorkspace = useCallback(async () => {
     const ws = await window.api.pickWorkspace()
-    if (ws) await newChatInWorkspace(ws)
-  }, [newChatInWorkspace])
+    if (ws) enterNewChat(ws)
+  }, [enterNewChat])
 
   const onDeleteConversation = useCallback(
     async (id: string) => {
-      const conv = conversations.find((c) => c.id === id)
-      let removeWorktree = false
-      if (conv?.worktree) {
-        // The chat is deleted either way; the prompt only governs the worktree.
-        removeWorktree = window.confirm(
-          `Delete “${conv.title}”.\n\n` +
-            `Also remove its git worktree and branch “${conv.worktree.branch}”?\n\n` +
-            `OK — remove the worktree (any uncommitted or unmerged work is kept).\n` +
-            `Cancel — keep the worktree on disk.`
-        )
-      }
-      const res = await window.api.deleteConversation(
-        id,
-        conv?.worktree ? { removeWorktree } : undefined
-      )
-      if (removeWorktree && res?.message) alert(res.message)
+      // The native confirmation (and the worktree choice) lives in the main process;
+      // it returns deleted:false when the user cancels, so we touch nothing then.
+      const res = await window.api.deleteConversation(id)
+      if (!res.deleted) return
+      if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
         setCurrentId(null)
         chat.reset([])
       }
       await refreshConversations()
     },
-    [conversations, currentId, chat, refreshConversations]
+    [currentId, chat, refreshConversations]
   )
 
   const onForkConversation = useCallback(
@@ -522,18 +529,6 @@ export default function App(): JSX.Element {
     [chat]
   )
 
-  // Shift+Tab steps to the next approval mode and confirms it in the transcript
-  // (the ControlBar's mode selector also reflects the change).
-  const cyclePolicy = useCallback(() => {
-    if (!settings) return
-    const next = nextApprovalPolicy(settings.approvalPolicy)
-    void onChangePolicy(next)
-    chat.notify(`Approval mode: ${POLICY_LABEL[next]}`)
-    // chat.notify is stable (useCallback in useChat); depend on it explicitly rather
-    // than the whole `chat`, which changes identity every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings, onChangePolicy, chat.notify])
-
   const onChangeReasoning = useCallback(async (reasoningEffort: ReasoningEffort) => {
     const fresh = await window.api.saveSettings({
       ...(await window.api.getSettings()),
@@ -613,6 +608,52 @@ export default function App(): JSX.Element {
       }
     },
     [commitSidebarWidth, sidebarWidth]
+  )
+
+  // ---- Integrated terminal (toggle + resizable height, persisted) ----
+
+  const persistTerminal = useCallback(
+    async (patch: Pick<Partial<AppSettings>, 'terminalHeight' | 'terminalOpen'>) => {
+      const fresh = await window.api.saveSettings({ ...(await window.api.getSettings()), ...patch })
+      setSettings(fresh)
+    },
+    []
+  )
+
+  const toggleTerminal = useCallback(() => {
+    setTerminalOpen((open) => {
+      const next = !open
+      if (next) setTerminalMounted(true)
+      void persistTerminal({ terminalOpen: next })
+      return next
+    })
+  }, [persistTerminal])
+
+  // Drag the panel's top edge: update the height CSS variable live (no re-render of
+  // the transcript while dragging), then commit to state/settings on release.
+  // Dragging up grows the panel, so height increases as the cursor's Y decreases.
+  const onTerminalResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const startY = e.clientY
+      const startH = terminalHeight
+      document.body.classList.add('is-resizing')
+      const onMove = (ev: MouseEvent): void => {
+        const h = clampTerminalHeight(startH + (startY - ev.clientY))
+        appRef.current?.style.setProperty('--terminal-h', `${h}px`)
+      }
+      const onUp = (ev: MouseEvent): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        document.body.classList.remove('is-resizing')
+        const h = clampTerminalHeight(startH + (startY - ev.clientY))
+        setTerminalHeight(h)
+        void persistTerminal({ terminalHeight: h })
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [terminalHeight, persistTerminal]
   )
 
   const onRevert = useCallback(async () => {
@@ -701,7 +742,7 @@ export default function App(): JSX.Element {
     [onNewChat, onCompact, onChangePolicy, chat, commands]
   )
 
-  // ---- Command palette (⌘K) ----
+  // ---- Keyboard shortcuts, command palette, mode cycling ----
 
   const mac = useMemo(() => isMacPlatform(), [])
 
@@ -709,13 +750,40 @@ export default function App(): JSX.Element {
   // applied. Drives global matching, the help overlay, and palette key hints.
   const shortcuts = useMemo(() => resolveShortcuts(settings?.keybindings), [settings?.keybindings])
 
-  // The palette's flat, searchable item list: app actions, approval modes, the
-  // available models, and every chat as a switch target. Each item closes over its
-  // own handler; the palette closes after running one.
+  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the currently visible list.
+  const jumpToChat = useCallback(
+    (index: number) => {
+      const id = chatAtIndex(visibleConversations, index)
+      if (id && id !== currentId) void selectConversation(id)
+    },
+    [visibleConversations, currentId, selectConversation]
+  )
+
+  const cycleChat = useCallback(
+    (dir: 1 | -1) => {
+      const id = cycleChatId(visibleConversations, currentId, dir)
+      if (id && id !== currentId) void selectConversation(id)
+    },
+    [visibleConversations, currentId, selectConversation]
+  )
+
+  // Shift+Tab steps to the next approval mode and confirms it in the transcript
+  // (the ControlBar's mode selector also reflects the change).
+  const cyclePolicy = useCallback(() => {
+    if (!settings) return
+    const next = nextApprovalPolicy(settings.approvalPolicy)
+    void onChangePolicy(next)
+    chat.notify(`Approval mode: ${POLICY_LABEL[next]}`)
+    // chat.notify is stable (useCallback in useChat); depend on it explicitly rather
+    // than the whole `chat`, which changes identity every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, onChangePolicy, chat.notify])
+
+  // The command palette's flat, searchable item list: app actions, approval modes,
+  // the available models, and every chat as a switch target.
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const base = (p: string): string => p.replace(/\/+$/, '').split('/').pop() || p
     const items: PaletteItem[] = []
-
     items.push(
       {
         id: 'act-new-chat',
@@ -726,18 +794,19 @@ export default function App(): JSX.Element {
         run: () => void onNewChat()
       },
       {
-        id: 'act-new-worktree',
-        title: 'New chat in a worktree',
-        section: 'Actions',
-        keywords: 'branch git',
-        run: () => void onNewWorktree()
-      },
-      {
         id: 'act-toggle-sidebar',
         title: sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar',
         section: 'Actions',
         hint: shortcutHint('toggle-sidebar', mac, shortcuts),
         run: toggleSidebar
+      },
+      {
+        id: 'act-toggle-terminal',
+        title: 'Toggle terminal',
+        section: 'Actions',
+        hint: shortcutHint('toggle-terminal', mac, shortcuts),
+        keywords: 'shell console',
+        run: toggleTerminal
       },
       {
         id: 'act-change-folder',
@@ -793,7 +862,6 @@ export default function App(): JSX.Element {
         run: () => void onCompact()
       })
     }
-
     for (const p of APPROVAL_POLICIES) {
       items.push({
         id: `mode-${p}`,
@@ -804,7 +872,6 @@ export default function App(): JSX.Element {
         run: () => void onChangePolicy(p)
       })
     }
-
     for (const prov of settings?.providers ?? []) {
       for (const m of prov.models) {
         const current =
@@ -820,7 +887,6 @@ export default function App(): JSX.Element {
         })
       }
     }
-
     for (const c of conversations) {
       if (c.id === currentId) continue
       items.push({
@@ -831,7 +897,6 @@ export default function App(): JSX.Element {
         run: () => void selectConversation(c.id)
       })
     }
-
     return items
   }, [
     mac,
@@ -844,8 +909,8 @@ export default function App(): JSX.Element {
     settings?.selected,
     conversations,
     onNewChat,
-    onNewWorktree,
     toggleSidebar,
+    toggleTerminal,
     onChangeWorkspace,
     onImportConversation,
     onCompact,
@@ -854,9 +919,9 @@ export default function App(): JSX.Element {
     selectConversation
   ])
 
-  // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): Cmd/Ctrl+N
-  // new chat, Cmd/Ctrl+K command palette, Cmd/Ctrl+, settings, Cmd/Ctrl+B toggle
-  // sidebar, Cmd/Ctrl+/ or ? help, Esc to stop a run or close an open dialog.
+  // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
+  // ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab cycle mode, ⌘F find, ⌘⇧M model,
+  // ⌘/ or ? help, ⌃` terminal, Esc to stop a run / close a dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       // Plain-character shortcuts (e.g. `?`) must not fire while typing in a field;
@@ -864,6 +929,11 @@ export default function App(): JSX.Element {
       const inEditable = isEditableTarget(e.target)
       if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape') return
       const action = matchShortcut(e, shortcuts)
+      // Keys typed inside the terminal belong to the shell (Esc → vim, etc.).
+      // Only the terminal toggle is honoured there; everything else passes through.
+      const inTerminal =
+        e.target instanceof HTMLElement && e.target.closest('.terminal-dock') !== null
+      if (inTerminal && action !== 'toggle-terminal') return
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
@@ -884,6 +954,9 @@ export default function App(): JSX.Element {
       } else if (action === 'toggle-sidebar') {
         e.preventDefault()
         toggleSidebar()
+      } else if (action === 'toggle-terminal') {
+        e.preventDefault()
+        toggleTerminal()
       } else if (action === 'show-help') {
         e.preventDefault()
         setHelpOpen((v) => !v)
@@ -899,8 +972,7 @@ export default function App(): JSX.Element {
       } else if (action === 'cycle-mode') {
         // Shift+Tab is reverse-focus in dialogs — let their focus trap (or the find
         // bar) have it; only hijack it for mode-cycling in the main chat view.
-        if (paletteOpen || helpOpen || settingsOpen || changesOpen || worktreeFor || findOpen)
-          return
+        if (paletteOpen || helpOpen || settingsOpen || changesOpen || findOpen) return
         e.preventDefault()
         cyclePolicy()
       } else if (action === 'escape') {
@@ -922,6 +994,7 @@ export default function App(): JSX.Element {
   }, [
     onNewChat,
     toggleSidebar,
+    toggleTerminal,
     jumpToChat,
     cycleChat,
     cyclePolicy,
@@ -931,7 +1004,6 @@ export default function App(): JSX.Element {
     findOpen,
     settingsOpen,
     changesOpen,
-    worktreeFor,
     chat.running,
     chat.cancel
   ])
@@ -948,7 +1020,11 @@ export default function App(): JSX.Element {
   const selectionReady = Boolean(
     selectedProvider && (!selectedProvider.requiresKey || selectedProvider.hasKey)
   )
-  const canChat = Boolean(settings.selected && workspace && selectionReady)
+  // Block sending while a worktree is being set up with an invalid/taken branch,
+  // so the failure is caught before the message is consumed.
+  const worktreeBlocked =
+    creatingWorktree && branchNameError(branchName, repoInfo?.branches ?? []) !== null
+  const canChat = Boolean(settings.selected && workspace && selectionReady && !worktreeBlocked)
   // Only offer the image-attachment affordance when the selected model can see images.
   const visionSupported = settings.selected
     ? modelCapabilities(settings.selected.model).vision
@@ -959,7 +1035,10 @@ export default function App(): JSX.Element {
       className="app"
       ref={appRef}
       style={
-        { '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px` } as CSSProperties
+        {
+          '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`,
+          '--terminal-h': `${terminalHeight}px`
+        } as CSSProperties
       }
     >
       <Sidebar
@@ -972,7 +1051,6 @@ export default function App(): JSX.Element {
         onToggleCollapse={toggleSidebar}
         onSelect={selectConversation}
         onNew={onNewChat}
-        onNewWorktree={onNewWorktree}
         onDelete={onDeleteConversation}
         onFork={onForkConversation}
         onExport={onExportConversation}
@@ -1008,6 +1086,8 @@ export default function App(): JSX.Element {
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
+          onToggleTerminal={toggleTerminal}
+          terminalOpen={terminalOpen}
         />
 
         <UpdateBanner update={update} onDismiss={() => setUpdate(null)} />
@@ -1092,12 +1172,32 @@ export default function App(): JSX.Element {
           </div>
         )}
 
+        {terminalMounted && (
+          <Suspense fallback={null}>
+            <TerminalDock
+              workspace={workspace}
+              visible={terminalOpen}
+              onResizeMouseDown={onTerminalResizeMouseDown}
+              onClose={toggleTerminal}
+            />
+          </Suspense>
+        )}
+
         <div className="dock">
           <ControlBar
             settings={settings}
             selected={settings.selected}
             workspace={workspace}
             usage={chat.usage}
+            newChat={currentId === null}
+            repoInfo={repoInfo}
+            worktreeMode={worktreeMode}
+            branchName={branchName}
+            baseBranch={baseBranch}
+            currentWorktree={currentConv?.worktree}
+            onToggleWorktree={setWorktreeMode}
+            onChangeBranchName={setBranchName}
+            onChangeBaseBranch={setBaseBranch}
             onSelectModel={onSelectModel}
             onChangePolicy={onChangePolicy}
             onChangeReasoning={onChangeReasoning}
@@ -1130,14 +1230,6 @@ export default function App(): JSX.Element {
             initial={settings}
             onClose={() => setSettingsOpen(false)}
             onSaved={(s) => setSettings(s)}
-          />
-        )}
-
-        {worktreeFor && (
-          <WorktreeDialog
-            workspace={worktreeFor}
-            onClose={() => setWorktreeFor(null)}
-            onCreate={newChatInWorktree}
           />
         )}
 

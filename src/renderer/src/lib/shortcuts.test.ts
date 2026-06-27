@@ -43,6 +43,12 @@ describe('matchShortcut', () => {
     expect(matchShortcut(ev('m', true))).toBeNull()
   })
 
+  it('maps Ctrl+backtick to toggle-terminal (raw Control, not ⌘)', () => {
+    expect(matchShortcut({ key: '`', metaKey: false, ctrlKey: true })).toBe('toggle-terminal')
+    // ⌘` is not the terminal toggle — the binding is Control-specific.
+    expect(matchShortcut({ key: '`', metaKey: true, ctrlKey: false })).toBeNull()
+  })
+
   it('maps Escape to escape (no modifier needed)', () => {
     expect(matchShortcut(ev('Escape'))).toBe('escape')
   })
