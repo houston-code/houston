@@ -6,7 +6,7 @@ a project folder, and let it read, edit, search, and run code — every action g
 by an approval flow and, where the OS supports it, confined to a sandbox.
 
 Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
-(Apple Silicon), Windows 10 or newer (x64), and Linux (x64, glibc-based distros).
+(Apple Silicon and Intel), Windows 10 or newer (x64), and Linux (x64, glibc-based distros).
 
 ![Houston icon](build/icon.png)
 
@@ -276,6 +276,7 @@ Grab the artifact for your platform:
 | Platform | Minimum OS | Download | Auto-updates? |
 |----------|------------|----------|---------------|
 | macOS (Apple Silicon) | macOS 12 Monterey | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
+| macOS (Intel) | macOS 12 Monterey | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | **No** — re-download to update |
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
 | Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
 | Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
@@ -289,6 +290,12 @@ Grab the artifact for your platform:
 >
 > The bundled `ast-grep` is glibc-only, so the Linux build needs a glibc distro
 > (Debian/Ubuntu/Fedora/etc.); musl distros (Alpine) aren't supported.
+>
+> **Intel macs don't auto-update.** arm64 and Intel build on separate runners, and
+> electron-builder emits one `latest-mac.yml` per build — letting both publish it would
+> clobber the arm64 feed and break the updater ([electron-builder#5592](https://github.com/electron-userland/electron-builder/issues/5592)).
+> So arm64 owns auto-update; the Intel build ships its `.dmg`/`.zip` for manual
+> re-download (like the Linux `.deb`). Intel auto-update is a planned follow-up.
 >
 > To ship a signed + notarized macOS build, see [Signing & notarization](#signing--notarization).
 
@@ -340,13 +347,15 @@ npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 
 ## Build a release
 
-Each OS builds its own artifacts — native modules (`node-pty`) and the per-platform
-`rg`/`ast-grep` binaries can't be cross-compiled, so you build on the target OS:
+Each OS+arch builds its own artifacts — native modules (`node-pty`) and the per-platform
+`rg`/`ast-grep` binaries can't be cross-compiled, so you build on the target OS (and, for
+mac, on the target arch — arm64 on Apple Silicon, x64 on an Intel mac):
 
 ```bash
-npm run dist:mac    # macOS arm64 → .dmg + .zip (+ latest-mac.yml)   — run on macOS
-npm run dist:win    # Windows x64 → -setup.exe + .zip (+ latest.yml) — run on Windows
-npm run dist:linux  # Linux x64   → .AppImage + .deb (+ latest-linux.yml) — run on Linux
+npm run dist:mac      # macOS arm64 → .dmg + .zip (+ latest-mac.yml) — run on Apple Silicon
+npm run dist:mac:x64  # macOS x64   → .dmg + .zip                    — run on an Intel mac
+npm run dist:win      # Windows x64 → -setup.exe + .zip (+ latest.yml) — run on Windows
+npm run dist:linux    # Linux x64   → .AppImage + .deb (+ latest-linux.yml) — run on Linux
 ```
 
 The human download is the `.dmg` / `-setup.exe` / `.AppImage`; the `.zip` / nsis /
@@ -354,10 +363,12 @@ AppImage feeds (+ `latest-*.yml`) are what `electron-updater` uses to auto-updat
 installed app (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
 fails if a vendored binary is missing, so a build can't silently ship without search.
 
-Every PR set to auto-merge also builds all three platforms in CI (each on its own
-runner, against the merged state), smoke-tests the packaged macOS app with Playwright,
-and uploads the artifacts (`houston-mac-arm64` / `houston-win-x64` / `houston-linux-x64`)
-on the workflow run — grab a build from the **Actions** tab without building locally.
+Every PR set to auto-merge builds macOS arm64, Windows x64, and Linux x64 in CI (each on
+its own runner, against the merged state), smoke-tests the packaged macOS app with
+Playwright, and uploads the artifacts (`houston-mac-arm64` / `houston-win-x64` /
+`houston-linux-x64`) on the workflow run — grab a build from the **Actions** tab without
+building locally. The macOS **x64 (Intel)** build runs only in the release pipeline (the
+prepare gate and the publish job), keeping its 10×-billed macOS minutes off the per-PR path.
 
 ## Updates
 

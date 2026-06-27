@@ -29,6 +29,7 @@
     "verify:resources": "node scripts/verify-bundled-binaries.mjs",
     "dist": "npm run build && npm run verify:resources && electron-builder --mac --arm64",
     "dist:mac": "npm run build && npm run verify:resources && electron-builder --mac --arm64",
+    "dist:mac:x64": "npm run build && npm run verify:resources -- --platform darwin --arch x64 && electron-builder --mac --x64",
     "dist:win": "npm run build && npm run verify:resources -- --platform win32 --arch x64 && electron-builder --win --x64",
     "dist:linux": "npm run build && npm run verify:resources -- --platform linux --arch x64 && electron-builder --linux --x64",
     "dist:unpacked": "npm run build && npm run verify:resources && electron-builder --mac --arm64 --dir"
