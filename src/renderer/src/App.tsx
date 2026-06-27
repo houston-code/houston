@@ -18,6 +18,7 @@ import { applyTheme } from './lib/theme'
 import { matchShortcut, isEditableTarget, isMacPlatform, shortcutHint } from './lib/shortcuts'
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
 import { nextApprovalPolicy } from './lib/policyCycle'
+import { resolveShortcuts } from './lib/keybindingOverrides'
 import type { PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
@@ -704,6 +705,10 @@ export default function App(): JSX.Element {
 
   const mac = useMemo(() => isMacPlatform(), [])
 
+  // The effective shortcut registry: built-in defaults with the user's overrides
+  // applied. Drives global matching, the help overlay, and palette key hints.
+  const shortcuts = useMemo(() => resolveShortcuts(settings?.keybindings), [settings?.keybindings])
+
   // The palette's flat, searchable item list: app actions, approval modes, the
   // available models, and every chat as a switch target. Each item closes over its
   // own handler; the palette closes after running one.
@@ -716,7 +721,7 @@ export default function App(): JSX.Element {
         id: 'act-new-chat',
         title: 'New chat',
         section: 'Actions',
-        hint: shortcutHint('new-chat', mac),
+        hint: shortcutHint('new-chat', mac, shortcuts),
         keywords: 'create start',
         run: () => void onNewChat()
       },
@@ -731,7 +736,7 @@ export default function App(): JSX.Element {
         id: 'act-toggle-sidebar',
         title: sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar',
         section: 'Actions',
-        hint: shortcutHint('toggle-sidebar', mac),
+        hint: shortcutHint('toggle-sidebar', mac, shortcuts),
         run: toggleSidebar
       },
       {
@@ -751,7 +756,7 @@ export default function App(): JSX.Element {
         id: 'act-find',
         title: 'Find in conversation',
         section: 'Actions',
-        hint: shortcutHint('find-in-chat', mac),
+        hint: shortcutHint('find-in-chat', mac, shortcuts),
         keywords: 'search',
         run: () => setFindOpen(true)
       },
@@ -759,14 +764,14 @@ export default function App(): JSX.Element {
         id: 'act-help',
         title: 'Keyboard shortcuts',
         section: 'Actions',
-        hint: shortcutHint('show-help', mac),
+        hint: shortcutHint('show-help', mac, shortcuts),
         run: () => setHelpOpen(true)
       },
       {
         id: 'act-settings',
         title: 'Open settings',
         section: 'Actions',
-        hint: shortcutHint('open-settings', mac),
+        hint: shortcutHint('open-settings', mac, shortcuts),
         run: () => setSettingsOpen(true)
       }
     )
@@ -830,6 +835,7 @@ export default function App(): JSX.Element {
     return items
   }, [
     mac,
+    shortcuts,
     workspace,
     currentId,
     sidebarCollapsed,
@@ -857,7 +863,7 @@ export default function App(): JSX.Element {
       // mod-bearing chords (⌘…) still work everywhere, and Esc is always allowed.
       const inEditable = isEditableTarget(e.target)
       if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape') return
-      const action = matchShortcut(e)
+      const action = matchShortcut(e, shortcuts)
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
@@ -919,6 +925,7 @@ export default function App(): JSX.Element {
     jumpToChat,
     cycleChat,
     cyclePolicy,
+    shortcuts,
     paletteOpen,
     helpOpen,
     findOpen,
@@ -1145,7 +1152,7 @@ export default function App(): JSX.Element {
 
         {whatsNew && <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />}
 
-        {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
+        {helpOpen && <ShortcutsHelp shortcuts={shortcuts} onClose={() => setHelpOpen(false)} />}
 
         {paletteOpen && (
           <CommandPalette

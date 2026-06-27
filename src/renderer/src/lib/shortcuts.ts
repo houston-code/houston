@@ -76,6 +76,22 @@ export interface ShortcutDef {
    * would be noise (e.g. a range like ⌘1–9). Overrides per-chord formatting.
    */
   display?: (mac: boolean) => string
+  /** Reserved binding that can't be user-rebound (e.g. Escape's cancel semantics). */
+  fixed?: boolean
+}
+
+/**
+ * Whether a shortcut can be user-rebound: a single-chord, global, non-fixed binding
+ * without a custom display. (Multi-chord / range / composer-handled shortcuts and
+ * Escape are left as-is.)
+ */
+export function isCustomizable(def: ShortcutDef): boolean {
+  return (
+    (def.scope ?? 'global') === 'global' &&
+    !def.fixed &&
+    !def.display &&
+    def.chords.length === 1
+  )
 }
 
 /** The shortcut registry. New shortcuts are added here and picked up everywhere. */
@@ -126,7 +142,8 @@ export const SHORTCUTS: ShortcutDef[] = [
     id: 'escape',
     chords: [{ key: 'Escape' }],
     label: 'Stop the current turn, or close an open dialog',
-    category: 'General'
+    category: 'General',
+    fixed: true
   },
   {
     id: 'select-chat-n',
@@ -212,9 +229,10 @@ function chordMatches(e: Keyish, c: KeyChord): boolean {
 /**
  * Resolve a key event to a global shortcut id, or null. Only `global`-scope
  * shortcuts are considered; composer shortcuts are handled in their own component.
+ * Pass a resolved registry (defaults + user overrides) to honour customizations.
  */
-export function matchShortcut(e: Keyish): ShortcutId | null {
-  for (const def of SHORTCUTS) {
+export function matchShortcut(e: Keyish, defs: ShortcutDef[] = SHORTCUTS): ShortcutId | null {
+  for (const def of defs) {
     if ((def.scope ?? 'global') !== 'global') continue
     for (const c of def.chords) {
       if (chordMatches(e, c)) return def.id
@@ -254,9 +272,13 @@ export function shortcutDisplays(def: ShortcutDef, mac: boolean): string[] {
   return def.chords.map((c) => formatChord(c, mac))
 }
 
-/** The display string for a shortcut's primary chord, e.g. `⌘K`, or undefined if unknown. */
-export function shortcutHint(id: ShortcutId, mac: boolean): string | undefined {
-  const def = SHORTCUTS.find((s) => s.id === id)
+/** The display string for a shortcut's primary chord, e.g. `⌘K`, or undefined if unbound. */
+export function shortcutHint(
+  id: ShortcutId,
+  mac: boolean,
+  defs: ShortcutDef[] = SHORTCUTS
+): string | undefined {
+  const def = defs.find((s) => s.id === id)
   return def ? shortcutDisplays(def, mac)[0] : undefined
 }
 

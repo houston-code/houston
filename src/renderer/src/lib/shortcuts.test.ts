@@ -4,6 +4,7 @@ import {
   formatChord,
   shortcutDisplays,
   isEditableTarget,
+  isCustomizable,
   SHORTCUTS,
   type Keyish
 } from './shortcuts'
@@ -138,5 +139,22 @@ describe('SHORTCUTS registry', () => {
       expect(s.chords.length).toBeGreaterThan(0)
       expect(s.label.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('isCustomizable', () => {
+  const byId = (id: string) => SHORTCUTS.find((s) => s.id === id)!
+
+  it('is true for single-chord global shortcuts', () => {
+    expect(isCustomizable(byId('new-chat'))).toBe(true)
+    expect(isCustomizable(byId('command-palette'))).toBe(true)
+    expect(isCustomizable(byId('next-chat'))).toBe(true)
+  })
+
+  it('is false for fixed, composer-scope, multi-chord and range shortcuts', () => {
+    expect(isCustomizable(byId('escape'))).toBe(false) // fixed
+    expect(isCustomizable(byId('send-message'))).toBe(false) // composer scope
+    expect(isCustomizable(byId('show-help'))).toBe(false) // two chords
+    expect(isCustomizable(byId('select-chat-n'))).toBe(false) // custom display (range)
   })
 })

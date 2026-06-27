@@ -11,18 +11,25 @@ import {
 
 /**
  * A read-only overlay listing every keyboard shortcut, grouped by category and
- * derived straight from the {@link SHORTCUTS} registry — so it can never drift from
- * what the app actually binds. Opened with ⌘/ (or `?`), closed with Esc or the
- * backdrop.
+ * derived straight from the shortcut registry — so it can never drift from what the
+ * app actually binds. `shortcuts` defaults to the built-ins but accepts the resolved
+ * registry (with user overrides) so customizations show through. Opened with ⌘/ (or
+ * `?`), closed with Esc or the backdrop.
  */
-export function ShortcutsHelp({ onClose }: { onClose: () => void }): JSX.Element {
+export function ShortcutsHelp({
+  shortcuts = SHORTCUTS,
+  onClose
+}: {
+  shortcuts?: ShortcutDef[]
+  onClose: () => void
+}): JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   useFocusTrap(ref, onClose)
   const mac = useMemo(() => isMacPlatform(), [])
 
   const groups = useMemo(() => {
     const byCat = new Map<ShortcutCategory, ShortcutDef[]>()
-    for (const s of SHORTCUTS) {
+    for (const s of shortcuts) {
       const list = byCat.get(s.category) ?? []
       list.push(s)
       byCat.set(s.category, list)
@@ -30,7 +37,7 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }): JSX.Element
     return SHORTCUT_CATEGORIES.map((cat) => ({ cat, items: byCat.get(cat) ?? [] })).filter(
       (g) => g.items.length > 0
     )
-  }, [])
+  }, [shortcuts])
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -58,12 +65,16 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }): JSX.Element
                   <li key={s.id} className="shortcuts-help__row">
                     <span className="shortcuts-help__label">{s.label}</span>
                     <span className="shortcuts-help__keys">
-                      {shortcutDisplays(s, mac).map((d, i) => (
-                        <span key={i}>
-                          {i > 0 && <span className="shortcuts-help__or">or</span>}
-                          <kbd className="kbd">{d}</kbd>
-                        </span>
-                      ))}
+                      {shortcutDisplays(s, mac).length === 0 ? (
+                        <span className="shortcuts-help__unbound">Unbound</span>
+                      ) : (
+                        shortcutDisplays(s, mac).map((d, i) => (
+                          <span key={i}>
+                            {i > 0 && <span className="shortcuts-help__or">or</span>}
+                            <kbd className="kbd">{d}</kbd>
+                          </span>
+                        ))
+                      )}
                     </span>
                   </li>
                 ))}
