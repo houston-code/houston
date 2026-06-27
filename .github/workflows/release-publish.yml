@@ -1,0 +1,140 @@
+name: Release - publish
+
+# Manual trigger — run AFTER the `release/vX.Y.Z` PR from "Release - prepare" has merged to
+# main. Builds the full signed matrix (macOS arm64, Windows x64, Linux x64) and publishes a
+# GitHub Release to the PUBLIC releases repo, which is what electron-updater reads. The
+# release is created as a draft by electron-builder, then the finalize job attaches the
+# CHANGELOG notes, un-drafts it, and marks it `latest` so the updater picks it up.
+#
+# Distribution lives in a SEPARATE PUBLIC repo (piyushvijay/houston-releases) so the app
+# can fetch updates with no embedded token, while source stays private. Writing to that
+# repo requires a PAT (the default GITHUB_TOKEN is scoped to this repo only): mint a
+# fine-grained PAT with contents:write on houston-releases and add it as the
+# GH_RELEASES_TOKEN secret here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build artifacts but do NOT publish to the public repo'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require GH_RELEASES_TOKEN for a real publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::GH_RELEASES_TOKEN secret is not set. Mint a fine-grained PAT with contents:write on piyushvijay/houston-releases and add it as the GH_RELEASES_TOKEN repo secret. (Or re-run with dry_run=true to only build artifacts.)"
+            exit 1
+          fi
+
+  build:
+    needs: guard
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      # Serialize so the three platforms don't race to CREATE the same draft release on the
+      # public repo (the first leg creates it; the others upload into it). Releases are
+      # infrequent, so the extra wall-clock is fine in exchange for a deterministic publish.
+      max-parallel: 1
+      matrix:
+        include:
+          - os: macos-14
+            dist: dist:mac
+          - os: windows-latest
+            dist: dist:win
+          - os: ubuntu-latest
+            dist: dist:linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - name: Package and publish
+        # electron-builder's github publisher reads GH_TOKEN; pointing it at the PAT makes
+        # it write to the public houston-releases repo (per electron-builder.yml `publish`).
+        # GITHUB_TOKEN is intentionally NOT in scope here — it can't write that repo.
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npm run ${{ matrix.dist }}
+          else
+            # Appends to the dist script's electron-builder invocation: --publish always
+            # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
+            npm run ${{ matrix.dist }} -- --publish always
+          fi
+      - if: matrix.os == 'macos-14'
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.os }}
+          retention-days: 14
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*-setup.exe
+            release/*.AppImage
+            release/*.deb
+            release/latest*.yml
+          if-no-files-found: error
+
+  finalize:
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      # Tag the SOURCE repo at the released commit so the next release's note range starts here.
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract version + this release's notes
+        id: meta
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # Pull just this version's section out of CHANGELOG.md to use as the Release body.
+          VERSION="$version" node scripts/extract-changelog-section.mjs > release-notes.md
+      - name: Tag source repo at released commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tag="v${{ steps.meta.outputs.version }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Tag $tag already exists; skipping."
+          else
+            git tag "$tag"
+            git push origin "$tag"
+          fi
+      - name: Publish the GitHub Release on the public repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        run: |
+          tag="v${{ steps.meta.outputs.version }}"
+          # electron-builder created this as a draft; attach the notes, un-draft, mark latest.
+          gh release edit "$tag" -R piyushvijay/houston-releases \
+            --draft=false --latest --notes-file release-notes.md

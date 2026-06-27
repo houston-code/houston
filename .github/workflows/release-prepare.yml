@@ -1,0 +1,133 @@
+name: Release - prepare
+
+# Manual trigger. Runs the ultra-thorough gate (full test + packaging matrix on all three
+# platforms), then opens a `release/vX.Y.Z` PR that bumps the MINOR (or MAJOR) version and
+# carries a generated, user-facing CHANGELOG section. You review/sharpen the notes in that
+# PR and merge to approve. After it merges, run "Release - publish" to build + ship.
+#
+# This is the only place the heavy macOS/Windows packaging matrix runs outside of release
+# (per-merge CI builds Linux only), so packaging regressions on those platforms surface
+# here, before a release is cut.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Which part of the version to bump for this release'
+        type: choice
+        options: [minor, major]
+        default: minor
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two prepare runs race to open release PRs / compute the same version.
+  group: release-prepare
+  cancel-in-progress: false
+
+jobs:
+  # Ultra-thorough gate: lint + typecheck + the full unit suite AND a full signed-less
+  # package build on every target platform. A release is only cut from a tree that is
+  # green and buildable everywhere.
+  verify:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            dist: dist:linux
+          - os: macos-14
+            dist: dist:mac
+          - os: windows-latest
+            dist: dist:win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run ${{ matrix.dist }}
+      # The packaged-app e2e (built .app via Playwright) runs at release time — it moved
+      # off the per-merge path to save macOS minutes, so this is where it gates a release.
+      - if: matrix.os == 'macos-14'
+        run: npm run test:e2e
+
+  prepare:
+    needs: verify
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+      - name: Compute release version
+        id: ver
+        run: |
+          # --no-git-tag-version edits package.json + package-lock only (no commit/tag).
+          new_tag=$(npm version ${{ inputs.bump }} --no-git-tag-version)
+          version=${new_tag#v}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release version: $version"
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          # Collect PRs merged since the previous release tag (all merged PRs for the first
+          # release, which has no prior tag). The tag is created by release-publish.yml.
+          prev=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -n "$prev" ]; then
+            since=$(git log -1 --format=%cI "$prev")
+            echo "Previous release: $prev (merged:>$since)"
+            gh pr list --state merged --base main --search "merged:>$since" \
+              --limit 300 --json number,title,labels,body > prs.json
+          else
+            echo "No previous release tag — including all merged PRs."
+            gh pr list --state merged --base main --limit 300 \
+              --json number,title,labels,body > prs.json
+          fi
+          node scripts/gen-release-notes.mjs < prs.json > .release-section.md
+          # Prepend the new section above any existing CHANGELOG body.
+          node -e "const fs=require('fs');import('./scripts/gen-release-notes.mjs').then(m=>{const s=fs.readFileSync('.release-section.md','utf8');const e=fs.existsSync('CHANGELOG.md')?fs.readFileSync('CHANGELOG.md','utf8'):'';fs.writeFileSync('CHANGELOG.md',m.prependToChangelog(e,s))})"
+          rm -f prs.json .release-section.md
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="release/v$VERSION"
+          git checkout -b "$branch"
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -qm "release: v$VERSION"
+          git push -u origin "$branch"
+          gh pr create --base main --head "$branch" --label release \
+            --title "release: v$VERSION" \
+            --body "$(cat <<EOF
+          Automated release-prep PR for **v$VERSION** (do not add the \`auto-merge\` label — this PR waits for you).
+
+          ## Before approving
+          1. Replace the placeholder summary line in \`CHANGELOG.md\` with a 2–3 sentence plain-English summary.
+          2. Fill in **Required steps** if this release needs a migration or manual action.
+          3. Sanity-check the **Breaking changes** section.
+
+          ## To ship
+          Merge this PR, then run the **Release - publish** workflow. It builds the full signed matrix and publishes to the public releases repo (visible to the updater).
+          EOF
+          )"
