@@ -457,7 +457,9 @@ the agent loop and UI never depend on a specific provider.
   `view_localhost`) always prompts on first use — even in *full auto* — since it
   leaves the machine; choose *allow-for-the-run* to stop further prompts that run.
   `view_localhost` is restricted to loopback addresses and loads untrusted page
-  content in a sandboxed, isolated, no-Node window.
+  content in a sandboxed, isolated, no-Node window; its main frame can't be
+  navigated or redirected off loopback, and its requests can't reach
+  private/LAN/metadata hosts (public CDNs are still allowed so pages render).
 - **Keys at rest** are encrypted via the OS Keychain; only ciphertext is written
   to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
 

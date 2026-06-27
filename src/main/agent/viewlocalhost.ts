@@ -19,7 +19,8 @@
  * whatever the dev server serves is untrusted.
  */
 
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, session, type Session } from 'electron'
+import { isPrivateHost } from './webfetch'
 
 /** Offscreen viewport for the capture (a typical laptop content width). */
 const VIEWPORT = { width: 1280, height: 800 }
@@ -106,6 +107,21 @@ export function validateLocalhostUrl(raw: string): URL {
     )
   }
   return url
+}
+
+/**
+ * True for a *subresource* host the capture window must not reach: the
+ * private/LAN/link-local/metadata ranges webfetch blocks, EXCEPT loopback (the
+ * dev server and its own assets are allowed) and public hosts (CDNs, allowed so
+ * pages still render). This closes the residual where a localhost page's own JS
+ * could `fetch('http://169.254.169.254/...')` or a LAN service and leak it via
+ * the screenshot or console. An empty host (data:/blob:/about:) is not network
+ * egress and is allowed. Like webfetch, this matches on the URL's host literal,
+ * so a DNS name resolving to a private IP is a known, documented gap.
+ */
+export function isBlockedSubresourceHost(hostname: string): boolean {
+  if (!hostname) return false
+  return isPrivateHost(hostname) && !isLoopbackHost(hostname)
 }
 
 /** Format collected console entries into capped "LEVEL: text" lines. */
@@ -264,6 +280,32 @@ function roundRect(rect: Rect): Rect {
   }
 }
 
+/**
+ * In-memory session (isolated from the app's default session, so it can't touch
+ * app cookies/cache and its request filter doesn't affect the main window) whose
+ * web requests are blocked from reaching private/LAN/metadata hosts. Installed
+ * once and reused across captures — the filter is stateless.
+ */
+const CAPTURE_PARTITION = 'view-localhost-capture'
+let captureFilterInstalled = false
+
+function captureSession(): Session {
+  const ses = session.fromPartition(CAPTURE_PARTITION)
+  if (!captureFilterInstalled) {
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      let host = ''
+      try {
+        host = new URL(details.url).hostname
+      } catch {
+        /* unparseable (data:/blob:/about:) — no network egress, allow */
+      }
+      callback({ cancel: isBlockedSubresourceHost(host) })
+    })
+    captureFilterInstalled = true
+  }
+  return ses
+}
+
 async function openElectronWindow(opts: { width: number; height: number }): Promise<CaptureSession> {
   const win = new BrowserWindow({
     show: false,
@@ -271,7 +313,9 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
     height: opts.height,
     webPreferences: {
       // Offscreen rendering so the window never flashes on screen; the page is
-      // untrusted, so it's sandboxed, isolated, and has no Node integration.
+      // untrusted, so it's sandboxed, isolated, has no Node integration, and runs
+      // in a private session whose requests can't reach private/LAN/metadata hosts.
+      session: captureSession(),
       offscreen: true,
       sandbox: true,
       contextIsolation: true,
@@ -288,7 +332,8 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
   // internally, so without this a localhost page could 302 the top-level
   // navigation to a public or internal host (e.g. cloud metadata) and we'd
   // screenshot/report that — the same SSRF that webfetch guards per redirect hop.
-  // Subresources (CDN scripts, fonts) are left alone so pages still render.
+  // (Subresources are filtered separately by the capture session above: internal
+  // hosts blocked, public CDNs allowed so pages still render.)
   const blockOffHost = (event: { preventDefault: () => void }, navUrl: string): void => {
     let host = ''
     try {

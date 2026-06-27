@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   captureLocalhost,
   formatConsole,
+  isBlockedSubresourceHost,
   isLoopbackHost,
   loadWithDeadline,
   validateLocalhostUrl,
@@ -29,6 +30,31 @@ describe('isLoopbackHost', () => {
     expect(isLoopbackHost('example.com')).toBe(false)
     expect(isLoopbackHost('8.8.8.8')).toBe(false)
     expect(isLoopbackHost('999.0.0.1')).toBe(false)
+  })
+})
+
+describe('isBlockedSubresourceHost', () => {
+  it('blocks private, LAN, link-local, and metadata hosts', () => {
+    expect(isBlockedSubresourceHost('169.254.169.254')).toBe(true) // cloud metadata
+    expect(isBlockedSubresourceHost('10.0.0.5')).toBe(true)
+    expect(isBlockedSubresourceHost('192.168.1.1')).toBe(true)
+    expect(isBlockedSubresourceHost('172.16.4.4')).toBe(true)
+    expect(isBlockedSubresourceHost('100.64.0.1')).toBe(true) // CGNAT
+    expect(isBlockedSubresourceHost('fe80::1')).toBe(true) // link-local v6
+  })
+
+  it('allows loopback (the dev server) and public hosts (CDNs)', () => {
+    expect(isBlockedSubresourceHost('localhost')).toBe(false)
+    expect(isBlockedSubresourceHost('127.0.0.1')).toBe(false)
+    expect(isBlockedSubresourceHost('::1')).toBe(false)
+    expect(isBlockedSubresourceHost('0.0.0.0')).toBe(false)
+    expect(isBlockedSubresourceHost('example.com')).toBe(false)
+    expect(isBlockedSubresourceHost('cdn.jsdelivr.net')).toBe(false)
+    expect(isBlockedSubresourceHost('8.8.8.8')).toBe(false)
+  })
+
+  it('allows hostless URLs (data:/blob:/about:)', () => {
+    expect(isBlockedSubresourceHost('')).toBe(false)
   })
 })
 
