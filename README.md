@@ -203,7 +203,10 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   changes, not just the current chat's edits); read-only and hardened, the same
   way the agent's `git_diff` tool is. A **Create PR** action hands off to the
   agent — it commits, pushes, and opens the pull request through the same
-  `gh_pr_*` tools and approval gate, so the panel never drives git itself.
+  `gh_pr_*` tools and approval gate, so the panel never drives git itself. It
+  opens an independent PR against the default branch, or — when the current branch
+  already has an open PR — stacks the new one on top (based on that PR's branch) so
+  its diff shows only the new changes.
 - **Start a chat in its own worktree.** Every new chat in a git repo defaults to
   running in a fresh, isolated worktree on its own branch — so the agent's edits
   never touch your current checkout. Right after the folder picker in the control
