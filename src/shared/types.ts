@@ -185,8 +185,9 @@ export interface AppSettings {
   /** Extra directories (beyond the project folder) the agent may read and write. */
   additionalRoots?: string[]
   /**
-   * Show a native desktop notification when the agent finishes, needs approval, or
-   * asks a question while Houston isn't the focused window. On by default.
+   * Show a native desktop notification when the agent finishes, needs approval,
+   * asks a question, or opens/merges a pull request while Houston isn't the
+   * focused window. On by default.
    */
   desktopNotifications?: boolean
   /** UI color theme (default follows the OS). */
