@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import { buildSidebarSections, type SidebarSection } from '../lib/chatGroups'
+import { Icon } from './Icon'
 import { Popover } from './Popover'
 
 function basename(p: string): string {
@@ -190,7 +191,15 @@ function ConvRow({
                 close()
               }}
             >
-              {conv.archived ? '⊞ Unarchive' : '⊟ Archive'}
+              {conv.archived ? (
+                <>
+                  <Icon name="unarchive" /> Unarchive
+                </>
+              ) : (
+                <>
+                  <Icon name="archive" /> Archive
+                </>
+              )}
             </button>
             <div className="menu__sep" />
             <div className="menu__label">Move to</div>
@@ -227,7 +236,7 @@ function ConvRow({
                   close()
                 }}
               >
-                ⤴ Remove from group
+                <Icon name="removeFromGroup" /> Remove from group
               </button>
             )}
             <div className="menu__sep" />
@@ -238,7 +247,7 @@ function ConvRow({
                 close()
               }}
             >
-              ⤓ Export
+              <Icon name="export" /> Export
             </button>
             <button
               className="menu__item"
@@ -247,7 +256,7 @@ function ConvRow({
                 close()
               }}
             >
-              ⤓ Export as HTML
+              <Icon name="export" /> Export as HTML
             </button>
             <button
               className="menu__item menu__item--danger"
@@ -375,23 +384,7 @@ function FilterButton({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <svg
-          className="sidebar__filter-icon"
-          viewBox="0 0 16 16"
-          width="14"
-          height="14"
-          aria-hidden="true"
-          focusable="false"
-        >
-          <path
-            d="M2.5 4h11L9.5 8.6v4.1l-3 1.3V8.6z"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.3"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
-        </svg>
+        <Icon name="filter" />
         {filtered && <span className="sidebar__filter-dot" />}
       </button>
       {open && (
@@ -539,7 +532,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
 
       <div className="sidebar__foot">
         <button className="btn btn--sm sidebar__import" onClick={props.onImport}>
-          ⤒ Import chat
+          <Icon name="import" /> Import chat
         </button>
         <button className="btn btn--sm sidebar__settings" onClick={props.onOpenSettings}>
           ⚙︎ Settings
