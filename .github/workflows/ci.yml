@@ -143,6 +143,10 @@ jobs:
           if-no-files-found: error
 
   auto-merge:
+    # `needs` makes this run AFTER the known jobs (and skip cleanly if one fails), but
+    # the enumerated list is NOT the merge gate — the "Require all CI checks to pass"
+    # step below is. That step verifies EVERY check on the PR succeeded, so a CI job
+    # that fails (or is still running) blocks the merge even if it was never added here.
     needs: [test, linux-sandbox, test-windows, build]
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
     runs-on: ubuntu-latest
@@ -159,6 +163,44 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      # The real merge gate: refuse to merge unless EVERY other check on this PR's head
+      # has completed successfully. Self-maintaining — a CI job that fails (or is still
+      # running) blocks the merge even if it was never listed in `needs`, which is the
+      # hole that previously let a PR merge with a failing job. We exclude this
+      # auto-merge job's own check(s) (IN_PROGRESS while this runs) to avoid waiting on
+      # ourselves, and poll so a check that hasn't finished yet doesn't read as "passed".
+      - name: Require all CI checks to pass
+        run: |
+          for attempt in $(seq 1 80); do   # up to ~40 min at 30s intervals
+            ROLLUP=$(gh pr view "$PR" --json statusCheckRollup --jq '
+              [ .statusCheckRollup[]
+                | select((.name // .context) != "auto-merge")
+                | { name: (.name // .context),
+                    done: (if .__typename == "CheckRun" then (.status == "COMPLETED") else (.state != "PENDING" and .state != "EXPECTED") end),
+                    ok:   (if .__typename == "CheckRun"
+                           then (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED")
+                           else (.state == "SUCCESS") end) } ]') || ROLLUP=""
+            if [ -z "$ROLLUP" ]; then echo "check rollup fetch failed; retrying"; sleep 30; continue; fi
+            PENDING=$(echo "$ROLLUP" | jq '[.[] | select(.done | not)] | length')
+            if [ "$PENDING" -gt 0 ]; then
+              echo "Waiting on $PENDING in-progress check(s)…"
+              sleep 30
+              continue
+            fi
+            FAILED=$(echo "$ROLLUP" | jq -r '[.[] | select(.ok | not) | .name] | join(", ")')
+            if [ -n "$FAILED" ]; then
+              echo "::error::Not merging PR #$PR — these CI checks did not pass: $FAILED"
+              exit 1
+            fi
+            echo "All CI checks passed — proceeding to merge."
+            exit 0
+          done
+          echo "::error::Timed out waiting for PR #$PR CI checks to complete."
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
       # Idempotent merge. `gh pr merge` exits non-zero for several reasons; only a
       # genuinely un-merged PR should fail the job. After a non-zero exit we confirm
       # the PR's state (polling briefly, since a concurrent run's merge may still be
