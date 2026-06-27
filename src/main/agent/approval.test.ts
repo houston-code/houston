@@ -167,4 +167,45 @@ describe('decideApproval', () => {
       expect(decideApproval(base({ kind: 'read', shellSandboxed: false })).mustApprove).toBe(false)
     })
   })
+
+  describe('workspace-escaping shell command (shellEscapesWorkspace=true)', () => {
+    it('prompts under full-auto, which would otherwise auto-approve', () => {
+      expect(
+        decideApproval(
+          base({ kind: 'shell', policy: 'full-auto', shellEscapesWorkspace: true })
+        ).mustApprove
+      ).toBe(true)
+    })
+
+    it('prompts despite a generic override', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', override: true, shellEscapesWorkspace: true }))
+          .mustApprove
+      ).toBe(true)
+    })
+
+    it('an explicit allow rule still allows it', () => {
+      expect(
+        decideApproval(
+          base({ kind: 'shell', ruleAction: 'allow', shellEscapesWorkspace: true })
+        ).mustApprove
+      ).toBe(false)
+    })
+
+    it('does not affect non-shell kinds', () => {
+      expect(
+        decideApproval(
+          base({ kind: 'read', policy: 'full-auto', shellEscapesWorkspace: true })
+        ).mustApprove
+      ).toBe(false)
+    })
+
+    it('a clean in-workspace command is unaffected (auto-approves under full-auto)', () => {
+      expect(
+        decideApproval(
+          base({ kind: 'shell', policy: 'full-auto', shellEscapesWorkspace: false })
+        ).mustApprove
+      ).toBe(false)
+    })
+  })
 })

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchRule, permissionSubject } from './permissions'
+import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
 import type { PermissionRule } from '@shared/types'
 
 describe('permissionSubject', () => {
@@ -10,6 +10,44 @@ describe('permissionSubject', () => {
     expect(permissionSubject('read_file', { path: 'src/a.ts' })).toBe('src/a.ts')
     expect(permissionSubject('glob', { pattern: '**/*.ts' })).toBe('**/*.ts')
     expect(permissionSubject('read_file', {})).toBe('')
+  })
+})
+
+describe('shellReferencesExternalPath', () => {
+  it('flags absolute and home-relative paths', () => {
+    expect(shellReferencesExternalPath('cat /etc/passwd')).toBe(true)
+    expect(shellReferencesExternalPath('ls /')).toBe(true)
+    expect(shellReferencesExternalPath('cat ~/.ssh/id_rsa')).toBe(true)
+    expect(shellReferencesExternalPath('ls ~')).toBe(true)
+  })
+
+  it('flags relative paths that climb above the workspace', () => {
+    expect(shellReferencesExternalPath('cat ../outside.txt')).toBe(true)
+    expect(shellReferencesExternalPath('cat a/../../b')).toBe(true)
+    expect(shellReferencesExternalPath('cat ..')).toBe(true)
+  })
+
+  it('does not flag in-workspace paths or non-path tokens', () => {
+    expect(shellReferencesExternalPath('cat src/index.ts')).toBe(false)
+    expect(shellReferencesExternalPath('cat ./README.md')).toBe(false)
+    // Climbs then returns — stays within the workspace.
+    expect(shellReferencesExternalPath('cat a/../b')).toBe(false)
+    expect(shellReferencesExternalPath('git status')).toBe(false)
+    expect(shellReferencesExternalPath('npm run build')).toBe(false)
+    // A URL contains "//" but is not an absolute filesystem path.
+    expect(shellReferencesExternalPath('curl https://example.com')).toBe(false)
+  })
+
+  it('looks past an = for env prefixes and flag values', () => {
+    expect(shellReferencesExternalPath('FOO=/etc/secret cat $FOO')).toBe(true)
+    expect(shellReferencesExternalPath('grep x --file=/etc/hosts')).toBe(true)
+    expect(shellReferencesExternalPath('FOO=bar cat src/a.ts')).toBe(false)
+  })
+
+  it('honours quotes when tokenizing', () => {
+    expect(shellReferencesExternalPath('cat "/etc/passwd"')).toBe(true)
+    expect(shellReferencesExternalPath("cat '../escape'")).toBe(true)
+    expect(shellReferencesExternalPath('echo "hello world"')).toBe(false)
   })
 })
 
