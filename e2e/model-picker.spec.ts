@@ -12,7 +12,7 @@ const ROOT = join(__dirname, '..')
  * *upward* and stay fully on-screen rather than spilling off the bottom edge. This is
  * layout-dependent, so it can't be checked under jsdom — it needs the real app.
  */
-test('model picker opens upward, fully on-screen, in curated order', async () => {
+test('model picker opens upward, fully on-screen, in advanced-first order', async () => {
   const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
   const app: ElectronApplication = await electron.launch({
     executablePath: electronPath as unknown as string,
@@ -49,12 +49,17 @@ test('model picker opens upward, fully on-screen, in curated order', async () =>
     // The default model set fits without an internal scrollbar.
     expect(info.fitsWithoutScroll).toBe(true)
 
-    // GPT-5 is ordered ahead of GPT-4o (curated order, not stored/append order)...
+    // Advanced-first ordering: GPT-5 ahead of GPT-4o, regardless of stored order.
     const gpt5 = info.options.findIndex((o) => o.startsWith('GPT-5'))
     const gpt4o = info.options.findIndex((o) => o.startsWith('GPT-4o'))
     expect(gpt5).toBeGreaterThanOrEqual(0)
     expect(gpt5).toBeLessThan(gpt4o)
-    // ...and every model is annotated with its context window.
+    // Same family grouped, newest version first: Opus 4.8 immediately before 4.7.
+    const opus48 = info.options.findIndex((o) => o.startsWith('Claude Opus 4.8'))
+    const opus47 = info.options.findIndex((o) => o.startsWith('Claude Opus 4.7'))
+    expect(opus48).toBeGreaterThanOrEqual(0)
+    expect(opus47).toBe(opus48 + 1)
+    // Every model is annotated with its context window.
     expect(info.options.find((o) => o.startsWith('GPT-5'))).toContain('400k')
   } finally {
     await app.close()

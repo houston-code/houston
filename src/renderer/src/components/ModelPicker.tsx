@@ -45,7 +45,7 @@ export function ModelPicker({
   // Each provider's models in display order, plus a flat list of just the selectable
   // options for keyboard navigation (group headers and empty providers are skipped).
   const groups = useMemo(
-    () => settings.providers.map((p) => ({ provider: p, models: sortedModels(p.id, p.models) })),
+    () => settings.providers.map((p) => ({ provider: p, models: sortedModels(p.kind, p.models) })),
     [settings.providers]
   )
   const flat = useMemo<FlatOption[]>(
