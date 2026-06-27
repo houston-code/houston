@@ -22,17 +22,15 @@ env:
 jobs:
   test:
     timeout-minutes: 15
-    # Run the suite on Linux AND macOS. The sandbox conformance suite
-    # (src/main/sandbox/conformance.test.ts) exercises the real OS sandbox where one
-    # exists: the macOS leg verifies the Seatbelt backend end-to-end. This ubuntu leg
-    # has no bubblewrap installed, so it uses the unconfined backend and the
-    # confinement-only assertions skip — the real bubblewrap exercise is the dedicated
-    # `linux-sandbox` job below. macos-14 is arm64, matching the build target.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-14]
-    runs-on: ${{ matrix.os }}
+    # Per-PR unit gate — Linux only (×1). lint + typecheck + the full vitest suite. The
+    # conformance suite (src/main/sandbox/conformance.test.ts) runs here against the
+    # unconfined backend (no bubblewrap on this runner, so confinement-only assertions
+    # skip); the REAL Linux bubblewrap exercise is the dedicated `linux-sandbox` job below.
+    # The macOS leg (real Seatbelt backend) and the Windows execution-backend suite moved
+    # OFF the per-PR path to nightly-build.yml + release-prepare.yml — they bill macOS ×10 /
+    # Windows ×2 and shouldn't sit on every push. Trade-off: a macOS- or Windows-specific
+    # unit regression surfaces nightly / at release, not on the PR that introduced it.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -74,23 +72,10 @@ jobs:
       # active, so even a subtle probe/selection mismatch fails the job.
       - run: HOUSTON_REQUIRE_SANDBOX=1 npx vitest run src/main/sandbox/conformance.test.ts
 
-  # Exercise the Windows execution backend for REAL (the macOS-bound developer can't run
-  # it locally). Scoped to the sandbox suite — the broader Node suite has macOS-shaped
-  # tests that have never run on Windows; this leg proves the Windows backend's declared
-  # contract (sandboxed:false, commands run, exit codes, timeout teardown) against the
-  # runner's bundled Git Bash. windows-latest ships Git for Windows + an MSVC toolchain
-  # (so node-pty's postinstall rebuild succeeds).
-  test-windows:
-    timeout-minutes: 15
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      - run: npx vitest run src/main/sandbox
+  # NOTE: the Windows execution-backend suite (`npx vitest run src/main/sandbox`) moved off
+  # the per-PR path — it now runs in nightly-build.yml and release-prepare.yml (Windows bills
+  # ×2). Same for the macOS Seatbelt leg of `test`. Per-PR CI keeps the real LINUX sandbox
+  # exercise (`linux-sandbox` below, ×1) since it's cheap.
 
   # Per-merge packaging smoke — Linux x64 ONLY (×1 Actions-minute multiplier). Proves the
   # afterPack vendored-binary copy + asar packaging still succeed on every merge without
@@ -138,7 +123,7 @@ jobs:
     # `needs` has succeeded. If any of them (or any of their matrix legs) fails, GitHub
     # skips this job and the PR does not merge. IMPORTANT: when you add a CI job that
     # must block merges, add it to this list too (it is not auto-discovered).
-    needs: [test, linux-sandbox, test-windows, build]
+    needs: [test, linux-sandbox, build]
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
     runs-on: ubuntu-latest
     # A PR opened *and* labeled at once can spawn two CI runs for the same PR (see

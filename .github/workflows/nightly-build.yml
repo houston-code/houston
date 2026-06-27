@@ -66,6 +66,15 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
+      # Platform-specific unit coverage that moved off per-PR CI (bills macOS ×10 / Windows
+      # ×2). macOS runs the full suite (exercises the real Seatbelt sandbox backend); Windows
+      # runs the execution-backend suite (scoped to src/main/sandbox — the broader suite has
+      # macOS-shaped tests that don't run on Windows). Linux/Intel-mac legs skip it: Linux
+      # unit coverage is on per-PR CI, and the arm64 leg already covers the macOS suite.
+      - if: matrix.os == 'macos-14'
+        run: npm test
+      - if: matrix.os == 'windows-latest'
+        run: npx vitest run src/main/sandbox
       # `--publish never` appends to the dist script's electron-builder invocation, so it
       # packages without ever contacting the release repo. (Belt-and-suspenders: there is no
       # token in scope and no write permission either.)
