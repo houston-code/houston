@@ -150,7 +150,7 @@ describe('Sidebar — empty states', () => {
   it('shows a drop hint inside an empty group', () => {
     const groups: ChatGroup[] = [{ id: 'g1', name: 'Empty Group' }]
     render(<Sidebar {...baseProps({ groups, conversations: [makeConv()] })} />)
-    expect(screen.getByText('Drop chats here from the ⋯ menu')).toBeInTheDocument()
+    expect(screen.getByText('Drop a chat here, or use the ⋯ menu')).toBeInTheDocument()
   })
 })
 
@@ -463,6 +463,131 @@ describe('Sidebar — moving chats between groups', () => {
 
     openConvMenu('Alpha')
     expect(screen.queryByText('⤴ Remove from group')).not.toBeInTheDocument()
+  })
+})
+
+/** A minimal stand-in for the browser DataTransfer used in drag events. */
+function makeDataTransfer(): {
+  effectAllowed: string
+  dropEffect: string
+  setData: (type: string, value: string) => void
+  getData: (type: string) => string
+  readonly types: string[]
+} {
+  const store: Record<string, string> = {}
+  return {
+    effectAllowed: '',
+    dropEffect: '',
+    setData: (type, value) => {
+      store[type] = value
+    },
+    getData: (type) => store[type] ?? '',
+    get types() {
+      return Object.keys(store)
+    }
+  }
+}
+
+/** Pick up the given conversation row, returning the populated DataTransfer. */
+function startConvDrag(title: string): ReturnType<typeof makeDataTransfer> {
+  const row = screen.getByText(title).closest('.conv') as HTMLElement
+  const dataTransfer = makeDataTransfer()
+  fireEvent.dragStart(row, { dataTransfer })
+  return dataTransfer
+}
+
+const sectionOf = (label: string): HTMLElement =>
+  screen.getByText(label).closest('.section') as HTMLElement
+
+describe('Sidebar — drag a chat onto a group', () => {
+  it('dropping a chat onto a group fires onMove with that group id', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [makeConv({ id: 'a', title: 'Alpha' })]
+    })
+    render(<Sidebar {...props} />)
+
+    const dataTransfer = startConvDrag('Alpha')
+    fireEvent.drop(sectionOf('Work'), { dataTransfer })
+    expect(props.onMove).toHaveBeenCalledWith('a', 'g1')
+  })
+
+  it('dropping into an empty group works (the drop target is the whole section)', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Empty Group' }],
+      conversations: [makeConv({ id: 'a', title: 'Alpha' })]
+    })
+    render(<Sidebar {...props} />)
+
+    const dataTransfer = startConvDrag('Alpha')
+    // The empty group's only body is the "Drop a chat here…" hint.
+    fireEvent.drop(sectionOf('Empty Group'), { dataTransfer })
+    expect(props.onMove).toHaveBeenCalledWith('a', 'g1')
+  })
+
+  it('dropping a grouped chat onto Ungrouped removes it from its group', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha', groupId: 'g1' }),
+        // A loose chat so the "Ungrouped" section (the drop target) renders.
+        makeConv({ id: 'b', title: 'Loose', updatedAt: 2 })
+      ]
+    })
+    render(<Sidebar {...props} />)
+
+    const dataTransfer = startConvDrag('Alpha')
+    fireEvent.drop(sectionOf('Ungrouped'), { dataTransfer })
+    expect(props.onMove).toHaveBeenCalledWith('a', null)
+  })
+
+  it('highlights a droppable section while a chat is dragged over it', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [makeConv({ id: 'a', title: 'Alpha' })]
+    })
+    render(<Sidebar {...props} />)
+
+    const dataTransfer = startConvDrag('Alpha')
+    const section = sectionOf('Work')
+    expect(section).not.toHaveClass('section--drop')
+
+    fireEvent.dragOver(section, { dataTransfer })
+    expect(section).toHaveClass('section--drop')
+
+    // Leaving the section clears the highlight.
+    fireEvent.dragLeave(section, { dataTransfer, relatedTarget: document.body })
+    expect(section).not.toHaveClass('section--drop')
+  })
+
+  it('does not highlight the Pinned section (pinning is independent of groups)', () => {
+    const props = baseProps({
+      conversations: [
+        makeConv({ id: 'p', title: 'Pinned chat', pinned: true }),
+        makeConv({ id: 'a', title: 'Alpha' })
+      ]
+    })
+    render(<Sidebar {...props} />)
+
+    const dataTransfer = startConvDrag('Alpha')
+    const pinned = sectionOf('Pinned')
+    fireEvent.dragOver(pinned, { dataTransfer })
+    expect(pinned).not.toHaveClass('section--drop')
+    fireEvent.drop(pinned, { dataTransfer })
+    expect(props.onMove).not.toHaveBeenCalled()
+  })
+
+  it('makes chat rows draggable but not while renaming', () => {
+    const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
+    render(<Sidebar {...props} />)
+
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    expect(row).toHaveAttribute('draggable', 'true')
+
+    // Entering rename mode disables dragging so the text input keeps selection.
+    fireEvent.doubleClick(screen.getByText('Alpha'))
+    const renamingRow = screen.getByDisplayValue('Alpha').closest('.conv') as HTMLElement
+    expect(renamingRow).toHaveAttribute('draggable', 'false')
   })
 })
 

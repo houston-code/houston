@@ -436,6 +436,13 @@ body.is-resizing {
 .section + .section {
   margin-top: 8px;
 }
+/* Highlighted while a chat is dragged over a droppable section (group / Ungrouped). */
+.section--drop {
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 
 /* ---- Section / group headers ---- */
 .section-head {
