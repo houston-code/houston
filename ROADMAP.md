@@ -107,6 +107,27 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 - **IDE integration.** VS Code / JetBrains extensions. Out of scope for a
   standalone desktop app, but listed for completeness.
 
+- **More gh-backed GitHub tools (merge, review, lifecycle).** The shipped gh
+  tools cover PRs (create/list/view/comment/checkout/checks), issues
+  (list/view/create/comment), CI runs (list/view), and repo creation. Three
+  deliberately-deferred additions remain — all *in scope* (local-first, gh-driven,
+  `kind:'network'` behind the approval gate), just not built yet:
+  - **`gh_pr_merge`.** Merge a pull request. *Why deferred:* it's the riskiest
+    mutating GitHub op and clashes with a label-gated **auto-merge CI** workflow,
+    where CI — not the agent — merges once checks pass (and a direct
+    `gh pr merge` silently bypasses that gate on repos without enforced branch
+    protection). Doing it safely wants an explicit confirm, a merge-method choice
+    (merge/squash/rebase), and a required-checks guard — more than a thin wrapper.
+  - **`gh_pr_review` (approve / request-changes / comment).** Submit a *formal*
+    PR review verdict. *Why deferred:* an agent recording an `approve` is a
+    trust-sensitive action distinct from a plain comment (which `gh_pr_comment`
+    already covers), and it deserves a UX that makes the verdict explicit rather
+    than being mistaken for a normal comment.
+  - **PR / issue lifecycle (`close` / `reopen` / mark-ready).** *Why deferred:*
+    low marginal value over the existing create/comment tools; each is a quick
+    add when a real workflow needs it, so they're bundled here rather than shipped
+    piecemeal.
+
 ## Out of scope — non-goals
 
 These are Codex/Claude-Code capabilities that conflict with Houston's
