@@ -20,7 +20,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   mockups. The affordance is offered only when the selected model supports
   vision. Thumbnails show inline and the images persist with the conversation.
   The agent can also `read_file` an image or PDF in the project and view it
-  directly (full vision on Anthropic; other providers get a text placeholder).
+  directly — and images a tool produces (a `read_file` image, a `view_localhost`
+  screenshot) reach any vision-capable model, on Anthropic, OpenAI, and Gemini
+  alike. (PDFs are Anthropic-only; elsewhere they fall back to a text placeholder.)
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
   `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `ast_grep`,
   `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,

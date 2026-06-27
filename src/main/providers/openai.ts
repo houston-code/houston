@@ -6,7 +6,7 @@ import { openaiReasoningEffort } from './reasoning'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
-function toOpenAIMessages(system: string | undefined, messages: ChatMessage[]): OpenAIMessage[] {
+export function toOpenAIMessages(system: string | undefined, messages: ChatMessage[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = []
   if (system) out.push({ role: 'system', content: system })
 
@@ -37,6 +37,17 @@ function toOpenAIMessages(system: string | undefined, messages: ChatMessage[]): 
       out.push(msg)
     } else if (m.role === 'tool') {
       out.push({ role: 'tool', tool_call_id: m.toolCallId ?? '', content: m.content })
+      // A tool message's content is text-only, so images a tool produced (e.g. a
+      // view_localhost screenshot) follow as a user turn for vision-capable models.
+      if (m.images?.length) {
+        out.push({
+          role: 'user',
+          content: m.images.map((img) => ({
+            type: 'image_url' as const,
+            image_url: { url: imageDataUrl(img) }
+          }))
+        })
+      }
     }
   }
   return out
