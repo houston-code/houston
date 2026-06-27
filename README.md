@@ -1,10 +1,9 @@
 # Houston
 
-An open-source, local-first **coding agent for macOS**, in the spirit of Claude Code
-and Codex — but **bring your own model**. Point it at Claude, GPT, Gemini, any
-OpenAI-compatible API, or a local model (Ollama / LM Studio), give it a project
-folder, and let it read, edit, search, and run code — every action gated by an
-approval flow and confined to a macOS sandbox.
+A **coding agent for macOS** — **bring your own model**. Point it at Claude, GPT,
+Gemini, any OpenAI-compatible API, or a local model (Ollama / LM Studio), give it
+a project folder, and let it read, edit, search, and run code — every action gated
+by an approval flow and confined to a macOS sandbox.
 
 Built with Electron + React + TypeScript. Apple Silicon (arm64).
 
@@ -78,20 +77,20 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   author's blind spots — then a skeptical verifier that re-checks every candidate
   finding against the real code and drops the false positives, and reports the
   confirmed ones. The agent can self-review after a substantial change before
-  telling you it's done. Same multi-agent shape as Claude Code's review.
+  telling you it's done.
 - **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
   a specialized read-only subagent (front-matter `description` + a system-prompt
   body) — the main agent can dispatch it by name. An optional front-matter `tools:`
   list narrows which read-only tools that agent may use (it can only restrict the
   default set, never grant write/shell/network). Add a `.houston/skills/<name>/SKILL.md`
   to register a skill: its description is surfaced to the agent, which reads the
-  full instructions on demand. Same shape as Claude Code's subagents and skills.
+  full instructions on demand.
 - **MCP servers.** Connect Model Context Protocol servers in Settings — a local
   **stdio** process or a remote **HTTP** (streamable) or **SSE** endpoint (with
   optional static bearer-token / custom auth headers). Their tools are offered to the agent namespaced as
   `mcp__<id>__<tool>` and always require approval. Point Houston at the
   filesystem, git, a hosted MCP service, or any other server to extend what the
-  agent can do — the same extensibility model as Claude Code. When a lot of MCP
+  agent can do. When a lot of MCP
   tools are connected, Houston **loads their schemas lazily**: above a threshold
   the agent gets a compact catalog plus a `find_tools` meta-tool and pulls in only
   the tool definitions it needs, instead of paying to send every schema on every
@@ -223,7 +222,7 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   - **Repositories** — `gh_repo_create` (private by default, made from the
     current project directory and pushed).
 
-  Same approach as Claude Code: it drives your local `gh`, so no token is stored
+  It drives your local `gh`, so no token is stored
   in the app and `gh` owns the credentials. Each call is **network**-gated
   (always prompts for approval) and the mutating ones (PR/issue create & comment,
   PR checkout, repo create) are refused in plan mode. Because these tools run
@@ -248,7 +247,7 @@ Built with Electron + React + TypeScript. Apple Silicon (arm64).
   automatically, shallowest first) — so the agent follows your conventions,
   build/test commands, and house rules without you re-explaining them each time.
   Any rules file can also pull in others with `@path` imports (relative, `~/…`, or
-  absolute), the same way Claude Code splits or shares memory files.
+  absolute), to split or share common rules across files.
 - **Token usage & cost at a glance.** The control bar above the composer shows the
   current context size, the output tokens used this session, and an **estimated
   USD cost** (for models with known pricing — Claude/GPT/Gemini; local models show
@@ -416,6 +415,6 @@ an `afterSign` hook), then `npm run dist`.
 
 ## Roadmap
 
-What's intentionally not done yet — out of scope for a local-first macOS desktop
-app, or a larger effort — is tracked in [ROADMAP.md](./ROADMAP.md) with the
+What's intentionally not done yet — out of scope for a macOS desktop app, or a
+larger effort — is tracked in [ROADMAP.md](./ROADMAP.md) with the
 rationale for each.

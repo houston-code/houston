@@ -17,8 +17,8 @@ import { SKIP_DIRS } from './search'
  *      up without being explicitly imported.
  *
  * Any loaded file may also pull in other files with `@path` imports (relative to
- * the importing file, `~/…` for home, or absolute) — the same mechanism Claude
- * Code uses to split a large memory file. Imports are expanded recursively with a
+ * the importing file, `~/…` for home, or absolute) — a way to split a large
+ * rules file into shared pieces. Imports are expanded recursively with a
  * depth cap and cycle protection.
  */
 
@@ -28,7 +28,7 @@ export const RULES_FILES = ['AGENTS.md', 'CLAUDE.md'] as const
 /** Cap the combined rules text so a huge file can't crowd out the context window. */
 export const MAX_RULES_CHARS = 32_000
 
-/** Maximum @import nesting depth (matches Claude Code). */
+/** Maximum @import nesting depth. */
 export const MAX_IMPORT_DEPTH = 5
 
 /** How deep below the workspace root to look for nested rules files. */

@@ -1,9 +1,9 @@
 # Roadmap
 
-Houston has closed the bulk of the Claude Code feature-parity gap (see the
-**Features** list in the [README](./README.md)). This file tracks the items that
-are intentionally **not done yet** — either out of scope for a local-first macOS
-desktop app, or a larger effort than the current sweep covered. Each notes *why*
+Houston covers a broad span of coding-agent features (see the **Features** list in
+the [README](./README.md)). This file tracks the items that are intentionally
+**not done yet** — either out of scope for a macOS desktop app, or a larger effort
+than the current sweep covered. Each notes *why*
 it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 ## Deferred — larger effort
@@ -56,7 +56,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   itself editing the tree mid-turn — it goes stale against the agent's own writes
   and needs constant re-sync; (2) it's a heavyweight, always-on subsystem for a
   single-user desktop app; (3) semantic search needs an embeddings provider + API
-  key, which cuts against bring-your-own-model and the local-first/privacy stance
+  key, which cuts against bring-your-own-model and the privacy stance
   (keys stay in the Keychain; nothing is shipped off-machine to be indexed). Modern
   long-context models navigate unfamiliar code well from exact search +
   `read_file` + `run_shell`, so an index mostly buys latency, not capability.
@@ -97,7 +97,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   shortcuts (⌘N / ⌘, / Esc). Would add a keybindings file/UI and a resolver.
 
 - **Custom-command status line.** A status line whose content comes from a
-  user-configured shell command (Claude Code's `statusLine`), beyond the built-in
+  user-configured shell command, beyond the built-in
   live-activity status bar.
 
 - **Tool-result image thumbnails.** When the agent `read_file`s an image, the
@@ -110,7 +110,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 - **More gh-backed GitHub tools (merge, review, lifecycle).** The shipped gh
   tools cover PRs (create/list/view/comment/checkout/checks), issues
   (list/view/create/comment), CI runs (list/view), and repo creation. Three
-  deliberately-deferred additions remain — all *in scope* (local-first, gh-driven,
+  deliberately-deferred additions remain — all *in scope* (gh-driven,
   `kind:'network'` behind the approval gate), just not built yet:
   - **`gh_pr_merge`.** Merge a pull request. *Why deferred:* it's the riskiest
     mutating GitHub op and clashes with a label-gated **auto-merge CI** workflow,
@@ -130,20 +130,20 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 ## Out of scope — non-goals
 
-These are Codex/Claude-Code capabilities that conflict with Houston's
-**local-first, bring-your-own-model** stance or require a hosted backend. They're
+These are capabilities that conflict with Houston's **bring-your-own-model**
+stance or require a hosted backend. They're
 deliberately **not** on the roadmap (recorded here so the gap analysis is honest
 and nothing is silently dropped):
 
 - **Subscription / OAuth sign-in (ChatGPT, Claude Pro/Max, GitHub Copilot).**
   Houston is **bring-your-own-API-key** by design — keys are stored in the macOS
-  Keychain and used directly. Codex's `codex login` (ChatGPT OAuth, included
-  usage, workspace RBAC) and similar subscription auth are a different account /
-  billing model that doesn't fit a BYO-key local app.
+  Keychain and used directly. Subscription sign-in (vendor OAuth, included usage,
+  workspace RBAC) is a different account / billing model that doesn't fit a
+  BYO-key local app.
 
-- **Cloud task delegation** (Codex `codex cloud`, parallel/best-of-N attempts,
-  isolated cloud sandboxes, `codex apply` of cloud diffs). Requires a hosted
-  execution backend and account; Houston runs entirely on the user's machine.
+- **Cloud task delegation** (parallel/best-of-N attempts, isolated cloud
+  sandboxes, applying cloud-computed diffs). Requires a hosted execution backend
+  and account; Houston runs entirely on the user's machine.
 
 - **Hosted GitHub bot / "install GitHub app".** A *server-side* PR-creating bot,
   hosted code review that runs on GitHub's infrastructure, or an "install GitHub
@@ -155,7 +155,7 @@ and nothing is silently dropped):
   `pr_sweep` board (batch-author PRs from tasks, or
   process a batch of existing PRs), all driving the user's local `gh` CLI — no
   hosted backend, no app-level token storage (`gh` owns auth), which keeps
-  Houston local-first. The remaining non-goal is specifically the
+  Houston entirely on the user's machine. The remaining non-goal is specifically the
   *hosted* bot/app side, which needs a multi-tenant backend and an OAuth app
   registration that don't fit a single-user desktop app.
 

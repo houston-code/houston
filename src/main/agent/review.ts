@@ -3,7 +3,7 @@ import { runSubAgent, type SubAgentOptions } from './subagent'
 import { gitDiff, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
 
 /**
- * Adversarial, multi-agent review of a change — Claude Code style. The motivation
+ * Adversarial, multi-agent review of a change. The motivation
  * is that a reviewer sharing the author's context inherits the author's blind
  * spots, so each reviewer runs in a *fresh, separate context* (its own subagent
  * loop) and is told to look for problems, not to praise the change. We review

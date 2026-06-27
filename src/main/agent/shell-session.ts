@@ -11,7 +11,7 @@ import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
  * variables don't survive from one command to the next — `cd build` followed by
  * `make` would run `make` back at the project root. A ShellSession threads the
  * working directory and exported environment between foreground commands within a
- * run, so the agent gets the "same terminal" behavior Codex preserves: change
+ * run, so the agent gets "same terminal" behavior: change
  * directory once, activate a virtualenv once, and later commands inherit it.
  *
  * Implementation: each command is wrapped so it (1) restores the captured env and

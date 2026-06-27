@@ -7,7 +7,7 @@ import { parseWorktreePorcelain } from './git'
 
 /**
  * Create and tear down git worktrees that back a conversation, so a chat can work
- * on its own branch in an isolated checkout (à la Claude Code). Worktrees live at
+ * on its own branch in an isolated checkout. Worktrees live at
  * `<repoRoot>/.houston/worktrees/<slug>` — co-located with the repo so they're
  * easy to find — and a per-repo `.git/info/exclude` entry keeps them out of the
  * parent repo's `git status` without touching the tracked `.gitignore`.

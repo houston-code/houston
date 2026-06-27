@@ -7,7 +7,7 @@ import { parseFrontmatter } from '@shared/frontmatter'
  * SKILL.md has front-matter `name`/`description` and a body of instructions. Only
  * the name + description are injected into the system prompt (cheap); the agent
  * reads the full SKILL.md with read_file when a task calls for it — progressive
- * disclosure, the same shape as Claude Code skills.
+ * disclosure.
  */
 
 export const SKILLS_DIR = '.houston/skills'
