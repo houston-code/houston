@@ -21,6 +21,7 @@ env:
 
 jobs:
   test:
+    timeout-minutes: 15
     # Run the suite on Linux AND macOS. The sandbox conformance suite
     # (src/main/sandbox/conformance.test.ts) exercises the real OS sandbox where one
     # exists: the macOS leg verifies the Seatbelt backend end-to-end. This ubuntu leg
@@ -49,6 +50,7 @@ jobs:
   # hard-probes that confinement actually works before running the conformance suite —
   # a failed probe reds the job instead of letting the suite silently skip (false green).
   linux-sandbox:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -79,6 +81,7 @@ jobs:
   # runner's bundled Git Bash. windows-latest ships Git for Windows + an MSVC toolchain
   # (so node-pty's postinstall rebuild succeeds).
   test-windows:
+    timeout-minutes: 15
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -99,6 +102,7 @@ jobs:
   # auto-merge's `needs`, so a PR that breaks packaging on any platform won't auto-merge.
   # x64 mac + arm64 win/linux are follow-ups (each needs its own runner).
   build:
+    timeout-minutes: 25
     needs: test
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
     strategy:
@@ -143,6 +147,7 @@ jobs:
           if-no-files-found: error
 
   auto-merge:
+    timeout-minutes: 10
     # The merge gate: this job runs — and can merge — only after EVERY job listed in
     # `needs` has succeeded. If any of them (or any of their matrix legs) fails, GitHub
     # skips this job and the PR does not merge. IMPORTANT: when you add a CI job that
