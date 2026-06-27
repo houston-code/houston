@@ -625,10 +625,6 @@ body.is-resizing {
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
-.sidebar__newgroup {
-  align-self: flex-start;
-  font-size: 12px;
-}
 .sidebar__import,
 .sidebar__settings {
   width: 100%;
