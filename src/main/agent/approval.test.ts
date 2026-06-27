@@ -35,6 +35,36 @@ describe('needsApproval', () => {
     expect(needsApproval('ask', 'shell', false)).toBe(true)
     expect(needsApproval('auto-edit', 'shell', false)).toBe(true)
   })
+
+  it('defaults to assuming the sandbox is in effect (back-compat)', () => {
+    // The 4-arg form omitting `sandboxed` behaves as before: full-auto shell auto-approves.
+    expect(needsApproval('full-auto', 'shell', false)).toBe(false)
+  })
+
+  it('never silently auto-approves shell when the sandbox is NOT in effect', () => {
+    // The whole premise for auto-approving shell is Seatbelt confinement. Without
+    // it, an arbitrary command runs with full user privileges — prompt every time.
+    for (const policy of ['ask', 'auto-edit', 'full-auto'] as const) {
+      expect(needsApproval(policy, 'shell', false, false)).toBe(true)
+    }
+  })
+
+  it('still auto-approves shell in full-auto when the sandbox IS in effect', () => {
+    expect(needsApproval('full-auto', 'shell', false, true)).toBe(false)
+  })
+
+  it('lets an explicit "Allow for run" override win even when unsandboxed', () => {
+    // The user opted into running unconfined for the rest of the run.
+    expect(needsApproval('full-auto', 'shell', true, false)).toBe(false)
+  })
+
+  it('does not let the sandbox signal gate non-shell kinds (JS-enforced containment)', () => {
+    // Reads/writes don't rely on Seatbelt; the structured file tools contain them.
+    expect(needsApproval('full-auto', 'read', false, false)).toBe(false)
+    expect(needsApproval('full-auto', 'write', false, false)).toBe(false)
+    expect(needsApproval('auto-edit', 'write', false, false)).toBe(false)
+    expect(needsApproval('ask', 'write', false, false)).toBe(true) // still strict under ask
+  })
 })
 
 describe('isBlockedByPlan', () => {
