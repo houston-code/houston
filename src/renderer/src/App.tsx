@@ -242,9 +242,9 @@ export default function App(): JSX.Element {
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
 
-  // For a not-yet-started chat, load the workspace's git info and seed fresh
-  // worktree defaults: a new worktree (on for git repos), a suggested branch
-  // name, and the current branch as the base. Re-runs when the folder changes.
+  // For a not-yet-started chat, load the repo's git info and seed fresh worktree
+  // defaults: a new worktree (on for git repos), a suggested branch name, and the
+  // current branch as the base. Re-runs when the folder changes.
   useEffect(() => {
     if (currentId !== null || !workspace) {
       setRepoInfo(null)
@@ -253,6 +253,16 @@ export default function App(): JSX.Element {
     let cancelled = false
     void window.api.getRepoInfo(workspace).then((info) => {
       if (cancelled) return
+      // Anchor a new chat to the repo's MAIN worktree, not whatever linked worktree
+      // the previously-open chat used. Otherwise getRepoInfo reports that prior
+      // chat's branch as "current", and the base picker would default to (and offer
+      // to fork from) it instead of the repo's mainline. Re-point at the canonical
+      // root and let this effect re-run.
+      const norm = (p: string): string => p.replace(/\/+$/, '')
+      if (info.isRepo && info.root && norm(info.root) !== norm(workspace)) {
+        setLastWorkspace(info.root)
+        return
+      }
       setRepoInfo(info)
       setWorktreeMode(info.isRepo)
       setBranchName(suggestBranch())
