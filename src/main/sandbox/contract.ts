@@ -94,6 +94,15 @@ export interface SandboxBackend {
   readonly sandboxed: boolean
   /** Whether this backend can enforce the `allowNetwork: false` network gate. */
   readonly confinesNetwork: boolean
-  /** Build the argv + spawn flags to launch `command` under this backend. */
-  buildLaunch(opts: { command: string; roots: string[]; allowNetwork: boolean }): ShellLaunch
+  /**
+   * Build the argv + spawn flags to launch `command` under this backend. `cwd` is the
+   * working directory (some backends, e.g. bubblewrap, must set it inside the sandbox);
+   * the shared runner also passes it to `spawn`, so backends that don't need it ignore it.
+   */
+  buildLaunch(opts: {
+    command: string
+    roots: string[]
+    allowNetwork: boolean
+    cwd: string
+  }): ShellLaunch
 }

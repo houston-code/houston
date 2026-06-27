@@ -13,8 +13,9 @@ describe('sandboxAvailable', () => {
     expect(sandboxAvailable({ platform: 'darwin', exists: () => false })).toBe(false)
   })
 
-  it('is false on linux (bubblewrap backend not yet wired)', () => {
-    expect(sandboxAvailable({ platform: 'linux', exists: () => true })).toBe(false)
+  it('on linux, reflects whether bubblewrap is usable (the probe)', () => {
+    expect(sandboxAvailable({ platform: 'linux', bwrapUsable: () => true })).toBe(true)
+    expect(sandboxAvailable({ platform: 'linux', bwrapUsable: () => false })).toBe(false)
   })
 
   it('is false on windows', () => {
@@ -35,8 +36,14 @@ describe('selectBackend', () => {
     expect(b.sandboxed).toBe(false)
   })
 
-  it('falls back to the unconfined backend on linux (for now)', () => {
-    const b = selectBackend({ platform: 'linux', exists: () => true })
+  it('picks the bubblewrap backend on linux when bwrap is usable', () => {
+    const b = selectBackend({ platform: 'linux', bwrapUsable: () => true })
+    expect(b.id).toBe('bubblewrap')
+    expect(b.sandboxed).toBe(true)
+  })
+
+  it('falls back to the unconfined backend on linux when bwrap is NOT usable', () => {
+    const b = selectBackend({ platform: 'linux', bwrapUsable: () => false })
     expect(b.id).toBe('none')
     expect(b.sandboxed).toBe(false)
   })

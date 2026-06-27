@@ -16,12 +16,18 @@ import type { SandboxRunOptions } from './contract'
  * running for real on the macOS leg. Lifecycle guarantees (C1/C3/C5/C6/C7) run on
  * every backend.
  *
- * Network probe (C4): a sandbox-denied outbound connect surfaces "operation not
- * permitted" on stderr; an allowed connect to a closed loopback port surfaces
- * "connection refused" (it reached the network stack). We assert on the stderr
- * signature, not the exit code — a failed `/dev/tcp` redirect does not reliably
- * propagate a non-zero top-level exit.
+ * Network probe (C4): this must hold across backends with different denial mechanics.
+ *  - DENIED targets a NON-loopback, non-routable address (TEST-NET-1, 192.0.2.1). A
+ *    Seatbelt-denied connect surfaces "operation not permitted"; a bubblewrap empty
+ *    network namespace surfaces "network is unreachable" / "no route to host" (its
+ *    loopback stays up, so a loopback target would NOT prove the gate). Either is a
+ *    denial signature.
+ *  - ALLOWED targets a closed LOOPBACK port (always reachable when the net stack is
+ *    shared), surfacing "connection refused" — it reached the stack.
+ * We assert on the stderr signature, not the exit code — a failed `/dev/tcp` redirect
+ * does not reliably propagate a non-zero top-level exit.
  */
+const NETWORK_DENIED_RE = /operation not permitted|not permitted|network is unreachable|no route to host/i
 
 const backend = selectBackend()
 const enforces = backend.sandboxed
@@ -33,6 +39,17 @@ function sq(p: string): string {
 }
 
 describe(`sandbox conformance [backend=${backend.id} sandboxed=${enforces}]`, () => {
+  // Belt-and-suspenders for the dedicated CI leg that is SUPPOSED to exercise a real
+  // OS sandbox: assert the confining backend was actually selected, so a misconfigured
+  // runner (e.g. bubblewrap installed but unprivileged userns blocked) fails LOUDLY
+  // instead of silently skipping the confinement assertions and reporting green.
+  if (process.env.HOUSTON_REQUIRE_SANDBOX === '1') {
+    it('a real OS sandbox backend is active (HOUSTON_REQUIRE_SANDBOX)', () => {
+      expect(enforces).toBe(true)
+      expect(backend.id).not.toBe('none')
+    })
+  }
+
   let workspace: string
   let outside: string
 
@@ -97,11 +114,13 @@ describe(`sandbox conformance [backend=${backend.id} sandboxed=${enforces}]`, ()
   })
 
   itEnforced('C4a network is denied when allowNetwork=false', async () => {
-    const r = await run('exec 3<>/dev/tcp/127.0.0.1/1', { allowNetwork: false })
-    expect(r.stderr).toMatch(/operation not permitted/i)
+    // 192.0.2.1 is non-loopback + non-routable (TEST-NET-1): denied by every backend.
+    const r = await run('exec 3<>/dev/tcp/192.0.2.1/80', { allowNetwork: false })
+    expect(r.stderr).toMatch(NETWORK_DENIED_RE)
   })
 
   itEnforced('C4b network reaches the stack when allowNetwork=true', async () => {
+    // Loopback is reachable whenever the net stack is shared; the closed port refuses.
     const r = await run('exec 3<>/dev/tcp/127.0.0.1/1', { allowNetwork: true })
     expect(r.stderr).toMatch(/connection refused/i)
   })
