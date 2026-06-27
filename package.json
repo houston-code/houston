@@ -2,7 +2,10 @@
   "name": "houston",
   "version": "0.1.0",
   "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
-  "author": "Houston contributors",
+  "author": {
+    "name": "Houston contributors",
+    "email": "noreply@houston.app"
+  },
   "main": "./out/main/index.js",
   "homepage": "https://github.com/piyushvijay/houston",
   "engines": {
