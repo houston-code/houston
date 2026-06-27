@@ -91,11 +91,14 @@ export function ControlBar({
                 — no models configured —
               </option>
             )}
-            {p.models.map((m) => (
-              <option key={`${p.id}::${m.id}`} value={`${p.id}::${m.id}`}>
-                {m.label ?? m.id}
-              </option>
-            ))}
+            {p.models.map((m) => {
+              const win = contextWindowFor(m.id)
+              return (
+                <option key={`${p.id}::${m.id}`} value={`${p.id}::${m.id}`}>
+                  {(m.label ?? m.id) + (win ? ` · ${formatTokens(win)}` : '')}
+                </option>
+              )
+            })}
           </optgroup>
         ))}
       </select>
