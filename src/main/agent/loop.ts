@@ -28,7 +28,7 @@ import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead } from './scheduling'
 import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
-import { matchRule, permissionSubject } from './permissions'
+import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
 import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed } from '../sandbox'
@@ -680,13 +680,19 @@ export async function startRun(
           // A permission rule can force-allow or force-ask; otherwise the policy
           // decides — folding in the honest sandbox status so unconfined shell on a
           // host without an enforceable sandbox is never silently auto-approved.
+          const shellEscapesWorkspace =
+            tool.kind === 'shell' &&
+            call.name === 'run_shell' &&
+            typeof call.arguments.command === 'string' &&
+            shellReferencesExternalPath(call.arguments.command)
           const { mustApprove, unsandboxedShell } = decideApproval({
             ruleAction,
             policy: run.policy,
             kind: tool.kind,
             override: run.override,
             shellSandboxed: isSandboxed(),
-            shellUnsandboxedOverride: run.shellUnsandboxedOverride
+            shellUnsandboxedOverride: run.shellUnsandboxedOverride,
+            shellEscapesWorkspace
           })
 
           let approved = true

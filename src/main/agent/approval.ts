@@ -64,6 +64,11 @@ export interface ApprovalInputs {
   shellSandboxed: boolean
   /** Per-run consent specifically to run UNCONFINED shell ("Allow for run" on such a prompt). */
   shellUnsandboxedOverride: boolean
+  /**
+   * Whether this shell command references a path outside the workspace (absolute,
+   * `~`, or `..`-climbing). Defaults to false for non-shell calls / clean commands.
+   */
+  shellEscapesWorkspace?: boolean
 }
 
 /**
@@ -78,6 +83,11 @@ export interface ApprovalInputs {
  * tool, or authored on a machine where shell *was* sandboxed) substitutes for
  * conscious consent to run unconfined. Such a command always prompts until the user
  * grants the unconfined-shell-specific override.
+ *
+ * A shell command that references a path *outside* the workspace defeats the same
+ * project-confinement premise even on a confining host (the sandbox may still let
+ * it read `/etc` or `~/.ssh`), so it always prompts — even in full-auto or under a
+ * generic override — unless an explicit permission `allow` rule whitelisted it.
  */
 export function decideApproval(inputs: ApprovalInputs): {
   mustApprove: boolean
@@ -90,6 +100,11 @@ export function decideApproval(inputs: ApprovalInputs): {
   }
   if (ruleAction === 'allow') return { mustApprove: false, unsandboxedShell: false }
   if (ruleAction === 'ask') return { mustApprove: true, unsandboxedShell: false }
+  // A workspace-escaping shell command always prompts (a generic override or
+  // full-auto doesn't cover it); only an explicit allow-rule, handled above, can.
+  if (kind === 'shell' && inputs.shellEscapesWorkspace) {
+    return { mustApprove: true, unsandboxedShell: false }
+  }
   return {
     mustApprove: needsApproval(policy, kind, override, shellSandboxed),
     unsandboxedShell: false
