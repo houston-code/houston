@@ -231,7 +231,8 @@ export function spawnWithBackend(
   const launch = backend.buildLaunch({
     command: opts.command,
     roots: opts.roots ?? [opts.workspace],
-    allowNetwork: opts.allowNetwork
+    allowNetwork: opts.allowNetwork,
+    cwd: opts.cwd
   })
   const baseEnv = opts.env ?? process.env
   const child = spawn(launch.file, launch.args, {
@@ -265,7 +266,8 @@ export function runWithBackend(
   const launch = backend.buildLaunch({
     command: opts.command,
     roots: opts.roots ?? [opts.workspace],
-    allowNetwork: opts.allowNetwork
+    allowNetwork: opts.allowNetwork,
+    cwd: opts.cwd
   })
 
   const baseEnv = opts.env ?? process.env

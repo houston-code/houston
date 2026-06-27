@@ -41,7 +41,8 @@ describe('SeatbeltBackend.buildLaunch', () => {
     const launch = SeatbeltBackend.buildLaunch({
       command: 'echo hi',
       roots: ['/work'],
-      allowNetwork: false
+      allowNetwork: false,
+      cwd: '/work'
     })
     expect(launch.file).toBe('sandbox-exec')
     expect(launch.args[0]).toBe('-p')
