@@ -2476,11 +2476,6 @@ pre.diff {
 }
 
 /* ---- Keyboard-shortcut editor (Settings → Keyboard) ---- */
-.keybind-hint {
-  color: var(--text-dim);
-  font-size: 12px;
-  margin: 0 0 14px;
-}
 .keybind-list {
   display: flex;
   flex-direction: column;
@@ -2764,4 +2759,209 @@ pre.diff {
 }
 .add-endpoint input {
   flex: 1;
+}
+
+/* ===================================================================
+   Settings console — clarity / beautify pass.
+   Structure comes from a restyled title + one-line description + a top
+   hairline + vertical rhythm, NOT from boxing every setting. The only
+   bordered "record" card stays .provider. The left nav gains an accent
+   "you are here" rail + decorative icons. One control system (height,
+   focus ring, row gap) unifies every tab. Everything is additive and
+   namespaced (.set-section, never the sidebar's .section); the h3 restyle
+   is scoped so the Shortcuts / What's-New modals' headings are untouched.
+   Themed via existing tokens only — correct in both Graphite and Daylight.
+   =================================================================== */
+
+/* Spacing / sizing scale + a reusable focus ring (color-mix already used). */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 28px;
+  --control-h: 34px;
+  --ring: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ---- Left nav: icon + label, with an accent active rail ---- */
+.modal__nav {
+  gap: 3px;
+}
+.modal__nav button {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: center;
+  gap: 9px;
+  /* Reserve the rail so activating a tab doesn't shift its label. */
+  box-shadow: inset 2px 0 0 transparent;
+}
+.set-nav__icon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+  opacity: 0.8;
+}
+.modal__nav button:hover .set-nav__icon {
+  opacity: 1;
+}
+.modal__nav button.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.modal__nav button.is-active .set-nav__icon {
+  color: var(--accent);
+  opacity: 1;
+}
+.modal__nav button:focus-visible {
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent), var(--ring);
+}
+/* The active tab already shows the inset rail at rest, so the faint shared ring
+   isn't a perceptible focus change — give it a full-strength outer ring. */
+.modal__nav button.is-active:focus-visible {
+  box-shadow: inset 2px 0 0 var(--accent), 0 0 0 2px var(--accent);
+}
+
+/* ---- Reusable flat section wrapper (NOT .section — that's the sidebar) ---- */
+.set-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+.set-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.set-section__head {
+  margin-bottom: var(--space-1);
+}
+/* Same <h3> element + text, restyled. Scoped — must NOT touch the bare
+   .modal__body h3 used by the Shortcuts / What's-New dialogs. */
+.set-section h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+.set-section__desc {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-width: 64ch;
+}
+/* Keep each control's own margins; just trim the section's tail so the next
+   section's hairline lands on a consistent rhythm. */
+.set-section__body > :last-child {
+  margin-bottom: 0;
+}
+
+/* ---- Field labels read as field names (not the multi-line checkbox copy) ---- */
+.set-section .field:not(.field--checkbox) > span {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ---- One control system: consistent height + focus ring across tabs ---- */
+.field input:not([type='checkbox']),
+.field select,
+.add-endpoint input,
+.rule input,
+.rule select,
+.mcp-server__args:not([rows]) {
+  min-height: var(--control-h);
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.add-endpoint input:focus,
+.full-textarea:focus,
+.rule input:focus,
+.rule select:focus,
+.mcp-server__args:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+/* ---- Unify list-row gaps + alignment ---- */
+.rule,
+.mcp-server__row,
+.field__row,
+.add-endpoint,
+.updates-row {
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* ---- Brand-tinted native checkboxes (layout untouched) ---- */
+.field--checkbox input,
+.mcp-server__enabled input {
+  accent-color: var(--accent);
+}
+
+/* ---- Consistent add / remove affordances on every tab ---- */
+.set-section__body > .btn--sm:not(.btn--danger):not(.btn--accent):hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.rule .btn--danger,
+.mcp-server__row .btn--danger {
+  color: var(--text-dim);
+  border-color: var(--border);
+}
+.rule .btn--danger:hover,
+.mcp-server__row .btn--danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ---- Shared status pill ---- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  line-height: 1.5;
+}
+.pill--ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.pill--warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.pill--accent {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* ---- Close button hover + focus polish ---- */
+.modal__close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal__close:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.modal__close:focus-visible {
+  outline: none;
+  /* The borderless close button has no other focus affordance, so the ring must
+     clear WCAG 3:1 on its own — full accent, not the translucent shared ring. */
+  box-shadow: 0 0 0 2px var(--accent);
 }
