@@ -1,8 +1,16 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { AppSettings, SelectedModel } from '@shared/types'
+import type { RepoInfo } from '@shared/agent'
 import type { SessionUsage } from '@shared/usage'
 import { ControlBar } from './ControlBar'
+
+const repo: RepoInfo = {
+  isRepo: true,
+  root: '/Users/me/projects/houston',
+  currentBranch: 'main',
+  branches: ['main', 'develop']
+}
 
 function makeSettings(): AppSettings {
   return {
@@ -39,6 +47,15 @@ function baseProps() {
     selected: { providerId: 'anthropic', model: 'claude-opus' } as SelectedModel,
     workspace: '/Users/me/projects/houston',
     usage: null as SessionUsage | null,
+    newChat: false,
+    repoInfo: null as RepoInfo | null,
+    worktreeMode: true,
+    branchName: 'houston/swift-otter',
+    baseBranch: 'main',
+    currentWorktree: null,
+    onToggleWorktree: vi.fn(),
+    onChangeBranchName: vi.fn(),
+    onChangeBaseBranch: vi.fn(),
     onSelectModel: vi.fn(),
     onChangePolicy: vi.fn(),
     onChangeReasoning: vi.fn(),
@@ -96,6 +113,57 @@ describe('ControlBar', () => {
     const warn = screen.getByRole('button', { name: /Set API key/ })
     fireEvent.click(warn)
     expect(noKey.onOpenSettings).toHaveBeenCalledOnce()
+  })
+
+  it('hides the worktree editor unless it is a new chat in a git repo', () => {
+    // Existing chat → no editor.
+    const { unmount } = render(<ControlBar {...baseProps()} newChat={false} repoInfo={repo} />)
+    expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
+    unmount()
+
+    // New chat but not a repo → no editor.
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={{ ...repo, isRepo: false }} />)
+    expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
+  })
+
+  it('shows the branch name + base controls for a new chat in a repo, defaulting worktree on', () => {
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />)
+    expect((screen.getByLabelText('New branch name') as HTMLInputElement).value).toBe(
+      'houston/swift-otter'
+    )
+    expect((screen.getByLabelText('Base branch') as HTMLSelectElement).value).toBe('main')
+  })
+
+  it('hides the branch fields when the worktree toggle is off', () => {
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={false} />)
+    expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
+    // The toggle itself is still present so the user can turn it back on.
+    expect(screen.getByText('⑂ New worktree')).toBeInTheDocument()
+  })
+
+  it('reports branch edits and base selection', () => {
+    const props = baseProps()
+    render(<ControlBar {...props} newChat={true} repoInfo={repo} />)
+    fireEvent.change(screen.getByLabelText('New branch name'), { target: { value: 'feature/x' } })
+    expect(props.onChangeBranchName).toHaveBeenCalledWith('feature/x')
+    fireEvent.change(screen.getByLabelText('Base branch'), { target: { value: 'develop' } })
+    expect(props.onChangeBaseBranch).toHaveBeenCalledWith('develop')
+  })
+
+  it('flags an invalid branch name on the input', () => {
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} branchName="--bad" />)
+    expect(screen.getByLabelText('New branch name')).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('shows a read-only branch badge for an existing worktree chat', () => {
+    render(
+      <ControlBar
+        {...baseProps()}
+        newChat={false}
+        currentWorktree={{ path: '/wt', branch: 'houston/feat', repoRoot: '/repo' }}
+      />
+    )
+    expect(screen.getByText('⑂ houston/feat')).toBeInTheDocument()
   })
 
   it('surfaces token usage only when there are tokens', () => {

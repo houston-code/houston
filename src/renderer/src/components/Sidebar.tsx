@@ -29,7 +29,6 @@ export interface SidebarProps {
   onToggleCollapse: () => void
   onSelect: (id: string) => void
   onNew: () => void
-  onNewWorktree: () => void
   onDelete: (id: string) => void
   onFork: (id: string) => void
   onExport: (id: string) => void
@@ -440,19 +439,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       >
         «
       </button>
-      <div className="sidebar__new-row">
-        <button className="btn btn--accent sidebar__new" onClick={props.onNew}>
-          ＋ New chat
-        </button>
-        <button
-          className="btn btn--accent sidebar__new-worktree"
-          onClick={props.onNewWorktree}
-          title="New chat in a git worktree (isolated branch)"
-          aria-label="New chat in a git worktree"
-        >
-          ⑂
-        </button>
-      </div>
+      <button className="btn btn--accent sidebar__new" onClick={props.onNew}>
+        ＋ New chat
+      </button>
 
       <input
         className="sidebar__search"

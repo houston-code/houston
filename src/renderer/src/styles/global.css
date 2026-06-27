@@ -302,21 +302,9 @@ body.is-resizing {
 .sidebar__rail-spacer {
   flex: 1;
 }
-.sidebar__new-row {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
-}
 .sidebar__new {
-  flex: 1;
-  min-width: 0;
-}
-.sidebar__new-worktree {
-  flex: 0 0 auto;
-  padding-left: 11px;
-  padding-right: 11px;
-  font-size: 15px;
-  line-height: 1;
+  width: 100%;
+  margin-bottom: 10px;
 }
 .sidebar__search {
   width: 100%;
@@ -705,9 +693,42 @@ body.is-resizing {
 .control-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 7px;
+  row-gap: 6px;
   width: 100%;
   padding: 9px 24px 0;
+}
+/* The inline worktree setup (checkbox + base + branch name) wraps as one unit. */
+.control-bar__wt {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.control--check {
+  flex-shrink: 0;
+  gap: 6px;
+}
+.control--check input {
+  margin: 0;
+  cursor: pointer;
+}
+.control--input {
+  min-width: 0;
+  max-width: 180px;
+}
+.control--input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+.control--branch {
+  flex-shrink: 0;
+  color: var(--accent);
+  cursor: default;
+}
+.control--branch:hover {
+  border-color: var(--border);
+  background: var(--bg-input);
 }
 .control-bar__spacer {
   flex: 1;
