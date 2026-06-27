@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties
+} from 'react'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, ReasoningEffort } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
@@ -25,12 +34,22 @@ import { Titlebar } from './components/Titlebar'
 import { ControlBar } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
-import { SettingsModal } from './components/SettingsModal'
-import { WorktreeDialog } from './components/WorktreeDialog'
-import { DiffPanel } from './components/DiffPanel'
 import { UpdateBanner } from './components/UpdateBanner'
-import { WhatsNewModal } from './components/WhatsNewModal'
 import type { UpdateCheckResult, WhatsNew } from '@shared/update'
+
+// These overlays aren't on the initial render path, so load them as separate
+// chunks fetched on first open instead of bloating the main bundle. SettingsModal
+// alone is the largest component in the renderer.
+const SettingsModal = lazy(() =>
+  import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
+)
+const WorktreeDialog = lazy(() =>
+  import('./components/WorktreeDialog').then((m) => ({ default: m.WorktreeDialog }))
+)
+const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })))
+const WhatsNewModal = lazy(() =>
+  import('./components/WhatsNewModal').then((m) => ({ default: m.WhatsNewModal }))
+)
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
@@ -842,32 +861,34 @@ export default function App(): JSX.Element {
         </footer>
       </div>
 
-      {settingsOpen && (
-        <SettingsModal
-          initial={settings}
-          onClose={() => setSettingsOpen(false)}
-          onSaved={(s) => setSettings(s)}
-        />
-      )}
+      <Suspense fallback={null}>
+        {settingsOpen && (
+          <SettingsModal
+            initial={settings}
+            onClose={() => setSettingsOpen(false)}
+            onSaved={(s) => setSettings(s)}
+          />
+        )}
 
-      {worktreeFor && (
-        <WorktreeDialog
-          workspace={worktreeFor}
-          onClose={() => setWorktreeFor(null)}
-          onCreate={newChatInWorktree}
-        />
-      )}
+        {worktreeFor && (
+          <WorktreeDialog
+            workspace={worktreeFor}
+            onClose={() => setWorktreeFor(null)}
+            onCreate={newChatInWorktree}
+          />
+        )}
 
-      {changesOpen && (
-        <DiffPanel
-          workspace={workspace}
-          onClose={() => setChangesOpen(false)}
-          onCreatePr={canChat ? onCreatePr : undefined}
-          creating={chat.running}
-        />
-      )}
+        {changesOpen && (
+          <DiffPanel
+            workspace={workspace}
+            onClose={() => setChangesOpen(false)}
+            onCreatePr={canChat ? onCreatePr : undefined}
+            creating={chat.running}
+          />
+        )}
 
-      <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />
+        {whatsNew && <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />}
+      </Suspense>
     </div>
   )
 }
