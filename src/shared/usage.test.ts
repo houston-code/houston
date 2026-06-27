@@ -89,8 +89,9 @@ describe('contextPercent', () => {
 
 describe('modelPricing', () => {
   it('matches Claude / GPT / Gemini families', () => {
-    expect(modelPricing('claude-opus-4-8')).toEqual({ input: 15, output: 75 })
+    expect(modelPricing('claude-opus-4-8')).toEqual({ input: 5, output: 25 })
     expect(modelPricing('claude-sonnet-4-6')).toEqual({ input: 3, output: 15 })
+    expect(modelPricing('claude-haiku-4-5')).toEqual({ input: 1, output: 5 })
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6 })
     expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5 })
     expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10 })
@@ -104,8 +105,8 @@ describe('modelPricing', () => {
 
 describe('turnCostUsd', () => {
   it('prices input and output tokens per million', () => {
-    // 1M in + 1M out on Opus = 15 + 75
-    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 1_000_000)).toBeCloseTo(90, 6)
+    // 1M in + 1M out on Opus = 5 + 25
+    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 1_000_000)).toBeCloseTo(30, 6)
     // 10k in + 2k out on gpt-4o-mini = 0.0015 + 0.0012
     expect(turnCostUsd('gpt-4o-mini', 10_000, 2_000)).toBeCloseTo(0.0027, 6)
   })

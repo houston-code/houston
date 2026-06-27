@@ -28,10 +28,10 @@ export interface ModelPricing {
  */
 export function modelPricing(model: string): ModelPricing | null {
   const m = model.toLowerCase()
-  // Anthropic (Claude)
-  if (m.includes('opus')) return { input: 15, output: 75 }
+  // Anthropic (Claude) — current per-MTok rates for the 4.x line.
+  if (m.includes('opus')) return { input: 5, output: 25 }
   if (m.includes('sonnet')) return { input: 3, output: 15 }
-  if (m.includes('haiku')) return { input: 0.8, output: 4 }
+  if (m.includes('haiku')) return { input: 1, output: 5 }
   // OpenAI (GPT / o-series)
   if (m.includes('gpt-4o-mini')) return { input: 0.15, output: 0.6 }
   if (m.includes('gpt-4o')) return { input: 2.5, output: 10 }
