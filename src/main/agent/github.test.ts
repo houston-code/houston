@@ -54,9 +54,12 @@ describe('runGh', () => {
 })
 
 describe('githubContext', () => {
-  it('advertises the gh_pr_* and gh_repo_create tools when gh is present', () => {
+  it('advertises the PR, issue, CI-run, and repo tools when gh is present', () => {
     const ctx = githubContext(() => '/opt/homebrew/bin/gh')
     expect(ctx).toContain('gh_pr_create')
+    expect(ctx).toContain('gh_pr_checks')
+    expect(ctx).toContain('gh_issue_create')
+    expect(ctx).toContain('gh_run_view')
     expect(ctx).toContain('gh_repo_create')
     expect(ctx).toContain('gh auth login')
   })
