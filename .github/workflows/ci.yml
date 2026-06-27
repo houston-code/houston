@@ -92,33 +92,20 @@ jobs:
       - run: npm ci
       - run: npx vitest run src/main/sandbox
 
-  # Package the app for each OS (macOS arm64, Windows x64, Linux x64) on every PR set
-  # to auto-merge. Cross-compilation is impossible — native node-pty + per-(os,arch)
-  # rg/ast-grep binaries — so each OS builds its own artifacts on its own runner. We
-  # build on the pull_request event (which checks out the merge ref = the state about
-  # to land); a push-to-main build can't run because the auto-merge job pushes with
-  # GITHUB_TOKEN, which doesn't trigger a new workflow run. This validates that packaging
-  # + the afterPack vendored-binary copy succeed on every OS, and it gates merge: it's in
-  # auto-merge's `needs`, so a PR that breaks packaging on any platform won't auto-merge.
-  # x64 mac + arm64 win/linux are follow-ups (each needs its own runner).
+  # Per-merge packaging smoke — Linux x64 ONLY (×1 Actions-minute multiplier). Proves the
+  # afterPack vendored-binary copy + asar packaging still succeed on every merge without
+  # burning macOS (×10) or Windows (×2) minutes per PR. The FULL signed macOS/Windows/Linux
+  # matrix is built and published at release time by release-publish.yml, and the heavy
+  # matrix also runs in release-prepare.yml before a release is cut — so macOS/Windows
+  # packaging regressions surface there. This job is in auto-merge's `needs`, so a PR that
+  # breaks Linux packaging won't auto-merge. Cross-compilation is impossible (native
+  # node-pty + per-(os,arch) rg/ast-grep binaries), which is why a single runner can only
+  # validate its own platform. Trade-off: the macOS packaged-app e2e moved to release time.
   build:
     timeout-minutes: 25
     needs: test
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            dist: dist:mac
-            artifact: houston-mac-arm64
-          - os: windows-latest
-            dist: dist:win
-            artifact: houston-win-x64
-          - os: ubuntu-latest
-            dist: dist:linux
-            artifact: houston-linux-x64
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -126,21 +113,15 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
-      - run: npm run ${{ matrix.dist }}
-      # Smoke-test the packaged macOS app: the spec launches the built .app via
-      # Playwright (_electron) and asserts the renderer mounts — exercising the asar
-      # archive, the afterPack vendored binaries, and the main ↔ preload ↔ renderer
-      # bridge end to end. macOS has a display without xvfb; Windows/Linux e2e is a
-      # follow-up (Linux needs xvfb), and the package build itself is the smoke test there.
-      - if: matrix.os == 'macos-14'
-        run: npm run test:e2e
+      - run: npm run dist:linux
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ matrix.artifact }}
+          name: houston-linux-x64
+          # Internal smoke artifact only — NEVER the public update feed (electron-updater
+          # reads published Releases, not Actions artifacts). Short retention caps storage;
+          # the real release artifacts live on the public releases repo, not here.
+          retention-days: 5
           path: |
-            release/*.dmg
-            release/*.zip
-            release/*-setup.exe
             release/*.AppImage
             release/*.deb
             release/latest*.yml
@@ -193,3 +174,38 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
           GH_REPO: ${{ github.repository }}
+
+      # Auto-advance the version after a successful merge so package.json always reflects
+      # the merge count. Feature PRs bump the PATCH here; the release-prep PR (label
+      # `release`) already carries the MINOR bump from release-prepare.yml, so it's skipped.
+      # The bump commit is pushed with GITHUB_TOKEN, which by design does NOT trigger a new
+      # workflow run, so this never loops. Feature PRs never edit the version line, so the
+      # 3-way merge of an in-flight PR can't conflict with these bumps.
+      - name: Check out main for version bump
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'release') }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Bump patch version
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'release') }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Retry to absorb a concurrent auto-merge that advanced main between fetch and push.
+          for attempt in 1 2 3 4 5; do
+            git fetch --quiet origin main
+            git reset --hard --quiet origin/main
+            # --no-git-tag-version: edit package.json/package-lock only, no commit, no tag,
+            # and no clean-tree requirement. We commit + tag-at-release ourselves.
+            new=$(npm version patch --no-git-tag-version)
+            git commit -aqm "chore(release): $new"
+            if git push origin HEAD:main; then
+              echo "Bumped version to $new"
+              exit 0
+            fi
+            echo "push rejected on attempt $attempt (main advanced); retrying"
+          done
+          echo "::error::Failed to push version bump after 5 attempts."
+          exit 1
