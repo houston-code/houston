@@ -14,6 +14,7 @@
 
 export type ShortcutId =
   | 'new-chat'
+  | 'command-palette'
   | 'toggle-sidebar'
   | 'open-settings'
   | 'show-help'
@@ -62,6 +63,12 @@ export const SHORTCUTS: ShortcutDef[] = [
     id: 'new-chat',
     chords: [{ key: 'n', mod: true }],
     label: 'New chat',
+    category: 'General'
+  },
+  {
+    id: 'command-palette',
+    chords: [{ key: 'k', mod: true }],
+    label: 'Command palette',
     category: 'General'
   },
   {
@@ -160,6 +167,12 @@ const KEY_GLYPH: Record<string, string> = {
   ArrowRight: '→',
   ' ': 'Space',
   Tab: 'Tab'
+}
+
+/** The display string for a shortcut's primary chord, e.g. `⌘K`, or undefined if unknown. */
+export function shortcutHint(id: ShortcutId, mac: boolean): string | undefined {
+  const def = SHORTCUTS.find((s) => s.id === id)
+  return def ? formatChord(def.chords[0], mac) : undefined
 }
 
 /** Render a chord as a display string, e.g. `⌘N` on macOS or `Ctrl+N` elsewhere. */
