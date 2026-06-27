@@ -94,11 +94,10 @@ jobs:
   # rg/ast-grep binaries — so each OS builds its own artifacts on its own runner. We
   # build on the pull_request event (which checks out the merge ref = the state about
   # to land); a push-to-main build can't run because the auto-merge job pushes with
-  # GITHUB_TOKEN, which doesn't trigger a new workflow run. This job validates that
-  # packaging + the afterPack vendored-binary copy succeed everywhere; it is NOT in
-  # auto-merge's `needs` (a packaging flake shouldn't wedge the merge queue — the unit/
-  # conformance legs are the gate). x64 mac + arm64 win/linux are follow-ups (each needs
-  # its own runner).
+  # GITHUB_TOKEN, which doesn't trigger a new workflow run. This validates that packaging
+  # + the afterPack vendored-binary copy succeed on every OS, and it gates merge: it's in
+  # auto-merge's `needs`, so a PR that breaks packaging on any platform won't auto-merge.
+  # x64 mac + arm64 win/linux are follow-ups (each needs its own runner).
   build:
     needs: test
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
@@ -144,7 +143,11 @@ jobs:
           if-no-files-found: error
 
   auto-merge:
-    needs: [test, linux-sandbox, test-windows]
+    # The merge gate: this job runs — and can merge — only after EVERY job listed in
+    # `needs` has succeeded. If any of them (or any of their matrix legs) fails, GitHub
+    # skips this job and the PR does not merge. IMPORTANT: when you add a CI job that
+    # must block merges, add it to this list too (it is not auto-discovered).
+    needs: [test, linux-sandbox, test-windows, build]
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
     runs-on: ubuntu-latest
     # A PR opened *and* labeled at once can spawn two CI runs for the same PR (see
