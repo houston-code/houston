@@ -140,3 +140,36 @@ describe('Composer prompt-history recall', () => {
     expect(input.value).toBe('')
   })
 })
+
+describe('Composer edit-last-message (Esc Esc)', () => {
+  it('recalls the last user message on double-Esc when the field is empty', () => {
+    render(<Composer {...baseProps({ lastUserMessage: 'the previous question' })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('the previous question')
+  })
+
+  it('does not recall on a single Esc', () => {
+    render(<Composer {...baseProps({ lastUserMessage: 'the previous question' })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('')
+  })
+
+  it('leaves a non-empty draft untouched on double-Esc', () => {
+    render(<Composer {...baseProps({ lastUserMessage: 'the previous question' })} />)
+    const input = type('half-written thought')
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('half-written thought')
+  })
+
+  it('is a no-op when there is no last message', () => {
+    render(<Composer {...baseProps()} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('')
+  })
+})

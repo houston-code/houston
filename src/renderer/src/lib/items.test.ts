@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { COMPACTION_SUMMARY_PREFIX, type AgentEvent, type ChatMessage } from '@shared/agent'
 import {
   itemsFromMessages,
+  lastUserText,
   reduceEvent,
+  type DisplayItem,
   type NoticeItem,
   type QuestionItem,
   type ToolItem,
@@ -154,5 +156,35 @@ describe('PR lifecycle notices', () => {
       expect.stringContaining('Opened pull request #9'),
       expect.stringContaining('Pull request #9 merged')
     ])
+  })
+})
+
+describe('lastUserText', () => {
+  const user = (id: string, text: string, isSummary = false): DisplayItem => ({
+    kind: 'user',
+    id,
+    text,
+    ...(isSummary ? { isSummary: true } : {})
+  })
+
+  it('returns the most recent user turn', () => {
+    const items: DisplayItem[] = [
+      user('u1', 'first'),
+      { kind: 'assistant', id: 'a1', text: 'reply', streaming: false },
+      user('u2', 'second')
+    ]
+    expect(lastUserText(items)).toBe('second')
+  })
+
+  it('skips the synthetic compaction-summary turn', () => {
+    const items: DisplayItem[] = [user('u1', 'real message'), user('s1', 'summary blob', true)]
+    expect(lastUserText(items)).toBe('real message')
+  })
+
+  it('returns undefined when there is no user turn', () => {
+    expect(lastUserText([])).toBeUndefined()
+    expect(
+      lastUserText([{ kind: 'assistant', id: 'a1', text: 'hi', streaming: false }])
+    ).toBeUndefined()
   })
 })

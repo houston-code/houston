@@ -31,7 +31,7 @@ import {
 } from './lib/sidebar'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
-import { itemsFromMessages } from './lib/items'
+import { itemsFromMessages, lastUserText } from './lib/items'
 import { Sidebar } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
@@ -1051,6 +1051,7 @@ export default function App(): JSX.Element {
             workspace={workspace}
             commands={commands}
             vision={visionSupported}
+            lastUserMessage={lastUserText(chat.items)}
             onCommand={onCommand}
             onSend={onSend}
             onCancel={chat.cancel}

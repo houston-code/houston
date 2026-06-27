@@ -62,6 +62,19 @@ export interface QuestionItem {
 
 export type DisplayItem = UserItem | AssistantItem | ToolItem | NoticeItem | QuestionItem
 
+/**
+ * The text of the most recent real user turn, or undefined if there is none.
+ * Skips the synthetic compaction-summary turn (it's model-authored, not something
+ * the user typed) — used to recall the last message into the composer (Esc Esc).
+ */
+export function lastUserText(items: DisplayItem[]): string | undefined {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === 'user' && !it.isSummary) return it.text
+  }
+  return undefined
+}
+
 /** Parse a tool call's `options` argument into display options (string[] or {label,…}[]). */
 function optionsFromArgs(raw: unknown): QuestionOption[] {
   if (!Array.isArray(raw)) return []

@@ -24,6 +24,8 @@ export type ShortcutId =
   | 'prev-chat'
   | 'send-message'
   | 'insert-newline'
+  | 'edit-last-message'
+  | 'history-recall'
 
 export type ShortcutCategory = 'General' | 'Navigation' | 'Chat' | 'Modes'
 
@@ -143,6 +145,22 @@ export const SHORTCUTS: ShortcutDef[] = [
     label: 'Insert a line break',
     category: 'Chat',
     scope: 'composer'
+  },
+  {
+    id: 'edit-last-message',
+    chords: [{ key: 'Escape' }],
+    label: 'Edit last message (when the field is empty)',
+    category: 'Chat',
+    scope: 'composer',
+    display: () => 'Esc Esc'
+  },
+  {
+    id: 'history-recall',
+    chords: [{ key: 'ArrowUp' }],
+    label: 'Recall a previous prompt (when the field is empty)',
+    category: 'Chat',
+    scope: 'composer',
+    display: () => '↑ / ↓'
   }
 ]
 
