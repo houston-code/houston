@@ -39,6 +39,7 @@ import { captureLocalhost } from './viewlocalhost'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills } from './skills'
+import { loadPlugins } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { githubContext, resolveGh, runGh } from './github'
@@ -247,6 +248,9 @@ export async function startRun(
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
     const skills = await loadSkills(workspace)
+    // Local trusted plugins (.houston/plugins/*.js) register observational
+    // lifecycle hooks — see plugins.ts for the trust boundary.
+    const plugins = await loadPlugins(workspace)
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(agents, skills)
     // Git + GitHub awareness folded into the prompt. githubContext is a pure PATH
@@ -287,6 +291,15 @@ export async function startRun(
         .map((d) => d.schema)
     ]
     const messages: ChatMessage[] = [...req.messages]
+
+    // Notify plugins of the user turn that started this run (the latest user
+    // message). Observational; a plugin error degrades to a warning (see plugins.ts).
+    if (plugins.has('onUserMessage')) {
+      const lastUser = [...req.messages].reverse().find((m) => m.role === 'user')
+      if (lastUser && typeof lastUser.content === 'string') {
+        await plugins.emit('onUserMessage', { text: lastUser.content })
+      }
+    }
 
     // Allowed roots: the workspace plus any configured additional directories
     // that still resolve (deduped). This is the file-tool + sandbox boundary.
@@ -598,6 +611,7 @@ export async function startRun(
       if (toolCalls.length > 1 && toolCalls.every(isParallelCall)) {
         for (const call of toolCalls) {
           emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
+          await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
         }
         const results = await Promise.all(
           toolCalls.map(async (call) => {
@@ -629,6 +643,12 @@ export async function startRun(
             ok: r.ok,
             output: r.output,
             ...(r.images.length ? { images: r.images } : {})
+          })
+          await plugins.emit('onToolResult', {
+            tool: r.call.name,
+            input: r.call.arguments,
+            output: r.output,
+            ok: r.ok
           })
           messages.push({
             role: 'tool',
@@ -736,6 +756,7 @@ export async function startRun(
                 await recordOriginal(runId, roots, call.arguments.path)
               }
               emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
+              await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
               try {
                 output = await tool.execute(
                   call.arguments,
@@ -818,6 +839,7 @@ export async function startRun(
           output,
           ...(toolImages.length ? { images: toolImages } : {})
         })
+        await plugins.emit('onToolResult', { tool: call.name, input: call.arguments, output, ok })
         messages.push({
           role: 'tool',
           content: output,
