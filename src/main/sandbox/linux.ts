@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import type { SandboxBackend, ShellLaunch } from './contract'
+import { resolvePosixShell } from './shared'
 
 /**
  * Linux bubblewrap (`bwrap`) backend.
@@ -32,9 +33,10 @@ export function realpathOrSelf(p: string): string {
   }
 }
 
-/** Choose the shell to exec inside the sandbox: bash when present, else POSIX sh. */
+/** Choose the shell to exec inside the sandbox: a real bash when present (searched
+ *  across the standard locations), else POSIX sh. See {@link resolvePosixShell}. */
 export function bwrapShell(exists: (p: string) => boolean = existsSync): string {
-  return exists('/bin/bash') ? '/bin/bash' : '/bin/sh'
+  return resolvePosixShell(exists).shell
 }
 
 /**
@@ -192,12 +194,14 @@ export const BubblewrapBackend: SandboxBackend = {
   id: 'bubblewrap',
   sandboxed: true,
   confinesNetwork: true,
-  supportsSession: true,
+  // Honest: the bash session prelude only runs when bash is the resolved shell. On the
+  // (near-impossible) bash-less host bwrap falls back to /bin/sh and callers skip it.
+  supportsSession: resolvePosixShell().isBash,
   buildLaunch({ command, roots, allowNetwork, cwd }): ShellLaunch {
-    const shell = bwrapShell()
+    const { shell, isBash } = resolvePosixShell()
     const writableRoots = dedupeExisting(roots.length ? roots : [cwd])
     const tmpDirs = dedupeExisting(linuxTmpDirs())
     const args = buildBwrapArgs({ roots: writableRoots, tmpDirs, allowNetwork, command, cwd, shell })
-    return { file: 'bwrap', args, detached: true, windowsHide: false, supportsSession: true }
+    return { file: 'bwrap', args, detached: true, windowsHide: false, supportsSession: isBash }
   }
 }
