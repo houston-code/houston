@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import {
   SHORTCUTS,
@@ -58,6 +58,68 @@ function textToModels(text: string, prev: ModelOption[]): ModelOption[] {
     .map((s) => s.trim())
     .filter(Boolean)
     .map((id) => ({ id, label: labelById.get(id) }))
+}
+
+/**
+ * One settings subsection: a restyled <h3> title (kept as a real heading with
+ * its exact text — tests query it), an optional one-line description, and a
+ * body. Flat by design — separation comes from a top hairline + rhythm, not a
+ * box. Purely presentational; adds no class any test depends on.
+ */
+function SettingsSection({
+  title,
+  desc,
+  children
+}: {
+  title: string
+  desc?: ReactNode
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <section className="set-section">
+      <div className="set-section__head">
+        <h3>{title}</h3>
+      </div>
+      {desc != null && <p className="set-section__desc">{desc}</p>}
+      <div className="set-section__body">{children}</div>
+    </section>
+  )
+}
+
+/**
+ * Decorative monoline glyph per nav tab. Rendered inside an aria-hidden span so
+ * it never alters the button's accessible name (which must stay exactly the tab
+ * label). currentColor lets each icon track the idle/hover/active text colour.
+ */
+const NAV_ICON: Record<TabId, JSX.Element> = {
+  models: (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="8" height="8" rx="1" />
+      <path d="M6.5 1.5v2M9.5 1.5v2M6.5 12.5v2M9.5 12.5v2M1.5 6.5h2M1.5 9.5h2M12.5 6.5h2M12.5 9.5h2" />
+    </svg>
+  ),
+  tools: (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.5l5 2v3.6c0 3-2.1 5.2-5 6.4-2.9-1.2-5-3.4-5-6.4V3.5l5-2z" />
+    </svg>
+  ),
+  workspace: (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M1.5 4.5a1 1 0 011-1h3l1.5 1.5h5a1 1 0 011 1v6a1 1 0 01-1 1h-10a1 1 0 01-1-1z" />
+    </svg>
+  ),
+  keyboard: (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+      <path d="M4 6.5h0M6.5 6.5h0M9 6.5h0M11.5 6.5h0M4 9h0M11.5 9h0M6 9h4" />
+    </svg>
+  ),
+  appearance: (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="3" />
+      <path d="M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3.05 3.05l1.15 1.15M11.8 11.8l1.15 1.15M12.95 3.05l-1.15 1.15M4.2 11.8l-1.15 1.15" />
+    </svg>
+  )
 }
 
 /** One customizable shortcut: shows its binding and records a replacement on demand. */
@@ -144,12 +206,15 @@ export function KeyboardTab({
   const hasOverrides = !!overrides && Object.keys(overrides).length > 0
 
   return (
-    <>
-      <h3>Keyboard shortcuts</h3>
-      <p className="keybind-hint">
-        Click a binding to record a new key combination, or disable it. Press{' '}
-        {mac ? '⌘/' : 'Ctrl+/'} (or ?) anytime to see the full list.
-      </p>
+    <SettingsSection
+      title="Keyboard shortcuts"
+      desc={
+        <>
+          Click a binding to record a new key combination, or disable it. Press{' '}
+          {mac ? '⌘/' : 'Ctrl+/'} (or ?) anytime to see the full list.
+        </>
+      }
+    >
       <div className="keybind-list">
         {rows.map((def) => {
           const overridden = !!overrides && def.id in overrides
@@ -172,7 +237,7 @@ export function KeyboardTab({
           Reset all to defaults
         </button>
       )}
-    </>
+    </SettingsSection>
   )
 }
 
@@ -354,6 +419,17 @@ export function SettingsModal({
     onClose()
   }
 
+  // Tone for the optional-integration status pills. While still loading we use a
+  // neutral accent pill so "Checking…" doesn't masquerade as an amber warning.
+  const ghTone =
+    integrations == null
+      ? 'accent'
+      : integrations.gh.installed && integrations.gh.authenticated
+        ? 'ok'
+        : 'warn'
+  const formatterTone =
+    integrations != null && integrations.formatters.some((f) => f.installed) ? 'ok' : 'warn'
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
@@ -380,6 +456,9 @@ export function SettingsModal({
                 className={t.id === tab ? 'is-active' : ''}
                 onClick={() => setTab(t.id)}
               >
+                <span className="set-nav__icon" aria-hidden="true">
+                  {NAV_ICON[t.id]}
+                </span>
                 {t.label}
               </button>
             ))}
@@ -388,517 +467,580 @@ export function SettingsModal({
           <div className="modal__body">
             {tab === 'models' && (
               <>
-                <h3>Providers &amp; models</h3>
-                {settings.providers.map((p) => (
-                  <div className="provider" key={p.id}>
-                    <div className="provider__head">
-                      <strong>{p.label}</strong>
-                      <span className="provider__kind">{p.kind}</span>
-                      {p.hasKey && <span className="provider__key-ok">key set ✓</span>}
-                      {!p.builtIn && (
-                        <button
-                          className="btn btn--danger btn--sm"
-                          onClick={() => removeProvider(p.id)}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
-
-                    {(p.kind === 'openai-compatible' || p.baseUrl !== undefined) && (
-                      <label className="field">
-                        <span>Base URL</span>
-                        <input
-                          value={p.baseUrl ?? ''}
-                          placeholder="https://host/v1"
-                          onChange={(e) => patchProvider(p.id, { baseUrl: e.target.value })}
-                        />
-                      </label>
-                    )}
-
-                    <label className="field">
-                      <span>API key</span>
-                      <div className="field__row">
-                        <input
-                          type="password"
-                          placeholder={
-                            p.hasKey ? '•••••••• (stored)' : p.requiresKey ? 'Required' : 'Optional'
-                          }
-                          value={keyInputs[p.id] ?? ''}
-                          onChange={(e) => setKeyInputs((k) => ({ ...k, [p.id]: e.target.value }))}
-                        />
-                        <button
-                          className="btn btn--sm"
-                          disabled={busy === p.id}
-                          onClick={() => saveKey(p.id)}
-                        >
-                          Save
-                        </button>
+                <SettingsSection title="Providers &amp; models">
+                  {settings.providers.map((p) => (
+                    <div className="provider" key={p.id}>
+                      <div className="provider__head">
+                        <strong>{p.label}</strong>
+                        <span className="provider__kind">{p.kind}</span>
                         {p.hasKey && (
+                          <span className="provider__key-ok pill pill--ok">key set ✓</span>
+                        )}
+                        {!p.builtIn && (
                           <button
-                            className="btn btn--sm btn--danger"
-                            disabled={busy === p.id}
-                            onClick={() => removeKey(p.id)}
+                            className="btn btn--danger btn--sm"
+                            onClick={() => removeProvider(p.id)}
                           >
                             Remove
                           </button>
                         )}
                       </div>
-                    </label>
 
-                    <label className="field">
-                      <span>
-                        Models{' '}
-                        <button
-                          className="link"
-                          onClick={() => fetchModels(p.id)}
-                          disabled={busy === p.id}
-                        >
-                          fetch from provider
-                        </button>
-                      </span>
-                      <textarea
-                        rows={3}
-                        value={modelsToText(p.models)}
-                        placeholder="one model id per line"
-                        onChange={(e) =>
-                          patchProvider(p.id, { models: textToModels(e.target.value, p.models) })
-                        }
-                      />
-                    </label>
-                  </div>
-                ))}
+                      {(p.kind === 'openai-compatible' || p.baseUrl !== undefined) && (
+                        <label className="field">
+                          <span>Base URL</span>
+                          <input
+                            value={p.baseUrl ?? ''}
+                            placeholder="https://host/v1"
+                            onChange={(e) => patchProvider(p.id, { baseUrl: e.target.value })}
+                          />
+                        </label>
+                      )}
 
-                <h3>Add a local / custom endpoint</h3>
-                <div className="add-endpoint">
-                  <input
-                    placeholder="Label (e.g. My vLLM)"
-                    value={newLabel}
-                    onChange={(e) => setNewLabel(e.target.value)}
-                  />
-                  <input
-                    placeholder="Base URL (http://localhost:8000/v1)"
-                    value={newUrl}
-                    onChange={(e) => setNewUrl(e.target.value)}
-                  />
-                  <button className="btn" onClick={addEndpoint}>
-                    Add
-                  </button>
-                </div>
+                      <label className="field">
+                        <span>API key</span>
+                        <div className="field__row">
+                          <input
+                            type="password"
+                            placeholder={
+                              p.hasKey
+                                ? '•••••••• (stored)'
+                                : p.requiresKey
+                                  ? 'Required'
+                                  : 'Optional'
+                            }
+                            value={keyInputs[p.id] ?? ''}
+                            onChange={(e) =>
+                              setKeyInputs((k) => ({ ...k, [p.id]: e.target.value }))
+                            }
+                          />
+                          <button
+                            className="btn btn--sm"
+                            disabled={busy === p.id}
+                            onClick={() => saveKey(p.id)}
+                          >
+                            Save
+                          </button>
+                          {p.hasKey && (
+                            <button
+                              className="btn btn--sm btn--danger"
+                              disabled={busy === p.id}
+                              onClick={() => removeKey(p.id)}
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </label>
 
-                <h3>System prompt addition</h3>
-                <textarea
-                  className="full-textarea"
-                  rows={3}
-                  placeholder="Extra instructions appended to every conversation (optional)."
-                  value={settings.systemPromptExtra ?? ''}
-                  onChange={(e) =>
-                    setSettings((s) => ({ ...s, systemPromptExtra: e.target.value }))
-                  }
-                />
+                      <label className="field">
+                        <span>
+                          Models{' '}
+                          <button
+                            className="link"
+                            onClick={() => fetchModels(p.id)}
+                            disabled={busy === p.id}
+                          >
+                            fetch from provider
+                          </button>
+                        </span>
+                        <textarea
+                          rows={3}
+                          value={modelsToText(p.models)}
+                          placeholder="one model id per line"
+                          onChange={(e) =>
+                            patchProvider(p.id, { models: textToModels(e.target.value, p.models) })
+                          }
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </SettingsSection>
 
-                <h3>Context window</h3>
-                <label className="field">
-                  <span>
-                    Compact the conversation when it grows past this many tokens (0 to disable).
-                    Lower it for small-context local models.
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1000}
-                    value={settings.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD}
-                    onChange={(e) =>
-                      setSettings((s) => ({
-                        ...s,
-                        compactionThreshold: Math.max(0, Math.floor(Number(e.target.value) || 0))
-                      }))
-                    }
-                  />
-                </label>
-                <label className="field">
-                  <span>
-                    Truncate a single command&apos;s output to this many bytes, keeping both ends
-                    (~4 bytes ≈ 1 token). Stops one runaway command from flooding the context
-                    window.
-                  </span>
-                  <input
-                    type="number"
-                    min={1000}
-                    step={1000}
-                    value={settings.shellOutputMaxBytes ?? DEFAULT_SHELL_OUTPUT_MAX_BYTES}
-                    onChange={(e) =>
-                      setSettings((s) => ({
-                        ...s,
-                        shellOutputMaxBytes: Math.max(1000, Math.floor(Number(e.target.value) || 0))
-                      }))
-                    }
-                  />
-                </label>
-
-                <h3>Reasoning</h3>
-                <p className="field__hint">
-                  Reasoning effort is set per-chat in the control bar. These tune how the model&apos;s
-                  reasoning is reported and how long replies run (OpenAI Responses models).
-                </p>
-                <label className="field">
-                  <span>Reasoning summary</span>
-                  <select
-                    value={settings.reasoningSummary ?? 'auto'}
-                    onChange={(e) =>
-                      setSettings((s) => ({
-                        ...s,
-                        reasoningSummary: e.target.value as AppSettings['reasoningSummary']
-                      }))
-                    }
-                  >
-                    <option value="auto">Auto</option>
-                    <option value="concise">Concise</option>
-                    <option value="detailed">Detailed</option>
-                    <option value="none">None</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>Verbosity</span>
-                  <select
-                    value={settings.verbosity ?? 'medium'}
-                    onChange={(e) =>
-                      setSettings((s) => ({ ...s, verbosity: e.target.value as AppSettings['verbosity'] }))
-                    }
-                  >
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </select>
-                </label>
-
-                <h3>Web search</h3>
-                <label className="field">
-                  <span>
-                    Tavily API key for the <code>web_search</code> tool{' '}
-                    {settings.hasWebSearchKey && (
-                      <span className="provider__key-ok">key set ✓</span>
-                    )}
-                  </span>
-                  <div className="field__row">
+                <SettingsSection
+                  title="Add a local / custom endpoint"
+                  desc="Point Houston at any OpenAI-compatible server — local or hosted."
+                >
+                  <div className="add-endpoint">
                     <input
-                      type="password"
-                      placeholder={settings.hasWebSearchKey ? '•••••••• (stored)' : 'tvly-…'}
-                      value={keyInputs[WEB_SEARCH_KEY_ID] ?? ''}
+                      placeholder="Label (e.g. My vLLM)"
+                      value={newLabel}
+                      onChange={(e) => setNewLabel(e.target.value)}
+                    />
+                    <input
+                      placeholder="Base URL (http://localhost:8000/v1)"
+                      value={newUrl}
+                      onChange={(e) => setNewUrl(e.target.value)}
+                    />
+                    <button className="btn" onClick={addEndpoint}>
+                      Add
+                    </button>
+                  </div>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="System prompt addition"
+                  desc="Extra instructions appended to every conversation in this workspace."
+                >
+                  <textarea
+                    className="full-textarea"
+                    rows={3}
+                    placeholder="Extra instructions appended to every conversation (optional)."
+                    value={settings.systemPromptExtra ?? ''}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, systemPromptExtra: e.target.value }))
+                    }
+                  />
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Context window"
+                  desc="Cap conversation size and per-command output so a long session or a runaway command can't flood the model's context."
+                >
+                  <label className="field">
+                    <span>
+                      Compact the conversation when it grows past this many tokens (0 to disable).
+                      Lower it for small-context local models.
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1000}
+                      value={settings.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD}
                       onChange={(e) =>
-                        setKeyInputs((k) => ({ ...k, [WEB_SEARCH_KEY_ID]: e.target.value }))
+                        setSettings((s) => ({
+                          ...s,
+                          compactionThreshold: Math.max(0, Math.floor(Number(e.target.value) || 0))
+                        }))
                       }
                     />
-                    <button
-                      className="btn btn--sm"
-                      disabled={busy === WEB_SEARCH_KEY_ID}
-                      onClick={() => saveKey(WEB_SEARCH_KEY_ID)}
+                  </label>
+                  <label className="field">
+                    <span>
+                      Truncate a single command&apos;s output to this many bytes, keeping both ends
+                      (~4 bytes ≈ 1 token). Stops one runaway command from flooding the context
+                      window.
+                    </span>
+                    <input
+                      type="number"
+                      min={1000}
+                      step={1000}
+                      value={settings.shellOutputMaxBytes ?? DEFAULT_SHELL_OUTPUT_MAX_BYTES}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          shellOutputMaxBytes: Math.max(
+                            1000,
+                            Math.floor(Number(e.target.value) || 0)
+                          )
+                        }))
+                      }
+                    />
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Reasoning"
+                  desc={
+                    <>
+                      Reasoning effort is set per-chat in the control bar. These tune how the
+                      model&apos;s reasoning is reported and how long replies run (OpenAI Responses
+                      models).
+                    </>
+                  }
+                >
+                  <label className="field">
+                    <span>Reasoning summary</span>
+                    <select
+                      value={settings.reasoningSummary ?? 'auto'}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          reasoningSummary: e.target.value as AppSettings['reasoningSummary']
+                        }))
+                      }
                     >
-                      Save
-                    </button>
-                    {settings.hasWebSearchKey && (
+                      <option value="auto">Auto</option>
+                      <option value="concise">Concise</option>
+                      <option value="detailed">Detailed</option>
+                      <option value="none">None</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Verbosity</span>
+                    <select
+                      value={settings.verbosity ?? 'medium'}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          verbosity: e.target.value as AppSettings['verbosity']
+                        }))
+                      }
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Web search"
+                  desc={
+                    <>
+                      Enable the <code>web_search</code> tool with a Tavily API key, stored in your
+                      OS keychain.
+                    </>
+                  }
+                >
+                  <label className="field">
+                    <span>
+                      Tavily API key{' '}
+                      {settings.hasWebSearchKey && (
+                        <span className="provider__key-ok pill pill--ok">key set ✓</span>
+                      )}
+                    </span>
+                    <div className="field__row">
+                      <input
+                        type="password"
+                        placeholder={settings.hasWebSearchKey ? '•••••••• (stored)' : 'tvly-…'}
+                        value={keyInputs[WEB_SEARCH_KEY_ID] ?? ''}
+                        onChange={(e) =>
+                          setKeyInputs((k) => ({ ...k, [WEB_SEARCH_KEY_ID]: e.target.value }))
+                        }
+                      />
                       <button
-                        className="btn btn--sm btn--danger"
+                        className="btn btn--sm"
                         disabled={busy === WEB_SEARCH_KEY_ID}
-                        onClick={() => removeKey(WEB_SEARCH_KEY_ID)}
+                        onClick={() => saveKey(WEB_SEARCH_KEY_ID)}
                       >
-                        Remove
+                        Save
                       </button>
-                    )}
-                  </div>
-                </label>
+                      {settings.hasWebSearchKey && (
+                        <button
+                          className="btn btn--sm btn--danger"
+                          disabled={busy === WEB_SEARCH_KEY_ID}
+                          onClick={() => removeKey(WEB_SEARCH_KEY_ID)}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </label>
+                </SettingsSection>
               </>
             )}
 
             {tab === 'tools' && (
               <>
-                <h3>Permissions</h3>
-                <p className="field__hint">
-                  Rules are checked before the approval policy (first match wins).{' '}
-                  <strong>Allow</strong> auto-approves, <strong>Deny</strong> refuses,{' '}
-                  <strong>Ask</strong> always prompts. The pattern is a glob over the call&apos;s
-                  command, path, URL, or query.
-                </p>
-                <datalist id="tool-names">
-                  {TOOL_NAMES.map((t) => (
-                    <option key={t} value={t} />
-                  ))}
-                </datalist>
-                {rules.map((r, i) => (
-                  <div className="rule" key={i}>
-                    <select
-                      value={r.action}
-                      onChange={(e) =>
-                        patchRule(i, { action: e.target.value as PermissionRule['action'] })
-                      }
-                    >
-                      <option value="allow">Allow</option>
-                      <option value="ask">Ask</option>
-                      <option value="deny">Deny</option>
-                    </select>
-                    <input
-                      list="tool-names"
-                      className="rule__tool"
-                      placeholder="tool (or *)"
-                      value={r.tool}
-                      onChange={(e) => patchRule(i, { tool: e.target.value.trim() })}
-                    />
-                    <input
-                      className="rule__match"
-                      placeholder="pattern, e.g. git * or src/**"
-                      value={r.match}
-                      onChange={(e) => patchRule(i, { match: e.target.value })}
-                    />
-                    <button className="btn btn--sm btn--danger" onClick={() => removeRule(i)}>
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button className="btn btn--sm" onClick={addRule}>
-                  + Add rule
-                </button>
-
-                <h3>Hooks</h3>
-                <p className="field__hint">
-                  Shell commands run around tool calls (sandboxed to the project, no network).{' '}
-                  <strong>PreToolUse</strong> runs before a tool — a non-zero exit blocks it;{' '}
-                  <strong>PostToolUse</strong> runs after, and its output is shown to the agent (e.g. a
-                  formatter or test run). The call&apos;s context is in{' '}
-                  <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code>.
-                </p>
-                {hooks.map((h, i) => (
-                  <div className="rule" key={i}>
-                    <select
-                      value={h.event}
-                      onChange={(e) => patchHook(i, { event: e.target.value as Hook['event'] })}
-                    >
-                      <option value="PreToolUse">Pre</option>
-                      <option value="PostToolUse">Post</option>
-                    </select>
-                    <input
-                      list="tool-names"
-                      className="rule__tool"
-                      placeholder="tool (or *)"
-                      value={h.matcher}
-                      onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
-                    />
-                    <input
-                      className="rule__match"
-                      placeholder="shell command, e.g. npm run format"
-                      value={h.command}
-                      onChange={(e) => patchHook(i, { command: e.target.value })}
-                    />
-                    <button className="btn btn--sm btn--danger" onClick={() => removeHook(i)}>
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button className="btn btn--sm" onClick={addHook}>
-                  + Add hook
-                </button>
-
-                <h3>Optional integrations</h3>
-                <p className="field__hint">
-                  These extras are optional — Houston works without them. Status on this machine:
-                </p>
-                <div className="integration">
-                  <span className="integration__name">
-                    GitHub CLI (<code>gh</code>)
-                  </span>
-                  <span
-                    className={`integration__status integration__status--${
-                      integrations?.gh.installed && integrations.gh.authenticated ? 'ok' : 'warn'
-                    }`}
-                  >
-                    {integrations == null
-                      ? 'Checking…'
-                      : !integrations.gh.installed
-                        ? 'Not found'
-                        : integrations.gh.authenticated
-                          ? 'Installed & signed in'
-                          : 'Installed — not signed in'}
-                  </span>
-                </div>
-                {integrations != null &&
-                  !(integrations.gh.installed && integrations.gh.authenticated) && (
-                    <p className="field__hint">
-                      Enables the <code>gh_*</code> GitHub tools (pull requests, issues, checks).{' '}
-                      {!integrations.gh.installed ? (
-                        <>
-                          Install it from{' '}
-                          <a href="https://cli.github.com" target="_blank" rel="noreferrer">
-                            cli.github.com
-                          </a>{' '}
-                          and run <code>gh auth login</code>.
-                        </>
-                      ) : (
-                        <>
-                          Run <code>gh auth login</code> to sign in.
-                        </>
-                      )}
-                    </p>
-                  )}
-                {integrations != null && (
-                  <>
-                    <div className="integration">
-                      <span className="integration__name">Formatters (format on save)</span>
-                      <span
-                        className={`integration__status integration__status--${
-                          integrations.formatters.some((f) => f.installed) ? 'ok' : 'warn'
-                        }`}
+                <SettingsSection
+                  title="Permissions"
+                  desc={
+                    <>
+                      Rules are checked before the approval policy (first match wins).{' '}
+                      <strong>Allow</strong> auto-approves, <strong>Deny</strong> refuses,{' '}
+                      <strong>Ask</strong> always prompts. The pattern is a glob over the call&apos;s
+                      command, path, URL, or query.
+                    </>
+                  }
+                >
+                  <datalist id="tool-names">
+                    {TOOL_NAMES.map((t) => (
+                      <option key={t} value={t} />
+                    ))}
+                  </datalist>
+                  {rules.map((r, i) => (
+                    <div className="rule" key={i}>
+                      <select
+                        value={r.action}
+                        onChange={(e) =>
+                          patchRule(i, { action: e.target.value as PermissionRule['action'] })
+                        }
                       >
-                        {integrations.formatters.filter((f) => f.installed).length} of{' '}
-                        {integrations.formatters.length} found
-                      </span>
+                        <option value="allow">Allow</option>
+                        <option value="ask">Ask</option>
+                        <option value="deny">Deny</option>
+                      </select>
+                      <input
+                        list="tool-names"
+                        className="rule__tool"
+                        placeholder="tool (or *)"
+                        value={r.tool}
+                        onChange={(e) => patchRule(i, { tool: e.target.value.trim() })}
+                      />
+                      <input
+                        className="rule__match"
+                        placeholder="pattern, e.g. git * or src/**"
+                        value={r.match}
+                        onChange={(e) => patchRule(i, { match: e.target.value })}
+                      />
+                      <button className="btn btn--sm btn--danger" onClick={() => removeRule(i)}>
+                        ✕
+                      </button>
                     </div>
-                    <p className="field__hint">
-                      {integrations.formatters.map((f, i) => (
-                        <span key={f.bin}>
-                          {i > 0 && ', '}
-                          <code>{f.bin}</code> {f.installed ? '✓' : '✗'}
+                  ))}
+                  <button className="btn btn--sm" onClick={addRule}>
+                    + Add rule
+                  </button>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Hooks"
+                  desc={
+                    <>
+                      Shell commands run around tool calls (sandboxed to the project, no network).{' '}
+                      <strong>PreToolUse</strong> runs before a tool — a non-zero exit blocks it;{' '}
+                      <strong>PostToolUse</strong> runs after, and its output is shown to the agent
+                      (e.g. a formatter or test run). The call&apos;s context is in{' '}
+                      <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code>.
+                    </>
+                  }
+                >
+                  {hooks.map((h, i) => (
+                    <div className="rule" key={i}>
+                      <select
+                        value={h.event}
+                        onChange={(e) => patchHook(i, { event: e.target.value as Hook['event'] })}
+                      >
+                        <option value="PreToolUse">Pre</option>
+                        <option value="PostToolUse">Post</option>
+                      </select>
+                      <input
+                        list="tool-names"
+                        className="rule__tool"
+                        placeholder="tool (or *)"
+                        value={h.matcher}
+                        onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
+                      />
+                      <input
+                        className="rule__match"
+                        placeholder="shell command, e.g. npm run format"
+                        value={h.command}
+                        onChange={(e) => patchHook(i, { command: e.target.value })}
+                      />
+                      <button className="btn btn--sm btn--danger" onClick={() => removeHook(i)}>
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <button className="btn btn--sm" onClick={addHook}>
+                    + Add hook
+                  </button>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Optional integrations"
+                  desc="These extras are optional — Houston works without them. Status on this machine:"
+                >
+                  <div className="integration">
+                    <span className="integration__name">
+                      GitHub CLI (<code>gh</code>)
+                    </span>
+                    <span
+                      className={`integration__status pill integration__status--${ghTone} pill--${ghTone}`}
+                    >
+                      {integrations == null
+                        ? 'Checking…'
+                        : !integrations.gh.installed
+                          ? 'Not found'
+                          : integrations.gh.authenticated
+                            ? 'Installed & signed in'
+                            : 'Installed — not signed in'}
+                    </span>
+                  </div>
+                  {integrations != null &&
+                    !(integrations.gh.installed && integrations.gh.authenticated) && (
+                      <p className="field__hint">
+                        Enables the <code>gh_*</code> GitHub tools (pull requests, issues, checks).{' '}
+                        {!integrations.gh.installed ? (
+                          <>
+                            Install it from{' '}
+                            <a href="https://cli.github.com" target="_blank" rel="noreferrer">
+                              cli.github.com
+                            </a>{' '}
+                            and run <code>gh auth login</code>.
+                          </>
+                        ) : (
+                          <>
+                            Run <code>gh auth login</code> to sign in.
+                          </>
+                        )}
+                      </p>
+                    )}
+                  {integrations != null && (
+                    <>
+                      <div className="integration">
+                        <span className="integration__name">Formatters (format on save)</span>
+                        <span
+                          className={`integration__status pill integration__status--${formatterTone} pill--${formatterTone}`}
+                        >
+                          {integrations.formatters.filter((f) => f.installed).length} of{' '}
+                          {integrations.formatters.length} found
                         </span>
-                      ))}
-                      . Install the ones you want on your <code>PATH</code>; the matching formatter
-                      runs only when present.
-                    </p>
-                  </>
-                )}
-
-                <h3>Format on save</h3>
-                <label className="field field--checkbox">
-                  <input
-                    type="checkbox"
-                    checked={settings.formatOnSave ?? false}
-                    onChange={(e) =>
-                      setSettings((s) => ({ ...s, formatOnSave: e.target.checked }))
-                    }
-                  />
-                  <span>
-                    After the agent writes a file, run the matching formatter on it (Prettier for
-                    JS/TS/JSON/CSS/Markdown, <code>gofmt</code>, <code>rustfmt</code>,{' '}
-                    <code>ruff</code>/<code>black</code> for Python). Only runs when the formatter is
-                    installed (see <em>Optional integrations</em> above); off by default.
-                  </span>
-                </label>
-
-                <h3>Diagnostics on save</h3>
-                <label className="field field--checkbox">
-                  <input
-                    type="checkbox"
-                    checked={settings.diagnosticsOnSave ?? false}
-                    onChange={(e) =>
-                      setSettings((s) => ({ ...s, diagnosticsOnSave: e.target.checked }))
-                    }
-                  />
-                  <span>
-                    After the agent writes a file, run a fast checker on it (<code>eslint</code> for
-                    JS/TS, <code>ruff</code>/<code>pyflakes</code> for Python, <code>gofmt</code> for
-                    Go) and show any problems to the agent so it can self-correct in the same turn.
-                    Read-only — never edits the file. Only runs when the checker is installed; off by
-                    default.
-                  </span>
-                </label>
-
-                <h3>MCP servers</h3>
-                <p className="field__hint">
-                  Connect Model Context Protocol servers — a local <strong>stdio</strong> process or a
-                  remote <strong>HTTP</strong> or <strong>SSE</strong> endpoint (optionally
-                  authenticated with a bearer-token header). Their tools are offered to the agent as{' '}
-                  <code>mcp__&lt;id&gt;__&lt;tool&gt;</code> and always require approval. stdio
-                  commands run as you (not sandboxed), so only add servers you trust.
-                </p>
-                {servers.map((sv, i) => {
-                  const transport = sv.transport ?? (sv.url && !sv.command ? 'http' : 'stdio')
-                  return (
-                    <div className="mcp-server" key={i}>
-                      <div className="mcp-server__row">
-                        <input
-                          className="rule__tool"
-                          placeholder="id"
-                          value={sv.id}
-                          onChange={(e) => patchServer(i, { id: sanitizeServerId(e.target.value) })}
-                        />
-                        <select
-                          value={transport}
-                          onChange={(e) =>
-                            patchServer(i, {
-                              transport: e.target.value as McpServerConfig['transport']
-                            })
-                          }
-                        >
-                          <option value="stdio">stdio</option>
-                          <option value="http">http</option>
-                          <option value="sse">sse</option>
-                        </select>
-                        <label className="mcp-server__enabled" title="Enabled">
-                          <input
-                            type="checkbox"
-                            checked={sv.enabled}
-                            onChange={(e) => patchServer(i, { enabled: e.target.checked })}
-                          />
-                        </label>
-                        <button
-                          className="btn btn--sm btn--danger"
-                          onClick={() => removeServer(i)}
-                        >
-                          ✕
-                        </button>
                       </div>
-                      {transport === 'http' || transport === 'sse' ? (
-                        <>
+                      <p className="field__hint">
+                        {integrations.formatters.map((f, i) => (
+                          <span key={f.bin}>
+                            {i > 0 && ', '}
+                            <code>{f.bin}</code> {f.installed ? '✓' : '✗'}
+                          </span>
+                        ))}
+                        . Install the ones you want on your <code>PATH</code>; the matching formatter
+                        runs only when present.
+                      </p>
+                    </>
+                  )}
+                </SettingsSection>
+
+                <SettingsSection title="Format on save">
+                  <label className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={settings.formatOnSave ?? false}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, formatOnSave: e.target.checked }))
+                      }
+                    />
+                    <span>
+                      After the agent writes a file, run the matching formatter on it (Prettier for
+                      JS/TS/JSON/CSS/Markdown, <code>gofmt</code>, <code>rustfmt</code>,{' '}
+                      <code>ruff</code>/<code>black</code> for Python). Only runs when the formatter
+                      is installed (see <em>Optional integrations</em> above); off by default.
+                    </span>
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection title="Diagnostics on save">
+                  <label className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={settings.diagnosticsOnSave ?? false}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, diagnosticsOnSave: e.target.checked }))
+                      }
+                    />
+                    <span>
+                      After the agent writes a file, run a fast checker on it (<code>eslint</code>{' '}
+                      for JS/TS, <code>ruff</code>/<code>pyflakes</code> for Python,{' '}
+                      <code>gofmt</code> for Go) and show any problems to the agent so it can
+                      self-correct in the same turn. Read-only — never edits the file. Only runs when
+                      the checker is installed; off by default.
+                    </span>
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="MCP servers"
+                  desc={
+                    <>
+                      Connect Model Context Protocol servers — a local <strong>stdio</strong> process
+                      or a remote <strong>HTTP</strong> or <strong>SSE</strong> endpoint (optionally
+                      authenticated with a bearer-token header). Their tools are offered to the agent
+                      as <code>mcp__&lt;id&gt;__&lt;tool&gt;</code> and always require approval. stdio
+                      commands run as you (not sandboxed), so only add servers you trust.
+                    </>
+                  }
+                >
+                  {servers.map((sv, i) => {
+                    const transport = sv.transport ?? (sv.url && !sv.command ? 'http' : 'stdio')
+                    return (
+                      <div className="mcp-server" key={i}>
+                        <div className="mcp-server__row">
                           <input
-                            className="mcp-server__args"
-                            placeholder="url (e.g. https://example.com/mcp)"
-                            value={sv.url ?? ''}
-                            onChange={(e) => patchServer(i, { url: e.target.value })}
-                          />
-                          <textarea
-                            className="mcp-server__args"
-                            placeholder="headers, one per line (e.g. Authorization: Bearer TOKEN)"
-                            rows={2}
-                            value={Object.entries(sv.headers ?? {})
-                              .map(([k, v]) => `${k}: ${v}`)
-                              .join('\n')}
+                            className="rule__tool"
+                            placeholder="id"
+                            value={sv.id}
                             onChange={(e) =>
-                              patchServer(i, { headers: parseHeaderLines(e.target.value) })
+                              patchServer(i, { id: sanitizeServerId(e.target.value) })
                             }
                           />
-                        </>
-                      ) : (
-                        <>
-                          <input
-                            className="mcp-server__args"
-                            placeholder="command (e.g. npx)"
-                            value={sv.command}
-                            onChange={(e) => patchServer(i, { command: e.target.value })}
-                          />
-                          <input
-                            className="mcp-server__args"
-                            placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
-                            value={(sv.args ?? []).join(' ')}
+                          <select
+                            value={transport}
                             onChange={(e) =>
-                              patchServer(i, { args: e.target.value.split(/\s+/).filter(Boolean) })
+                              patchServer(i, {
+                                transport: e.target.value as McpServerConfig['transport']
+                              })
                             }
-                          />
-                        </>
-                      )}
-                    </div>
-                  )
-                })}
-                <button className="btn btn--sm" onClick={addServer}>
-                  + Add MCP server
-                </button>
+                          >
+                            <option value="stdio">stdio</option>
+                            <option value="http">http</option>
+                            <option value="sse">sse</option>
+                          </select>
+                          <label className="mcp-server__enabled" title="Enabled">
+                            <input
+                              type="checkbox"
+                              checked={sv.enabled}
+                              onChange={(e) => patchServer(i, { enabled: e.target.checked })}
+                            />
+                          </label>
+                          <button
+                            className="btn btn--sm btn--danger"
+                            onClick={() => removeServer(i)}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        {transport === 'http' || transport === 'sse' ? (
+                          <>
+                            <input
+                              className="mcp-server__args"
+                              placeholder="url (e.g. https://example.com/mcp)"
+                              value={sv.url ?? ''}
+                              onChange={(e) => patchServer(i, { url: e.target.value })}
+                            />
+                            <textarea
+                              className="mcp-server__args"
+                              placeholder="headers, one per line (e.g. Authorization: Bearer TOKEN)"
+                              rows={2}
+                              value={Object.entries(sv.headers ?? {})
+                                .map(([k, v]) => `${k}: ${v}`)
+                                .join('\n')}
+                              onChange={(e) =>
+                                patchServer(i, { headers: parseHeaderLines(e.target.value) })
+                              }
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <input
+                              className="mcp-server__args"
+                              placeholder="command (e.g. npx)"
+                              value={sv.command}
+                              onChange={(e) => patchServer(i, { command: e.target.value })}
+                            />
+                            <input
+                              className="mcp-server__args"
+                              placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
+                              value={(sv.args ?? []).join(' ')}
+                              onChange={(e) =>
+                                patchServer(i, {
+                                  args: e.target.value.split(/\s+/).filter(Boolean)
+                                })
+                              }
+                            />
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                  <button className="btn btn--sm" onClick={addServer}>
+                    + Add MCP server
+                  </button>
+                </SettingsSection>
               </>
             )}
 
             {tab === 'workspace' && (
-              <>
-                <h3>Additional folders</h3>
-                <p className="field__hint">
-                  Extra directories the agent may read and write, beyond the project folder.
-                  They&apos;re added to the file tools&apos; allowed roots and the shell sandbox.
-                  Only add folders you trust the agent to modify.
-                </p>
+              <SettingsSection
+                title="Additional folders"
+                desc={
+                  <>
+                    Extra directories the agent may read and write, beyond the project folder.
+                    They&apos;re added to the file tools&apos; allowed roots and the shell sandbox.
+                    Only add folders you trust the agent to modify.
+                  </>
+                }
+              >
                 {additionalRoots.map((dir) => (
                   <div className="rule" key={dir}>
                     <code className="rule__path" title={dir}>
@@ -912,7 +1054,7 @@ export function SettingsModal({
                 <button className="btn btn--sm" onClick={() => void addRoot()}>
                   + Add folder
                 </button>
-              </>
+              </SettingsSection>
             )}
 
             {tab === 'keyboard' && (
@@ -926,61 +1068,74 @@ export function SettingsModal({
 
             {tab === 'appearance' && (
               <>
-                <h3>Appearance</h3>
-                <label className="field">
-                  <span>Color theme</span>
-                  <select
-                    value={settings.theme ?? 'system'}
-                    onChange={(e) =>
-                      setSettings((s) => ({ ...s, theme: e.target.value as AppSettings['theme'] }))
-                    }
-                  >
-                    <option value="system">System</option>
-                    <option value="dark">Dark</option>
-                    <option value="light">Light</option>
-                  </select>
-                </label>
-                <h3>Notifications</h3>
-                <label className="field field--checkbox">
-                  <input
-                    type="checkbox"
-                    checked={settings.desktopNotifications ?? true}
-                    onChange={(e) =>
-                      setSettings((s) => ({ ...s, desktopNotifications: e.target.checked }))
-                    }
-                  />
-                  <span>
-                    Show a desktop notification when the agent finishes a turn, needs approval,
-                    asks a question, or opens/merges a pull request while Houston isn’t the focused
-                    window. On by default.
-                  </span>
-                </label>
-                <h3>Updates</h3>
-                <div className="updates-row">
-                  <span className="updates-row__version">
-                    Houston {version || '—'}
-                  </span>
-                  <button className="btn btn--sm" onClick={() => void checkForUpdates()} disabled={checking}>
-                    {checking ? 'Checking…' : 'Check for updates'}
-                  </button>
-                </div>
-                {updateResult && (
-                  <p className="updates-status">
-                    {updateResult.status === 'available' && (
-                      <>
-                        Houston <strong>{updateResult.latestVersion}</strong> is available.{' '}
-                        <a href={updateResult.releaseUrl} target="_blank" rel="noreferrer">
-                          Download
-                        </a>
-                      </>
-                    )}
-                    {updateResult.status === 'up-to-date' && 'You’re on the latest version.'}
-                    {updateResult.status === 'disabled' &&
-                      'Update checks run only in packaged builds.'}
-                    {updateResult.status === 'error' &&
-                      `Couldn’t check for updates: ${updateResult.message}`}
-                  </p>
-                )}
+                <SettingsSection
+                  title="Appearance"
+                  desc="Choose how Houston looks; System follows your OS setting."
+                >
+                  <label className="field">
+                    <span>Color theme</span>
+                    <select
+                      value={settings.theme ?? 'system'}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, theme: e.target.value as AppSettings['theme'] }))
+                      }
+                    >
+                      <option value="system">System</option>
+                      <option value="dark">Dark</option>
+                      <option value="light">Light</option>
+                    </select>
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection title="Notifications">
+                  <label className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={settings.desktopNotifications ?? true}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, desktopNotifications: e.target.checked }))
+                      }
+                    />
+                    <span>
+                      Show a desktop notification when the agent finishes a turn, needs approval,
+                      asks a question, or opens/merges a pull request while Houston isn’t the focused
+                      window. On by default.
+                    </span>
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Updates"
+                  desc="Your installed version, and a manual check for new releases."
+                >
+                  <div className="updates-row">
+                    <span className="updates-row__version">Houston {version || '—'}</span>
+                    <button
+                      className="btn btn--sm"
+                      onClick={() => void checkForUpdates()}
+                      disabled={checking}
+                    >
+                      {checking ? 'Checking…' : 'Check for updates'}
+                    </button>
+                  </div>
+                  {updateResult && (
+                    <p className="updates-status">
+                      {updateResult.status === 'available' && (
+                        <>
+                          Houston <strong>{updateResult.latestVersion}</strong> is available.{' '}
+                          <a href={updateResult.releaseUrl} target="_blank" rel="noreferrer">
+                            Download
+                          </a>
+                        </>
+                      )}
+                      {updateResult.status === 'up-to-date' && 'You’re on the latest version.'}
+                      {updateResult.status === 'disabled' &&
+                        'Update checks run only in packaged builds.'}
+                      {updateResult.status === 'error' &&
+                        `Couldn’t check for updates: ${updateResult.message}`}
+                    </p>
+                  )}
+                </SettingsSection>
               </>
             )}
           </div>
