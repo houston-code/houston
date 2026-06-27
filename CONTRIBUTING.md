@@ -5,9 +5,11 @@ app. This guide covers local setup and the conventions the codebase follows.
 
 ## Prerequisites
 
-- macOS on Apple Silicon (arm64)
+- A supported OS: macOS 12 Monterey+ (Apple Silicon), Windows 10+ (x64), or Linux
+  (x64, glibc-based distro). Each platform builds its own artifacts on its own host —
+  native modules and the per-platform binaries can't cross-compile.
 - Node.js 20+ (22 recommended)
-- Xcode Command Line Tools (for `iconutil`/`sips` if you regenerate the icon)
+- Xcode Command Line Tools (macOS, for `iconutil`/`sips` if you regenerate the icon)
 
 ## Setup
 

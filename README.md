@@ -5,8 +5,8 @@ Gemini, any OpenAI-compatible API, or a local model (Ollama / LM Studio), give i
 a project folder, and let it read, edit, search, and run code — every action gated
 by an approval flow and, where the OS supports it, confined to a sandbox.
 
-Built with Electron + React + TypeScript. Runs on macOS (Apple Silicon), Linux (x64),
-and Windows (x64).
+Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
+(Apple Silicon), Windows 10 or newer (x64), and Linux (x64, glibc-based distros).
 
 ![Houston icon](build/icon.png)
 
@@ -273,12 +273,12 @@ and Windows (x64).
 
 Grab the artifact for your platform:
 
-| Platform | Download | Auto-updates? |
-|----------|----------|---------------|
-| macOS (Apple Silicon) | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
-| Windows (x64) | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
-| Linux (x64) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
-| Linux (x64) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
+| Platform | Minimum OS | Download | Auto-updates? |
+|----------|------------|----------|---------------|
+| macOS (Apple Silicon) | macOS 12 Monterey | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
+| Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
+| Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
+| Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
 
 > **The builds are unsigned.** First-run warnings to expect:
 > - **macOS** — Gatekeeper warns. Right-click the app → **Open** → **Open**, or remove
