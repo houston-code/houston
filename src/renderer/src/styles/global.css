@@ -185,6 +185,39 @@ body {
   text-decoration: underline;
 }
 
+/* Horizontal gutter shared by the chat surfaces (transcript, composer, control
+   bar, checkpoint/queue bars). Liberal on wide windows, eased back on narrower
+   ones so the content column never gets crushed — but kept generous throughout.
+   Breakpoints account for the ~248px sidebar eating into the window width. */
+:root {
+  --chat-gap: 128px;
+}
+@media (max-width: 1400px) {
+  :root {
+    --chat-gap: 104px;
+  }
+}
+@media (max-width: 1200px) {
+  :root {
+    --chat-gap: 80px;
+  }
+}
+@media (max-width: 1024px) {
+  :root {
+    --chat-gap: 56px;
+  }
+}
+@media (max-width: 820px) {
+  :root {
+    --chat-gap: 36px;
+  }
+}
+@media (max-width: 640px) {
+  :root {
+    --chat-gap: 24px;
+  }
+}
+
 /* ---- Layout ---- */
 .app {
   display: grid;
@@ -752,7 +785,7 @@ body.is-resizing {
   gap: 7px;
   row-gap: 6px;
   width: 100%;
-  padding: 9px 128px 0;
+  padding: 9px var(--chat-gap) 0;
 }
 /* The inline worktree setup (checkbox + base + branch name) wraps as one unit. */
 .control-bar__wt {
@@ -885,7 +918,7 @@ body.is-resizing {
   gap: 10px;
   width: 100%;
   margin: 0 0 4px;
-  padding: 6px 128px;
+  padding: 6px var(--chat-gap);
   font-size: 12px;
   color: var(--text-dim);
 }
@@ -900,7 +933,7 @@ body.is-resizing {
   gap: 10px;
   width: 100%;
   margin: 0 0 4px;
-  padding: 6px 128px;
+  padding: 6px var(--chat-gap);
   font-size: 12px;
   color: var(--text-dim);
 }
@@ -1095,7 +1128,7 @@ body.is-resizing {
 }
 .transcript__inner {
   width: 100%;
-  padding: 0 128px;
+  padding: 0 var(--chat-gap);
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -1995,7 +2028,7 @@ pre.diff {
   gap: 8px;
   align-items: flex-end;
   flex-shrink: 0;
-  padding: 10px 128px 16px;
+  padding: 10px var(--chat-gap) 16px;
   width: 100%;
 }
 .composer__input {
