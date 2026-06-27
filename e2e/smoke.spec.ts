@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import electronPath from 'electron'
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
@@ -46,5 +47,43 @@ test('app boots and renders the UI', async () => {
     await expect(window.locator('.app')).toBeVisible()
   } finally {
     await app.close()
+  }
+})
+
+test('sidebar collapses to a rail and expands again', async () => {
+  const { executablePath, args, mode } = resolveLaunch()
+  test.info().annotations.push({ type: 'launch-mode', description: mode })
+
+  // Isolate userData so toggling collapse persists into a throwaway dir instead
+  // of the developer's real settings, and so the app starts in the known default
+  // (expanded) state regardless of local config.
+  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
+  const app: ElectronApplication = await electron.launch({
+    executablePath,
+    args: [...args, `--user-data-dir=${userDataDir}`]
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await expect(window.locator('.app')).toBeVisible()
+
+    // Expanded by default: the drag handle and the collapse toggle are present.
+    const resizer = window.locator('[role="separator"][aria-label="Resize sidebar"]')
+    await expect(resizer).toBeVisible()
+    const collapse = window.getByRole('button', { name: 'Collapse sidebar' })
+    await expect(collapse).toBeVisible()
+
+    // Collapse → the rail's expand control appears and the drag handle is gone.
+    await collapse.click()
+    const expand = window.getByRole('button', { name: 'Expand sidebar' })
+    await expect(expand).toBeVisible()
+    await expect(resizer).toHaveCount(0)
+
+    // Expand again → back to the full sidebar with the drag handle.
+    await expand.click()
+    await expect(window.locator('[role="separator"][aria-label="Resize sidebar"]')).toBeVisible()
+  } finally {
+    await app.close()
+    rmSync(userDataDir, { recursive: true, force: true })
   }
 })
