@@ -1,4 +1,5 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
+import type { MessageBoxOptions } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
 import { IPC } from '@shared/constants'
@@ -106,6 +107,85 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     console.error('[updater] check failed:', message)
     return { status: 'error', currentVersion, message }
   }
+}
+
+/**
+ * Map a check result to the native dialog the menu item should show. Split out as
+ * a pure function so the wording/branching is unit-testable without Electron. The
+ * `downloadUrl` is non-null only for the available case, where the dialog offers a
+ * Download button (button index 0) that opens it.
+ */
+export function menuUpdateDialog(result: UpdateCheckResult): {
+  options: MessageBoxOptions
+  downloadUrl: string | null
+} {
+  switch (result.status) {
+    case 'available':
+      return {
+        downloadUrl: result.releaseUrl,
+        options: {
+          type: 'info',
+          buttons: ['Download', 'Later'],
+          defaultId: 0,
+          cancelId: 1,
+          title: 'Update available',
+          message: `Houston ${result.latestVersion} is available.`,
+          detail: `You have ${result.currentVersion}. Download the new version to update.`
+        }
+      }
+    case 'up-to-date':
+      return {
+        downloadUrl: null,
+        options: {
+          type: 'info',
+          buttons: ['OK'],
+          defaultId: 0,
+          title: 'You’re up to date',
+          message: 'You’re up to date.',
+          detail: `Houston ${result.currentVersion} is the latest version.`
+        }
+      }
+    case 'disabled':
+      return {
+        downloadUrl: null,
+        options: {
+          type: 'info',
+          buttons: ['OK'],
+          defaultId: 0,
+          title: 'Check for updates',
+          message: 'Update checks run only in packaged builds.',
+          detail: `You’re running Houston ${result.currentVersion} from a development build.`
+        }
+      }
+    case 'error':
+      return {
+        downloadUrl: null,
+        options: {
+          type: 'warning',
+          buttons: ['OK'],
+          defaultId: 0,
+          title: 'Check for updates',
+          message: 'Couldn’t check for updates.',
+          detail: result.message
+        }
+      }
+  }
+}
+
+/**
+ * Menu-driven "Check for Updates…": runs the same feed check as the in-app button
+ * but reports every outcome through a native dialog, the way a desktop app's menu
+ * item is expected to. The available case still broadcasts the in-app banner (via
+ * checkForUpdates), so both entry points stay consistent; here we additionally
+ * offer a Download button that opens the Releases page (the build is unsigned, so
+ * updates are downloaded manually).
+ */
+export async function checkForUpdatesFromMenu(): Promise<void> {
+  const result = await checkForUpdates()
+  const { options, downloadUrl } = menuUpdateDialog(result)
+  const win = BrowserWindow.getFocusedWindow() ?? undefined
+  const { response } = await dialog.showMessageBox(win!, options)
+  if (downloadUrl && response === 0) void shell.openExternal(downloadUrl)
 }
 
 /**

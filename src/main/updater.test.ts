@@ -136,6 +136,56 @@ describe('checkForUpdates', () => {
   })
 })
 
+describe('menuUpdateDialog', () => {
+  it('offers a Download button pointing at the release for an available update', async () => {
+    const { menuUpdateDialog } = await load()
+    const { options, downloadUrl } = menuUpdateDialog({
+      status: 'available',
+      currentVersion: '0.2.0',
+      latestVersion: '0.3.0',
+      releaseUrl: 'https://example.com/releases'
+    })
+    expect(downloadUrl).toBe('https://example.com/releases')
+    expect(options.buttons).toEqual(['Download', 'Later'])
+    expect(options.defaultId).toBe(0)
+    expect(options.message).toContain('0.3.0')
+    expect(options.detail).toContain('0.2.0')
+  })
+
+  it('reports up-to-date with a single OK button and no download', async () => {
+    const { menuUpdateDialog } = await load()
+    const { options, downloadUrl } = menuUpdateDialog({
+      status: 'up-to-date',
+      currentVersion: '0.2.0'
+    })
+    expect(downloadUrl).toBeNull()
+    expect(options.buttons).toEqual(['OK'])
+    expect(options.detail).toContain('0.2.0')
+  })
+
+  it('explains the disabled (unpackaged) case', async () => {
+    const { menuUpdateDialog } = await load()
+    const { options, downloadUrl } = menuUpdateDialog({
+      status: 'disabled',
+      currentVersion: '0.2.0'
+    })
+    expect(downloadUrl).toBeNull()
+    expect(options.message).toMatch(/packaged builds/i)
+  })
+
+  it('surfaces the failure message as a warning dialog', async () => {
+    const { menuUpdateDialog } = await load()
+    const { options, downloadUrl } = menuUpdateDialog({
+      status: 'error',
+      currentVersion: '0.2.0',
+      message: 'feed unreachable'
+    })
+    expect(downloadUrl).toBeNull()
+    expect(options.type).toBe('warning')
+    expect(options.detail).toBe('feed unreachable')
+  })
+})
+
 describe('initUpdates / takePendingWhatsNew', () => {
   it('stages the "What\'s new" popup once after an upgrade, then records the version', async () => {
     h.isPackaged = false // skip the network check; exercise only the what's-new path
