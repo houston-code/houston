@@ -87,14 +87,23 @@ jobs:
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             npm run ${{ matrix.dist }}
           elif [ "${{ matrix.mac_x64_manual }}" = "true" ]; then
-            # Intel mac: build WITHOUT electron-builder's publisher so it never uploads its
-            # own latest-mac.yml (which would clobber arm64's feed — electron-builder#5592).
-            # Then attach just the .dmg/.zip to the draft the macos-14 leg already created.
+            # Intel mac: build WITHOUT electron-builder's publisher (its latest-mac.yml lists
+            # only x64 — publishing it as-is would clobber the arm64 feed: electron-builder#5592).
+            # Instead, MERGE this build's x64 files INTO the arm64 feed the macos-14 leg already
+            # published, so one latest-mac.yml auto-updates BOTH arches — MacUpdater self-selects
+            # per arch from the `files` list. max-parallel:1 guarantees the arm64 leg ran first.
             npm run ${{ matrix.dist }}
-            version=$(node -p "require('./package.json').version")
-            gh release upload "v$version" \
-              release/*-x64.dmg release/*-x64.zip \
-              -R piyushvijay/houston-releases --clobber
+            tag="v$(node -p "require('./package.json').version")"
+            mkdir -p arm64-feed merged-feed
+            # Pull the arm64-only feed the arm64 leg uploaded to the draft, then merge x64 into it.
+            gh release download "$tag" -R piyushvijay/houston-releases -p latest-mac.yml -D arm64-feed --clobber
+            node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml > merged-feed/latest-mac.yml
+            # Upload every x64 binary (dmg/zip/blockmaps, whatever electron-builder named them),
+            # then replace the feed with the merged one. Exclude *.yml from the binary upload so
+            # the x64-only latest-mac.yml is never published.
+            find release -maxdepth 1 -type f ! -name '*.yml' -print0 \
+              | xargs -0 gh release upload "$tag" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" merged-feed/latest-mac.yml -R piyushvijay/houston-releases --clobber
           else
             # Appends to the dist script's electron-builder invocation: --publish always
             # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
