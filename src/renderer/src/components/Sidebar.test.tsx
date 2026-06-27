@@ -235,25 +235,13 @@ describe('Sidebar — group collapse', () => {
     expect(screen.queryByText('Hidden item')).not.toBeInTheDocument()
   })
 
-  it('creates a new group via the footer control and enters rename mode for it', async () => {
-    // The footer "＋ New group" creates a group, then puts it into inline-rename
-    // mode. The new group must exist in `groups` for its header (and editor) to
-    // render, so we seed it with the id onCreateGroup resolves to.
-    const onCreateGroup = vi.fn().mockResolvedValue('g-new')
-    const props = baseProps({
-      onCreateGroup,
-      groups: [{ id: 'g-new', name: 'New group' }]
-    })
+  it('has no footer "New group" control (groups are created from the conv menu)', () => {
+    const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
     render(<Sidebar {...props} />)
 
-    fireEvent.click(screen.getByText('＋ New group'))
-    expect(onCreateGroup).toHaveBeenCalledOnce()
-
-    // After the create resolves, the new group's header shows an inline editor.
-    const editor = (await screen.findByDisplayValue('New group')) as HTMLInputElement
-    expect(editor).toHaveClass('inline-edit')
-    // The static group name is no longer rendered as a plain label.
-    expect(screen.queryByText('New group')).not.toBeInTheDocument()
+    // The only "＋ New group" affordance lives inside a conversation's ⋯ menu,
+    // which is closed here — so none is visible in the footer.
+    expect(screen.queryByText('＋ New group')).not.toBeInTheDocument()
   })
 })
 
@@ -355,6 +343,28 @@ describe('Sidebar — moving chats between groups', () => {
     // The "Move to" list renders a button per group ("○ Work" when not in it).
     fireEvent.click(screen.getByRole('button', { name: '○ Work' }))
     expect(props.onMove).toHaveBeenCalledWith('a', 'g1')
+  })
+
+  it('“＋ New group” creates a group, moves the chat in, and enters rename mode', async () => {
+    // onCreateGroup resolves to the new id; the group must exist in `groups` for
+    // its header (and inline editor) to render, so we seed it.
+    const onCreateGroup = vi.fn().mockResolvedValue('grp-new')
+    const props = baseProps({
+      onCreateGroup,
+      groups: [{ id: 'grp-new', name: 'New group' }],
+      conversations: [makeConv({ id: 'a', title: 'Alpha' })]
+    })
+    render(<Sidebar {...props} />)
+
+    openConvMenu('Alpha')
+    fireEvent.click(screen.getByText('＋ New group'))
+    expect(onCreateGroup).toHaveBeenCalledOnce()
+
+    // After the create resolves, the new group's header shows an inline editor
+    // so the user can name it — and the chat has been moved into that group.
+    const editor = (await screen.findByDisplayValue('New group')) as HTMLInputElement
+    expect(editor).toHaveClass('inline-edit')
+    expect(props.onMove).toHaveBeenCalledWith('a', 'grp-new')
   })
 
   it('“Remove from group” on a grouped conv fires onMove with null', () => {

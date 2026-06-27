@@ -80,7 +80,8 @@ function ConvRow({
   props,
   renaming,
   onStartRename,
-  onStopRename
+  onStopRename,
+  onStartRenameGroup
 }: {
   conv: ConversationMeta
   active: boolean
@@ -89,6 +90,7 @@ function ConvRow({
   renaming: boolean
   onStartRename: () => void
   onStopRename: () => void
+  onStartRenameGroup: (id: string) => void
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -185,7 +187,10 @@ function ConvRow({
             <button
               className="menu__item menu__item--indent"
               onClick={() => {
-                void props.onCreateGroup().then((id) => props.onMove(conv.id, id))
+                void props.onCreateGroup().then((id) => {
+                  props.onMove(conv.id, id)
+                  onStartRenameGroup(id)
+                })
                 close()
               }}
             >
@@ -324,10 +329,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   const [renamingConv, setRenamingConv] = useState<string | null>(null)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
 
-  const onNewGroup = (): void => {
-    void props.onCreateGroup().then((id) => setRenamingGroup(id))
-  }
-
   // Collapsed: a thin rail with just the expand toggle and the most-used actions.
   if (props.collapsed) {
     return (
@@ -413,6 +414,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
                   renaming={renamingConv === c.id}
                   onStartRename={() => setRenamingConv(c.id)}
                   onStopRename={() => setRenamingConv(null)}
+                  onStartRenameGroup={(id) => setRenamingGroup(id)}
                 />
               ))}
             {section.kind === 'group' && !section.collapsed && section.conversations.length === 0 && (
@@ -423,9 +425,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       </div>
 
       <div className="sidebar__foot">
-        <button className="link sidebar__newgroup" onClick={onNewGroup}>
-          ＋ New group
-        </button>
         <button className="btn btn--sm sidebar__import" onClick={props.onImport}>
           ⤒ Import chat
         </button>
