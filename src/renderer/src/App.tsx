@@ -349,29 +349,18 @@ export default function App(): JSX.Element {
 
   const onDeleteConversation = useCallback(
     async (id: string) => {
-      const conv = conversations.find((c) => c.id === id)
-      let removeWorktree = false
-      if (conv?.worktree) {
-        // The chat is deleted either way; the prompt only governs the worktree.
-        removeWorktree = window.confirm(
-          `Delete “${conv.title}”.\n\n` +
-            `Also remove its git worktree and branch “${conv.worktree.branch}”?\n\n` +
-            `OK — remove the worktree (any uncommitted or unmerged work is kept).\n` +
-            `Cancel — keep the worktree on disk.`
-        )
-      }
-      const res = await window.api.deleteConversation(
-        id,
-        conv?.worktree ? { removeWorktree } : undefined
-      )
-      if (removeWorktree && res?.message) alert(res.message)
+      // The native confirmation (and the worktree choice) lives in the main process;
+      // it returns deleted:false when the user cancels, so we touch nothing then.
+      const res = await window.api.deleteConversation(id)
+      if (!res.deleted) return
+      if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
         setCurrentId(null)
         chat.reset([])
       }
       await refreshConversations()
     },
-    [conversations, currentId, chat, refreshConversations]
+    [currentId, chat, refreshConversations]
   )
 
   const onForkConversation = useCallback(

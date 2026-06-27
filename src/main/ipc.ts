@@ -8,6 +8,7 @@ import type {
   AgentSendRequest,
   ChatMessage,
   ConversationMeta,
+  DeleteConversationResult,
   ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
@@ -51,6 +52,20 @@ import {
   setMessages,
   updateConversationMeta
 } from './conversations'
+
+/**
+ * Translate a delete-confirmation dialog button index into what should happen.
+ * Button 0 is always Cancel (in both the plain and the worktree dialog), so a
+ * cancel can never delete — the bug this guards against. Only the worktree
+ * dialog's button 2 ("Delete & remove worktree") tears the worktree down.
+ */
+export function resolveDeleteAction(
+  hasWorktree: boolean,
+  response: number
+): { delete: boolean; removeWorktree: boolean } {
+  if (response === 0) return { delete: false, removeWorktree: false }
+  return { delete: true, removeWorktree: hasWorktree && response === 2 }
+}
 
 /**
  * Persist a usage event's tokens/cost and rewrite it to carry the conversation's
@@ -252,20 +267,53 @@ export function registerIpc(): void {
     (_event, id: string, providerId: string, model: string) =>
       compactConversationNow(id, providerId, model)
   )
-  // Delete a conversation. When it owns a Houston-created worktree and the caller
-  // opts in, also tear the worktree down (safe by default: a dirty worktree or an
-  // unmerged branch is kept). Returns what happened to the worktree, or null.
+  // Delete a conversation, confirming first via a native dialog so the choice is
+  // unambiguous. A chat that owns a Houston-created worktree gets a three-way
+  // choice — the worktree can outlive the chat — and in every case the Cancel
+  // button truly cancels (returns deleted: false, nothing is touched).
   ipcMain.handle(
     IPC.conversationDelete,
-    async (_event, id: string, opts?: { removeWorktree?: boolean; force?: boolean }) => {
+    async (event, id: string): Promise<DeleteConversationResult> => {
       const conv = getConversation(id)
+      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+      const title = conv?.title ?? 'this chat'
+      const hasWorktree = !!conv?.worktree
+
+      const { response } = await dialog.showMessageBox(
+        win!,
+        hasWorktree
+          ? {
+              type: 'warning',
+              buttons: ['Cancel', 'Delete, keep worktree', 'Delete & remove worktree'],
+              defaultId: 1,
+              cancelId: 0,
+              title: 'Delete chat',
+              message: `Delete “${title}”?`,
+              detail:
+                `This chat has a git worktree on branch “${conv!.worktree!.branch}”.\n\n` +
+                `Delete, keep worktree — remove the chat, leave the worktree on disk.\n` +
+                `Delete & remove worktree — also tear down the worktree (any uncommitted ` +
+                `or unmerged work is kept).`
+            }
+          : {
+              type: 'warning',
+              buttons: ['Cancel', 'Delete'],
+              defaultId: 1,
+              cancelId: 0,
+              title: 'Delete chat',
+              message: `Delete “${title}”?`,
+              detail: 'This cannot be undone.'
+            }
+      )
+
+      const action = resolveDeleteAction(hasWorktree, response)
+      if (!action.delete) return { deleted: false }
       // Drop any buffered follow-ups so a deleted chat's queue can't linger in memory.
       clearQueue(id)
       deleteConversation(id)
-      if (opts?.removeWorktree && conv?.worktree) {
-        return removeWorktree(conv.worktree, { force: opts.force })
-      }
-      return null
+      const worktree =
+        action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null
+      return { deleted: true, worktree }
     }
   )
   // Rename / pin / move-to-group. Does not affect the recency ordering.

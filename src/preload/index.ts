@@ -10,9 +10,9 @@ import type {
   ChatMessage,
   Conversation,
   ConversationMeta,
+  DeleteConversationResult,
   RepoInfo,
-  ToolApprovalDecision,
-  WorktreeRemoval
+  ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import type { UpdateCheckResult, WhatsNew } from '@shared/update'
@@ -74,14 +74,12 @@ const api = {
     error?: string
   }> => ipcRenderer.invoke(IPC.conversationCompact, id, providerId, model),
   /**
-   * Delete a conversation. Pass `removeWorktree` to also tear down a
-   * Houston-created worktree (safe by default — a dirty worktree / unmerged branch
-   * is kept unless `force`). Resolves with what happened to the worktree, or null.
+   * Delete a conversation. Shows a native confirmation dialog (a three-way choice
+   * when the chat owns a Houston-created worktree, which can outlive the chat).
+   * Resolves with whether the delete happened and what became of the worktree.
    */
-  deleteConversation: (
-    id: string,
-    opts?: { removeWorktree?: boolean; force?: boolean }
-  ): Promise<WorktreeRemoval | null> => ipcRenderer.invoke(IPC.conversationDelete, id, opts),
+  deleteConversation: (id: string): Promise<DeleteConversationResult> =>
+    ipcRenderer.invoke(IPC.conversationDelete, id),
   exportConversation: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExport, id),
   exportConversationHtml: (id: string): Promise<string | null> =>
