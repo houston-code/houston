@@ -2,7 +2,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
 import type {
   SandboxBackend,
@@ -196,20 +196,49 @@ export function planKill(platform: NodeJS.Platform, pid: number): KillPlan {
   return { kind: 'group', target: -pid }
 }
 
+/** A single taskkill invocation: an executable plus its arguments. */
+export type KillCommand = { file: string; args: string[] }
+
+/**
+ * Ordered `taskkill` invocations to try on Windows, most-resilient-PATH-wise last.
+ * Every entry reaps the whole tree (`/T /F`) by parent-pid; the caller stops at the
+ * first that succeeds. `taskkill` lives in `System32` and is normally on PATH, but a
+ * locked-down or stripped PATH (corp images, packaged/headless launches) can hide it —
+ * so after the bare name we fall back to its absolute path under `%SystemRoot%`
+ * (`%windir%` as an older alias). Only when EVERY tree-kill fails does the caller drop
+ * to a shallow `child.kill()`, which can orphan grandchildren.
+ */
+export function windowsKillCommands(
+  pid: number,
+  env: NodeJS.ProcessEnv = process.env
+): KillCommand[] {
+  const args = ['/pid', String(pid), '/T', '/F']
+  const cmds: KillCommand[] = [{ file: 'taskkill', args }]
+  const root = env.SystemRoot || env.windir
+  if (root) cmds.push({ file: win32.join(root, 'System32', 'taskkill.exe'), args })
+  return cmds
+}
+
 /** SIGKILL a child and its descendants (see {@link planKill}). */
 export function killProcessTree(child: ChildProcess): void {
   const pid = child.pid
   if (pid === undefined) return
   const plan = planKill(process.platform, pid)
   if (plan.kind === 'taskkill') {
-    try {
-      execFileSync(plan.file, plan.args, { stdio: 'ignore' })
-    } catch {
+    // Try each taskkill location in turn; the first that reaps the tree wins. Only if
+    // they all fail do we fall back to the shallow kill (which leaves grandchildren).
+    for (const cmd of windowsKillCommands(pid)) {
       try {
-        child.kill()
+        execFileSync(cmd.file, cmd.args, { stdio: 'ignore' })
+        return
       } catch {
-        // already gone
+        // taskkill missing here or the process already exited — try the next location.
       }
+    }
+    try {
+      child.kill()
+    } catch {
+      // already gone
     }
     return
   }

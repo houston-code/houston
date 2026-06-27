@@ -8,8 +8,10 @@ import {
   pkgCacheDir,
   planKill,
   runWithBackend,
-  sandboxEnv
+  sandboxEnv,
+  windowsKillCommands
 } from './shared'
+import { win32 } from 'node:path'
 import type { SandboxBackend, SandboxRunOptions } from './contract'
 
 describe('augmentPath', () => {
@@ -181,6 +183,34 @@ describe('planKill', () => {
       file: 'taskkill',
       args: ['/pid', '4242', '/T', '/F']
     })
+  })
+})
+
+describe('windowsKillCommands', () => {
+  const args = ['/pid', '4242', '/T', '/F']
+
+  it('tries bare taskkill first, then the absolute System32 path under %SystemRoot%', () => {
+    expect(windowsKillCommands(4242, { SystemRoot: 'C:\\Windows' })).toEqual([
+      { file: 'taskkill', args },
+      { file: win32.join('C:\\Windows', 'System32', 'taskkill.exe'), args }
+    ])
+  })
+
+  it('falls back to %windir% when %SystemRoot% is unset', () => {
+    expect(windowsKillCommands(4242, { windir: 'D:\\WINNT' })).toEqual([
+      { file: 'taskkill', args },
+      { file: win32.join('D:\\WINNT', 'System32', 'taskkill.exe'), args }
+    ])
+  })
+
+  it('yields only the bare name when neither env var is present', () => {
+    expect(windowsKillCommands(4242, {})).toEqual([{ file: 'taskkill', args }])
+  })
+
+  it('every command reaps the whole tree (/T /F) by pid', () => {
+    for (const cmd of windowsKillCommands(99, { SystemRoot: 'C:\\Windows' })) {
+      expect(cmd.args).toEqual(['/pid', '99', '/T', '/F'])
+    }
   })
 })
 
