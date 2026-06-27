@@ -179,19 +179,6 @@ export function ControlBar({
 
       <select
         className="control control--select"
-        value={settings.approvalPolicy}
-        onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
-        title="How much the agent may do without asking"
-      >
-        {(Object.keys(POLICY_LABEL) as ApprovalPolicy[]).map((p) => (
-          <option key={p} value={p}>
-            {POLICY_LABEL[p]}
-          </option>
-        ))}
-      </select>
-
-      <select
-        className="control control--select"
         value={settings.reasoningEffort ?? 'off'}
         onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
         title="How hard the model should think before answering (supported models only)"
@@ -199,6 +186,19 @@ export function ControlBar({
         {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
           <option key={r} value={r}>
             {REASONING_LABEL[r]}
+          </option>
+        ))}
+      </select>
+
+      <select
+        className="control control--select"
+        value={settings.approvalPolicy}
+        onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
+        title="How much the agent may do without asking"
+      >
+        {(Object.keys(POLICY_LABEL) as ApprovalPolicy[]).map((p) => (
+          <option key={p} value={p}>
+            {POLICY_LABEL[p]}
           </option>
         ))}
       </select>
