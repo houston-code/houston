@@ -628,7 +628,9 @@ body.is-resizing {
   background: var(--bg-hover);
 }
 .control--ws {
-  min-width: 0;
+  /* Floor so the folder name never fully collapses; it absorbs squeeze down to
+     this width (icon + a few chars), then the selects below give up width too. */
+  min-width: 92px;
 }
 .control__icon {
   flex-shrink: 0;
@@ -640,6 +642,9 @@ body.is-resizing {
   text-overflow: ellipsis;
 }
 .control--select {
+  /* Let dropdowns concede width once the folder hits its floor, instead of
+     forcing all the squeeze onto the folder button. */
+  min-width: 0;
   appearance: none;
   padding-right: 22px;
   background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
