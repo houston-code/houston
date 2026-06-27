@@ -14,7 +14,7 @@ import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
 import { applyTheme } from './lib/theme'
-import { shortcutFor } from './lib/shortcuts'
+import { matchShortcut, isEditableTarget } from './lib/shortcuts'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
 import {
@@ -49,6 +49,9 @@ const WorktreeDialog = lazy(() =>
 const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })))
 const WhatsNewModal = lazy(() =>
   import('./components/WhatsNewModal').then((m) => ({ default: m.WhatsNewModal }))
+)
+const ShortcutsHelp = lazy(() =>
+  import('./components/ShortcutsHelp').then((m) => ({ default: m.ShortcutsHelp }))
 )
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
@@ -100,6 +103,7 @@ export default function App(): JSX.Element {
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [worktreeFor, setWorktreeFor] = useState<string | null>(null)
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
@@ -656,11 +660,16 @@ export default function App(): JSX.Element {
     [onNewChat, onCompact, onChangePolicy, chat, commands]
   )
 
-  // Global keyboard shortcuts: Cmd/Ctrl+N new chat, Cmd/Ctrl+, settings,
-  // Esc to stop a run or close the settings dialog.
+  // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): Cmd/Ctrl+N
+  // new chat, Cmd/Ctrl+, settings, Cmd/Ctrl+B toggle sidebar, Cmd/Ctrl+/ or ? help,
+  // Esc to stop a run or close an open dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      const action = shortcutFor(e)
+      // Plain-character shortcuts (e.g. `?`) must not fire while typing in a field;
+      // mod-bearing chords (⌘…) still work everywhere, and Esc is always allowed.
+      const inEditable = isEditableTarget(e.target)
+      if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape') return
+      const action = matchShortcut(e)
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
@@ -670,8 +679,14 @@ export default function App(): JSX.Element {
       } else if (action === 'toggle-sidebar') {
         e.preventDefault()
         toggleSidebar()
+      } else if (action === 'show-help') {
+        e.preventDefault()
+        setHelpOpen((v) => !v)
       } else if (action === 'escape') {
-        if (settingsOpen) setSettingsOpen(false)
+        // The open overlays own their own Esc (focus trap), so this mainly handles
+        // Esc with nothing focused — still ordered most-recent-first defensively.
+        if (helpOpen) setHelpOpen(false)
+        else if (settingsOpen) setSettingsOpen(false)
         else if (changesOpen) setChangesOpen(false)
         else if (chat.running) chat.cancel()
       }
@@ -681,7 +696,7 @@ export default function App(): JSX.Element {
     // chat.cancel is stable (useCallback); depending on the whole `chat` object
     // would re-subscribe every render. The fields we read are listed explicitly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onNewChat, toggleSidebar, settingsOpen, changesOpen, chat.running, chat.cancel])
+  }, [onNewChat, toggleSidebar, helpOpen, settingsOpen, changesOpen, chat.running, chat.cancel])
 
   if (!settings) {
     return <div className="loading">Loading…</div>
@@ -888,6 +903,8 @@ export default function App(): JSX.Element {
         )}
 
         {whatsNew && <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />}
+
+        {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
       </Suspense>
     </div>
   )
