@@ -30,6 +30,7 @@ import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
 import { matchRule, permissionSubject } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
+import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed } from '../sandbox'
 import { formatFile } from './format'
 import { runSubAgent } from './subagent'
@@ -776,6 +777,28 @@ export async function startRun(
               // so the change can be faithfully redone after a revert.
               if (ok && tool.kind === 'write' && typeof call.arguments.path === 'string') {
                 await recordResult(runId, roots, call.arguments.path)
+              }
+              // Diagnostics-on-save (opt-in): after a successful write, run a fast
+              // checker (eslint/ruff/gofmt) on the file and append any problems so
+              // the model can self-correct this turn. Runs on the final content
+              // (after any formatter) and never mutates the file; best-effort, so a
+              // missing binary or crashing checker is a silent no-op.
+              if (
+                ok &&
+                settings.diagnosticsOnSave &&
+                tool.kind === 'write' &&
+                typeof call.arguments.path === 'string'
+              ) {
+                try {
+                  const diag = await runPostEditDiagnostics(call.arguments.path, {
+                    workspace,
+                    roots,
+                    signal: abort.signal
+                  })
+                  if (diag.block) output += diag.block
+                } catch {
+                  // Diagnostics are best-effort feedback — never fail the edit.
+                }
               }
             }
           }

@@ -180,6 +180,13 @@ export interface AppSettings {
    * when the formatter's binary is installed; off by default.
    */
   formatOnSave?: boolean
+  /**
+   * Run a fast file-appropriate checker (eslint/ruff/pyflakes/gofmt) on a file
+   * right after the agent writes it and feed any problems back so the model can
+   * self-correct in the same turn. Read-only (never modifies the file); only fires
+   * when the checker's binary is installed; off by default.
+   */
+  diagnosticsOnSave?: boolean
   /** MCP servers to connect to (stdio). Their tools are offered to the agent. */
   mcpServers?: McpServerConfig[]
   /** Extra directories (beyond the project folder) the agent may read and write. */
