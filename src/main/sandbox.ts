@@ -14,7 +14,7 @@ import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
  *   - allows writing ONLY inside the workspace and temp directories
  *   - allows or denies network access per the approval policy
  *
- * This is the same OS-native mechanism Codex uses on macOS. It is the boundary
+ * This is the OS-native sandbox mechanism on macOS. It is the boundary
  * for arbitrary shell commands; structured file tools enforce containment in JS.
  */
 

@@ -3,8 +3,8 @@ import { existsSync } from 'node:fs'
 import { join, delimiter } from 'node:path'
 
 /**
- * First-class GitHub integration via the `gh` CLI — the same path Claude Code
- * takes. Houston never stores a GitHub token: `gh` manages its own credentials
+ * First-class GitHub integration via the `gh` CLI. Houston never stores a GitHub
+ * token: `gh` manages its own credentials
  * (`gh auth login`), and every GitHub tool is kind:'network', so it leaves the
  * machine only behind an approval prompt. All invocations use execFile with an
  * argument array (no shell, so no command injection) under a hardened,
