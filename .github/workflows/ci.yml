@@ -162,6 +162,11 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # checks/statuses read are REQUIRED for `gh ... --json statusCheckRollup` below:
+      # an explicit permissions block defaults everything unlisted to `none`, and
+      # without these the rollup fetch fails (the job can't read other jobs' check runs).
+      checks: read
+      statuses: read
     steps:
       # The real merge gate: refuse to merge unless EVERY other check on this PR's head
       # has completed successfully. Self-maintaining — a CI job that fails (or is still
@@ -171,6 +176,7 @@ jobs:
       # ourselves, and poll so a check that hasn't finished yet doesn't read as "passed".
       - name: Require all CI checks to pass
         run: |
+          fetch_fails=0
           for attempt in $(seq 1 80); do   # up to ~40 min at 30s intervals
             ROLLUP=$(gh pr view "$PR" --json statusCheckRollup --jq '
               [ .statusCheckRollup[]
@@ -180,7 +186,17 @@ jobs:
                     ok:   (if .__typename == "CheckRun"
                            then (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED")
                            else (.state == "SUCCESS") end) } ]') || ROLLUP=""
-            if [ -z "$ROLLUP" ]; then echo "check rollup fetch failed; retrying"; sleep 30; continue; fi
+            # Fail loud after a few consecutive fetch failures instead of looping the
+            # full timeout — a persistent failure means a real problem (e.g. token perms).
+            if [ -z "$ROLLUP" ]; then
+              fetch_fails=$((fetch_fails + 1))
+              if [ "$fetch_fails" -ge 5 ]; then
+                echo "::error::Could not read the check rollup after $fetch_fails attempts (token permissions or a gh/API error). Aborting rather than hanging."
+                exit 1
+              fi
+              echo "check rollup fetch failed ($fetch_fails/5); retrying"; sleep 15; continue
+            fi
+            fetch_fails=0
             PENDING=$(echo "$ROLLUP" | jq '[.[] | select(.done | not)] | length')
             if [ "$PENDING" -gt 0 ]; then
               echo "Waiting on $PENDING in-progress check(s)…"
