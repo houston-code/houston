@@ -35,6 +35,13 @@ describe('matchShortcut', () => {
     expect(matchShortcut(ev('?', false, { shiftKey: true }))).toBe('show-help')
   })
 
+  it('maps Cmd/Ctrl+F to find-in-chat and Cmd/Ctrl+Shift+M to switch-model', () => {
+    expect(matchShortcut(ev('f', true))).toBe('find-in-chat')
+    expect(matchShortcut(ev('m', true, { shiftKey: true }))).toBe('switch-model')
+    // Plain Cmd+M (no shift) is not the model switcher.
+    expect(matchShortcut(ev('m', true))).toBeNull()
+  })
+
   it('maps Escape to escape (no modifier needed)', () => {
     expect(matchShortcut(ev('Escape'))).toBe('escape')
   })

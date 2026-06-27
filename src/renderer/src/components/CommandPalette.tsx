@@ -9,14 +9,17 @@ import { filterPalette, type PaletteItem } from '../lib/palette'
  */
 export function CommandPalette({
   items,
+  initialQuery = '',
   onClose
 }: {
   items: PaletteItem[]
+  /** Seed the search box (e.g. opening straight onto the model list). */
+  initialQuery?: string
   onClose: () => void
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery)
   const [active, setActive] = useState(0)
   useFocusTrap(ref, onClose)
 

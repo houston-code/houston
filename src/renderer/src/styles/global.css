@@ -566,6 +566,8 @@ body.is-resizing {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  /* Positioning context for the floating find bar. */
+  position: relative;
 }
 /* ---- Titlebar (slim, draggable) ---- */
 .titlebar {
@@ -2181,6 +2183,68 @@ pre.diff {
 .command-palette__footer .kbd {
   min-width: 0;
   padding: 1px 5px;
+}
+
+/* ---- Find in conversation (⌘F) ---- */
+.find-bar {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
+}
+.find-bar__input {
+  width: 200px;
+  border: none;
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  outline: none;
+}
+.find-bar__input::placeholder {
+  color: var(--text-dim);
+}
+.find-bar__count {
+  min-width: 46px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.find-bar__btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.find-bar__btn:hover:not(:disabled) {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.find-bar__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Match highlighting via the CSS Custom Highlight API (focus-independent). */
+::highlight(houston-find) {
+  background: rgba(250, 204, 21, 0.35);
+}
+::highlight(houston-find-active) {
+  background: rgba(250, 204, 21, 0.85);
+  color: #1a1a1a;
 }
 
 .provider {

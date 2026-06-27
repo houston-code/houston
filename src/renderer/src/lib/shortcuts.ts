@@ -15,6 +15,8 @@
 export type ShortcutId =
   | 'new-chat'
   | 'command-palette'
+  | 'switch-model'
+  | 'find-in-chat'
   | 'toggle-sidebar'
   | 'open-settings'
   | 'show-help'
@@ -89,6 +91,18 @@ export const SHORTCUTS: ShortcutDef[] = [
     chords: [{ key: 'k', mod: true }],
     label: 'Command palette',
     category: 'General'
+  },
+  {
+    id: 'switch-model',
+    chords: [{ key: 'm', mod: true, shift: true }],
+    label: 'Switch model',
+    category: 'General'
+  },
+  {
+    id: 'find-in-chat',
+    chords: [{ key: 'f', mod: true }],
+    label: 'Find in conversation',
+    category: 'Navigation'
   },
   {
     id: 'toggle-sidebar',

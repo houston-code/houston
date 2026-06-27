@@ -60,6 +60,7 @@ const ShortcutsHelp = lazy(() =>
 const CommandPalette = lazy(() =>
   import('./components/CommandPalette').then((m) => ({ default: m.CommandPalette }))
 )
+const FindBar = lazy(() => import('./components/FindBar').then((m) => ({ default: m.FindBar })))
 
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
@@ -112,6 +113,8 @@ export default function App(): JSX.Element {
   const [changesOpen, setChangesOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteSeed, setPaletteSeed] = useState('')
+  const [findOpen, setFindOpen] = useState(false)
   const [worktreeFor, setWorktreeFor] = useState<string | null>(null)
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
   const [search, setSearch] = useState('')
@@ -745,6 +748,14 @@ export default function App(): JSX.Element {
         run: () => void onImportConversation()
       },
       {
+        id: 'act-find',
+        title: 'Find in conversation',
+        section: 'Actions',
+        hint: shortcutHint('find-in-chat', mac),
+        keywords: 'search',
+        run: () => setFindOpen(true)
+      },
+      {
         id: 'act-help',
         title: 'Keyboard shortcuts',
         section: 'Actions',
@@ -852,7 +863,15 @@ export default function App(): JSX.Element {
         void onNewChat()
       } else if (action === 'command-palette') {
         e.preventDefault()
+        setPaletteSeed('')
         setPaletteOpen((v) => !v)
+      } else if (action === 'switch-model') {
+        e.preventDefault()
+        setPaletteSeed('model')
+        setPaletteOpen(true)
+      } else if (action === 'find-in-chat') {
+        e.preventDefault()
+        setFindOpen(true)
       } else if (action === 'open-settings') {
         e.preventDefault()
         setSettingsOpen(true)
@@ -872,9 +891,10 @@ export default function App(): JSX.Element {
         e.preventDefault()
         cycleChat(-1)
       } else if (action === 'cycle-mode') {
-        // Shift+Tab is reverse-focus in dialogs — let their focus trap have it; only
-        // hijack it for mode-cycling in the main chat view.
-        if (paletteOpen || helpOpen || settingsOpen || changesOpen || worktreeFor) return
+        // Shift+Tab is reverse-focus in dialogs — let their focus trap (or the find
+        // bar) have it; only hijack it for mode-cycling in the main chat view.
+        if (paletteOpen || helpOpen || settingsOpen || changesOpen || worktreeFor || findOpen)
+          return
         e.preventDefault()
         cyclePolicy()
       } else if (action === 'escape') {
@@ -882,6 +902,7 @@ export default function App(): JSX.Element {
         // Esc with nothing focused — still ordered most-recent-first defensively.
         if (paletteOpen) setPaletteOpen(false)
         else if (helpOpen) setHelpOpen(false)
+        else if (findOpen) setFindOpen(false)
         else if (settingsOpen) setSettingsOpen(false)
         else if (changesOpen) setChangesOpen(false)
         else if (chat.running) chat.cancel()
@@ -900,6 +921,7 @@ export default function App(): JSX.Element {
     cyclePolicy,
     paletteOpen,
     helpOpen,
+    findOpen,
     settingsOpen,
     changesOpen,
     worktreeFor,
@@ -982,6 +1004,15 @@ export default function App(): JSX.Element {
         />
 
         <UpdateBanner update={update} onDismiss={() => setUpdate(null)} />
+
+        {findOpen && (
+          <Suspense fallback={null}>
+            <FindBar
+              getRoot={() => document.querySelector<HTMLElement>('.transcript')}
+              onClose={() => setFindOpen(false)}
+            />
+          </Suspense>
+        )}
 
         {chat.items.length === 0 ? (
           <div className="welcome">
@@ -1117,7 +1148,11 @@ export default function App(): JSX.Element {
         {helpOpen && <ShortcutsHelp onClose={() => setHelpOpen(false)} />}
 
         {paletteOpen && (
-          <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} />
+          <CommandPalette
+            items={paletteItems}
+            initialQuery={paletteSeed}
+            onClose={() => setPaletteOpen(false)}
+          />
         )}
       </Suspense>
     </div>
