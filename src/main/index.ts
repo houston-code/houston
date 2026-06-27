@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, shell, screen, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
+import { loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { registerIpc } from './ipc'
 import { killAllShells } from './agent/shells'
 import { killAllTerminals } from './terminal'
@@ -28,9 +29,16 @@ app.setName(APP_NAME)
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
+  // Fill the primary display's work area on a fresh install; restore the user's
+  // saved bounds once they've resized or moved the window (see window-state.ts).
+  const bounds = pickStartupBounds(
+    loadWindowState(),
+    screen.getPrimaryDisplay().workArea,
+    screen.getAllDisplays().map((d) => d.workArea)
+  )
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 820,
+    ...bounds,
     minWidth: 720,
     minHeight: 560,
     show: false,
@@ -46,6 +54,21 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // Remember the window's position and size after the user resizes or moves it,
+  // so the next launch reopens exactly there instead of refilling the desktop.
+  // Debounced to coalesce the stream of events a drag produces into one write.
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+  const rememberBounds = (): void => {
+    if (!mainWindow || mainWindow.isFullScreen()) return
+    if (saveTimer) clearTimeout(saveTimer)
+    const win = mainWindow
+    saveTimer = setTimeout(() => {
+      if (!win.isDestroyed()) saveWindowState(win.getBounds())
+    }, 400)
+  }
+  mainWindow.on('resize', rememberBounds)
+  mainWindow.on('move', rememberBounds)
 
   // Open external links in the user's browser, never in-app.
   mainWindow.webContents.setWindowOpenHandler((details) => {
