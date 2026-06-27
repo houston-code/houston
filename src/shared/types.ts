@@ -220,3 +220,30 @@ export interface AppSettings {
   /** Whether the integrated terminal panel is open. */
   terminalOpen?: boolean
 }
+
+/** One format-on-save backend and whether its binary is present on this machine. */
+export interface FormatterStatus {
+  /** Binary name, e.g. `prettier`, `gofmt`, `ruff`. */
+  bin: string
+  /** Found on PATH or a standard install dir. */
+  installed: boolean
+  /** File extensions it formats, e.g. `['ts', 'tsx', 'json']`. */
+  languages: string[]
+}
+
+/**
+ * Runtime status of OPTIONAL external integrations, surfaced in Settings as a hint.
+ * These are never required — Houston degrades gracefully without them — but the UI
+ * shows whether each is available and how to enable it.
+ */
+export interface IntegrationsInfo {
+  /** The `gh` CLI, used by the `gh_*` GitHub tools. */
+  gh: {
+    /** `gh` binary found. */
+    installed: boolean
+    /** `gh auth status` succeeded — only meaningful when `installed`. */
+    authenticated: boolean
+  }
+  /** Format-on-save backends and whether each is installed. */
+  formatters: FormatterStatus[]
+}

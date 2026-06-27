@@ -32,6 +32,8 @@ export const IPC = {
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
   settingsListModels: 'settings:listModels',
+  // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
+  integrationsGet: 'integrations:get',
   // Conversations
   conversationList: 'conversation:list',
   conversationSearch: 'conversation:search',

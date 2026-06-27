@@ -12,6 +12,7 @@ import type { UpdateCheckResult } from '@shared/update'
 import type {
   AppSettings,
   Hook,
+  IntegrationsInfo,
   McpServerConfig,
   ModelOption,
   PermissionRule,
@@ -210,6 +211,12 @@ export function SettingsModal({
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null)
   useEffect(() => {
     void window.api.getVersion().then(setVersion)
+  }, [])
+
+  // Optional-integrations status (gh CLI + formatters), shown as a hint in the Tools tab.
+  const [integrations, setIntegrations] = useState<IntegrationsInfo | null>(null)
+  useEffect(() => {
+    void window.api.getIntegrations().then(setIntegrations)
   }, [])
   const checkForUpdates = async (): Promise<void> => {
     setChecking(true)
@@ -690,6 +697,73 @@ export function SettingsModal({
                   + Add hook
                 </button>
 
+                <h3>Optional integrations</h3>
+                <p className="field__hint">
+                  These extras are optional — Houston works without them. Status on this machine:
+                </p>
+                <div className="integration">
+                  <span className="integration__name">
+                    GitHub CLI (<code>gh</code>)
+                  </span>
+                  <span
+                    className={`integration__status integration__status--${
+                      integrations?.gh.installed && integrations.gh.authenticated ? 'ok' : 'warn'
+                    }`}
+                  >
+                    {integrations == null
+                      ? 'Checking…'
+                      : !integrations.gh.installed
+                        ? 'Not found'
+                        : integrations.gh.authenticated
+                          ? 'Installed & signed in'
+                          : 'Installed — not signed in'}
+                  </span>
+                </div>
+                {integrations != null &&
+                  !(integrations.gh.installed && integrations.gh.authenticated) && (
+                    <p className="field__hint">
+                      Enables the <code>gh_*</code> GitHub tools (pull requests, issues, checks).{' '}
+                      {!integrations.gh.installed ? (
+                        <>
+                          Install it from{' '}
+                          <a href="https://cli.github.com" target="_blank" rel="noreferrer">
+                            cli.github.com
+                          </a>{' '}
+                          and run <code>gh auth login</code>.
+                        </>
+                      ) : (
+                        <>
+                          Run <code>gh auth login</code> to sign in.
+                        </>
+                      )}
+                    </p>
+                  )}
+                {integrations != null && (
+                  <>
+                    <div className="integration">
+                      <span className="integration__name">Formatters (format on save)</span>
+                      <span
+                        className={`integration__status integration__status--${
+                          integrations.formatters.some((f) => f.installed) ? 'ok' : 'warn'
+                        }`}
+                      >
+                        {integrations.formatters.filter((f) => f.installed).length} of{' '}
+                        {integrations.formatters.length} found
+                      </span>
+                    </div>
+                    <p className="field__hint">
+                      {integrations.formatters.map((f, i) => (
+                        <span key={f.bin}>
+                          {i > 0 && ', '}
+                          <code>{f.bin}</code> {f.installed ? '✓' : '✗'}
+                        </span>
+                      ))}
+                      . Install the ones you want on your <code>PATH</code>; the matching formatter
+                      runs only when present.
+                    </p>
+                  </>
+                )}
+
                 <h3>Format on save</h3>
                 <label className="field field--checkbox">
                   <input
@@ -703,7 +777,7 @@ export function SettingsModal({
                     After the agent writes a file, run the matching formatter on it (Prettier for
                     JS/TS/JSON/CSS/Markdown, <code>gofmt</code>, <code>rustfmt</code>,{' '}
                     <code>ruff</code>/<code>black</code> for Python). Only runs when the formatter is
-                    installed; off by default.
+                    installed (see <em>Optional integrations</em> above); off by default.
                   </span>
                 </label>
 

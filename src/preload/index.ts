@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
-import type { AppSettings, ApprovalPolicy } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, IntegrationsInfo } from '@shared/types'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import type {
@@ -46,6 +46,8 @@ const api = {
     ipcRenderer.invoke(IPC.settingsDeleteKey, providerId),
   listModels: (providerId: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.settingsListModels, providerId),
+  /** Status of optional integrations (gh CLI, formatters) for the Settings hint. */
+  getIntegrations: (): Promise<IntegrationsInfo> => ipcRenderer.invoke(IPC.integrationsGet),
 
   // Conversations
   listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),

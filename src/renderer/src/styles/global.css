@@ -2571,6 +2571,28 @@ pre.diff {
 .field__hint--warn {
   color: var(--warn);
 }
+/* Optional-integrations status rows (Settings → Tools & Permissions). */
+.integration {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.integration__name {
+  color: var(--text);
+}
+.integration__status {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.integration__status--ok {
+  color: var(--ok);
+}
+.integration__status--warn {
+  color: var(--warn);
+}
 .field--checkbox {
   display: flex;
   align-items: flex-start;

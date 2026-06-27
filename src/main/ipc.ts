@@ -17,6 +17,7 @@ import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments } from '@shared/images'
 import { checkForUpdates, takePendingWhatsNew } from './updater'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
+import { getIntegrations } from './integrations'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
 import {
@@ -221,6 +222,9 @@ export function registerIpc(): void {
     if (!provider) throw new Error(`Unknown provider: ${providerId}`)
     return listModels(provider)
   })
+
+  // Optional-integrations status (gh CLI, formatters) for the Settings hint.
+  ipcMain.handle(IPC.integrationsGet, () => getIntegrations())
 
   // Conversations
   ipcMain.handle(IPC.conversationList, () => listConversations())
