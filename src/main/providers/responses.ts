@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+import type OpenAI from 'openai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
@@ -73,10 +73,17 @@ interface ResponsesEvent {
 }
 
 export function createResponsesProvider(apiKey: string | null, baseURL?: string): Provider {
-  const client = new OpenAI({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
+  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
+  // turn first runs. Providers the user never selects never pull their SDK in.
+  let clientPromise: Promise<OpenAI> | undefined
+  const getClient = (): Promise<OpenAI> =>
+    (clientPromise ??= import('openai').then(
+      (m) => new m.default({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
+    ))
 
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+      const client = await getClient()
       const reasoning = openaiResponsesReasoning(req.model, req.reasoningEffort, req.reasoningSummary)
       const tools = toResponsesTools(req.tools)
 

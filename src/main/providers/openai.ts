@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+import type OpenAI from 'openai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
@@ -54,10 +54,17 @@ function mapFinishReason(reason: string | null | undefined, hadToolCalls: boolea
  * a placeholder, which compatible servers ignore.
  */
 export function createOpenAIProvider(apiKey: string | null, baseURL?: string): Provider {
-  const client = new OpenAI({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
+  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
+  // turn first runs. Providers the user never selects never pull their SDK in.
+  let clientPromise: Promise<OpenAI> | undefined
+  const getClient = (): Promise<OpenAI> =>
+    (clientPromise ??= import('openai').then(
+      (m) => new m.default({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
+    ))
 
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+      const client = await getClient()
       const tools = req.tools?.map((t) => ({
         type: 'function' as const,
         function: { name: t.name, description: t.description, parameters: t.parameters }
@@ -134,6 +141,7 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
 
 /** Fetch the live model list (GET /models). Works for OpenAI and most compatible servers. */
 export async function listOpenAIModels(apiKey: string | null, baseURL?: string): Promise<string[]> {
+  const { default: OpenAI } = await import('openai')
   const client = new OpenAI({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
   const page = await client.models.list()
   return page.data.map((m) => m.id)

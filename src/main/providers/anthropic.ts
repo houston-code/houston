@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import type Anthropic from '@anthropic-ai/sdk'
 import { randomUUID } from 'node:crypto'
 import type {
   ChatMessage,
@@ -152,10 +152,17 @@ function reasoningFromMessage(content: Anthropic.ContentBlock[]): ReasoningBlock
 }
 
 export function createAnthropicProvider(apiKey: string, baseURL?: string): Provider {
-  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) })
+  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
+  // turn first runs. Providers the user never selects never pull their SDK in.
+  let clientPromise: Promise<Anthropic> | undefined
+  const getClient = (): Promise<Anthropic> =>
+    (clientPromise ??= import('@anthropic-ai/sdk').then(
+      (m) => new m.default({ apiKey, ...(baseURL ? { baseURL } : {}) })
+    ))
 
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+      const client = await getClient()
       const tools: Anthropic.Tool[] | undefined = req.tools?.map((t) => ({
         name: t.name,
         description: t.description,
@@ -249,6 +256,7 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
 
 /** Fetch the live model list from the Anthropic API. */
 export async function listAnthropicModels(apiKey: string, baseURL?: string): Promise<string[]> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk')
   const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) })
   const page = await client.models.list({ limit: 100 })
   return page.data.map((m) => m.id)

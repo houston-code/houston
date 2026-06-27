@@ -1,5 +1,4 @@
-import { GoogleGenAI } from '@google/genai'
-import type { Content } from '@google/genai'
+import type { Content, GoogleGenAI } from '@google/genai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import { geminiThinkingBudget } from './reasoning'
@@ -40,10 +39,15 @@ function toGeminiContents(messages: ChatMessage[]): Content[] {
 }
 
 export function createGeminiProvider(apiKey: string): Provider {
-  const ai = new GoogleGenAI({ apiKey })
+  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
+  // turn first runs. Providers the user never selects never pull their SDK in.
+  let aiPromise: Promise<GoogleGenAI> | undefined
+  const getAi = (): Promise<GoogleGenAI> =>
+    (aiPromise ??= import('@google/genai').then((m) => new m.GoogleGenAI({ apiKey })))
 
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+      const ai = await getAi()
       const config: Record<string, unknown> = {}
       if (req.system) config.systemInstruction = req.system
       const thinkingBudget = geminiThinkingBudget(req.model, req.reasoningEffort)
@@ -110,6 +114,7 @@ export function createGeminiProvider(apiKey: string): Provider {
 
 /** Fetch the live model list from the Gemini API. */
 export async function listGeminiModels(apiKey: string): Promise<string[]> {
+  const { GoogleGenAI } = await import('@google/genai')
   const ai = new GoogleGenAI({ apiKey })
   const out: string[] = []
   const pager = await ai.models.list()
