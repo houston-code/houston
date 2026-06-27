@@ -108,7 +108,7 @@ export function ControlBar({
 
       {showWorktreeEditor && (
         <div className="control-bar__wt">
-          {worktreeMode && (
+          {worktreeMode ? (
             <select
               className="control control--select"
               value={baseBranch}
@@ -126,6 +126,15 @@ export function ControlBar({
                 </option>
               ))}
             </select>
+          ) : (
+            // Worktree off → the chat works in the repo on its current branch.
+            // Show it (read-only) so it's clear which branch will be touched.
+            <span
+              className="control control--branch"
+              title="No worktree — this chat works directly on the repo's current branch"
+            >
+              ⑂ {repoInfo.currentBranch ?? 'detached HEAD'}
+            </span>
           )}
 
           <label

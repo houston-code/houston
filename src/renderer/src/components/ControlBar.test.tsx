@@ -189,8 +189,16 @@ describe('ControlBar', () => {
   it('hides the branch fields when the worktree toggle is off', () => {
     render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={false} />)
     expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Base branch')).not.toBeInTheDocument()
     // The toggle itself is still present so the user can turn it back on.
     expect(screen.getByText('⑂ New worktree')).toBeInTheDocument()
+  })
+
+  it('shows the current branch (read-only) when the worktree toggle is off', () => {
+    // Without a worktree the chat works on the repo's current branch — make that
+    // obvious so the user knows which branch will be touched.
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={false} />)
+    expect(screen.getByText('⑂ main')).toBeInTheDocument()
   })
 
   it('reports branch edits and base selection', () => {
