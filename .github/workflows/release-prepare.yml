@@ -40,6 +40,12 @@ jobs:
             dist: dist:linux
           - os: macos-14
             dist: dist:mac
+          # macos-13 is GitHub's Intel (x64) runner — the only place the x64 mac app can be
+          # built natively (node-pty + per-arch rg/ast-grep don't cross-compile). Gating the
+          # release on it proves x64 packaging works. x64 mac runs only here and in the
+          # publish workflow, never on per-PR CI, to keep macOS minutes off the merge path.
+          - os: macos-13
+            dist: dist:mac:x64
           - os: windows-latest
             dist: dist:win
     runs-on: ${{ matrix.os }}

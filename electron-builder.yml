@@ -68,19 +68,30 @@ mac:
   # latest-mac.yml has nothing the updater can fetch and auto-update never fires.
   # Both share the same generated update metadata; the zip also gets a .blockmap
   # for differential downloads.
+  # Both arm64 (Apple Silicon) and x64 (Intel) are built. Each arch builds on its own
+  # native runner — node-pty is a native addon and the vendored rg/ast-grep are per-arch,
+  # so neither cross-compiles. The CLI arch flag in each `dist:mac*` script selects which
+  # of these the run produces (`--arm64` → arm64 only, `--x64` → x64 only).
   target:
     - target: dmg
-      arch: arm64
+      arch:
+        - arm64
+        - x64
     - target: zip
-      arch: arm64
+      arch:
+        - arm64
+        - x64
   # No Apple Developer ID on this machine — build an ad-hoc (unsigned) app.
   # To notarize later, set identity to your Developer ID Application cert, set
   # hardenedRuntime: true, add a notarize block, and flip updater.ts to auto-install.
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
-  # Each CI runner builds its own host arch (arm64 here; native node-pty + per-arch rg/
-  # ast-grep can't cross-compile). x64 (Intel) mac is a follow-up once an x64 runner exists.
+  # NOTE on auto-update: arm64 and x64 build on separate runners, and electron-builder
+  # writes a single `latest-mac.yml` per build — two mac arches would clobber each other's
+  # feed (electron-builder#5592), breaking the updater. So arm64 owns the update feed and
+  # the Intel build publishes only its .dmg/.zip (manual re-download, like the Linux .deb).
+  # Intel auto-update is a follow-up (per-arch channel file or a merged universal build).
 
 win:
   icon: build/icon.ico
