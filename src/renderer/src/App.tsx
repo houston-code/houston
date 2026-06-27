@@ -17,6 +17,7 @@ import { modelCapabilities } from '@shared/usage'
 import { applyTheme } from './lib/theme'
 import { matchShortcut, isEditableTarget, isMacPlatform, shortcutHint } from './lib/shortcuts'
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
+import { nextApprovalPolicy } from './lib/policyCycle'
 import type { PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
@@ -517,6 +518,18 @@ export default function App(): JSX.Element {
     [chat]
   )
 
+  // Shift+Tab steps to the next approval mode and confirms it in the transcript
+  // (the ControlBar's mode selector also reflects the change).
+  const cyclePolicy = useCallback(() => {
+    if (!settings) return
+    const next = nextApprovalPolicy(settings.approvalPolicy)
+    void onChangePolicy(next)
+    chat.notify(`Approval mode: ${POLICY_LABEL[next]}`)
+    // chat.notify is stable (useCallback in useChat); depend on it explicitly rather
+    // than the whole `chat`, which changes identity every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, onChangePolicy, chat.notify])
+
   const onChangeReasoning = useCallback(async (reasoningEffort: ReasoningEffort) => {
     const fresh = await window.api.saveSettings({
       ...(await window.api.getSettings()),
@@ -858,6 +871,12 @@ export default function App(): JSX.Element {
       } else if (action === 'prev-chat') {
         e.preventDefault()
         cycleChat(-1)
+      } else if (action === 'cycle-mode') {
+        // Shift+Tab is reverse-focus in dialogs — let their focus trap have it; only
+        // hijack it for mode-cycling in the main chat view.
+        if (paletteOpen || helpOpen || settingsOpen || changesOpen || worktreeFor) return
+        e.preventDefault()
+        cyclePolicy()
       } else if (action === 'escape') {
         // The open overlays own their own Esc (focus trap), so this mainly handles
         // Esc with nothing focused — still ordered most-recent-first defensively.
@@ -878,10 +897,12 @@ export default function App(): JSX.Element {
     toggleSidebar,
     jumpToChat,
     cycleChat,
+    cyclePolicy,
     paletteOpen,
     helpOpen,
     settingsOpen,
     changesOpen,
+    worktreeFor,
     chat.running,
     chat.cancel
   ])

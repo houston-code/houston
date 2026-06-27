@@ -22,6 +22,7 @@ export type ShortcutId =
   | 'select-chat-n'
   | 'next-chat'
   | 'prev-chat'
+  | 'cycle-mode'
   | 'send-message'
   | 'insert-newline'
   | 'edit-last-message'
@@ -131,6 +132,12 @@ export const SHORTCUTS: ShortcutDef[] = [
     chords: [{ key: 'Tab', ctrl: true, shift: true }],
     label: 'Previous chat',
     category: 'Navigation'
+  },
+  {
+    id: 'cycle-mode',
+    chords: [{ key: 'Tab', shift: true }],
+    label: 'Cycle approval mode (plan → ask → auto → full)',
+    category: 'Modes'
   },
   {
     id: 'send-message',

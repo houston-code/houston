@@ -67,6 +67,12 @@ describe('matchShortcut', () => {
     expect(matchShortcut({ key: 'Tab', metaKey: true, ctrlKey: true })).toBeNull()
     expect(matchShortcut({ key: 'Tab', metaKey: false, ctrlKey: false })).toBeNull()
   })
+
+  it('maps plain Shift+Tab to cycle-mode, distinct from the Ctrl+Tab nav chords', () => {
+    expect(matchShortcut({ key: 'Tab', metaKey: false, ctrlKey: false, shiftKey: true })).toBe(
+      'cycle-mode'
+    )
+  })
 })
 
 describe('formatChord', () => {
