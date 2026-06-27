@@ -6,7 +6,7 @@ a project folder, and let it read, edit, search, and run code — every action g
 by an approval flow and, where the OS supports it, confined to a sandbox.
 
 Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
-(Apple Silicon and Intel), Windows 10 or newer (x64), and Linux (x64, glibc-based distros).
+(Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+).
 
 ![Houston icon](build/icon.png)
 
@@ -285,8 +285,8 @@ Grab the artifact for your platform:
 | macOS (Apple Silicon) | macOS 12 Monterey | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | macOS (Intel) | macOS 12 Monterey | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
-| Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
-| Linux (x64) | glibc-based distro (Ubuntu 20.04+ / Debian 11+ / Fedora) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
+| Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
+| Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
 
 > **The builds are unsigned.** First-run warnings to expect:
 > - **macOS** — Gatekeeper warns. Right-click the app → **Open** → **Open**, or remove
@@ -295,8 +295,11 @@ Grab the artifact for your platform:
 >   cert. Click **More info** → **Run anyway**.
 > - **Linux** — AppImage/deb are unsigned (conventional).
 >
-> The bundled `ast-grep` is glibc-only, so the Linux build needs a glibc distro
-> (Debian/Ubuntu/Fedora/etc.); musl distros (Alpine) aren't supported.
+> **Linux needs glibc 2.35 or newer** (Ubuntu 22.04+, Debian 12+, Fedora 36+). The floor
+> is set by the build toolchain: the native `node-pty` addon is compiled on Ubuntu 22.04
+> (glibc 2.35), and the bundled `ast-grep`/`ripgrep` are glibc builds — so musl distros
+> (Alpine) aren't supported. The runner is pinned so this floor stays put rather than
+> creeping up with newer CI images.
 >
 > **Both mac arches auto-update from one feed.** arm64 and Intel build on separate
 > runners, and electron-builder emits one `latest-mac.yml` per build — naively publishing
@@ -363,7 +366,7 @@ mac, on the target arch — arm64 on Apple Silicon, x64 on an Intel mac):
 npm run dist:mac      # macOS arm64 → .dmg + .zip (+ latest-mac.yml) — run on Apple Silicon
 npm run dist:mac:x64  # macOS x64   → .dmg + .zip                    — run on an Intel mac
 npm run dist:win      # Windows x64 → -setup.exe + .zip (+ latest.yml) — run on Windows
-npm run dist:linux    # Linux x64   → .AppImage + .deb (+ latest-linux.yml) — run on Linux
+npm run dist:linux    # Linux x64   → .AppImage + .deb (+ latest-linux.yml) — run on glibc 2.35+ (Ubuntu 22.04)
 ```
 
 The human download is the `.dmg` / `-setup.exe` / `.AppImage`; the `.zip` / nsis /

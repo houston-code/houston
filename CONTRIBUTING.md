@@ -5,10 +5,11 @@ app. This guide covers local setup and the conventions the codebase follows.
 
 ## Prerequisites
 
-- A supported OS: macOS 12 Monterey+ (Apple Silicon), Windows 10+ (x64), or Linux
-  (x64, glibc-based distro). Each platform builds its own artifacts on its own host —
-  native modules and the per-platform binaries can't cross-compile.
-- Node.js 20+ (22 recommended)
+- A supported OS: macOS 12 Monterey+ (Apple Silicon or Intel), Windows 10+ (x64), or
+  Linux x64 (glibc 2.35+ — Ubuntu 22.04+ / Debian 12+ / Fedora 36+). Each platform+arch
+  builds its own artifacts on its own host — native modules and the per-platform binaries
+  can't cross-compile.
+- Node.js 22+ (pinned in `.nvmrc` and `engines`; CI uses the same)
 - Xcode Command Line Tools (macOS, for `iconutil`/`sips` if you regenerate the icon)
 
 ## Setup
