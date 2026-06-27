@@ -19,6 +19,9 @@ export type ShortcutId =
   | 'open-settings'
   | 'show-help'
   | 'escape'
+  | 'select-chat-n'
+  | 'next-chat'
+  | 'prev-chat'
   | 'send-message'
   | 'insert-newline'
 
@@ -40,7 +43,15 @@ export interface KeyChord {
   key: string
   /** Requires the platform command key (⌘ on macOS, Ctrl elsewhere). */
   mod?: boolean
-  /** Requires Shift. When unset, Shift is ignored so e.g. ⇧⌘N still triggers a ⌘N chord. */
+  /**
+   * Requires the raw Control key specifically (⌃), independent of platform — and
+   * disallows ⌘. Use for bindings like ⌃Tab where ⌘Tab is reserved by the OS.
+   */
+  ctrl?: boolean
+  /**
+   * Shift requirement. `true` requires it, `false` forbids it, unset ignores it (so
+   * e.g. ⇧⌘N still triggers a ⌘N chord while ⌃⇧Tab stays distinct from ⌃Tab).
+   */
   shift?: boolean
   /** Requires Alt/Option. */
   alt?: boolean
@@ -55,6 +66,11 @@ export interface ShortcutDef {
   category: ShortcutCategory
   /** Defaults to `global`. */
   scope?: ShortcutScope
+  /**
+   * Custom display string for the help overlay / hints, when listing every chord
+   * would be noise (e.g. a range like ⌘1–9). Overrides per-chord formatting.
+   */
+  display?: (mac: boolean) => string
 }
 
 /** The shortcut registry. New shortcuts are added here and picked up everywhere. */
@@ -96,6 +112,25 @@ export const SHORTCUTS: ShortcutDef[] = [
     category: 'General'
   },
   {
+    id: 'select-chat-n',
+    chords: Array.from({ length: 9 }, (_, i) => ({ key: String(i + 1), mod: true })),
+    label: 'Switch to chat 1–9',
+    category: 'Navigation',
+    display: (mac) => (mac ? '⌘1–9' : 'Ctrl+1–9')
+  },
+  {
+    id: 'next-chat',
+    chords: [{ key: 'Tab', ctrl: true, shift: false }],
+    label: 'Next chat',
+    category: 'Navigation'
+  },
+  {
+    id: 'prev-chat',
+    chords: [{ key: 'Tab', ctrl: true, shift: true }],
+    label: 'Previous chat',
+    category: 'Navigation'
+  },
+  {
     id: 'send-message',
     chords: [{ key: 'Enter' }],
     label: 'Send message',
@@ -120,13 +155,18 @@ export interface Keyish {
 }
 
 function chordMatches(e: Keyish, c: KeyChord): boolean {
-  const mod = e.metaKey || e.ctrlKey
-  if ((c.mod ?? false) !== mod) return false
+  if (c.ctrl !== undefined) {
+    // Raw-Control binding: match Control exactly and never with ⌘ held.
+    if (e.ctrlKey !== c.ctrl || e.metaKey) return false
+  } else {
+    const mod = e.metaKey || e.ctrlKey
+    if ((c.mod ?? false) !== mod) return false
+  }
   if ((c.alt ?? false) !== Boolean(e.altKey)) return false
-  // Shift is enforced only when the chord requires it: this keeps ⇧⌘N matching the
-  // ⌘N chord (prior behaviour, and what a user expects), while letting a
-  // shift-specific chord like ⇧Tab stay distinct from plain Tab.
-  if (c.shift && !e.shiftKey) return false
+  // Shift: enforced when true, forbidden when false, ignored when unset. The ignore
+  // case keeps ⇧⌘N matching the ⌘N chord; the explicit cases let ⌃Tab / ⌃⇧Tab split.
+  if (c.shift === true && !e.shiftKey) return false
+  if (c.shift === false && e.shiftKey) return false
   return e.key.toLowerCase() === c.key.toLowerCase()
 }
 
@@ -169,16 +209,23 @@ const KEY_GLYPH: Record<string, string> = {
   Tab: 'Tab'
 }
 
+/** The display string(s) for a shortcut: a custom override, else each chord formatted. */
+export function shortcutDisplays(def: ShortcutDef, mac: boolean): string[] {
+  if (def.display) return [def.display(mac)]
+  return def.chords.map((c) => formatChord(c, mac))
+}
+
 /** The display string for a shortcut's primary chord, e.g. `⌘K`, or undefined if unknown. */
 export function shortcutHint(id: ShortcutId, mac: boolean): string | undefined {
   const def = SHORTCUTS.find((s) => s.id === id)
-  return def ? formatChord(def.chords[0], mac) : undefined
+  return def ? shortcutDisplays(def, mac)[0] : undefined
 }
 
 /** Render a chord as a display string, e.g. `⌘N` on macOS or `Ctrl+N` elsewhere. */
 export function formatChord(c: KeyChord, mac: boolean): string {
   const parts: string[] = []
   if (c.mod) parts.push(mac ? '⌘' : 'Ctrl')
+  if (c.ctrl) parts.push(mac ? '⌃' : 'Ctrl')
   if (c.alt) parts.push(mac ? '⌥' : 'Alt')
   if (c.shift) parts.push(mac ? '⇧' : 'Shift')
   const k = KEY_GLYPH[c.key] ?? (c.key.length === 1 ? c.key.toUpperCase() : c.key)

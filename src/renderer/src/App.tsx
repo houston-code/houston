@@ -16,6 +16,7 @@ import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
 import { applyTheme } from './lib/theme'
 import { matchShortcut, isEditableTarget, isMacPlatform, shortcutHint } from './lib/shortcuts'
+import { chatAtIndex, cycleChatId } from './lib/sessionNav'
 import type { PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
@@ -280,6 +281,23 @@ export default function App(): JSX.Element {
       if (activeRunId) chat.adopt(activeRunId)
     },
     [chat]
+  )
+
+  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the currently visible list.
+  const jumpToChat = useCallback(
+    (index: number) => {
+      const id = chatAtIndex(visibleConversations, index)
+      if (id && id !== currentId) void selectConversation(id)
+    },
+    [visibleConversations, currentId, selectConversation]
+  )
+
+  const cycleChat = useCallback(
+    (dir: 1 | -1) => {
+      const id = cycleChatId(visibleConversations, currentId, dir)
+      if (id && id !== currentId) void selectConversation(id)
+    },
+    [visibleConversations, currentId, selectConversation]
   )
 
   const newChatInWorkspace = useCallback(
@@ -831,6 +849,15 @@ export default function App(): JSX.Element {
       } else if (action === 'show-help') {
         e.preventDefault()
         setHelpOpen((v) => !v)
+      } else if (action === 'select-chat-n') {
+        e.preventDefault()
+        jumpToChat(Number(e.key) - 1)
+      } else if (action === 'next-chat') {
+        e.preventDefault()
+        cycleChat(1)
+      } else if (action === 'prev-chat') {
+        e.preventDefault()
+        cycleChat(-1)
       } else if (action === 'escape') {
         // The open overlays own their own Esc (focus trap), so this mainly handles
         // Esc with nothing focused — still ordered most-recent-first defensively.
@@ -849,6 +876,8 @@ export default function App(): JSX.Element {
   }, [
     onNewChat,
     toggleSidebar,
+    jumpToChat,
+    cycleChat,
     paletteOpen,
     helpOpen,
     settingsOpen,

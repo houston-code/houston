@@ -3,7 +3,7 @@ import { useFocusTrap } from '../lib/useFocusTrap'
 import {
   SHORTCUTS,
   SHORTCUT_CATEGORIES,
-  formatChord,
+  shortcutDisplays,
   isMacPlatform,
   type ShortcutCategory,
   type ShortcutDef
@@ -58,10 +58,10 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }): JSX.Element
                   <li key={s.id} className="shortcuts-help__row">
                     <span className="shortcuts-help__label">{s.label}</span>
                     <span className="shortcuts-help__keys">
-                      {s.chords.map((c, i) => (
+                      {shortcutDisplays(s, mac).map((d, i) => (
                         <span key={i}>
                           {i > 0 && <span className="shortcuts-help__or">or</span>}
-                          <kbd className="kbd">{formatChord(c, mac)}</kbd>
+                          <kbd className="kbd">{d}</kbd>
                         </span>
                       ))}
                     </span>

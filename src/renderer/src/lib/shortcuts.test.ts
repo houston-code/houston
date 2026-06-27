@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   matchShortcut,
   formatChord,
+  shortcutDisplays,
   isEditableTarget,
   SHORTCUTS,
   type Keyish
@@ -50,6 +51,22 @@ describe('matchShortcut', () => {
   it('does not match composer-scope shortcuts globally (Enter is not a global action)', () => {
     expect(matchShortcut(ev('Enter'))).toBeNull()
   })
+
+  it('maps Cmd/Ctrl+digit to select-chat-n for 1–9', () => {
+    expect(matchShortcut(ev('1', true))).toBe('select-chat-n')
+    expect(matchShortcut(ev('9', true))).toBe('select-chat-n')
+    expect(matchShortcut(ev('0', true))).toBeNull()
+  })
+
+  it('splits Ctrl+Tab (next) from Ctrl+Shift+Tab (prev) and ignores Cmd+Tab', () => {
+    expect(matchShortcut({ key: 'Tab', metaKey: false, ctrlKey: true })).toBe('next-chat')
+    expect(matchShortcut({ key: 'Tab', metaKey: false, ctrlKey: true, shiftKey: true })).toBe(
+      'prev-chat'
+    )
+    // ⌘Tab is the OS app switcher — never ours.
+    expect(matchShortcut({ key: 'Tab', metaKey: true, ctrlKey: true })).toBeNull()
+    expect(matchShortcut({ key: 'Tab', metaKey: false, ctrlKey: false })).toBeNull()
+  })
 })
 
 describe('formatChord', () => {
@@ -67,6 +84,21 @@ describe('formatChord', () => {
   it('renders punctuation as-is', () => {
     expect(formatChord({ key: '/', mod: true }, true)).toBe('⌘/')
     expect(formatChord({ key: '?' }, true)).toBe('?')
+  })
+
+  it('renders raw Control as ⌃ on macOS', () => {
+    expect(formatChord({ key: 'Tab', ctrl: true }, true)).toBe('⌃Tab')
+    expect(formatChord({ key: 'Tab', ctrl: true, shift: true }, false)).toBe('Ctrl+Shift+Tab')
+  })
+})
+
+describe('shortcutDisplays', () => {
+  it('uses a custom display override when present (⌘1–9), else formats chords', () => {
+    const nth = SHORTCUTS.find((s) => s.id === 'select-chat-n')!
+    expect(shortcutDisplays(nth, true)).toEqual(['⌘1–9'])
+    expect(shortcutDisplays(nth, false)).toEqual(['Ctrl+1–9'])
+    const help = SHORTCUTS.find((s) => s.id === 'show-help')!
+    expect(shortcutDisplays(help, true)).toEqual(['⌘/', '?'])
   })
 })
 

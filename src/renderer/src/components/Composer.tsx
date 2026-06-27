@@ -259,7 +259,7 @@ export function Composer({
         setCmdIndex((i) => (i - 1 + cmdMatches.length) % cmdMatches.length)
         return
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         chooseCommand(cmdMatches[cmdIndex])
         return
@@ -280,7 +280,7 @@ export function Composer({
         setMentionIndex((i) => (i - 1 + suggestions.length) % suggestions.length)
         return
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         chooseMention(suggestions[mentionIndex])
         return
