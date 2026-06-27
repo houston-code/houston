@@ -177,6 +177,7 @@ export function ModelPicker({
                       type="button"
                       role="option"
                       aria-selected={isSelected}
+                      aria-label={win ? `${m.label ?? m.id} ${win}` : (m.label ?? m.id)}
                       className={`model-menu__opt${idx === active ? ' model-menu__opt--active' : ''}${
                         isSelected ? ' model-menu__opt--selected' : ''
                       }`}
