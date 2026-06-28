@@ -2470,7 +2470,11 @@ pre.diff {
   border-radius: 6px;
   background: var(--bg-input);
   color: var(--text);
-  font-family: var(--mono);
+  /* The system UI font, not --mono: monospace stacks lack the Apple modifier
+     glyphs (⌘ ⇧ ⌃ ⌥) and substitute them from a fallback whose advance width
+     doesn't match the cell, so symbols render mis-sized and overlap. The UI
+     font carries them natively with correct metrics. */
+  font-family: var(--font);
   font-size: 12px;
   line-height: 1.4;
   text-align: center;
@@ -2551,7 +2555,8 @@ pre.diff {
   flex-shrink: 0;
   color: var(--text-dim);
   font-size: 12px;
-  font-family: var(--mono);
+  /* UI font so modifier glyphs (⌘ ⇧ ⌃ ⌥) render correctly — see .kbd. */
+  font-family: var(--font);
 }
 .command-palette__empty {
   padding: 20px;
