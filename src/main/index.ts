@@ -12,7 +12,7 @@ import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
 import { log } from './logger'
 import { getSettings } from './store'
-import { startRun, resolveApproval } from './agent/loop'
+import { startRun, resolveApproval, resolveQuestion } from './agent/loop'
 import { parseHeadlessArgs, runHeadless } from './headless'
 import { activeBackendId, isSandboxed } from './sandbox'
 
@@ -102,6 +102,7 @@ if (headless) {
         getSettings,
         startRun,
         resolveApproval,
+        resolveQuestion,
         out: (s) => process.stdout.write(s),
         err: (s) => process.stderr.write(s)
       })
