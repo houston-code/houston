@@ -184,6 +184,27 @@ describe('useChat', () => {
     expect(result.current.items).toHaveLength(itemsBefore)
   })
 
+  it('reset seeds errored from a persisted failure so the Retry banner survives a reload', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    // Drive into a live errored state, then prove reset can both restore and clear it.
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'done', stopReason: 'end_turn' })
+    expect(result.current.errored).toBe(false)
+
+    // Re-open a conversation whose last run had failed: notice + banner restored.
+    const errNotice = { kind: 'notice' as const, id: 'n', text: 'kaboom', tone: 'error' as const }
+    act(() => result.current.reset([errNotice], null, true))
+    expect(result.current.errored).toBe(true)
+    expect(result.current.running).toBe(false)
+    expect(result.current.items).toEqual([errNotice])
+
+    // Re-opening a healthy conversation clears it (default errored = false).
+    act(() => result.current.reset([]))
+    expect(result.current.errored).toBe(false)
+    expect(result.current.items).toEqual([])
+  })
+
   it('routes cancel, approve, and setPolicy to the active run', async () => {
     const { api } = installApi()
     const { result } = renderHook(() => useChat())

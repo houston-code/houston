@@ -369,15 +369,22 @@ export default function App(): JSX.Element {
       if (!conv) return
       setCurrentId(id)
       setLastWorkspace(conv.workspace)
+      // Restore a persisted failure: re-show the error notice in the transcript and
+      // flag `errored` so the "last turn failed / Retry" banner returns after reload.
+      const items = itemsFromMessages(conv.messages)
+      if (conv.lastError) {
+        items.push({ kind: 'notice', id: `lasterror-${id}`, text: conv.lastError.message, tone: 'error' })
+      }
       chat.reset(
-        itemsFromMessages(conv.messages),
+        items,
         conv.usage
           ? {
               context: conv.usage.inputTokens,
               output: conv.usage.outputTokens,
               cost: conv.usage.cost ?? 0
             }
-          : null
+          : null,
+        Boolean(conv.lastError)
       )
       // A run for this conversation is still in flight in the main process —
       // re-adopt it so the composer shows Stop and events/approvals reconnect.

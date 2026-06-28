@@ -142,5 +142,7 @@ export function forkConversationData(src: Conversation, id: string, now: number)
   delete fork.pinned
   delete fork.archived
   delete fork.groupId
+  // A fork hasn't run anything yet — don't inherit the source's failed-turn marker.
+  delete fork.lastError
   return fork
 }

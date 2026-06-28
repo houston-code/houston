@@ -4,7 +4,12 @@ import { combineQueued, type QueuedInputMeta } from '@shared/queue'
 import { startRun } from './loop'
 import { maybeGenerateTitle } from './title'
 import { takeQueue } from './queue'
-import { getConversation, setMessages, updateConversationMeta } from '../conversations'
+import {
+  getConversation,
+  setConversationError,
+  setMessages,
+  updateConversationMeta
+} from '../conversations'
 
 /** How the run orchestrator talks back to the renderer (provided by the IPC layer). */
 export interface DrainIO {
@@ -28,11 +33,18 @@ export async function runAndDrain(
   runReq: AgentRunRequest
 ): Promise<void> {
   let terminal: 'natural' | 'aborted' | 'error' = 'natural'
+  let errorMessage = ''
   const send = (e: AgentEvent): void => {
-    if (e.type === 'error') terminal = 'error'
-    else if (e.type === 'done') terminal = e.stopReason === 'aborted' ? 'aborted' : 'natural'
+    if (e.type === 'error') {
+      terminal = 'error'
+      errorMessage = e.message
+    } else if (e.type === 'done') terminal = e.stopReason === 'aborted' ? 'aborted' : 'natural'
     io.emit(conversationId, e)
   }
+  // A new run supersedes any prior failure: clear the persisted "last turn failed"
+  // marker up front, so a reload mid-run doesn't resurrect a stale banner. It's
+  // re-set below only if this run itself ends in an error.
+  setConversationError(conversationId, null)
   // Tag the run with its conversation so the loop enforces one live run per
   // conversation (a second would interleave its setMessages writes and corrupt
   // the log). The slot is freed when this run ends, before any queue drain below.
@@ -47,6 +59,10 @@ export async function runAndDrain(
       onTitle: (title) => io.emitTitleChanged?.(conversationId, title)
     })
     drainQueue(io, conversationId)
+  } else if (terminal === 'error') {
+    // Persist the failure so the "last turn failed" Retry banner survives a reload.
+    // Aborts fall through untouched — a cancel isn't a failure worth re-running.
+    setConversationError(conversationId, { message: errorMessage })
   }
 }
 

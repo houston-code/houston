@@ -14,6 +14,7 @@ import type {
   AgentEvent,
   ChatMessage,
   Conversation,
+  ConversationError,
   ConversationMeta,
   ConversationUsage,
   ConversationWorktree
@@ -227,6 +228,26 @@ export function addUsage(
 export function mergeRunningTotals(e: AgentEvent, total: ConversationUsage | null): AgentEvent {
   if (e.type !== 'usage' || !total) return e
   return { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens, cost: total.cost }
+}
+
+/**
+ * Persist (or clear) the error that ended the conversation's most recent run, so
+ * the "last turn failed" banner and its Retry button survive a reload. Pass `null`
+ * to clear. Skips the write when nothing changes, and never bumps `updatedAt` — the
+ * failed turn already did so via {@link setMessages}, and clearing the flag on the
+ * next run shouldn't reorder the sidebar.
+ */
+export function setConversationError(id: string, error: ConversationError | null): void {
+  const conv = read(id)
+  if (!conv) return
+  if (error) {
+    if (conv.lastError?.message === error.message) return
+    conv.lastError = error
+  } else {
+    if (conv.lastError === undefined) return
+    delete conv.lastError
+  }
+  write(conv)
 }
 
 /** Replace the message log for a conversation and bump updatedAt. */
