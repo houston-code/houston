@@ -41,6 +41,7 @@ import {
 import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
+import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import { itemsFromMessages, lastUserText } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
@@ -333,6 +334,10 @@ export default function App(): JSX.Element {
   // by conversation) and sent combined as the next turn when the run finishes —
   // surviving navigation to other chats. This is the open conversation's view.
   const queue = useInputQueue(currentId)
+
+  // Uncommitted-change counts for the titlebar Changes badge (refreshes on run
+  // completion / window focus).
+  const workingTreeStats = useWorkingTreeStats(workspace, chat.running)
 
   // Load the workspace's custom slash commands (alongside the built-ins).
   useEffect(() => {
@@ -1138,6 +1143,7 @@ export default function App(): JSX.Element {
       <div className="main">
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
+          changes={workspace ? workingTreeStats : undefined}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
           onToggleTerminal={toggleTerminal}
           terminalOpen={terminalOpen}
