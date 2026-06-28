@@ -28,6 +28,10 @@ function type(value: string): HTMLTextAreaElement {
   return input
 }
 
+// The composer seeds itself from the persisted draft on mount, so keep storage
+// clean between tests to avoid one test's draft leaking into the next.
+beforeEach(() => localStorage.clear())
+
 describe('Composer', () => {
   it('runs a slash command (not a send) when idle', () => {
     const props = baseProps()
@@ -171,5 +175,28 @@ describe('Composer edit-last-message (Esc Esc)', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(input.value).toBe('')
+  })
+})
+
+describe('Composer draft persistence', () => {
+  it('restores an unsent draft after a restart (unmount + remount)', () => {
+    const { unmount } = render(<Composer {...baseProps()} />)
+    type('a half-written message')
+    unmount() // simulate quitting the app
+
+    render(<Composer {...baseProps()} />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(
+      'a half-written message'
+    )
+  })
+
+  it('clears the persisted draft once the message is sent', () => {
+    const { unmount } = render(<Composer {...baseProps()} />)
+    const input = type('send me')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    unmount()
+
+    render(<Composer {...baseProps()} />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
   })
 })
