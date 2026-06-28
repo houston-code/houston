@@ -1,7 +1,10 @@
 import { app, screen, BrowserWindow } from 'electron'
+import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { APP_NAME } from '@shared/constants'
 import { openExternalSafely } from './safeExternal'
+import { isAllowedNavigation } from './navigation'
 import { loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { registerIpc } from './ipc'
 import { buildAppMenu } from './menu'
@@ -82,10 +85,28 @@ function createWindow(): void {
   })
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
+  const indexFile = join(__dirname, '../renderer/index.html')
+  const startUrl = devUrl ?? pathToFileURL(indexFile).toString()
+
+  // Pin the main frame to its own document. The renderer holds the privileged
+  // `window.api` bridge, so a top-level navigation to any other origin must never
+  // replace it (a dropped `file://`, a form submit in rendered untrusted content,
+  // a stray `location =`). `setWindowOpenHandler` above only covers *new* windows;
+  // these cover same-frame navigations and redirects. Off-allowlist http(s) is
+  // handed to the external browser; any other scheme is silently dropped. The
+  // view_localhost capture window manages its own (loopback-only) policy.
+  const guardNavigation = (e: ElectronEvent, url: string): void => {
+    if (isAllowedNavigation(url, startUrl, devUrl)) return
+    e.preventDefault()
+    openExternalSafely(url)
+  }
+  mainWindow.webContents.on('will-navigate', guardNavigation)
+  mainWindow.webContents.on('will-redirect', guardNavigation)
+
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
   } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    void mainWindow.loadFile(indexFile)
   }
 }
 
