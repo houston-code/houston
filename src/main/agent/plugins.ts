@@ -9,16 +9,24 @@ import vm from 'node:vm'
  * ─────────────────────────────────────────────────────────────────────────────
  * TRUST BOUNDARY
  * ─────────────────────────────────────────────────────────────────────────────
- * Plugins are *local, trusted, user-authored* files — the same trust model as
- * `.houston/hooks` (shell commands), `.houston/agents`, and `.houston/skills`:
- * if you can drop a file into the project's `.houston/plugins/` directory, you
- * already control the workspace. Houston does NOT execute plugins fetched from a
- * registry, downloaded at runtime, or supplied by the model — only files already
- * sitting on disk in the project.
+ * Plugins are executable JavaScript evaluated IN-PROCESS, and a `vm` context is
+ * NOT a security sandbox: a plugin can walk the prototype chain of the host
+ * `houston.on` function it's handed back to the host realm's `Function`
+ * constructor and reach `process`/`require`, i.e. arbitrary code execution in the
+ * unsandboxed main process. A `.houston/plugins/*.js` file shipped inside a
+ * repository is therefore attacker-controlled the moment you open that repo — the
+ * same threat model `projectConfig.ts` already refuses to honor project hooks /
+ * MCP servers / `allow` rules for.
  *
- * Because the real guarantee is "you authored this file," the loader is
- * deliberately conservative and adds defense-in-depth so an *accidentally* buggy
- * (not adversarial) plugin can't take the app down:
+ * So workspace plugins are NOT loaded automatically. `loadPluginsIfEnabled` only
+ * runs them when the user has explicitly turned on the `projectPlugins` setting
+ * (off by default) for a project they trust. Houston never executes plugins
+ * fetched from a registry, downloaded at runtime, or supplied by the model — only
+ * files already sitting on disk in a project the user opted into.
+ *
+ * The remaining measures below are defense-in-depth against an *accidentally*
+ * buggy (not adversarial) plugin once a user has opted in — they are not, and
+ * cannot be, a boundary against a determined attacker:
  *
  *  1. Hooks are OBSERVATIONAL ONLY. `onToolStart` / `onToolResult` /
  *     `onUserMessage` receive a frozen copy of the event and their return value
@@ -262,4 +270,21 @@ export async function loadPlugins(
   }
 
   return new PluginHost(registrations, warn)
+}
+
+/**
+ * Load workspace plugins ONLY when the user has explicitly opted in via the
+ * `projectPlugins` setting. Because plugins are executable JS evaluated in-process
+ * (and `vm` is not a security boundary — see the trust-boundary note above),
+ * auto-running a repo's `.houston/plugins/*.js` on open would be arbitrary code
+ * execution from an untrusted repository. When the setting is anything other than
+ * `true`, this returns an empty `PluginHost` and never touches the workspace files.
+ */
+export async function loadPluginsIfEnabled(
+  workspace: string,
+  enabled: boolean | undefined,
+  warn: (msg: string) => void = defaultWarn
+): Promise<PluginHost> {
+  if (enabled !== true) return new PluginHost([], warn)
+  return loadPlugins(workspace, warn)
 }

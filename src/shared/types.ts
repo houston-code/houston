@@ -189,6 +189,13 @@ export interface AppSettings {
   diagnosticsOnSave?: boolean
   /** MCP servers to connect to (stdio). Their tools are offered to the agent. */
   mcpServers?: McpServerConfig[]
+  /**
+   * Execute the opened project's `.houston/plugins/*.js` files. OFF by default and
+   * deliberately opt-in: plugins are evaluated in-process and `vm` is NOT a security
+   * boundary, so a plugin file shipped in an untrusted repo is arbitrary code
+   * execution in the main process. Only enable this for projects you fully trust.
+   */
+  projectPlugins?: boolean
   /** Extra directories (beyond the project folder) the agent may read and write. */
   additionalRoots?: string[]
   /**
