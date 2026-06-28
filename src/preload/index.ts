@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
-import type { AppSettings, ApprovalPolicy, IntegrationsInfo } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, IntegrationsInfo, ModelOption } from '@shared/types'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import type {
@@ -44,7 +44,7 @@ const api = {
     ipcRenderer.invoke(IPC.settingsSetKey, providerId, key),
   deleteKey: (providerId: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsDeleteKey, providerId),
-  listModels: (providerId: string): Promise<string[]> =>
+  listModels: (providerId: string): Promise<ModelOption[]> =>
     ipcRenderer.invoke(IPC.settingsListModels, providerId),
   /** Whether a local model supports tool calling: true / false / null (unknown). */
   ollamaSupportsTools: (providerId: string, model: string): Promise<boolean | null> =>

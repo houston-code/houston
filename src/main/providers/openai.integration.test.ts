@@ -40,7 +40,7 @@ describe.skipIf(!up)('openai-compatible adapter (live local server)', () => {
   it('streams text and ends with a done event', async () => {
     // Use the pinned model, or fall back to whatever the server lists first, so
     // the test doesn't assume a specific model is installed.
-    const model = MODEL ?? (await listOpenAIModels(null, BASE!))[0]
+    const model = MODEL ?? (await listOpenAIModels(null, BASE!))[0]?.id
     expect(model, 'server reported no models').toBeTruthy()
     const provider = createOpenAIProvider(null, BASE!)
     let text = ''

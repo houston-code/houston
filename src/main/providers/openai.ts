@@ -1,6 +1,7 @@
 import type OpenAI from 'openai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
+import type { ModelCaps, ModelOption } from '@shared/types'
 import { imageDataUrl } from '@shared/images'
 import { openaiReasoningEffort } from './reasoning'
 import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
@@ -217,12 +218,46 @@ export function createOpenAIProvider(
   }
 }
 
+/**
+ * Map one entry from a `GET /models` response into a ModelOption, capturing
+ * capability metadata when the host provides it. Plain OpenAI-compatible servers
+ * return only `{ id }`, so `caps` stays undefined (heuristics take over). Rich
+ * hosts (OpenRouter and look-alikes) add:
+ *   - `context_length` (number)
+ *   - `supported_parameters` (string[]): `tools`/`tool_choice`, `reasoning`/`include_reasoning`
+ *   - `architecture.input_modalities` (string[]): `image` ⇒ vision
+ * These fields aren't in the SDK's typed Model, so we read them off the raw object.
+ */
+export function modelOptionFromListing(raw: Record<string, unknown>): ModelOption {
+  const id = String(raw.id ?? '')
+  const caps: ModelCaps = {}
+
+  const params = raw.supported_parameters
+  if (Array.isArray(params)) {
+    const has = (...names: string[]): boolean => names.some((n) => params.includes(n))
+    caps.tools = has('tools', 'tool_choice')
+    caps.reasoning = has('reasoning', 'include_reasoning', 'reasoning_effort')
+  }
+
+  const arch = raw.architecture
+  if (arch && typeof arch === 'object') {
+    const modalities = (arch as Record<string, unknown>).input_modalities
+    if (Array.isArray(modalities)) caps.vision = modalities.includes('image')
+  }
+
+  if (typeof raw.context_length === 'number' && raw.context_length > 0) {
+    caps.contextWindow = raw.context_length
+  }
+
+  return Object.keys(caps).length ? { id, caps } : { id }
+}
+
 /** Fetch the live model list (GET /models). Works for OpenAI and most compatible servers. */
 export async function listOpenAIModels(
   apiKey: string | null,
   baseURL?: string,
   headers?: Record<string, string>
-): Promise<string[]> {
+): Promise<ModelOption[]> {
   const { default: OpenAI } = await import('openai')
   const client = new OpenAI({
     apiKey: apiKey || 'no-key',
@@ -230,5 +265,5 @@ export async function listOpenAIModels(
     ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
   })
   const page = await client.models.list()
-  return page.data.map((m) => m.id)
+  return page.data.map((m) => modelOptionFromListing(m as unknown as Record<string, unknown>))
 }
