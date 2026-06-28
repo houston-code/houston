@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { isSafeGitRef } from '@shared/git'
+import { GIT_ENV, GIT_HARDENING } from './gitRead'
 
 export { isSafeGitRef }
 
@@ -9,6 +10,14 @@ export { isSafeGitRef }
  * prompt, so the agent knows what branch it's on and what's already modified
  * without having to run git itself. Read-only git commands, so they don't go
  * through the sandbox; never throws (a non-repo just yields no context).
+ *
+ * SECURITY: these run automatically (and unapproved) the moment a workspace is
+ * opened, so they MUST neutralize the repo-local `.git/config` keys that make git
+ * execute an external program during ordinary reads — `core.fsmonitor` (run by
+ * `git status`), `diff.external` / textconv (run by `git diff`), pagers, and the
+ * `ext` protocol. We reuse the same `GIT_HARDENING` args + `GIT_ENV` as the
+ * read-only git tools (gitRead.ts) so an untrusted checkout can't get code
+ * execution in the unsandboxed main process.
  */
 
 /** Max porcelain lines to include verbatim. */
@@ -23,8 +32,8 @@ function runGit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      args,
-      { cwd, timeout: 5000, maxBuffer: 1_000_000, windowsHide: true },
+      [...GIT_HARDENING, '--no-pager', ...args],
+      { cwd, env: GIT_ENV, timeout: 5000, maxBuffer: 1_000_000, windowsHide: true },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     )
   })
@@ -167,7 +176,9 @@ export async function gitDiff(
     try {
       // `--` guards against `base` being read as a path; on a repo with no commits
       // `git diff HEAD` throws (no HEAD) — the untracked list carries the review then.
-      diff = await exec(['diff', base, '--'], workspace)
+      // `--no-ext-diff`/`--no-textconv` block repo-config diff drivers from running
+      // a program (defence in depth atop GIT_HARDENING; matches workingTree.ts).
+      diff = await exec(['diff', base, '--no-ext-diff', '--no-textconv', '--'], workspace)
     } catch {
       // invalid base (e.g. unborn HEAD) — fall back to no tracked diff
     }
