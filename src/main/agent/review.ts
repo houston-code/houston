@@ -132,6 +132,82 @@ export function formatReviewInput(d: WorkspaceDiff): string {
   return parts.join('\n\n')
 }
 
+/** The untracked-files section of a review input, or '' when there are none. */
+function untrackedSection(untracked: string[]): string {
+  if (!untracked.length) return ''
+  const list = untracked.map((f) => `- ${f}`).join('\n')
+  return `New (untracked) files — read them in full to review their contents:\n${list}`
+}
+
+/** Split a unified diff into per-file sections (each starting at `diff --git`). */
+export function splitDiffByFile(diff: string): string[] {
+  return diff
+    .split(/\n(?=diff --git )/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/** Pack per-file diffs into chunks no larger than `maxChars`; truncate a single oversized file. */
+function packDiffChunks(fileDiffs: string[], maxChars: number): string[] {
+  const chunks: string[] = []
+  let cur = ''
+  for (const fd of fileDiffs) {
+    const piece =
+      fd.length > maxChars
+        ? `${fd.slice(0, maxChars)}\n[file diff truncated — read the file directly for the rest]`
+        : fd
+    if (cur && cur.length + 2 + piece.length > maxChars) {
+      chunks.push(cur)
+      cur = piece
+    } else {
+      cur = cur ? `${cur}\n\n${piece}` : piece
+    }
+  }
+  if (cur) chunks.push(cur)
+  return chunks
+}
+
+/**
+ * Compose the review input as one or more size-bounded chunks. A small diff yields
+ * a single chunk (identical to formatReviewInput); a large one is split by file so
+ * every hunk is reviewed instead of truncated away. The untracked-files list is
+ * appended to the last chunk. Returns [] when there is nothing to review.
+ */
+export function chunkReviewInput(d: WorkspaceDiff, maxChars = MAX_DIFF_CHARS): string[] {
+  const untracked = untrackedSection(d.untracked)
+  if (!d.diff && !untracked) return []
+
+  // Small enough to review whole — keep the original single-chunk shape.
+  if (d.diff.length <= maxChars) {
+    const single = formatReviewInput(d)
+    return single.trim() ? [single] : []
+  }
+
+  const packed = packDiffChunks(splitDiffByFile(d.diff), maxChars)
+  const chunks = packed.map(
+    (c, i) => `Diff of changes to tracked files (part ${i + 1} of ${packed.length}):\n\n${c}`
+  )
+  if (untracked) {
+    if (chunks.length) chunks[chunks.length - 1] += `\n\n${untracked}`
+    else chunks.push(untracked)
+  }
+  return chunks
+}
+
+/**
+ * Merge one dimension's per-chunk reviewer reports into a single report: collect
+ * the chunks that found something; treat all-clean as clean and all-failed as an
+ * error (so the caller's clean/error classification still applies).
+ */
+function mergeChunkReports(reports: string[]): string {
+  const findings = reports.filter((r) => !isErrorReport(r) && !isClean(r))
+  if (findings.length) return findings.join('\n\n')
+  if (reports.length > 0 && reports.every(isErrorReport)) {
+    return reports.find((r) => r.trim()) ?? '[subagent error]'
+  }
+  return 'No issues found.'
+}
+
 /** runSubAgent wraps provider failures, aborts, and step-limit hits in bracketed notes. */
 function isErrorReport(report: string): boolean {
   return report.trim() === '' || /^\s*\[subagent (error|aborted|reached)/i.test(report)
@@ -212,8 +288,10 @@ export interface RunReviewOptions {
   provider: Provider
   model: string
   workspace: string
-  /** The composed review input (see formatReviewInput). */
-  diff: string
+  /** The composed review input as a single chunk (see formatReviewInput). */
+  diff?: string
+  /** The review input split into size-bounded chunks (see chunkReviewInput); preferred over `diff`. */
+  chunks?: string[]
   signal: AbortSignal
   /** Override the dimensions to review (default: all three). */
   dimensions?: readonly ReviewDimension[]
@@ -231,24 +309,31 @@ export interface RunReviewOptions {
  * agent. Never throws — reviewer failures surface as notes, not an aborted review.
  */
 export async function runReview(opts: RunReviewOptions): Promise<string> {
-  const { provider, model, workspace, diff, signal } = opts
+  const { provider, model, workspace, signal } = opts
   const runAgent = opts.runAgent ?? runSubAgent
   const dimensions = opts.dimensions ?? REVIEW_DIMENSIONS
 
-  if (!diff.trim()) return 'No changes to review.'
+  // Accept either pre-chunked input or a single diff string (back-compat).
+  const inputs = (opts.chunks ?? (opts.diff !== undefined ? [opts.diff] : [])).filter((s) => s.trim())
+  if (inputs.length === 0) return 'No changes to review.'
   if (signal.aborted) return '[review aborted]'
 
+  // Each dimension reviews every chunk in its own fresh context; merge per dimension.
   const reports = await Promise.all(
     dimensions.map(async (dimension) => {
-      const report = await runAgent({
-        provider,
-        model,
-        workspace,
-        signal,
-        prompt: reviewerPrompt(dimension, diff),
-        systemOverride: reviewerSystem(dimension)
-      })
-      return { dimension, report: report.trim() }
+      const chunkReports = await Promise.all(
+        inputs.map((chunk) =>
+          runAgent({
+            provider,
+            model,
+            workspace,
+            signal,
+            prompt: reviewerPrompt(dimension, chunk),
+            systemOverride: reviewerSystem(dimension)
+          }).then((r) => r.trim())
+        )
+      )
+      return { dimension, report: mergeChunkReports(chunkReports) }
     })
   )
 
@@ -265,6 +350,8 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   }
 
   const candidateText = candidates.map((c) => `### ${c.dimension} findings\n${c.report}`).join('\n\n')
+  // A size-bounded diff for the single verifier's context (it also reads the files).
+  const diffContext = inputs.join('\n\n').slice(0, MAX_DIFF_CHARS)
   const footer =
     'Once you have addressed the confirmed findings, run review_changes again to confirm the fixes and surface anything the changes introduced.'
   const dims = dimensions.join(', ')
@@ -321,7 +408,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     model,
     workspace,
     signal,
-    prompt: verifierPrompt(diff, candidateText),
+    prompt: verifierPrompt(diffContext, candidateText),
     systemOverride: verifierSystem()
   })
 
@@ -366,8 +453,8 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
   if (!d.isRepo) {
     return 'Cannot review: this project is not a git repository, so there is no diff to review. Commit your work in a git repo to use review_changes, or ask me to review specific files directly.'
   }
-  const input = formatReviewInput(d)
-  if (!input.trim()) {
+  const chunks = chunkReviewInput(d)
+  if (chunks.length === 0) {
     const against = base !== 'HEAD' ? ` against ${base}` : ''
     const scope = paths.length ? ` in ${paths.join(', ')}` : ''
     return `No uncommitted changes to review${scope}${against}.`
@@ -376,7 +463,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     provider: opts.provider,
     model: opts.model,
     workspace: opts.workspace,
-    diff: input,
+    chunks,
     effort: opts.effort,
     signal: opts.signal,
     runAgent: opts.runAgent

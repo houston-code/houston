@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import type { SubAgentOptions } from './subagent'
 import {
+  chunkReviewInput,
   formatReviewInput,
   isSafeReviewPath,
   parseFindings,
   reviewWorkspaceChanges,
   runReview,
+  splitDiffByFile,
   verifierSystem,
   type RunReviewOptions
 } from './review'
@@ -67,6 +69,38 @@ describe('formatReviewInput', () => {
   })
 })
 
+describe('splitDiffByFile', () => {
+  it('splits a unified diff on file boundaries', () => {
+    const parts = splitDiffByFile('diff --git a/a.ts b/a.ts\n+x\ndiff --git a/b.ts b/b.ts\n+y')
+    expect(parts).toHaveLength(2)
+    expect(parts[0]).toContain('a/a.ts')
+    expect(parts[1]).toContain('a/b.ts')
+  })
+})
+
+describe('chunkReviewInput', () => {
+  it('returns a single chunk for a small diff', () => {
+    const chunks = chunkReviewInput({ isRepo: true, diff: 'diff --git a/a b/a\n+x', untracked: [] })
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]).toContain('git diff')
+    expect(chunks[0]).not.toContain('part 1 of')
+  })
+
+  it('splits a large diff by file and appends untracked files to the last chunk', () => {
+    const fileA = 'diff --git a/a.ts b/a.ts\n@@ @@\n+' + 'a'.repeat(40)
+    const fileB = 'diff --git a/b.ts b/b.ts\n@@ @@\n+' + 'b'.repeat(40)
+    const chunks = chunkReviewInput({ isRepo: true, diff: `${fileA}\n${fileB}`, untracked: ['n.ts'] }, 30)
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]).toContain('part 1 of 2')
+    expect(chunks[1]).toContain('part 2 of 2')
+    expect(chunks[1]).toContain('n.ts') // untracked rides on the last chunk
+  })
+
+  it('returns [] when there is nothing to review', () => {
+    expect(chunkReviewInput({ isRepo: true, diff: '', untracked: [] })).toEqual([])
+  })
+})
+
 describe('runReview', () => {
   it('reviews each dimension in its own context, then verifies the findings', async () => {
     const { fn, calls } = fakeAgent((o) => {
@@ -112,6 +146,22 @@ describe('runReview', () => {
     const out = await runReview(base({ diff: '   ', runAgent: fn }))
     expect(calls).toHaveLength(0)
     expect(out).toBe('No changes to review.')
+  })
+
+  it('reviews every chunk per dimension and merges findings across chunks', async () => {
+    const { fn, calls } = fakeAgent((o) => {
+      if (isVerifier(o)) return '- [high] b.ts:1 — confirmed\nConfirmed 1 of 1 candidate findings.'
+      // A finding lives only in chunk B; chunk A and other dimensions are clean.
+      return dimensionOf(o) === 'CORRECTNESS' && o.prompt.includes('CHUNK_B')
+        ? '- [SEVERITY: high] b.ts:1 — chunk-b bug'
+        : 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn, chunks: ['CHUNK_A diff', 'CHUNK_B diff'] }))
+    // 3 dimensions × 2 chunks = 6 reviewer calls (skeptics not used at normal effort).
+    expect(calls.filter((c) => !isVerifier(c))).toHaveLength(6)
+    // The chunk-B finding is merged into the candidates handed to the verifier.
+    expect(calls.find(isVerifier)!.prompt).toContain('chunk-b bug')
+    expect(out).toContain('confirmed')
   })
 
   it('surfaces a reviewer that failed as a note', async () => {

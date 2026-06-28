@@ -87,6 +87,7 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   telling you it's done. Review the whole diff, a different `base` (e.g. a branch),
   or scope it to specific `paths`; raise `effort` to `high` to verify each finding
   with several independent skeptics (majority-confirmed) for high-stakes changes.
+  Large diffs are split by file across reviewers, so nothing is skipped.
 - **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
   a specialized read-only subagent (front-matter `description` + a system-prompt
   body) — the main agent can dispatch it by name. An optional front-matter `tools:`
