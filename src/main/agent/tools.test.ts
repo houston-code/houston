@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, realpathSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, realpathSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -1165,5 +1165,58 @@ describe('gh output formatters', () => {
   it('formatters fall back to raw text on non-JSON input', () => {
     expect(formatPrList('not json')).toBe('not json')
     expect(formatPrView('')).toBe('[no output]')
+  })
+})
+
+describe('symlink confinement (file tools run outside the sandbox)', () => {
+  // A repo can ship a tracked symlink that points outside the workspace; the file
+  // tools must not read or write through it, even though the path is lexically
+  // inside the workspace. These tools run in the main process, not the sandbox,
+  // so resolveInRoots' realpath check is the only confinement.
+  let outside: string
+  beforeEach(() => {
+    outside = realpathSync(mkdtempSync(join(tmpdir(), 'houston-outside-')))
+    writeFileSync(join(outside, 'secret.txt'), 'SECRET')
+    // `escape-file` -> outside/secret.txt ; `escape-dir` -> outside/
+    symlinkSync(join(outside, 'secret.txt'), join(workspace, 'escape-file'))
+    symlinkSync(outside, join(workspace, 'escape-dir'))
+  })
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('read_file refuses a symlink that resolves outside the workspace', async () => {
+    await expect(run('read_file', { path: 'escape-file' })).rejects.toThrow(/symlink/i)
+  })
+
+  it('write_file refuses to write through a symlink (target stays untouched)', async () => {
+    await expect(run('write_file', { path: 'escape-file', content: 'PWNED' })).rejects.toThrow(/symlink/i)
+    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('SECRET')
+  })
+
+  it('write_file refuses a path under a symlinked directory (no file created outside)', async () => {
+    await expect(run('write_file', { path: 'escape-dir/new.txt', content: 'x' })).rejects.toThrow(/symlink/i)
+    expect(existsSync(join(outside, 'new.txt'))).toBe(false)
+  })
+
+  it('edit_file refuses a symlink that resolves outside the workspace', async () => {
+    await expect(
+      run('edit_file', { path: 'escape-file', old_string: 'SECRET', new_string: 'x' })
+    ).rejects.toThrow(/symlink/i)
+    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('SECRET')
+  })
+
+  it('apply_patch refuses to add a file under a symlinked directory', async () => {
+    const p = ['*** Begin Patch', '*** Add File: escape-dir/p.txt', '+pwned', '*** End Patch'].join('\n')
+    await expect(run('apply_patch', { patch: p })).rejects.toThrow(/symlink/i)
+    expect(existsSync(join(outside, 'p.txt'))).toBe(false)
+  })
+
+  it('still allows a symlink that resolves to a location INSIDE the workspace', async () => {
+    writeFileSync(join(workspace, 'real.txt'), 'inside')
+    symlinkSync(join(workspace, 'real.txt'), join(workspace, 'inside-link'))
+    expect(await run('read_file', { path: 'inside-link' })).toBe('inside')
+    await run('write_file', { path: 'inside-link', content: 'updated' })
+    expect(readFileSync(join(workspace, 'real.txt'), 'utf8')).toBe('updated')
   })
 })
