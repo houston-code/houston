@@ -206,9 +206,21 @@ export interface ConversationUsage {
   cost: number
 }
 
+/**
+ * The error that ended a conversation's most recent run, persisted so the "last
+ * turn failed" state — and its Retry affordance — survive a reload or restart. Set
+ * only when a run ends in an error (never on a natural or aborted end) and cleared
+ * when the next run starts, so it never lingers as a stale failure.
+ */
+export interface ConversationError {
+  message: string
+}
+
 export interface Conversation extends ConversationMeta {
   messages: ChatMessage[]
   usage?: ConversationUsage
+  /** Present when the most recent run failed; powers the persisted Retry banner. */
+  lastError?: ConversationError
 }
 
 /** Internal input to the agent loop. */

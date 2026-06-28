@@ -46,8 +46,11 @@ export interface ChatController {
   revertCheckpoint: () => Promise<number>
   /** Re-apply a reverted checkpoint's file changes. Returns the count re-applied. */
   reapplyCheckpoint: () => Promise<number>
-  /** Replace the transcript and (optionally) seed usage, e.g. when switching conversations. */
-  reset: (items: DisplayItem[], usage?: SessionUsage | null) => void
+  /**
+   * Replace the transcript and (optionally) seed usage and the errored flag, e.g.
+   * when switching conversations — `errored` restores the persisted Retry banner.
+   */
+  reset: (items: DisplayItem[], usage?: SessionUsage | null, errored?: boolean) => void
   /**
    * Re-attach to a run already in flight in the main process — e.g. after
    * switching back to a conversation whose run kept going in the background.
@@ -189,14 +192,19 @@ export function useChat(conversationId: string | null = null): ChatController {
     return reapplied
   }, [checkpoint])
 
-  const reset = useCallback((next: DisplayItem[], nextUsage: SessionUsage | null = null) => {
-    setItems(next)
-    setRunning(false)
-    setUsage(nextUsage)
-    setCheckpoint(null)
-    setErrored(false)
-    runIdRef.current = null
-  }, [])
+  const reset = useCallback(
+    (next: DisplayItem[], nextUsage: SessionUsage | null = null, nextErrored = false) => {
+      setItems(next)
+      setRunning(false)
+      setUsage(nextUsage)
+      setCheckpoint(null)
+      // Seed from the conversation's persisted failure so a reload restores the
+      // "last turn failed" banner; a live run we adopt afterwards clears it.
+      setErrored(nextErrored)
+      runIdRef.current = null
+    },
+    []
+  )
 
   const adopt = useCallback((runId: string) => {
     runIdRef.current = runId

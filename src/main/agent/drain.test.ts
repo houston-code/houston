@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   startRun: vi.fn(),
   getConversation: vi.fn(),
   setMessages: vi.fn(),
+  setConversationError: vi.fn(),
   updateConversationMeta: vi.fn(),
   maybeGenerateTitle: vi.fn(() => Promise.resolve())
 }))
@@ -20,6 +21,7 @@ vi.mock('./title', () => ({ maybeGenerateTitle: h.maybeGenerateTitle }))
 vi.mock('../conversations', () => ({
   getConversation: h.getConversation,
   setMessages: h.setMessages,
+  setConversationError: h.setConversationError,
   updateConversationMeta: h.updateConversationMeta
 }))
 
@@ -108,6 +110,10 @@ describe('runAndDrain', () => {
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
     expect(h.maybeGenerateTitle).not.toHaveBeenCalled() // no auto-title on error
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A']) // still held
+    // The failure is persisted so the Retry banner survives a reload — cleared at
+    // run start, then re-set with the error message once the run ends.
+    expect(h.setConversationError).toHaveBeenNthCalledWith(1, cid, null)
+    expect(h.setConversationError).toHaveBeenLastCalledWith(cid, { message: 'kaboom' })
     clearQueue(cid)
   })
 
@@ -124,6 +130,10 @@ describe('runAndDrain', () => {
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
     expect(h.maybeGenerateTitle).not.toHaveBeenCalled() // no auto-title on abort
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A'])
+    // An abort isn't a failure to retry: the marker is cleared at start and never
+    // re-set, so no Retry banner is persisted.
+    expect(h.setConversationError).toHaveBeenCalledWith(cid, null)
+    expect(h.setConversationError).not.toHaveBeenCalledWith(cid, expect.objectContaining({ message: expect.anything() }))
     clearQueue(cid)
   })
 

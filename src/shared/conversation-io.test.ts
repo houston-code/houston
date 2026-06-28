@@ -192,6 +192,7 @@ describe('forkConversationData', () => {
     archived: true,
     groupId: 'g1',
     usage: { inputTokens: 10, outputTokens: 20, cost: 0.01 },
+    lastError: { message: 'boom' },
     messages: [{ role: 'user', content: 'hi' }]
   }
 
@@ -208,6 +209,11 @@ describe('forkConversationData', () => {
     expect(fork.pinned).toBeUndefined()
     expect(fork.archived).toBeUndefined()
     expect(fork.groupId).toBeUndefined()
+  })
+
+  it("does not inherit the source's failed-turn marker", () => {
+    const fork = forkConversationData(src, 'new-id', 99)
+    expect(fork.lastError).toBeUndefined()
   })
 
   it('copies messages into an independent array', () => {
