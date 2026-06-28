@@ -218,7 +218,7 @@ describe('gitDiff', () => {
       if (args[0] === 'ls-files') return 'new.ts\nother.ts\n'
       return ''
     }
-    const d = await gitDiff('/ws', 'HEAD', exec)
+    const d = await gitDiff('/ws', 'HEAD', [], exec)
     expect(d.isRepo).toBe(true)
     expect(d.diff).toContain('+changed')
     expect(d.untracked).toEqual(['new.ts', 'other.ts'])
@@ -228,7 +228,7 @@ describe('gitDiff', () => {
     const exec = async (): Promise<string> => {
       throw new Error('not a git repository')
     }
-    const d = await gitDiff('/ws', 'HEAD', exec)
+    const d = await gitDiff('/ws', 'HEAD', [], exec)
     expect(d).toEqual({ isRepo: false, diff: '', untracked: [] })
   })
 
@@ -239,7 +239,7 @@ describe('gitDiff', () => {
       if (args[0] === 'ls-files') return 'first.ts\n'
       return ''
     }
-    const d = await gitDiff('/ws', 'HEAD', exec)
+    const d = await gitDiff('/ws', 'HEAD', [], exec)
     expect(d.isRepo).toBe(true)
     expect(d.diff).toBe('')
     expect(d.untracked).toEqual(['first.ts'])
@@ -252,9 +252,24 @@ describe('gitDiff', () => {
       if (args[0] === 'rev-parse') return 'true\n'
       return ''
     }
-    const d = await gitDiff('/ws', '--output=/tmp/pwn', exec)
+    const d = await gitDiff('/ws', '--output=/tmp/pwn', [], exec)
     expect(d.isRepo).toBe(true)
     expect(seen.some((a) => a[0] === 'diff')).toBe(false) // the dangerous arg never reached git diff
+  })
+
+  it('passes a path filter as a pathspec after --', async () => {
+    const seen: string[][] = []
+    const exec = async (args: string[]): Promise<string> => {
+      seen.push(args)
+      if (args[0] === 'rev-parse') return 'true\n'
+      return ''
+    }
+    await gitDiff('/ws', 'HEAD', ['src/api', 'README.md'], exec)
+    const diffArgs = seen.find((a) => a[0] === 'diff')!
+    const lsArgs = seen.find((a) => a[0] === 'ls-files')!
+    // The paths come strictly after the `--` separator (can't be read as options).
+    expect(diffArgs.slice(diffArgs.indexOf('--'))).toEqual(['--', 'src/api', 'README.md'])
+    expect(lsArgs.slice(lsArgs.indexOf('--'))).toEqual(['--', 'src/api', 'README.md'])
   })
 })
 

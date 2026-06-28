@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest'
 import type { SubAgentOptions } from './subagent'
 import {
   formatReviewInput,
+  isSafeReviewPath,
   reviewWorkspaceChanges,
   runReview,
+  verifierSystem,
   type RunReviewOptions
 } from './review'
 import type { GitExec } from './git'
@@ -84,6 +86,14 @@ describe('runReview', () => {
     expect(verifierCalls[0].prompt).toContain('off-by-one')
     expect(out).toContain('confirmed bug')
     expect(out).toContain('separate context')
+    // Findings present → nudge the agent to re-review after fixing them.
+    expect(out).toContain('run review_changes again')
+  })
+
+  it('does not add the re-review nudge to a clean review', async () => {
+    const { fn } = fakeAgent(() => 'No issues found.')
+    const out = await runReview(base({ runAgent: fn }))
+    expect(out).not.toContain('run review_changes again')
   })
 
   it('short-circuits without a verifier when every reviewer is clean', async () => {
@@ -128,6 +138,26 @@ describe('runReview', () => {
     const out = await runReview(base({ runAgent: fn, signal: ac.signal }))
     expect(calls).toHaveLength(0)
     expect(out).toContain('aborted')
+  })
+})
+
+describe('verifierSystem', () => {
+  it('instructs the verifier to merge duplicate findings', () => {
+    expect(verifierSystem().toLowerCase()).toContain('merge them into a single finding')
+  })
+})
+
+describe('isSafeReviewPath', () => {
+  it('accepts project-relative paths', () => {
+    for (const p of ['src', 'src/api/index.ts', 'a/b/c.tsx', 'README.md']) {
+      expect(isSafeReviewPath(p)).toBe(true)
+    }
+  })
+
+  it('rejects absolute paths, parent-climbing, and empties', () => {
+    for (const p of ['/etc/passwd', '../secrets', 'a/../../b', '..', '', '   ', 'C:\\win']) {
+      expect(isSafeReviewPath(p)).toBe(false)
+    }
   })
 })
 
@@ -201,5 +231,44 @@ describe('reviewWorkspaceChanges', () => {
     })
     expect(calls.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toContain('no issues found across')
+  })
+
+  it('rejects an unsafe review path before touching git', async () => {
+    let execCalled = false
+    const out = await reviewWorkspaceChanges({
+      provider: base().provider,
+      model: 'm',
+      workspace: '/ws',
+      paths: ['../etc/passwd'],
+      signal: new AbortController().signal,
+      gitExec: async () => {
+        execCalled = true
+        return ''
+      },
+      runAgent: fakeAgent(() => 'unused').fn
+    })
+    expect(out).toContain('Invalid review path')
+    expect(execCalled).toBe(false)
+  })
+
+  it('scopes the diff to the given paths and reports them when clean', async () => {
+    const seen: string[][] = []
+    const out = await reviewWorkspaceChanges({
+      provider: base().provider,
+      model: 'm',
+      workspace: '/ws',
+      paths: ['src/api'],
+      signal: new AbortController().signal,
+      gitExec: async (args) => {
+        seen.push(args)
+        if (args[0] === 'rev-parse') return 'true'
+        return ''
+      },
+      runAgent: fakeAgent(() => 'unused').fn
+    })
+    const diffArgs = seen.find((a) => a[0] === 'diff')!
+    expect(diffArgs).toContain('src/api')
+    expect(out).toContain('No uncommitted changes')
+    expect(out).toContain('src/api')
   })
 })
