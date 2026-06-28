@@ -509,7 +509,7 @@ body.is-resizing {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 8px 7px 10px;
+  padding: 4px 8px 4px 10px;
   border-radius: 8px;
   cursor: pointer;
 }
@@ -535,12 +535,14 @@ body.is-resizing {
 }
 .conv__title {
   font-size: 13px;
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .conv__meta {
   font-size: 11px;
+  line-height: 1.25;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
