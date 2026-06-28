@@ -255,6 +255,18 @@ export function isEditableTarget(el: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true
 }
 
+/**
+ * When a key event lands inside the integrated terminal, decide whether the shell
+ * keeps it (true) or the app handles it as a shortcut (false). The terminal toggle
+ * always reaches the app. ⌘-chords are macOS app shortcuts that the shell never
+ * receives, so they reach the app too; everything else — Ctrl keys (the shell's own
+ * Ctrl+C/R/A…) and plain keys — belongs to the shell.
+ */
+export function terminalKeepsKey(action: ShortcutId | null, hasMeta: boolean): boolean {
+  if (action === 'toggle-terminal') return false
+  return !hasMeta
+}
+
 /** Best-effort macOS detection, for rendering ⌘/⇧/⌥ glyphs instead of Ctrl/Shift/Alt. */
 export function isMacPlatform(): boolean {
   if (typeof navigator === 'undefined') return false
