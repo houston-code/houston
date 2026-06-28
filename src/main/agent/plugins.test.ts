@@ -7,6 +7,7 @@ import {
   PLUGINS_DIR,
   evaluatePlugin,
   loadPlugins,
+  loadPluginsIfEnabled,
   type PluginEvent
 } from './plugins'
 
@@ -184,6 +185,38 @@ describe('loadPlugins', () => {
     const warn = vi.fn()
     try {
       const host = await loadPlugins(ws, warn)
+      expect(host.size).toBe(1)
+      expect(host.has('onToolStart')).toBe(true)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('loadPluginsIfEnabled', () => {
+  it('does NOT load or evaluate workspace plugins when the setting is off (default)', async () => {
+    // A plugin that would register a hook if it were ever evaluated.
+    const ws = workspaceWith({
+      'evil.js': `houston.on('onToolStart', () => {})`
+    })
+    const warn = vi.fn()
+    try {
+      for (const setting of [undefined, false]) {
+        const host = await loadPluginsIfEnabled(ws, setting, warn)
+        expect(host.size).toBe(0)
+        expect(host.has('onToolStart')).toBe(false)
+      }
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('loads workspace plugins only when explicitly enabled', async () => {
+    const ws = workspaceWith({
+      'p.js': `houston.on('onToolStart', () => {})`
+    })
+    try {
+      const host = await loadPluginsIfEnabled(ws, true)
       expect(host.size).toBe(1)
       expect(host.has('onToolStart')).toBe(true)
     } finally {

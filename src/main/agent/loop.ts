@@ -39,7 +39,7 @@ import { captureLocalhost } from './viewlocalhost'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills } from './skills'
-import { loadPlugins } from './plugins'
+import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { githubContext, resolveGh, runGh } from './github'
@@ -248,9 +248,12 @@ export async function startRun(
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
     const skills = await loadSkills(workspace)
-    // Local trusted plugins (.houston/plugins/*.js) register observational
-    // lifecycle hooks — see plugins.ts for the trust boundary.
-    const plugins = await loadPlugins(workspace)
+    // Local plugins (.houston/plugins/*.js) register observational lifecycle
+    // hooks. They are executable JS run in-process and `vm` is not a security
+    // boundary, so they are NEVER auto-run for an opened repo — only when the user
+    // has explicitly opted into project plugins for a trusted project. See
+    // plugins.ts for the trust boundary.
+    const plugins = await loadPluginsIfEnabled(workspace, settings.projectPlugins)
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(agents, skills)
     // Git + GitHub awareness folded into the prompt. githubContext is a pure PATH
