@@ -5,7 +5,7 @@
  * is the primary control: the user sees and approves the exact URL on each call.
  * On top of that we apply best-effort SSRF guards — an http(s)-only scheme
  * allowlist and a private/loopback/link-local host block re-checked on every
- * redirect hop. (DNS-rebinding via IP pinning is a documented follow-up.)
+ * redirect hop. (DNS-rebinding via IP pinning is deferred — see ROADMAP.md.)
  */
 
 const MAX_REDIRECTS = 5

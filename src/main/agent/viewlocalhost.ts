@@ -117,7 +117,7 @@ export function validateLocalhostUrl(raw: string): URL {
  * could `fetch('http://169.254.169.254/...')` or a LAN service and leak it via
  * the screenshot or console. An empty host (data:/blob:/about:) is not network
  * egress and is allowed. Like webfetch, this matches on the URL's host literal,
- * so a DNS name resolving to a private IP is a known, documented gap.
+ * so a DNS name resolving to a private IP is a known gap (deferred — see ROADMAP.md).
  */
 export function isBlockedSubresourceHost(hostname: string): boolean {
   if (!hostname) return false
