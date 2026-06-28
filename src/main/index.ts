@@ -1,6 +1,7 @@
-import { app, shell, screen, BrowserWindow } from 'electron'
+import { app, screen, BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import { APP_NAME } from '@shared/constants'
+import { openExternalSafely } from './safeExternal'
 import { loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { registerIpc } from './ipc'
 import { buildAppMenu } from './menu'
@@ -72,9 +73,11 @@ function createWindow(): void {
   mainWindow.on('resize', rememberBounds)
   mainWindow.on('move', rememberBounds)
 
-  // Open external links in the user's browser, never in-app.
+  // Open external links in the user's browser, never in-app — and only http(s)/
+  // mailto, so a crafted link in rendered content (markdown, terminal output)
+  // can't route a dangerous scheme (file:, custom app URLs) to openExternal.
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    void shell.openExternal(details.url)
+    openExternalSafely(details.url)
     return { action: 'deny' }
   })
 

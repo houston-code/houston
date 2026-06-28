@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, shell } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import type { MessageBoxOptions } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
@@ -6,6 +6,7 @@ import { IPC } from '@shared/constants'
 import { highlightsFor, type UpdateCheckResult, type WhatsNew } from '@shared/update'
 import { shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
 import { readLastSeenVersion, writeLastSeenVersion } from './update-state'
+import { openExternalSafely } from './safeExternal'
 
 /**
  * App updates, in two parts:
@@ -185,7 +186,7 @@ export async function checkForUpdatesFromMenu(): Promise<void> {
   const { options, downloadUrl } = menuUpdateDialog(result)
   const win = BrowserWindow.getFocusedWindow() ?? undefined
   const { response } = await dialog.showMessageBox(win!, options)
-  if (downloadUrl && response === 0) void shell.openExternal(downloadUrl)
+  if (downloadUrl && response === 0) openExternalSafely(downloadUrl)
 }
 
 /**
