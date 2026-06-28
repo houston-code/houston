@@ -118,6 +118,42 @@ describe('Sidebar — expanded rendering', () => {
     expect(within(plainRow).queryByTitle('Pinned')).not.toBeInTheDocument()
   })
 
+  it('shows the repo name alongside the branch for a worktree chat', () => {
+    const props = baseProps({
+      conversations: [
+        makeConv({
+          id: 'wt',
+          title: 'Worktree chat',
+          worktree: {
+            path: '/Users/me/projects/houston/.worktrees/feat-x',
+            branch: 'feat/x',
+            repoRoot: '/Users/me/projects/houston'
+          }
+        })
+      ]
+    })
+    render(<Sidebar {...props} />)
+
+    const row = screen.getByText('Worktree chat').closest('.conv') as HTMLElement
+    const meta = row.querySelector('.conv__meta') as HTMLElement
+    // Repo basename (from repoRoot) precedes the branch on the meta line.
+    expect(meta).toHaveTextContent('houston')
+    const branch = within(meta).getByText('⑂ feat/x')
+    expect(branch).toHaveClass('conv__branch')
+  })
+
+  it('shows the workspace basename (no branch) for a non-worktree chat', () => {
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Plain chat' })]
+    })
+    render(<Sidebar {...props} />)
+
+    const row = screen.getByText('Plain chat').closest('.conv') as HTMLElement
+    const meta = row.querySelector('.conv__meta') as HTMLElement
+    expect(meta).toHaveTextContent('houston')
+    expect(meta.querySelector('.conv__branch')).toBeNull()
+  })
+
   it('groups custom-grouped chats under their group header (with count)', () => {
     const groups: ChatGroup[] = [{ id: 'g1', name: 'Work' }]
     const props = baseProps({
