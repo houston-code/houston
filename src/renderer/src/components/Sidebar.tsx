@@ -121,19 +121,22 @@ function ConvRow({
   onStartRenameGroup: (id: string) => void
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [dragging, setDragging] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const close = (): void => setMenuOpen(false)
 
   return (
     <div
-      className={`conv ${active ? 'conv--active' : ''}`}
+      className={`conv ${active ? 'conv--active' : ''} ${dragging ? 'conv--dragging' : ''}`}
       // Renaming swaps in a text input; dragging would hijack its selection.
       draggable={!renaming}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData(CONV_DRAG_MIME, conv.id)
         e.dataTransfer.setData('text/plain', conv.id)
+        setDragging(true)
       }}
+      onDragEnd={() => setDragging(false)}
       onClick={() => !renaming && props.onSelect(conv.id)}
     >
       {conv.pinned && <span className="conv__pin" title="Pinned">★</span>}
@@ -519,7 +522,7 @@ function SidebarSectionView({
 
   return (
     <div
-      className={`section ${dropAt !== null ? 'section--drop' : ''}`}
+      className="section"
       onDragOver={droppable ? onDragOver : undefined}
       onDragLeave={droppable ? onDragLeave : undefined}
       onDrop={droppable ? onDrop : undefined}

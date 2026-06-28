@@ -622,7 +622,7 @@ describe('Sidebar — drag a chat onto a group', () => {
     expect(props.onReorder).not.toHaveBeenCalled()
   })
 
-  it('shows a drop indicator at the slot the chat would land in', () => {
+  it('shows only a drop-indicator line — not a whole-section highlight', () => {
     const props = baseProps({
       groups: [{ id: 'g1', name: 'Work' }],
       conversations: [
@@ -638,12 +638,28 @@ describe('Sidebar — drag a chat onto a group', () => {
     expect(container.querySelector('.conv-drop-line')).toBeNull()
 
     fireDrag('dragOver', section, dataTransfer, 2)
-    expect(section).toHaveClass('section--drop')
+    // The section itself is never box-highlighted; only the insertion line shows.
+    expect(section).not.toHaveClass('section--drop')
     expect(container.querySelector('.conv-drop-line')).not.toBeNull()
 
     fireEvent.dragLeave(section, { dataTransfer, relatedTarget: document.body })
-    expect(section).not.toHaveClass('section--drop')
     expect(container.querySelector('.conv-drop-line')).toBeNull()
+  })
+
+  it('dims the dragged chat while it is being dragged', () => {
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Alpha' })]
+    })
+    render(<Sidebar {...props} />)
+
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    expect(row).not.toHaveClass('conv--dragging')
+
+    startConvDrag('Alpha')
+    expect(row).toHaveClass('conv--dragging')
+
+    fireEvent.dragEnd(row)
+    expect(row).not.toHaveClass('conv--dragging')
   })
 
   it('does not accept drops on the Pinned section (pinning is independent of groups)', () => {
@@ -653,12 +669,13 @@ describe('Sidebar — drag a chat onto a group', () => {
         makeConv({ id: 'a', title: 'Alpha' })
       ]
     })
-    render(<Sidebar {...props} />)
+    const { container } = render(<Sidebar {...props} />)
 
     const dataTransfer = startConvDrag('Alpha')
     const pinned = sectionOf('Pinned')
     fireEvent.dragOver(pinned, { dataTransfer })
-    expect(pinned).not.toHaveClass('section--drop')
+    // No drop target → no insertion line — and a drop does nothing.
+    expect(container.querySelector('.conv-drop-line')).toBeNull()
     fireEvent.drop(pinned, { dataTransfer })
     expect(props.onReorder).not.toHaveBeenCalled()
   })
