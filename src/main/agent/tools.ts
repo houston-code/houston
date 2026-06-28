@@ -62,7 +62,7 @@ export interface ToolContext {
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
   dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
   /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
-  dispatchReview?: (base?: string, paths?: string[]) => Promise<string>
+  dispatchReview?: (base?: string, paths?: string[], effort?: 'normal' | 'high') => Promise<string>
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
@@ -1132,6 +1132,12 @@ const reviewChanges: ToolDef = {
           items: { type: 'string' },
           description:
             'Optional: limit the review to these project-relative paths/directories (e.g. ["src/api"]). Default: the whole diff.'
+        },
+        effort: {
+          type: 'string',
+          enum: ['normal', 'high'],
+          description:
+            "Verification depth. 'high' verifies each finding with several independent skeptics and keeps only the majority-confirmed ones (more thorough, more model calls); 'normal' uses a single verifier. Default 'normal' — use 'high' for security-sensitive or high-stakes changes."
         }
       },
       []
@@ -1142,7 +1148,8 @@ const reviewChanges: ToolDef = {
     const paths = Array.isArray(args.paths)
       ? args.paths.filter((p): p is string => typeof p === 'string' && p.length > 0)
       : undefined
-    return ctx.dispatchReview(str(args, 'base') || undefined, paths)
+    const effort = str(args, 'effort') === 'high' ? 'high' : undefined
+    return ctx.dispatchReview(str(args, 'base') || undefined, paths, effort)
   }
 }
 

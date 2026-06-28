@@ -17,8 +17,24 @@ import { gitDiff, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
 export const REVIEW_DIMENSIONS = ['correctness', 'security', 'quality'] as const
 export type ReviewDimension = (typeof REVIEW_DIMENSIONS)[number]
 
+/**
+ * Verification depth. `normal` runs a single verifier over all candidate findings
+ * (fast, cheap). `high` verifies each finding independently with several skeptics
+ * and keeps only the majority-confirmed ones (more thorough, more model calls) —
+ * diversity catches false positives one verifier, anchored on the candidate list,
+ * can miss.
+ */
+export const REVIEW_EFFORTS = ['normal', 'high'] as const
+export type ReviewEffort = (typeof REVIEW_EFFORTS)[number]
+
 /** Cap the diff embedded in each prompt; reviewers read the files for the rest. */
 const MAX_DIFF_CHARS = 50_000
+
+/** Independent skeptics per finding, and the confirmations needed, in high effort. */
+const VOTES_PER_FINDING = 3
+const VOTES_TO_CONFIRM = 2
+/** Bound the high-effort fan-out so a huge finding list can't spawn unbounded calls. */
+const MAX_VERIFIED_FINDINGS = 20
 
 const DIMENSION_FOCUS: Record<ReviewDimension, string> = {
   correctness:
@@ -77,6 +93,24 @@ Candidate findings to verify:
 ${candidates}`
 }
 
+/** The system prompt for a single-finding skeptic (high-effort verification). */
+export function skepticSystem(): string {
+  return `You are a skeptical verifier checking ONE candidate finding from a code review, in a fresh context. Decide whether it describes a real, reproducible problem in the actual code — not a misreading, not something already handled elsewhere, not a hypothetical.
+
+Read the referenced files (read_file, search_files, glob, list_dir) to check; do not trust the finding's wording. Be conservative: if you cannot reproduce the problem or are unsure, REJECT — a false alarm wastes the author's time.
+
+Reply with CONFIRMED or REJECTED as the very first word, then one sentence of justification.`
+}
+
+/** The user turn handed to a single-finding skeptic. */
+export function skepticPrompt(finding: string): string {
+  return `Candidate finding:
+
+${finding}
+
+Verify it against the actual code in the project, then answer CONFIRMED or REJECTED.`
+}
+
 /**
  * Compose the review input from a workspace diff: the (size-capped) tracked diff
  * plus a list of new untracked files for the reviewer to read in full. Returns ''
@@ -108,6 +142,61 @@ function isClean(report: string): boolean {
   return /^\s*no issues found\.?\s*$/i.test(report)
 }
 
+const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+
+/** A single candidate finding split out of the reviewers' reports. */
+export interface ParsedFinding {
+  dimension: string
+  severity: string
+  /** The finding's full text block (bullet + its continuation lines). */
+  text: string
+}
+
+/** Lowest severity rank is most severe; unknown severities sort last. */
+function severityOf(text: string): string {
+  const m = text.match(/\[(?:severity:\s*)?(critical|high|medium|low)/i)
+  return m ? m[1].toLowerCase() : 'low'
+}
+
+/**
+ * Split the concatenated reviewer reports into individual findings. A finding
+ * starts at a `- [SEVERITY...]` bullet and runs until the next bullet or the next
+ * `### <dimension> findings` header. Tolerant: returns [] when nothing parses,
+ * which the caller treats as a signal to fall back to whole-report verification.
+ */
+export function parseFindings(candidateText: string): ParsedFinding[] {
+  const findings: ParsedFinding[] = []
+  let dimension = 'review'
+  let current: string[] | null = null
+  const flush = (): void => {
+    if (current) {
+      const text = current.join('\n').trim()
+      if (text) findings.push({ dimension, severity: severityOf(text), text })
+    }
+    current = null
+  }
+  for (const line of candidateText.split('\n')) {
+    const header = line.match(/^###\s+(\w+)\s+findings/i)
+    if (header) {
+      flush()
+      dimension = header[1].toLowerCase()
+    } else if (/^\s*-\s*\[/.test(line)) {
+      flush()
+      current = [line]
+    } else if (current) {
+      current.push(line)
+    }
+  }
+  flush()
+  return findings
+}
+
+/** A skeptic confirms a finding only when its reply opens with CONFIRMED. */
+function isConfirmed(verdict: string): boolean {
+  const firstLine = verdict.split('\n').map((l) => l.trim()).find(Boolean) ?? ''
+  return /^confirmed\b/i.test(firstLine)
+}
+
 /**
  * A review path filter must be a relative path that stays inside the workspace —
  * no absolute paths and no `..` segments climbing out. (git pathspecs after `--`
@@ -128,15 +217,18 @@ export interface RunReviewOptions {
   signal: AbortSignal
   /** Override the dimensions to review (default: all three). */
   dimensions?: readonly ReviewDimension[]
+  /** Verification depth (default 'normal'). 'high' verifies each finding by vote. */
+  effort?: ReviewEffort
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
 }
 
 /**
  * Run the review: fan out one read-only reviewer per dimension (parallel, each in
- * its own fresh context), then run a skeptical verifier over the surviving
- * candidate findings. Returns a single report for the parent agent. Never throws —
- * reviewer failures surface as notes rather than aborting the whole review.
+ * its own fresh context), then verify the surviving candidate findings — with a
+ * single skeptic over the whole list ('normal') or several independent skeptics
+ * per finding, majority-confirmed ('high'). Returns a single report for the parent
+ * agent. Never throws — reviewer failures surface as notes, not an aborted review.
  */
 export async function runReview(opts: RunReviewOptions): Promise<string> {
   const { provider, model, workspace, diff, signal } = opts
@@ -173,6 +265,57 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   }
 
   const candidateText = candidates.map((c) => `### ${c.dimension} findings\n${c.report}`).join('\n\n')
+  const footer =
+    'Once you have addressed the confirmed findings, run review_changes again to confirm the fixes and surface anything the changes introduced.'
+  const dims = dimensions.join(', ')
+
+  // High effort: verify each finding independently by majority vote of skeptics.
+  // Falls back to the single-verifier path if the reports don't parse into findings.
+  if ((opts.effort ?? 'normal') === 'high') {
+    const findings = parseFindings(candidateText)
+    if (findings.length > 0) {
+      const toVerify = findings.slice(0, MAX_VERIFIED_FINDINGS)
+      if (findings.length > toVerify.length) {
+        notes.push(
+          `⚠ ${findings.length} candidate findings exceeded the per-review verification cap; verified the first ${toVerify.length}.`
+        )
+      }
+      const verdicts = await Promise.all(
+        toVerify.map(async (f) => {
+          const votes = await Promise.all(
+            Array.from({ length: VOTES_PER_FINDING }, () =>
+              runAgent({
+                provider,
+                model,
+                workspace,
+                signal,
+                prompt: skepticPrompt(f.text),
+                systemOverride: skepticSystem()
+              })
+            )
+          )
+          return { finding: f, confirms: votes.filter(isConfirmed).length }
+        })
+      )
+      if (signal.aborted) return '[review aborted]'
+
+      const confirmed = verdicts
+        .filter((v) => v.confirms >= VOTES_TO_CONFIRM)
+        .map((v) => v.finding)
+        .sort((a, b) => (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9))
+      const tally = `Confirmed ${confirmed.length} of ${toVerify.length} candidate findings (each checked by ${VOTES_PER_FINDING} independent verifiers).`
+
+      if (confirmed.length === 0) {
+        const clean = `Adversarial review (${dims}) — no findings survived independent verification. ${tally}`
+        return [clean, ...notes].join('\n\n')
+      }
+      const header = `Adversarial review of the current changes (${dims}), each finding independently verified by ${VOTES_PER_FINDING} skeptics:`
+      const list = confirmed.map((f) => f.text).join('\n\n')
+      return [header, list, tally, ...notes, footer].join('\n\n')
+    }
+    // else: nothing parsed — fall through to the single-verifier path below.
+  }
+
   const verified = await runAgent({
     provider,
     model,
@@ -182,12 +325,8 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     systemOverride: verifierSystem()
   })
 
-  const header = `Adversarial review of the current changes (${dimensions.join(
-    ', '
-  )}), each candidate finding verified in a separate context:`
+  const header = `Adversarial review of the current changes (${dims}), each candidate finding verified in a separate context:`
   const body = verified.trim() || '[verifier returned no output]'
-  const footer =
-    'Once you have addressed the confirmed findings, run review_changes again to confirm the fixes and surface anything the changes introduced.'
   return [header, body, ...notes, footer].join('\n\n')
 }
 
@@ -199,6 +338,8 @@ export interface ReviewWorkspaceOptions {
   base?: string
   /** Optional pathspec: limit the review to these workspace-relative paths. */
   paths?: string[]
+  /** Verification depth (default 'normal'). 'high' verifies each finding by vote. */
+  effort?: ReviewEffort
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -236,6 +377,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     model: opts.model,
     workspace: opts.workspace,
     diff: input,
+    effort: opts.effort,
     signal: opts.signal,
     runAgent: opts.runAgent
   })
