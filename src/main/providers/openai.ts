@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { openaiReasoningEffort } from './reasoning'
+import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
@@ -104,6 +105,16 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
       let inputTokens: number | undefined
       let outputTokens: number | undefined
 
+      // Some OpenAI-compatible servers (notably Ollama on certain model templates,
+      // and historically whenever streaming) return a tool call as plain assistant
+      // text instead of structured `tool_calls`. When the request offered tools,
+      // hold content that *starts* like a tool call so we can recover it at the end
+      // instead of streaming raw JSON the user can't act on; ordinary prose streams
+      // as usual. With no tools offered there's nothing to recover, so never hold.
+      const knownToolNames = new Set((req.tools ?? []).map((t) => t.name))
+      let contentMode: 'undecided' | 'text' | 'hold' = knownToolNames.size ? 'undecided' : 'text'
+      let heldContent = ''
+
       for await (const chunk of stream) {
         // The usage-only chunk arrives last and has an empty `choices` array.
         if (chunk.usage) {
@@ -113,7 +124,26 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
         const choice = chunk.choices[0]
         if (!choice) continue
         const delta = choice.delta
-        if (delta?.content) yield { type: 'text', text: delta.content }
+        if (delta?.content) {
+          if (contentMode === 'text') {
+            yield { type: 'text', text: delta.content }
+          } else {
+            heldContent += delta.content
+            if (contentMode === 'undecided') {
+              const lead = heldContent.trimStart()
+              const verdict = lead ? classifyLead(lead) : 'wait'
+              if (verdict === 'tool') {
+                contentMode = 'hold'
+              } else if (verdict === 'text') {
+                // Ordinary prose — commit to streaming and flush what we buffered.
+                contentMode = 'text'
+                yield { type: 'text', text: heldContent }
+                heldContent = ''
+              }
+              // 'wait' — ambiguous prefix; keep buffering until it resolves.
+            }
+          }
+        }
         if (delta?.tool_calls) {
           for (const tc of delta.tool_calls) {
             const idx = tc.index
@@ -130,7 +160,7 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
         if (choice.finish_reason) finishReason = choice.finish_reason
       }
 
-      const hadToolCalls = toolAcc.size > 0
+      let hadToolCalls = toolAcc.size > 0
       for (const acc of toolAcc.values()) {
         let args: Record<string, unknown>
         try {
@@ -140,6 +170,20 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
         }
         yield { type: 'tool_call', call: { id: acc.id || randomUUID(), name: acc.name, arguments: args } }
       }
+
+      // No structured tool calls, but the model may have written one as text.
+      if (!hadToolCalls && knownToolNames.size && heldContent.trim()) {
+        const recovered = parseTextToolCalls(heldContent, knownToolNames)
+        if (recovered) {
+          for (const c of recovered) {
+            yield { type: 'tool_call', call: { id: randomUUID(), name: c.name, arguments: c.arguments } }
+          }
+          hadToolCalls = true
+          heldContent = ''
+        }
+      }
+      // Anything still held wasn't a recoverable tool call — surface it as text.
+      if (heldContent) yield { type: 'text', text: heldContent }
 
       yield {
         type: 'done',
