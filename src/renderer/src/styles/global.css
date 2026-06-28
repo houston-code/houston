@@ -5,6 +5,9 @@
   --bg-elevated: #131417;
   --bg-input: #17181c;
   --bg-hover: #1d1e23;
+  /* Selected rows sit a clear step ABOVE --bg-hover so the active chat never
+     reads as weaker than a merely-hovered one. */
+  --bg-selected: #24272f;
   --bg-code: #08090b;
   --stripe: rgba(255, 255, 255, 0.022);
   --border: #272930;
@@ -33,6 +36,9 @@
   --bg-elevated: #f3f1ea;
   --bg-input: #ffffff;
   --bg-hover: #ece9e1;
+  /* Pure white is already the brightest surface here, a clear step above the
+     warm hover — it doubles as the selected-row background. */
+  --bg-selected: #ffffff;
   --bg-code: #f2f0e8;
   --stripe: rgba(0, 0, 0, 0.03);
   --border: #e6e2d8;
@@ -516,9 +522,15 @@ body.is-resizing {
 .conv:hover {
   background: var(--bg-hover);
 }
-.conv--active {
-  background: var(--bg-input);
-  box-shadow: inset 2px 0 0 var(--accent);
+/* Listed after .conv:hover so an active row keeps its selected surface on hover
+   (equal specificity → later rule wins) rather than dropping to --bg-hover. */
+.conv--active,
+.conv--active:hover {
+  background: var(--bg-selected);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.conv--active .conv__title {
+  font-weight: 500;
 }
 /* The chat currently being dragged — dimmed so its origin is clear. */
 .conv--dragging {

@@ -7,6 +7,7 @@ import {
   type DragEvent,
   type KeyboardEvent
 } from 'react'
+import { loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
   appendPromptHistory,
@@ -80,7 +81,8 @@ export function Composer({
   onSend: (text: string, images?: ImageAttachment[]) => void
   onCancel: () => void
 }): JSX.Element {
-  const [text, setText] = useState('')
+  // Seed from the persisted draft so text typed but not sent survives a restart.
+  const [text, setText] = useState(loadComposerDraft)
   const [images, setImages] = useState<ImageAttachment[]>([])
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
@@ -102,6 +104,13 @@ export function Composer({
   useEffect(() => {
     if (!vision) setImages((prev) => (prev.length ? [] : prev))
   }, [vision])
+
+  // Persist the unsent draft so it survives an app restart. Every path that
+  // changes the field goes through setText, so watching `text` covers both
+  // saving as the user types and clearing on submit (setText('') → removeItem).
+  useEffect(() => {
+    saveComposerDraft(text)
+  }, [text])
 
   const addFiles = async (files: File[]): Promise<void> => {
     const read = await Promise.all(files.map(readImageFile))
