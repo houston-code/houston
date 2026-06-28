@@ -31,6 +31,13 @@ describe('isLoopbackHost', () => {
     expect(isLoopbackHost('8.8.8.8')).toBe(false)
     expect(isLoopbackHost('999.0.0.1')).toBe(false)
   })
+
+  it('recognizes IPv4-mapped IPv6 loopback but not mapped metadata/LAN', () => {
+    expect(isLoopbackHost('[::ffff:127.0.0.1]')).toBe(true)
+    expect(isLoopbackHost('::ffff:7f00:1')).toBe(true) // hex form
+    expect(isLoopbackHost('::ffff:169.254.169.254')).toBe(false) // metadata, not loopback
+    expect(isLoopbackHost('::ffff:192.168.1.1')).toBe(false) // LAN, not loopback
+  })
 })
 
 describe('isBlockedSubresourceHost', () => {
@@ -41,6 +48,12 @@ describe('isBlockedSubresourceHost', () => {
     expect(isBlockedSubresourceHost('172.16.4.4')).toBe(true)
     expect(isBlockedSubresourceHost('100.64.0.1')).toBe(true) // CGNAT
     expect(isBlockedSubresourceHost('fe80::1')).toBe(true) // link-local v6
+    // IPv4-mapped IPv6 egress to metadata/LAN — the bypass this fixes. The capture
+    // session's onBeforeRequest receives the hex-compressed form from new URL().
+    expect(isBlockedSubresourceHost('[::ffff:169.254.169.254]')).toBe(true)
+    expect(isBlockedSubresourceHost('::ffff:a9fe:a9fe')).toBe(true) // hex metadata
+    expect(isBlockedSubresourceHost('::ffff:192.168.1.1')).toBe(true)
+    expect(isBlockedSubresourceHost('::ffff:c0a8:101')).toBe(true) // hex LAN
   })
 
   it('allows loopback (the dev server) and public hosts (CDNs)', () => {
@@ -51,6 +64,7 @@ describe('isBlockedSubresourceHost', () => {
     expect(isBlockedSubresourceHost('example.com')).toBe(false)
     expect(isBlockedSubresourceHost('cdn.jsdelivr.net')).toBe(false)
     expect(isBlockedSubresourceHost('8.8.8.8')).toBe(false)
+    expect(isBlockedSubresourceHost('[::ffff:127.0.0.1]')).toBe(false) // mapped loopback OK
   })
 
   it('allows hostless URLs (data:/blob:/about:)', () => {

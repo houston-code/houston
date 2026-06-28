@@ -12,14 +12,43 @@ const MAX_REDIRECTS = 5
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_BYTES = 5_000_000
 
+/**
+ * If `h` is an IPv4-mapped / -compatible / NAT64 IPv6 literal, return the embedded
+ * dotted-quad IPv4; otherwise null. Covers both the textual `::ffff:1.2.3.4` form
+ * and the hex-compressed `::ffff:0102:0304` form that the WHATWG URL parser emits
+ * (e.g. `new URL('http://[::ffff:169.254.169.254]').hostname` === `[::ffff:a9fe:a9fe]`).
+ * `h` must already be lowercased and IPv6-bracket-stripped.
+ */
+export function embeddedIPv4(h: string): string | null {
+  const dotted = h.match(/^(?:::ffff:|::|64:ff9b::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (dotted) return dotted[1]
+  const hex = h.match(/^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (hex) {
+    const hi = parseInt(hex[1], 16)
+    const lo = parseInt(hex[2], 16)
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`
+  }
+  return null
+}
+
 /** True for hosts that must never be fetched (loopback, private ranges, cloud metadata). */
 export function isPrivateHost(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '') // strip IPv6 brackets
+  let h = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '') // strip IPv6 brackets
+  if (h.endsWith('.')) h = h.slice(0, -1) // trailing-dot FQDN: "localhost." -> "localhost"
   if (h === '' || h === 'localhost' || h.endsWith('.localhost')) return true
 
-  // IPv6 loopback / unspecified / unique-local (fc00::/7) / link-local (fe80::/10)
+  // Unwrap IPv4-mapped/-compatible/NAT64 IPv6 to the embedded IPv4 and re-classify,
+  // so e.g. `[::ffff:169.254.169.254]` (cloud metadata) and `[::ffff:127.0.0.1]`
+  // (loopback) can't slip past the IPv6 string checks below.
+  const v4 = embeddedIPv4(h)
+  if (v4) return isPrivateHost(v4)
+
+  // IPv6 loopback / unspecified / unique-local (fc00::/7) / link-local (fe80::/10,
+  // i.e. fe80–febf) / deprecated site-local (fec0::/10, i.e. fec0–feff).
   if (h === '::1' || h === '::') return true
-  if (/^f[cd][0-9a-f]*:/.test(h) || /^fe8[0-9a-f]:/.test(h)) return true
+  if (/^f[cd][0-9a-f]*:/.test(h) || /^fe[89ab][0-9a-f]*:/.test(h) || /^fe[c-f][0-9a-f]*:/.test(h)) {
+    return true
+  }
 
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
   if (m) {

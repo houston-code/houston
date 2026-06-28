@@ -20,7 +20,7 @@
  */
 
 import { BrowserWindow, session, type Session } from 'electron'
-import { isPrivateHost } from './webfetch'
+import { embeddedIPv4, isPrivateHost } from './webfetch'
 
 /** Offscreen viewport for the capture (a typical laptop content width). */
 const VIEWPORT = { width: 1280, height: 800 }
@@ -74,7 +74,13 @@ export interface LocalhostCapture {
  * rejected, so this tool can't reach the LAN or cloud metadata.
  */
 export function isLoopbackHost(hostname: string): boolean {
-  const h = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '') // strip IPv6 brackets
+  let h = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '') // strip IPv6 brackets
+  if (h.endsWith('.')) h = h.slice(0, -1) // trailing-dot FQDN
+  // Recognize an IPv4-mapped IPv6 loopback (e.g. [::ffff:127.0.0.1]) as loopback by
+  // re-classifying its embedded IPv4, so the subresource filter (isPrivateHost &&
+  // !isLoopbackHost) doesn't wrongly block the dev server's own mapped-loopback.
+  const v4 = embeddedIPv4(h)
+  if (v4) h = v4
   if (h === 'localhost' || h.endsWith('.localhost')) return true
   // IPv6 loopback / unspecified (a server bound to "all" is reachable via loopback).
   if (h === '::1' || h === '::' || h === '0:0:0:0:0:0:0:1') return true
