@@ -159,9 +159,12 @@ function ConvRow({
             <span className="conv__tag" title="Archived">Archived</span>
           )}
           {conv.worktree ? (
-            <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
-              ⑂ {conv.worktree.branch}
-            </span>
+            <>
+              {basename(conv.worktree.repoRoot)}{' '}
+              <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
+                ⑂ {conv.worktree.branch}
+              </span>
+            </>
           ) : (
             basename(conv.workspace)
           )}
