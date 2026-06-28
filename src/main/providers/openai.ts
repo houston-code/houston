@@ -4,6 +4,7 @@ import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReaso
 import { imageDataUrl } from '@shared/images'
 import { openaiReasoningEffort } from './reasoning'
 import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
+import { ControlTagScrubber } from './control-tag-scrubber'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
@@ -115,6 +116,11 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
       let contentMode: 'undecided' | 'text' | 'hold' = knownToolNames.size ? 'undecided' : 'text'
       let heldContent = ''
 
+      // Strip ChatML/Hermes control tags some local models leak into visible text
+      // (e.g. a `<tool_response>…</tool_response>` echo). All emitted text flows
+      // through it; the trailing flush below catches any tag split across the end.
+      const scrubber = new ControlTagScrubber()
+
       for await (const chunk of stream) {
         // The usage-only chunk arrives last and has an empty `choices` array.
         if (chunk.usage) {
@@ -126,7 +132,8 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
         const delta = choice.delta
         if (delta?.content) {
           if (contentMode === 'text') {
-            yield { type: 'text', text: delta.content }
+            const clean = scrubber.push(delta.content)
+            if (clean) yield { type: 'text', text: clean }
           } else {
             heldContent += delta.content
             if (contentMode === 'undecided') {
@@ -137,7 +144,8 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
               } else if (verdict === 'text') {
                 // Ordinary prose — commit to streaming and flush what we buffered.
                 contentMode = 'text'
-                yield { type: 'text', text: heldContent }
+                const clean = scrubber.push(heldContent)
+                if (clean) yield { type: 'text', text: clean }
                 heldContent = ''
               }
               // 'wait' — ambiguous prefix; keep buffering until it resolves.
@@ -183,7 +191,13 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
         }
       }
       // Anything still held wasn't a recoverable tool call — surface it as text.
-      if (heldContent) yield { type: 'text', text: heldContent }
+      if (heldContent) {
+        const clean = scrubber.push(heldContent)
+        if (clean) yield { type: 'text', text: clean }
+      }
+      // Emit any text the scrubber was holding back pending a possible split tag.
+      const tail = scrubber.flush()
+      if (tail) yield { type: 'text', text: tail }
 
       yield {
         type: 'done',
