@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import { useApplyTheme } from '../hooks/useApplyTheme'
+import { applyTheme } from '../lib/theme'
 import {
   SHORTCUTS,
   isCustomizable,
@@ -268,6 +270,23 @@ export function SettingsModal({
   const modalRef = useRef<HTMLDivElement>(null)
   useFocusTrap(modalRef, onClose)
 
+  // Live-preview the selected color theme while the modal is open, so the user
+  // sees the change before committing. If they close without saving we revert to
+  // whatever theme was active when the modal opened. `committed` guards the
+  // revert: once Save persists the selection it becomes the real theme, so the
+  // unmount cleanup must leave it in place. This is purely CSS-variable driven
+  // (data-theme on <html>), so the preview behaves identically on macOS, Linux,
+  // and Windows.
+  useApplyTheme(settings.theme ?? 'system')
+  const themeAtOpen = useRef<AppSettings['theme']>(initial.theme ?? 'system').current
+  const committed = useRef(false)
+  useEffect(
+    () => () => {
+      if (!committed.current) applyTheme(themeAtOpen ?? 'system')
+    },
+    [themeAtOpen]
+  )
+
   // Known-host catalog for the "Add a provider" picker. Platform-filtered (e.g. the
   // Apple-Silicon oMLX preset is hidden off macOS); hosts already present are shown
   // disabled so they can't be added twice.
@@ -448,6 +467,8 @@ export function SettingsModal({
 
   const save = async (): Promise<void> => {
     const fresh = await window.api.saveSettings(settings)
+    // Lock in the previewed theme: skip the revert-on-unmount below.
+    committed.current = true
     onSaved(fresh)
     onClose()
   }

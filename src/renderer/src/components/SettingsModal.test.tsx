@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { SettingsModal } from './SettingsModal'
 
@@ -370,5 +370,55 @@ describe('SettingsModal', () => {
 
     await waitFor(() => expect(api.pickDirectory).toHaveBeenCalled())
     await waitFor(() => expect(screen.getByText('/picked/dir')).toBeInTheDocument())
+  })
+
+  describe('appearance theme preview', () => {
+    // The preview writes data-theme onto the shared document root; reset between
+    // cases so one test's selection can't leak into the next.
+    afterEach(() => {
+      delete document.documentElement.dataset.theme
+    })
+
+    it('previews the selected theme on the document root before saving', () => {
+      installApi()
+      renderModal({ theme: 'dark' })
+      fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+      // Opening with the saved theme applies it (no change yet).
+      expect(document.documentElement.dataset.theme).toBe('dark')
+
+      // Picking a new option previews immediately, without touching Save.
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
+      expect(document.documentElement.dataset.theme).toBe('light')
+    })
+
+    it('reverts the preview to the open-time theme when closed without saving', () => {
+      installApi()
+      const { onSaved, unmount } = renderModal({ theme: 'dark' })
+      fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
+      expect(document.documentElement.dataset.theme).toBe('light')
+
+      // Closing without Save (modal unmounts) discards the preview.
+      unmount()
+      expect(document.documentElement.dataset.theme).toBe('dark')
+      expect(onSaved).not.toHaveBeenCalled()
+    })
+
+    it('keeps the previewed theme after Save and does not revert on close', async () => {
+      const api = installApi()
+      const { onSaved, unmount } = renderModal({ theme: 'dark' })
+      fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
+
+      // Footer Save persists the selection and propagates it upward.
+      const foot = document.querySelector('.modal__foot') as HTMLElement
+      fireEvent.click(within(foot).getByText('Save'))
+      await waitFor(() => expect(onSaved).toHaveBeenCalled())
+      expect((api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings).theme).toBe('light')
+
+      // The committed theme survives the close instead of snapping back.
+      unmount()
+      expect(document.documentElement.dataset.theme).toBe('light')
+    })
   })
 })
