@@ -16,7 +16,10 @@ const h = vi.hoisted(() => ({
     permissionRules: [],
     hooks: [],
     mcpServers: [],
-    additionalRoots: []
+    additionalRoots: [],
+    // Opted in so the lifecycle-hook assertions exercise the recording host; the
+    // default-off gate is asserted separately below.
+    projectPlugins: true
   } as Record<string, unknown>,
   // Records every plugin lifecycle event the loop fires, for assertions.
   pluginEvents: [] as Array<{ event: string; payload: unknown }>
@@ -41,9 +44,11 @@ vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 // Stub the plugin loader with a host that records every event the loop fires, so
 // we can assert the lifecycle hooks (onUserMessage/onToolStart/onToolResult) fire
-// at the right points. The real loader/host is covered in plugins.test.ts.
-vi.mock('./plugins', () => ({
-  loadPlugins: async () => ({
+// at the right points. The real loader/host is covered in plugins.test.ts. The
+// gate mirrors production: a host only loads when `enabled === true`, otherwise an
+// inert empty host (so the loop's gating is exercised end-to-end).
+vi.mock('./plugins', () => {
+  const recordingHost = {
     has: () => true,
     get size() {
       return 1
@@ -51,8 +56,14 @@ vi.mock('./plugins', () => ({
     emit: async (event: string, payload: unknown) => {
       h.pluginEvents.push({ event, payload })
     }
-  })
-}))
+  }
+  const emptyHost = { has: () => false, size: 0, emit: async () => {} }
+  return {
+    loadPlugins: async () => recordingHost,
+    loadPluginsIfEnabled: async (_ws: string, enabled: boolean | undefined) =>
+      enabled === true ? recordingHost : emptyHost
+  }
+})
 
 // Imported after the mocks are registered.
 const { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy, activeRunForConversation } =
@@ -754,5 +765,26 @@ describe('ask_user', () => {
     expect(start?.payload).toMatchObject({ tool: 'read_file', input: { path: 'note.txt' } })
     const toolResult = h.pluginEvents.find((e) => e.event === 'onToolResult')
     expect(toolResult?.payload).toMatchObject({ tool: 'read_file', ok: true })
+  })
+
+  it('does not run workspace plugins when projectPlugins is off (default)', async () => {
+    h.settings.projectPlugins = false
+    try {
+      await run({
+        policy: 'full-auto',
+        userText: 'read the note',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // The inert host fires nothing — opening a repo never runs its plugins.
+      expect(h.pluginEvents).toHaveLength(0)
+    } finally {
+      h.settings.projectPlugins = true
+    }
   })
 })
