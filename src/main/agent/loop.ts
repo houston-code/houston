@@ -377,13 +377,14 @@ export async function startRun(
           tools: agent?.tools
         })
       },
-      dispatchReview: (base, paths) =>
+      dispatchReview: (base, paths, effort) =>
         reviewWorkspaceChanges({
           provider,
           model: req.model,
           workspace,
           base,
           paths,
+          effort,
           signal: abort.signal
         }),
       attachImage,

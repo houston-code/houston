@@ -3,6 +3,7 @@ import type { SubAgentOptions } from './subagent'
 import {
   formatReviewInput,
   isSafeReviewPath,
+  parseFindings,
   reviewWorkspaceChanges,
   runReview,
   verifierSystem,
@@ -27,6 +28,8 @@ function fakeAgent(handler: (opts: SubAgentOptions) => string): {
 
 const isVerifier = (o: SubAgentOptions): boolean =>
   (o.systemOverride ?? '').includes('skeptical verification')
+const isSkeptic = (o: SubAgentOptions): boolean =>
+  (o.systemOverride ?? '').includes('checking ONE candidate finding')
 const dimensionOf = (o: SubAgentOptions): string | undefined =>
   ['CORRECTNESS', 'SECURITY', 'QUALITY'].find((d) => (o.systemOverride ?? '').includes(d))
 
@@ -144,6 +147,53 @@ describe('runReview', () => {
 describe('verifierSystem', () => {
   it('instructs the verifier to merge duplicate findings', () => {
     expect(verifierSystem().toLowerCase()).toContain('merge them into a single finding')
+  })
+})
+
+describe('parseFindings', () => {
+  it('splits bullets into per-finding blocks tagged by dimension and severity', () => {
+    const text =
+      '### correctness findings\n- [SEVERITY: high] a.ts:1 — x\n  why it matters\n- [low] b.ts:2 — y\n\n### security findings\n- [critical] c.ts:3 — z'
+    const f = parseFindings(text)
+    expect(f).toHaveLength(3)
+    expect(f[0]).toMatchObject({ dimension: 'correctness', severity: 'high' })
+    expect(f[0].text).toContain('why it matters') // continuation line captured
+    expect(f[1].severity).toBe('low')
+    expect(f[2]).toMatchObject({ dimension: 'security', severity: 'critical' })
+  })
+
+  it('returns [] when there are no bullet findings to parse', () => {
+    expect(parseFindings('### correctness findings\njust prose, no bullets')).toEqual([])
+  })
+})
+
+describe('runReview high effort', () => {
+  it('verifies each finding by a vote of skeptics and keeps the confirmed ones', async () => {
+    const correctness =
+      '- [SEVERITY: high] a.ts:1 — bug one\n  Why: real\n- [SEVERITY: low] b.ts:2 — nit two\n  Why: cosmetic'
+    const { fn, calls } = fakeAgent((o) => {
+      if (isSkeptic(o)) return o.prompt.includes('bug one') ? 'CONFIRMED a real bug' : 'REJECTED not real'
+      return dimensionOf(o) === 'CORRECTNESS' ? correctness : 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn, effort: 'high' }))
+
+    // Two findings × 3 skeptics each; the single-verifier path is not used.
+    expect(calls.filter(isSkeptic)).toHaveLength(6)
+    expect(calls.some(isVerifier)).toBe(false)
+    expect(out).toContain('bug one')
+    expect(out).not.toContain('nit two')
+    expect(out).toContain('Confirmed 1 of 2 candidate findings')
+    expect(out).toContain('run review_changes again')
+  })
+
+  it('falls back to the single verifier when nothing parses into findings', async () => {
+    const { fn, calls } = fakeAgent((o) => {
+      if (isVerifier(o)) return 'No confirmed issues.'
+      return dimensionOf(o) === 'SECURITY' ? 'Something feels off but I cannot pin it down.' : 'No issues found.'
+    })
+    await runReview(base({ runAgent: fn, effort: 'high' }))
+    expect(calls.filter(isSkeptic)).toHaveLength(0)
+    expect(calls.filter(isVerifier)).toHaveLength(1)
   })
 })
 
