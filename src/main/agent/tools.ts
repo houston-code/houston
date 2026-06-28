@@ -1,5 +1,5 @@
-import { promises as fs } from 'node:fs'
-import { resolve, relative, isAbsolute, dirname, join, sep } from 'node:path'
+import { promises as fs, realpathSync } from 'node:fs'
+import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type {
   AgentQuestion,
@@ -116,8 +116,52 @@ export function resolveInRoots(roots: string[], p: string): string {
   if (roots.length === 0) throw new Error('No allowed roots configured.')
   const base = roots[0]
   const abs = isAbsolute(p) ? resolve(p) : resolve(base, p)
-  if (roots.some((root) => isWithin(root, abs))) return abs
-  throw new Error(`Path escapes the allowed roots: ${p}`)
+  // Lexical containment first — cheap, and rejects `..` escapes.
+  if (!roots.some((root) => isWithin(root, abs))) {
+    throw new Error(`Path escapes the allowed roots: ${p}`)
+  }
+  // Symlink-aware containment. A path that is lexically inside a root can still
+  // resolve OUTSIDE it through a symlink committed in the workspace
+  // (e.g. `innocent -> /Users/you/.ssh/authorized_keys`). These file tools run in
+  // the main process, NOT the Seatbelt sandbox, so this realpath check is their
+  // only confinement against symlink traversal.
+  if (!realpathWithinRoots(roots, abs)) {
+    throw new Error(`Path escapes the allowed roots via a symlink: ${p}`)
+  }
+  return abs
+}
+
+/**
+ * Whether the canonical (symlink-resolved) location of `abs` lies within a root.
+ * The target may not exist yet (a write/create), so we realpath the deepest
+ * EXISTING ancestor — resolving every symlink in that prefix — then re-attach the
+ * not-yet-existing tail and check containment. Roots are realpath'd too so a
+ * non-canonical root (e.g. macOS `/var` -> `/private/var`) doesn't false-positive.
+ * Fails closed on any realpath error other than a missing path (e.g. ELOOP).
+ */
+function realpathWithinRoots(roots: string[], abs: string): boolean {
+  const realRoots = roots.map((r) => {
+    try {
+      return realpathSync(r)
+    } catch {
+      return r
+    }
+  })
+  let tail = ''
+  let probe = abs
+  for (;;) {
+    try {
+      const realBase = realpathSync(probe)
+      const real = tail ? resolve(realBase, tail) : realBase
+      return realRoots.some((root) => isWithin(root, real))
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false // ELOOP/EACCES → deny
+      const parent = dirname(probe)
+      if (parent === probe) return false // reached the fs root without resolving
+      tail = tail ? join(basename(probe), tail) : basename(probe)
+      probe = parent
+    }
+  }
 }
 
 /** The allowed roots for a tool call (workspace plus any added directories). */
