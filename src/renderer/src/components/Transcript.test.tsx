@@ -149,6 +149,38 @@ describe('Transcript', () => {
     expect(button.querySelector('[data-icon="check"]')).not.toBeInTheDocument()
   })
 
+  it('shows a copy button on a user turn and copies its exact text', async () => {
+    copyText.mockClear()
+    copyText.mockResolvedValueOnce(true)
+    const { container } = renderTranscript([userItem({ text: 'fix the build' })])
+
+    // The affordance lives on the user bubble, tucked to its left.
+    const button = within(container.querySelector('.msg--user')!).getByTitle('Copy message')
+    expect(button).toHaveClass('msg__copy--user')
+    expect(button.querySelector('[data-icon="copy"]')).toBeInTheDocument()
+
+    fireEvent.click(button)
+
+    // The user's own message text is what gets copied — not the assistant's.
+    expect(copyText).toHaveBeenCalledWith('fix the build')
+    await waitFor(() => expect(button.querySelector('[data-icon="check"]')).toBeInTheDocument())
+  })
+
+  it('omits the copy button on an empty user turn', () => {
+    const { container } = renderTranscript([userItem({ text: '   ' })])
+    // Nothing meaningful to copy, so the bubble carries no copy affordance.
+    expect(container.querySelector('.msg--user .msg__copy')).not.toBeInTheDocument()
+  })
+
+  it('omits the copy button on a compaction-summary turn', () => {
+    const { container } = renderTranscript([
+      userItem({ id: 'u-sum', text: `${COMPACTION_SUMMARY_PREFIX} recap`, isSummary: true })
+    ])
+    // The summary is system-authored, not the user's input — no copy button.
+    expect(container.querySelector('.msg--summary')).toBeInTheDocument()
+    expect(container.querySelector('.msg__copy')).not.toBeInTheDocument()
+  })
+
   it('renders a tool row with its verb and target', () => {
     const { container } = renderTranscript([
       toolItem({ name: 'read_file', args: { path: '/repo/src/app/main.ts' }, status: 'done' })

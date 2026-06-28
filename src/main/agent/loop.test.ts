@@ -66,8 +66,15 @@ vi.mock('./plugins', () => {
 })
 
 // Imported after the mocks are registered.
-const { startRun, cancelRun, resolveApproval, resolveQuestion, setRunPolicy, activeRunForConversation } =
-  await import('./loop')
+const {
+  startRun,
+  cancelRun,
+  resolveApproval,
+  resolveQuestion,
+  setRunPolicy,
+  activeRunForConversation,
+  activeRunCount
+} = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
 function scripted(turns: ProviderStreamEvent[][]): Provider {
@@ -623,6 +630,67 @@ describe('one run per conversation', () => {
     )
     expect(events.some((e) => e.type === 'text')).toBe(true)
     expect(events.at(-1)).toMatchObject({ type: 'done' })
+  })
+
+  it('counts live runs across conversations and clears them as they finish', async () => {
+    // Two conversations, each gated open, so we can watch the live count rise and
+    // fall as runs start and complete. This count is what the quit guard reads.
+    expect(activeRunCount()).toBe(0)
+
+    const gates: Array<() => void> = []
+    const gated = (): Provider => {
+      let release!: () => void
+      gates.push(() => release())
+      const gate = new Promise<void>((r) => {
+        release = r
+      })
+      return {
+        async *streamChat() {
+          await gate
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+    }
+
+    h.provider = gated()
+    const startA = startRun(
+      {
+        runId: 'count-A',
+        conversationId: 'conv-count-A',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'a' }]
+      },
+      () => {},
+      () => {}
+    )
+    expect(activeRunCount()).toBe(1)
+
+    h.provider = gated()
+    const startB = startRun(
+      {
+        runId: 'count-B',
+        conversationId: 'conv-count-B',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'b' }]
+      },
+      () => {},
+      () => {}
+    )
+    expect(activeRunCount()).toBe(2)
+
+    gates[0]()
+    await startA
+    expect(activeRunCount()).toBe(1)
+
+    gates[1]()
+    await startB
+    expect(activeRunCount()).toBe(0)
   })
 })
 

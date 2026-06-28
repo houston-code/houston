@@ -162,8 +162,13 @@ export interface AppSettings {
    * falls back to DEFAULT_SHELL_OUTPUT_MAX_BYTES when unset or invalid.
    */
   shellOutputMaxBytes?: number
-  /** True when a web-search (Tavily) API key is stored. Derived, never persisted. */
-  hasWebSearchKey?: boolean
+  /** Selected web-search provider id (see SEARCH_PROVIDERS). Defaults to Tavily. */
+  searchProvider?: string
+  /**
+   * Per-provider "an API key is stored" flags, keyed by search-provider id. Derived
+   * from the secrets store on every read, never persisted.
+   */
+  searchKeyStatus?: Record<string, boolean>
   /** How hard the model should think before answering (default `off`). */
   reasoningEffort?: ReasoningEffort
   /** How to request the reasoning summary, OpenAI Responses (default `auto`). */

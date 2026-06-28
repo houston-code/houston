@@ -41,9 +41,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   `function $F($$$) { $$$ }`, `useEffect($CB, [])` — so the agent can find
   calls, declarations, and JSX without the false positives of a regex. Pass the
   language (`ts`, `tsx`, `py`, `rust`, …).
-- **Web search.** With a Tavily API key (set in Settings → *Web search*), the
-  agent can `web_search` the web for current information. Like `web_fetch`, it
-  requires approval since it leaves the machine.
+- **Web search.** Pick a search provider and supply its API key (Settings →
+  *Web search*) and the agent can `web_search` the web for current information.
+  Like `web_fetch`, it requires approval since it leaves the machine.
 - **See its own localhost.** After starting a dev server (a background
   `run_shell`), the agent can `view_localhost` to load the page in an offscreen
   Electron window, screenshot it, and read back the browser console — closing the

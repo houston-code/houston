@@ -1234,6 +1234,13 @@ body.is-resizing {
 .msg {
   position: relative;
 }
+/* Reserve a little room beneath the two turn types so their hover copy button
+   (absolutely placed at top:100%) sits below the text instead of over it. Tool
+   rows and notices have no copy button, so they keep the tighter default gap. */
+.msg--assistant,
+.msg--user {
+  margin-bottom: 10px;
+}
 .msg--user {
   display: flex;
   justify-content: flex-end;
@@ -1274,10 +1281,14 @@ body.is-resizing {
   margin-bottom: 6px;
   padding-left: 12px;
 }
+/* Hover-revealed copy affordance. It sits just *below* the message (top:100%),
+   not over it, in the spacing reserved by the turn's margin-bottom — so it never
+   overlaps the text. Assistant turns (output) anchor it to the left; user turns
+   (input) override to the right below. */
 .msg__copy {
   position: absolute;
-  top: -2px;
-  right: 0;
+  top: 100%;
+  left: 0;
   opacity: 0;
   display: flex;
   align-items: center;
@@ -1285,9 +1296,9 @@ body.is-resizing {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-dim);
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
   cursor: pointer;
   transition: opacity 0.12s, color 0.12s, border-color 0.12s;
 }
@@ -1315,6 +1326,15 @@ body.is-resizing {
   margin-top: 6px;
 }
 .msg--assistant:hover .msg__copy {
+  opacity: 1;
+}
+/* The user's own turns are right-aligned, so their copy button anchors to the
+   bottom-right corner of the bubble (mirroring the assistant's bottom-left). */
+.msg__copy--user {
+  left: auto;
+  right: 0;
+}
+.msg--user:hover .msg__copy--user {
   opacity: 1;
 }
 .msg__copy:hover {

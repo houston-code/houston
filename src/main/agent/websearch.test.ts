@@ -1,18 +1,33 @@
 import { describe, expect, it } from 'vitest'
-import { tavilySearch } from './websearch'
+import { tavilySearch, braveSearch, exaSearch, getSearchAdapter } from './websearch'
 
 interface FakeResponseInit {
   ok?: boolean
   status?: number
 }
 
+interface FakeCall {
+  url: string
+  headers?: Record<string, string>
+  body: unknown
+}
+
 function fakeFetch(body: unknown, init: FakeResponseInit = {}): {
   fetchImpl: typeof fetch
-  calls: { url: string; body: unknown }[]
+  calls: FakeCall[]
 } {
-  const calls: { url: string; body: unknown }[] = []
-  const fetchImpl = (async (url: string, opts: { body: string }) => {
-    calls.push({ url, body: JSON.parse(opts.body) })
+  const calls: FakeCall[] = []
+  // Tolerant of GET requests (no body), so it serves Brave as well as the
+  // JSON-body POSTs (Tavily/Exa).
+  const fetchImpl = (async (
+    url: string,
+    opts: { body?: string; headers?: Record<string, string> } = {}
+  ) => {
+    calls.push({
+      url,
+      headers: opts.headers,
+      body: opts.body ? JSON.parse(opts.body) : undefined
+    })
     return {
       ok: init.ok ?? true,
       status: init.status ?? 200,
@@ -59,5 +74,78 @@ describe('tavilySearch', () => {
   it('throws on other non-ok responses', async () => {
     const { fetchImpl } = fakeFetch('boom', { ok: false, status: 500 })
     await expect(tavilySearch('q', 'k', { fetchImpl })).rejects.toThrow(/Web search failed: 500/)
+  })
+})
+
+describe('braveSearch', () => {
+  it('formats web.results and sends the query, count, and token header', async () => {
+    const { fetchImpl, calls } = fakeFetch({
+      web: {
+        results: [
+          { title: 'Sky', url: 'https://ex.com/sky', description: 'Rayleigh scattering.' },
+          { title: 'Color', url: 'https://ex.com/color', description: 'Wavelengths.' }
+        ]
+      }
+    })
+    const out = await braveSearch('why is the sky blue', 'BSA-key', { fetchImpl, maxResults: 3 })
+    expect(out).toContain('Sky')
+    expect(out).toContain('https://ex.com/sky')
+    expect(out).toContain('Rayleigh scattering.')
+    expect(out).toContain('Color')
+
+    // GET with the query + clamped count in the URL and the key in the header.
+    expect(calls[0].url).toContain('api.search.brave.com')
+    expect(calls[0].url).toContain('q=why%20is%20the%20sky%20blue')
+    expect(calls[0].url).toContain('count=3')
+    expect(calls[0].body).toBeUndefined()
+    expect(calls[0].headers?.['x-subscription-token']).toBe('BSA-key')
+  })
+
+  it('returns "No results." when empty', async () => {
+    const { fetchImpl } = fakeFetch({ web: { results: [] } })
+    expect(await braveSearch('q', 'k', { fetchImpl })).toBe('No results.')
+  })
+
+  it('hints to check the key on a 403', async () => {
+    const { fetchImpl } = fakeFetch('forbidden', { ok: false, status: 403 })
+    await expect(braveSearch('q', 'bad', { fetchImpl })).rejects.toThrow(/403.*check the API key/s)
+  })
+})
+
+describe('exaSearch', () => {
+  it('posts query + numResults with the key header and prefers highlights', async () => {
+    const { fetchImpl, calls } = fakeFetch({
+      results: [{ title: 'E', url: 'https://x.com', highlights: ['the key span'], text: 'full body' }]
+    })
+    const out = await exaSearch('hi', 'exa-key', { fetchImpl, maxResults: 4 })
+    expect(out).toContain('E')
+    expect(out).toContain('https://x.com')
+    expect(out).toContain('the key span')
+
+    expect(calls[0].url).toContain('api.exa.ai')
+    expect(calls[0].body).toMatchObject({ query: 'hi', numResults: 4 })
+    expect(calls[0].headers?.['x-api-key']).toBe('exa-key')
+  })
+
+  it('falls back to page text when a result has no highlights', async () => {
+    const { fetchImpl } = fakeFetch({ results: [{ title: 'E', url: 'u', text: 'body text' }] })
+    expect(await exaSearch('q', 'k', { fetchImpl })).toContain('body text')
+  })
+
+  it('returns "No results." when empty', async () => {
+    const { fetchImpl } = fakeFetch({ results: [] })
+    expect(await exaSearch('q', 'k', { fetchImpl })).toBe('No results.')
+  })
+})
+
+describe('getSearchAdapter', () => {
+  it('maps known ids to their adapters', () => {
+    expect(getSearchAdapter('tavily')).toBe(tavilySearch)
+    expect(getSearchAdapter('brave')).toBe(braveSearch)
+    expect(getSearchAdapter('exa')).toBe(exaSearch)
+  })
+
+  it('falls back to Tavily for an unknown id', () => {
+    expect(getSearchAdapter('nope')).toBe(tavilySearch)
   })
 })

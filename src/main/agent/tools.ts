@@ -17,7 +17,8 @@ import {
   parseSweepMode
 } from '@shared/sweep'
 import { isSafeGitRef } from '@shared/git'
-import { ASK_USER_TOOL, WEB_SEARCH_KEY_ID } from '@shared/constants'
+import { ASK_USER_TOOL } from '@shared/constants'
+import { getSearchProviderInfo } from '@shared/search'
 import {
   MAX_ATTACH_IMAGE_BYTES,
   MAX_PDF_BYTES,
@@ -36,7 +37,7 @@ import { killShell, readShellOutput, registerShell } from './shells'
 import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
 import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
-import { tavilySearch } from './websearch'
+import { getSearchAdapter } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { resolveEdit } from './edit-match'
@@ -56,6 +57,8 @@ export interface ToolContext {
   signal?: AbortSignal
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
+  /** Active web-search provider id (selected in Settings; injected by the loop). */
+  searchProvider?: string
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
   dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
   /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
@@ -1053,7 +1056,7 @@ const webSearch: ToolDef = {
   schema: {
     name: 'web_search',
     description:
-      'Search the web and return the top results (title, URL, snippet) plus a short synthesized answer. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a Tavily API key set in Settings.',
+      'Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a search-provider API key set in Settings.',
     parameters: objectSchema(
       {
         query: { type: 'string', description: 'The search query.' },
@@ -1065,11 +1068,17 @@ const webSearch: ToolDef = {
   async execute(args, ctx) {
     const query = str(args, 'query')
     if (!query) throw new Error('query is required.')
-    const key = ctx.getSecret?.(WEB_SEARCH_KEY_ID)
+    const provider = getSearchProviderInfo(ctx.searchProvider)
+    const key = ctx.getSecret?.(provider.keyId)
     if (!key) {
-      throw new Error('No web-search API key set. Add a Tavily API key in Settings to enable web_search.')
+      throw new Error(
+        `No ${provider.label} API key set. Add a ${provider.label} API key in Settings to enable web_search.`
+      )
     }
-    return tavilySearch(query, key, { signal: ctx.signal, maxResults: num(args, 'max_results') })
+    return getSearchAdapter(provider.id)(query, key, {
+      signal: ctx.signal,
+      maxResults: num(args, 'max_results')
+    })
   }
 }
 

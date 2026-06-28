@@ -62,7 +62,8 @@ function makeSettings(over: Partial<AppSettings> = {}): AppSettings {
     selected: null,
     approvalPolicy: 'ask',
     recentWorkspaces: [],
-    hasWebSearchKey: false,
+    searchProvider: 'tavily',
+    searchKeyStatus: {},
     ...over
   } as AppSettings
 }

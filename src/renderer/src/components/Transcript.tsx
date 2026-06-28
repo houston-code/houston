@@ -10,6 +10,31 @@ import { QuestionCard } from './QuestionCard'
 import { Markdown } from './Markdown'
 import { Icon } from './Icon'
 
+/**
+ * Subtle, hover-revealed copy affordance shared by user and assistant turns. The
+ * `className` lets each turn place it (the assistant pins it to the top-right; the
+ * user turn tucks it to the left of the right-aligned bubble — see global.css).
+ */
+function CopyButton({ text, className }: { text: string; className?: string }): JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const copy = (): void => {
+    void copyText(text).then((ok) => {
+      if (!ok) return
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1200)
+    })
+  }
+  return (
+    <button
+      className={className ? `msg__copy ${className}` : 'msg__copy'}
+      onClick={copy}
+      title="Copy message"
+    >
+      <Icon name={copied ? 'check' : 'copy'} />
+    </button>
+  )
+}
+
 function UserBubble({
   text,
   images,
@@ -35,6 +60,7 @@ function UserBubble({
   }
   return (
     <div className="msg msg--user">
+      {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
       <div className="msg__body">
         {images && images.length > 0 && (
           <div className="bubble__images">
@@ -58,14 +84,6 @@ function AssistantMessage({
   streaming?: boolean
   reasoning?: string
 }): JSX.Element {
-  const [copied, setCopied] = useState(false)
-  const copy = (): void => {
-    void copyText(text).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
-    })
-  }
   return (
     <div className="msg msg--assistant">
       {reasoning && (
@@ -80,11 +98,7 @@ function AssistantMessage({
           {streaming && <span className="md-cursor" />}
         </div>
       )}
-      {!streaming && text.trim() !== '' && (
-        <button className="msg__copy" onClick={copy} title="Copy message">
-          <Icon name={copied ? 'check' : 'copy'} />
-        </button>
-      )}
+      {!streaming && text.trim() !== '' && <CopyButton text={text} />}
     </div>
   )
 }
