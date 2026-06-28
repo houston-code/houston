@@ -26,7 +26,7 @@ import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead } from './scheduling'
-import { abortableSleep, backoffDelayMs, isRetryableError } from './retry'
+import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
 import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
@@ -553,6 +553,18 @@ export async function startRun(
                 "The conversation is too large for this model's context window, even after " +
                 'compacting older messages. Start a new conversation, remove large attachments, ' +
                 'or switch to a model with a larger context window.'
+            })
+            return
+          }
+          // The model can't do tool calling, which the agent requires. The raw API
+          // string ("<model> does not support tools") is opaque — point the user at
+          // a tool-capable model instead. Fatal, so don't retry.
+          if (isToolsUnsupportedError(e)) {
+            emit({
+              type: 'error',
+              message:
+                `The selected model "${req.model}" doesn't support tool calling, which this agent ` +
+                'requires. Pick a tool-capable model (e.g. qwen2.5-coder, llama3.1, mistral-nemo).'
             })
             return
           }

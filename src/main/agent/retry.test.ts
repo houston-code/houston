@@ -1,5 +1,28 @@
 import { describe, it, expect } from 'vitest'
-import { isRetryableError, backoffDelayMs, abortableSleep } from './retry'
+import { isRetryableError, isToolsUnsupportedError, backoffDelayMs, abortableSleep } from './retry'
+
+describe('isToolsUnsupportedError', () => {
+  it('matches the Ollama "does not support tools" 400', () => {
+    expect(
+      isToolsUnsupportedError({
+        status: 400,
+        message: 'registry.ollama.ai/library/llama2:latest does not support tools'
+      })
+    ).toBe(true)
+  })
+
+  it('matches other phrasings and a status-less error', () => {
+    expect(isToolsUnsupportedError({ status: 422, message: 'tool calling is not supported' })).toBe(true)
+    expect(isToolsUnsupportedError(new Error('This model does not support tools'))).toBe(true)
+  })
+
+  it('ignores unrelated errors and non-4xx statuses', () => {
+    expect(isToolsUnsupportedError({ status: 400, message: 'prompt is too long' })).toBe(false)
+    expect(isToolsUnsupportedError(new Error('invalid api key'))).toBe(false)
+    // A 5xx that happens to contain the phrase isn't a model-capability problem.
+    expect(isToolsUnsupportedError({ status: 503, message: 'does not support tools' })).toBe(false)
+  })
+})
 
 describe('isRetryableError', () => {
   it('retries 429 / 408 / 409 / 5xx by status', () => {

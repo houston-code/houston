@@ -283,6 +283,19 @@ describe('startRun', () => {
     expect(types(r).at(-1)).toBe('error')
   })
 
+  it('replaces a "model does not support tools" error with actionable guidance', async () => {
+    const r = await run({
+      turns: [[{ type: 'error', message: 'registry.ollama.ai/library/llama2:latest does not support tools' }]]
+    })
+    expect(types(r)).not.toContain('retry')
+    const last = r.events.at(-1)
+    expect(last?.type).toBe('error')
+    const msg = (last as { message: string }).message
+    expect(msg).toContain("doesn't support tool calling")
+    expect(msg).toContain('qwen2.5-coder')
+    expect(msg).not.toContain('registry.ollama.ai') // the opaque raw string is replaced
+  })
+
   it('recovers from a context-overflow error by force-compacting older turns', async () => {
     // Many older turns plus the current one. The first send overflows; the loop
     // should summarize older turns and retry the (now smaller) request.
