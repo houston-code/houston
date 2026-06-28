@@ -56,7 +56,7 @@ ${diff}`
 export function verifierSystem(): string {
   return `You are a skeptical verification reviewer working in a fresh context. You are given a change (as a diff) and a list of CANDIDATE findings raised by other reviewers. Many candidates are false positives — wrong, already handled elsewhere in the code, not actually reachable, or based on a misreading of the diff without its surrounding context.
 
-For EACH candidate, independently verify it against the actual code (read the files) and decide CONFIRMED or REJECTED. Reject anything you cannot reproduce or are unsure about — a false alarm wastes the author's time, so when in doubt, drop it.
+For EACH candidate, independently verify it against the actual code (read the files) and decide CONFIRMED or REJECTED. Reject anything you cannot reproduce or are unsure about — a false alarm wastes the author's time, so when in doubt, drop it. When several candidates describe the same underlying problem (same file, line, and root cause — reviewers of different dimensions often overlap), merge them into a single finding rather than repeating it.
 
 Output only the CONFIRMED findings, most severe first, each as:
 - [SEVERITY] path:line — problem statement
@@ -106,6 +106,17 @@ function isErrorReport(report: string): boolean {
 /** A reviewer that found nothing replies with exactly this phrase. */
 function isClean(report: string): boolean {
   return /^\s*no issues found\.?\s*$/i.test(report)
+}
+
+/**
+ * A review path filter must be a relative path that stays inside the workspace —
+ * no absolute paths and no `..` segments climbing out. (git pathspecs after `--`
+ * are already safe from option injection; this guards against escaping the repo.)
+ */
+export function isSafeReviewPath(p: string): boolean {
+  if (typeof p !== 'string' || p.trim() === '') return false
+  if (p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p)) return false // absolute (incl. Windows)
+  return !p.split(/[\\/]/).includes('..')
 }
 
 export interface RunReviewOptions {
@@ -175,7 +186,9 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     ', '
   )}), each candidate finding verified in a separate context:`
   const body = verified.trim() || '[verifier returned no output]'
-  return [header, body, ...notes].join('\n\n')
+  const footer =
+    'Once you have addressed the confirmed findings, run review_changes again to confirm the fixes and surface anything the changes introduced.'
+  return [header, body, ...notes, footer].join('\n\n')
 }
 
 export interface ReviewWorkspaceOptions {
@@ -184,6 +197,8 @@ export interface ReviewWorkspaceOptions {
   workspace: string
   /** Git ref to diff against (default HEAD — all uncommitted changes). */
   base?: string
+  /** Optional pathspec: limit the review to these workspace-relative paths. */
+  paths?: string[]
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -201,14 +216,20 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
   if (!isSafeGitRef(base)) {
     return `Invalid base ref "${base}". Use a branch name, tag, or commit SHA (no leading dash or shell characters).`
   }
-  const d = await gitDiff(opts.workspace, base, opts.gitExec)
+  const paths = opts.paths ?? []
+  const badPath = paths.find((p) => !isSafeReviewPath(p))
+  if (badPath !== undefined) {
+    return `Invalid review path "${badPath}". Use project-relative paths inside the workspace (no absolute paths or "..").`
+  }
+  const d = await gitDiff(opts.workspace, base, paths, opts.gitExec)
   if (!d.isRepo) {
     return 'Cannot review: this project is not a git repository, so there is no diff to review. Commit your work in a git repo to use review_changes, or ask me to review specific files directly.'
   }
   const input = formatReviewInput(d)
   if (!input.trim()) {
     const against = base !== 'HEAD' ? ` against ${base}` : ''
-    return `No uncommitted changes to review${against}.`
+    const scope = paths.length ? ` in ${paths.join(', ')}` : ''
+    return `No uncommitted changes to review${scope}${against}.`
   }
   return runReview({
     provider: opts.provider,

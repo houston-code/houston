@@ -62,7 +62,7 @@ export interface ToolContext {
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
   dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
   /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
-  dispatchReview?: (base?: string) => Promise<string>
+  dispatchReview?: (base?: string, paths?: string[]) => Promise<string>
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
@@ -1119,13 +1119,19 @@ const reviewChanges: ToolDef = {
   schema: {
     name: 'review_changes',
     description:
-      'Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don\'t inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done — then fix what it confirms. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch.',
+      'Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don\'t inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done — then fix what it confirms and run it again to confirm the fixes. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch, and paths to limit the review to specific files.',
     parameters: objectSchema(
       {
         base: {
           type: 'string',
           description:
             'Optional git ref to diff against (e.g. "main" or a commit SHA). Default: HEAD (all uncommitted changes).'
+        },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Optional: limit the review to these project-relative paths/directories (e.g. ["src/api"]). Default: the whole diff.'
         }
       },
       []
@@ -1133,7 +1139,10 @@ const reviewChanges: ToolDef = {
   },
   async execute(args, ctx) {
     if (!ctx.dispatchReview) throw new Error('Review is not available in this context.')
-    return ctx.dispatchReview(str(args, 'base') || undefined)
+    const paths = Array.isArray(args.paths)
+      ? args.paths.filter((p): p is string => typeof p === 'string' && p.length > 0)
+      : undefined
+    return ctx.dispatchReview(str(args, 'base') || undefined, paths)
   }
 }
 

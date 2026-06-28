@@ -163,6 +163,7 @@ export interface WorkspaceDiff {
 export async function gitDiff(
   workspace: string,
   base = 'HEAD',
+  paths: string[] = [],
   exec: GitExec = runGit
 ): Promise<WorkspaceDiff> {
   try {
@@ -170,6 +171,9 @@ export async function gitDiff(
   } catch {
     return { isRepo: false, diff: '', untracked: [] }
   }
+  // Everything after `--` is a pathspec, so the optional `paths` filter can't be
+  // read as an option; callers still validate the paths stay in the workspace.
+  const pathspec = paths.length ? ['--', ...paths] : ['--']
   let diff = ''
   // Refuse an option-like base (defence in depth — callers should validate too).
   if (isSafeGitRef(base)) {
@@ -178,14 +182,14 @@ export async function gitDiff(
       // `git diff HEAD` throws (no HEAD) — the untracked list carries the review then.
       // `--no-ext-diff`/`--no-textconv` block repo-config diff drivers from running
       // a program (defence in depth atop GIT_HARDENING; matches workingTree.ts).
-      diff = await exec(['diff', base, '--no-ext-diff', '--no-textconv', '--'], workspace)
+      diff = await exec(['diff', base, '--no-ext-diff', '--no-textconv', ...pathspec], workspace)
     } catch {
       // invalid base (e.g. unborn HEAD) — fall back to no tracked diff
     }
   }
   let untracked: string[] = []
   try {
-    const out = await exec(['ls-files', '--others', '--exclude-standard'], workspace)
+    const out = await exec(['ls-files', '--others', '--exclude-standard', ...pathspec], workspace)
     untracked = out.split('\n').map((l) => l.trim()).filter(Boolean)
   } catch {
     // ignore — untracked listing is best-effort

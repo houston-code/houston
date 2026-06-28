@@ -81,7 +81,8 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   author's blind spots — then a skeptical verifier that re-checks every candidate
   finding against the real code and drops the false positives, and reports the
   confirmed ones. The agent can self-review after a substantial change before
-  telling you it's done.
+  telling you it's done. Review the whole diff, a different `base` (e.g. a branch),
+  or scope it to specific `paths`.
 - **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
   a specialized read-only subagent (front-matter `description` + a system-prompt
   body) — the main agent can dispatch it by name. An optional front-matter `tools:`
