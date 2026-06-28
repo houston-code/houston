@@ -125,6 +125,10 @@ function ToolRow({
         {expandable && <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>}
       </div>
 
+      {item.status === 'running' && item.progress && (
+        <div className="tool-row__progress">{item.progress}</div>
+      )}
+
       {isTodo && (
         <ul className="todo-list">
           {todos.map((t, i) => (

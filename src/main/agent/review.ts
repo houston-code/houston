@@ -297,6 +297,8 @@ export interface RunReviewOptions {
   dimensions?: readonly ReviewDimension[]
   /** Verification depth (default 'normal'). 'high' verifies each finding by vote. */
   effort?: ReviewEffort
+  /** Called with short status lines as the review progresses (surfaced live in the UI). */
+  onProgress?: (message: string) => void
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
 }
@@ -310,20 +312,45 @@ export interface RunReviewOptions {
  */
 export async function runReview(opts: RunReviewOptions): Promise<string> {
   const { provider, model, workspace, signal } = opts
-  const runAgent = opts.runAgent ?? runSubAgent
+  const baseRunAgent = opts.runAgent ?? runSubAgent
   const dimensions = opts.dimensions ?? REVIEW_DIMENSIONS
+  const progress = opts.onProgress ?? ((): void => {})
+
+  // Wrap the runner to count model calls and total token usage for a cost summary.
+  let modelCalls = 0
+  let inputTokens = 0
+  let outputTokens = 0
+  const run = (o: SubAgentOptions): Promise<string> => {
+    modelCalls++
+    return baseRunAgent({
+      ...o,
+      onUsage: (u) => {
+        inputTokens += u.inputTokens ?? 0
+        outputTokens += u.outputTokens ?? 0
+      }
+    })
+  }
+  const costLine = (): string | null =>
+    inputTokens + outputTokens > 0
+      ? `Review cost: ~${inputTokens.toLocaleString()} input / ${outputTokens.toLocaleString()} output tokens across ${modelCalls} model calls.`
+      : null
+  /** Assemble a report, dropping empty sections (notes/cost may be absent). */
+  const assemble = (...parts: (string | null)[]): string => parts.filter(Boolean).join('\n\n')
 
   // Accept either pre-chunked input or a single diff string (back-compat).
   const inputs = (opts.chunks ?? (opts.diff !== undefined ? [opts.diff] : [])).filter((s) => s.trim())
   if (inputs.length === 0) return 'No changes to review.'
   if (signal.aborted) return '[review aborted]'
 
+  const dimsLabel = dimensions.join(', ')
+  progress(`Reviewing ${dimsLabel} in separate contexts…`)
+
   // Each dimension reviews every chunk in its own fresh context; merge per dimension.
   const reports = await Promise.all(
     dimensions.map(async (dimension) => {
       const chunkReports = await Promise.all(
         inputs.map((chunk) =>
-          runAgent({
+          run({
             provider,
             model,
             workspace,
@@ -345,8 +372,8 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const candidates = reports.filter((r) => !isErrorReport(r.report) && !isClean(r.report))
 
   if (candidates.length === 0) {
-    const clean = `Review complete — no issues found across ${dimensions.join(', ')}.`
-    return notes.length ? `${clean}\n\n${notes.join('\n')}` : clean
+    const clean = `Review complete — no issues found across ${dimsLabel}.`
+    return assemble(clean, notes.length ? notes.join('\n') : null, costLine())
   }
 
   const candidateText = candidates.map((c) => `### ${c.dimension} findings\n${c.report}`).join('\n\n')
@@ -354,7 +381,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const diffContext = inputs.join('\n\n').slice(0, MAX_DIFF_CHARS)
   const footer =
     'Once you have addressed the confirmed findings, run review_changes again to confirm the fixes and surface anything the changes introduced.'
-  const dims = dimensions.join(', ')
+  const dims = dimsLabel
 
   // High effort: verify each finding independently by majority vote of skeptics.
   // Falls back to the single-verifier path if the reports don't parse into findings.
@@ -367,11 +394,12 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
           `⚠ ${findings.length} candidate findings exceeded the per-review verification cap; verified the first ${toVerify.length}.`
         )
       }
+      progress(`Verifying ${toVerify.length} findings with ${VOTES_PER_FINDING} skeptics each…`)
       const verdicts = await Promise.all(
         toVerify.map(async (f) => {
           const votes = await Promise.all(
             Array.from({ length: VOTES_PER_FINDING }, () =>
-              runAgent({
+              run({
                 provider,
                 model,
                 workspace,
@@ -394,16 +422,17 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
 
       if (confirmed.length === 0) {
         const clean = `Adversarial review (${dims}) — no findings survived independent verification. ${tally}`
-        return [clean, ...notes].join('\n\n')
+        return assemble(clean, notes.length ? notes.join('\n') : null, costLine())
       }
       const header = `Adversarial review of the current changes (${dims}), each finding independently verified by ${VOTES_PER_FINDING} skeptics:`
       const list = confirmed.map((f) => f.text).join('\n\n')
-      return [header, list, tally, ...notes, footer].join('\n\n')
+      return assemble(header, list, tally, ...notes, footer, costLine())
     }
     // else: nothing parsed — fall through to the single-verifier path below.
   }
 
-  const verified = await runAgent({
+  progress('Verifying candidate findings…')
+  const verified = await run({
     provider,
     model,
     workspace,
@@ -414,7 +443,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
 
   const header = `Adversarial review of the current changes (${dims}), each candidate finding verified in a separate context:`
   const body = verified.trim() || '[verifier returned no output]'
-  return [header, body, ...notes, footer].join('\n\n')
+  return assemble(header, body, ...notes, footer, costLine())
 }
 
 export interface ReviewWorkspaceOptions {
@@ -427,6 +456,8 @@ export interface ReviewWorkspaceOptions {
   paths?: string[]
   /** Verification depth (default 'normal'). 'high' verifies each finding by vote. */
   effort?: ReviewEffort
+  /** Called with short status lines as the review progresses (surfaced live in the UI). */
+  onProgress?: (message: string) => void
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -465,6 +496,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     workspace: opts.workspace,
     chunks,
     effort: opts.effort,
+    onProgress: opts.onProgress,
     signal: opts.signal,
     runAgent: opts.runAgent
   })

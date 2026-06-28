@@ -274,6 +274,7 @@ export type AgentEvent =
   | { runId: string; type: 'text'; delta: string }
   | { runId: string; type: 'reasoning'; delta: string }
   | { runId: string; type: 'tool_start'; callId: string; name: string; args: Record<string, unknown> }
+  | { runId: string; type: 'tool_progress'; callId: string; message: string }
   | {
       runId: string
       type: 'tool_approval'

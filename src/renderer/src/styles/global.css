@@ -1711,6 +1711,13 @@ h6.md-h {
   word-break: break-word;
   color: var(--text-dim);
 }
+.tool-row__progress {
+  margin: -2px 12px 9px 32px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-style: italic;
+}
 .tool-row__approval {
   display: flex;
   gap: 8px;

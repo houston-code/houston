@@ -192,6 +192,36 @@ describe('runReview', () => {
     expect(calls).toHaveLength(0)
     expect(out).toContain('aborted')
   })
+
+  it('appends a token-cost summary when usage is reported', async () => {
+    const { fn } = fakeAgent((o) => {
+      o.onUsage?.({ inputTokens: 100, outputTokens: 20 })
+      return 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn }))
+    // 3 reviewers × (100/20), no verifier (all clean).
+    expect(out).toContain('Review cost: ~300 input / 60 output tokens across 3 model calls.')
+  })
+
+  it('omits the cost summary when no usage is reported', async () => {
+    const { fn } = fakeAgent(() => 'No issues found.')
+    const out = await runReview(base({ runAgent: fn }))
+    expect(out).not.toContain('Review cost')
+  })
+
+  it('reports progress as it works', async () => {
+    const msgs: string[] = []
+    const { fn } = fakeAgent((o) =>
+      isVerifier(o)
+        ? 'No confirmed issues.'
+        : dimensionOf(o) === 'CORRECTNESS'
+          ? '- [SEVERITY: high] a.ts:1 — x'
+          : 'No issues found.'
+    )
+    await runReview(base({ runAgent: fn, onProgress: (m) => msgs.push(m) }))
+    expect(msgs.some((m) => /Reviewing/.test(m))).toBe(true)
+    expect(msgs.some((m) => /Verifying/.test(m))).toBe(true)
+  })
 })
 
 describe('verifierSystem', () => {

@@ -188,3 +188,35 @@ describe('lastUserText', () => {
     ).toBeUndefined()
   })
 })
+
+describe('reduceEvent tool progress', () => {
+  const ev = (e: AgentEvent): AgentEvent => e
+
+  it('attaches a progress line to a running tool and clears it on the result', () => {
+    let items: DisplayItem[] = []
+    items = reduceEvent(
+      items,
+      ev({ runId: 'r1', type: 'tool_start', callId: 'c1', name: 'review_changes', args: {} })
+    )
+    items = reduceEvent(
+      items,
+      ev({ runId: 'r1', type: 'tool_progress', callId: 'c1', message: 'Reviewing correctness…' })
+    )
+    const running = items.find((it): it is ToolItem => it.kind === 'tool' && it.id === 'c1')!
+    expect(running.status).toBe('running')
+    expect(running.progress).toContain('Reviewing')
+
+    items = reduceEvent(
+      items,
+      ev({ runId: 'r1', type: 'tool_result', callId: 'c1', name: 'review_changes', ok: true, output: 'done' })
+    )
+    const done = items.find((it): it is ToolItem => it.kind === 'tool' && it.id === 'c1')!
+    expect(done.status).toBe('done')
+    expect(done.progress).toBeUndefined()
+  })
+
+  it('ignores progress for a tool that is not present', () => {
+    const items = reduceEvent([], ev({ runId: 'r1', type: 'tool_progress', callId: 'missing', message: 'x' }))
+    expect(items).toEqual([])
+  })
+})

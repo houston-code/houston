@@ -41,6 +41,8 @@ export interface ToolItem {
   toolKind?: 'read' | 'write' | 'shell' | 'network' | 'mcp'
   status: ToolStatus
   output?: string
+  /** Latest progress line from a long-running tool (e.g. a review's current phase). */
+  progress?: string
   /** Images the tool produced (e.g. a view_localhost screenshot). */
   images?: ImageAttachment[]
 }
@@ -150,6 +152,10 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         { kind: 'tool', id: e.callId, name: e.name, args: e.args, status: 'running' }
       ]
     }
+    case 'tool_progress': {
+      // Update the live progress line on the running tool (no-op if it's gone).
+      return updateTool(items, e.callId, { progress: e.message })
+    }
     case 'tool_question': {
       const finalized = finalizeStreaming(items)
       return [
@@ -178,6 +184,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       const updated = updateTool(items, e.callId, {
         status,
         output: e.output,
+        progress: undefined, // clear the live progress line now the tool has finished
         ...(e.images?.length ? { images: e.images } : {})
       })
       // Highlight a PR opening/merging as its own notice, above the tool row.
