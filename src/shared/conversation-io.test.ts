@@ -4,7 +4,9 @@ import {
   forkConversationData,
   forkTitle,
   resolveImportWorkspace,
-  validateImportedConversation
+  validateImportedConversation,
+  MAX_IMPORT_MESSAGES,
+  MAX_IMPORT_BYTES
 } from './conversation-io'
 
 const valid = {
@@ -93,6 +95,55 @@ describe('validateImportedConversation', () => {
       messages: [{ role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'x', arguments: 'nope' }] }]
     })
     expect(r.messages[0].toolCalls?.[0].arguments).toEqual({})
+  })
+
+  describe('size caps (hostile / huge files)', () => {
+    it('exposes a positive byte cap for the import handler to enforce', () => {
+      expect(MAX_IMPORT_BYTES).toBeGreaterThan(0)
+    })
+
+    it('rejects a file with too many messages', () => {
+      const messages = Array.from({ length: MAX_IMPORT_MESSAGES + 1 }, () => ({
+        role: 'user',
+        content: 'x'
+      }))
+      expect(() => validateImportedConversation({ messages })).toThrow(/too many messages/)
+    })
+
+    it('clamps an enormous message content instead of keeping it whole', () => {
+      const huge = 'a'.repeat(2_000_000)
+      const r = validateImportedConversation({ messages: [{ role: 'user', content: huge }] })
+      expect(r.messages[0].content.length).toBeLessThan(huge.length)
+      expect(r.messages[0].content).toMatch(/\[truncated\]$/)
+    })
+
+    it('clamps an over-long title and tool fields', () => {
+      const r = validateImportedConversation({
+        title: 'T'.repeat(5000),
+        messages: [
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [{ id: 'i'.repeat(5000), name: 'n'.repeat(5000), arguments: {} }]
+          }
+        ]
+      })
+      expect(r.title.length).toBeLessThan(5000)
+      expect(r.messages[0].toolCalls?.[0].id.length).toBeLessThan(5000)
+      expect(r.messages[0].toolCalls?.[0].name.length).toBeLessThan(5000)
+    })
+
+    it('caps the number of tool calls kept per message', () => {
+      const toolCalls = Array.from({ length: 5000 }, (_, i) => ({
+        id: `c${i}`,
+        name: 'x',
+        arguments: {}
+      }))
+      const r = validateImportedConversation({
+        messages: [{ role: 'assistant', content: '', toolCalls }]
+      })
+      expect(r.messages[0].toolCalls!.length).toBeLessThanOrEqual(1000)
+    })
   })
 })
 
