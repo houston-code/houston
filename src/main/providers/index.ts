@@ -24,16 +24,16 @@ export function createProvider(config: ProviderConfig): Provider {
 
   switch (config.kind) {
     case 'anthropic':
-      return createAnthropicProvider(key ?? '', config.baseUrl)
+      return createAnthropicProvider(key ?? '', config.baseUrl, config.headers)
     case 'openai':
       // Native OpenAI uses the Responses API (GPT-5/o-series path). A custom base
       // URL means a proxy/gateway that may only speak Chat Completions, so fall
       // back to the Chat Completions adapter there.
       return config.baseUrl
-        ? createOpenAIProvider(key, config.baseUrl)
+        ? createOpenAIProvider(key, config.baseUrl, config.headers)
         : createResponsesProvider(key)
     case 'openai-compatible':
-      return createOpenAIProvider(key, config.baseUrl)
+      return createOpenAIProvider(key, config.baseUrl, config.headers)
     case 'gemini':
       return createGeminiProvider(key ?? '')
     default:
@@ -46,10 +46,10 @@ export async function listModels(config: ProviderConfig): Promise<string[]> {
   const key = getKey(config.id)
   switch (config.kind) {
     case 'anthropic':
-      return listAnthropicModels(key ?? '', config.baseUrl)
+      return listAnthropicModels(key ?? '', config.baseUrl, config.headers)
     case 'openai':
     case 'openai-compatible':
-      return listOpenAIModels(key, config.baseUrl)
+      return listOpenAIModels(key, config.baseUrl, config.headers)
     case 'gemini':
       return listGeminiModels(key ?? '')
     default:

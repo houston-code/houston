@@ -151,13 +151,22 @@ function reasoningFromMessage(content: Anthropic.ContentBlock[]): ReasoningBlock
   return blocks
 }
 
-export function createAnthropicProvider(apiKey: string, baseURL?: string): Provider {
+export function createAnthropicProvider(
+  apiKey: string,
+  baseURL?: string,
+  headers?: Record<string, string>
+): Provider {
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
   let clientPromise: Promise<Anthropic> | undefined
   const getClient = (): Promise<Anthropic> =>
     (clientPromise ??= import('@anthropic-ai/sdk').then(
-      (m) => new m.default({ apiKey, ...(baseURL ? { baseURL } : {}) })
+      (m) =>
+        new m.default({
+          apiKey,
+          ...(baseURL ? { baseURL } : {}),
+          ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+        })
     ))
 
   return {
@@ -263,9 +272,17 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
 }
 
 /** Fetch the live model list from the Anthropic API. */
-export async function listAnthropicModels(apiKey: string, baseURL?: string): Promise<string[]> {
+export async function listAnthropicModels(
+  apiKey: string,
+  baseURL?: string,
+  headers?: Record<string, string>
+): Promise<string[]> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
-  const client = new Anthropic({ apiKey, ...(baseURL ? { baseURL } : {}) })
+  const client = new Anthropic({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+  })
   const page = await client.models.list({ limit: 100 })
   return page.data.map((m) => m.id)
 }

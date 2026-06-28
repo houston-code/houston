@@ -66,13 +66,22 @@ function mapFinishReason(reason: string | null | undefined, hadToolCalls: boolea
  * vLLM, OpenRouter, etc.). Local endpoints often don't need a key — callers pass
  * a placeholder, which compatible servers ignore.
  */
-export function createOpenAIProvider(apiKey: string | null, baseURL?: string): Provider {
+export function createOpenAIProvider(
+  apiKey: string | null,
+  baseURL?: string,
+  headers?: Record<string, string>
+): Provider {
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
   let clientPromise: Promise<OpenAI> | undefined
   const getClient = (): Promise<OpenAI> =>
     (clientPromise ??= import('openai').then(
-      (m) => new m.default({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
+      (m) =>
+        new m.default({
+          apiKey: apiKey || 'no-key',
+          ...(baseURL ? { baseURL } : {}),
+          ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+        })
     ))
 
   return {
@@ -209,9 +218,17 @@ export function createOpenAIProvider(apiKey: string | null, baseURL?: string): P
 }
 
 /** Fetch the live model list (GET /models). Works for OpenAI and most compatible servers. */
-export async function listOpenAIModels(apiKey: string | null, baseURL?: string): Promise<string[]> {
+export async function listOpenAIModels(
+  apiKey: string | null,
+  baseURL?: string,
+  headers?: Record<string, string>
+): Promise<string[]> {
   const { default: OpenAI } = await import('openai')
-  const client = new OpenAI({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
+  const client = new OpenAI({
+    apiKey: apiKey || 'no-key',
+    ...(baseURL ? { baseURL } : {}),
+    ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+  })
   const page = await client.models.list()
   return page.data.map((m) => m.id)
 }

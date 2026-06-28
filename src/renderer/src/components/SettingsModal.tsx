@@ -515,14 +515,30 @@ export function SettingsModal({
                       </div>
 
                       {(p.kind === 'openai-compatible' || p.baseUrl !== undefined) && (
-                        <label className="field">
-                          <span>Base URL</span>
-                          <input
-                            value={p.baseUrl ?? ''}
-                            placeholder="https://host/v1"
-                            onChange={(e) => patchProvider(p.id, { baseUrl: e.target.value })}
-                          />
-                        </label>
+                        <>
+                          <label className="field">
+                            <span>Base URL</span>
+                            <input
+                              value={p.baseUrl ?? ''}
+                              placeholder="https://host/v1"
+                              onChange={(e) => patchProvider(p.id, { baseUrl: e.target.value })}
+                            />
+                          </label>
+
+                          <label className="field">
+                            <span>Custom headers</span>
+                            <textarea
+                              rows={2}
+                              placeholder="one per line (e.g. HTTP-Referer: https://myapp)"
+                              value={Object.entries(p.headers ?? {})
+                                .map(([k, v]) => `${k}: ${v}`)
+                                .join('\n')}
+                              onChange={(e) =>
+                                patchProvider(p.id, { headers: parseHeaderLines(e.target.value) })
+                              }
+                            />
+                          </label>
+                        </>
                       )}
 
                       <label className="field">
