@@ -25,6 +25,11 @@ import {
   DEFAULT_SEARCH_PROVIDER_ID,
   getSearchProviderInfo
 } from '@shared/search'
+import {
+  catalogForPlatform,
+  catalogEntryToProvider,
+  type CatalogEntry
+} from '@shared/provider-catalog'
 
 /** Settings groups shown as tabs in the left-hand nav. */
 type TabId = 'models' | 'tools' | 'workspace' | 'keyboard' | 'appearance'
@@ -263,6 +268,15 @@ export function SettingsModal({
   const modalRef = useRef<HTMLDivElement>(null)
   useFocusTrap(modalRef, onClose)
 
+  // Known-host catalog for the "Add a provider" picker. Platform-filtered (e.g. the
+  // Apple-Silicon oMLX preset is hidden off macOS); hosts already present are shown
+  // disabled so they can't be added twice.
+  const catalog = useMemo(() => catalogForPlatform(isMacPlatform()), [])
+  const existingProviderIds = useMemo(
+    () => new Set(settings.providers.map((p) => p.id)),
+    [settings.providers]
+  )
+
   // ---- Keyboard-shortcut overrides (Keyboard tab) ----
   const setKeybind = (id: string, value: string | null): void =>
     setSettings((s) => ({ ...s, keybindings: { ...(s.keybindings ?? {}), [id]: value } }))
@@ -411,6 +425,16 @@ export function SettingsModal({
     }))
     setNewLabel('')
     setNewUrl('')
+  }
+
+  // Add a known host from the catalog. Idempotent: the catalog reuses a stable id,
+  // so an already-added host is a no-op (and is shown disabled in the picker).
+  const addCatalogProvider = (entry: CatalogEntry): void => {
+    setSettings((s) =>
+      s.providers.some((p) => p.id === entry.id)
+        ? s
+        : { ...s, providers: [...s.providers, catalogEntryToProvider(entry)] }
+    )
   }
 
   const removeProvider = (id: string): void => {
@@ -562,12 +586,56 @@ export function SettingsModal({
                 </SettingsSection>
 
                 <SettingsSection
-                  title="Add a local / custom endpoint"
-                  desc="Point Houston at any OpenAI-compatible server — local or hosted."
+                  title="Add a provider"
+                  desc="Pick a known host, or point Houston at any OpenAI-compatible server — local or hosted."
                 >
+                  <label className="field">
+                    <span>Known hosts</span>
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const entry = catalog.find((c) => c.id === e.target.value)
+                        if (entry) addCatalogProvider(entry)
+                        e.currentTarget.selectedIndex = 0
+                      }}
+                    >
+                      <option value="">Choose a host to add…</option>
+                      <optgroup label="Cloud (API key)">
+                        {catalog
+                          .filter((c) => c.category === 'cloud')
+                          .map((c) => (
+                            <option
+                              key={c.id}
+                              value={c.id}
+                              title={c.blurb}
+                              disabled={existingProviderIds.has(c.id)}
+                            >
+                              {c.label}
+                              {existingProviderIds.has(c.id) ? ' — added' : ''}
+                            </option>
+                          ))}
+                      </optgroup>
+                      <optgroup label="Local / self-hosted">
+                        {catalog
+                          .filter((c) => c.category === 'local')
+                          .map((c) => (
+                            <option
+                              key={c.id}
+                              value={c.id}
+                              title={c.blurb}
+                              disabled={existingProviderIds.has(c.id)}
+                            >
+                              {c.label}
+                              {existingProviderIds.has(c.id) ? ' — added' : ''}
+                            </option>
+                          ))}
+                      </optgroup>
+                    </select>
+                  </label>
+
                   <div className="add-endpoint">
                     <input
-                      placeholder="Label (e.g. My vLLM)"
+                      placeholder="Custom label (e.g. My vLLM)"
                       value={newLabel}
                       onChange={(e) => setNewLabel(e.target.value)}
                     />
@@ -577,7 +645,7 @@ export function SettingsModal({
                       onChange={(e) => setNewUrl(e.target.value)}
                     />
                     <button className="btn" onClick={addEndpoint}>
-                      Add
+                      Add custom
                     </button>
                   </div>
                 </SettingsSection>
