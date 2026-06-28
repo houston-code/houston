@@ -77,9 +77,9 @@ jobs:
   # ×2). Same for the macOS Seatbelt leg of `test`. Per-PR CI keeps the real LINUX sandbox
   # exercise (`linux-sandbox` below, ×1) since it's cheap.
 
-  # Per-merge packaging smoke — Linux x64 ONLY (×1 Actions-minute multiplier). Proves the
-  # afterPack vendored-binary copy + asar packaging still succeed on every merge without
-  # burning macOS (×10) or Windows (×2) minutes per PR. The FULL signed macOS/Windows/Linux
+  # Per-PR packaging smoke — Linux x64 ONLY (×1 Actions-minute multiplier). Proves the
+  # afterPack vendored-binary copy + asar packaging still succeed on every PR without
+  # burning macOS (×10) or Windows (×2) minutes. The FULL signed macOS/Windows/Linux
   # matrix is built and published at release time by release-publish.yml, and the heavy
   # matrix also runs in release-prepare.yml before a release is cut — so macOS/Windows
   # packaging regressions surface there. This job is in auto-merge's `needs`, so a PR that
@@ -89,7 +89,10 @@ jobs:
   build:
     timeout-minutes: 25
     needs: test
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
+    # Runs on EVERY PR, independent of the `auto-merge` label — packaging is a real check, so
+    # it shouldn't depend on whether the PR happens to be set to auto-merge. The label only
+    # drives the `auto-merge` job (which merges); it never changes what CI validates.
+    if: github.event_name == 'pull_request'
     # Pinned to ubuntu-22.04 (NOT ubuntu-latest): the native node-pty addon is compiled here,
     # so the runner's glibc sets the shipped app's minimum glibc. 22.04 = glibc 2.35, our
     # documented Linux floor (README). ubuntu-latest tracks the newest image (24.04 → glibc
