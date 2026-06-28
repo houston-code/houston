@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAX_RULES_CHARS, loadProjectRules } from './rules'
@@ -104,9 +104,11 @@ describe('loadProjectRules', () => {
       expect(rules.text).toContain('B-content')
     })
 
-    it('expands ~/ imports against the (test) home dir', async () => {
+    it('expands ~/ imports in the TRUSTED global file against the home dir', async () => {
+      // ~/ imports are only honored from the user's own global rules file. A
+      // workspace file doing the same is blocked (see the confinement tests below).
       writeFileSync(join(home, 'shared.md'), 'Shared snippet.')
-      writeFileSync(join(workspace, 'CLAUDE.md'), 'Pull in @~/shared.md here.')
+      writeFileSync(join(globalDir, 'CLAUDE.md'), 'Pull in @~/shared.md here.')
       const rules = await loadProjectRules(workspace, opts())
       expect(rules.text).toContain('Shared snippet.')
     })
@@ -137,6 +139,68 @@ describe('loadProjectRules', () => {
       // Should terminate and include each file's text once, not loop forever.
       expect(rules.text).toContain('start')
       expect(rules.text).toContain('end')
+    })
+  })
+
+  describe('@import confinement (untrusted repo)', () => {
+    // A workspace AGENTS.md/CLAUDE.md is attacker-controlled when an untrusted
+    // repo is opened, and its expanded text goes into the system prompt. It must
+    // not be able to @import host files (~/.ssh, /etc, ../escape, or via a
+    // symlink) and exfiltrate them into the prompt.
+
+    it('blocks a project file from importing a ~/ (home) path', async () => {
+      writeFileSync(join(home, 'secret.md'), 'TOPSECRET-HOME')
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Conventions. @~/secret.md')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).toContain('Conventions.')
+      expect(rules.text).not.toContain('TOPSECRET-HOME')
+    })
+
+    it('blocks a project file from importing an absolute path outside the workspace', async () => {
+      writeFileSync(join(home, 'secret.md'), 'TOPSECRET-ABS')
+      writeFileSync(join(workspace, 'CLAUDE.md'), `Rules. @${join(home, 'secret.md')}`)
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).not.toContain('TOPSECRET-ABS')
+    })
+
+    it('blocks a nested file from climbing out of the workspace with ../', async () => {
+      // A sibling of the workspace (both are direct children of tmpdir), reachable
+      // only by climbing above the root.
+      const sibling = mkdtempSync(join(tmpdir(), 'houston-sibling-'))
+      try {
+        writeFileSync(join(sibling, 'secret.md'), 'TOPSECRET-CLIMB')
+        mkdirSync(join(workspace, 'pkg'), { recursive: true })
+        // From workspace/pkg: ../.. = tmpdir, then into the sibling.
+        const escape = `../../${sibling.split('/').pop()}/secret.md`
+        writeFileSync(join(workspace, 'pkg', 'AGENTS.md'), `Pkg. @${escape}`)
+        const rules = await loadProjectRules(workspace, opts())
+        expect(rules.text).not.toContain('TOPSECRET-CLIMB')
+      } finally {
+        rmSync(sibling, { recursive: true, force: true })
+      }
+    })
+
+    it('does not follow a workspace symlink that points outside the tree', async () => {
+      writeFileSync(join(home, 'secret.md'), 'TOPSECRET-LINK')
+      symlinkSync(join(home, 'secret.md'), join(workspace, 'link.md'))
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Rules. @./link.md')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).not.toContain('TOPSECRET-LINK')
+    })
+
+    it('still allows an in-workspace import (legitimate split)', async () => {
+      mkdirSync(join(workspace, 'docs'), { recursive: true })
+      writeFileSync(join(workspace, 'docs', 'style.md'), 'IN-WORKSPACE-OK')
+      writeFileSync(join(workspace, 'CLAUDE.md'), 'Rules. @./docs/style.md')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).toContain('IN-WORKSPACE-OK')
+    })
+
+    it('the trusted global file may still import a home path', async () => {
+      writeFileSync(join(home, 'extra.md'), 'GLOBAL-EXTRA-OK')
+      writeFileSync(join(globalDir, 'CLAUDE.md'), 'Global. @~/extra.md')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).toContain('GLOBAL-EXTRA-OK')
     })
   })
 
