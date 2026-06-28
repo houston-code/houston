@@ -164,30 +164,35 @@ export function ModelPicker({
 
   return (
     <>
-      <button
-        ref={btnRef}
-        type="button"
-        className={`control control--select control--model${lacksTools ? ' control--model-warn' : ''}`}
-        title={lacksTools ? TOOL_WARNING : 'Model'}
-        role="combobox"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-activedescendant={open && flat[active] ? `model-opt-${active}` : undefined}
-        onClick={() => (open ? close() : openMenu())}
-        onKeyDown={onKeyDown}
-      >
+      <span className="model-control">
+        <button
+          ref={btnRef}
+          type="button"
+          className={`control control--select control--model${lacksTools ? ' control--model-warn' : ''}`}
+          title="Model"
+          role="combobox"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-activedescendant={open && flat[active] ? `model-opt-${active}` : undefined}
+          aria-describedby={lacksTools ? 'model-tool-warning' : undefined}
+          onClick={() => (open ? close() : openMenu())}
+          onKeyDown={onKeyDown}
+        >
+          {lacksTools && (
+            <span className="control__icon" aria-hidden="true">
+              ⚠
+            </span>
+          )}
+          <span className="control__text">{triggerLabel}</span>
+        </button>
+        {/* Explains the ⚠ on hover/focus; tied to the trigger via aria-describedby so
+            screen readers read it when the model button is focused. */}
         {lacksTools && (
-          <span className="control__icon" aria-hidden="true">
-            ⚠
+          <span id="model-tool-warning" role="tooltip" className="model-warn-tip">
+            {TOOL_WARNING}
           </span>
         )}
-        <span className="control__text">{triggerLabel}</span>
-      </button>
-      {lacksTools && (
-        <span role="alert" className="sr-only">
-          {TOOL_WARNING}
-        </span>
-      )}
+      </span>
 
       {open && (
         <Popover
