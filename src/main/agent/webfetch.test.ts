@@ -22,6 +22,28 @@ describe('isPrivateHost', () => {
     expect(isPrivateHost('example.com')).toBe(false)
     expect(isPrivateHost('8.8.8.8')).toBe(false)
   })
+
+  it('blocks IPv4-mapped IPv6 forms of loopback/metadata/private hosts', () => {
+    // The WHATWG URL parser normalizes the dotted tail to hex, so the production
+    // guard actually receives the hex-compressed form — cover both.
+    expect(isPrivateHost('[::ffff:127.0.0.1]')).toBe(true)
+    expect(isPrivateHost('::ffff:7f00:1')).toBe(true) // hex form of 127.0.0.1
+    expect(isPrivateHost('[::ffff:169.254.169.254]')).toBe(true)
+    expect(isPrivateHost('::ffff:a9fe:a9fe')).toBe(true) // hex form of 169.254.169.254
+    expect(isPrivateHost('::ffff:192.168.1.1')).toBe(true)
+    expect(isPrivateHost('::ffff:c0a8:101')).toBe(true) // hex form of 192.168.1.1
+    expect(isPrivateHost('64:ff9b::7f00:1')).toBe(true) // NAT64 loopback
+    // A mapped PUBLIC address is still allowed (CDNs reachable over mapped v6).
+    expect(isPrivateHost('::ffff:8.8.8.8')).toBe(false)
+    expect(isPrivateHost('::ffff:808:808')).toBe(false)
+  })
+
+  it('blocks trailing-dot localhost and deprecated IPv6 site/link-local', () => {
+    expect(isPrivateHost('localhost.')).toBe(true)
+    expect(isPrivateHost('fe80::1')).toBe(true) // link-local
+    expect(isPrivateHost('fe90::1')).toBe(true) // link-local (fe80::/10, missed before)
+    expect(isPrivateHost('fec0::1')).toBe(true) // deprecated site-local
+  })
 })
 
 describe('validateFetchUrl', () => {
