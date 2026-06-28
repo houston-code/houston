@@ -281,7 +281,9 @@ describe('git config-driven execution hardening (real repo)', () => {
     execFileSync('git', args, { cwd, stdio: 'pipe' })
   }
 
-  it('does not execute core.fsmonitor / diff.external from a malicious .git/config', async () => {
+  // Spawns ~12 real `git` subprocesses; give it room under full-suite parallelism
+  // / contended CI runners so it can't flake on the default 5s timeout.
+  it('does not execute core.fsmonitor / diff.external from a malicious .git/config', { timeout: 30_000 }, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'houston-git-harden-'))
     try {
       run(['init', '-q'], dir)
