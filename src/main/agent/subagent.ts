@@ -1,4 +1,4 @@
-import type { ChatMessage, Provider } from '@shared/agent'
+import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
 import { getTool } from './tools'
 
 /**
@@ -54,6 +54,8 @@ export interface SubAgentOptions {
    * so it can only narrow the read-only set, never expand it. Absent/empty => default.
    */
   tools?: string[]
+  /** Called with each turn's token usage, so callers (e.g. a review) can total cost. */
+  onUsage?: (usage: TokenUsage) => void
 }
 
 /** Run a read-only subagent loop to completion and return its final report text. */
@@ -85,7 +87,9 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       })) {
         if (ev.type === 'text') text += ev.text
         else if (ev.type === 'tool_call') calls.push(ev.call)
-        else if (ev.type === 'error') return `[subagent error: ${ev.message}]`
+        else if (ev.type === 'done') {
+          if (ev.usage) opts.onUsage?.(ev.usage)
+        } else if (ev.type === 'error') return `[subagent error: ${ev.message}]`
       }
     } catch (e) {
       if (signal.aborted) return lastText.trim() || '[subagent aborted]'

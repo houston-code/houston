@@ -385,6 +385,7 @@ export async function startRun(
           base,
           paths,
           effort,
+          onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
           signal: abort.signal
         }),
       attachImage,
