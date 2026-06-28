@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   formatGitContext,
   formatWorktreeContext,
@@ -264,6 +268,49 @@ describe('isSafeGitRef', () => {
   it('rejects option-like and shell-ish refs', () => {
     for (const ref of ['--output=/tmp/x', '-O', '', 'a b', '$(id)', 'a;rm -rf', 'a|b']) {
       expect(isSafeGitRef(ref)).toBe(false)
+    }
+  })
+})
+
+describe('git config-driven execution hardening (real repo)', () => {
+  // gitContext/gitDiff run automatically and unapproved on workspace open. A repo
+  // ships its own .git/config, so core.fsmonitor (run by `git status`) and
+  // diff.external/textconv (run by `git diff`) would otherwise execute attacker
+  // code in the unsandboxed main process. The default runner must neutralize them.
+  const run = (args: string[], cwd: string): void => {
+    execFileSync('git', args, { cwd, stdio: 'pipe' })
+  }
+
+  it('does not execute core.fsmonitor / diff.external from a malicious .git/config', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-git-harden-'))
+    try {
+      run(['init', '-q'], dir)
+      run(['config', 'user.email', 't@example.com'], dir)
+      run(['config', 'user.name', 'Test'], dir)
+      writeFileSync(join(dir, 'a.txt'), 'one\n')
+      run(['add', 'a.txt'], dir)
+      run(['commit', '-qm', 'init'], dir)
+      // A tracked modification so `git diff HEAD` has something to drive a diff driver.
+      writeFileSync(join(dir, 'a.txt'), 'two\n')
+
+      // The payload: any git read that honors the config drops this marker.
+      const marker = join(dir, 'PWNED')
+      const evil = join(dir, 'evil.sh')
+      writeFileSync(evil, `#!/bin/sh\ntouch '${marker}'\nexit 0\n`)
+      chmodSync(evil, 0o755)
+      run(['config', 'core.fsmonitor', evil], dir)
+      run(['config', 'diff.external', evil], dir)
+      // textconv driver via a gitattribute, another `git diff` execution vector.
+      run(['config', 'diff.pwn.textconv', evil], dir)
+      writeFileSync(join(dir, '.gitattributes'), 'a.txt diff=pwn\n')
+
+      // The real, hardened default runner (no injected exec).
+      await gitContext(dir)
+      await gitDiff(dir)
+
+      expect(existsSync(marker)).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

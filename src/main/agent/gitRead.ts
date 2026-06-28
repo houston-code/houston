@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process'
  * These commands are read-only and never prompt for approval, so the hardening is
  * the only thing standing between an untrusted checkout and code execution.
  */
-const GIT_HARDENING = [
+export const GIT_HARDENING = [
   '-c',
   'core.fsmonitor=',
   '-c',
@@ -19,7 +19,7 @@ const GIT_HARDENING = [
   'protocol.ext.allow=never'
 ]
 
-const GIT_ENV = {
+export const GIT_ENV = {
   ...process.env,
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_EXTERNAL_DIFF: '',
