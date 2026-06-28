@@ -931,6 +931,26 @@ body.is-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.control--model-warn {
+  /* The selected local model can't call tools — flag the trigger in warn color. */
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.control--model-warn:hover {
+  border-color: var(--warn);
+}
+.sr-only {
+  /* Visually hidden but exposed to assistive tech (e.g. role="alert" messages). */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .control--select {
   /* Let dropdowns concede width once the folder hits its floor, instead of
      forcing all the squeeze onto the folder button. */

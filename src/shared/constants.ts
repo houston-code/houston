@@ -34,6 +34,8 @@ export const IPC = {
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
   settingsListModels: 'settings:listModels',
+  /** Whether a local (Ollama) model supports tool calling — true / false / null (unknown). */
+  ollamaSupportsTools: 'ollama:supportsTools',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
   // Conversations

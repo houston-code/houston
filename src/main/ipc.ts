@@ -24,6 +24,7 @@ import { getSettings, saveSettings, rememberWorkspace, getProvider } from './sto
 import { getIntegrations } from './integrations'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
+import { ollamaSupportsTools } from './providers/ollama'
 import {
   cancelRun,
   resolveApproval,
@@ -226,6 +227,15 @@ export function registerIpc(): void {
     const provider = getProvider(providerId)
     if (!provider) throw new Error(`Unknown provider: ${providerId}`)
     return listModels(provider)
+  })
+
+  // Preflight: does this local model support tool calling? Only meaningful for an
+  // Ollama-style (openai-compatible) provider; anything else returns null (unknown)
+  // so the UI never shows a false warning.
+  ipcMain.handle(IPC.ollamaSupportsTools, async (_event, providerId: string, model: string) => {
+    const provider = getProvider(providerId)
+    if (!provider?.baseUrl || provider.kind !== 'openai-compatible') return null
+    return ollamaSupportsTools(provider.baseUrl, model)
   })
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
