@@ -9,6 +9,12 @@ export interface Command {
   description: string
   /** Prompt template for a custom command; absent for built-in action commands. */
   template?: string
+  /**
+   * Run the moment it's submitted instead of expanding into the composer for
+   * editing. For first-party action templates like `/review` that should "just
+   * work" — the expanded prompt is sent as a normal turn, not previewed.
+   */
+  autoRun?: boolean
 }
 
 /** Parse a leading slash command from composer text: "/name the rest" → {name, args}. */

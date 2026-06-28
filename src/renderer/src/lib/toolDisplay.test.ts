@@ -49,6 +49,24 @@ describe('describeTool', () => {
     })
   })
 
+  it('labels a dispatched subagent by its task description', () => {
+    expect(describeTool(tool('dispatch_agent', { description: 'find auth flow' }))).toEqual({
+      verb: 'Subagent',
+      target: 'find auth flow',
+      mono: false
+    })
+    expect(describeTool(tool('dispatch_agent', {})).target).toBe('research task')
+  })
+
+  it('labels a review, noting the base when given', () => {
+    expect(describeTool(tool('review_changes', {}))).toEqual({
+      verb: 'Review',
+      target: 'uncommitted changes',
+      mono: false
+    })
+    expect(describeTool(tool('review_changes', { base: 'main' })).target).toBe('changes vs main')
+  })
+
   it('describes a localhost view by its URL', () => {
     expect(describeTool(tool('view_localhost', { url: 'http://localhost:3000' }))).toEqual({
       verb: 'View',

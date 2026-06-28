@@ -240,12 +240,22 @@ export function Composer({
         const cmd = resolveCommand(commands, parsed.name)
         if (cmd) {
           if (cmd.template) {
-            // Custom command: expand into the composer so the (workspace-supplied)
-            // prompt is visible and editable before the user sends it.
             const expanded = expandTemplate(cmd.template, parsed.args)
-            setText(expanded)
-            resetMenus()
-            focusEnd(expanded.length)
+            if (cmd.autoRun) {
+              // Action template (e.g. /review): run it straight away — send the
+              // expanded prompt as a normal turn instead of dropping it in the field.
+              appendPromptHistory(trimmed)
+              onSend(expanded)
+              setText('')
+              setImages([])
+              resetMenus()
+            } else {
+              // Custom command: expand into the composer so the (workspace-supplied)
+              // prompt is visible and editable before the user sends it.
+              setText(expanded)
+              resetMenus()
+              focusEnd(expanded.length)
+            }
           } else {
             appendPromptHistory(trimmed)
             onCommand(cmd, parsed.args)

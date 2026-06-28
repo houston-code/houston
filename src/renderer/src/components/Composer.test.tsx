@@ -97,6 +97,42 @@ describe('Composer', () => {
   })
 })
 
+describe('Composer slash-command templates', () => {
+  it('runs an autoRun template command immediately instead of expanding it', () => {
+    const review: Command = {
+      name: 'review',
+      description: 'Review',
+      autoRun: true,
+      template: 'Do the review now.'
+    }
+    const props = baseProps({ commands: [review] })
+    render(<Composer {...props} />)
+
+    // Trailing space closes the command menu so Enter submits (matches /new).
+    const input = type('/review ')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(props.onSend).toHaveBeenCalledWith('Do the review now.')
+    expect(input.value).toBe('') // sent, not left lingering in the field
+  })
+
+  it('expands a non-autoRun template command into the field for editing', () => {
+    const custom: Command = {
+      name: 'spec',
+      description: 'Spec',
+      template: 'Write a spec for $ARGUMENTS.'
+    }
+    const props = baseProps({ commands: [custom] })
+    render(<Composer {...props} />)
+
+    const input = type('/spec the login flow')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(props.onSend).not.toHaveBeenCalled()
+    expect(input.value).toBe('Write a spec for the login flow.') // previewed for editing
+  })
+})
+
 describe('Composer prompt-history recall', () => {
   beforeEach(() => localStorage.clear())
 

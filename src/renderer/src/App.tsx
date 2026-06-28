@@ -83,6 +83,8 @@ const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'review',
     description: 'Adversarial review of your uncommitted changes',
+    // Runs immediately on submit (autoRun) rather than expanding into the composer.
+    autoRun: true,
     template:
       'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
   }
