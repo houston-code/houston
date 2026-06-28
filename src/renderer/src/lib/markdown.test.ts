@@ -214,3 +214,38 @@ describe('safeHref', () => {
     expect(safeHref('#section')).toBe('#section')
   })
 })
+
+describe('parser is bounded on adversarial input (no O(n^2) freeze)', () => {
+  // The inline scanners (links, code, emphasis, autolinks) scan forward to find a
+  // close; thousands of unclosed constructs used to compound to O(n^2) and freeze
+  // the renderer. A shared scan budget caps the work to O(n).
+  const fast = (label: string, src: string): void => {
+    const t0 = performance.now()
+    const blocks = parseMarkdown(src)
+    const ms = performance.now() - t0
+    expect(Array.isArray(blocks)).toBe(true)
+    // Generous bound: the fixed parser does this in ~30ms; the quadratic version
+    // would take many seconds at this size.
+    expect(ms, `${label} took ${ms.toFixed(0)}ms`).toBeLessThan(2000)
+  }
+
+  it('handles a flood of unclosed links quickly', () => {
+    fast('unclosed-links', '[a]('.repeat(80_000))
+  })
+  it('handles a flood of unclosed angle brackets quickly', () => {
+    fast('angle-brackets', '<'.repeat(300_000))
+  })
+  it('handles a flood of emphasis delimiters quickly', () => {
+    fast('emphasis', '*_~'.repeat(100_000))
+  })
+
+  it('still parses a normal link/bold/code after the budget guard', () => {
+    const blocks = parseMarkdown('See [docs](https://example.com) for **bold** and `code`.')
+    const para = blocks[0] as Extract<Block, { type: 'paragraph' }>
+    expect(para.type).toBe('paragraph')
+    const kinds = para.children.map((c) => c.type)
+    expect(kinds).toContain('link')
+    expect(kinds).toContain('strong')
+    expect(kinds).toContain('code')
+  })
+})

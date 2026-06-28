@@ -45,9 +45,37 @@ const UL_RE = /^(\s*)([-*+])\s+(.*)$/
 const OL_RE = /^(\s*)(\d{1,9})[.)]\s+(.*)$/
 const BLOCKQUOTE_RE = /^ {0,3}>\s?(.*)$/
 
+/**
+ * Hard cap on the document size handed to the parser, so a single pathological
+ * input can't exhaust memory. Beyond this the tail is dropped with a notice.
+ */
+const MAX_DOC_CHARS = 1_000_000
+
+/**
+ * Per-document budget for inline look-ahead steps. The inline scanners (links,
+ * code spans, emphasis, autolinks) each scan forward to find their close; on
+ * adversarial input (e.g. thousands of unclosed `[a](`) that compounds to O(n²)
+ * and freezes the renderer. Capping the cumulative scan steps bounds the work to
+ * O(n): once the budget is spent, further scans give up and the remaining text
+ * renders verbatim instead of hanging the UI. The budget scales with input length
+ * (with a floor) so normal documents — which use ~O(n) steps — are never
+ * truncated, while quadratic blowup is capped at a small multiple of n.
+ */
+function inlineScanFloor(len: number): number {
+  return Math.max(2_000_000, len * 20)
+}
+let inlineScanBudget = 0
+
 /** Parse a markdown document into a list of blocks. */
 export function parseMarkdown(src: string): Block[] {
-  const lines = src.replace(/\r\n?/g, '\n').split('\n')
+  let text = src
+  if (text.length > MAX_DOC_CHARS) {
+    text = `${text.slice(0, MAX_DOC_CHARS)}\n\n[content truncated]`
+  }
+  // The inline look-ahead budget is (re)set per block by parseInline (proportional
+  // to each block's length), so a pathological block is bounded to O(len) without
+  // starving later blocks. The cap above just bounds total memory.
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
   return parseBlocks(lines)
 }
 
@@ -289,8 +317,18 @@ function parseTable(lines: string[], start: number): { block: Extract<Block, { t
 
 const URL_RE = /^https?:\/\/[^\s<]+/i
 
-/** Parse inline markdown (emphasis, code, links) into a node list. */
+/**
+ * Parse inline markdown (emphasis, code, links) into a node list. Each top-level
+ * call resets the inline look-ahead budget (proportional to this run's length) so
+ * the forward scanners can't be driven into O(n²) by adversarial content;
+ * recursion (link text, emphasis inner) shares the budget via parseInlineInner.
+ */
 export function parseInline(src: string): Inline[] {
+  inlineScanBudget = inlineScanFloor(src.length)
+  return parseInlineInner(src)
+}
+
+function parseInlineInner(src: string): Inline[] {
   const out: Inline[] = []
   let buf = ''
   let i = 0
@@ -330,7 +368,14 @@ export function parseInline(src: string): Inline[] {
 
     // Angle autolink: <https://…>
     if (c === '<') {
-      const close = src.indexOf('>', i + 1)
+      let close = -1
+      for (let k = i + 1; k < src.length; k++) {
+        if (--inlineScanBudget <= 0) break
+        if (src[k] === '>') {
+          close = k
+          break
+        }
+      }
       if (close > i) {
         const url = src.slice(i + 1, close)
         if (URL_RE.test(url)) {
@@ -347,7 +392,7 @@ export function parseInline(src: string): Inline[] {
       const link = parseLink(src, i)
       if (link) {
         flush()
-        out.push({ type: 'link', href: link.href, children: parseInline(link.text) })
+        out.push({ type: 'link', href: link.href, children: parseInlineInner(link.text) })
         i = link.end
         continue
       }
@@ -413,6 +458,7 @@ function codeSpan(src: string, start: number): { value: string; end: number } | 
   while (src[start + n] === '`') n++
   let j = start + n
   while (j < src.length) {
+    if (--inlineScanBudget <= 0) return null
     if (src[j] === '`') {
       let run = 0
       while (src[j + run] === '`') run++
@@ -437,6 +483,7 @@ function parseLink(src: string, start: number): { text: string; href: string; en
   let depth = 0
   let close = -1
   for (let j = start; j < src.length; j++) {
+    if (--inlineScanBudget <= 0) return null
     if (src[j] === '\\') {
       j++
       continue
@@ -455,6 +502,7 @@ function parseLink(src: string, start: number): { text: string; href: string; en
   let depthP = 0
   let end = -1
   for (let j = close + 1; j < src.length; j++) {
+    if (--inlineScanBudget <= 0) return null
     if (src[j] === '(') depthP++
     else if (src[j] === ')') {
       depthP--
@@ -501,7 +549,7 @@ function parseEmphasis(src: string, start: number): { node: Inline; end: number 
 
     const inner = src.slice(start + L, closeIdx)
     if (inner === '') continue
-    const children = parseInline(inner)
+    const children = parseInlineInner(inner)
     const node: Inline = wrap
       ? { type, children: [{ type: wrap, children }] }
       : { type, children }
@@ -514,6 +562,7 @@ function parseEmphasis(src: string, start: number): { node: Inline; end: number 
 function findClosing(src: string, from: number, mark: string): number {
   let j = from
   while (j < src.length) {
+    if (--inlineScanBudget <= 0) return -1
     if (src[j] === '`') {
       const span = codeSpan(src, j)
       if (span) {
