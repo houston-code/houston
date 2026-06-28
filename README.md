@@ -13,8 +13,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
 ## Features
 
 - **Any model, your keys.** Anthropic (Claude), OpenAI (GPT), Google (Gemini),
-  any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Add
-  custom endpoints and fetch live model lists in Settings.
+  any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Add a
+  known host (OpenRouter, Together, Fireworks, Groq, and more) in one click, point
+  at any custom endpoint, and fetch live model lists in Settings.
 - **Image attachments.** Drag-drop or paste images (PNG/JPEG/GIF/WebP) into the
   composer to send them to a vision-capable model — screenshots, diagrams,
   mockups. The affordance is offered only when the selected model supports
