@@ -105,6 +105,21 @@ describe('openai adapter: tool calls emitted as text (Ollama)', () => {
     expect(events.some((e) => e.type === 'tool_call')).toBe(false)
     expect(textOf(events)).toBe('{"name":"read_file","arguments":{}}')
   })
+
+  it('strips <tool_response> control tags the model echoes into text', async () => {
+    const events = await run([
+      textChunk('Here are the results: '),
+      textChunk('<tool_response>{"ok":'),
+      textChunk('true}</tool_response>'),
+      textChunk(' and my analysis.'),
+      stopChunk()
+    ])
+    const text = textOf(events)
+    expect(text).not.toContain('tool_response')
+    expect(text).not.toContain('{"ok":true}')
+    expect(text).toContain('Here are the results:')
+    expect(text).toContain('and my analysis.')
+  })
 })
 
 describe('toOpenAIMessages', () => {
