@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi, afterEach } from 'vitest'
 import type { AppSettings, ProviderConfig, SelectedModel } from '@shared/types'
 import { ModelPicker } from './ModelPicker'
 
@@ -124,5 +124,85 @@ describe('ModelPicker', () => {
     renderPicker({ settings, selected: { providerId: 'openai', model: 'gpt-5' } })
     fireEvent.click(screen.getByTitle('Model'))
     expect(screen.getByRole('group', { name: 'OpenAI (GPT) (no key)' })).toBeInTheDocument()
+  })
+})
+
+describe('ModelPicker — local model tool-support warning', () => {
+  afterEach(() => {
+    delete (window as { api?: unknown }).api
+  })
+
+  function ollamaSettings(): AppSettings {
+    return {
+      providers: [
+        provider({
+          id: 'ollama',
+          kind: 'openai-compatible',
+          label: 'Local — Ollama',
+          requiresKey: false,
+          hasKey: false,
+          baseUrl: 'http://localhost:11434/v1',
+          models: [{ id: 'llama2', label: 'llama2' }]
+        })
+      ]
+    } as unknown as AppSettings
+  }
+
+  function installApi(supportsTools: boolean | null): ReturnType<typeof vi.fn> {
+    const fn = vi.fn().mockResolvedValue(supportsTools)
+    ;(window as { api?: unknown }).api = { ollamaSupportsTools: fn }
+    return fn
+  }
+
+  function renderOllama(): void {
+    render(
+      <ModelPicker
+        settings={ollamaSettings()}
+        selected={{ providerId: 'ollama', model: 'llama2' }}
+        onSelect={vi.fn()}
+      />
+    )
+  }
+
+  it('warns when the selected local model does not support tools', async () => {
+    const fn = installApi(false)
+    renderOllama()
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveClass('control--model-warn')
+    })
+    expect(fn).toHaveBeenCalledWith('ollama', 'llama2')
+    expect(screen.getByRole('combobox')).toHaveAttribute('title', expect.stringContaining('tool calling'))
+    expect(screen.getByRole('alert')).toHaveTextContent(/tool calling/)
+  })
+
+  it('stays silent when tool support is unknown (null)', async () => {
+    installApi(null)
+    renderOllama()
+    // Give the async check a chance to resolve before asserting absence.
+    await Promise.resolve()
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).not.toHaveClass('control--model-warn')
+    })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('stays silent when the model supports tools', async () => {
+    installApi(true)
+    renderOllama()
+    await waitFor(() => expect(window.api.ollamaSupportsTools).toHaveBeenCalled())
+    expect(screen.getByRole('combobox')).not.toHaveClass('control--model-warn')
+  })
+
+  it('does not probe non-local providers', () => {
+    const fn = installApi(false)
+    render(
+      <ModelPicker
+        settings={settingsWith(OPENAI_STORED)}
+        selected={{ providerId: 'openai', model: 'gpt-5' }}
+        onSelect={vi.fn()}
+      />
+    )
+    expect(fn).not.toHaveBeenCalled()
+    expect(screen.getByRole('combobox')).not.toHaveClass('control--model-warn')
   })
 })

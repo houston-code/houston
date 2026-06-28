@@ -46,6 +46,9 @@ const api = {
     ipcRenderer.invoke(IPC.settingsDeleteKey, providerId),
   listModels: (providerId: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.settingsListModels, providerId),
+  /** Whether a local model supports tool calling: true / false / null (unknown). */
+  ollamaSupportsTools: (providerId: string, model: string): Promise<boolean | null> =>
+    ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),
   /** Status of optional integrations (gh CLI, formatters) for the Settings hint. */
   getIntegrations: (): Promise<IntegrationsInfo> => ipcRenderer.invoke(IPC.integrationsGet),
 

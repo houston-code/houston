@@ -1,8 +1,13 @@
-import { useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { AppSettings, ProviderConfig, SelectedModel } from '@shared/types'
 import { contextWindowFor, formatTokens } from '@shared/usage'
 import { sortedModels } from '@shared/models'
 import { Popover } from './Popover'
+
+/** Shown when the selected local model doesn't advertise tool-calling support. */
+const TOOL_WARNING =
+  "This model doesn't support tool calling, which this agent requires. " +
+  'Pick a tool-capable model (e.g. qwen2.5-coder, llama3.1, mistral-nemo).'
 
 /** "Anthropic (Claude)" or "OpenAI (GPT) (no key)" when a required key is missing. */
 function groupLabel(p: ProviderConfig): string {
@@ -59,6 +64,30 @@ export function ModelPicker({
   const selectedKey = selected ? `${selected.providerId}::${selected.model}` : ''
   const selectedProvider = settings.providers.find((p) => p.id === selected?.providerId)
   const selectedModel = selectedProvider?.models.find((m) => m.id === selected?.model)
+
+  // Preflight: a local (Ollama) model that doesn't advertise tool calling can't run
+  // this agent. Warn at selection time rather than letting the first turn 400. Only
+  // a definitive `false` warns — `null` (Ollama down, model not pulled, old version)
+  // is "unknown" and must stay silent. Re-checks whenever the selection changes.
+  const [lacksTools, setLacksTools] = useState(false)
+  const providerId = selected?.providerId
+  const model = selected?.model
+  const providerKind = selectedProvider?.kind
+  useEffect(() => {
+    setLacksTools(false)
+    if (!providerId || !model || providerKind !== 'openai-compatible') return
+    const check = window.api?.ollamaSupportsTools
+    if (!check) return
+    let cancelled = false
+    void check(providerId, model)
+      .then((supported) => {
+        if (!cancelled && supported === false) setLacksTools(true)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [providerId, model, providerKind])
   const triggerLabel = selected
     ? `${selectedModel?.label ?? selected.model}${
         windowLabel(selected.model) ? ` · ${windowLabel(selected.model)}` : ''
@@ -138,8 +167,8 @@ export function ModelPicker({
       <button
         ref={btnRef}
         type="button"
-        className="control control--select control--model"
-        title="Model"
+        className={`control control--select control--model${lacksTools ? ' control--model-warn' : ''}`}
+        title={lacksTools ? TOOL_WARNING : 'Model'}
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -147,8 +176,18 @@ export function ModelPicker({
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={onKeyDown}
       >
+        {lacksTools && (
+          <span className="control__icon" aria-hidden="true">
+            ⚠
+          </span>
+        )}
         <span className="control__text">{triggerLabel}</span>
       </button>
+      {lacksTools && (
+        <span role="alert" className="sr-only">
+          {TOOL_WARNING}
+        </span>
+      )}
 
       {open && (
         <Popover
