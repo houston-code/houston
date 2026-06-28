@@ -5,6 +5,7 @@ import {
   shortcutDisplays,
   isEditableTarget,
   isCustomizable,
+  terminalKeepsKey,
   SHORTCUTS,
   type Keyish
 } from './shortcuts'
@@ -145,6 +146,23 @@ describe('SHORTCUTS registry', () => {
       expect(s.chords.length).toBeGreaterThan(0)
       expect(s.label.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('terminalKeepsKey', () => {
+  it('lets the shell keep Ctrl-chords and plain keys', () => {
+    expect(terminalKeepsKey('next-chat', false)).toBe(true) // ⌃Tab → shell
+    expect(terminalKeepsKey('cycle-mode', false)).toBe(true) // Shift+Tab → shell
+    expect(terminalKeepsKey(null, false)).toBe(true) // Ctrl+C etc. → shell
+  })
+
+  it('lets ⌘-chords through to the app (the shell never receives ⌘)', () => {
+    expect(terminalKeepsKey('command-palette', true)).toBe(false) // ⌘K → app
+    expect(terminalKeepsKey('find-in-chat', true)).toBe(false) // ⌘F → app
+  })
+
+  it('always lets the terminal toggle reach the app', () => {
+    expect(terminalKeepsKey('toggle-terminal', false)).toBe(false)
   })
 })
 

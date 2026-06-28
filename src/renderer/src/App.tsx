@@ -16,7 +16,13 @@ import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
 import { branchNameError, suggestBranch } from './lib/worktree'
 import { applyTheme } from './lib/theme'
-import { matchShortcut, isEditableTarget, isMacPlatform, shortcutHint } from './lib/shortcuts'
+import {
+  matchShortcut,
+  isEditableTarget,
+  isMacPlatform,
+  shortcutHint,
+  terminalKeepsKey
+} from './lib/shortcuts'
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
 import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
@@ -971,11 +977,12 @@ export default function App(): JSX.Element {
       const inEditable = isEditableTarget(e.target)
       if (inEditable && !(e.metaKey || e.ctrlKey) && e.key !== 'Escape') return
       const action = matchShortcut(e, shortcuts)
-      // Keys typed inside the terminal belong to the shell (Esc → vim, etc.).
-      // Only the terminal toggle is honoured there; everything else passes through.
+      // Keys typed inside the terminal mostly belong to the shell (Esc → vim, Ctrl+C
+      // → SIGINT, etc.). The terminal toggle and ⌘-chords (macOS app shortcuts the
+      // shell never sees) still reach the app; everything else passes through.
       const inTerminal =
         e.target instanceof HTMLElement && e.target.closest('.terminal-dock') !== null
-      if (inTerminal && action !== 'toggle-terminal') return
+      if (inTerminal && terminalKeepsKey(action, e.metaKey)) return
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
