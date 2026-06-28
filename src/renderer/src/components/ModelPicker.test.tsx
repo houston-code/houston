@@ -171,8 +171,10 @@ describe('ModelPicker — local model tool-support warning', () => {
       expect(screen.getByRole('combobox')).toHaveClass('control--model-warn')
     })
     expect(fn).toHaveBeenCalledWith('ollama', 'llama2')
-    expect(screen.getByRole('combobox')).toHaveAttribute('title', expect.stringContaining('tool calling'))
-    expect(screen.getByRole('alert')).toHaveTextContent(/tool calling/)
+    // A hover/focus tooltip carries the explanation, tied to the trigger for a11y.
+    const tip = screen.getByRole('tooltip')
+    expect(tip).toHaveTextContent(/tool calling/)
+    expect(screen.getByRole('combobox')).toHaveAttribute('aria-describedby', tip.id)
   })
 
   it('stays silent when tool support is unknown (null)', async () => {
@@ -183,7 +185,7 @@ describe('ModelPicker — local model tool-support warning', () => {
     await waitFor(() => {
       expect(screen.getByRole('combobox')).not.toHaveClass('control--model-warn')
     })
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
   })
 
   it('stays silent when the model supports tools', async () => {
