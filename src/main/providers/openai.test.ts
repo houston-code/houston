@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
-import { toOpenAIMessages, createOpenAIProvider } from './openai'
+import { toOpenAIMessages, createOpenAIProvider, modelOptionFromListing } from './openai'
 
 // Mock the lazily-imported SDK so we can feed a synthetic chat-completions stream
 // and assert how the adapter turns it into provider events. `ctor` captures the
@@ -209,5 +209,48 @@ describe('openai adapter: client construction (base URL + custom headers)', () =
   it('omits defaultHeaders for an empty headers object', async () => {
     const opts = await construct({})
     expect(opts).not.toHaveProperty('defaultHeaders')
+  })
+})
+
+describe('modelOptionFromListing', () => {
+  it('returns just the id for a plain OpenAI-compatible entry', () => {
+    expect(modelOptionFromListing({ id: 'qwen2.5-coder', object: 'model' })).toEqual({
+      id: 'qwen2.5-coder'
+    })
+  })
+
+  it('captures OpenRouter-style capability metadata', () => {
+    const opt = modelOptionFromListing({
+      id: 'deepseek/deepseek-r1',
+      context_length: 128000,
+      supported_parameters: ['tools', 'reasoning', 'temperature'],
+      architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }
+    })
+    expect(opt).toEqual({
+      id: 'deepseek/deepseek-r1',
+      caps: { tools: true, reasoning: true, vision: true, contextWindow: 128000 }
+    })
+  })
+
+  it('records explicit negative capabilities (text-only, no tools)', () => {
+    const opt = modelOptionFromListing({
+      id: 'some/base-model',
+      supported_parameters: ['temperature', 'top_p'],
+      architecture: { input_modalities: ['text'] }
+    })
+    expect(opt.caps).toEqual({ tools: false, reasoning: false, vision: false })
+  })
+
+  it('accepts alternate parameter names (tool_choice / include_reasoning)', () => {
+    const opt = modelOptionFromListing({
+      id: 'x',
+      supported_parameters: ['tool_choice', 'include_reasoning']
+    })
+    expect(opt.caps).toMatchObject({ tools: true, reasoning: true })
+  })
+
+  it('ignores a non-positive or non-numeric context_length', () => {
+    expect(modelOptionFromListing({ id: 'a', context_length: 0 })).toEqual({ id: 'a' })
+    expect(modelOptionFromListing({ id: 'b', context_length: 'big' })).toEqual({ id: 'b' })
   })
 })

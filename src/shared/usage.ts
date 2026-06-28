@@ -3,6 +3,7 @@
  * each provider) and the renderer (which displays them). Pure + dependency-free
  * so both processes and the unit tests can use them.
  */
+import type { ModelCaps } from './types'
 
 /** Per-conversation running token usage (persisted; displayed in the control bar). */
 export interface SessionUsage {
@@ -113,6 +114,36 @@ export interface ModelCapabilities {
 export function modelCapabilities(model: string): ModelCapabilities {
   const m = model.toLowerCase()
   return { vision: hasVision(m), reasoning: hasReasoning(m) }
+}
+
+/**
+ * Resolve a model's capabilities, preferring host-provided metadata (`caps`, from
+ * the model listing) over the name-heuristics. Each field falls back independently,
+ * so a host that reports only context_length still gets heuristic vision/reasoning.
+ * This is how host-routed ids the heuristics don't recognize (deepseek-r1, gemma-3)
+ * still surface the right flags.
+ */
+export function resolveCapabilities(model: string, caps?: ModelCaps): ModelCapabilities {
+  const h = modelCapabilities(model)
+  return {
+    vision: caps?.vision ?? h.vision,
+    reasoning: caps?.reasoning ?? h.reasoning
+  }
+}
+
+/**
+ * Resolved tool-calling support: the host's listed value when known, else null
+ * ("unknown" — the caller may probe a local server or simply stay silent). There's
+ * no name-heuristic fallback because most tool-capable open models can't be told
+ * apart from incapable ones by id alone.
+ */
+export function resolveToolSupport(caps?: ModelCaps): boolean | null {
+  return caps?.tools ?? null
+}
+
+/** Context window, preferring host-provided metadata over the family heuristic. */
+export function resolveContextWindow(model: string, caps?: ModelCaps): number | null {
+  return caps?.contextWindow ?? contextWindowFor(model)
 }
 
 function hasVision(m: string): boolean {

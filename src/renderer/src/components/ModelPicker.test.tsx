@@ -208,3 +208,82 @@ describe('ModelPicker — local model tool-support warning', () => {
     expect(screen.getByRole('combobox')).not.toHaveClass('control--model-warn')
   })
 })
+
+describe('ModelPicker — host-listed capabilities', () => {
+  afterEach(() => {
+    delete (window as { api?: unknown }).api
+  })
+
+  function hostSettings(caps: Record<string, unknown>): AppSettings {
+    return {
+      providers: [
+        provider({
+          id: 'openrouter',
+          kind: 'openai-compatible',
+          label: 'OpenRouter',
+          requiresKey: true,
+          hasKey: true,
+          baseUrl: 'https://openrouter.ai/api/v1',
+          models: [{ id: 'deepseek/deepseek-r1', caps }]
+        })
+      ]
+    } as unknown as AppSettings
+  }
+
+  it('warns from a listed tools:false without probing the server', async () => {
+    const fn = vi.fn().mockResolvedValue(true)
+    ;(window as { api?: unknown }).api = { ollamaSupportsTools: fn }
+    render(
+      <ModelPicker
+        settings={hostSettings({ tools: false })}
+        selected={{ providerId: 'openrouter', model: 'deepseek/deepseek-r1' }}
+        onSelect={vi.fn()}
+      />
+    )
+    await waitFor(() => expect(screen.getByRole('combobox')).toHaveClass('control--model-warn'))
+    // The listed value is authoritative — no live preflight needed.
+    expect(fn).not.toHaveBeenCalled()
+  })
+
+  it('suppresses the local preflight when tools are listed as supported', async () => {
+    const fn = vi.fn().mockResolvedValue(false)
+    ;(window as { api?: unknown }).api = { ollamaSupportsTools: fn }
+    render(
+      <ModelPicker
+        settings={hostSettings({ tools: true })}
+        selected={{ providerId: 'openrouter', model: 'deepseek/deepseek-r1' }}
+        onSelect={vi.fn()}
+      />
+    )
+    await Promise.resolve()
+    expect(fn).not.toHaveBeenCalled()
+    expect(screen.getByRole('combobox')).not.toHaveClass('control--model-warn')
+  })
+
+  it('renders capability chips for tools / vision / reasoning', () => {
+    render(
+      <ModelPicker
+        settings={hostSettings({ tools: true, vision: true, reasoning: true })}
+        selected={{ providerId: 'openrouter', model: 'deepseek/deepseek-r1' }}
+        onSelect={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByTitle('Model'))
+    const opt = screen.getByRole('option', { name: /deepseek/ })
+    expect(within(opt).getByTitle('Supports tool calling')).toBeInTheDocument()
+    expect(within(opt).getByTitle('Accepts images (vision)')).toBeInTheDocument()
+    expect(within(opt).getByTitle('Has a reasoning mode')).toBeInTheDocument()
+  })
+
+  it('shows the listed context window on a model the heuristics do not know', () => {
+    render(
+      <ModelPicker
+        settings={hostSettings({ contextWindow: 128_000 })}
+        selected={{ providerId: 'openrouter', model: 'deepseek/deepseek-r1' }}
+        onSelect={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByTitle('Model'))
+    expect(screen.getByRole('option', { name: /deepseek\/deepseek-r1 128k/ })).toBeInTheDocument()
+  })
+})

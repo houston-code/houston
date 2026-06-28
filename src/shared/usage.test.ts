@@ -6,6 +6,9 @@ import {
   formatUsd,
   modelCapabilities,
   modelPricing,
+  resolveCapabilities,
+  resolveContextWindow,
+  resolveToolSupport,
   turnCostUsd
 } from './usage'
 
@@ -189,5 +192,62 @@ describe('modelCapabilities', () => {
   it('is case-insensitive', () => {
     expect(modelCapabilities('Claude-Opus-4-8')).toEqual({ vision: true, reasoning: true })
     expect(modelCapabilities('GPT-4O')).toEqual({ vision: true, reasoning: false })
+  })
+})
+
+describe('resolveCapabilities', () => {
+  it('prefers listed caps over the name heuristic', () => {
+    // gpt-4o heuristically has vision but no reasoning; listed caps override both.
+    expect(resolveCapabilities('gpt-4o', { vision: false, reasoning: true })).toEqual({
+      vision: false,
+      reasoning: true
+    })
+  })
+
+  it('falls back per-field when a cap is absent', () => {
+    // Only reasoning is listed; vision still comes from the gpt-4o heuristic (true).
+    expect(resolveCapabilities('gpt-4o', { reasoning: true })).toEqual({
+      vision: true,
+      reasoning: true
+    })
+  })
+
+  it('uses heuristics entirely when no caps are given', () => {
+    expect(resolveCapabilities('claude-opus-4-8')).toEqual({ vision: true, reasoning: true })
+  })
+
+  it('lights up a host-routed id the heuristics do not recognize', () => {
+    // deepseek-r1 matches no curated family, so heuristics report all-false; the
+    // host's listed reasoning flag is what surfaces it.
+    expect(resolveCapabilities('deepseek/deepseek-r1', { reasoning: true })).toEqual({
+      vision: false,
+      reasoning: true
+    })
+  })
+})
+
+describe('resolveToolSupport', () => {
+  it('returns the listed value when known', () => {
+    expect(resolveToolSupport({ tools: true })).toBe(true)
+    expect(resolveToolSupport({ tools: false })).toBe(false)
+  })
+
+  it('returns null (unknown) when unlisted — no name heuristic', () => {
+    expect(resolveToolSupport({})).toBeNull()
+    expect(resolveToolSupport(undefined)).toBeNull()
+  })
+})
+
+describe('resolveContextWindow', () => {
+  it('prefers a listed context window', () => {
+    expect(resolveContextWindow('gpt-4o', { contextWindow: 64_000 })).toBe(64_000)
+  })
+
+  it('falls back to the family heuristic when unlisted', () => {
+    expect(resolveContextWindow('gpt-4o')).toBe(contextWindowFor('gpt-4o'))
+  })
+
+  it('returns null for an unknown id with no listed window', () => {
+    expect(resolveContextWindow('deepseek/deepseek-r1')).toBeNull()
   })
 })

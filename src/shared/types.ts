@@ -18,9 +18,29 @@ export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'openai-compatibl
  */
 export type AuthMethod = 'api-key' | 'oauth'
 
+/**
+ * What a model can do, when known. Every field is optional: an absent field means
+ * "unknown" — callers fall back to the name-heuristics in `usage.ts` rather than
+ * treating absence as `false`. Populated from a host's model listing (e.g.
+ * OpenRouter's `/models`) for models the curated heuristics don't recognize, like
+ * `deepseek/deepseek-r1` or `google/gemma-3-27b`.
+ */
+export interface ModelCaps {
+  /** Accepts tool / function calls. */
+  tools?: boolean
+  /** Accepts image inputs (multimodal vision). */
+  vision?: boolean
+  /** Has an extended-thinking / reasoning mode. */
+  reasoning?: boolean
+  /** Context window in tokens. */
+  contextWindow?: number
+}
+
 export interface ModelOption {
   id: string
   label?: string
+  /** Capability metadata captured from the host's model list. Absent for hand-typed ids. */
+  caps?: ModelCaps
 }
 
 /** A configured model provider. Safe to send to the renderer. */

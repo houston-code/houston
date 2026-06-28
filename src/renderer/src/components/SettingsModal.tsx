@@ -393,8 +393,13 @@ export function SettingsModal({
     setBusy(id)
     try {
       await window.api.saveSettings(settings)
-      const ids = await window.api.listModels(id)
-      patchProvider(id, { models: ids.map((m) => ({ id: m })) })
+      const fetched = await window.api.listModels(id)
+      // Adopt fetched ids + capability metadata, but keep any curated label the
+      // user already had for that id (the listing rarely carries display labels).
+      const prev = new Map(
+        (settings.providers.find((p) => p.id === id)?.models ?? []).map((m) => [m.id, m])
+      )
+      patchProvider(id, { models: fetched.map((m) => ({ ...m, label: m.label ?? prev.get(m.id)?.label })) })
     } catch (e) {
       alert(`Could not fetch models: ${(e as Error).message}`)
     } finally {

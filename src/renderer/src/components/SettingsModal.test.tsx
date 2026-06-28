@@ -12,7 +12,8 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   const saveSettings = vi.fn((s: AppSettings) => Promise.resolve(s))
   const setKey = vi.fn((_id: string, _key: string) => Promise.resolve(makeSettings()))
   const deleteKey = vi.fn((_id: string) => Promise.resolve(makeSettings()))
-  const listModels = vi.fn((_id: string) => Promise.resolve(['model-a', 'model-b']))
+  // listModels returns ModelOption[] (ids + optional capability metadata).
+  const listModels = vi.fn((_id: string) => Promise.resolve([{ id: 'model-a' }, { id: 'model-b' }]))
   const pickDirectory = vi.fn(() => Promise.resolve('/picked/dir'))
   const getVersion = vi.fn(() => Promise.resolve('1.2.3'))
   const checkForUpdates = vi.fn(() => Promise.resolve({ status: 'up-to-date', currentVersion: '1.2.3' }))

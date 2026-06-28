@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import type { AppSettings, ProviderConfig, SelectedModel } from '@shared/types'
-import { contextWindowFor, formatTokens } from '@shared/usage'
+import type { AppSettings, ModelOption, ProviderConfig, SelectedModel } from '@shared/types'
+import {
+  formatTokens,
+  resolveCapabilities,
+  resolveContextWindow,
+  resolveToolSupport
+} from '@shared/usage'
 import { sortedModels } from '@shared/models'
 import { Popover } from './Popover'
 
-/** Shown when the selected local model doesn't advertise tool-calling support. */
+/** Shown when the selected model doesn't advertise tool-calling support. */
 const TOOL_WARNING =
   "This model doesn't support tool calling, which this agent requires. " +
   'Pick a tool-capable model (e.g. qwen2.5-coder, llama3.1, mistral-nemo).'
@@ -15,9 +20,32 @@ function groupLabel(p: ProviderConfig): string {
 }
 
 /** The context-window suffix shown after a model name, e.g. "400k" — empty when unknown. */
-function windowLabel(modelId: string): string {
-  const win = contextWindowFor(modelId)
+function windowLabel(m: ModelOption): string {
+  const win = resolveContextWindow(m.id, m.caps)
   return win ? formatTokens(win) : ''
+}
+
+interface CapChip {
+  key: string
+  glyph: string
+  title: string
+}
+
+/**
+ * Capability badges for a model option: tool calling, vision, reasoning. Tools show
+ * only when a host explicitly reports support (there's no reliable name heuristic);
+ * vision/reasoning use the resolver, so curated families light up even without
+ * listed metadata.
+ */
+function capChips(m: ModelOption): CapChip[] {
+  const caps = resolveCapabilities(m.id, m.caps)
+  const chips: CapChip[] = []
+  if (resolveToolSupport(m.caps) === true) {
+    chips.push({ key: 'tools', glyph: 'T', title: 'Supports tool calling' })
+  }
+  if (caps.vision) chips.push({ key: 'vision', glyph: 'V', title: 'Accepts images (vision)' })
+  if (caps.reasoning) chips.push({ key: 'reasoning', glyph: 'R', title: 'Has a reasoning mode' })
+  return chips
 }
 
 interface FlatOption {
@@ -65,16 +93,24 @@ export function ModelPicker({
   const selectedProvider = settings.providers.find((p) => p.id === selected?.providerId)
   const selectedModel = selectedProvider?.models.find((m) => m.id === selected?.model)
 
-  // Preflight: a local (Ollama) model that doesn't advertise tool calling can't run
-  // this agent. Warn at selection time rather than letting the first turn 400. Only
-  // a definitive `false` warns — `null` (Ollama down, model not pulled, old version)
-  // is "unknown" and must stay silent. Re-checks whenever the selection changes.
+  // Warn at selection time when the chosen model can't call tools (this agent
+  // requires them) rather than letting the first turn 400. Two sources, in order:
+  //   1. Host-listed capability (any provider) — a definitive `false` warns at once.
+  //   2. For a local (Ollama) server that lists nothing, a live preflight. Only a
+  //      definitive `false` warns; `null` (server down, model not pulled, old
+  //      version) is "unknown" and stays silent. Re-checks when the selection changes.
   const [lacksTools, setLacksTools] = useState(false)
   const providerId = selected?.providerId
   const model = selected?.model
   const providerKind = selectedProvider?.kind
+  const listedTools = resolveToolSupport(selectedModel?.caps)
   useEffect(() => {
     setLacksTools(false)
+    if (listedTools === false) {
+      setLacksTools(true)
+      return
+    }
+    if (listedTools === true) return // host says it's tool-capable; no need to probe
     if (!providerId || !model || providerKind !== 'openai-compatible') return
     const check = window.api?.ollamaSupportsTools
     if (!check) return
@@ -87,10 +123,10 @@ export function ModelPicker({
     return () => {
       cancelled = true
     }
-  }, [providerId, model, providerKind])
+  }, [providerId, model, providerKind, listedTools])
   const triggerLabel = selected
     ? `${selectedModel?.label ?? selected.model}${
-        windowLabel(selected.model) ? ` · ${windowLabel(selected.model)}` : ''
+        selectedModel && windowLabel(selectedModel) ? ` · ${windowLabel(selectedModel)}` : ''
       }`
     : 'Select a model…'
 
@@ -213,7 +249,8 @@ export function ModelPicker({
                   const key = `${provider.id}::${m.id}`
                   const idx = flat.findIndex((f) => `${f.providerId}::${f.modelId}` === key)
                   const isSelected = key === selectedKey
-                  const win = windowLabel(m.id)
+                  const win = windowLabel(m)
+                  const chips = capChips(m)
                   return (
                     <button
                       key={key}
@@ -232,7 +269,18 @@ export function ModelPicker({
                         {isSelected ? '✓' : ''}
                       </span>
                       <span className="model-menu__name">{m.label ?? m.id}</span>
-                      {win && <span className="model-menu__win">{win}</span>}
+                      <span className="model-menu__meta">
+                        {chips.length > 0 && (
+                          <span className="model-menu__caps" aria-hidden="true">
+                            {chips.map((c) => (
+                              <span key={c.key} className="model-cap" title={c.title}>
+                                {c.glyph}
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        {win && <span className="model-menu__win">{win}</span>}
+                      </span>
                     </button>
                   )
                 })

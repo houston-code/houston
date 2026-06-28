@@ -1,5 +1,5 @@
 import type { Provider } from '@shared/agent'
-import type { ProviderConfig } from '@shared/types'
+import type { ModelOption, ProviderConfig } from '@shared/types'
 import { getKey, hasStoredKey } from '../secrets'
 import { createAnthropicProvider, listAnthropicModels } from './anthropic'
 import { createOpenAIProvider, listOpenAIModels } from './openai'
@@ -41,17 +41,23 @@ export function createProvider(config: ProviderConfig): Provider {
   }
 }
 
-/** Fetch the live model list for a provider. */
-export async function listModels(config: ProviderConfig): Promise<string[]> {
+/**
+ * Fetch the live model list for a provider. OpenAI / OpenAI-compatible hosts may
+ * return capability metadata (see `modelOptionFromListing`); Anthropic and Gemini
+ * return ids only, so their capabilities come from the name-heuristics in usage.ts.
+ */
+export async function listModels(config: ProviderConfig): Promise<ModelOption[]> {
   const key = getKey(config.id)
   switch (config.kind) {
     case 'anthropic':
-      return listAnthropicModels(key ?? '', config.baseUrl, config.headers)
+      return (await listAnthropicModels(key ?? '', config.baseUrl, config.headers)).map((id) => ({
+        id
+      }))
     case 'openai':
     case 'openai-compatible':
       return listOpenAIModels(key, config.baseUrl, config.headers)
     case 'gemini':
-      return listGeminiModels(key ?? '')
+      return (await listGeminiModels(key ?? '')).map((id) => ({ id }))
     default:
       return []
   }

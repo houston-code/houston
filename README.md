@@ -15,7 +15,10 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
 - **Any model, your keys.** Anthropic (Claude), OpenAI (GPT), Google (Gemini),
   any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Add a
   known host (OpenRouter, Together, Fireworks, Groq, and more) in one click, point
-  at any custom endpoint, and fetch live model lists in Settings.
+  at any custom endpoint, and fetch live model lists in Settings. The model picker
+  shows each model's context window and capability badges (tool calling, vision,
+  reasoning) — read live from the host where it advertises them, so it warns before
+  you pick a model that can't call tools.
 - **Image attachments.** Drag-drop or paste images (PNG/JPEG/GIF/WebP) into the
   composer to send them to a vision-capable model — screenshots, diagrams,
   mockups. The affordance is offered only when the selected model supports
