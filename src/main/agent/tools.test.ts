@@ -533,8 +533,33 @@ describe('todo_write', () => {
 })
 
 describe('web_search', () => {
-  it('errors with guidance when no key is configured', async () => {
-    await expect(run('web_search', { query: 'anything' })).rejects.toThrow(/No web-search API key/)
+  it('errors with guidance naming the default provider when no key is configured', async () => {
+    await expect(run('web_search', { query: 'anything' })).rejects.toThrow(/No Tavily API key/)
+  })
+
+  it('names the selected provider in the missing-key error', async () => {
+    const brave: ToolContext = { ...ctx, searchProvider: 'brave' }
+    await expect(getTool('web_search')!.execute({ query: 'x' }, brave)).rejects.toThrow(
+      /No Brave Search API key/
+    )
+  })
+
+  it('reads the key from the selected provider key id', async () => {
+    // Exa's key lives under a different secret id than Tavily's; an unset Exa key
+    // must error even though a Tavily key would resolve, proving per-provider lookup.
+    const seen: string[] = []
+    const exa: ToolContext = {
+      ...ctx,
+      searchProvider: 'exa',
+      getSecret: (id) => {
+        seen.push(id)
+        return id === 'web-search' ? 'tvly-x' : null
+      }
+    }
+    await expect(getTool('web_search')!.execute({ query: 'x' }, exa)).rejects.toThrow(
+      /No Exa API key/
+    )
+    expect(seen).toContain('web-search:exa')
   })
 
   it('requires a query', async () => {

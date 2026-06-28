@@ -127,6 +127,15 @@ export function activeRunForConversation(conversationId: string): string | null 
   return runsByConversation.get(conversationId) ?? null
 }
 
+/**
+ * How many conversations currently have a live run. Read at quit time to warn the
+ * user before tearing down in-flight work (each conversation has at most one run,
+ * so this is the count of "chats still running").
+ */
+export function activeRunCount(): number {
+  return runsByConversation.size
+}
+
 export function cancelRun(runId: string): void {
   const run = runs.get(runId)
   if (!run) return
@@ -341,6 +350,7 @@ export async function startRun(
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
       ghExec,
       getSecret: getKey,
+      searchProvider: settings.searchProvider,
       // Ask the user a structured question and block until they answer. The
       // resolver is registered before the event is emitted so a fast reply can't
       // race ahead of it; cancelRun resolves any still-pending question.

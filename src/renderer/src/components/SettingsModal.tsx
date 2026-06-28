@@ -20,7 +20,11 @@ import type {
 } from '@shared/types'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
 import { DEFAULT_COMPACTION_THRESHOLD, DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
-import { WEB_SEARCH_KEY_ID } from '@shared/constants'
+import {
+  SEARCH_PROVIDERS,
+  DEFAULT_SEARCH_PROVIDER_ID,
+  getSearchProviderInfo
+} from '@shared/search'
 
 /** Settings groups shown as tabs in the left-hand nav. */
 type TabId = 'models' | 'tools' | 'workspace' | 'keyboard' | 'appearance'
@@ -688,45 +692,75 @@ export function SettingsModal({
                   title="Web search"
                   desc={
                     <>
-                      Enable the <code>web_search</code> tool with a Tavily API key, stored in your
-                      OS keychain.
+                      Enable the <code>web_search</code> tool by choosing a provider and supplying
+                      its API key, stored in your OS keychain.
                     </>
                   }
                 >
-                  <label className="field">
-                    <span>
-                      Tavily API key{' '}
-                      {settings.hasWebSearchKey && (
-                        <span className="provider__key-ok pill pill--ok">key set ✓</span>
-                      )}
-                    </span>
-                    <div className="field__row">
-                      <input
-                        type="password"
-                        placeholder={settings.hasWebSearchKey ? '•••••••• (stored)' : 'tvly-…'}
-                        value={keyInputs[WEB_SEARCH_KEY_ID] ?? ''}
-                        onChange={(e) =>
-                          setKeyInputs((k) => ({ ...k, [WEB_SEARCH_KEY_ID]: e.target.value }))
-                        }
-                      />
-                      <button
-                        className="btn btn--sm"
-                        disabled={busy === WEB_SEARCH_KEY_ID}
-                        onClick={() => saveKey(WEB_SEARCH_KEY_ID)}
-                      >
-                        Save
-                      </button>
-                      {settings.hasWebSearchKey && (
-                        <button
-                          className="btn btn--sm btn--danger"
-                          disabled={busy === WEB_SEARCH_KEY_ID}
-                          onClick={() => removeKey(WEB_SEARCH_KEY_ID)}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
-                  </label>
+                  {(() => {
+                    // The selected provider drives the whole section: which key field
+                    // to show, its placeholder/help link, and whether a key is stored
+                    // (read from the per-provider status map, so switching the dropdown
+                    // reflects the right provider without a round-trip).
+                    const selected = getSearchProviderInfo(
+                      settings.searchProvider ?? DEFAULT_SEARCH_PROVIDER_ID
+                    )
+                    const keySet = settings.searchKeyStatus?.[selected.id] ?? false
+                    return (
+                      <>
+                        <label className="field">
+                          <span>Provider</span>
+                          <select
+                            value={selected.id}
+                            onChange={(e) =>
+                              setSettings((s) => ({ ...s, searchProvider: e.target.value }))
+                            }
+                          >
+                            {SEARCH_PROVIDERS.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>
+                            {selected.label} API key{' '}
+                            {keySet && (
+                              <span className="provider__key-ok pill pill--ok">key set ✓</span>
+                            )}
+                          </span>
+                          <div className="field__row">
+                            <input
+                              type="password"
+                              placeholder={keySet ? '•••••••• (stored)' : selected.keyPlaceholder}
+                              value={keyInputs[selected.keyId] ?? ''}
+                              onChange={(e) =>
+                                setKeyInputs((k) => ({ ...k, [selected.keyId]: e.target.value }))
+                              }
+                            />
+                            <button
+                              className="btn btn--sm"
+                              disabled={busy === selected.keyId}
+                              onClick={() => saveKey(selected.keyId)}
+                            >
+                              Save
+                            </button>
+                            {keySet && (
+                              <button
+                                className="btn btn--sm btn--danger"
+                                disabled={busy === selected.keyId}
+                                onClick={() => removeKey(selected.keyId)}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                          <p className="set-section__desc">Get a key at {selected.keyUrl}</p>
+                        </label>
+                      </>
+                    )
+                  })()}
                 </SettingsSection>
               </>
             )}

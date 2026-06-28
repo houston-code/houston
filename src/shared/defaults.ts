@@ -1,4 +1,5 @@
 import type { AppSettings, ProviderConfig } from './types'
+import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 
 export const SETTINGS_SCHEMA_VERSION = 2
 
@@ -141,6 +142,7 @@ export function defaultSettings(): AppSettings {
     mcpServers: [],
     additionalRoots: [],
     desktopNotifications: true,
-    theme: 'system'
+    theme: 'system',
+    searchProvider: DEFAULT_SEARCH_PROVIDER_ID
   }
 }
