@@ -87,18 +87,20 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
   const out: string[] = []
   const err: string[] = []
   const approvals: Array<[string, string, string]> = []
+  const questions: Array<[string, string, string]> = []
   const d: HeadlessDeps = {
     getSettings: () => settings({ selected: { providerId: 'anthropic', model: 'claude' } }),
     startRun: async (_req, send) => {
       for (const e of events) send(e)
     },
     resolveApproval: (r, c, dec) => approvals.push([r, c, dec]),
+    resolveQuestion: (r, c, ans) => questions.push([r, c, ans]),
     out: (s) => out.push(s),
     err: (s) => err.push(s),
     newId: () => 'run-1',
     ...extra
   }
-  return { d, out, err, approvals }
+  return { d, out, err, approvals, questions }
 }
 
 const baseOpts = { prompt: 'hi', cwd: '/proj', approvalPolicy: 'plan' as const, json: false }
@@ -119,6 +121,28 @@ describe('runHeadless', () => {
     const { d, err } = deps([{ runId: 'run-1', type: 'error', message: 'boom' }])
     expect(await runHeadless(baseOpts, d)).toBe(1)
     expect(err.join('')).toContain('boom')
+  })
+
+  it('auto-answers an ask_user question so a headless run cannot hang', async () => {
+    // Mirror the real loop: emit a question and BLOCK until it is answered. If
+    // headless failed to answer, this run (and the test) would hang forever.
+    let resolveAnswered: (a: string) => void = () => {}
+    const answered = new Promise<string>((r) => (resolveAnswered = r))
+    const startRun: HeadlessDeps['startRun'] = async (req, send) => {
+      send({ runId: req.runId, type: 'tool_question', callId: 'q1', question: 'which?', options: [] })
+      const answer = await answered
+      send({ runId: req.runId, type: 'text', delta: `picked: ${answer}` })
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    const { d, out } = deps([], {
+      startRun,
+      resolveQuestion: (_r, _c, ans) => resolveAnswered(ans)
+    })
+    const code = await runHeadless(baseOpts, d)
+    expect(code).toBe(0)
+    // The run completing (not timing out) + the auto-answer reaching the agent
+    // proves headless answered the question rather than hanging on it.
+    expect(out.join('')).toContain('picked: [No interactive user is available in headless mode')
   })
 
   it('auto-approves tool approval prompts', async () => {

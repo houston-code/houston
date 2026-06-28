@@ -113,6 +113,7 @@ export interface HeadlessDeps {
   getSettings: () => AppSettings
   startRun: (req: AgentRunRequest, send: (e: AgentEvent) => void) => Promise<void>
   resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
+  resolveQuestion: (runId: string, callId: string, answer: string) => void
   out: (s: string) => void
   err: (s: string) => void
   newId?: () => string
@@ -158,6 +159,17 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
       case 'tool_approval':
         if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
         deps.resolveApproval(e.runId, e.callId, 'allow')
+        break
+      case 'tool_question':
+        // No interactive user in headless mode — auto-answer so an `ask_user`
+        // call can't hang the run forever. The agent gets a clear signal to
+        // proceed on its own rather than a silent empty string.
+        if (!opts.json) deps.err('· no interactive user (headless) — auto-answering ask_user\n')
+        deps.resolveQuestion(
+          e.runId,
+          e.callId,
+          '[No interactive user is available in headless mode. Proceed using your best judgment.]'
+        )
         break
       case 'error':
         failed = true
