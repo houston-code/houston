@@ -18,7 +18,12 @@ function clampToHigh(effort: OnEffort): 'low' | 'medium' | 'high' {
   return effort === 'xhigh' ? 'high' : effort
 }
 
-/** Anthropic thinking token budgets per effort level. */
+/**
+ * Per-effort token sizing for Anthropic. On legacy models this is the literal
+ * `budget_tokens` for extended thinking; on adaptive-thinking models (which have
+ * no budget) it sizes `max_tokens` so the reply keeps the same headroom it had
+ * before, leaving output ceilings unchanged across the two APIs.
+ */
 const ANTHROPIC_BUDGET: Record<'low' | 'medium' | 'high', number> = {
   low: 4096,
   medium: 10_000,
@@ -28,22 +33,68 @@ const ANTHROPIC_BUDGET: Record<'low' | 'medium' | 'high', number> = {
 /** Extra output tokens to allow on top of the thinking budget for the reply. */
 export const ANTHROPIC_REPLY_HEADROOM = 8192
 
-/** Claude models that support extended thinking (3.7 and the 4.x family). */
+/** Claude models that support thinking at all (3.7 and the 4.x family). */
 export function anthropicSupportsThinking(model: string): boolean {
   return /claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-)/i.test(model)
 }
 
 /**
- * Anthropic `thinking` config + the `max_tokens` it requires (budget must be
- * strictly less than max_tokens). Returns null when reasoning is off/unsupported.
+ * Claude models that predate adaptive thinking and still take the legacy
+ * `{ type: 'enabled', budget_tokens }` API (they also reject `output_config.effort`):
+ * Claude 3.7, the 4.0 / 4.1 / 4.5 lines, and Haiku 4.5. Everything newer
+ * (Opus 4.6+, Sonnet 4.6+, Fable, Mythos) uses adaptive thinking + effort — and
+ * the Opus 4.7/4.8 line *rejects* the legacy shape with a 400, which is the bug
+ * this gating exists to prevent. The default is adaptive so a future model is
+ * never silently routed onto the removed legacy parameter.
+ */
+export function anthropicUsesLegacyThinking(model: string): boolean {
+  return (
+    /claude-3-7/i.test(model) || // Claude 3.7
+    /claude-(opus|sonnet)-4-\d{8}/i.test(model) || // Opus/Sonnet 4.0 (dated snapshots)
+    /claude-opus-4-1\b/i.test(model) || // Opus 4.1
+    /claude-opus-4-5\b/i.test(model) || // Opus 4.5
+    /claude-sonnet-4-5\b/i.test(model) || // Sonnet 4.5
+    /claude-haiku-4-5\b/i.test(model) // Haiku 4.5 (no effort support)
+  )
+}
+
+/**
+ * The `xhigh` effort tier exists only on Opus 4.7+ (and Fable / Mythos); older
+ * effort-capable models top out at `high`, so `xhigh` is clamped there.
+ */
+export function anthropicSupportsXhigh(model: string): boolean {
+  return /claude-(opus-4-(7|8)|fable|mythos)/i.test(model)
+}
+
+/** Anthropic reasoning config: adaptive thinking (4.6+) or legacy budget thinking. */
+export type AnthropicThinking =
+  | { kind: 'adaptive'; effort: OnEffort; display: 'summarized'; maxTokens: number }
+  | { kind: 'budget'; budgetTokens: number; maxTokens: number }
+
+/**
+ * Anthropic reasoning config + the `max_tokens` to pair it with. Newer models
+ * (4.6+) use adaptive thinking driven by `output_config.effort`; pre-4.6 models
+ * and Haiku 4.5 use the legacy `{ type: 'enabled', budget_tokens }` API (budget
+ * must be < max_tokens). Returns null when reasoning is off or unsupported.
  */
 export function anthropicThinking(
   model: string,
   effort: ReasoningEffort | undefined
-): { budgetTokens: number; maxTokens: number } | null {
+): AnthropicThinking | null {
   if (!isOn(effort) || !anthropicSupportsThinking(model)) return null
   const budgetTokens = ANTHROPIC_BUDGET[clampToHigh(effort)]
-  return { budgetTokens, maxTokens: budgetTokens + ANTHROPIC_REPLY_HEADROOM }
+  const maxTokens = budgetTokens + ANTHROPIC_REPLY_HEADROOM
+  if (anthropicUsesLegacyThinking(model)) {
+    return { kind: 'budget', budgetTokens, maxTokens }
+  }
+  // Adaptive thinking: request a summary so the UI keeps streaming reasoning —
+  // the 4.7/4.8 default is `omitted`, which would surface an empty thinking stream.
+  return {
+    kind: 'adaptive',
+    effort: anthropicSupportsXhigh(model) ? effort : clampToHigh(effort),
+    display: 'summarized',
+    maxTokens
+  }
 }
 
 /** OpenAI reasoning models (o-series and gpt-5) accept `reasoning_effort`. */

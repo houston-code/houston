@@ -180,7 +180,8 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
       const messages = toAnthropicMessages(req.messages, thinking !== null)
       markMessagesCacheBreakpoint(messages)
 
-      // With thinking, max_tokens must exceed the thinking budget.
+      // Thinking dictates max_tokens: legacy budget thinking needs room above the
+      // budget; adaptive sizing keeps the reply's headroom unchanged (see reasoning.ts).
       const maxTokens = thinking ? thinking.maxTokens : req.maxTokens ?? DEFAULT_MAX_TOKENS
 
       const stream = client.messages.stream(
@@ -190,9 +191,16 @@ export function createAnthropicProvider(apiKey: string, baseURL?: string): Provi
           ...(system ? { system } : {}),
           messages,
           ...(tools && tools.length ? { tools } : {}),
-          ...(thinking
-            ? { thinking: { type: 'enabled' as const, budget_tokens: thinking.budgetTokens } }
-            : {})
+          // Opus 4.7/4.8 (and Fable/Mythos) reject `{type:'enabled', budget_tokens}`
+          // with a 400 — they require adaptive thinking + output_config.effort.
+          ...(thinking?.kind === 'adaptive'
+            ? {
+                thinking: { type: 'adaptive' as const, display: thinking.display },
+                output_config: { effort: thinking.effort }
+              }
+            : thinking?.kind === 'budget'
+              ? { thinking: { type: 'enabled' as const, budget_tokens: thinking.budgetTokens } }
+              : {})
         },
         { signal: req.signal }
       )
