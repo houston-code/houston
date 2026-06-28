@@ -1,6 +1,6 @@
-import { promises as fs } from 'node:fs'
+import { promises as fs, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { SKIP_DIRS } from './search'
 
 /**
@@ -108,6 +108,33 @@ function resolveImport(spec: string, baseDir: string, home: string): string {
   return resolve(baseDir, spec)
 }
 
+/** Whether `abs` (canonical) is `root` itself or lives inside it. */
+function isWithinRoot(root: string, abs: string): boolean {
+  const rel = relative(root, abs)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/**
+ * For a confined (workspace-sourced) import chain, whether `abs` is allowed: its
+ * canonical path must stay inside `confineRoot`. A workspace `AGENTS.md`/`CLAUDE.md`
+ * is attacker-controlled when an untrusted repo is opened, and its expanded text
+ * goes straight into the system prompt sent to the model — so a `@~/.ssh/id_rsa`,
+ * `@/etc/passwd`, `@../../secret`, or a symlink pointing out of the tree must NOT
+ * be readable, or opening a repo would exfiltrate host files. realpath defeats
+ * symlink escapes. `confineRoot === null` means a trusted source (the global
+ * ~/.claude/CLAUDE.md), which may import from anywhere.
+ */
+function importAllowed(abs: string, confineRoot: string | null): boolean {
+  if (confineRoot === null) return true
+  let real: string
+  try {
+    real = realpathSync(abs)
+  } catch {
+    return false // missing/unreadable — nothing to import anyway
+  }
+  return isWithinRoot(confineRoot, real)
+}
+
 // A candidate @import: "@" at line start or after whitespace, followed by a
 // path-like token (contains a "/" or starts with "~"). This skips bare mentions
 // like "@param" or an "@scope/pkg" that doesn't resolve to a file (the read
@@ -115,13 +142,19 @@ function resolveImport(spec: string, baseDir: string, home: string): string {
 // before resolving so "see @./notes.md." still works.
 const IMPORT_RE = /(^|\s)@([^\s`]*\/[^\s`]*|~[^\s`]*)/g
 
-/** Expand @import tokens in `text`, recursively. Missing/oversized/cyclic imports are skipped. */
+/**
+ * Expand @import tokens in `text`, recursively. Missing/oversized/cyclic imports
+ * are skipped — as are imports that escape `confineRoot` (when set), so a
+ * workspace rules file can't pull in host files. `confineRoot === null` (the
+ * trusted global file) imposes no path confinement.
+ */
 async function expandImports(
   text: string,
   baseDir: string,
   home: string,
   visited: Set<string>,
-  depth: number
+  depth: number,
+  confineRoot: string | null
 ): Promise<string> {
   if (depth > MAX_IMPORT_DEPTH) return text
   const lines = text.split('\n')
@@ -150,6 +183,9 @@ async function expandImports(
       if (!trimmed) continue
       const abs = resolveImport(trimmed, baseDir, home)
       if (visited.has(abs)) continue
+      // Confine workspace-sourced imports to the workspace; a trusted global file
+      // (confineRoot === null) is unrestricted.
+      if (!importAllowed(abs, confineRoot)) continue
       let content: string | null
       try {
         content = await fs.readFile(abs, 'utf8')
@@ -158,7 +194,7 @@ async function expandImports(
       }
       if (content === null) continue
       visited.add(abs)
-      const expanded = await expandImports(content.trim(), dirname(abs), home, visited, depth + 1)
+      const expanded = await expandImports(content.trim(), dirname(abs), home, visited, depth + 1, confineRoot)
       result += line.slice(lastIndex, m.index) + lead + expanded + rawSpec.slice(trimmed.length)
       lastIndex = m.index + full.length
     }
@@ -178,7 +214,8 @@ async function loadOne(
   path: string,
   label: string,
   home: string,
-  visited: Set<string>
+  visited: Set<string>,
+  confineRoot: string | null
 ): Promise<string | null> {
   let raw: string
   try {
@@ -188,7 +225,7 @@ async function loadOne(
   }
   if (!raw) return null
   visited.add(resolve(path)) // a file can't import itself
-  const expanded = await expandImports(raw, dirname(path), home, visited, 1)
+  const expanded = await expandImports(raw, dirname(path), home, visited, 1, confineRoot)
   return `### ${label}\n${expanded.trim()}`
 }
 
@@ -212,14 +249,25 @@ export async function loadProjectRules(
   const nested =
     maxNestedDepth > 0 ? await discoverNestedRules(workspace, maxNestedDepth, maxNestedFiles) : []
 
-  const sources: { path: string; label: string }[] = [
-    { path: join(globalDir, 'CLAUDE.md'), label: '~/.claude/CLAUDE.md (global)' },
-    ...RULES_FILES.map((name) => ({ path: join(workspace, name), label: name })),
-    ...nested
+  // Canonical workspace root used to confine workspace-sourced @imports. Only the
+  // global ~/.claude/CLAUDE.md is trusted to import from outside the workspace
+  // (confineRoot null); project + nested files are attacker-controlled in an
+  // untrusted repo and may import only files inside the tree.
+  let confineRoot = workspace
+  try {
+    confineRoot = realpathSync(workspace)
+  } catch {
+    // workspace missing/unreadable — keep the raw path; imports will resolve nothing
+  }
+
+  const sources: { path: string; label: string; confineRoot: string | null }[] = [
+    { path: join(globalDir, 'CLAUDE.md'), label: '~/.claude/CLAUDE.md (global)', confineRoot: null },
+    ...RULES_FILES.map((name) => ({ path: join(workspace, name), label: name, confineRoot })),
+    ...nested.map((n) => ({ ...n, confineRoot }))
   ]
 
-  for (const { path, label } of sources) {
-    const block = await loadOne(path, label, home, visited)
+  for (const { path, label, confineRoot: cr } of sources) {
+    const block = await loadOne(path, label, home, visited, cr)
     if (block) {
       parts.push(block)
       files.push(label)
