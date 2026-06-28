@@ -7,15 +7,19 @@
  */
 export function Titlebar({
   title,
+  changes,
   onShowChanges,
   onToggleTerminal,
   terminalOpen
 }: {
   title: string
+  /** Working-tree change counts; highlights the Changes button and shows a +/− badge. */
+  changes?: { fileCount: number; added: number; removed: number }
   onShowChanges?: () => void
   onToggleTerminal?: () => void
   terminalOpen?: boolean
 }): JSX.Element {
+  const hasChanges = !!changes && changes.fileCount > 0
   return (
     <header className="titlebar">
       <span className="titlebar__title">{title}</span>
@@ -23,11 +27,21 @@ export function Titlebar({
         {onShowChanges && (
           <button
             type="button"
-            className="titlebar__action"
+            className={`titlebar__action${hasChanges ? ' titlebar__action--changes' : ''}`}
             onClick={onShowChanges}
-            title="View uncommitted working-tree changes"
+            title={
+              hasChanges
+                ? `${changes.fileCount} changed file${changes.fileCount === 1 ? '' : 's'} — view uncommitted changes`
+                : 'View uncommitted working-tree changes'
+            }
           >
             ⤓ Changes
+            {hasChanges && (changes.added > 0 || changes.removed > 0) && (
+              <span className="diff-stat">
+                <span className="diff-stat__add">+{changes.added}</span>
+                <span className="diff-stat__del">−{changes.removed}</span>
+              </span>
+            )}
           </button>
         )}
         {onToggleTerminal && (

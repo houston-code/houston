@@ -1960,6 +1960,12 @@ pre.diff {
   border-color: var(--accent);
   background: var(--bg-hover);
 }
+/* The Changes button when the working tree is dirty: lift it out of the dim
+   resting state and let the accent border draw the eye to the pending +/− badge. */
+.titlebar__action--changes {
+  color: var(--text);
+  border-color: var(--accent);
+}
 
 /* ---- Changes panel (working-tree diff drawer) ---- */
 .drawer-overlay {
