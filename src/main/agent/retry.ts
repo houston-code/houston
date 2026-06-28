@@ -19,6 +19,20 @@ export function isRetryableError(err: unknown): boolean {
   )
 }
 
+/**
+ * Whether a provider error means "this model can't do tool calling at all".
+ * The agent is built on tools, so this is fatal (not retryable) — the caller
+ * surfaces a friendlier message pointing at a tool-capable model instead of the
+ * raw API string. Local servers phrase it distinctively and report it as a 4xx,
+ * e.g. Ollama: "<model> does not support tools".
+ */
+export function isToolsUnsupportedError(err: unknown): boolean {
+  const status = (err as { status?: number })?.status
+  if (typeof status === 'number' && status !== 400 && status !== 404 && status !== 422) return false
+  const msg = String((err as { message?: unknown })?.message ?? err).toLowerCase()
+  return /not support tool|tool (?:use|calling|s) (?:is |are )?not supported/.test(msg)
+}
+
 /** Exponential backoff with full jitter, in ms. `rand` is injectable for tests. */
 export function backoffDelayMs(
   attempt: number,
