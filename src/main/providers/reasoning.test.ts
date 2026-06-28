@@ -11,9 +11,10 @@ import {
 } from './reasoning'
 
 describe('anthropic thinking', () => {
-  it('is null when off', () => {
+  it('is null when off or unsupported', () => {
     expect(anthropicThinking('claude-opus-4-8', 'off')).toBeNull()
     expect(anthropicThinking('claude-opus-4-8', undefined)).toBeNull()
+    expect(anthropicThinking('claude-3-5-sonnet', 'high')).toBeNull()
   })
 
   it('gates on model support', () => {
@@ -21,21 +22,59 @@ describe('anthropic thinking', () => {
     expect(anthropicSupportsThinking('claude-sonnet-4-6')).toBe(true)
     expect(anthropicSupportsThinking('claude-haiku-4-5')).toBe(true)
     expect(anthropicSupportsThinking('claude-3-5-sonnet')).toBe(false)
-    expect(anthropicThinking('claude-3-5-sonnet', 'high')).toBeNull()
   })
 
-  it('returns budget < max_tokens', () => {
-    const t = anthropicThinking('claude-opus-4-8', 'high')
-    expect(t).not.toBeNull()
-    expect(t!.budgetTokens).toBeGreaterThanOrEqual(1024)
-    expect(t!.maxTokens).toBe(t!.budgetTokens + ANTHROPIC_REPLY_HEADROOM)
-    expect(t!.maxTokens).toBeGreaterThan(t!.budgetTokens)
+  // Opus 4.7/4.8 (and Fable/Mythos) 400 on the legacy enabled+budget_tokens shape;
+  // they must use adaptive thinking + effort. This is the regression we're fixing.
+  it('uses adaptive thinking + effort on 4.6+ models, never budget_tokens', () => {
+    for (const model of [
+      'claude-opus-4-8',
+      'claude-opus-4-7',
+      'claude-sonnet-4-6',
+      'claude-opus-4-6'
+    ]) {
+      const t = anthropicThinking(model, 'high')
+      expect(t).toMatchObject({ kind: 'adaptive', effort: 'high', display: 'summarized' })
+      expect(t).not.toHaveProperty('budgetTokens')
+    }
   })
 
-  it('scales budget with effort', () => {
-    const low = anthropicThinking('claude-opus-4-8', 'low')!.budgetTokens
-    const high = anthropicThinking('claude-opus-4-8', 'high')!.budgetTokens
-    expect(high).toBeGreaterThan(low)
+  it('passes xhigh through on Opus 4.7+ but clamps it to high on 4.6', () => {
+    expect(anthropicThinking('claude-opus-4-8', 'xhigh')).toMatchObject({ effort: 'xhigh' })
+    expect(anthropicThinking('claude-opus-4-7', 'xhigh')).toMatchObject({ effort: 'xhigh' })
+    expect(anthropicThinking('claude-sonnet-4-6', 'xhigh')).toMatchObject({ effort: 'high' })
+    expect(anthropicThinking('claude-opus-4-6', 'xhigh')).toMatchObject({ effort: 'high' })
+  })
+
+  it('uses legacy budget thinking on pre-4.6 models and Haiku 4.5', () => {
+    for (const model of [
+      'claude-3-7-sonnet-20250219',
+      'claude-opus-4-20250514',
+      'claude-sonnet-4-20250514',
+      'claude-opus-4-1-20250805',
+      'claude-opus-4-5-20251101',
+      'claude-sonnet-4-5-20250929',
+      'claude-haiku-4-5'
+    ]) {
+      const t = anthropicThinking(model, 'high')
+      expect(t?.kind).toBe('budget')
+    }
+  })
+
+  it('keeps budget < max_tokens on the legacy path', () => {
+    const t = anthropicThinking('claude-haiku-4-5', 'high')
+    expect(t?.kind).toBe('budget')
+    if (t?.kind === 'budget') {
+      expect(t.budgetTokens).toBeGreaterThanOrEqual(1024)
+      expect(t.maxTokens).toBe(t.budgetTokens + ANTHROPIC_REPLY_HEADROOM)
+      expect(t.maxTokens).toBeGreaterThan(t.budgetTokens)
+    }
+  })
+
+  it('scales max_tokens sizing with effort', () => {
+    const low = anthropicThinking('claude-opus-4-8', 'low')!
+    const high = anthropicThinking('claude-opus-4-8', 'high')!
+    expect(high.maxTokens).toBeGreaterThan(low.maxTokens)
   })
 })
 
@@ -72,9 +111,11 @@ describe('openai Responses reasoning', () => {
 })
 
 describe('xhigh clamping for providers without an xhigh tier', () => {
-  it('anthropic clamps xhigh to its high budget', () => {
-    const high = anthropicThinking('claude-opus-4-8', 'high')!
-    const xhigh = anthropicThinking('claude-opus-4-8', 'xhigh')!
+  // Opus 4.7+ has an xhigh tier (covered in the anthropic describe). Sonnet 4.6
+  // and the 4.6 line do not, so xhigh must collapse onto high there.
+  it('anthropic clamps xhigh to high on models without an xhigh tier', () => {
+    const high = anthropicThinking('claude-sonnet-4-6', 'high')!
+    const xhigh = anthropicThinking('claude-sonnet-4-6', 'xhigh')!
     expect(xhigh).toEqual(high)
   })
 
