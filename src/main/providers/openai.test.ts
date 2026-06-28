@@ -3,12 +3,15 @@ import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agen
 import { toOpenAIMessages, createOpenAIProvider } from './openai'
 
 // Mock the lazily-imported SDK so we can feed a synthetic chat-completions stream
-// and assert how the adapter turns it into provider events.
-const h = vi.hoisted(() => ({ create: vi.fn() }))
+// and assert how the adapter turns it into provider events. `ctor` captures the
+// client constructor options so we can assert base URL / custom headers wiring.
+const h = vi.hoisted(() => ({ create: vi.fn(), ctor: vi.fn() }))
 vi.mock('openai', () => {
   class FakeOpenAI {
     chat = { completions: { create: h.create } }
-    constructor(_opts: unknown) {}
+    constructor(opts: unknown) {
+      h.ctor(opts)
+    }
   }
   return { default: FakeOpenAI }
 })
@@ -166,5 +169,45 @@ describe('toOpenAIMessages', () => {
         content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,SHOT' } }]
       }
     ])
+  })
+})
+
+describe('openai adapter: client construction (base URL + custom headers)', () => {
+  beforeEach(() => {
+    h.create.mockReset()
+    h.ctor.mockReset()
+  })
+
+  /** Drive one streamed turn so the lazily-created client is constructed. */
+  async function construct(
+    headers?: Record<string, string>,
+    baseURL: string | undefined = 'https://openrouter.ai/api/v1'
+  ): Promise<Record<string, unknown>> {
+    h.create.mockResolvedValue(streamOf([stopChunk()]))
+    const provider = createOpenAIProvider('k', baseURL, headers)
+    for await (const _e of provider.streamChat({
+      model: 'x',
+      messages: [{ role: 'user', content: 'hi' }]
+    })) {
+      void _e
+    }
+    expect(h.ctor).toHaveBeenCalledTimes(1)
+    return h.ctor.mock.calls[0][0] as Record<string, unknown>
+  }
+
+  it('passes custom headers as defaultHeaders', async () => {
+    const opts = await construct({ 'HTTP-Referer': 'https://app', 'X-Title': 'Houston' })
+    expect(opts.defaultHeaders).toEqual({ 'HTTP-Referer': 'https://app', 'X-Title': 'Houston' })
+    expect(opts.baseURL).toBe('https://openrouter.ai/api/v1')
+  })
+
+  it('omits defaultHeaders when no headers are given', async () => {
+    const opts = await construct(undefined)
+    expect(opts).not.toHaveProperty('defaultHeaders')
+  })
+
+  it('omits defaultHeaders for an empty headers object', async () => {
+    const opts = await construct({})
+    expect(opts).not.toHaveProperty('defaultHeaders')
   })
 })

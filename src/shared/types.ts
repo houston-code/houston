@@ -31,6 +31,14 @@ export interface ProviderConfig {
   label: string
   /** Base URL. Required for `openai-compatible`; optional override for the others. */
   baseUrl?: string
+  /**
+   * Extra HTTP headers sent on every request to this provider — e.g. OpenRouter's
+   * `HTTP-Referer`/`X-Title` attribution, or a gateway's custom auth header. Sent
+   * in addition to the SDK's own `Authorization` (the API key). Honored on the
+   * OpenAI / OpenAI-compatible and Anthropic paths (the ones that take a `baseUrl`).
+   * Never carries the API key itself — that stays in the secrets store.
+   */
+  headers?: Record<string, string>
   /** Known/curated model ids. Users can edit these or fetch live from the provider. */
   models: ModelOption[]
   defaultModel?: string
