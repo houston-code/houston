@@ -284,6 +284,33 @@ export function isSafeReviewPath(p: string): boolean {
   return !p.split(/[\\/]/).includes('..')
 }
 
+/**
+ * A lifecycle update for one nested reviewer subagent, surfaced live in the UI as
+ * its own row under the review_changes tool. `id` is stable across the running→done
+ * transition (the dimension name, or 'verify') so the row updates in place; `label`
+ * may change to reflect the outcome (e.g. "Correctness" → "Correctness — 2 issues").
+ */
+export interface ReviewSubAgentEvent {
+  id: string
+  label: string
+  status: 'running' | 'done' | 'error'
+}
+
+/** Title-case a dimension name for a subagent row label ("security" → "Security"). */
+function titleCase(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/** The finished-row label + status for one dimension, reflecting what it found. */
+function dimensionOutcome(dimension: string, report: string): ReviewSubAgentEvent {
+  const title = titleCase(dimension)
+  if (isErrorReport(report)) return { id: dimension, label: `${title} — failed`, status: 'error' }
+  if (isClean(report)) return { id: dimension, label: `${title} — clean`, status: 'done' }
+  const n = parseFindings(report).length
+  const found = n > 0 ? `${n} issue${n === 1 ? '' : 's'}` : 'findings'
+  return { id: dimension, label: `${title} — ${found}`, status: 'done' }
+}
+
 export interface RunReviewOptions {
   provider: Provider
   model: string
@@ -299,6 +326,8 @@ export interface RunReviewOptions {
   effort?: ReviewEffort
   /** Called with short status lines as the review progresses (surfaced live in the UI). */
   onProgress?: (message: string) => void
+  /** Called as each nested reviewer subagent starts and finishes (its own live row in the UI). */
+  onSubAgent?: (ev: ReviewSubAgentEvent) => void
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
 }
@@ -315,6 +344,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const baseRunAgent = opts.runAgent ?? runSubAgent
   const dimensions = opts.dimensions ?? REVIEW_DIMENSIONS
   const progress = opts.onProgress ?? ((): void => {})
+  const sub = opts.onSubAgent ?? ((): void => {})
 
   // Wrap the runner to count model calls and total token usage for a cost summary.
   let modelCalls = 0
@@ -344,6 +374,8 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
 
   const dimsLabel = dimensions.join(', ')
   progress(`Reviewing ${dimsLabel} in separate contexts…`)
+  // One live row per dimension, shown running up front and resolved as each finishes.
+  for (const dimension of dimensions) sub({ id: dimension, label: titleCase(dimension), status: 'running' })
 
   // Each dimension reviews every chunk in its own fresh context; merge per dimension.
   const reports = await Promise.all(
@@ -360,7 +392,9 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
           }).then((r) => r.trim())
         )
       )
-      return { dimension, report: mergeChunkReports(chunkReports) }
+      const report = mergeChunkReports(chunkReports)
+      sub(dimensionOutcome(dimension, report))
+      return { dimension, report }
     })
   )
 
@@ -394,6 +428,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
           `⚠ ${findings.length} candidate findings exceeded the per-review verification cap; verified the first ${toVerify.length}.`
         )
       }
+      sub({ id: 'verify', label: `Verifying ${toVerify.length} findings`, status: 'running' })
       progress(`Verifying ${toVerify.length} findings with ${VOTES_PER_FINDING} skeptics each…`)
       const verdicts = await Promise.all(
         toVerify.map(async (f) => {
@@ -418,6 +453,11 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
         .filter((v) => v.confirms >= VOTES_TO_CONFIRM)
         .map((v) => v.finding)
         .sort((a, b) => (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9))
+      sub({
+        id: 'verify',
+        label: `Verified ${toVerify.length} findings — ${confirmed.length} confirmed`,
+        status: 'done'
+      })
       const tally = `Confirmed ${confirmed.length} of ${toVerify.length} candidate findings (each checked by ${VOTES_PER_FINDING} independent verifiers).`
 
       if (confirmed.length === 0) {
@@ -431,6 +471,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     // else: nothing parsed — fall through to the single-verifier path below.
   }
 
+  sub({ id: 'verify', label: 'Verifying findings', status: 'running' })
   progress('Verifying candidate findings…')
   const verified = await run({
     provider,
@@ -440,6 +481,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     prompt: verifierPrompt(diffContext, candidateText),
     systemOverride: verifierSystem()
   })
+  sub({ id: 'verify', label: 'Verified findings', status: 'done' })
 
   const header = `Adversarial review of the current changes (${dims}), each candidate finding verified in a separate context:`
   const body = verified.trim() || '[verifier returned no output]'
@@ -458,6 +500,8 @@ export interface ReviewWorkspaceOptions {
   effort?: ReviewEffort
   /** Called with short status lines as the review progresses (surfaced live in the UI). */
   onProgress?: (message: string) => void
+  /** Called as each nested reviewer subagent starts and finishes (its own live row in the UI). */
+  onSubAgent?: (ev: ReviewSubAgentEvent) => void
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -497,6 +541,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     chunks,
     effort: opts.effort,
     onProgress: opts.onProgress,
+    onSubAgent: opts.onSubAgent,
     signal: opts.signal,
     runAgent: opts.runAgent
   })

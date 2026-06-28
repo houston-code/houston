@@ -9,6 +9,7 @@ import {
   runReview,
   splitDiffByFile,
   verifierSystem,
+  type ReviewSubAgentEvent,
   type RunReviewOptions
 } from './review'
 import type { GitExec } from './git'
@@ -222,6 +223,44 @@ describe('runReview', () => {
     expect(msgs.some((m) => /Reviewing/.test(m))).toBe(true)
     expect(msgs.some((m) => /Verifying/.test(m))).toBe(true)
   })
+
+  it('emits a live subagent row per dimension and for verification', async () => {
+    const evs: ReviewSubAgentEvent[] = []
+    const { fn } = fakeAgent((o) =>
+      isVerifier(o)
+        ? 'No confirmed issues.'
+        : dimensionOf(o) === 'CORRECTNESS'
+          ? '- [SEVERITY: high] a.ts:1 — off-by-one'
+          : 'No issues found.'
+    )
+    await runReview(base({ runAgent: fn, onSubAgent: (e) => evs.push(e) }))
+
+    // Every dimension opens a row (running) and resolves it in place (same id, done).
+    for (const dim of ['correctness', 'security', 'quality']) {
+      const forDim = evs.filter((e) => e.id === dim)
+      expect(forDim[0]).toMatchObject({ status: 'running' })
+      expect(forDim.at(-1)?.status).toBe('done')
+    }
+    // The finished label reflects each dimension's outcome.
+    expect(evs.some((e) => e.id === 'correctness' && /1 issue/.test(e.label))).toBe(true)
+    expect(evs.some((e) => e.id === 'security' && /clean/.test(e.label))).toBe(true)
+    // Verification is its own row: running, then resolved.
+    const verify = evs.filter((e) => e.id === 'verify')
+    expect(verify[0]).toMatchObject({ status: 'running' })
+    expect(verify.at(-1)).toMatchObject({ status: 'done' })
+  })
+
+  it('marks a dimension subagent row as error when that reviewer fails', async () => {
+    const evs: ReviewSubAgentEvent[] = []
+    const { fn } = fakeAgent((o) => {
+      if (isVerifier(o)) return 'No confirmed issues.'
+      if (dimensionOf(o) === 'SECURITY') return '[subagent error: boom]'
+      if (dimensionOf(o) === 'CORRECTNESS') return '- [SEVERITY: high] a.ts:1 — bug'
+      return 'No issues found.'
+    })
+    await runReview(base({ runAgent: fn, onSubAgent: (e) => evs.push(e) }))
+    expect(evs.some((e) => e.id === 'security' && e.status === 'error')).toBe(true)
+  })
 })
 
 describe('verifierSystem', () => {
@@ -274,6 +313,21 @@ describe('runReview high effort', () => {
     await runReview(base({ runAgent: fn, effort: 'high' }))
     expect(calls.filter(isSkeptic)).toHaveLength(0)
     expect(calls.filter(isVerifier)).toHaveLength(1)
+  })
+
+  it('surfaces the skeptic verification pass as its own subagent row', async () => {
+    const evs: ReviewSubAgentEvent[] = []
+    const { fn } = fakeAgent((o) => {
+      if (isSkeptic(o)) return o.prompt.includes('bug one') ? 'CONFIRMED' : 'REJECTED'
+      return dimensionOf(o) === 'CORRECTNESS'
+        ? '- [SEVERITY: high] a.ts:1 — bug one\n- [SEVERITY: low] b.ts:2 — nit two'
+        : 'No issues found.'
+    })
+    await runReview(base({ runAgent: fn, effort: 'high', onSubAgent: (e) => evs.push(e) }))
+    const verify = evs.filter((e) => e.id === 'verify')
+    expect(verify[0]).toMatchObject({ status: 'running' })
+    expect(verify.at(-1)).toMatchObject({ status: 'done' })
+    expect(verify.at(-1)?.label).toMatch(/confirmed/)
   })
 })
 

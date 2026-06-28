@@ -1730,6 +1730,31 @@ h6.md-h {
   color: var(--text-dim);
   font-style: italic;
 }
+.tool-row__subagents {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 9px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tool-row__subagent {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 20px;
+}
+.tool-row__subagent-label {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tool-row__subagent--running .tool-row__subagent-label {
+  color: var(--text);
+}
 .tool-row__approval {
   display: flex;
   gap: 8px;

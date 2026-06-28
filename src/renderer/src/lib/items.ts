@@ -32,6 +32,13 @@ export interface AssistantItem {
   /** Model reasoning ("thinking") streamed before the answer, if any. */
   reasoning?: string
 }
+/** A nested subagent spawned by a tool (e.g. a review_changes dimension reviewer), shown as its own row. */
+export interface SubAgentRow {
+  /** Stable id within the parent tool (e.g. the review dimension, or 'verify'). */
+  id: string
+  label: string
+  status: 'running' | 'done' | 'error'
+}
 export interface ToolItem {
   kind: 'tool'
   id: string // callId
@@ -43,6 +50,8 @@ export interface ToolItem {
   output?: string
   /** Latest progress line from a long-running tool (e.g. a review's current phase). */
   progress?: string
+  /** Live child rows for nested subagents this tool spawned (e.g. review dimension reviewers). */
+  subagents?: SubAgentRow[]
   /** Images the tool produced (e.g. a view_localhost screenshot). */
   images?: ImageAttachment[]
 }
@@ -156,6 +165,17 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       // Update the live progress line on the running tool (no-op if it's gone).
       return updateTool(items, e.callId, { progress: e.message })
     }
+    case 'subagent': {
+      // Add or update a nested subagent row under its parent tool (no-op if gone).
+      return items.map((it) => {
+        if (it.kind !== 'tool' || it.id !== e.parentCallId) return it
+        const row: SubAgentRow = { id: e.id, label: e.label, status: e.status }
+        const existing = it.subagents ?? []
+        const idx = existing.findIndex((s) => s.id === e.id)
+        const subagents = idx >= 0 ? existing.map((s, i) => (i === idx ? row : s)) : [...existing, row]
+        return { ...it, subagents }
+      })
+    }
     case 'tool_question': {
       const finalized = finalizeStreaming(items)
       return [
@@ -181,12 +201,23 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         : e.output.startsWith('Denied') || e.output.startsWith('Blocked')
           ? 'denied'
           : 'error'
-      const updated = updateTool(items, e.callId, {
+      const patched = updateTool(items, e.callId, {
         status,
         output: e.output,
         progress: undefined, // clear the live progress line now the tool has finished
         ...(e.images?.length ? { images: e.images } : {})
       })
+      // The tool finished, so any nested subagent row still spinning is now resolved.
+      const updated = patched.map((it) =>
+        it.kind === 'tool' && it.id === e.callId && it.subagents?.some((s) => s.status === 'running')
+          ? {
+              ...it,
+              subagents: it.subagents.map((s) =>
+                s.status === 'running' ? { ...s, status: 'done' as const } : s
+              )
+            }
+          : it
+      )
       // Highlight a PR opening/merging as its own notice, above the tool row.
       const pr = prNoticeFromToolResult(e.name, e.ok, e.output)
       if (pr) {
