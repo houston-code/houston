@@ -15,7 +15,7 @@ import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
 import { branchNameError, suggestBranch } from './lib/worktree'
-import { applyTheme } from './lib/theme'
+import { useApplyTheme } from './hooks/useApplyTheme'
 import {
   matchShortcut,
   isEditableTarget,
@@ -212,16 +212,8 @@ export default function App(): JSX.Element {
   // Open the Settings modal when chosen from the native app menu (macOS ⌘,).
   useEffect(() => window.api.onOpenSettings(() => setSettingsOpen(true)), [])
 
-  // Apply the color theme whenever it changes, and follow the OS while on "system".
-  const theme = settings?.theme ?? 'system'
-  useEffect(() => {
-    applyTheme(theme)
-    if (theme !== 'system' || typeof window.matchMedia !== 'function') return
-    const mq = window.matchMedia('(prefers-color-scheme: light)')
-    const onChange = (): void => applyTheme('system')
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [theme])
+  // Apply the saved color theme, following the OS while on "system".
+  useApplyTheme(settings?.theme ?? 'system')
 
   // Debounced full-text search across conversations (title + message content).
   useEffect(() => {
