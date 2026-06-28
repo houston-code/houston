@@ -1,6 +1,6 @@
 import { ipcMain, dialog, app, BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
 import type {
@@ -12,7 +12,11 @@ import type {
   ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
-import { validateImportedConversation, resolveImportWorkspace } from '@shared/conversation-io'
+import {
+  validateImportedConversation,
+  resolveImportWorkspace,
+  MAX_IMPORT_BYTES
+} from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments } from '@shared/images'
 import { checkForUpdates, takePendingWhatsNew } from './updater'
@@ -385,6 +389,14 @@ export function registerIpc(): void {
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
     if (res.canceled || res.filePaths.length === 0) return null
+    // Reject an oversized file BEFORE reading it into memory / JSON.parsing it, so
+    // a huge or hostile file can't exhaust memory.
+    const { size } = statSync(res.filePaths[0])
+    if (size > MAX_IMPORT_BYTES) {
+      throw new Error(
+        `Conversation file is too large (${Math.round(size / 1_000_000)} MB; max ${Math.round(MAX_IMPORT_BYTES / 1_000_000)} MB).`
+      )
+    }
     const raw = JSON.parse(readFileSync(res.filePaths[0], 'utf8'))
     const data = validateImportedConversation(raw)
     const settings = getSettings()
