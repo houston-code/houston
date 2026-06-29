@@ -1080,9 +1080,12 @@ export default function App(): JSX.Element {
 
   // First-run / updated-terms gate: block all use of the app until the user
   // accepts the current legal terms. Renders alone (nothing else mounts) so the
-  // disclaimers can't be bypassed.
+  // disclaimers can't be bypassed. A non-zero stored version means they accepted
+  // earlier terms and are being re-prompted after a bump (vs. a fresh first run).
   if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
-    return <LegalGate onAccept={onAcceptLegal} />
+    return (
+      <LegalGate onAccept={onAcceptLegal} isUpdate={(settings.legalAcceptedVersion ?? 0) > 0} />
+    )
   }
 
   // The composer is usable only when the *selected* provider is actually ready —

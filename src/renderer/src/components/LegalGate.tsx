@@ -3,15 +3,25 @@ import { useFocusTrap } from '../lib/useFocusTrap'
 import { LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 
 /**
- * Blocking first-run gate: the user must accept the Terms of Use, Privacy Policy,
- * and License before using Houston. Unlike other modals it cannot be dismissed —
- * Escape and backdrop clicks do nothing; the only way forward is to accept, and
- * the only way out is to quit. Shown again after the legal terms version bumps.
+ * Blocking legal-acceptance gate: the user must accept the Terms of Use, Privacy
+ * Policy, and License before using Houston. Unlike other modals it cannot be
+ * dismissed — Escape and backdrop clicks do nothing; the only way forward is to
+ * accept, and the only way out is to quit.
+ *
+ * Shown on first run, and again whenever LEGAL_VERSION bumps (see @shared/legal).
+ * `isUpdate` distinguishes a returning user being re-prompted after a terms change
+ * from a fresh first-run acceptance, so the copy reads correctly in both cases.
  *
  * The key disclaimers are stated inline so they have effect even offline; the
  * links open the full documents in the browser.
  */
-export function LegalGate({ onAccept }: { onAccept: () => void }): JSX.Element {
+export function LegalGate({
+  onAccept,
+  isUpdate = false
+}: {
+  onAccept: () => void
+  isUpdate?: boolean
+}): JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   // Pass a no-op so the focus trap keeps focus inside but Escape can't dismiss.
   useFocusTrap(ref, () => {})
@@ -27,13 +37,15 @@ export function LegalGate({ onAccept }: { onAccept: () => void }): JSX.Element {
         tabIndex={-1}
       >
         <div className="modal__head">
-          <h2 id="legal-gate-title">Before you use Houston</h2>
+          <h2 id="legal-gate-title">
+            {isUpdate ? 'Houston’s terms have been updated' : 'Before you use Houston'}
+          </h2>
         </div>
         <div className="modal__body legal-gate__body">
           <p>
-            Houston is a coding agent that can read, edit, delete, and run files and
-            commands on your device, and connect to AI models and other services that
-            you choose. Please read and accept the terms below before continuing.
+            {isUpdate
+              ? 'We’ve updated Houston’s Terms of Use, Privacy Policy, and License. Please review and accept the updated terms to continue.'
+              : 'Houston is a coding agent that can read, edit, delete, and run files and commands on your device, and connect to AI models and other services that you choose. Please read and accept the terms below before continuing.'}
           </p>
           <ul className="legal-gate__points">
             <li>

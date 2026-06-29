@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { AppSettings } from '@shared/types'
 import type { AgentEvent } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
-import { parseHeadlessArgs, resolveHeadlessModel, runHeadless, type HeadlessDeps } from './headless'
+import {
+  legalAcceptanceMessage,
+  parseHeadlessArgs,
+  resolveHeadlessModel,
+  runHeadless,
+  type HeadlessDeps
+} from './headless'
 
 describe('parseHeadlessArgs', () => {
   it('returns null without a prompt flag (GUI launch)', () => {
@@ -46,6 +52,24 @@ describe('parseHeadlessArgs', () => {
   it('ignores unknown tokens like the binary/app path', () => {
     const o = parseHeadlessArgs(['/Applications/Houston.app/...', '-p', 'hi'], '/d')
     expect(o?.prompt).toBe('hi')
+  })
+})
+
+describe('legalAcceptanceMessage', () => {
+  it('uses first-run wording and points to --accept-terms + the doc links', () => {
+    const m = legalAcceptanceMessage(false)
+    expect(m).toContain('before using headless mode')
+    expect(m).not.toContain('have been updated')
+    expect(m).toContain('--accept-terms')
+    expect(m).toContain('/docs/TERMS.md')
+    expect(m).toContain('/docs/PRIVACY.md')
+    expect(m).toContain('/LICENSE')
+  })
+
+  it('uses re-acceptance wording when the terms changed since a prior acceptance', () => {
+    const m = legalAcceptanceMessage(true)
+    expect(m).toContain('have been updated and must be re-accepted')
+    expect(m).toContain('--accept-terms')
   })
 })
 
