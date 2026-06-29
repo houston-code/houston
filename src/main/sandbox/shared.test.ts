@@ -132,6 +132,14 @@ describe('sandboxEnv', () => {
     expect(env.XDG_CACHE_HOME).toBe(`${cache}${sep}xdg`)
   })
 
+  it('redirects the Go build + module caches into the writable temp cache dir', () => {
+    const env = sandboxEnv({ PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' })
+    const cache = pkgCacheDir({ TMPDIR: '/tmp' })
+    expect(env.GOCACHE).toBe(`${cache}${sep}go-build`)
+    expect(env.GOMODCACHE).toBe(`${cache}${sep}go-mod`)
+    expect(env.GOCACHE).not.toMatch(/Users[/\\]me/) // not ~/Library/Caches — that's the EPERM we fix
+  })
+
   it('keeps the cache under the temp area (sandbox-writable), never $HOME', () => {
     // Use join() on both sides so this is correct on Windows (where the path
     // separator and join semantics differ from POSIX).
