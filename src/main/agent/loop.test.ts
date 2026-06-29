@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { AgentEvent, ChatMessage, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ApprovalPolicy } from '@shared/types'
 import type { ToolDef } from './tools'
+import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -909,5 +910,74 @@ describe('ask_user', () => {
     } finally {
       h.settings.projectPlugins = true
     }
+  })
+
+  describe('interrupted-turn recovery', () => {
+    it('backfills a placeholder for a dangling tool call left by a prior interrupted run', async () => {
+      // History ends with an assistant tool_use and no matching result — the shape a
+      // turn killed while parked on an approval prompt leaves behind. The run must
+      // repair it (so the provider isn't sent invalid history) and finish normally.
+      const r = await run({
+        messages: [
+          { role: 'user', content: 'compare the apps' },
+          {
+            role: 'assistant',
+            content: 'fetching',
+            toolCalls: [{ id: 'orphan1', name: 'web_fetch', arguments: { url: 'https://example.com' } }]
+          }
+        ],
+        turns: [[{ type: 'text', text: 'continuing' }, { type: 'done', stopReason: 'end_turn' }]]
+      })
+
+      expect(types(r).at(-1)).toBe('done')
+      // The dangling call now has a placeholder result, so nothing is left orphaned.
+      expect(missingToolResults(r.messages)).toEqual([])
+      const placeholder = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'orphan1')
+      expect(placeholder?.content).toBe(INTERRUPTED_TOOL_RESULT)
+    })
+
+    it('backfills calls left unanswered when a multi-call turn is cancelled mid-sequence', async () => {
+      // Two writes in one turn (sequential under "ask"): cancel on the first prompt.
+      // The first becomes "Denied", the second never runs — the finally must pair it
+      // so the persisted log has no dangling tool_use.
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'x' } } },
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'b.txt', content: 'y' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ])
+      const runId = 'run-cancel-multicall'
+      let messages: ChatMessage[] = []
+      const send = (e: AgentEvent): void => {
+        if (e.type === 'tool_approval') setTimeout(() => cancelRun(runId), 0)
+      }
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'write both files' }]
+        },
+        send,
+        (m) => {
+          messages = m
+        }
+      )
+
+      // No tool_use is left without a result.
+      expect(missingToolResults(messages)).toEqual([])
+      const r1 = messages.find((m) => m.role === 'tool' && m.toolCallId === 'w1')
+      const r2 = messages.find((m) => m.role === 'tool' && m.toolCallId === 'w2')
+      expect(r1).toBeTruthy()
+      expect(r2).toBeTruthy()
+      // The un-run second call carries the interruption placeholder.
+      expect(r2?.content).toBe(INTERRUPTED_TOOL_RESULT)
+      // Neither file was actually written.
+      expect(existsSync(join(ws, 'a.txt'))).toBe(false)
+      expect(existsSync(join(ws, 'b.txt'))).toBe(false)
+    })
   })
 })

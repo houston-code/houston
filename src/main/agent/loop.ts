@@ -28,6 +28,7 @@ import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead } from './scheduling'
 import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
+import { missingToolResults } from './repair'
 import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
 import { recordOriginal, recordResult } from './checkpoints'
 import { runPostEditDiagnostics } from './diagnostics'
@@ -247,6 +248,10 @@ export async function startRun(
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void =>
     send({ ...(e as object), runId } as AgentEvent)
 
+  // Hoisted above the try so the `finally` can backfill results for any tool call
+  // left dangling by an interruption (see the repair calls below).
+  const messages: ChatMessage[] = [...req.messages]
+
   try {
     let workspace: string
     try {
@@ -333,7 +338,17 @@ export async function startRun(
         .filter((d) => !lazyMcp || revealedMcp.has(d.schema.name))
         .map((d) => d.schema)
     ]
-    const messages: ChatMessage[] = [...req.messages]
+    // A prior run interrupted while a tool call was pending (commonly parked on an
+    // approval prompt when the app quit/crashed) leaves an assistant `tool_use`
+    // with no matching `tool_result`. Providers reject that history, so backfill
+    // placeholder results before the first provider call — otherwise every
+    // continue/retry on this conversation fails. Persist the repair so the stored
+    // log and transcript are valid too, not just the in-flight request.
+    const orphanFill = missingToolResults(messages)
+    if (orphanFill.length > 0) {
+      messages.push(...orphanFill)
+      onMessages?.(messages)
+    }
 
     // Notify plugins of the user turn that started this run (the latest user
     // message). Observational; a plugin error degrades to a warning (see plugins.ts).
@@ -919,6 +934,16 @@ export async function startRun(
     emit({ type: 'limit', reason: 'max-steps' })
     emit({ type: 'done', stopReason: 'end_turn' })
   } finally {
+    // A turn stopped mid-tool — the user hit Stop, or an exception unwound after
+    // the assistant `tool_use` was persisted but before its result — would leave a
+    // dangling tool call that makes the conversation un-continuable. Pair any
+    // unanswered call with a placeholder so the persisted log stays valid. (A hard
+    // crash skips this; the intake repair in startRun is the backstop for that.)
+    const fill = missingToolResults(messages)
+    if (fill.length > 0) {
+      messages.push(...fill)
+      onMessages?.(messages)
+    }
     runs.delete(runId)
     // Only clear the conversation's slot if it still points at this run, so a
     // (guarded-against, but defensive) later run can't have its entry removed.
