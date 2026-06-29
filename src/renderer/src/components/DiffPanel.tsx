@@ -1,22 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { FileChangeStatus, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
+import type { FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import { DiffView } from './DiffView'
-
-/** Single-letter badge + accessible label per change status. */
-const STATUS: Record<FileChangeStatus, { mark: string; label: string }> = {
-  added: { mark: 'A', label: 'added' },
-  modified: { mark: 'M', label: 'modified' },
-  deleted: { mark: 'D', label: 'deleted' },
-  renamed: { mark: 'R', label: 'renamed' },
-  untracked: { mark: 'U', label: 'untracked' }
-}
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
 
 function FileSection({ file, defaultOpen }: { file: FileDiff; defaultOpen: boolean }): JSX.Element {
   const [open, setOpen] = useState(defaultOpen)
-  const s = STATUS[file.status]
   return (
     <div className="changes-file">
       <button
@@ -26,9 +16,6 @@ function FileSection({ file, defaultOpen }: { file: FileDiff; defaultOpen: boole
         aria-expanded={open}
       >
         <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>
-        <span className={`changes-file__badge changes-file__badge--${file.status}`} title={s.label}>
-          {s.mark}
-        </span>
         <span className="changes-file__path" title={file.path}>
           {file.oldPath && file.oldPath !== file.path && (
             <span className="changes-file__old">{file.oldPath} → </span>
@@ -183,7 +170,7 @@ export function DiffPanel({
                   : 'Ask the agent to create a pull request from these changes'
               }
             >
-              Create PR…
+              Create PR
             </button>
           </footer>
         )}
