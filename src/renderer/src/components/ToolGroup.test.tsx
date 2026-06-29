@@ -312,6 +312,33 @@ describe('ToolGroup', () => {
     expect(imgs[1].getAttribute('src')).toBe('data:image/jpeg;base64,BBBB')
   })
 
+  it('renders nested subagent rows under a review tool, each with its own live status', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 'rev',
+        name: 'review_changes',
+        status: 'running',
+        args: {},
+        subagents: [
+          { id: 'correctness', label: 'Correctness — 2 issues', status: 'done' },
+          { id: 'security', label: 'Security', status: 'running' },
+          { id: 'verify', label: 'Verifying findings', status: 'running' }
+        ]
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+
+    // One row per subagent, each showing its label.
+    expect(container.querySelectorAll('.tool-row__subagent')).toHaveLength(3)
+    expect(screen.getByText('Correctness — 2 issues')).toBeInTheDocument()
+    expect(screen.getByText('Security')).toBeInTheDocument()
+    // A finished dimension shows the done glyph; a still-working one shows a spinner.
+    const done = screen.getByText('Correctness — 2 issues').closest('.tool-row__subagent')
+    expect(done?.querySelector('.tool-row__glyph--done')).not.toBeNull()
+    const running = screen.getByText('Security').closest('.tool-row__subagent')
+    expect(running?.querySelector('[aria-label="running"]')).not.toBeNull()
+  })
+
   it('shows the highest-priority status on a fold of reads with mixed statuses', () => {
     // A fold needs ≥2 consecutive read_file calls. One running + one done should
     // surface as running (running outranks done in combinedStatus).

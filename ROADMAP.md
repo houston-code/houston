@@ -53,12 +53,15 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 - **Write-capable / multi-agent delegation.** Today `dispatch_agent` (and custom
   `.houston/agents`) are deliberately **read-only** — a subagent can read/search
   and report back, but can't edit, run commands, or use the network. Letting a
-  subagent act would need a nested agent loop with its own tool budget, approval
-  propagation back to the UI, and streamed sub-events. *Why deferred:* it's a
-  larger architecture change *and* a safety-surface expansion (an autonomous
-  sub-loop taking write/shell actions) that deserves its own design + consent UX
-  rather than being bolted on. Read-only delegation already covers the common
-  "investigate without polluting my context" case.
+  subagent *act* would still need a nested agent loop with its own tool budget and
+  approval propagation back to the UI. (Streaming a nested subagent's live status
+  is already in place: `review_changes` surfaces each per-dimension reviewer and
+  the verification pass as their own live rows under the tool, via the `subagent`
+  agent event.) *Why deferred:* write capability is a larger architecture change
+  *and* a safety-surface expansion (an autonomous sub-loop taking write/shell
+  actions) that deserves its own design + consent UX rather than being bolted on.
+  Read-only delegation already covers the common "investigate without polluting my
+  context" case.
 
 - **Persistent code index / semantic (embeddings) search.** Houston searches the
   project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**

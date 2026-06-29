@@ -220,3 +220,48 @@ describe('reduceEvent tool progress', () => {
     expect(items).toEqual([])
   })
 })
+
+describe('reduceEvent subagent rows', () => {
+  const ev = (e: AgentEvent): AgentEvent => e
+  const start = (): DisplayItem[] =>
+    reduceEvent([], ev({ runId: 'r1', type: 'tool_start', callId: 'c1', name: 'review_changes', args: {} }))
+  const sub = (id: string, label: string, status: 'running' | 'done' | 'error'): AgentEvent =>
+    ev({ runId: 'r1', type: 'subagent', parentCallId: 'c1', id, label, status })
+  const toolC1 = (items: DisplayItem[]): ToolItem =>
+    items.find((it): it is ToolItem => it.kind === 'tool' && it.id === 'c1')!
+
+  it('adds a child row on start and updates it in place by id', () => {
+    let items = start()
+    items = reduceEvent(items, sub('correctness', 'Correctness', 'running'))
+    expect(toolC1(items).subagents).toEqual([{ id: 'correctness', label: 'Correctness', status: 'running' }])
+
+    items = reduceEvent(items, sub('correctness', 'Correctness — 2 issues', 'done'))
+    // Same id updates the existing row — no duplicate; label + status reflect the outcome.
+    expect(toolC1(items).subagents).toEqual([
+      { id: 'correctness', label: 'Correctness — 2 issues', status: 'done' }
+    ])
+  })
+
+  it('keeps one row per distinct subagent id, in arrival order', () => {
+    let items = start()
+    for (const id of ['correctness', 'security', 'quality']) items = reduceEvent(items, sub(id, id, 'running'))
+    expect(toolC1(items).subagents?.map((s) => s.id)).toEqual(['correctness', 'security', 'quality'])
+  })
+
+  it('finalizes any still-running child rows when the tool result arrives', () => {
+    let items = start()
+    items = reduceEvent(items, sub('quality', 'Quality', 'running'))
+    items = reduceEvent(
+      items,
+      ev({ runId: 'r1', type: 'tool_result', callId: 'c1', name: 'review_changes', ok: true, output: 'done' })
+    )
+    const tool = toolC1(items)
+    expect(tool.status).toBe('done')
+    expect(tool.subagents).toEqual([{ id: 'quality', label: 'Quality', status: 'done' }])
+  })
+
+  it('ignores a subagent event for a parent tool that is not present', () => {
+    const items = reduceEvent([], sub('correctness', 'Correctness', 'running'))
+    expect(items).toEqual([])
+  })
+})

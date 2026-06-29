@@ -386,6 +386,8 @@ export async function startRun(
           paths,
           effort,
           onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
+          onSubAgent: (ev) =>
+            emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
           signal: abort.signal
         }),
       attachImage,

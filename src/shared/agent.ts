@@ -276,6 +276,21 @@ export type AgentEvent =
   | { runId: string; type: 'tool_start'; callId: string; name: string; args: Record<string, unknown> }
   | { runId: string; type: 'tool_progress'; callId: string; message: string }
   | {
+      // A nested subagent spawned by a tool (e.g. one of review_changes' per-dimension
+      // reviewers), surfaced as its own live row under the parent tool's row. Emitted
+      // when the subagent starts and again when it finishes, keyed by a stable `id`
+      // within the parent so the row updates in place.
+      runId: string
+      type: 'subagent'
+      /** The tool call (e.g. a review_changes call) that spawned this subagent. */
+      parentCallId: string
+      /** Stable id of this subagent row within its parent (e.g. the review dimension). */
+      id: string
+      /** Human label for the row (e.g. "Correctness", "Verifying findings"). */
+      label: string
+      status: 'running' | 'done' | 'error'
+    }
+  | {
       runId: string
       type: 'tool_approval'
       callId: string

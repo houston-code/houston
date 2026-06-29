@@ -129,6 +129,19 @@ function ToolRow({
         <div className="tool-row__progress">{item.progress}</div>
       )}
 
+      {item.subagents && item.subagents.length > 0 && (
+        <ul className="tool-row__subagents">
+          {item.subagents.map((s) => (
+            <li key={s.id} className={`tool-row__subagent tool-row__subagent--${s.status}`}>
+              <StatusGlyph status={s.status} />
+              <span className="tool-row__subagent-label" title={s.label}>
+                {s.label}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
       {isTodo && (
         <ul className="todo-list">
           {todos.map((t, i) => (
