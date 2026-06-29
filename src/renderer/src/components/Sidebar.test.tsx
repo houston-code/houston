@@ -56,6 +56,11 @@ function openConvMenu(title: string): void {
   fireEvent.click(within(row).getByTitle('More'))
 }
 
+/** Open an expand-on-highlight submenu (e.g. "Open in", "Move to group") by its row. */
+function openSubmenu(name: string): void {
+  fireEvent.click(screen.getByRole('button', { name }))
+}
+
 /** Open the ⋯ options menu for a given group header. */
 function openGroupMenu(name: string): void {
   const head = screen.getByText(name).closest('.section-head') as HTMLElement
@@ -452,7 +457,8 @@ describe('Sidebar — moving chats between groups', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    // The "Move to" list renders a button per group ("○ Work" when not in it).
+    // "Move to group" opens a flyout with a button per group ("○ Work" when not in it).
+    openSubmenu('Move to group')
     fireEvent.click(screen.getByRole('button', { name: '○ Work' }))
     expect(props.onMove).toHaveBeenCalledWith('a', 'g1')
   })
@@ -469,6 +475,7 @@ describe('Sidebar — moving chats between groups', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
+    openSubmenu('Move to group')
     fireEvent.click(screen.getByText('＋ New group'))
     expect(onCreateGroup).toHaveBeenCalledOnce()
 
@@ -487,6 +494,7 @@ describe('Sidebar — moving chats between groups', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
+    openSubmenu('Move to group')
     fireEvent.click(screen.getByText('Remove from group'))
     expect(props.onMove).toHaveBeenCalledWith('a', null)
   })
@@ -499,6 +507,7 @@ describe('Sidebar — moving chats between groups', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
+    openSubmenu('Move to group')
     expect(screen.queryByText('Remove from group')).not.toBeInTheDocument()
   })
 })
@@ -533,6 +542,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
 
     openConvMenu('Alpha')
     await waitFor(() => expect(api.listEditors).toHaveBeenCalled())
+    openSubmenu('Open in')
     fireEvent.click(await screen.findByRole('button', { name: 'VS Code' }))
     await waitFor(() => expect(api.openInEditor).toHaveBeenCalledWith('vscode', '/Users/me/proj'))
   })
@@ -543,6 +553,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
+    openSubmenu('Open in')
     expect(await screen.findByRole('button', { name: 'VS Code' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Cursor' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Zed' })).not.toBeInTheDocument()
@@ -557,6 +568,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
+    openSubmenu('Open in')
     fireEvent.click(await screen.findByRole('button', { name: /reveal in/i }))
     await waitFor(() => expect(api.revealInFileManager).toHaveBeenCalledWith('/Users/me/proj'))
   })
@@ -570,6 +582,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
+    openSubmenu('Open in')
     fireEvent.click(await screen.findByRole('button', { name: 'VS Code' }))
     expect(await screen.findByRole('alert')).toHaveTextContent("VS Code isn't installed.")
   })

@@ -640,8 +640,8 @@ body.is-resizing {
   background: var(--border);
   margin: 4px 2px;
 }
-/* Expand-on-highlight submenu: a single row that reveals nested options on hover or
-   keyboard focus, keeping a long menu compact. Pure CSS so it never flickers. */
+/* Expand-on-highlight submenu: a row whose options open into a floating card to the
+   right (see MenuExpander) when hovered or focused, instead of expanding inline. */
 .menu__item--expander {
   display: flex;
   align-items: center;
@@ -654,22 +654,18 @@ body.is-resizing {
   font-size: 10px;
   transition: transform 0.12s ease;
 }
-.menu__expander:hover > .menu__item--expander .menu__expander-caret,
-.menu__expander:focus-within > .menu__item--expander .menu__expander-caret {
-  transform: rotate(90deg);
+.menu__item--expander[aria-expanded='true'] .menu__expander-caret {
+  color: var(--text);
 }
-.menu__submenu {
-  display: none;
-  flex-direction: column;
-  gap: 1px;
-}
-.menu__expander:hover > .menu__submenu,
-.menu__expander:focus-within > .menu__submenu {
-  display: flex;
+/* The floating submenu card. Reuses .menu's elevated card look; its position and
+   offsets are set inline (fixed, from the row's rect) so it escapes the parent
+   menu's scroll clipping. */
+.menu--flyout {
+  margin: 0;
 }
 /* Inert info lines inside a menu (e.g. "Checking…", "No editors detected"). */
 .menu__note {
-  padding: 6px 9px 6px 18px;
+  padding: 6px 9px;
   font-size: 12.5px;
   color: var(--text-dim);
 }
