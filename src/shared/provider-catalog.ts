@@ -98,6 +98,20 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     docsUrl: 'https://docs.hyperbolic.xyz'
   },
   {
+    // Bedrock's recommended OpenAI-compatible endpoint (bedrock-mantle) accepts an
+    // Amazon Bedrock API key as a bearer token, so it rides the openai-compatible
+    // path with no AWS SigV4 — the cheap cloud win. Region is in the host; the user
+    // edits it. (IAM/SigV4 access is the separate Tier-2 work, not this preset.)
+    id: 'bedrock',
+    label: 'Amazon Bedrock',
+    baseUrl: 'https://bedrock-mantle.us-east-1.api.aws/v1',
+    requiresKey: true,
+    category: 'cloud',
+    blurb: 'AWS-hosted models via a Bedrock API key. Edit the region in the URL.',
+    docsUrl:
+      'https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html'
+  },
+  {
     id: 'omlx',
     label: 'oMLX (Apple Silicon)',
     baseUrl: 'http://localhost:8000/v1',
