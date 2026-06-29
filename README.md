@@ -77,7 +77,8 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
 - **Research subagents.** The agent can `dispatch_agent` to hand a focused,
   read-only question to a subagent with its own fresh context. The subagent
   reads, globs, and searches the project and reports back — keeping the main
-  agent's context clean. Subagents can't edit, run commands, or use the network.
+  agent's context clean. Subagents can't edit, run commands, or use the network,
+  and the tokens they spend roll into the conversation's usage meter.
 - **Adversarial review.** `review_changes` (or `/review`) reviews your uncommitted
   changes for correctness, security, and quality. It runs an independent read-only
   reviewer per dimension — each in its own fresh context, so they don't inherit the

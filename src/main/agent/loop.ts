@@ -481,6 +481,12 @@ export async function startRun(
         }),
       dispatchSubAgent: (prompt, agentName) => {
         const agent = agentName ? agentsByName.get(agentName) : undefined
+        // A research subagent bills against the same model; total its tokens and
+        // fold them into the conversation's usage when it ends. inputTokens: 0
+        // keeps the context-size meter on the main turn (this is an ephemeral
+        // subagent context), while output + cost accumulate. Mirrors dispatchReview.
+        let subInput = 0
+        let subOutput = 0
         return runSubAgent({
           provider,
           model: req.model,
@@ -488,7 +494,20 @@ export async function startRun(
           prompt,
           signal: abort.signal,
           systemOverride: agent?.systemPrompt,
-          tools: agent?.tools
+          tools: agent?.tools,
+          onUsage: (u) => {
+            subInput += u.inputTokens ?? 0
+            subOutput += u.outputTokens ?? 0
+          }
+        }).finally(() => {
+          if (subInput || subOutput) {
+            emit({
+              type: 'usage',
+              inputTokens: 0,
+              outputTokens: subOutput,
+              cost: turnCostUsd(req.model, subInput, subOutput)
+            })
+          }
         })
       },
       dispatchReview: (base, paths, effort) => {
