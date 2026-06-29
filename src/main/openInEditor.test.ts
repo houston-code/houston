@@ -73,17 +73,26 @@ describe('detectEditors', () => {
 })
 
 describe('planEditorLaunch', () => {
-  it('prefers the resolved CLI with the directory as the only arg', () => {
+  it('launches by exact app name on macOS when the .app is present', () => {
+    // Even with a `code` CLI on PATH — which a VS Code fork (Cursor) can shadow —
+    // the app-name launch wins, so "Open in VS Code" can't open the wrong editor.
     expect(planEditorLaunch(code, '/proj', 'darwin', '/usr/local/bin/code', true)).toEqual({
+      cmd: 'open',
+      args: ['-a', 'Visual Studio Code', '/proj']
+    })
+  })
+
+  it('uses the resolved CLI on macOS when no .app is installed', () => {
+    expect(planEditorLaunch(code, '/proj', 'darwin', '/usr/local/bin/code', false)).toEqual({
       cmd: '/usr/local/bin/code',
       args: ['/proj']
     })
   })
 
-  it('falls back to `open -a` on macOS when only the app is present', () => {
-    expect(planEditorLaunch(code, '/proj', 'darwin', null, true)).toEqual({
-      cmd: 'open',
-      args: ['-a', 'Visual Studio Code', '/proj']
+  it('uses the resolved CLI off macOS (no app-name launch)', () => {
+    expect(planEditorLaunch(code, '/proj', 'linux', '/usr/bin/code', false)).toEqual({
+      cmd: '/usr/bin/code',
+      args: ['/proj']
     })
   })
 
@@ -106,12 +115,30 @@ describe('openProjectInEditor', () => {
   })
 
   it('spawns the resolved CLI with the directory (argv array, never a shell)', () => {
+    // Off macOS the CLI is the only launch path; inject platform so the assertion
+    // is deterministic regardless of where the test runs.
     resolveBinaryPath.mockReturnValue('/usr/local/bin/code')
-    const res = openProjectInEditor('vscode', process.cwd())
+    const res = openProjectInEditor('vscode', process.cwd(), { platform: 'linux' })
     expect(res.ok).toBe(true)
     expect(spawn).toHaveBeenCalledWith(
       '/usr/local/bin/code',
       [process.cwd()],
+      expect.objectContaining({ detached: true })
+    )
+  })
+
+  it('on macOS launches the .app by name, not a shadowing `code` CLI (Cursor hijack)', () => {
+    // A `code` on PATH that actually belongs to a fork would otherwise open it;
+    // with the .app present we launch VS Code by name instead.
+    resolveBinaryPath.mockReturnValue('/usr/local/bin/code')
+    const res = openProjectInEditor('vscode', process.cwd(), {
+      platform: 'darwin',
+      exists: (p) => p === process.cwd() || p === '/Applications/Visual Studio Code.app'
+    })
+    expect(res.ok).toBe(true)
+    expect(spawn).toHaveBeenCalledWith(
+      'open',
+      ['-a', 'Visual Studio Code', process.cwd()],
       expect.objectContaining({ detached: true })
     )
   })

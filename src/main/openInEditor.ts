@@ -59,9 +59,13 @@ export interface LaunchPlan {
 }
 
 /**
- * Pure planner for how to open `dir` in `editor`: prefer the resolved CLI
- * (`<bin> <dir>`); on macOS fall back to `open -a <app> <dir>` when only the .app is
- * present. Returns null when neither is available.
+ * Pure planner for how to open `dir` in `editor`. On macOS, when the editor's .app
+ * is installed, launch by exact app name (`open -a <app> <dir>`): the bare CLI
+ * launcher is easily shadowed on PATH by a VS Code fork's shim — Cursor installs
+ * its own `code` — so resolving `code` could silently open the wrong editor.
+ * LaunchServices resolves the app by name, so the chosen editor always opens.
+ * Otherwise use the resolved CLI (`<bin> <dir>`), which is the only option off
+ * macOS and the fallback when no .app is present. Returns null when neither exists.
  */
 export function planEditorLaunch(
   editor: EditorDef,
@@ -70,8 +74,8 @@ export function planEditorLaunch(
   binPath: string | null,
   appPresent: boolean
 ): LaunchPlan | null {
-  if (binPath) return { cmd: binPath, args: [dir] }
   if (platform === 'darwin' && appPresent) return { cmd: 'open', args: ['-a', editor.macAppName, dir] }
+  if (binPath) return { cmd: binPath, args: [dir] }
   return null
 }
 
@@ -85,15 +89,24 @@ function isOpenableDir(dir: unknown, exists: (p: string) => boolean): dir is str
   }
 }
 
+export interface OpenDeps {
+  /** Override the host platform (default: the real one). Injectable for tests. */
+  platform?: NodeJS.Platform
+  /** Path-existence check for the dir + macOS .app probe (default: real fs). */
+  exists?: (p: string) => boolean
+}
+
 /** Open the project directory `dir` in the editor identified by `editorId`. */
-export function openProjectInEditor(editorId: string, dir: string): OpenResult {
+export function openProjectInEditor(editorId: string, dir: string, deps: OpenDeps = {}): OpenResult {
+  const platform = deps.platform ?? process.platform
+  const exists = deps.exists ?? existsSync
   const editor = editorById(editorId)
   if (!editor) return { ok: false, error: `Unknown editor: ${editorId}` }
-  if (!isOpenableDir(dir, existsSync)) return { ok: false, error: 'No project folder to open.' }
+  if (!isOpenableDir(dir, exists)) return { ok: false, error: 'No project folder to open.' }
 
   const binPath = resolveBinaryPath(editor.bin)
-  const appPresent = process.platform === 'darwin' && macAppPresent(editor.macAppName, existsSync)
-  const plan = planEditorLaunch(editor, dir, process.platform, binPath, appPresent)
+  const appPresent = platform === 'darwin' && macAppPresent(editor.macAppName, exists)
+  const plan = planEditorLaunch(editor, dir, platform, binPath, appPresent)
   if (!plan) return { ok: false, error: `${editor.label} isn't installed.` }
 
   try {
