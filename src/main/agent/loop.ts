@@ -491,8 +491,14 @@ export async function startRun(
           tools: agent?.tools
         })
       },
-      dispatchReview: (base, paths, effort) =>
-        reviewWorkspaceChanges({
+      dispatchReview: (base, paths, effort) => {
+        // The review's nested subagent calls bill against the same model; total
+        // their tokens and fold them into the conversation's usage when it ends.
+        // inputTokens: 0 keeps the context-size meter on the main turn (these are
+        // ephemeral subagent contexts), while output + cost accumulate.
+        let reviewInput = 0
+        let reviewOutput = 0
+        return reviewWorkspaceChanges({
           provider,
           model: req.model,
           workspace,
@@ -502,8 +508,22 @@ export async function startRun(
           onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
           onSubAgent: (ev) =>
             emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
+          onUsage: (u) => {
+            reviewInput += u.inputTokens ?? 0
+            reviewOutput += u.outputTokens ?? 0
+          },
           signal: abort.signal
-        }),
+        }).finally(() => {
+          if (reviewInput || reviewOutput) {
+            emit({
+              type: 'usage',
+              inputTokens: 0,
+              outputTokens: reviewOutput,
+              cost: turnCostUsd(req.model, reviewInput, reviewOutput)
+            })
+          }
+        })
+      },
       attachImage,
       attachDocument,
       captureLocalhost

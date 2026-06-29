@@ -204,6 +204,19 @@ describe('runReview', () => {
     expect(out).toContain('Review cost: ~300 input / 60 output tokens across 3 model calls.')
   })
 
+  it('forwards each subagent turn usage to onUsage so the caller can meter cost', async () => {
+    const seen: Array<{ inputTokens?: number; outputTokens?: number }> = []
+    const { fn } = fakeAgent((o) => {
+      o.onUsage?.({ inputTokens: 10, outputTokens: 2 })
+      return 'No issues found.'
+    })
+    await runReview(base({ runAgent: fn, onUsage: (u) => seen.push(u) }))
+    // One forwarded usage per dimension reviewer (all clean → no verifier).
+    expect(seen).toHaveLength(3)
+    expect(seen.reduce((s, u) => s + (u.outputTokens ?? 0), 0)).toBe(6)
+    expect(seen.reduce((s, u) => s + (u.inputTokens ?? 0), 0)).toBe(30)
+  })
+
   it('omits the cost summary when no usage is reported', async () => {
     const { fn } = fakeAgent(() => 'No issues found.')
     const out = await runReview(base({ runAgent: fn }))
