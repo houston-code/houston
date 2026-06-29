@@ -466,6 +466,7 @@ export async function startRun(
       roots,
       allowNetwork: run.policy === 'full-auto' || run.override,
       signal: abort.signal,
+      ...(conversationId ? { conversationId } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
       ghExec,

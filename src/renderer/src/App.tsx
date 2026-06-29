@@ -17,6 +17,9 @@ import { modelCapabilities } from '@shared/usage'
 import { branchNameError, suggestBranch } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
 import { useRunningConversations } from './hooks/useRunningConversations'
+import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
+import { useBackgroundShells } from './hooks/useBackgroundShells'
+import { useTerminals } from './hooks/useTerminals'
 import {
   matchShortcut,
   isEditableTarget,
@@ -226,6 +229,14 @@ export default function App(): JSX.Element {
   // (including chats running in the background, not just the open one).
   const runningIds = useRunningConversations()
 
+  // Refresh the conversation list whenever the running set changes so a background
+  // run finishing updates its title/usage — and its `errored` flag, which the
+  // tasks indicator reads to mark a finished run done vs. failed. The open chat is
+  // already covered by the `chat.running` effect above; this catches the rest.
+  useEffect(() => {
+    void refreshConversations()
+  }, [runningIds, refreshConversations])
+
   // Debounced full-text search across conversations (title + message content).
   useEffect(() => {
     const q = search.trim()
@@ -266,6 +277,25 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+
+  // Integrated-terminal tab state, lifted here (out of the lazy TerminalDock) so
+  // the background-tasks indicator can list terminals even while the panel is
+  // hidden, and clicking a terminal task can reopen + focus its tab.
+  const terminals = useTerminals(workspace)
+
+  // Background shells the agent spawned via run_shell (dev servers, watchers),
+  // tracked by the main process.
+  const backgroundShells = useBackgroundShells()
+
+  // The unified background-tasks list shown in the title bar: in-progress agent
+  // runs + terminals + background shells, plus the ones that finished recently —
+  // so a backgrounded completion is noticeable from anywhere in the app.
+  const { tasks: backgroundTasks, clearFinished: clearFinishedTasks } = useBackgroundTasks(
+    conversations,
+    runningIds,
+    terminals.tabs,
+    backgroundShells
+  )
 
   // For a not-yet-started chat, load the repo's git info and seed fresh worktree
   // defaults: a new worktree (on for git repos), a suggested branch name, and the
@@ -727,6 +757,24 @@ export default function App(): JSX.Element {
       return next
     })
   }, [persistTerminal])
+
+  // Open a background task from the title-bar indicator: surface + focus its
+  // terminal tab (mounting/showing the dock), or switch to the conversation it
+  // belongs to — its own for a chat, the spawning run for a background shell.
+  const openBackgroundTask = useCallback(
+    (task: BackgroundTask) => {
+      if (task.kind === 'terminal') {
+        setTerminalMounted(true)
+        setTerminalOpen(true)
+        void persistTerminal({ terminalOpen: true })
+        terminals.setActive(task.id)
+        return
+      }
+      const convId = task.kind === 'shell' ? task.conversationId : task.id
+      if (convId) void selectConversation(convId)
+    },
+    [terminals, persistTerminal, selectConversation]
+  )
 
   // Drag the panel's top edge: update the height CSS variable live (no re-render of
   // the transcript while dragging), then commit to state/settings on release.
@@ -1203,6 +1251,9 @@ export default function App(): JSX.Element {
       <div className="main">
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
+          tasks={backgroundTasks}
+          onSelectTask={openBackgroundTask}
+          onClearFinishedTasks={clearFinishedTasks}
           changes={workspace ? workingTreeStats : undefined}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
           onToggleTerminal={toggleTerminal}
@@ -1294,7 +1345,7 @@ export default function App(): JSX.Element {
         {terminalMounted && (
           <Suspense fallback={null}>
             <TerminalDock
-              workspace={workspace}
+              controller={terminals}
               visible={terminalOpen}
               onResizeMouseDown={onTerminalResizeMouseDown}
               onClose={toggleTerminal}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { useTerminals } from '../hooks/useTerminals'
+import type { UseTerminals } from '../hooks/useTerminals'
 import { TerminalView } from './TerminalView'
 
 /**
@@ -8,21 +8,23 @@ import { TerminalView } from './TerminalView'
  * only enters the bundle when the user first opens the terminal.
  *
  * It stays mounted once opened and is hidden via `visible` (CSS display) rather
- * than unmounted, so terminal sessions and scrollback survive hide/show. Height
- * is owned by App (persisted to settings); the top edge is a drag handle.
+ * than unmounted, so terminal sessions and scrollback survive hide/show. Tab state
+ * is owned by App (so the background-tasks indicator can see terminals even while
+ * this panel is hidden) and passed in via `controller`; height is owned by App too
+ * (persisted to settings) and the top edge is a drag handle.
  */
 export function TerminalDock({
-  workspace,
+  controller,
   visible,
   onResizeMouseDown,
   onClose
 }: {
-  workspace: string | null
+  controller: UseTerminals
   visible: boolean
   onResizeMouseDown: (e: React.MouseEvent) => void
   onClose: () => void
 }): JSX.Element {
-  const { tabs, activeId, addTab, closeTab, setActive } = useTerminals(workspace)
+  const { tabs, activeId, addTab, closeTab, setActive } = controller
   // Guards against double-spawning while the async addTab is in flight.
   const opening = useRef(false)
 

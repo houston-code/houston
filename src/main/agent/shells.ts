@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import type { BackgroundShellInfo } from '@shared/agent'
 import { killProcessTree } from '../sandbox'
 
 /**
@@ -23,12 +24,35 @@ interface Shell {
   readStderr: number
   exitCode: number | null
   running: boolean
+  startedAt: number
+  exitedAt: number | null
+  /** Conversation whose agent run spawned this shell (for renderer navigation). */
+  conversationId?: string
 }
 
 /** Keep at most this many trailing bytes per stream (rolling window). */
 const MAX_BUF = 2_000_000
 
 const shells = new Map<string, Shell>()
+
+/**
+ * Listeners notified whenever the shell registry changes (a shell starts or
+ * exits). The IPC layer subscribes to broadcast the new list to the renderer so
+ * the background-tasks indicator stays live without polling. Kept here,
+ * Electron-free, so the registry stays unit-testable.
+ */
+const changedListeners = new Set<(shells: BackgroundShellInfo[]) => void>()
+
+/** Subscribe to registry changes; returns an unsubscribe function. */
+export function onShellsChanged(fn: (shells: BackgroundShellInfo[]) => void): () => void {
+  changedListeners.add(fn)
+  return () => changedListeners.delete(fn)
+}
+
+function notifyShellsChanged(): void {
+  const list = listShells()
+  for (const fn of changedListeners) fn(list)
+}
 
 function appendCapped(buf: string, chunk: string): string {
   const next = buf + chunk
@@ -49,7 +73,7 @@ export function unreadSlice(buffer: string, produced: number, cursor: number): s
 }
 
 /** Register a freshly spawned background child and start capturing its output. */
-export function registerShell(command: string, child: ChildProcess): string {
+export function registerShell(command: string, child: ChildProcess, conversationId?: string): string {
   const id = randomUUID().slice(0, 8)
   const shell: Shell = {
     id,
@@ -62,7 +86,10 @@ export function registerShell(command: string, child: ChildProcess): string {
     readStdout: 0,
     readStderr: 0,
     exitCode: null,
-    running: true
+    running: true,
+    startedAt: Date.now(),
+    exitedAt: null,
+    ...(conversationId ? { conversationId } : {})
   }
   child.stdout?.on('data', (c: Buffer) => {
     const s = c.toString()
@@ -77,11 +104,16 @@ export function registerShell(command: string, child: ChildProcess): string {
   child.on('close', (code) => {
     shell.running = false
     shell.exitCode = code
+    shell.exitedAt = Date.now()
+    notifyShellsChanged()
   })
   child.on('error', () => {
     shell.running = false
+    shell.exitedAt = Date.now()
+    notifyShellsChanged()
   })
   shells.set(id, shell)
+  notifyShellsChanged()
   return id
 }
 
@@ -115,19 +147,15 @@ export function killShell(id: string): boolean {
   return true
 }
 
-export interface ShellInfo {
-  id: string
-  command: string
-  running: boolean
-  exitCode: number | null
-}
-
-export function listShells(): ShellInfo[] {
+export function listShells(): BackgroundShellInfo[] {
   return [...shells.values()].map((s) => ({
     id: s.id,
     command: s.command,
     running: s.running,
-    exitCode: s.exitCode
+    exitCode: s.exitCode,
+    startedAt: s.startedAt,
+    exitedAt: s.exitedAt,
+    ...(s.conversationId ? { conversationId: s.conversationId } : {})
   }))
 }
 
@@ -135,4 +163,5 @@ export function listShells(): ShellInfo[] {
 export function killAllShells(): void {
   for (const s of shells.values()) if (s.running) killProcessTree(s.child)
   shells.clear()
+  notifyShellsChanged()
 }

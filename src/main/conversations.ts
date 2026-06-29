@@ -128,11 +128,20 @@ export function listConversations(): ConversationMeta[] {
   for (const f of files) {
     const conv = read(f.replace(/\.json$/, ''))
     if (conv) {
-      const { messages: _messages, ...meta } = conv
-      metas.push(meta)
+      metas.push(toMeta(conv))
     }
   }
   return metas.sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/**
+ * Strip the full message log (and the verbose `lastError`) from a stored
+ * conversation, leaving the lightweight metadata the sidebar and lists consume.
+ * `errored` carries the failed-run flag forward without the message payload.
+ */
+function toMeta(conv: Conversation): ConversationMeta {
+  const { messages: _messages, lastError, ...rest } = conv
+  return { ...rest, errored: !!lastError }
 }
 
 export function deleteConversation(id: string): void {
@@ -155,8 +164,7 @@ export function searchConversations(query: string): ConversationMeta[] {
   for (const f of files) {
     const conv = read(f.replace(/\.json$/, ''))
     if (conv && conversationMatches(conv, q)) {
-      const { messages: _messages, ...meta } = conv
-      metas.push(meta)
+      metas.push(toMeta(conv))
     }
   }
   return metas.sort((a, b) => b.updatedAt - a.updatedAt)

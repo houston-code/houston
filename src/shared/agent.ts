@@ -209,6 +209,32 @@ export interface ConversationMeta {
   titleGenerated?: boolean
   /** Present when this chat runs in a git worktree Houston created for it. */
   worktree?: ConversationWorktree
+  /**
+   * True when the most recent run ended in an error (mirrors {@link Conversation.lastError}
+   * without carrying the message). Surfaced in the lightweight list so the background-tasks
+   * indicator can mark a finished run as failed without loading the full conversation.
+   */
+  errored?: boolean
+}
+
+/**
+ * A background shell started by `run_shell` with `background: true`, surfaced to
+ * the renderer for the background-tasks indicator. Mirrors the main-process
+ * registry entry minus the live child handle and output buffers.
+ */
+export interface BackgroundShellInfo {
+  id: string
+  /** The command line, used as the task title. */
+  command: string
+  running: boolean
+  /** Exit status once finished; null while running or if it was killed. */
+  exitCode: number | null
+  /** Epoch ms the shell was spawned. */
+  startedAt: number
+  /** Epoch ms it exited, or null while still running. */
+  exitedAt: number | null
+  /** Conversation whose agent run spawned this shell, for click-to-open navigation. */
+  conversationId?: string
 }
 
 /** Token usage persisted with a conversation so it survives reloads/restarts. */
