@@ -73,7 +73,9 @@ const {
   resolveQuestion,
   setRunPolicy,
   activeRunForConversation,
-  activeRunCount
+  activeRunCount,
+  runningConversationIds,
+  onActiveRunsChanged
 } = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
@@ -691,6 +693,46 @@ describe('one run per conversation', () => {
     gates[1]()
     await startB
     expect(activeRunCount()).toBe(0)
+  })
+
+  it('reports running conversation ids and notifies listeners as runs start/end', async () => {
+    expect(runningConversationIds()).toEqual([])
+    const sets: string[][] = []
+    const off = onActiveRunsChanged((ids) => sets.push(ids))
+
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    h.provider = {
+      async *streamChat() {
+        await gate
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const run = startRun(
+      {
+        runId: 'ids-A',
+        conversationId: 'conv-ids-A',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'a' }]
+      },
+      () => {},
+      () => {}
+    )
+    // Start fires a change with the conversation present.
+    expect(runningConversationIds()).toEqual(['conv-ids-A'])
+    expect(sets.at(-1)).toEqual(['conv-ids-A'])
+
+    release()
+    await run
+    // End fires a change back to empty, and unsubscribing stops further calls.
+    expect(runningConversationIds()).toEqual([])
+    expect(sets.at(-1)).toEqual([])
+    off()
   })
 })
 

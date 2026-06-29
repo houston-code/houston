@@ -38,6 +38,8 @@ export interface SidebarProps {
   collapsed: boolean
   /** Toggle collapsed ⇄ expanded. */
   onToggleCollapse: () => void
+  /** Conversation ids with a live agent run — each gets a pulsing "running" dot. */
+  runningIds: ReadonlySet<string>
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
@@ -216,6 +218,9 @@ function ConvRow({
       onDragEnd={() => setDragging(false)}
       onClick={() => !renaming && props.onSelect(conv.id)}
     >
+      {props.runningIds.has(conv.id) && (
+        <span className="conv__running" role="img" aria-label="Running" title="Running" />
+      )}
       {conv.pinned && <span className="conv__pin" title="Pinned">★</span>}
       <div className="conv__main">
         {renaming ? (
