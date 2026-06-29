@@ -272,6 +272,14 @@ export default function App(): JSX.Element {
     let cancelled = false
     void window.api.getRepoInfo(workspace).then((info) => {
       if (cancelled) return
+      // The default workspace points at a folder that no longer exists (e.g. a
+      // torn-down worktree left in the recents). Drop it rather than anchoring a new
+      // chat to a phantom repo — clearing it falls back to the folder picker.
+      if (!info.exists) {
+        setRepoInfo(null)
+        setLastWorkspace(null)
+        return
+      }
       // Anchor a new chat to the repo's MAIN worktree, not whatever linked worktree
       // the previously-open chat used. Otherwise getRepoInfo reports that prior
       // chat's branch as "current", and the base picker would default to (and offer

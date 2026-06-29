@@ -9,7 +9,8 @@ const repo: RepoInfo = {
   isRepo: true,
   root: '/Users/me/projects/houston',
   currentBranch: 'main',
-  branches: ['main', 'develop']
+  branches: ['main', 'develop'],
+  exists: true
 }
 
 function makeSettings(): AppSettings {

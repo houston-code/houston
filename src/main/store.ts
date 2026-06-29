@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { backfillDefaultModels, defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
@@ -90,9 +90,39 @@ export function getProvider(providerId: string): ProviderConfig | undefined {
   return getSettings().providers.find((p) => p.id === providerId)
 }
 
-/** Push a workspace path to the front of the recents list (deduped, capped). */
+/** True when `path` is still an existing directory we can open as a workspace. */
+function workspaceExists(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Push a workspace path to the front of the recents list (deduped, capped). Dead
+ * entries (a folder that no longer exists — e.g. a torn-down worktree) are pruned
+ * as we go, so the recents self-heal and can't seed a new chat with a phantom repo.
+ * The freshly-added `path` is kept unconditionally; callers pass a live directory.
+ */
 export function rememberWorkspace(path: string): AppSettings {
   const current = getSettings()
-  const recents = [path, ...current.recentWorkspaces.filter((p) => p !== path)].slice(0, 10)
+  const recents = [
+    path,
+    ...current.recentWorkspaces.filter((p) => p !== path && workspaceExists(p))
+  ].slice(0, 10)
   return updateSettings({ recentWorkspaces: recents })
+}
+
+/**
+ * Drop recent-workspace entries whose directory no longer exists. Run once at
+ * startup so a folder deleted since the last launch (e.g. a worktree removed with
+ * its chat) can't become the default workspace for the next new chat. Persists
+ * only when something actually changed.
+ */
+export function pruneRecentWorkspaces(): AppSettings {
+  const current = getSettings()
+  const live = current.recentWorkspaces.filter(workspaceExists)
+  if (live.length === current.recentWorkspaces.length) return current
+  return updateSettings({ recentWorkspaces: live })
 }

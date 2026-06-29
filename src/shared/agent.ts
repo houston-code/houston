@@ -150,6 +150,13 @@ export interface RepoInfo {
   currentBranch: string | null
   /** Local branch names, newest-committed first, for picking a base. */
   branches: string[]
+  /**
+   * Whether the queried path still exists on disk. Distinguishes a valid
+   * non-repo folder (`exists: true, isRepo: false`) from a path that has since
+   * been deleted — e.g. a torn-down worktree left behind in the recents — so the
+   * new-chat UI can drop the stale default instead of anchoring to a phantom.
+   */
+  exists: boolean
 }
 
 /** Outcome of tearing down a conversation's worktree, for reporting to the user. */

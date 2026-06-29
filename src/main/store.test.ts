@@ -76,3 +76,54 @@ describe('settings migration — model backfill', () => {
     expect(getSettings().schemaVersion).toBe(2)
   })
 })
+
+describe('recent workspaces — existence pruning', () => {
+  it('rememberWorkspace fronts the path, dedupes, and keeps live entries in order', async () => {
+    const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
+    const b = mkdtempSync(join(tmpdir(), 'ws-b-'))
+    try {
+      const { rememberWorkspace } = await import('./store')
+      rememberWorkspace(a)
+      expect(rememberWorkspace(b).recentWorkspaces).toEqual([b, a])
+      // Re-remembering an existing live entry moves it to the front (deduped).
+      expect(rememberWorkspace(a).recentWorkspaces).toEqual([a, b])
+    } finally {
+      rmSync(a, { recursive: true, force: true })
+      rmSync(b, { recursive: true, force: true })
+    }
+  })
+
+  it('rememberWorkspace prunes a recent whose folder has since been deleted', async () => {
+    const live = mkdtempSync(join(tmpdir(), 'ws-live-'))
+    const gone = mkdtempSync(join(tmpdir(), 'ws-gone-'))
+    try {
+      const { rememberWorkspace } = await import('./store')
+      rememberWorkspace(live)
+      expect(rememberWorkspace(gone).recentWorkspaces).toEqual([gone, live])
+      rmSync(gone, { recursive: true, force: true })
+      // Touching recents again drops the now-missing folder.
+      expect(rememberWorkspace(live).recentWorkspaces).toEqual([live])
+    } finally {
+      rmSync(live, { recursive: true, force: true })
+    }
+  })
+
+  it('pruneRecentWorkspaces removes dead entries and is a no-op when all live', async () => {
+    const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
+    const b = mkdtempSync(join(tmpdir(), 'ws-b-'))
+    try {
+      const { rememberWorkspace, pruneRecentWorkspaces, getSettings } = await import('./store')
+      rememberWorkspace(a)
+      rememberWorkspace(b)
+      // All folders exist — prune changes nothing.
+      expect(pruneRecentWorkspaces().recentWorkspaces).toEqual([b, a])
+      rmSync(a, { recursive: true, force: true })
+      // `a` is gone — prune drops it and persists the cleaned list.
+      expect(pruneRecentWorkspaces().recentWorkspaces).toEqual([b])
+      expect(getSettings().recentWorkspaces).toEqual([b])
+    } finally {
+      rmSync(a, { recursive: true, force: true })
+      rmSync(b, { recursive: true, force: true })
+    }
+  })
+})
