@@ -98,7 +98,12 @@ export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
     // is the only redirect lever (there's no separate cache dir); pointing it here
     // fixes the common public-crates.io case. A user relying on `~/.cargo/config.toml`
     // or private-registry credentials there can still set CARGO_HOME per command.
-    CARGO_HOME: join(cache, 'cargo')
+    CARGO_HOME: join(cache, 'cargo'),
+    // node-gyp caches the downloaded Node headers/libs it compiles native addons
+    // against under `~/.node-gyp` (its "devdir"), so `npm install` of any package
+    // with a native build step fails on that write under the sandbox. Redirect the
+    // devdir via the npm config env so node-gyp (standalone or via npm) picks it up.
+    npm_config_devdir: join(cache, 'node-gyp')
   }
 }
 
