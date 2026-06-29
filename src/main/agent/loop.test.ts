@@ -74,6 +74,7 @@ const {
   resolveQuestion,
   setRunPolicy,
   activeRunForConversation,
+  pendingPromptsForConversation,
   activeRunCount,
   runningConversationIds,
   onActiveRunsChanged
@@ -978,6 +979,125 @@ describe('ask_user', () => {
       // Neither file was actually written.
       expect(existsSync(join(ws, 'a.txt'))).toBe(false)
       expect(existsSync(join(ws, 'b.txt'))).toBe(false)
+    })
+  })
+
+  describe('pending-prompt replay', () => {
+    it('exposes a blocking approval for re-adopt, then clears it once resolved', async () => {
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'hi' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'wrote it' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      const runId = 'run-pending-approval'
+      const conversationId = 'conv-pending-approval'
+      let promptsWhileBlocked: AgentEvent[] = []
+      const send = (e: AgentEvent): void => {
+        if (e.type === 'tool_approval') {
+          // Snapshot what a re-opening renderer would replay while the run blocks.
+          promptsWhileBlocked = pendingPromptsForConversation(conversationId)
+          setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+        }
+      }
+      await startRun(
+        {
+          runId,
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'write it' }]
+        },
+        send
+      )
+
+      expect(promptsWhileBlocked).toHaveLength(1)
+      expect(promptsWhileBlocked[0]).toMatchObject({
+        type: 'tool_approval',
+        callId: 'w1',
+        name: 'write_file',
+        kind: 'write',
+        runId
+      })
+      // Resolved, and the run has ended — nothing is left pending.
+      expect(pendingPromptsForConversation(conversationId)).toEqual([])
+    })
+
+    it('exposes a blocking ask_user question for re-adopt, then clears it once answered', async () => {
+      h.provider = scripted([
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'q1', name: 'ask_user', arguments: { question: 'Which option?', options: ['A', 'B'] } }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      const runId = 'run-pending-question'
+      const conversationId = 'conv-pending-question'
+      let promptsWhileBlocked: AgentEvent[] = []
+      const send = (e: AgentEvent): void => {
+        if (e.type === 'tool_question') {
+          promptsWhileBlocked = pendingPromptsForConversation(conversationId)
+          setTimeout(() => resolveQuestion(runId, e.callId, 'A'), 0)
+        }
+      }
+      await startRun(
+        {
+          runId,
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        send
+      )
+
+      expect(promptsWhileBlocked).toHaveLength(1)
+      expect(promptsWhileBlocked[0]).toMatchObject({
+        type: 'tool_question',
+        callId: 'q1',
+        question: 'Which option?',
+        runId
+      })
+      expect(pendingPromptsForConversation(conversationId)).toEqual([])
+    })
+
+    it('clears a pending approval when the run is cancelled', async () => {
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'hi' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ])
+      const runId = 'run-cancel-pending'
+      const conversationId = 'conv-cancel-pending'
+      const send = (e: AgentEvent): void => {
+        if (e.type === 'tool_approval') setTimeout(() => cancelRun(runId), 0)
+      }
+      await startRun(
+        {
+          runId,
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'write it' }]
+        },
+        send
+      )
+      expect(pendingPromptsForConversation(conversationId)).toEqual([])
+    })
+
+    it('returns nothing for a conversation with no live run', () => {
+      expect(pendingPromptsForConversation('no-such-conversation')).toEqual([])
     })
   })
 })

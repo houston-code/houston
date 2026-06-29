@@ -317,6 +317,38 @@ describe('useChat', () => {
     expect(result.current.running).toBe(true)
   })
 
+  it('replays pending prompts on adopt so a parked approval re-renders and is answerable', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat())
+
+    // Re-opening a conversation whose run is parked on an approval: the call is
+    // first rebuilt from the persisted log as a plain tool row...
+    act(() => result.current.reset([{ kind: 'tool', id: 'w1', name: 'write_file', status: 'done' }]))
+
+    // ...then adopt replays the still-pending approval prompt.
+    act(() =>
+      result.current.adopt('live-run', [
+        {
+          runId: 'live-run',
+          type: 'tool_approval',
+          callId: 'w1',
+          name: 'write_file',
+          summary: 'write out.txt',
+          kind: 'write'
+        }
+      ])
+    )
+
+    expect(result.current.running).toBe(true)
+    const tools = result.current.items.filter((i) => i.kind === 'tool' && i.id === 'w1')
+    expect(tools).toHaveLength(1)
+    expect((tools[0] as { status: string }).status).toBe('awaiting-approval')
+
+    // Answering the replayed prompt routes to the adopted run.
+    act(() => result.current.approve('w1', 'allow'))
+    expect(api.approveTool).toHaveBeenCalledWith('live-run', 'w1', 'allow')
+  })
+
   it('reset clears the transcript and seeds usage', async () => {
     const { api } = installApi()
     const { result } = renderHook(() => useChat())

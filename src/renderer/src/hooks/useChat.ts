@@ -56,8 +56,12 @@ export interface ChatController {
    * switching back to a conversation whose run kept going in the background.
    * Restores the running UI (Stop button) and routes subsequent events,
    * approvals, and cancel back to that run. Call after {@link reset}.
+   *
+   * `pendingPrompts` are the approval/question events still blocking that run;
+   * they're folded into the transcript so a prompt that was awaiting the user
+   * re-renders its UI (the live events are one-shot and already fired).
    */
-  adopt: (runId: string) => void
+  adopt: (runId: string, pendingPrompts?: AgentEvent[]) => void
   /** Append a transient notice to the transcript (e.g. slash-command feedback). */
   notify: (text: string, tone?: 'info' | 'error') => void
 }
@@ -206,10 +210,16 @@ export function useChat(conversationId: string | null = null): ChatController {
     []
   )
 
-  const adopt = useCallback((runId: string) => {
+  const adopt = useCallback((runId: string, pendingPrompts: AgentEvent[] = []) => {
     runIdRef.current = runId
     setRunning(true)
     setErrored(false)
+    // Re-render any approval/question still awaiting the user. reduceEvent upserts
+    // by callId, so replaying onto a transcript rebuilt from the log updates the
+    // matching row rather than duplicating it.
+    if (pendingPrompts.length > 0) {
+      setItems((prev) => pendingPrompts.reduce((acc, ev) => reduceEvent(acc, ev), prev))
+    }
   }, [])
 
   const notify = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
