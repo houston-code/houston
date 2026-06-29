@@ -163,4 +163,30 @@ describe('runSubAgent', () => {
     expect(report).toContain('Done.')
     // The model only saw the rejection note, never the file contents.
   })
+
+  it('reports each turn token usage via onUsage', async () => {
+    const provider = scriptedProvider([
+      [
+        { type: 'tool_call', call: { id: 'c1', name: 'glob', arguments: { pattern: '*' } } },
+        { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 100, outputTokens: 10 } }
+      ],
+      [
+        { type: 'text', text: 'Done.' },
+        { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 120, outputTokens: 8 } }
+      ]
+    ])
+    const usages: Array<{ inputTokens?: number; outputTokens?: number }> = []
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'do something',
+      signal: new AbortController().signal,
+      onUsage: (u) => usages.push(u)
+    })
+    expect(usages).toEqual([
+      { inputTokens: 100, outputTokens: 10 },
+      { inputTokens: 120, outputTokens: 8 }
+    ])
+  })
 })
