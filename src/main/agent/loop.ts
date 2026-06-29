@@ -51,6 +51,7 @@ import { loadSkills } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
+import { gitWritableRoots } from './gitDirs'
 import { githubContext, resolveGh, runGh } from './github'
 import {
   KEEP_RECENT_USER_TURNS,
@@ -431,6 +432,16 @@ export async function startRun(
         if (!roots.includes(real)) roots.push(real)
       } catch {
         // a configured directory that no longer exists — skip it
+      }
+    }
+    // When a root is a linked worktree (or submodule), its git dir lives OUTSIDE
+    // the working tree, so a bare `git fetch`/`commit`/`checkout` would otherwise be
+    // denied the writes it makes to FETCH_HEAD/index/objects/refs. Widen the writable
+    // roots to cover those git dirs — for the workspace and every added root alike.
+    // Plain checkouts add nothing. Snapshot first so we don't rescan the git dirs.
+    for (const base of [...roots]) {
+      for (const dir of gitWritableRoots(base)) {
+        if (!roots.includes(dir)) roots.push(dir)
       }
     }
 
