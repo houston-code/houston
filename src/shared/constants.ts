@@ -25,6 +25,10 @@ export const IPC = {
   workspacePick: 'workspace:pick',
   directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
+  /** Pick files in a native dialog and read their (capped) text contents — composer "+" menu. */
+  attachmentPickFiles: 'attachment:pickFiles',
+  /** Read the system clipboard (text + image) for the composer "+" menu. */
+  clipboardRead: 'clipboard:read',
   commandsList: 'commands:list',
   gitRepoInfo: 'git:repoInfo',
   workingTreeChanges: 'workingTree:changes',

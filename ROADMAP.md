@@ -30,6 +30,24 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   needs a terminal renderer, an input/keybinding layer, and an in-terminal
   approval/elicitation UX. A terminal UX is a distinct product surface from the GUI.
 
+- **Composer screenshot capture.** The composer's `+` attachment menu attaches
+  files, a folder, the working-tree diff, a clipboard payload, and a link (and
+  reuses the existing `@`-mention and image-upload flows). A "take a screenshot"
+  action — capture a screen or window and attach it as an image — is not yet
+  wired. *Why deferred:* needs a capture subsystem (Electron `desktopCapturer`
+  plus a source picker), and the per-OS paths differ enough to need real
+  cross-platform testing: macOS requires the Screen-Recording permission (TCC),
+  and Wayland on Linux routes capture through the `xdg-desktop-portal` screenshot
+  portal rather than a direct grab. Should feature-detect and disable the action
+  where capture isn't available rather than failing silently.
+
+- **Attach terminal output to a message.** A `+`-menu action to capture the
+  integrated terminal's recent buffer as message context. *Why deferred:* the
+  buffer lives in the renderer's xterm instance(s), so surfacing it to the
+  composer needs a shared most-recent-output store (and a choice of which terminal
+  when several are open) — cross-component plumbing beyond the current attachment
+  set.
+
 - **SSRF hardening: pin resolved IPs (DNS-rebinding).** The network-egress tools
   (`web_fetch`, `view_localhost`) validate the URL's *host literal* — `web_fetch`
   blocks private/loopback/metadata IPs and re-checks on each redirect hop;

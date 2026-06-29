@@ -5,6 +5,7 @@ import type { AppSettings, ApprovalPolicy, IntegrationsInfo, ModelOption } from 
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { ClipboardContent, PickedFile } from '@shared/composerContext'
 import type {
   AgentEvent,
   AgentSendRequest,
@@ -28,6 +29,10 @@ const api = {
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.workspaceListFiles, workspace, query),
+  /** Composer "+" menu: pick files via a native dialog; resolves with their capped text contents. */
+  pickAttachmentFiles: (): Promise<PickedFile[]> => ipcRenderer.invoke(IPC.attachmentPickFiles),
+  /** Composer "+" menu: read the system clipboard (text + optional image). */
+  readClipboard: (): Promise<ClipboardContent> => ipcRenderer.invoke(IPC.clipboardRead),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
   /** Git repo info for the "new chat in a worktree" picker (or isRepo:false). */

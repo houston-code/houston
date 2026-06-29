@@ -1,12 +1,15 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent
 } from 'react'
+import { Icon, type IconName } from './Icon'
 import { loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
@@ -27,8 +30,25 @@ import {
   exceedsImageSizeLimit,
   imageDataUrl,
   isSupportedImageType,
+  SUPPORTED_IMAGE_TYPES,
   type ImageAttachment
 } from '@shared/images'
+import {
+  buildMessageWithContext,
+  formatDiffContext,
+  formatFileContext,
+  formatFolderContext,
+  formatLinkContext,
+  humanBytes,
+  normalizeLink,
+  truncateUtf8,
+  MAX_CONTEXT_ATTACHMENTS,
+  MAX_DIFF_TEXT_BYTES,
+  type ContextAttachment,
+  type ContextKind,
+  type PickedFile
+} from '@shared/composerContext'
+import { workingTreeToText, type WorkingTreeChanges } from '@shared/workingTree'
 
 /** Read an image File into a base64 ImageAttachment, or null if unsupported. */
 function readImageFile(file: File): Promise<ImageAttachment | null> {
@@ -57,6 +77,45 @@ function readImageFile(file: File): Promise<ImageAttachment | null> {
 
 /** Max gap between the two Esc presses that recalls the last message. */
 const DOUBLE_ESC_MS = 500
+
+/** The icon shown on a context-attachment chip, by kind. */
+const KIND_ICON: Record<ContextKind, IconName> = {
+  file: 'file',
+  folder: 'folder',
+  diff: 'diff',
+  link: 'link'
+}
+
+/** One row in the `+` attachment menu. */
+function AttachItem({
+  icon,
+  label,
+  hint,
+  disabled,
+  onClick
+}: {
+  icon: IconName
+  label: string
+  hint?: string
+  disabled?: boolean
+  onClick: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className="attach-menu__item"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className="attach-menu__icon">
+        <Icon name={icon} size={16} />
+      </span>
+      <span className="attach-menu__label">{label}</span>
+      {hint && <span className="attach-menu__hint">{hint}</span>}
+    </button>
+  )
+}
 
 export function Composer({
   conversationId,
@@ -89,12 +148,25 @@ export function Composer({
   // runs when the open chat changes — loading that chat's own draft.
   const [text, setText] = useState(() => loadComposerDraft(conversationId))
   const [images, setImages] = useState<ImageAttachment[]>([])
+  // Non-image context (attached files, a folder listing, the working-tree diff, a
+  // link) shown as chips and rendered into the outgoing message text on send.
+  const [context, setContext] = useState<ContextAttachment[]>([])
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
   const [cmdIndex, setCmdIndex] = useState(0)
   const [cmdDismissed, setCmdDismissed] = useState(false)
+  // The `+` attachment menu: open/closed, and its inline "add a link" sub-form.
+  const [attachOpen, setAttachOpen] = useState(false)
+  const [linkMode, setLinkMode] = useState(false)
+  const [linkUrl, setLinkUrl] = useState('')
+  // A transient one-line status under the field (e.g. "No uncommitted changes").
+  const [notice, setNotice] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const plusRef = useRef<HTMLButtonElement>(null)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Prompt-history recall (Up/Down when the field is empty). `histPos` is null when
   // not navigating, otherwise an index into the snapshot taken when recall began;
   // `histDraft` preserves whatever was typed before recall so Down can restore it.
@@ -119,11 +191,197 @@ export function Composer({
     saveComposerDraft(conversationId, text)
   }, [conversationId, text])
 
+  // Clear the notice timer on unmount so a pending fade can't fire into a gone tree.
+  useEffect(() => () => clearNoticeTimer(), [])
+
+  const clearNoticeTimer = (): void => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    noticeTimer.current = null
+  }
+  const flashNotice = (msg: string): void => {
+    setNotice(msg)
+    clearNoticeTimer()
+    noticeTimer.current = setTimeout(() => setNotice(null), 3500)
+  }
+
   const addFiles = async (files: File[]): Promise<void> => {
     const read = await Promise.all(files.map(readImageFile))
     const valid = read.filter((x): x is ImageAttachment => x !== null)
     if (valid.length) setImages((prev) => [...prev, ...valid].slice(0, MAX_ATTACHMENTS))
   }
+
+  const addImage = (img: ImageAttachment): void =>
+    setImages((prev) => [...prev, img].slice(0, MAX_ATTACHMENTS))
+
+  const addContext = (att: ContextAttachment): void =>
+    setContext((prev) => [...prev, att].slice(0, MAX_CONTEXT_ATTACHMENTS))
+
+  const removeContext = (id: string): void =>
+    setContext((prev) => prev.filter((a) => a.id !== id))
+
+  const closeAttach = useCallback((): void => {
+    setAttachOpen(false)
+    setLinkMode(false)
+    setLinkUrl('')
+  }, [])
+
+  // Close the `+` menu on an outside click or Escape (Escape backs out of the
+  // link sub-form first, then closes the menu).
+  useEffect(() => {
+    if (!attachOpen) return
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node
+      if (menuRef.current?.contains(t) || plusRef.current?.contains(t)) return
+      closeAttach()
+    }
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      if (linkMode) {
+        setLinkMode(false)
+        setLinkUrl('')
+      } else {
+        closeAttach()
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [attachOpen, linkMode, closeAttach])
+
+  // ---- `+` menu actions ----
+
+  const pickImages = (): void => fileInputRef.current?.click()
+
+  const onPickImagesInput = (e: ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(e.target.files ?? [])
+    if (files.length) void addFiles(files)
+    e.target.value = '' // allow re-picking the same file
+  }
+
+  // Insert an `@` at the caret and focus, opening the existing mention autocomplete.
+  const insertMention = (): void => {
+    closeAttach()
+    const el = ref.current
+    const start = el?.selectionStart ?? text.length
+    const end = el?.selectionEnd ?? start
+    const next = `${text.slice(0, start)}@${text.slice(end)}`
+    sync(next, start + 1)
+    focusEnd(start + 1)
+  }
+
+  const attachFiles = async (): Promise<void> => {
+    closeAttach()
+    const files = await window.api.pickAttachmentFiles()
+    if (files.length === 0) return
+    let added = 0
+    for (const f of files) {
+      addContext(fileToContext(f))
+      added++
+    }
+    const binary = files.filter((f) => f.binary).length
+    if (binary) flashNotice(`Attached ${added} file${added === 1 ? '' : 's'} (${binary} binary, contents omitted)`)
+  }
+
+  const addFolder = async (): Promise<void> => {
+    closeAttach()
+    const dir = await window.api.pickDirectory()
+    if (!dir) return
+    const files = await window.api.listWorkspaceFiles(dir, '')
+    addContext(folderToContext(dir, files))
+  }
+
+  const addDiff = async (): Promise<void> => {
+    closeAttach()
+    if (!workspace) return
+    const changes = await window.api.getWorkingTreeChanges(workspace)
+    if (!changes.isRepo) {
+      flashNotice('Not a git repository')
+      return
+    }
+    if (changes.files.length === 0) {
+      flashNotice('No uncommitted changes')
+      return
+    }
+    addContext(diffToContext(changes))
+  }
+
+  const pasteClipboard = async (): Promise<void> => {
+    closeAttach()
+    const { text: clip, image } = await window.api.readClipboard()
+    let added = false
+    if (image && vision) {
+      addImage(image)
+      added = true
+    }
+    if (clip) {
+      const el = ref.current
+      const start = el?.selectionStart ?? text.length
+      const end = el?.selectionEnd ?? start
+      const next = text.slice(0, start) + clip + text.slice(end)
+      sync(next, start + clip.length)
+      focusEnd(start + clip.length)
+      added = true
+    }
+    if (!added) flashNotice(image ? 'Image copied — switch to a vision model to attach it' : 'Clipboard is empty')
+  }
+
+  const confirmLink = (): void => {
+    const url = normalizeLink(linkUrl)
+    if (!url) return
+    addContext(linkToContext(url))
+    closeAttach()
+  }
+
+  // ---- Context-attachment builders ----
+
+  const fileToContext = (f: PickedFile): ContextAttachment => ({
+    id: crypto.randomUUID(),
+    kind: 'file',
+    label: f.name,
+    detail: f.binary ? 'binary' : humanBytes(f.bytes) + (f.truncated ? ' · truncated' : ''),
+    text: formatFileContext(f.name, f.content, { truncated: f.truncated, binary: f.binary })
+  })
+
+  const folderToContext = (dir: string, files: string[]): ContextAttachment => {
+    const name = dir.split(/[\\/]/).filter(Boolean).pop() ?? dir
+    const truncated = files.length >= 20 // findFiles caps the listing at 20
+    return {
+      id: crypto.randomUUID(),
+      kind: 'folder',
+      label: name,
+      detail: `${files.length}${truncated ? '+' : ''} file${files.length === 1 ? '' : 's'}`,
+      text: formatFolderContext(dir, files, { truncated })
+    }
+  }
+
+  const diffToContext = (changes: WorkingTreeChanges): ContextAttachment => {
+    const { text: diff, truncated } = truncateUtf8(workingTreeToText(changes), MAX_DIFF_TEXT_BYTES)
+    const n = changes.files.length
+    return {
+      id: crypto.randomUUID(),
+      kind: 'diff',
+      label: 'Uncommitted changes',
+      detail: `${n} file${n === 1 ? '' : 's'} · +${changes.added} −${changes.removed}`,
+      text: formatDiffContext(diff, {
+        branch: changes.branch,
+        files: n,
+        added: changes.added,
+        removed: changes.removed,
+        truncated: truncated || !!changes.truncated
+      })
+    }
+  }
+
+  const linkToContext = (url: string): ContextAttachment => ({
+    id: crypto.randomUUID(),
+    kind: 'link',
+    label: url,
+    text: formatLinkContext(url)
+  })
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     if (!vision) return // model can't see images — let the paste fall through as text
@@ -235,14 +493,15 @@ export function Composer({
 
   const submit = (): void => {
     const trimmed = text.trim()
-    if ((!trimmed && images.length === 0) || disabled) return
+    const hasAttachments = images.length > 0 || context.length > 0
+    if ((!trimmed && !hasAttachments) || disabled) return
     // While a run is in progress the message is queued verbatim as the next
     // input (the app combines all queued messages when the run finishes), so
     // slash commands aren't interpreted — they'd be sent as a prompt anyway.
     if (!running) {
       // Slash commands only when there are no attachments (a message with images
-      // is always sent as a normal message).
-      const parsed = images.length === 0 ? parseSlashCommand(trimmed) : null
+      // or context is always sent as a normal message).
+      const parsed = !hasAttachments ? parseSlashCommand(trimmed) : null
       if (parsed) {
         const cmd = resolveCommand(commands, parsed.name)
         if (cmd) {
@@ -275,9 +534,10 @@ export function Composer({
       }
     }
     if (trimmed) appendPromptHistory(trimmed)
-    onSend(trimmed, images.length ? images : undefined)
+    onSend(buildMessageWithContext(trimmed, context), images.length ? images : undefined)
     setText('')
     setImages([])
+    setContext([])
     resetMenus()
   }
 
@@ -374,20 +634,39 @@ export function Composer({
     }
   }
 
+  const sendDisabled = disabled || (!text.trim() && images.length === 0 && context.length === 0)
+
   return (
     <div className="composer">
-      <div className="composer__field" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
-        {images.length > 0 && (
+      <div className="composer__card" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+        {(images.length > 0 || context.length > 0) && (
           <div className="composer__attachments">
             {images.map((img, i) => (
-              <div key={i} className="attachment">
+              <div key={`img-${i}`} className="attachment">
                 <img className="attachment__thumb" src={imageDataUrl(img)} alt="attachment" />
                 <button
                   className="attachment__remove"
                   title="Remove"
+                  aria-label="Remove image"
                   onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))}
                 >
-                  ✕
+                  <Icon name="close" size={10} />
+                </button>
+              </div>
+            ))}
+            {context.map((att) => (
+              <div key={att.id} className="ctx-chip" title={att.label}>
+                <span className="ctx-chip__icon">
+                  <Icon name={KIND_ICON[att.kind]} size={13} />
+                </span>
+                <span className="ctx-chip__label">{att.label}</span>
+                {att.detail && <span className="ctx-chip__detail">{att.detail}</span>}
+                <button
+                  className="ctx-chip__remove"
+                  aria-label={`Remove ${att.label}`}
+                  onClick={() => removeContext(att.id)}
+                >
+                  <Icon name="close" size={10} />
                 </button>
               </div>
             ))}
@@ -426,6 +705,61 @@ export function Composer({
             ))}
           </ul>
         )}
+        {attachOpen && (
+          <div className="attach-menu" role="menu" ref={menuRef}>
+            {linkMode ? (
+              <form
+                className="attach-menu__link"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  confirmLink()
+                }}
+              >
+                <input
+                  className="attach-menu__link-input"
+                  type="text"
+                  placeholder="https://example.com"
+                  aria-label="Link URL"
+                  value={linkUrl}
+                  autoFocus
+                  onChange={(e) => setLinkUrl(e.target.value)}
+                />
+                <button type="submit" className="btn btn--accent btn--sm" disabled={!linkUrl.trim()}>
+                  Add
+                </button>
+              </form>
+            ) : (
+              <>
+                <div className="attach-menu__group">From your computer</div>
+                {vision && (
+                  <AttachItem
+                    icon="image"
+                    label="Upload images"
+                    hint="PNG, JPG"
+                    onClick={() => {
+                      closeAttach()
+                      pickImages()
+                    }}
+                  />
+                )}
+                <AttachItem icon="file" label="Attach files" hint="code, docs" onClick={attachFiles} />
+                <AttachItem icon="folder" label="Add a folder" onClick={addFolder} />
+                <div className="attach-menu__group">From the workspace</div>
+                <AttachItem icon="at" label="Reference a file" hint="@" onClick={insertMention} />
+                <AttachItem
+                  icon="diff"
+                  label="Add current changes"
+                  hint="git diff"
+                  disabled={!workspace}
+                  onClick={addDiff}
+                />
+                <div className="attach-menu__group">Capture &amp; web</div>
+                <AttachItem icon="clipboard" label="Paste from clipboard" onClick={pasteClipboard} />
+                <AttachItem icon="link" label="Add a link" onClick={() => setLinkMode(true)} />
+              </>
+            )}
+          </div>
+        )}
         <textarea
           ref={ref}
           className="composer__input"
@@ -434,9 +768,7 @@ export function Composer({
               ? 'Pick a model and project folder to start…'
               : running
                 ? 'Queue a follow-up…  (sent when the current run finishes)'
-                : vision
-                  ? 'Ask Houston…  (@ file, / command, or drop/paste an image)'
-                  : 'Ask Houston…  (@ file or / command)'
+                : 'Ask Houston…  (@ file, / command, or + to attach)'
           }
           value={text}
           disabled={disabled}
@@ -445,30 +777,88 @@ export function Composer({
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
+        {notice && <div className="composer__notice">{notice}</div>}
+        <div className="composer__bar">
+          <div className="composer__bar-left">
+            <button
+              ref={plusRef}
+              type="button"
+              className={`composer__tool${attachOpen ? ' composer__tool--active' : ''}`}
+              aria-label="Add attachment"
+              aria-haspopup="menu"
+              aria-expanded={attachOpen}
+              disabled={disabled}
+              onClick={() => setAttachOpen((o) => !o)}
+            >
+              <Icon name="plus" size={16} />
+            </button>
+            {vision && (
+              <button
+                type="button"
+                className="composer__tool"
+                aria-label="Attach image"
+                disabled={disabled}
+                onClick={pickImages}
+              >
+                <Icon name="image" size={16} />
+              </button>
+            )}
+            <button
+              type="button"
+              className="composer__tool"
+              aria-label="Reference a file"
+              disabled={disabled}
+              onClick={insertMention}
+            >
+              <Icon name="at" size={16} />
+            </button>
+          </div>
+          <div className="composer__bar-right">
+            {running ? (
+              <>
+                <button
+                  type="button"
+                  className="composer__send"
+                  aria-label="Queue"
+                  title="Queue this message — it’s sent when the current run finishes"
+                  onClick={submit}
+                  disabled={sendDisabled}
+                >
+                  <Icon name="send" size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="composer__stop"
+                  aria-label="Stop"
+                  title="Stop the run"
+                  onClick={onCancel}
+                >
+                  <Icon name="stop" size={14} />
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="composer__send"
+                aria-label="Send"
+                onClick={submit}
+                disabled={sendDisabled}
+              >
+                <Icon name="send" size={16} />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
-      {running ? (
-        <>
-          <button
-            className="btn btn--accent composer__btn"
-            onClick={submit}
-            disabled={disabled || (!text.trim() && images.length === 0)}
-            title="Queue this message — it’s sent when the current run finishes"
-          >
-            Queue
-          </button>
-          <button className="btn btn--danger composer__btn" onClick={onCancel}>
-            Stop
-          </button>
-        </>
-      ) : (
-        <button
-          className="btn btn--accent composer__btn"
-          onClick={submit}
-          disabled={disabled || (!text.trim() && images.length === 0)}
-        >
-          Send
-        </button>
-      )}
+      <input
+        ref={fileInputRef}
+        className="composer__file-input"
+        type="file"
+        accept={SUPPORTED_IMAGE_TYPES.join(',')}
+        multiple
+        hidden
+        onChange={onPickImagesInput}
+      />
     </div>
   )
 }

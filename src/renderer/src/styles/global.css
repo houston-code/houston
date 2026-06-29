@@ -25,6 +25,9 @@
   /* Shadows read as noise on a near-black canvas — Graphite stays flat. */
   --shadow-card: none;
   --shadow-accent: none;
+  /* Floating menus (e.g. the composer "+" attachment popover) still need lift off
+     the near-black canvas, so they carry a shadow even though cards stay flat. */
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.5);
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
 }
@@ -60,6 +63,8 @@
   /* Soft warm elevation for cards, and an indigo glow for accent buttons/bubbles. */
   --shadow-card: 0 1px 3px rgba(47, 40, 30, 0.08);
   --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
+  /* A softer, warmer drop for floating menus against the off-white canvas. */
+  --shadow-popover: 0 12px 28px rgba(47, 40, 30, 0.18);
 }
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
    and collapse transitions for users who are sensitive to motion. */
@@ -2298,48 +2303,214 @@ pre.diff {
 
 /* ---- Composer (sits in the bottom dock, below the control bar) ---- */
 .composer {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
   flex-shrink: 0;
   padding: 10px var(--chat-gap) 16px;
   width: 100%;
 }
-.composer__input {
-  flex: 1;
-  resize: none;
+/* One rounded card holds the field, any attachments, and the action bar; the send
+   button lives inside it (no separate external button). */
+.composer__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   background: var(--bg-input);
   border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+.composer__card:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.composer__input {
+  resize: none;
+  background: transparent;
+  border: none;
   color: var(--text);
-  border-radius: 10px;
-  padding: 11px 13px;
+  padding: 3px 4px 0;
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.4;
   max-height: 200px;
-  min-height: 44px;
+  min-height: 32px;
 }
 .composer__input:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
-.composer__btn {
-  height: 44px;
+.composer__input:disabled {
+  color: var(--text-dim);
 }
-.composer__field {
-  position: relative;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+.composer__file-input {
+  display: none;
+}
+.composer__notice {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 0 4px;
 }
 
-/* ---- Image attachments ---- */
+/* ---- Action bar (bottom row: + / quick toggles on the left, send on the right) ---- */
+.composer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.composer__bar-left,
+.composer__bar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.composer__tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.composer__tool:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.composer__tool:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.composer__tool--active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.composer__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-fill);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: var(--shadow-accent);
+  transition: background 0.15s, opacity 0.15s;
+}
+.composer__send:hover:not(:disabled) {
+  background: var(--accent-fill-hover);
+}
+.composer__send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.composer__stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--danger);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.composer__stop:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+/* ---- The "+" attachment menu (opens above the card) ---- */
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  max-width: 100%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px;
+  z-index: 60;
+  box-shadow: var(--shadow-popover);
+}
+.attach-menu__group {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 8px 10px 4px;
+}
+.attach-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.attach-menu__item:hover:not(:disabled),
+.attach-menu__item:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+.attach-menu__item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.attach-menu__icon {
+  display: inline-flex;
+  justify-content: center;
+  width: 18px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.attach-menu__label {
+  flex: 1;
+}
+.attach-menu__hint {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.attach-menu__link {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+}
+.attach-menu__link-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 6px 9px;
+}
+.attach-menu__link-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ---- Image attachments + non-image context chips ---- */
 .composer__attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 6px;
 }
 .attachment {
   position: relative;
@@ -2357,16 +2528,65 @@ pre.diff {
   position: absolute;
   top: -6px;
   right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
   height: 18px;
   border-radius: 50%;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text);
-  font-size: 10px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
+}
+/* A non-image attachment (file / folder / diff / link) shown as a removable pill. */
+.ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 240px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+}
+.ctx-chip__icon {
+  display: inline-flex;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.ctx-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-chip__detail {
+  color: var(--text-dim);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.ctx-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ctx-chip__remove:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 .bubble__images {
   display: flex;

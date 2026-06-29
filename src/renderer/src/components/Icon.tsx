@@ -19,6 +19,17 @@ export type IconName =
   | 'removeFromGroup'
   | 'copy'
   | 'check'
+  | 'plus'
+  | 'image'
+  | 'file'
+  | 'folder'
+  | 'at'
+  | 'diff'
+  | 'clipboard'
+  | 'link'
+  | 'send'
+  | 'stop'
+  | 'close'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Funnel.
@@ -72,7 +83,76 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   // Checkmark (e.g. the "copied" confirmation).
-  check: <path d="M3.5 8.5 6.5 11.5 12.5 5" />
+  check: <path d="M3.5 8.5 6.5 11.5 12.5 5" />,
+  // Plus — the composer's "add attachment" affordance.
+  plus: (
+    <>
+      <path d="M8 3.5v9" />
+      <path d="M3.5 8h9" />
+    </>
+  ),
+  // Framed picture with a sun and a hill — an image attachment.
+  image: (
+    <>
+      <path d="M2.5 3.5h11v9h-11z" />
+      <circle cx="5.6" cy="6.4" r="1" />
+      <path d="M3 12 6.5 8.5l2 2 2.5-2.5 2 2" />
+    </>
+  ),
+  // Document with a folded corner — a file.
+  file: (
+    <>
+      <path d="M4 2.5h5l3 3v8H4z" />
+      <path d="M9 2.5v3h3" />
+    </>
+  ),
+  // Tabbed folder.
+  folder: <path d="M2.5 4.5h3.6l1.2 1.5h6.2v7.5h-11z" />,
+  // The @ sign — reference a workspace file.
+  at: (
+    <>
+      <circle cx="8" cy="8" r="2.2" />
+      <path d="M10.2 8v1.1a1.6 1.6 0 0 0 3.1-.6A5.3 5.3 0 1 0 11 12.6" />
+    </>
+  ),
+  // Plus over minus — added/removed lines, i.e. a diff.
+  diff: (
+    <>
+      <path d="M4.5 4v3" />
+      <path d="M3 5.5h3" />
+      <path d="M10 10.5h3" />
+    </>
+  ),
+  // Clipboard with a clip — paste from clipboard.
+  clipboard: (
+    <>
+      <path d="M4 3.5h8v10H4z" />
+      <path d="M6 3.5a2 2 0 0 1 4 0" />
+    </>
+  ),
+  // Two chain links — attach a URL.
+  link: (
+    <>
+      <path d="M6.8 9.2a2.4 2.4 0 0 0 3.4 0l2-2a2.4 2.4 0 0 0-3.4-3.4l-1 1" />
+      <path d="M9.2 6.8a2.4 2.4 0 0 0-3.4 0l-2 2a2.4 2.4 0 0 0 3.4 3.4l1-1" />
+    </>
+  ),
+  // Upward arrow — send the message.
+  send: (
+    <>
+      <path d="M8 13V4" />
+      <path d="M4.5 7.5 8 4l3.5 3.5" />
+    </>
+  ),
+  // Rounded square — stop the run.
+  stop: <path d="M4.8 4.8h6.4v6.4H4.8z" />,
+  // X — dismiss a chip.
+  close: (
+    <>
+      <path d="M4.5 4.5 11.5 11.5" />
+      <path d="M11.5 4.5 4.5 11.5" />
+    </>
+  )
 }
 
 export function Icon({
