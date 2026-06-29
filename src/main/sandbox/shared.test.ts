@@ -140,6 +140,13 @@ describe('sandboxEnv', () => {
     expect(env.GOCACHE).not.toMatch(/Users[/\\]me/) // not ~/Library/Caches — that's the EPERM we fix
   })
 
+  it('redirects the Cargo home into the writable temp cache dir', () => {
+    const env = sandboxEnv({ PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' })
+    const cache = pkgCacheDir({ TMPDIR: '/tmp' })
+    expect(env.CARGO_HOME).toBe(`${cache}${sep}cargo`)
+    expect(env.CARGO_HOME).not.toMatch(/Users[/\\]me/) // not ~/.cargo — that's the EPERM we fix
+  })
+
   it('keeps the cache under the temp area (sandbox-writable), never $HOME', () => {
     // Use join() on both sides so this is correct on Windows (where the path
     // separator and join semantics differ from POSIX).
