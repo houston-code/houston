@@ -1,0 +1,100 @@
+<!--
+  MAINTAINER NOTE — replace the bracketed placeholders before distributing:
+    [Licensor]                  → the legal name of the copyright holder / licensor
+    [Contact email]             → a real contact address for legal/abuse notices
+    [Governing-law jurisdiction] → the country/state whose law governs (e.g. "the State of Delaware, USA")
+  These same placeholders appear in docs/TERMS.md and docs/PRIVACY.md.
+  This is a proprietary, all-rights-reserved license. It is NOT an open-source
+  license — do not add an SPDX OSS identifier to package.json.
+-->
+
+Houston — Proprietary Software License Agreement
+
+Copyright (c) 2026 [Licensor]. All rights reserved.
+
+This software and its accompanying files (the "Software") are the proprietary
+property of [Licensor] (the "Licensor") and are protected by copyright and other
+intellectual-property laws. The Software is licensed, not sold.
+
+By installing, copying, or using the Software you ("you") agree to this License
+and to the Houston Terms of Use (docs/TERMS.md) and Privacy Policy
+(docs/PRIVACY.md), which are incorporated here by reference. If you do not agree,
+do not install or use the Software.
+
+1. LICENSE GRANT
+   Subject to your continued compliance with this License, the Licensor grants
+   you a personal, limited, non-exclusive, non-transferable, non-sublicensable,
+   revocable license to install and use the Software on devices you own or
+   control, for your own personal or internal business purposes.
+
+2. RESTRICTIONS
+   Except to the extent this restriction is prohibited by applicable law, you
+   shall not, and shall not permit any third party to:
+   (a) sell, rent, lease, lend, sublicense, distribute, or otherwise make the
+       Software available to any third party;
+   (b) copy the Software except as strictly necessary for your own permitted use;
+   (c) modify, adapt, translate, or create derivative works of the Software;
+   (d) reverse engineer, decompile, or disassemble the Software, or attempt to
+       derive its source code, except to the limited extent applicable law
+       expressly permits despite this restriction;
+   (e) remove, alter, or obscure any copyright, trademark, or other proprietary
+       notices; or
+   (f) use the Software to develop a competing product or service, or for any
+       unlawful purpose.
+
+3. RESERVATION OF RIGHTS
+   All rights not expressly granted to you are reserved by the Licensor. This
+   License does not grant you any rights to the Licensor's trademarks, service
+   marks, or trade names.
+
+4. THIRD-PARTY COMPONENTS
+   The Software incorporates third-party open-source components, each licensed
+   under its own terms. Those terms govern your use of those components and, to
+   the extent of any conflict with this License as applied to those components,
+   control. A list of such components and their licenses is available in the
+   Software's dependency manifests.
+
+5. THIRD-PARTY SERVICES AND MODELS
+   The Software lets you connect to third-party services and AI models that you
+   choose and configure (including, without limitation, model providers,
+   web-search providers, and Model Context Protocol servers). Your use of those
+   services and models is governed by the providers' own terms and privacy
+   policies, not this License. The Licensor does not control and is not
+   responsible for those third parties or for any data you send to them. See
+   docs/TERMS.md and docs/PRIVACY.md.
+
+6. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY
+   KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING WITHOUT
+   LIMITATION ANY IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+   PARTICULAR PURPOSE, TITLE, ACCURACY, AND NON-INFRINGEMENT. THE LICENSOR DOES
+   NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED, ERROR-FREE, SECURE, OR
+   THAT IT WILL MEET YOUR REQUIREMENTS. THE SOFTWARE CAN READ, MODIFY, DELETE,
+   AND EXECUTE FILES AND COMMANDS ON YOUR DEVICE AND MAY PRODUCE INACCURATE OR
+   HARMFUL OUTPUT; YOU USE IT AT YOUR OWN RISK.
+
+7. LIMITATION OF LIABILITY
+   TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL THE
+   LICENSOR OR ITS CONTRIBUTORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
+   SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF
+   PROFITS, REVENUE, DATA, OR GOODWILL, OR FOR DELETED, CORRUPTED, OR LOST
+   FILES OR CODE, OR FOR DAMAGE ARISING FROM COMMANDS THE SOFTWARE EXECUTES,
+   ARISING OUT OF OR RELATED TO THE SOFTWARE OR THIS LICENSE, WHETHER IN
+   CONTRACT, TORT (INCLUDING NEGLIGENCE), OR OTHERWISE, EVEN IF ADVISED OF THE
+   POSSIBILITY OF SUCH DAMAGES. THE LICENSOR'S TOTAL AGGREGATE LIABILITY ARISING
+   OUT OF OR RELATED TO THE SOFTWARE WILL NOT EXCEED THE GREATER OF THE AMOUNT
+   YOU PAID THE LICENSOR FOR THE SOFTWARE OR US $0. SOME JURISDICTIONS DO NOT
+   ALLOW CERTAIN OF THESE EXCLUSIONS OR LIMITATIONS, SO SOME MAY NOT APPLY TO
+   YOU.
+
+8. TERMINATION
+   This License is effective until terminated. It terminates automatically and
+   without notice if you breach any of its terms. Upon termination you must stop
+   using the Software and delete all copies in your possession. Sections 3
+   through 9 survive termination.
+
+9. GOVERNING LAW
+   This License is governed by the laws of [Governing-law jurisdiction], without
+   regard to its conflict-of-laws rules.
+
+Contact: [Contact email]

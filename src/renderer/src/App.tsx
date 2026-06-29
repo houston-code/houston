@@ -49,6 +49,8 @@ import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
 import { UpdateBanner } from './components/UpdateBanner'
+import { LegalGate } from './components/LegalGate'
+import { LEGAL_VERSION, needsLegalAcceptance } from '@shared/legal'
 import type { UpdateCheckResult, WhatsNew } from '@shared/update'
 
 // These overlays aren't on the initial render path, so load them as separate
@@ -509,6 +511,15 @@ export default function App(): JSX.Element {
     },
     [refreshConversations]
   )
+
+  // Record acceptance of the current legal terms, dismissing the first-run gate.
+  const onAcceptLegal = useCallback(async () => {
+    const fresh = await window.api.saveSettings({
+      ...(await window.api.getSettings()),
+      legalAcceptedVersion: LEGAL_VERSION
+    })
+    setSettings(fresh)
+  }, [])
 
   // ---- Custom groups (persisted in settings) ----
 
@@ -1065,6 +1076,13 @@ export default function App(): JSX.Element {
 
   if (!settings) {
     return <div className="loading">Loading…</div>
+  }
+
+  // First-run / updated-terms gate: block all use of the app until the user
+  // accepts the current legal terms. Renders alone (nothing else mounts) so the
+  // disclaimers can't be bypassed.
+  if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
+    return <LegalGate onAccept={onAcceptLegal} />
   }
 
   // The composer is usable only when the *selected* provider is actually ready —

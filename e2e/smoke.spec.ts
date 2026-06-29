@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import electronPath from 'electron'
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
+import { acceptLegalGate } from './helpers'
 
 const ROOT = join(__dirname, '..')
 
@@ -40,6 +41,9 @@ test('app boots and renders the UI', async () => {
     // BrowserWindow (`title: APP_NAME`) in src/main/index.ts.
     await expect(window).toHaveTitle('Houston')
 
+    // First launch shows the legal-acceptance gate before the app shell mounts.
+    await acceptLegalGate(window)
+
     // The app shell only mounts after the renderer has round-tripped to the main
     // process over IPC (settings + conversation list), so reaching `.app` proves
     // the whole main ↔ preload ↔ renderer bridge is wired — not just that a
@@ -62,6 +66,7 @@ test('integrated terminal opens and round-trips through a PTY', async () => {
 
   try {
     const window = await app.firstWindow()
+    await acceptLegalGate(window)
     await expect(window.locator('.app')).toBeVisible()
 
     // Open the terminal from the top-right titlebar action. This is also the real
@@ -131,6 +136,7 @@ test('sidebar collapses to a rail and expands again', async () => {
 
   try {
     const window = await app.firstWindow()
+    await acceptLegalGate(window)
     await expect(window.locator('.app')).toBeVisible()
 
     // Expanded by default: the drag handle and the collapse toggle are present.

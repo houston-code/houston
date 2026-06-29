@@ -8,6 +8,8 @@
   },
   "main": "./out/main/index.js",
   "homepage": "https://github.com/piyushvijay/houston",
+  "license": "SEE LICENSE IN LICENSE",
+  "private": true,
   "engines": {
     "node": ">=22"
   },

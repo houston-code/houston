@@ -2363,6 +2363,37 @@ pre.diff {
   height: auto;
   max-height: 86vh;
 }
+/* Medium, content-height variant (e.g. the first-run legal gate). */
+.modal--md {
+  width: 560px;
+  height: auto;
+  max-height: 86vh;
+}
+
+/* ---- First-run legal gate ---- */
+.legal-gate__body p {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.legal-gate__points {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  line-height: 1.45;
+}
+.legal-gate__links {
+  font-size: 13px;
+}
+.legal-gate__consent {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.settings-legal__links {
+  margin: 0;
+  font-size: 13px;
+}
 .modal__head,
 .modal__foot {
   display: flex;
