@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { killShell, listShells, readShellOutput, registerShell, unreadSlice } from './shells'
+import {
+  killShell,
+  listShells,
+  onShellsChanged,
+  readShellOutput,
+  registerShell,
+  unreadSlice
+} from './shells'
 
 const onClose = (child: ChildProcess): Promise<void> =>
   new Promise((resolve) => child.on('close', () => resolve()))
@@ -42,6 +49,34 @@ describe('background shell registry', () => {
     expect(killShell(id)).toBe(true)
     await onClose(child)
     expect(readShellOutput(id).running).toBe(false)
+  })
+
+  it('exposes timestamps, exit code, and the spawning conversation in listShells', async () => {
+    const child = node('process.exit(0)')
+    const id = registerShell('node done', child, 'conv-7')
+    const live = listShells().find((s) => s.id === id)!
+    expect(live).toMatchObject({ command: 'node done', conversationId: 'conv-7', running: true, exitedAt: null })
+    expect(live.startedAt).toBeGreaterThan(0)
+
+    await onClose(child)
+    const ended = listShells().find((s) => s.id === id)!
+    expect(ended.running).toBe(false)
+    expect(ended.exitCode).toBe(0)
+    expect(ended.exitedAt).toBeGreaterThanOrEqual(ended.startedAt)
+  })
+
+  it('notifies subscribers when a shell starts and when it exits', async () => {
+    const seen: number[] = []
+    const off = onShellsChanged((list) => seen.push(list.filter((s) => s.running).length))
+    const child = node('process.exit(0)')
+    const id = registerShell('node ping', child)
+    // The register call fired a change with the new shell running.
+    expect(seen.at(-1)).toBeGreaterThanOrEqual(1)
+    await onClose(child)
+    // The exit fired another change; that shell is no longer counted as running.
+    expect(listShells().find((s) => s.id === id)?.running).toBe(false)
+    expect(seen.length).toBeGreaterThanOrEqual(2)
+    off()
   })
 })
 

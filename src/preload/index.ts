@@ -9,6 +9,7 @@ import type { ClipboardContent, PickedFile } from '@shared/composerContext'
 import type {
   AgentEvent,
   AgentSendRequest,
+  BackgroundShellInfo,
   ChatMessage,
   Conversation,
   ConversationMeta,
@@ -189,6 +190,14 @@ const api = {
     const listener = (_event: IpcRendererEvent, ids: string[]): void => cb(ids)
     ipcRenderer.on(IPC.agentRunsChanged, listener)
     return () => ipcRenderer.removeListener(IPC.agentRunsChanged, listener)
+  },
+  /** The background shells (run_shell background mode) for the tasks indicator. */
+  getBackgroundShells: (): Promise<BackgroundShellInfo[]> => ipcRenderer.invoke(IPC.shellList),
+  /** Subscribe to background-shell registry changes. Returns an unsubscribe fn. */
+  onShellsChanged: (cb: (shells: BackgroundShellInfo[]) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, shells: BackgroundShellInfo[]): void => cb(shells)
+    ipcRenderer.on(IPC.shellsChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.shellsChanged, listener)
   },
   /** Revert the file changes a run made. Returns the number of files restored. */
   restoreCheckpoint: (runId: string): Promise<number> =>

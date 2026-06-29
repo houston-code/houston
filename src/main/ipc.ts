@@ -38,6 +38,7 @@ import {
   runningConversationIds,
   onActiveRunsChanged
 } from './agent/loop'
+import { listShells, onShellsChanged } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, type DrainIO } from './agent/drain'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
@@ -619,6 +620,19 @@ export function registerIpc(): void {
   onActiveRunsChanged((ids) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.webContents.isDestroyed()) win.webContents.send(IPC.agentRunsChanged, ids)
+    }
+  })
+
+  // The background shells (run_shell background mode) for the tasks indicator —
+  // queried once on load, then kept current via the shellsChanged broadcast.
+  ipcMain.handle(IPC.shellList, () => listShells())
+
+  // Push the shell registry to every renderer whenever one starts or exits, so the
+  // tasks indicator stays live without polling. Broadcast for the same reason as
+  // the running-set push above (a shell can exit while another window is focused).
+  onShellsChanged((shells) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.shellsChanged, shells)
     }
   })
 

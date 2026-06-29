@@ -78,6 +78,10 @@ export const IPC = {
   /** Main → renderer: the set of conversations with a live run changed (started/ended). */
   agentRunsChanged: 'agent:runsChanged',
   agentEvent: 'agent:event',
+  /** Query the background shells (run_shell background mode) for the tasks indicator. */
+  shellList: 'shell:list',
+  /** Main → renderer: the background-shell registry changed (one started or exited). */
+  shellsChanged: 'shell:changed',
   // Queued input (messages typed while a run is in progress)
   agentQueueAdd: 'agent:queue:add',
   agentQueueRemove: 'agent:queue:remove',

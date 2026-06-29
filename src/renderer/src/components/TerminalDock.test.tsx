@@ -8,6 +8,7 @@ vi.mock('./TerminalView', () => ({
 }))
 
 import { TerminalDock } from './TerminalDock'
+import { useTerminals } from '../hooks/useTerminals'
 
 let closeActiveCb: (() => void) | null = null
 let counter = 0
@@ -31,16 +32,29 @@ beforeEach(() => {
 
 const noop = (): void => {}
 
-function renderDock(props: Partial<React.ComponentProps<typeof TerminalDock>> = {}) {
-  return render(
+// The dock is now a pure view over a terminal controller (state lives in App), so
+// the harness owns the real `useTerminals` controller and feeds it in — preserving
+// the dock's own behaviour (auto-open, last-close-hides, ⌘W) under test.
+function Harness({
+  visible = true,
+  onClose = vi.fn()
+}: {
+  visible?: boolean
+  onClose?: () => void
+}): JSX.Element {
+  const controller = useTerminals('/repo')
+  return (
     <TerminalDock
-      workspace="/repo"
-      visible={true}
+      controller={controller}
+      visible={visible}
       onResizeMouseDown={noop}
-      onClose={vi.fn()}
-      {...props}
+      onClose={onClose}
     />
   )
+}
+
+function renderDock(props: { visible?: boolean; onClose?: () => void } = {}) {
+  return render(<Harness {...props} />)
 }
 
 describe('TerminalDock', () => {

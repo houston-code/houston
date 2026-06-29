@@ -6,6 +6,10 @@ export interface TermTab {
   title: string
   /** True once the underlying shell has exited (the tab stays until closed). */
   exited: boolean
+  /** Epoch ms the shell exited; set alongside `exited` for ordering/relative time. */
+  exitedAt?: number
+  /** The shell's exit status; nonzero marks the run as failed. Set on exit. */
+  exitCode?: number
 }
 
 export interface UseTerminals {
@@ -53,9 +57,13 @@ export function useTerminals(workspace: string | null): UseTerminals {
   const setActive = useCallback((id: string) => setActiveId(id), [])
 
   // Mark a tab whose shell exited; keep it so the user can read the final output.
+  // Stamp when and how it ended so the background-tasks indicator can order it and
+  // flag a nonzero exit as failed.
   useEffect(() => {
-    return window.api.onTerminalExit(({ id }) => {
-      setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, exited: true } : t)))
+    return window.api.onTerminalExit(({ id, exitCode }) => {
+      setTabs((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, exited: true, exitedAt: Date.now(), exitCode } : t))
+      )
     })
   }, [])
 

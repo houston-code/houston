@@ -55,6 +55,11 @@ export interface ToolContext {
   roots?: string[]
   allowNetwork: boolean
   signal?: AbortSignal
+  /**
+   * The conversation this run belongs to, when started from the UI. Tagged onto a
+   * background shell so the tasks indicator can open the run that spawned it.
+   */
+  conversationId?: string
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
   /** Active web-search provider id (selected in Settings; injected by the loop). */
@@ -767,7 +772,7 @@ const runShell: ToolDef = {
         allowNetwork: ctx.allowNetwork,
         signal: ctx.signal
       })
-      const id = registerShell(command, child)
+      const id = registerShell(command, child, ctx.conversationId)
       const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }

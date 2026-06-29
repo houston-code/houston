@@ -1,18 +1,29 @@
+import { BackgroundTasks } from './BackgroundTasks'
+import type { BackgroundTask } from '../hooks/useBackgroundTasks'
+
 /**
  * A slim, draggable strip at the top of the main pane. With the window's
  * `hiddenInset` traffic lights it keeps the top of the window draggable (the
  * sidebar covers the left), and shows the current chat's title for context now
- * that the model/mode controls live in the bottom bar. Top-right actions open the
- * working-tree diff panel and toggle the integrated terminal.
+ * that the model/mode controls live in the bottom bar. Top-right actions show
+ * background tasks, open the working-tree diff panel, and toggle the integrated
+ * terminal.
  */
 export function Titlebar({
   title,
+  tasks,
+  onSelectTask,
+  onClearFinishedTasks,
   changes,
   onShowChanges,
   onToggleTerminal,
   terminalOpen
 }: {
   title: string
+  /** Background work (agent runs + terminals, in progress + recently finished) for the indicator. */
+  tasks?: BackgroundTask[]
+  onSelectTask?: (task: BackgroundTask) => void
+  onClearFinishedTasks?: () => void
   /** Working-tree change counts; highlights the Changes button and shows a +/− badge. */
   changes?: { fileCount: number; added: number; removed: number }
   onShowChanges?: () => void
@@ -24,6 +35,13 @@ export function Titlebar({
     <header className="titlebar">
       <span className="titlebar__title">{title}</span>
       <div className="titlebar__actions">
+        {tasks && onSelectTask && (
+          <BackgroundTasks
+            tasks={tasks}
+            onSelect={onSelectTask}
+            onClearFinished={onClearFinishedTasks ?? (() => {})}
+          />
+        )}
         {onShowChanges && (
           <button
             type="button"
