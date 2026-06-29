@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import electronPath from 'electron'
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
+import { acceptLegalGate } from './helpers'
 
 const ROOT = join(__dirname, '..')
 
@@ -20,6 +21,7 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
   })
   try {
     const page = await app.firstWindow()
+    await acceptLegalGate(page)
     await expect(page.locator('.app')).toBeVisible()
 
     const trigger = page.locator('[title="Model"]')

@@ -330,11 +330,14 @@ Grab the artifact for your platform:
 
 ## First run
 
-1. Open **Settings** (sidebar) and set an API key for at least one provider
+1. On first launch Houston shows a one-time notice and asks you to accept the
+   [Terms of Use](docs/TERMS.md), [Privacy Policy](docs/PRIVACY.md), and
+   [License](LICENSE) before you can use it.
+2. Open **Settings** (sidebar) and set an API key for at least one provider
    (or point a local endpoint at Ollama/LM Studio — no key needed).
-2. Pick a **project folder** (control bar, above the composer).
-3. Choose a **model** and an **approval policy** (same control bar).
-4. Ask it to build or change something.
+3. Pick a **project folder** (control bar, above the composer).
+4. Choose a **model** and an **approval policy** (same control bar).
+5. Ask it to build or change something.
 
 ## Headless / scripting
 
@@ -488,3 +491,21 @@ an `afterSign` hook), then `npm run dist`.
 What's intentionally not done yet — out of scope for a macOS desktop app, or a
 larger effort — is tracked in [ROADMAP.md](./ROADMAP.md) with the
 rationale for each.
+
+## Legal
+
+Houston is proprietary software, provided **as is**, without warranty, and you
+use it at your own risk. It can read, edit, delete, and run files and commands on
+your device, and it sends your prompts, code, and files only to the model and
+other providers **you** configure — under those providers' own terms, privacy,
+and model-training policies. You are responsible for reviewing the agent's
+actions, keeping backups, and meeting any data-residency or data-protection
+obligations that apply to you.
+
+- [License](LICENSE) — proprietary license, all rights reserved
+- [Terms of Use](docs/TERMS.md)
+- [Privacy Policy](docs/PRIVACY.md)
+
+> These documents are templates and not legal advice. Replace the bracketed
+> placeholders (licensor, contact, governing law) and have a lawyer review them
+> before distributing.
