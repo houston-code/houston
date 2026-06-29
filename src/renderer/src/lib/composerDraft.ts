@@ -4,28 +4,35 @@
  * (see promptHistory.ts) — no main-process round-trip, and Chromium-backed
  * localStorage persists across restarts on macOS, Linux and Windows alike.
  *
- * A single draft is kept: the composer already carries one draft across the
- * session regardless of which chat is open, so that's what we save and restore.
- * Only the text is persisted — pending image attachments are not (they can be
- * large and would risk the localStorage quota).
+ * Drafts are keyed per conversation, so each chat keeps its own lingering text
+ * in isolation — a draft left in one chat never shows up in another, and every
+ * chat's draft survives a restart. The not-yet-created "new chat" composer gets
+ * its own slot. Only the text is persisted — pending image attachments are not
+ * (they can be large and would risk the localStorage quota).
  */
 
-const KEY = 'houston.composerDraft'
+const PREFIX = 'houston.composerDraft'
 
-/** Load the saved draft, tolerating absent/unavailable storage (→ ''). */
-export function loadComposerDraft(): string {
+/** Storage key for a conversation's draft; the new-chat composer gets its own slot. */
+function keyFor(conversationId: string | null): string {
+  return `${PREFIX}:${conversationId ?? 'new'}`
+}
+
+/** Load a conversation's saved draft, tolerating absent/unavailable storage (→ ''). */
+export function loadComposerDraft(conversationId: string | null): string {
   try {
-    return localStorage.getItem(KEY) ?? ''
+    return localStorage.getItem(keyFor(conversationId)) ?? ''
   } catch {
     return ''
   }
 }
 
-/** Persist the current draft, or clear it when empty so storage stays tidy. */
-export function saveComposerDraft(text: string): void {
+/** Persist a conversation's draft, or clear it when empty so storage stays tidy. */
+export function saveComposerDraft(conversationId: string | null, text: string): void {
   try {
-    if (text) localStorage.setItem(KEY, text)
-    else localStorage.removeItem(KEY)
+    const key = keyFor(conversationId)
+    if (text) localStorage.setItem(key, text)
+    else localStorage.removeItem(key)
   } catch {
     // Storage full/unavailable — the draft just won't survive restart; not worth surfacing.
   }

@@ -10,6 +10,7 @@ const COMMANDS: Command[] = [
 
 function baseProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
   return {
+    conversationId: null,
     disabled: false,
     running: false,
     workspace: null,
@@ -215,24 +216,44 @@ describe('Composer edit-last-message (Esc Esc)', () => {
 })
 
 describe('Composer draft persistence', () => {
-  it('restores an unsent draft after a restart (unmount + remount)', () => {
-    const { unmount } = render(<Composer {...baseProps()} />)
+  it('restores a conversation’s unsent draft after a restart (unmount + remount)', () => {
+    const { unmount } = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
     type('a half-written message')
     unmount() // simulate quitting the app
 
-    render(<Composer {...baseProps()} />)
+    render(<Composer {...baseProps({ conversationId: 'c1' })} />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(
       'a half-written message'
     )
   })
 
+  it('keeps drafts isolated per conversation', () => {
+    const first = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
+    type('draft for chat one')
+    first.unmount()
+
+    // A different conversation starts empty — chat one's draft doesn't leak in…
+    const second = render(<Composer {...baseProps({ conversationId: 'c2' })} />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
+    type('draft for chat two')
+    second.unmount()
+
+    // …and each chat restores its own draft, independently.
+    const backToOne = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('draft for chat one')
+    backToOne.unmount()
+
+    render(<Composer {...baseProps({ conversationId: 'c2' })} />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('draft for chat two')
+  })
+
   it('clears the persisted draft once the message is sent', () => {
-    const { unmount } = render(<Composer {...baseProps()} />)
+    const { unmount } = render(<Composer {...baseProps({ conversationId: 'c1' })} />)
     const input = type('send me')
     fireEvent.keyDown(input, { key: 'Enter' })
     unmount()
 
-    render(<Composer {...baseProps()} />)
+    render(<Composer {...baseProps({ conversationId: 'c1' })} />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
   })
 })

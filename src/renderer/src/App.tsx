@@ -43,6 +43,7 @@ import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPane
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
+import { saveComposerDraft } from './lib/composerDraft'
 import { itemsFromMessages, lastUserText } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
@@ -439,6 +440,7 @@ export default function App(): JSX.Element {
       // it returns deleted:false when the user cancels, so we touch nothing then.
       const res = await window.api.deleteConversation(id)
       if (!res.deleted) return
+      saveComposerDraft(id, '') // drop the deleted conversation's lingering draft
       if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
         setCurrentId(null)
@@ -1304,6 +1306,10 @@ export default function App(): JSX.Element {
             onOpenSettings={() => setSettingsOpen(true)}
           />
           <Composer
+            // Remount per conversation so each chat shows its own draft (and a
+            // fresh attachment/menu state), in isolation from the others.
+            key={currentId ?? 'new'}
+            conversationId={currentId}
             disabled={!canChat}
             running={chat.running}
             workspace={workspace}
