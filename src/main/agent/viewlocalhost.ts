@@ -20,7 +20,12 @@
  */
 
 import { BrowserWindow, session, type Session } from 'electron'
-import { embeddedIPv4, isPrivateHost } from './webfetch'
+// The loopback host classifier and URL validator are shared with the live Preview
+// dock (preview.ts) and the background-shell URL detector; re-export them so this
+// module's existing tests (and any importer) keep their stable entry point.
+import { isLoopbackHost, isBlockedSubresourceHost, validateLocalhostUrl } from './loopback'
+
+export { isLoopbackHost, isBlockedSubresourceHost, validateLocalhostUrl }
 
 /** Offscreen viewport for the capture (a typical laptop content width). */
 const VIEWPORT = { width: 1280, height: 800 }
@@ -65,69 +70,6 @@ export interface LocalhostCapture {
   loadError?: string
   /** True when a `selector` was given but matched nothing — the full viewport was captured instead. */
   selectorMissed?: boolean
-}
-
-/**
- * True for loopback hosts a local dev server binds to — the only hosts
- * view_localhost will load. Deliberately narrower than webfetch's `isPrivateHost`
- * block: 10/8, 172.16/12, 192.168/16 and link-local are NOT loopback and are
- * rejected, so this tool can't reach the LAN or cloud metadata.
- */
-export function isLoopbackHost(hostname: string): boolean {
-  let h = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '') // strip IPv6 brackets
-  if (h.endsWith('.')) h = h.slice(0, -1) // trailing-dot FQDN
-  // Recognize an IPv4-mapped IPv6 loopback (e.g. [::ffff:127.0.0.1]) as loopback by
-  // re-classifying its embedded IPv4, so the subresource filter (isPrivateHost &&
-  // !isLoopbackHost) doesn't wrongly block the dev server's own mapped-loopback.
-  const v4 = embeddedIPv4(h)
-  if (v4) h = v4
-  if (h === 'localhost' || h.endsWith('.localhost')) return true
-  // IPv6 loopback / unspecified (a server bound to "all" is reachable via loopback).
-  if (h === '::1' || h === '::' || h === '0:0:0:0:0:0:0:1') return true
-
-  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
-  if (m) {
-    if (m.slice(1).some((p) => Number(p) > 255)) return false
-    if (Number(m[1]) === 127) return true // 127.0.0.0/8 loopback
-    if (h === '0.0.0.0') return true // unspecified — reaches loopback from the same host
-  }
-  return false
-}
-
-/** Parse + validate a URL for view_localhost; throws on a bad scheme or non-loopback host. */
-export function validateLocalhostUrl(raw: string): URL {
-  let url: URL
-  try {
-    url = new URL(raw)
-  } catch {
-    throw new Error(`Invalid URL: ${raw}`)
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(`Only http and https URLs are allowed (got "${url.protocol}").`)
-  }
-  if (!isLoopbackHost(url.hostname)) {
-    throw new Error(
-      `view_localhost only loads loopback addresses (localhost, 127.0.0.1, ::1). Refusing: ${
-        url.hostname || raw
-      }. Use web_fetch for public URLs.`
-    )
-  }
-  return url
-}
-
-/**
- * True for a *subresource* host the capture window must not reach: the
- * private/LAN/link-local/metadata ranges webfetch blocks, EXCEPT loopback (the
- * dev server and its own assets are allowed) and public hosts (CDNs, allowed so
- * pages still render). This closes the residual where a localhost page's own JS
- * could `fetch('http://169.254.169.254/...')` or a LAN service and leak it via
- * the screenshot or console. An empty host (data:/blob:/about:) is not network
- * egress and is allowed. Like webfetch, this matches on the URL's host literal,
- * so a DNS name resolving to a private IP is a known gap (deferred — see ROADMAP.md).
- */
-export function isBlockedSubresourceHost(hostname: string): boolean {
-  if (!hostname) return false
-  return isPrivateHost(hostname) && !isLoopbackHost(hostname)
 }
 
 /** Format collected console entries into capped "LEVEL: text" lines. */

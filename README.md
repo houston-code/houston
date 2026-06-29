@@ -57,6 +57,14 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   Only loopback hosts (`localhost`, `127.0.0.1`, `::1`) are allowed — public URLs
   go through `web_fetch` — and, being local network egress, it always prompts for
   approval like `web_fetch`. Pass a `selector` to capture just one element.
+- **Live preview panel.** When the agent starts a dev server (a background
+  `run_shell`), Houston detects the loopback URL it prints and offers a **Preview**
+  panel — a resizable right-hand dock that renders the running page live and
+  interactively, right beside the chat. Multiple servers stack top-to-bottom (up to
+  three), each with reload and open-in-browser controls; you can also add a
+  `localhost` URL or port by hand. The pages render in isolated, sandboxed,
+  loopback-pinned views with the same network guards as `view_localhost`, so
+  untrusted dev-server output can't reach your network.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message — no need to paste or describe where things live.
 - **Slash commands.** Type `/` for a command menu. Built-ins: `/new` (new chat),

@@ -104,7 +104,18 @@ export const IPC = {
   /** Renderer → main: terminal focus gained/lost (drives Cmd+W routing). */
   terminalFocusChanged: 'terminal:focusChanged',
   /** Main → renderer: Cmd+W while the terminal is focused — close the active tab. */
-  terminalCloseActive: 'terminal:closeActive'
+  terminalCloseActive: 'terminal:closeActive',
+  // Live preview dock (started dev servers; see main/preview.ts)
+  /** Renderer → main: list the dev servers detected from started background shells. */
+  previewListServers: 'preview:listServers',
+  /** Main → renderer: the set of detected servers changed (started / got a URL / exited). */
+  previewServersChanged: 'preview:serversChanged',
+  /** Renderer → main: reconcile the live preview panes to these specs (+ whether visible). */
+  previewSync: 'preview:sync',
+  /** Renderer → main: reload one preview pane. */
+  previewReload: 'preview:reload',
+  /** Renderer → main: open a loopback URL in the OS browser (validated loopback-only). */
+  previewOpenExternal: 'preview:openExternal'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]

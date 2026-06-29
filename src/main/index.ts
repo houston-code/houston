@@ -9,6 +9,7 @@ import { loadWindowState, saveWindowState, pickStartupBounds } from './window-st
 import { registerIpc } from './ipc'
 import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
+import { attachPreviewHost, destroyAllPreviewPanes } from './preview'
 import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
@@ -116,6 +117,12 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // The live Preview dock overlays native WebContentsViews on this window; point
+  // the manager at it, and tear every pane down when the window goes away so the
+  // views (and their dev-server connections) don't leak.
+  attachPreviewHost(mainWindow)
+  mainWindow.on('closed', () => destroyAllPreviewPanes())
 
   // On Windows/Linux, closing the window quits the app (window-all-closed →
   // app.quit()), so the live-run confirmation has to happen here — while the
@@ -236,6 +243,7 @@ app.on('before-quit', (e) =>
 
 // Don't leave the agent's background shells or terminals running after the app exits.
 app.on('will-quit', () => {
+  destroyAllPreviewPanes()
   killAllShells()
   killAllTerminals()
   clearCheckpoints()
