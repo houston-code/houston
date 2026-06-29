@@ -26,6 +26,7 @@ function baseProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     currentId: null,
     collapsed: false,
     onToggleCollapse: vi.fn(),
+    runningIds: new Set<string>(),
     onSelect: vi.fn(),
     onNew: vi.fn(),
     onDelete: vi.fn(),
@@ -83,6 +84,33 @@ describe('Sidebar — expanded rendering', () => {
     expect(active).toHaveClass('conv--active')
     const inactive = screen.getByText('Alpha').closest('.conv') as HTMLElement
     expect(inactive).not.toHaveClass('conv--active')
+  })
+
+  it('marks every chat with a live run, regardless of which is active', () => {
+    const props = baseProps({
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha' }),
+        makeConv({ id: 'b', title: 'Beta' })
+      ],
+      // Beta is the open chat; Alpha is running in the background.
+      currentId: 'b',
+      runningIds: new Set(['a'])
+    })
+    render(<Sidebar {...props} />)
+
+    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
+    // The running (background) chat shows the indicator; the idle open one doesn't.
+    expect(within(alpha).getByLabelText('Running')).toBeInTheDocument()
+    expect(within(beta).queryByLabelText('Running')).not.toBeInTheDocument()
+  })
+
+  it('shows no running indicator when nothing is running', () => {
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Alpha' })]
+    })
+    render(<Sidebar {...props} />)
+    expect(screen.queryByLabelText('Running')).not.toBeInTheDocument()
   })
 
   it('selecting a conversation fires onSelect with its id', () => {

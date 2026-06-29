@@ -541,6 +541,28 @@ body.is-resizing {
   font-size: 10px;
   flex-shrink: 0;
 }
+/* Leading "running" dot: a chat with a live agent run. Same accent + cadence as
+   the status-bar busy dot, so a running chat reads consistently in both places.
+   The pulse is neutralized by the global prefers-reduced-motion rule above. */
+.conv__running {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: conv-pulse 1.2s ease-in-out infinite;
+}
+@keyframes conv-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
 .conv__main {
   flex: 1;
   min-width: 0;

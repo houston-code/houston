@@ -170,6 +170,14 @@ const api = {
    */
   getActiveRun: (conversationId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.agentActiveRun, conversationId),
+  /** The ids of every conversation with a live run (for the sidebar "running" dot). */
+  getRunningConversations: (): Promise<string[]> => ipcRenderer.invoke(IPC.agentRunningList),
+  /** Subscribe to changes in the running-conversation set. Returns an unsubscribe fn. */
+  onRunsChanged: (cb: (ids: string[]) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, ids: string[]): void => cb(ids)
+    ipcRenderer.on(IPC.agentRunsChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.agentRunsChanged, listener)
+  },
   /** Revert the file changes a run made. Returns the number of files restored. */
   restoreCheckpoint: (runId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.checkpointRestore, runId),

@@ -136,6 +136,30 @@ export function activeRunCount(): number {
   return runsByConversation.size
 }
 
+/** The ids of every conversation that currently has a live run. */
+export function runningConversationIds(): string[] {
+  return [...runsByConversation.keys()]
+}
+
+/**
+ * Listeners notified whenever the set of running conversations changes (a run
+ * started or ended). The IPC layer subscribes to broadcast the new set to the
+ * renderer so the sidebar can show a "running" dot on each live chat. Kept here,
+ * Electron-free, so the loop stays unit-testable.
+ */
+const runsChangedListeners = new Set<(ids: string[]) => void>()
+
+/** Subscribe to running-set changes; returns an unsubscribe function. */
+export function onActiveRunsChanged(fn: (ids: string[]) => void): () => void {
+  runsChangedListeners.add(fn)
+  return () => runsChangedListeners.delete(fn)
+}
+
+function notifyActiveRunsChanged(): void {
+  const ids = runningConversationIds()
+  for (const fn of runsChangedListeners) fn(ids)
+}
+
 export function cancelRun(runId: string): void {
   const run = runs.get(runId)
   if (!run) return
@@ -214,7 +238,10 @@ export async function startRun(
     policy: req.approvalPolicy
   }
   runs.set(runId, run)
-  if (conversationId) runsByConversation.set(conversationId, runId)
+  if (conversationId) {
+    runsByConversation.set(conversationId, runId)
+    notifyActiveRunsChanged()
+  }
 
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void =>
@@ -897,6 +924,7 @@ export async function startRun(
     // (guarded-against, but defensive) later run can't have its entry removed.
     if (conversationId && runsByConversation.get(conversationId) === runId) {
       runsByConversation.delete(conversationId)
+      notifyActiveRunsChanged()
     }
   }
 }

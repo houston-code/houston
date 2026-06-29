@@ -31,7 +31,9 @@ import {
   resolveApproval,
   resolveQuestion,
   setRunPolicy,
-  activeRunForConversation
+  activeRunForConversation,
+  runningConversationIds,
+  onActiveRunsChanged
 } from './agent/loop'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, type DrainIO } from './agent/drain'
@@ -568,6 +570,20 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.agentActiveRun, (_event, conversationId: string): string | null =>
     activeRunForConversation(conversationId)
   )
+
+  // The ids of every conversation with a live run, for the sidebar "running" dot.
+  // The renderer reads this once on load, then keeps it current via the
+  // IPC.agentRunsChanged broadcast below.
+  ipcMain.handle(IPC.agentRunningList, (): string[] => runningConversationIds())
+
+  // Push the running set to every renderer whenever a run starts or ends, so the
+  // sidebar dot stays live without polling. Broadcast (not sender-scoped) because
+  // a run can finish while a different window is focused.
+  onActiveRunsChanged((ids) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.agentRunsChanged, ids)
+    }
+  })
 
   // Revert the file changes a run made (restore each touched file to its pre-turn state).
   ipcMain.handle(IPC.checkpointRestore, (_event, runId: string): Promise<number> =>

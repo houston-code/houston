@@ -16,6 +16,7 @@ import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
 import { branchNameError, suggestBranch } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
+import { useRunningConversations } from './hooks/useRunningConversations'
 import {
   matchShortcut,
   isEditableTarget,
@@ -219,6 +220,10 @@ export default function App(): JSX.Element {
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
+
+  // Conversations with a live run, used to mark them "running" in the sidebar
+  // (including chats running in the background, not just the open one).
+  const runningIds = useRunningConversations()
 
   // Debounced full-text search across conversations (title + message content).
   useEffect(() => {
@@ -1133,6 +1138,7 @@ export default function App(): JSX.Element {
         currentId={currentId}
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
+        runningIds={runningIds}
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
