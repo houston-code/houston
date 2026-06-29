@@ -58,12 +58,12 @@ describe('FilesPanel', () => {
 
   it('previews a file in-app when clicked', async () => {
     const api = installApi(
-      { '': [file('README.md', 'README.md')] },
+      { '': [file('notes.txt', 'notes.txt')] },
       { kind: 'text', text: 'hello from the file', truncated: false, bytes: 19 }
     )
     render(<FilesPanel workspace="/repo" onClose={vi.fn()} />)
-    fireEvent.click(await screen.findByText('README.md'))
-    expect(api.readWorkspaceFile).toHaveBeenCalledWith('/repo', 'README.md')
+    fireEvent.click(await screen.findByText('notes.txt'))
+    expect(api.readWorkspaceFile).toHaveBeenCalledWith('/repo', 'notes.txt')
     expect(await screen.findByText('hello from the file')).toBeInTheDocument()
   })
 

@@ -30,6 +30,16 @@
   --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.5);
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
+  /* Syntax-highlight token colors for the Files preview code pane (Graphite). */
+  --syn-comment: #6b7280;
+  --syn-keyword: #c792ea;
+  --syn-string: #9ece6a;
+  --syn-number: #ff9e64;
+  --syn-function: #82aaff;
+  --syn-type: #ffcb6b;
+  --syn-tag: #f7768e;
+  --syn-attr: #ffcb6b;
+  --syn-meta: #89ddff;
 }
 
 /* Light palette — "Daylight": warm off-white surfaces, soft neutrals, indigo accent.
@@ -65,6 +75,16 @@
   --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
   /* A softer, warmer drop for floating menus against the off-white canvas. */
   --shadow-popover: 0 12px 28px rgba(47, 40, 30, 0.18);
+  /* Syntax tokens deepened for AA contrast on the warm light code surface. */
+  --syn-comment: #8a8f98;
+  --syn-keyword: #8839ef;
+  --syn-string: #2f7d32;
+  --syn-number: #b4540a;
+  --syn-function: #1e66f5;
+  --syn-type: #9a6700;
+  --syn-tag: #c01c28;
+  --syn-attr: #9a6700;
+  --syn-meta: #0e7490;
 }
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
    and collapse transitions for users who are sensitive to motion. */
@@ -2728,6 +2748,68 @@ body.is-resizing .preview-dock__resizer::after {
   line-height: 1.55;
   color: var(--text);
   white-space: pre;
+}
+/* highlight.js token colors, themed to the app palette (vars set per theme). The
+   pane carries `hljs`; tokens are scoped under it so the classes can't leak. */
+.file-preview__text .hljs-comment,
+.file-preview__text .hljs-quote {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+.file-preview__text .hljs-keyword,
+.file-preview__text .hljs-selector-tag,
+.file-preview__text .hljs-literal,
+.file-preview__text .hljs-section,
+.file-preview__text .hljs-operator,
+.file-preview__text .hljs-doctag {
+  color: var(--syn-keyword);
+}
+.file-preview__text .hljs-string,
+.file-preview__text .hljs-regexp,
+.file-preview__text .hljs-bullet,
+.file-preview__text .hljs-addition,
+.file-preview__text .hljs-selector-attr,
+.file-preview__text .hljs-selector-pseudo {
+  color: var(--syn-string);
+}
+.file-preview__text .hljs-number,
+.file-preview__text .hljs-symbol,
+.file-preview__text .hljs-link {
+  color: var(--syn-number);
+}
+.file-preview__text .hljs-title,
+.file-preview__text .hljs-title.function_,
+.file-preview__text .hljs-built_in {
+  color: var(--syn-function);
+}
+.file-preview__text .hljs-type,
+.file-preview__text .hljs-title.class_,
+.file-preview__text .hljs-class .hljs-title,
+.file-preview__text .hljs-selector-class {
+  color: var(--syn-type);
+}
+.file-preview__text .hljs-attr,
+.file-preview__text .hljs-attribute,
+.file-preview__text .hljs-property,
+.file-preview__text .hljs-selector-id,
+.file-preview__text .hljs-variable,
+.file-preview__text .hljs-template-variable,
+.file-preview__text .hljs-params {
+  color: var(--syn-attr);
+}
+.file-preview__text .hljs-tag,
+.file-preview__text .hljs-name,
+.file-preview__text .hljs-deletion {
+  color: var(--syn-tag);
+}
+.file-preview__text .hljs-meta {
+  color: var(--syn-meta);
+}
+.file-preview__text .hljs-emphasis {
+  font-style: italic;
+}
+.file-preview__text .hljs-strong {
+  font-weight: 600;
 }
 .file-preview__image-wrap {
   display: flex;
