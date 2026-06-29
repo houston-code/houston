@@ -67,6 +67,22 @@ describe('MenuExpander', () => {
     expect(card()).not.toBeInTheDocument()
   })
 
+  it('stays open when the pointer crosses the menu chrome (not a row), for continuity', () => {
+    render(
+      <div className="menu">
+        <MenuExpander label="Open in">
+          <button>VS Code</button>
+        </MenuExpander>
+        <div className="menu__sep" data-testid="sep" />
+      </div>
+    )
+    const trigger = screen.getByRole('button', { name: 'Open in' })
+    fireEvent.click(trigger)
+    expect(card()).toBeInTheDocument()
+    fireEvent.mouseOver(screen.getByTestId('sep')) // menu chrome, not a .menu__item
+    expect(card()).toBeInTheDocument()
+  })
+
   it('closes after the grace delay once the pointer leaves entirely', () => {
     const { trigger } = setup()
     fireEvent.click(trigger)
