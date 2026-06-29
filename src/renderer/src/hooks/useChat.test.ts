@@ -349,6 +349,25 @@ describe('useChat', () => {
     expect(api.approveTool).toHaveBeenCalledWith('live-run', 'w1', 'allow')
   })
 
+  it('seedCheckpoint restores the revert/redo affordance on re-open', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat())
+
+    // Re-opening a conversation: reset clears the (event-built) checkpoint...
+    act(() => result.current.reset([{ kind: 'user', id: 'u1', text: 'did work' }]))
+    expect(result.current.checkpoint).toBeNull()
+
+    // ...then the fetched latest-run checkpoint is seeded back.
+    act(() => result.current.seedCheckpoint({ runId: 'r9', files: 2, reverted: true }))
+    expect(result.current.checkpoint).toEqual({ runId: 'r9', files: 2, reverted: true })
+
+    // It routes restore/reapply to that run.
+    await act(async () => {
+      await result.current.reapplyCheckpoint()
+    })
+    expect(api.reapplyCheckpoint).toHaveBeenCalledWith('r9')
+  })
+
   it('reset clears the transcript and seeds usage', async () => {
     const { api } = installApi()
     const { result } = renderHook(() => useChat())

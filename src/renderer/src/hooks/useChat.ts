@@ -42,6 +42,13 @@ export interface ChatController {
   answerQuestion: (callId: string, answer: string) => void
   /** Change the approval policy of the in-flight run, if any (live mode switch). */
   setPolicy: (policy: ApprovalPolicy) => void
+  /**
+   * Restore the revert/redo affordance when re-opening a conversation — the
+   * checkpoint state is otherwise built only from live events and lost on a
+   * transcript rebuild. Pass the conversation's latest-run checkpoint, or null.
+   * Call after {@link reset}.
+   */
+  seedCheckpoint: (checkpoint: Checkpoint | null) => void
   /** Revert the current checkpoint's file changes. Returns the count restored. */
   revertCheckpoint: () => Promise<number>
   /** Re-apply a reverted checkpoint's file changes. Returns the count re-applied. */
@@ -222,6 +229,10 @@ export function useChat(conversationId: string | null = null): ChatController {
     }
   }, [])
 
+  const seedCheckpoint = useCallback((next: Checkpoint | null) => {
+    setCheckpoint(next)
+  }, [])
+
   const notify = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
     setItems((prev) => [...prev, { kind: 'notice', id: crypto.randomUUID(), text, tone }])
   }, [])
@@ -238,6 +249,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     approve,
     answerQuestion,
     setPolicy,
+    seedCheckpoint,
     revertCheckpoint,
     reapplyCheckpoint,
     reset,

@@ -82,6 +82,8 @@ export const IPC = {
   agentQueueChanged: 'agent:queue:changed',
   checkpointRestore: 'checkpoint:restore',
   checkpointReapply: 'checkpoint:reapply',
+  /** Query a conversation's latest-run checkpoint (files + reverted) to restore the revert/redo UI on re-open. */
+  checkpointGet: 'checkpoint:get',
   // Integrated terminal (PTY-backed; see main/terminal.ts)
   terminalCreate: 'terminal:create',
   terminalInput: 'terminal:input',
