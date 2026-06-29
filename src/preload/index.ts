@@ -3,6 +3,7 @@ import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
 import type { AppSettings, ApprovalPolicy, IntegrationsInfo, ModelOption } from '@shared/types'
 import type { EditorStatus, OpenResult } from '@shared/editors'
+import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import type { ClipboardContent, PickedFile } from '@shared/composerContext'
@@ -31,6 +32,15 @@ const api = {
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.workspaceListFiles, workspace, query),
+  /** One directory level for the Files panel — a folder's immediate children (lazy tree). */
+  listWorkspaceDir: (workspace: string, relPath: string): Promise<FileEntry[]> =>
+    ipcRenderer.invoke(IPC.workspaceListDir, workspace, relPath),
+  /** Read a workspace file for the Files panel's in-app preview (text / image / note). */
+  readWorkspaceFile: (workspace: string, relPath: string): Promise<FilePreview> =>
+    ipcRenderer.invoke(IPC.workspaceReadFile, workspace, relPath),
+  /** Reveal a workspace file/folder in the OS file manager (Files panel row click). */
+  revealWorkspacePath: (workspace: string, relPath: string): Promise<OpenResult> =>
+    ipcRenderer.invoke(IPC.workspaceRevealPath, workspace, relPath),
   /** Composer "+" menu: pick files via a native dialog; resolves with their capped text contents. */
   pickAttachmentFiles: (): Promise<PickedFile[]> => ipcRenderer.invoke(IPC.attachmentPickFiles),
   /** Composer "+" menu: read the system clipboard (text + optional image). */

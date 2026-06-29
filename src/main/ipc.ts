@@ -49,6 +49,7 @@ import { setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
+import { listDirectory, readWorkspaceFile, revealWorkspacePath } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { getRepoInfo, createWorktree, removeWorktree } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
@@ -192,6 +193,34 @@ export function registerIpc(): void {
       }
       return findFiles(root, typeof query === 'string' ? query : '')
     }
+  )
+
+  // One directory level for the Finder-like Files panel. The renderer expands
+  // folders lazily, so each call lists only a directory's immediate children;
+  // listDirectory realpaths the workspace and confines the subpath to it.
+  ipcMain.handle(IPC.workspaceListDir, async (_event, workspace: string, relPath: string) =>
+    listDirectory(
+      typeof workspace === 'string' ? workspace : '',
+      typeof relPath === 'string' ? relPath : ''
+    )
+  )
+
+  // Read a file selected in the Files panel for in-app preview. Confined to the
+  // workspace; returns a text/image payload or a note kind for binary/oversize.
+  ipcMain.handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string) =>
+    readWorkspaceFile(
+      typeof workspace === 'string' ? workspace : '',
+      typeof relPath === 'string' ? relPath : ''
+    )
+  )
+
+  // Reveal a file/folder picked in the Files panel in the OS file manager. A user
+  // gesture; the target is confined to the workspace before showItemInFolder.
+  ipcMain.handle(IPC.workspaceRevealPath, (_event, workspace: string, relPath: string) =>
+    revealWorkspacePath(
+      typeof workspace === 'string' ? workspace : '',
+      typeof relPath === 'string' ? relPath : ''
+    )
   )
 
   // Composer "+" menu: pick files in a native dialog and return their (capped)

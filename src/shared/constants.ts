@@ -25,6 +25,12 @@ export const IPC = {
   workspacePick: 'workspace:pick',
   directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
+  /** One directory level for the Finder-like Files panel (lazy tree expansion). */
+  workspaceListDir: 'workspace:listDir',
+  /** Read a workspace file for the Files panel's in-app preview (text / image / note). */
+  workspaceReadFile: 'workspace:readFile',
+  /** Reveal a workspace file/folder in the OS file manager (from the Files panel). */
+  workspaceRevealPath: 'workspace:revealPath',
   /** Pick files in a native dialog and read their (capped) text contents — composer "+" menu. */
   attachmentPickFiles: 'attachment:pickFiles',
   /** Read the system clipboard (text + image) for the composer "+" menu. */
