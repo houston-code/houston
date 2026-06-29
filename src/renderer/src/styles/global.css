@@ -36,9 +36,10 @@
   --bg-elevated: #f3f1ea;
   --bg-input: #ffffff;
   --bg-hover: #ece9e1;
-  /* Pure white is already the brightest surface here, a clear step above the
-     warm hover — it doubles as the selected-row background. */
-  --bg-selected: #ffffff;
+  /* A soft indigo tint for the selected row: cool against the warm off-white
+     sidebar and beige hover, so the active chat reads as selected by hue (not
+     just lightness) and pairs with the indigo accent rail. */
+  --bg-selected: #e7e4f6;
   --bg-code: #f2f0e8;
   --stripe: rgba(0, 0, 0, 0.03);
   --border: #e6e2d8;
