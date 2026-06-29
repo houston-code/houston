@@ -106,12 +106,19 @@ export function openaiSupportsReasoning(model: string): boolean {
  * The Chat Completions `reasoning_effort` value, or undefined when off/unsupported.
  * Chat Completions tops out at `high`, so `xhigh` is clamped (only the Responses
  * API path accepts `xhigh`).
+ *
+ * `capable` is the host's listed reasoning support (from `ModelOption.caps`): when
+ * provided it overrides the id heuristic, so a host-routed reasoning model the regex
+ * doesn't recognize (`deepseek/deepseek-r1`) still gets `reasoning_effort`, and a
+ * model the host says can't reason is never sent one. Absent → use the heuristic.
  */
 export function openaiReasoningEffort(
   model: string,
-  effort: ReasoningEffort | undefined
+  effort: ReasoningEffort | undefined,
+  capable?: boolean
 ): 'low' | 'medium' | 'high' | undefined {
-  if (!isOn(effort) || !openaiSupportsReasoning(model)) return undefined
+  const supported = capable ?? openaiSupportsReasoning(model)
+  if (!isOn(effort) || !supported) return undefined
   return clampToHigh(effort)
 }
 

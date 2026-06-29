@@ -234,6 +234,10 @@ export async function startRun(
       emit({ type: 'error', message: `Unknown provider: ${req.providerId}` })
       return
     }
+    // Host-listed reasoning support for the selected model, used to override the
+    // adapter's id-based heuristic so host-routed reasoning models still get a
+    // reasoning param. Undefined when the model carries no capability metadata.
+    const reasoningCapable = providerConfig.models.find((m) => m.id === req.model)?.caps?.reasoning
 
     let provider
     try {
@@ -512,6 +516,7 @@ export async function startRun(
             messages: sendMessages,
             tools,
             reasoningEffort,
+            reasoningCapable,
             reasoningSummary,
             verbosity,
             signal: abort.signal
