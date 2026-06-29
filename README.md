@@ -88,8 +88,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   or scope it to specific `paths`; raise `effort` to `high` to verify each finding
   with several independent skeptics (majority-confirmed) for high-stakes changes.
   Large diffs are split by file across reviewers, so nothing is skipped. The
-  review streams its progress live (which reviewer/verifier is running) and reports
-  its token cost, so a multi-agent review isn't a silent black box.
+  review streams its progress live (which reviewer/verifier is running), and the
+  tokens its nested reviewers spend roll into the conversation's usage meter, so a
+  multi-agent review isn't a silent black box.
 - **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
   a specialized read-only subagent (front-matter `description` + a system-prompt
   body) — the main agent can dispatch it by name. An optional front-matter `tools:`

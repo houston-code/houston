@@ -1,4 +1,4 @@
-import type { Provider } from '@shared/agent'
+import type { Provider, TokenUsage } from '@shared/agent'
 import { runSubAgent, type SubAgentOptions } from './subagent'
 import { gitDiff, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
 
@@ -328,6 +328,8 @@ export interface RunReviewOptions {
   onProgress?: (message: string) => void
   /** Called as each nested reviewer subagent starts and finishes (its own live row in the UI). */
   onSubAgent?: (ev: ReviewSubAgentEvent) => void
+  /** Called with each nested subagent turn's token usage, so the caller can meter review cost. */
+  onUsage?: (usage: TokenUsage) => void
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
 }
@@ -357,6 +359,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       onUsage: (u) => {
         inputTokens += u.inputTokens ?? 0
         outputTokens += u.outputTokens ?? 0
+        opts.onUsage?.(u) // forward each turn's usage so the loop can meter review cost
       }
     })
   }
@@ -501,6 +504,8 @@ export interface ReviewWorkspaceOptions {
   onProgress?: (message: string) => void
   /** Called as each nested reviewer subagent starts and finishes (its own live row in the UI). */
   onSubAgent?: (ev: ReviewSubAgentEvent) => void
+  /** Called with each nested subagent turn's token usage, so the caller can meter review cost. */
+  onUsage?: (usage: TokenUsage) => void
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -541,6 +546,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     effort: opts.effort,
     onProgress: opts.onProgress,
     onSubAgent: opts.onSubAgent,
+    onUsage: opts.onUsage,
     signal: opts.signal,
     runAgent: opts.runAgent
   })
