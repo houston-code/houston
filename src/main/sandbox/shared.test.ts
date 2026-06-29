@@ -154,6 +154,15 @@ describe('sandboxEnv', () => {
     expect(env.npm_config_devdir).not.toMatch(/Users[/\\]me/) // not ~/.node-gyp — that's the EPERM we fix
   })
 
+  it('redirects the Gradle/Deno/Bun caches into the writable temp cache dir', () => {
+    const env = sandboxEnv({ PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' })
+    const cache = pkgCacheDir({ TMPDIR: '/tmp' })
+    expect(env.GRADLE_USER_HOME).toBe(`${cache}${sep}gradle`)
+    expect(env.DENO_DIR).toBe(`${cache}${sep}deno`)
+    expect(env.BUN_INSTALL_CACHE_DIR).toBe(`${cache}${sep}bun`)
+    expect(env.GRADLE_USER_HOME).not.toMatch(/Users[/\\]me/) // not ~/.gradle — that's the EPERM we fix
+  })
+
   it('keeps the cache under the temp area (sandbox-writable), never $HOME', () => {
     // Use join() on both sides so this is correct on Windows (where the path
     // separator and join semantics differ from POSIX).
