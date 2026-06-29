@@ -550,6 +550,12 @@ body.is-resizing {
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;
+  /* Always occupies its slot (so the title never shifts); the dot only becomes
+     visible — and starts pulsing — while the chat has a live run. */
+  visibility: hidden;
+}
+.conv__running[data-running] {
+  visibility: visible;
   animation: conv-pulse 1.2s ease-in-out infinite;
 }
 @keyframes conv-pulse {
