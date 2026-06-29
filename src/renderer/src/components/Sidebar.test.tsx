@@ -650,7 +650,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
     expect(await screen.findByRole('button', { name: 'VS Code' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Cursor' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Zed' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /reveal in/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^(finder|file explorer|file manager)$/i })).toBeInTheDocument()
   })
 
   it('reveals the chat workspace in the file manager', async () => {
@@ -662,7 +662,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
 
     openConvMenu('Alpha')
     openSubmenu('Open in')
-    fireEvent.click(await screen.findByRole('button', { name: /reveal in/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /^(finder|file explorer|file manager)$/i }))
     await waitFor(() => expect(api.revealInFileManager).toHaveBeenCalledWith('/Users/me/proj'))
   })
 

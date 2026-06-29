@@ -159,7 +159,7 @@ function OpenInSubmenu({
             </button>
           ))}
           <button className="menu__item" onClick={reveal}>
-            Reveal in {fileManagerName()}
+            {fileManagerName()}
           </button>
           {available.length === 0 && <div className="menu__note">No editors detected</div>}
           {error && (
