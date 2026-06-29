@@ -146,13 +146,13 @@ function OpenInSubmenu({
           {available.map((e) => (
             <button
               key={e.id}
-              className="menu__item menu__item--indent"
+              className="menu__item"
               onClick={() => openIn(e.id)}
             >
               {e.label}
             </button>
           ))}
-          <button className="menu__item menu__item--indent" onClick={reveal}>
+          <button className="menu__item" onClick={reveal}>
             Reveal in {fileManagerName()}
           </button>
           {available.length === 0 && <div className="menu__note">No editors detected</div>}
@@ -315,7 +315,7 @@ function ConvRow({
               {groups.map((g) => (
                 <button
                   key={g.id}
-                  className="menu__item menu__item--indent"
+                  className="menu__item"
                   onClick={() => {
                     props.onMove(conv.id, g.id)
                     close()
@@ -326,7 +326,7 @@ function ConvRow({
                 </button>
               ))}
               <button
-                className="menu__item menu__item--indent"
+                className="menu__item"
                 onClick={() => {
                   void props.onCreateGroup().then((id) => {
                     props.onMove(conv.id, id)
@@ -339,7 +339,7 @@ function ConvRow({
               </button>
               {conv.groupId && (
                 <button
-                  className="menu__item menu__item--indent"
+                  className="menu__item"
                   onClick={() => {
                     props.onMove(conv.id, null)
                     close()
