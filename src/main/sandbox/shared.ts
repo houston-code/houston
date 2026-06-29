@@ -87,7 +87,12 @@ export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
     npm_config_cache: join(cache, 'npm'),
     YARN_CACHE_FOLDER: join(cache, 'yarn'),
     PIP_CACHE_DIR: join(cache, 'pip'),
-    XDG_CACHE_HOME: join(cache, 'xdg')
+    XDG_CACHE_HOME: join(cache, 'xdg'),
+    // Go's build + module caches default under $HOME (and `~/Library/Caches/go-build`
+    // on macOS, which XDG_CACHE_HOME doesn't cover), so `go build`/`go test`/`go mod`
+    // would hit the same write-denial. Redirect both explicitly.
+    GOCACHE: join(cache, 'go-build'),
+    GOMODCACHE: join(cache, 'go-mod')
   }
 }
 
