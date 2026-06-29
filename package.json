@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.1.179",
+  "version": "0.1.180",
   "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "Houston contributors",
