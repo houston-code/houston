@@ -67,6 +67,8 @@ export const IPC = {
   agentSetPolicy: 'agent:setPolicy',
   /** Query the runId of the live run for a conversation (or null) to re-adopt it. */
   agentActiveRun: 'agent:activeRun',
+  /** Query the prompts (approvals/questions) blocking a conversation's live run, to replay on re-adopt. */
+  agentPendingPrompts: 'agent:pendingPrompts',
   /** Query the ids of every conversation with a live run (drives the sidebar "running" dot). */
   agentRunningList: 'agent:runningList',
   /** Main → renderer: the set of conversations with a live run changed (started/ended). */

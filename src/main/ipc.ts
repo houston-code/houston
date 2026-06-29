@@ -32,6 +32,7 @@ import {
   resolveQuestion,
   setRunPolicy,
   activeRunForConversation,
+  pendingPromptsForConversation,
   runningConversationIds,
   onActiveRunsChanged
 } from './agent/loop'
@@ -569,6 +570,14 @@ export function registerIpc(): void {
   // (show Stop, reconnect events/approvals) instead of starting a second one.
   ipcMain.handle(IPC.agentActiveRun, (_event, conversationId: string): string | null =>
     activeRunForConversation(conversationId)
+  )
+
+  // The prompts (approvals/questions) currently blocking the conversation's live
+  // run. The renderer replays these right after re-adopting, so a prompt that was
+  // awaiting the user when the transcript was last rebuilt re-renders its UI
+  // instead of leaving the run wedged behind a spinner with no way to answer it.
+  ipcMain.handle(IPC.agentPendingPrompts, (_event, conversationId: string): AgentEvent[] =>
+    pendingPromptsForConversation(conversationId)
   )
 
   // The ids of every conversation with a live run, for the sidebar "running" dot.

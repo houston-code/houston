@@ -138,6 +138,17 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'tool_approval': {
       const finalized = finalizeStreaming(items)
+      // Upsert: when a row for this call already exists (e.g. rebuilt from the
+      // persisted log, then this prompt is replayed on re-adopt), flip it to
+      // awaiting-approval in place rather than appending a duplicate id.
+      if (finalized.some((it) => it.kind === 'tool' && it.id === e.callId)) {
+        return updateTool(finalized, e.callId, {
+          name: e.name,
+          summary: e.summary,
+          toolKind: e.kind,
+          status: 'awaiting-approval'
+        })
+      }
       return [
         ...finalized,
         {
@@ -178,6 +189,15 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'tool_question': {
       const finalized = finalizeStreaming(items)
+      // Upsert (see tool_approval): a question card rebuilt from the log and then
+      // replayed on re-adopt must update in place, not duplicate its id.
+      if (finalized.some((it) => it.kind === 'question' && it.id === e.callId)) {
+        return finalized.map((it) =>
+          it.kind === 'question' && it.id === e.callId
+            ? { ...it, question: e.question, options: e.options, multiSelect: e.multiSelect === true }
+            : it
+        )
+      }
       return [
         ...finalized,
         {

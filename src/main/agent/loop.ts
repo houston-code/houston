@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   DocumentAttachment,
   Provider,
+  QuestionOption,
   ReasoningBlock,
   StopReason,
   ToolApprovalDecision,
@@ -21,7 +22,14 @@ import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig } from './projectConfig'
-import { ASK_USER_NAME, getTool, toolSchemas, type ToolDef, type ToolContext } from './tools'
+import {
+  ASK_USER_NAME,
+  getTool,
+  toolSchemas,
+  type ToolDef,
+  type ToolContext,
+  type ToolKind
+} from './tools'
 import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
@@ -89,6 +97,16 @@ interface RunState {
   approvals: Map<string, (d: ToolApprovalDecision) => void>
   /** Pending `ask_user` questions, keyed by callId, resolved with the user's answer. */
   questions: Map<string, (answer: string) => void>
+  /**
+   * Display payloads for the prompts currently awaiting the user, keyed by callId.
+   * The `tool_approval` / `tool_question` events are one-shot, so a renderer that
+   * rebuilds its transcript (e.g. when the conversation is re-opened) would lose a
+   * prompt that's still blocking the run. These let {@link pendingPromptsForConversation}
+   * replay them on re-adopt so the approve/answer UI re-renders. Kept in lockstep
+   * with `approvals`/`questions` (set when emitted, deleted when resolved/cancelled).
+   */
+  pendingApprovals: Map<string, { name: string; summary: string; kind: ToolKind; sandboxed?: boolean }>
+  pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
   /** Flipped to true once the user chooses "always" — auto-approve the rest. */
   override: boolean
   /**
@@ -166,9 +184,11 @@ export function cancelRun(runId: string): void {
   if (!run) return
   for (const resolve of run.approvals.values()) resolve('deny')
   run.approvals.clear()
+  run.pendingApprovals.clear()
   // Unblock any pending question so its tool call returns instead of hanging.
   for (const resolve of run.questions.values()) resolve('[The user stopped the agent without answering.]')
   run.questions.clear()
+  run.pendingQuestions.clear()
   run.abort.abort()
 }
 
@@ -177,6 +197,7 @@ export function resolveApproval(runId: string, callId: string, decision: ToolApp
   const resolve = run?.approvals.get(callId)
   if (run && resolve) {
     run.approvals.delete(callId)
+    run.pendingApprovals.delete(callId)
     resolve(decision)
   }
 }
@@ -187,8 +208,45 @@ export function resolveQuestion(runId: string, callId: string, answer: string): 
   const resolve = run?.questions.get(callId)
   if (run && resolve) {
     run.questions.delete(callId)
+    run.pendingQuestions.delete(callId)
     resolve(answer)
   }
+}
+
+/**
+ * The prompts (approvals + `ask_user` questions) currently blocking a conversation's
+ * live run, rebuilt as the original one-shot events so a renderer re-opening the
+ * conversation can replay them and re-render the approve/answer UI. Empty when the
+ * conversation has no live run or nothing is awaiting the user.
+ */
+export function pendingPromptsForConversation(conversationId: string): AgentEvent[] {
+  const runId = runsByConversation.get(conversationId)
+  if (!runId) return []
+  const run = runs.get(runId)
+  if (!run) return []
+  const events: AgentEvent[] = []
+  for (const [callId, a] of run.pendingApprovals) {
+    events.push({
+      runId,
+      type: 'tool_approval',
+      callId,
+      name: a.name,
+      summary: a.summary,
+      kind: a.kind,
+      ...(a.sandboxed === false ? { sandboxed: false } : {})
+    })
+  }
+  for (const [callId, q] of run.pendingQuestions) {
+    events.push({
+      runId,
+      type: 'tool_question',
+      callId,
+      question: q.question,
+      options: q.options,
+      ...(q.multiSelect ? { multiSelect: true } : {})
+    })
+  }
+  return events
 }
 
 /**
@@ -234,6 +292,8 @@ export async function startRun(
     abort,
     approvals: new Map(),
     questions: new Map(),
+    pendingApprovals: new Map(),
+    pendingQuestions: new Map(),
     override: false,
     shellUnsandboxedOverride: false,
     policy: req.approvalPolicy
@@ -403,6 +463,11 @@ export async function startRun(
       askUser: (q) =>
         new Promise<string>((resolve) => {
           run.questions.set(callId, resolve)
+          run.pendingQuestions.set(callId, {
+            question: q.question,
+            options: q.options,
+            ...(q.multiSelect ? { multiSelect: true } : {})
+          })
           emit({
             type: 'tool_question',
             callId,
@@ -794,6 +859,14 @@ export async function startRun(
 
           let approved = true
           if (mustApprove) {
+            // Track the prompt so it can be replayed if the renderer re-opens this
+            // conversation while the call is still blocking (the event is one-shot).
+            run.pendingApprovals.set(call.id, {
+              name: call.name,
+              summary: tool.summarize(call.arguments),
+              kind: tool.kind,
+              ...(unsandboxedShell ? { sandboxed: false } : {})
+            })
             emit({
               type: 'tool_approval',
               callId: call.id,
@@ -803,6 +876,8 @@ export async function startRun(
               ...(unsandboxedShell ? { sandboxed: false } : {})
             })
             const decision = await waitForApproval(run, call.id)
+            // Resolved (or cancelled) — it's no longer awaiting the user.
+            run.pendingApprovals.delete(call.id)
             if (decision === 'always') {
               run.override = true
               // "Allow for run" on an unconfined-shell prompt is the conscious consent

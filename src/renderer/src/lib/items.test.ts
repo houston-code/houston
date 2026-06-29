@@ -100,6 +100,67 @@ describe('reduceEvent — ask_user', () => {
   })
 })
 
+describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
+  it('flips an existing tool row to awaiting-approval instead of duplicating it', () => {
+    // A run parked on an approval: the call is first rebuilt from the persisted log
+    // as a tool row, then its approval prompt is replayed when re-adopted.
+    const fromLog = itemsFromMessages([
+      {
+        role: 'assistant',
+        content: 'writing',
+        toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'a.txt' } }]
+      }
+    ])
+    const items = reduceEvent(fromLog, {
+      runId: 'r',
+      type: 'tool_approval',
+      callId: 'w1',
+      name: 'write_file',
+      summary: 'write a.txt',
+      kind: 'write'
+    })
+    const tools = items.filter((i): i is ToolItem => i.kind === 'tool' && i.id === 'w1')
+    expect(tools).toHaveLength(1)
+    expect(tools[0].status).toBe('awaiting-approval')
+    expect(tools[0].summary).toBe('write a.txt')
+  })
+
+  it('appends an approval row when no row exists yet (the normal live first emit)', () => {
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_approval',
+      callId: 'w1',
+      name: 'write_file',
+      summary: 's',
+      kind: 'write'
+    })
+    const tools = items.filter((i): i is ToolItem => i.kind === 'tool')
+    expect(tools).toHaveLength(1)
+    expect(tools[0].status).toBe('awaiting-approval')
+  })
+
+  it('updates an existing question card instead of duplicating it', () => {
+    const fromLog = itemsFromMessages([
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'q1', name: 'ask_user', arguments: { question: 'Which?', options: ['A', 'B'] } }
+        ]
+      }
+    ])
+    const items = reduceEvent(fromLog, {
+      runId: 'r',
+      type: 'tool_question',
+      callId: 'q1',
+      question: 'Which?',
+      options: [{ label: 'A' }, { label: 'B' }]
+    })
+    const questions = items.filter((i): i is QuestionItem => i.kind === 'question' && i.id === 'q1')
+    expect(questions).toHaveLength(1)
+  })
+})
+
 describe('PR lifecycle notices', () => {
   it('appends a created-PR notice after a gh_pr_create result (live)', () => {
     let items = reduceEvent([], {

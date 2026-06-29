@@ -170,6 +170,13 @@ const api = {
    */
   getActiveRun: (conversationId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.agentActiveRun, conversationId),
+  /**
+   * The prompts (approvals / `ask_user` questions) currently blocking a
+   * conversation's live run. Replayed after {@link getActiveRun}/adopt so a prompt
+   * still awaiting the user re-renders when the conversation is re-opened.
+   */
+  getPendingPrompts: (conversationId: string): Promise<AgentEvent[]> =>
+    ipcRenderer.invoke(IPC.agentPendingPrompts, conversationId),
   /** The ids of every conversation with a live run (for the sidebar "running" dot). */
   getRunningConversations: (): Promise<string[]> => ipcRenderer.invoke(IPC.agentRunningList),
   /** Subscribe to changes in the running-conversation set. Returns an unsubscribe fn. */
