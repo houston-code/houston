@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { parseUnifiedDiff, untrackedToFileDiff, totalStat } from './workingTree'
+import {
+  parseUnifiedDiff,
+  untrackedToFileDiff,
+  totalStat,
+  workingTreeToText,
+  type WorkingTreeChanges
+} from './workingTree'
 
 describe('parseUnifiedDiff', () => {
   it('returns [] for empty input', () => {
@@ -161,5 +167,56 @@ describe('totalStat', () => {
     )
     files.push(untrackedToFileDiff('u.txt', 'x\ny'))
     expect(totalStat(files)).toEqual({ added: 3, removed: 0 })
+  })
+})
+
+describe('workingTreeToText', () => {
+  const change = (over: Partial<WorkingTreeChanges> = {}): WorkingTreeChanges => ({
+    isRepo: true,
+    branch: 'main',
+    files: [],
+    added: 0,
+    removed: 0,
+    ...over
+  })
+
+  it('renders per-file headers, status, and hunk lines with +/-/space prefixes', () => {
+    const changes = change({
+      files: parseUnifiedDiff(
+        [
+          'diff --git a/src/foo.ts b/src/foo.ts',
+          '--- a/src/foo.ts',
+          '+++ b/src/foo.ts',
+          '@@ -1,2 +1,2 @@',
+          ' keep',
+          '-old',
+          '+new',
+          ''
+        ].join('\n')
+      )
+    })
+    const text = workingTreeToText(changes)
+    expect(text).toContain('diff --git a/src/foo.ts b/src/foo.ts')
+    expect(text).toContain('modified: src/foo.ts')
+    expect(text).toContain('@@ -1,2 +1,2 @@')
+    expect(text).toContain(' keep')
+    expect(text).toContain('-old')
+    expect(text).toContain('+new')
+  })
+
+  it('marks untracked files and shows a note instead of hunks when present', () => {
+    const changes = change({
+      files: [untrackedToFileDiff('a.bin', null, { binary: true })]
+    })
+    const text = workingTreeToText(changes)
+    expect(text).toContain('new file: a.bin')
+    expect(text).toContain('(Binary file)')
+  })
+
+  it('uses the old path in the diff header for a rename', () => {
+    const changes = change({
+      files: [{ path: 'new.ts', oldPath: 'old.ts', status: 'renamed', hunks: [], added: 0, removed: 0, binary: false }]
+    })
+    expect(workingTreeToText(changes)).toContain('diff --git a/old.ts b/new.ts')
   })
 })

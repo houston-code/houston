@@ -226,6 +226,33 @@ export function untrackedToFileDiff(
   }
 }
 
+/**
+ * Reconstruct a unified-diff-style text from a parsed {@link WorkingTreeChanges},
+ * for embedding as context in a composer message. Faithful enough for an agent to
+ * read (per-file header, status, and `@@` hunks with +/-/space prefixes); files
+ * with a note (binary / oversized) carry the note in place of hunks.
+ */
+export function workingTreeToText(changes: WorkingTreeChanges): string {
+  const parts: string[] = []
+  for (const f of changes.files) {
+    const oldp = f.oldPath && f.oldPath !== f.path ? f.oldPath : f.path
+    parts.push(`diff --git a/${oldp} b/${f.path}`)
+    parts.push(f.status === 'untracked' ? `new file: ${f.path}` : `${f.status}: ${f.path}`)
+    if (f.note) {
+      parts.push(`(${f.note})`)
+      continue
+    }
+    for (const h of f.hunks) {
+      parts.push(h.header)
+      for (const line of h.lines) {
+        const prefix = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '
+        parts.push(prefix + line.text)
+      }
+    }
+  }
+  return parts.join('\n')
+}
+
 /** Sum added / removed across files. */
 export function totalStat(files: FileDiff[]): { added: number; removed: number } {
   let added = 0

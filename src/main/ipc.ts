@@ -1,4 +1,4 @@
-import { ipcMain, dialog, app, BrowserWindow } from 'electron'
+import { ipcMain, dialog, app, BrowserWindow, clipboard } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
@@ -18,7 +18,9 @@ import {
   MAX_IMPORT_BYTES
 } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
-import { sanitizeAttachments } from '@shared/images'
+import { sanitizeAttachments, exceedsImageSizeLimit } from '@shared/images'
+import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
+import { readPickedFile } from './pickedFiles'
 import { checkForUpdates, takePendingWhatsNew } from './updater'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { getIntegrations } from './integrations'
@@ -188,6 +190,32 @@ export function registerIpc(): void {
       return findFiles(root, typeof query === 'string' ? query : '')
     }
   )
+
+  // Composer "+" menu: pick files in a native dialog and return their (capped)
+  // text contents as context for the next message. A user gesture, so any path is
+  // allowed; reads are bounded and binary files come back with contents omitted.
+  ipcMain.handle(IPC.attachmentPickFiles, async (event): Promise<PickedFile[]> => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Attach files',
+      properties: ['openFile', 'multiSelections']
+    })
+    if (result.canceled || result.filePaths.length === 0) return []
+    return result.filePaths.slice(0, MAX_ATTACHMENT_FILES).map(readPickedFile)
+  })
+
+  // Composer "+" menu: read the clipboard (text + image) on demand. The image is
+  // re-encoded to PNG and dropped if it exceeds the per-image cap.
+  ipcMain.handle(IPC.clipboardRead, (): ClipboardContent => {
+    const text = clipboard.readText()
+    const img = clipboard.readImage()
+    let image: ClipboardContent['image'] = null
+    if (!img.isEmpty()) {
+      const data = img.toPNG().toString('base64')
+      if (data && !exceedsImageSizeLimit(data)) image = { mediaType: 'image/png', data }
+    }
+    return { text: typeof text === 'string' ? text : '', image }
+  })
 
   // Git repo info for the "new chat in a worktree" picker: main worktree root,
   // current branch, and local branches to pick a base from. Read-only; a non-repo

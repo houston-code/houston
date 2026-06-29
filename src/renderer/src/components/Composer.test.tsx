@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Command } from '@shared/commands'
 import { Composer } from './Composer'
 
@@ -255,5 +255,195 @@ describe('Composer draft persistence', () => {
 
     render(<Composer {...baseProps({ conversationId: 'c1' })} />)
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
+  })
+})
+
+// Stub window.api for the "+" attachment-menu actions, which call into main.
+type ApiStub = Partial<Window['api']>
+function stubApi(overrides: ApiStub = {}): void {
+  ;(window as unknown as { api: ApiStub }).api = {
+    pickAttachmentFiles: vi.fn().mockResolvedValue([]),
+    readClipboard: vi.fn().mockResolvedValue({ text: '', image: null }),
+    pickDirectory: vi.fn().mockResolvedValue(null),
+    listWorkspaceFiles: vi.fn().mockResolvedValue([]),
+    getWorkingTreeChanges: vi
+      .fn()
+      .mockResolvedValue({ isRepo: true, branch: 'main', files: [], added: 0, removed: 0 }),
+    ...overrides
+  }
+}
+
+describe('Composer + attachment menu', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    stubApi()
+  })
+  afterEach(() => {
+    delete (window as unknown as { api?: ApiStub }).api
+  })
+
+  const openMenu = (): void => {
+    fireEvent.click(screen.getByRole('button', { name: 'Add attachment' }))
+  }
+
+  it('toggles the menu and lists the attachment actions', () => {
+    render(<Composer {...baseProps()} />)
+    expect(screen.queryByRole('menuitem')).not.toBeInTheDocument()
+
+    openMenu()
+    expect(screen.getByRole('menuitem', { name: /Upload images/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Attach files/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Reference a file/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Paste from clipboard/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Add a link/ })).toBeInTheDocument()
+
+    openMenu() // toggles closed
+    expect(screen.queryByRole('menuitem')).not.toBeInTheDocument()
+  })
+
+  it('hides the image actions when the model has no vision', () => {
+    render(<Composer {...baseProps({ vision: false })} />)
+    expect(screen.queryByRole('button', { name: 'Attach image' })).not.toBeInTheDocument()
+    openMenu()
+    expect(screen.queryByRole('menuitem', { name: /Upload images/ })).not.toBeInTheDocument()
+  })
+
+  it('disables "Add current changes" without a workspace', () => {
+    render(<Composer {...baseProps({ workspace: null })} />)
+    openMenu()
+    expect(screen.getByRole('menuitem', { name: /Add current changes/ })).toBeDisabled()
+  })
+
+  it('"Reference a file" inserts an @ into the field', () => {
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reference a file/ }))
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('@')
+  })
+
+  it('attaches a picked file and embeds its contents in the sent message', async () => {
+    stubApi({
+      pickAttachmentFiles: vi.fn().mockResolvedValue([
+        { path: '/p/foo.ts', name: 'foo.ts', bytes: 11, content: 'const x = 1', truncated: false, binary: false }
+      ])
+    })
+    const props = baseProps()
+    render(<Composer {...props} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Attach files/ }))
+
+    await screen.findByText('foo.ts') // chip appears
+
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'look at this' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(props.onSend).toHaveBeenCalledTimes(1)
+    const [sent, images] = vi.mocked(props.onSend).mock.calls[0]
+    expect(sent).toContain('look at this')
+    expect(sent).toContain('File: foo.ts')
+    expect(sent).toContain('const x = 1')
+    expect(images).toBeUndefined()
+  })
+
+  it('removes a context chip before sending', async () => {
+    stubApi({
+      pickAttachmentFiles: vi.fn().mockResolvedValue([
+        { path: '/p/foo.ts', name: 'foo.ts', bytes: 1, content: 'x', truncated: false, binary: false }
+      ])
+    })
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Attach files/ }))
+    await screen.findByText('foo.ts')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove foo.ts' }))
+    expect(screen.queryByText('foo.ts')).not.toBeInTheDocument()
+  })
+
+  it('adds a link via the inline form and sends it as context', async () => {
+    const props = baseProps()
+    render(<Composer {...props} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Add a link/ }))
+
+    const url = screen.getByLabelText('Link URL')
+    fireEvent.change(url, { target: { value: 'example.com/docs' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    await screen.findByText('https://example.com/docs') // chip label, scheme added
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    expect(props.onSend).toHaveBeenCalledWith('Link: https://example.com/docs', undefined)
+  })
+
+  it('pastes clipboard text into the field', async () => {
+    stubApi({ readClipboard: vi.fn().mockResolvedValue({ text: 'pasted text', image: null }) })
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Paste from clipboard/ }))
+
+    await waitFor(() =>
+      expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('pasted text')
+    )
+  })
+
+  it('attaches the working-tree diff and embeds it on send', async () => {
+    stubApi({
+      getWorkingTreeChanges: vi.fn().mockResolvedValue({
+        isRepo: true,
+        branch: 'main',
+        added: 1,
+        removed: 0,
+        files: [
+          {
+            path: 'a.ts',
+            status: 'modified',
+            hunks: [{ header: '@@ -1 +1,2 @@', lines: [{ type: 'add', text: 'new line' }] }],
+            added: 1,
+            removed: 0,
+            binary: false
+          }
+        ]
+      })
+    })
+    const props = baseProps({ workspace: '/repo' })
+    render(<Composer {...props} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Add current changes/ }))
+
+    await screen.findByText('Uncommitted changes')
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+
+    const [sent] = vi.mocked(props.onSend).mock.calls[0]
+    expect(sent).toContain('Uncommitted changes on branch main')
+    expect(sent).toContain('+new line')
+  })
+
+  it('flashes a notice when there are no uncommitted changes', async () => {
+    stubApi({
+      getWorkingTreeChanges: vi
+        .fn()
+        .mockResolvedValue({ isRepo: true, branch: 'main', files: [], added: 0, removed: 0 })
+    })
+    render(<Composer {...baseProps({ workspace: '/repo' })} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Add current changes/ }))
+    expect(await screen.findByText('No uncommitted changes')).toBeInTheDocument()
+  })
+
+  it('uploads an image through the file input and sends it', async () => {
+    const props = baseProps()
+    const { container } = render(<Composer {...props} />)
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['x'], 'shot.png', { type: 'image/png' })
+    fireEvent.change(fileInput, { target: { files: [file] } })
+
+    await screen.findByAltText('attachment')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    const [sent, images] = vi.mocked(props.onSend).mock.calls[0]
+    expect(sent).toBe('')
+    expect(images).toEqual([expect.objectContaining({ mediaType: 'image/png' })])
   })
 })
