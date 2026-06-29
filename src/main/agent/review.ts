@@ -415,7 +415,6 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const diffContext = inputs.join('\n\n').slice(0, MAX_DIFF_CHARS)
   const footer =
     'Once you have addressed the confirmed findings, run review_changes again to confirm the fixes and surface anything the changes introduced.'
-  const dims = dimsLabel
 
   // High effort: verify each finding independently by majority vote of skeptics.
   // Falls back to the single-verifier path if the reports don't parse into findings.
@@ -461,10 +460,10 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       const tally = `Confirmed ${confirmed.length} of ${toVerify.length} candidate findings (each checked by ${VOTES_PER_FINDING} independent verifiers).`
 
       if (confirmed.length === 0) {
-        const clean = `Adversarial review (${dims}) — no findings survived independent verification. ${tally}`
+        const clean = `Adversarial review (${dimsLabel}) — no findings survived independent verification. ${tally}`
         return assemble(clean, notes.length ? notes.join('\n') : null, costLine())
       }
-      const header = `Adversarial review of the current changes (${dims}), each finding independently verified by ${VOTES_PER_FINDING} skeptics:`
+      const header = `Adversarial review of the current changes (${dimsLabel}), each finding independently verified by ${VOTES_PER_FINDING} skeptics:`
       const list = confirmed.map((f) => f.text).join('\n\n')
       return assemble(header, list, tally, ...notes, footer, costLine())
     }
@@ -483,7 +482,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   })
   sub({ id: 'verify', label: 'Verified findings', status: 'done' })
 
-  const header = `Adversarial review of the current changes (${dims}), each candidate finding verified in a separate context:`
+  const header = `Adversarial review of the current changes (${dimsLabel}), each candidate finding verified in a separate context:`
   const body = verified.trim() || '[verifier returned no output]'
   return assemble(header, body, ...notes, footer, costLine())
 }
