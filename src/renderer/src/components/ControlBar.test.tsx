@@ -51,7 +51,7 @@ function baseProps() {
     newChat: false,
     repoInfo: null as RepoInfo | null,
     worktreeMode: true,
-    branchName: 'houston/swift-otter',
+    branchName: 'swift-otter',
     baseBranch: 'main',
     currentWorktree: null,
     onToggleWorktree: vi.fn(),
@@ -136,9 +136,7 @@ describe('ControlBar', () => {
 
   it('shows the branch name + base controls for a new chat in a repo, defaulting worktree on', () => {
     render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />)
-    expect((screen.getByLabelText('New branch name') as HTMLInputElement).value).toBe(
-      'houston/swift-otter'
-    )
+    expect((screen.getByLabelText('New branch name') as HTMLInputElement).value).toBe('swift-otter')
     expect((screen.getByLabelText('Base branch') as HTMLSelectElement).value).toBe('main')
   })
 

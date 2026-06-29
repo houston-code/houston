@@ -9,11 +9,11 @@ import { isSafeGitRef } from '@shared/git'
 const ADJECTIVES = ['swift', 'bright', 'calm', 'bold', 'keen', 'brave', 'lucid', 'eager']
 const NOUNS = ['otter', 'falcon', 'maple', 'comet', 'harbor', 'cedar', 'quartz', 'meadow']
 
-/** A friendly, editable default branch name like `houston/swift-otter`. */
+/** A friendly, editable default branch name like `swift-otter`. */
 export function suggestBranch(): string {
   const a = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
   const n = NOUNS[Math.floor(Math.random() * NOUNS.length)]
-  return `houston/${a}-${n}`
+  return `${a}-${n}`
 }
 
 /**

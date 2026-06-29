@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { suggestBranch, branchNameError } from './worktree'
 
 describe('suggestBranch', () => {
-  it('produces a houston/<adjective>-<noun> branch name', () => {
-    expect(suggestBranch()).toMatch(/^houston\/[a-z]+-[a-z]+$/)
+  it('produces an <adjective>-<noun> branch name (no path prefix)', () => {
+    expect(suggestBranch()).toMatch(/^[a-z]+-[a-z]+$/)
   })
 })
 
