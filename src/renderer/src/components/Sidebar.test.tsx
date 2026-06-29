@@ -105,6 +105,25 @@ describe('Sidebar — expanded rendering', () => {
     expect(within(beta).queryByLabelText('Running')).not.toBeInTheDocument()
   })
 
+  it('reserves the running-dot slot on every row so the title never shifts', () => {
+    const props = baseProps({
+      conversations: [
+        makeConv({ id: 'a', title: 'Alpha' }),
+        makeConv({ id: 'b', title: 'Beta' })
+      ],
+      runningIds: new Set(['a'])
+    })
+    render(<Sidebar {...props} />)
+
+    // Both rows carry the dot element; only the running one is marked active.
+    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
+    expect(alpha.querySelector('.conv__running')).not.toBeNull()
+    expect(beta.querySelector('.conv__running')).not.toBeNull()
+    expect(alpha.querySelector('.conv__running')).toHaveAttribute('data-running')
+    expect(beta.querySelector('.conv__running')).not.toHaveAttribute('data-running')
+  })
+
   it('shows no running indicator when nothing is running', () => {
     const props = baseProps({
       conversations: [makeConv({ id: 'a', title: 'Alpha' })]

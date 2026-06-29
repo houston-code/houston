@@ -218,9 +218,15 @@ function ConvRow({
       onDragEnd={() => setDragging(false)}
       onClick={() => !renaming && props.onSelect(conv.id)}
     >
-      {props.runningIds.has(conv.id) && (
-        <span className="conv__running" role="img" aria-label="Running" title="Running" />
-      )}
+      {/* The dot's slot is always present so the title never shifts when a run
+          starts/stops; only its visibility (and accessible name) toggle. */}
+      <span
+        className="conv__running"
+        data-running={props.runningIds.has(conv.id) ? '' : undefined}
+        {...(props.runningIds.has(conv.id)
+          ? { role: 'img', 'aria-label': 'Running', title: 'Running' }
+          : { 'aria-hidden': true })}
+      />
       {conv.pinned && <span className="conv__pin" title="Pinned">★</span>}
       <div className="conv__main">
         {renaming ? (
