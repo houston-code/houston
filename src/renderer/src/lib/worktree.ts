@@ -8,12 +8,21 @@ import { isSafeGitRef } from '@shared/git'
 
 const ADJECTIVES = ['swift', 'bright', 'calm', 'bold', 'keen', 'brave', 'lucid', 'eager']
 const NOUNS = ['otter', 'falcon', 'maple', 'comet', 'harbor', 'cedar', 'quartz', 'meadow']
+const SUFFIX_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
 
-/** A friendly, editable default branch name like `houston/swift-otter`. */
+/**
+ * A friendly, editable default branch name like `swift-otter-78dj6e`. The
+ * 6-char random suffix keeps suggestions unique so two new chats don't collide
+ * on the same branch/worktree.
+ */
 export function suggestBranch(): string {
   const a = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
   const n = NOUNS[Math.floor(Math.random() * NOUNS.length)]
-  return `houston/${a}-${n}`
+  const suffix = Array.from(
+    { length: 6 },
+    () => SUFFIX_CHARS[Math.floor(Math.random() * SUFFIX_CHARS.length)]
+  ).join('')
+  return `${a}-${n}-${suffix}`
 }
 
 /**
