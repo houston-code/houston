@@ -2,8 +2,15 @@ import { describe, it, expect } from 'vitest'
 import { suggestBranch, branchNameError } from './worktree'
 
 describe('suggestBranch', () => {
-  it('produces an <adjective>-<noun> branch name (no path prefix)', () => {
-    expect(suggestBranch()).toMatch(/^[a-z]+-[a-z]+$/)
+  it('produces an <adjective>-<noun>-<suffix> branch name (no path prefix)', () => {
+    expect(suggestBranch()).toMatch(/^[a-z]+-[a-z]+-[a-z0-9]{6}$/)
+  })
+
+  it('varies the random suffix between calls', () => {
+    const suffix = (b: string): string => b.split('-')[2]
+    const suffixes = new Set(Array.from({ length: 20 }, () => suffix(suggestBranch())))
+    // 20 draws from 36^6 should never all collide.
+    expect(suffixes.size).toBeGreaterThan(1)
   })
 })
 
