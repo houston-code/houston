@@ -89,10 +89,13 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 ## Deferred — polish
 
 - **Clickable file paths in the transcript.** Linkify `path:line` references in the
-  agent's replies so a click opens the file. *Why deferred:* doing it well needs
-  reliable path-detection in prose (to avoid false positives), an open-in-editor
-  IPC with an editor preference, and changes to the actively-evolving Markdown /
-  tool-row renderers — more than a polish pass.
+  agent's replies so a click opens the file. The open-in-editor plumbing now exists
+  (each chat's ⋯ menu has an "Open in" submenu that launches the chat's working
+  directory in VS Code / Cursor / Windsurf / Zed / Xcode, or reveals it in the file
+  manager), so the remaining work is per-file/line opens from the transcript. *Why
+  still deferred:* doing it well needs reliable path-detection in prose (to avoid
+  false positives) and changes to the actively-evolving Markdown / tool-row
+  renderers — more than a polish pass.
 
 - **`.gitignore`-aware search & `glob`.** Neither `search_files` nor `glob` honors
   a project's `.gitignore`: both skip a fixed set (`node_modules`, `.git`,

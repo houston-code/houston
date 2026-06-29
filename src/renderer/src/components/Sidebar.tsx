@@ -1,14 +1,17 @@
 import { Fragment, useEffect, useRef, useState, type DragEvent } from 'react'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
+import type { EditorId, EditorStatus } from '@shared/editors'
 import {
   buildSidebarSections,
   dropIndexForY,
   reorderedIds,
   type SidebarSection
 } from '../lib/chatGroups'
+import { listEditors, fileManagerName } from '../lib/editors'
 import { Icon } from './Icon'
 import { Popover } from './Popover'
+import { MenuExpander } from './MenuExpander'
 
 /**
  * Custom drag payload carried when a chat row is dragged onto a group. A
@@ -101,6 +104,69 @@ function InlineEdit({
   )
 }
 
+/**
+ * The "Open in" expander inside a chat's ⋯ menu: opens the chat's working directory
+ * in a detected editor (VS Code / Cursor / Windsurf / Zed / Xcode) or reveals it in
+ * the file manager. Only editors found on this machine are listed. A launch failure
+ * keeps the menu open and shows why (the mouse is still over the submenu).
+ */
+function OpenInSubmenu({
+  workspace,
+  editors,
+  onDone
+}: {
+  workspace: string
+  editors: EditorStatus[] | null
+  onDone: () => void
+}): JSX.Element {
+  const [error, setError] = useState<string | null>(null)
+  const available = (editors ?? []).filter((e) => e.available)
+
+  const openIn = (id: EditorId): void => {
+    setError(null)
+    void Promise.resolve(window.api?.openInEditor?.(id, workspace)).then((r) => {
+      if (r?.ok) onDone()
+      else setError(r?.error ?? 'Could not open the editor.')
+    })
+  }
+  const reveal = (): void => {
+    setError(null)
+    void Promise.resolve(window.api?.revealInFileManager?.(workspace)).then((r) => {
+      if (r?.ok) onDone()
+      else setError(r?.error ?? 'Could not reveal the folder.')
+    })
+  }
+
+  return (
+    <MenuExpander label="Open in">
+      {editors === null ? (
+        <div className="menu__note">Checking…</div>
+      ) : (
+        <>
+          {available.map((e) => (
+            <button
+              key={e.id}
+              className="menu__item menu__item--indent"
+              onClick={() => openIn(e.id)}
+            >
+              {e.label}
+            </button>
+          ))}
+          <button className="menu__item menu__item--indent" onClick={reveal}>
+            Reveal in {fileManagerName()}
+          </button>
+          {available.length === 0 && <div className="menu__note">No editors detected</div>}
+          {error && (
+            <div className="menu__note menu__note--error" role="alert">
+              {error}
+            </div>
+          )}
+        </>
+      )}
+    </MenuExpander>
+  )
+}
+
 function ConvRow({
   conv,
   active,
@@ -122,8 +188,19 @@ function ConvRow({
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
+  // Editors are probed lazily the first time this row's menu opens (null = not yet).
+  const [editors, setEditors] = useState<EditorStatus[] | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
   const close = (): void => setMenuOpen(false)
+  const toggleMenu = (): void => {
+    const next = !menuOpen
+    setMenuOpen(next)
+    // Probe editors only when the bridge is actually present (it always is in the
+    // app; guarding keeps unrelated tests from triggering an async state update).
+    if (next && editors === null && typeof window.api?.listEditors === 'function') {
+      void listEditors().then(setEditors)
+    }
+  }
 
   return (
     <div
@@ -181,7 +258,7 @@ function ConvRow({
           title="More"
           onClick={(e) => {
             e.stopPropagation()
-            setMenuOpen((v) => !v)
+            toggleMenu()
           }}
         >
           ⋯
@@ -233,6 +310,7 @@ function ConvRow({
               )}
             </button>
             <div className="menu__sep" />
+            <OpenInSubmenu workspace={conv.workspace} editors={editors} onDone={close} />
             <div className="menu__label">Move to</div>
             {groups.map((g) => (
               <button

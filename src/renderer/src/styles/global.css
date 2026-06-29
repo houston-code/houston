@@ -640,6 +640,42 @@ body.is-resizing {
   background: var(--border);
   margin: 4px 2px;
 }
+/* Expand-on-highlight submenu: a single row that reveals nested options on hover or
+   keyboard focus, keeping a long menu compact. Pure CSS so it never flickers. */
+.menu__item--expander {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.menu__expander-caret {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  transition: transform 0.12s ease;
+}
+.menu__expander:hover > .menu__item--expander .menu__expander-caret,
+.menu__expander:focus-within > .menu__item--expander .menu__expander-caret {
+  transform: rotate(90deg);
+}
+.menu__submenu {
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+}
+.menu__expander:hover > .menu__submenu,
+.menu__expander:focus-within > .menu__submenu {
+  display: flex;
+}
+/* Inert info lines inside a menu (e.g. "Checking…", "No editors detected"). */
+.menu__note {
+  padding: 6px 9px 6px 18px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.menu__note--error {
+  color: var(--danger);
+}
 
 /* ---- Model picker menu ---- */
 .model-menu {
