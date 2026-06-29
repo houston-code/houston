@@ -670,6 +670,11 @@ body.is-resizing {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* Plain rows fill the menu via its flex `align-items: stretch`, but this button
+     sits inside the .menu__expander wrapper, so it'd otherwise shrink to its content
+     (a <button>'s auto width) — leaving the caret mid-row and the rest of the row a
+     dead zone. Fill the row so the caret reaches the end and the whole row is live. */
+  width: 100%;
 }
 .menu__expander-caret {
   flex-shrink: 0;

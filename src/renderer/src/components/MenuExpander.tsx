@@ -93,7 +93,12 @@ export function MenuExpander({
     if (!menu) return
     // Refs + setOpen only (all stable) so the effect's only dependency is `open`.
     const onOver = (e: Event): void => {
-      if (wrapRef.current?.contains(e.target as Node)) return
+      const target = e.target as HTMLElement | null
+      if (!target || wrapRef.current?.contains(target)) return
+      // Close only when the pointer reaches another *row* — not the menu's own
+      // padding/chrome between this row and the card, so the move from row to card
+      // stays continuous.
+      if (!target.closest('.menu__item')) return
       if (openTimer.current) clearTimeout(openTimer.current)
       if (closeTimer.current) clearTimeout(closeTimer.current)
       openTimer.current = null
