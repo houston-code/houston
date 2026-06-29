@@ -1,13 +1,14 @@
 import { BackgroundTasks } from './BackgroundTasks'
 import type { BackgroundTask } from '../hooks/useBackgroundTasks'
+import { Icon } from './Icon'
 
 /**
  * A slim, draggable strip at the top of the main pane. With the window's
  * `hiddenInset` traffic lights it keeps the top of the window draggable (the
  * sidebar covers the left), and shows the current chat's title for context now
  * that the model/mode controls live in the bottom bar. Top-right actions show
- * background tasks, open the working-tree diff panel, and toggle the integrated
- * terminal.
+ * background tasks, open the Files browser and working-tree diff panel, toggle
+ * the preview panel, and toggle the integrated terminal.
  */
 export function Titlebar({
   title,
@@ -15,6 +16,7 @@ export function Titlebar({
   onSelectTask,
   onClearFinishedTasks,
   changes,
+  onShowFiles,
   onShowChanges,
   onTogglePreview,
   previewOpen,
@@ -29,6 +31,7 @@ export function Titlebar({
   onClearFinishedTasks?: () => void
   /** Working-tree change counts; highlights the Changes button and shows a +/− badge. */
   changes?: { fileCount: number; added: number; removed: number }
+  onShowFiles?: () => void
   onShowChanges?: () => void
   onTogglePreview?: () => void
   previewOpen?: boolean
@@ -61,6 +64,16 @@ export function Titlebar({
             {!!previewCount && previewCount > 0 && (
               <span className="titlebar__badge">{previewCount}</span>
             )}
+          </button>
+        )}
+        {onShowFiles && (
+          <button
+            type="button"
+            className="titlebar__action"
+            onClick={onShowFiles}
+            title="Browse the project's files"
+          >
+            <Icon name="folder" /> Files
           </button>
         )}
         {onShowChanges && (
