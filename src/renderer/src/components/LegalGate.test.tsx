@@ -17,6 +17,23 @@ describe('LegalGate', () => {
     expect(screen.getByText(/data residency is your call/i)).toBeInTheDocument()
   })
 
+  it('shows first-run copy by default (not the updated-terms wording)', () => {
+    render(<LegalGate onAccept={() => {}} />)
+    expect(screen.getByText(/before you use houston/i)).toBeInTheDocument()
+    expect(screen.queryByText(/have been updated/i)).not.toBeInTheDocument()
+  })
+
+  it('shows updated-terms copy when isUpdate is set', () => {
+    render(<LegalGate onAccept={() => {}} isUpdate />)
+    expect(screen.getByText(/houston’s terms have been updated/i)).toBeInTheDocument()
+    expect(screen.getByText(/we’ve updated houston’s terms/i)).toBeInTheDocument()
+    expect(screen.queryByText(/before you use houston/i)).not.toBeInTheDocument()
+    // Disclaimers, links, and the accept button are unchanged in update mode.
+    expect(screen.getByText(/no liability/i)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /terms of use/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /i agree/i })).toBeInTheDocument()
+  })
+
   it('links to the full Terms, Privacy Policy, and License', () => {
     render(<LegalGate onAccept={() => {}} />)
     expect(screen.getByRole('link', { name: /terms of use/i })).toHaveAttribute('href', TERMS_URL)

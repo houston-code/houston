@@ -120,6 +120,24 @@ export function resolveHeadlessModel(
   return { error: 'No model configured. Set one in the app, or pass --provider/--model.' }
 }
 
+/**
+ * The stderr message shown when a headless run is blocked on legal acceptance.
+ * `isUpdate` is true when the user accepted an earlier terms version and is being
+ * asked to re-accept after a change (vs. a fresh first run). Exported for tests.
+ */
+export function legalAcceptanceMessage(isUpdate: boolean): string {
+  const lead = isUpdate
+    ? 'Houston’s Terms of Use, Privacy Policy, and License have been updated and must be re-accepted before using headless mode.\n'
+    : 'You must accept the Houston Terms of Use, Privacy Policy, and License before using headless mode.\n'
+  return (
+    lead +
+    `  Terms:   ${TERMS_URL}\n` +
+    `  Privacy: ${PRIVACY_URL}\n` +
+    `  License: ${LICENSE_URL}\n` +
+    'Re-run with --accept-terms to accept (recorded once; later runs won’t ask).\n'
+  )
+}
+
 export interface HeadlessDeps {
   getSettings: () => AppSettings
   /** Persist acceptance of the current legal terms (sets legalAcceptedVersion). */
@@ -145,16 +163,11 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
   // Legal gate: the GUI shows a blocking acceptance dialog on first run; headless
   // has no UI, so it requires --accept-terms once. Acceptance is then persisted,
   // so later runs (and the GUI) don't ask again. Exit code 2 distinguishes
-  // "terms not accepted" from a normal run failure (1).
+  // "terms not accepted" from a normal run failure (1). A non-zero stored version
+  // means the terms changed since they last accepted (vs. a fresh first run).
   if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
     if (!opts.acceptTerms) {
-      deps.err(
-        'You must accept the Houston Terms of Use, Privacy Policy, and License before using headless mode.\n' +
-          `  Terms:   ${TERMS_URL}\n` +
-          `  Privacy: ${PRIVACY_URL}\n` +
-          `  License: ${LICENSE_URL}\n` +
-          'Re-run with --accept-terms to accept (recorded once; later runs won’t ask).\n'
-      )
+      deps.err(legalAcceptanceMessage((settings.legalAcceptedVersion ?? 0) > 0))
       return 2
     }
     deps.recordLegalAcceptance()
