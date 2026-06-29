@@ -376,10 +376,11 @@ export default function App(): JSX.Element {
       // Fetch the persisted conversation and any live run for it together, so the
       // reset + adopt below happen back-to-back in one render (no flicker where the
       // composer shows Send for a conversation whose run is still going).
-      const [conv, activeRunId, pendingPrompts] = await Promise.all([
+      const [conv, activeRunId, pendingPrompts, checkpoint] = await Promise.all([
         window.api.getConversation(id),
         window.api.getActiveRun(id),
-        window.api.getPendingPrompts(id)
+        window.api.getPendingPrompts(id),
+        window.api.getCheckpoint(id)
       ])
       if (!conv) return
       setCurrentId(id)
@@ -406,6 +407,9 @@ export default function App(): JSX.Element {
       // Replaying pendingPrompts re-renders any approval/question that was still
       // awaiting the user, so a run parked on a prompt isn't left wedged.
       if (activeRunId) chat.adopt(activeRunId, pendingPrompts)
+      // Restore the revert/redo affordance for the conversation's latest turn — the
+      // checkpoint state is built only from live events and lost on a reset/rebuild.
+      chat.seedCheckpoint(checkpoint)
     },
     [chat]
   )

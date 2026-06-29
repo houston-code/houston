@@ -191,6 +191,14 @@ const api = {
   /** Re-apply a reverted run's file changes. Returns the number of files re-applied. */
   reapplyCheckpoint: (runId: string): Promise<number> =>
     ipcRenderer.invoke(IPC.checkpointReapply, runId),
+  /**
+   * The revertable checkpoint for a conversation's latest run, or null. Fetched on
+   * re-open so the revert/redo affordance survives a transcript rebuild.
+   */
+  getCheckpoint: (
+    conversationId: string
+  ): Promise<{ runId: string; files: number; reverted: boolean } | null> =>
+    ipcRenderer.invoke(IPC.checkpointGet, conversationId),
   /** Subscribe to streamed agent events. Returns an unsubscribe function. */
   onAgentEvent: (cb: (e: AgentEvent) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, payload: AgentEvent): void => cb(payload)

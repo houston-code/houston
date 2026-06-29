@@ -26,6 +26,12 @@ interface FileSnapshot {
 interface Checkpoint {
   workspace: string
   files: Map<string, FileSnapshot>
+  /**
+   * Whether this turn's changes are currently reverted (so a re-opened conversation
+   * shows "redo" rather than "revert"). Tracked here, not just in the renderer,
+   * so {@link getConversationCheckpoint} can restore the right state on re-adopt.
+   */
+  reverted: boolean
 }
 
 /** Don't snapshot files larger than this (a revert of a huge file isn't worth the memory). */
@@ -34,6 +40,21 @@ const MAX_SNAPSHOT_BYTES = 5_000_000
 const MAX_CHECKPOINTS = 50
 
 const checkpoints = new Map<string, Checkpoint>()
+
+/**
+ * The most recent run on each conversation, so the revert/redo affordance can be
+ * restored when the conversation is re-opened (the renderer's checkpoint state is
+ * otherwise rebuilt only from live events, which a transcript rebuild discards).
+ * Only the latest turn is ever revertable — a new run replaces the entry — which
+ * mirrors the renderer clearing the checkpoint when the next turn starts. In
+ * memory for the session, like the checkpoints themselves.
+ */
+const lastRunByConversation = new Map<string, string>()
+
+/** Remember the run currently/most-recently executing on a conversation. */
+export function noteConversationRun(conversationId: string, runId: string): void {
+  lastRunByConversation.set(conversationId, runId)
+}
 
 function resolveOrNull(roots: string[], relPath: string): string | null {
   try {
@@ -80,7 +101,7 @@ export async function recordOriginal(runId: string, roots: string[], relPath: st
       if (oldest === undefined) break
       checkpoints.delete(oldest)
     }
-    cp = { workspace: roots[0], files: new Map() }
+    cp = { workspace: roots[0], files: new Map(), reverted: false }
     checkpoints.set(runId, cp)
   }
   if (cp.files.has(abs)) return
@@ -118,6 +139,22 @@ export function checkpointFileCount(runId: string): number {
 }
 
 /**
+ * The revertable checkpoint for a conversation's most recent run, or null when its
+ * latest turn changed no files (nothing to revert) or its snapshots were evicted.
+ * The renderer fetches this when re-opening a conversation to restore the
+ * revert/redo affordance that a transcript rebuild would otherwise drop.
+ */
+export function getConversationCheckpoint(
+  conversationId: string
+): { runId: string; files: number; reverted: boolean } | null {
+  const runId = lastRunByConversation.get(conversationId)
+  if (!runId) return null
+  const cp = checkpoints.get(runId)
+  if (!cp || cp.files.size === 0) return null
+  return { runId, files: cp.files.size, reverted: cp.reverted }
+}
+
+/**
  * Restore every file in a run's checkpoint to its pre-turn state. Returns the
  * number of files restored. The checkpoint is kept so the change can be redone.
  */
@@ -133,6 +170,7 @@ export async function restoreCheckpoint(runId: string): Promise<number> {
       // Best effort — keep going with the rest.
     }
   }
+  cp.reverted = true
   return restored
 }
 
@@ -154,10 +192,12 @@ export async function reapplyCheckpoint(runId: string): Promise<number> {
       // Best effort — keep going with the rest.
     }
   }
+  cp.reverted = false
   return reapplied
 }
 
 /** Drop all checkpoints (e.g. on app shutdown). */
 export function clearCheckpoints(): void {
   checkpoints.clear()
+  lastRunByConversation.clear()
 }

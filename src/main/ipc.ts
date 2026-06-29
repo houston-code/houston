@@ -39,7 +39,7 @@ import {
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, type DrainIO } from './agent/drain'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
-import { restoreCheckpoint, reapplyCheckpoint } from './agent/checkpoints'
+import { restoreCheckpoint, reapplyCheckpoint, getConversationCheckpoint } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
 import { setTerminalFocused } from './menu'
 import { compactConversationNow } from './agent/compact'
@@ -602,6 +602,15 @@ export function registerIpc(): void {
   // Re-apply a reverted run's file changes (restore each touched file to its post-turn state).
   ipcMain.handle(IPC.checkpointReapply, (_event, runId: string): Promise<number> =>
     reapplyCheckpoint(runId)
+  )
+
+  // The revertable checkpoint for a conversation's latest run (or null). The renderer
+  // fetches this when re-opening a conversation so the revert/redo affordance — built
+  // only from live events otherwise — survives a transcript rebuild.
+  ipcMain.handle(
+    IPC.checkpointGet,
+    (_event, conversationId: string): { runId: string; files: number; reverted: boolean } | null =>
+      getConversationCheckpoint(conversationId)
   )
 
   // ---- Integrated terminal (PTY-backed) ----

@@ -8,6 +8,8 @@ import {
   restoreCheckpoint,
   reapplyCheckpoint,
   checkpointFileCount,
+  getConversationCheckpoint,
+  noteConversationRun,
   clearCheckpoints
 } from './checkpoints'
 
@@ -184,6 +186,64 @@ describe('checkpoints', () => {
       // The oldest (run-0) should have been evicted; the newest retained.
       expect(checkpointFileCount('run-0')).toBe(0)
       expect(checkpointFileCount('run-50')).toBe(1)
+    })
+  })
+
+  describe('getConversationCheckpoint (restore the revert/redo affordance on re-open)', () => {
+    it('returns the latest run checkpoint with file count and reverted=false', async () => {
+      noteConversationRun('conv1', 'run-a')
+      writeFileSync(join(ws, 'a.txt'), 'original')
+      await recordOriginal('run-a', [ws], 'a.txt')
+      writeFileSync(join(ws, 'a.txt'), 'modified')
+      await recordResult('run-a', [ws], 'a.txt')
+
+      expect(getConversationCheckpoint('conv1')).toEqual({ runId: 'run-a', files: 1, reverted: false })
+    })
+
+    it('reflects reverted state across restore and reapply', async () => {
+      noteConversationRun('conv1', 'run-a')
+      writeFileSync(join(ws, 'a.txt'), 'original')
+      await recordOriginal('run-a', [ws], 'a.txt')
+      writeFileSync(join(ws, 'a.txt'), 'modified')
+      await recordResult('run-a', [ws], 'a.txt')
+
+      await restoreCheckpoint('run-a')
+      expect(getConversationCheckpoint('conv1')?.reverted).toBe(true)
+      await reapplyCheckpoint('run-a')
+      expect(getConversationCheckpoint('conv1')?.reverted).toBe(false)
+    })
+
+    it('returns null for a conversation with no recorded run', () => {
+      expect(getConversationCheckpoint('unknown')).toBeNull()
+    })
+
+    it('returns null when the latest run changed no files (nothing to revert)', () => {
+      noteConversationRun('conv1', 'run-empty')
+      expect(getConversationCheckpoint('conv1')).toBeNull()
+    })
+
+    it('tracks only the latest run — a newer no-op run hides an earlier revertable one', async () => {
+      // run-a wrote a file (revertable)...
+      noteConversationRun('conv1', 'run-a')
+      writeFileSync(join(ws, 'a.txt'), 'original')
+      await recordOriginal('run-a', [ws], 'a.txt')
+      await recordResult('run-a', [ws], 'a.txt')
+      expect(getConversationCheckpoint('conv1')).not.toBeNull()
+
+      // ...then run-b ran on the same conversation and touched nothing.
+      noteConversationRun('conv1', 'run-b')
+      expect(getConversationCheckpoint('conv1')).toBeNull()
+    })
+
+    it('is cleared by clearCheckpoints', async () => {
+      noteConversationRun('conv1', 'run-a')
+      writeFileSync(join(ws, 'a.txt'), 'x')
+      await recordOriginal('run-a', [ws], 'a.txt')
+      await recordResult('run-a', [ws], 'a.txt')
+      expect(getConversationCheckpoint('conv1')).not.toBeNull()
+
+      clearCheckpoints()
+      expect(getConversationCheckpoint('conv1')).toBeNull()
     })
   })
 })

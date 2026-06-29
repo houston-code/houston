@@ -38,7 +38,7 @@ import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedErr
 import { isBlockedByPlan, decideApproval } from './approval'
 import { missingToolResults } from './repair'
 import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
-import { recordOriginal, recordResult } from './checkpoints'
+import { recordOriginal, recordResult, noteConversationRun } from './checkpoints'
 import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed } from '../sandbox'
 import { formatFile } from './format'
@@ -301,6 +301,9 @@ export async function startRun(
   runs.set(runId, run)
   if (conversationId) {
     runsByConversation.set(conversationId, runId)
+    // Record this as the conversation's latest run so its checkpoint (the
+    // revert/redo affordance) can be restored if the conversation is re-opened.
+    noteConversationRun(conversationId, runId)
     notifyActiveRunsChanged()
   }
 
