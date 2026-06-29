@@ -240,7 +240,10 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   `gh_pr_*` tools and approval gate, so the panel never drives git itself. It
   opens an independent PR against the default branch, or — when the current branch
   already has an open PR — stacks the new one on top (based on that PR's branch) so
-  its diff shows only the new changes.
+  its diff shows only the new changes. Whenever the working tree has changes, the
+  same **Create PR** action (and a clickable `N changed files +/−` summary that
+  opens the panel) also sits at the top of the composer, so it's one click away
+  without opening the panel first.
 - **Start a chat in its own worktree.** Every new chat in a git repo defaults to
   running in a fresh, isolated worktree on its own branch — so the agent's edits
   never touch your current checkout. Right after the folder picker in the control

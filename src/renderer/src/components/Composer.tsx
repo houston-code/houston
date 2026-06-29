@@ -10,6 +10,8 @@ import {
   type KeyboardEvent
 } from 'react'
 import { Icon, type IconName } from './Icon'
+import { ComposerPrBar } from './ComposerPrBar'
+import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
 import { loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
 import {
@@ -125,6 +127,9 @@ export function Composer({
   commands,
   vision = true,
   lastUserMessage,
+  changes,
+  onShowChanges,
+  onCreatePr,
   onCommand,
   onSend,
   onCancel
@@ -139,6 +144,12 @@ export function Composer({
   vision?: boolean
   /** Text of the most recent user turn — recalled into the field on Esc Esc (empty field). */
   lastUserMessage?: string
+  /** Working-tree change counts; drives the top Create-PR bar (omit to hide it). */
+  changes?: WorkingTreeStats
+  /** Open the Changes panel (clicking the bar's stat chip). */
+  onShowChanges?: () => void
+  /** Hand PR creation to the agent (the bar's Create PR button). */
+  onCreatePr?: () => void
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
   onCancel: () => void
@@ -639,6 +650,14 @@ export function Composer({
   return (
     <div className="composer">
       <div className="composer__card" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+        {changes && onShowChanges && onCreatePr && (
+          <ComposerPrBar
+            changes={changes}
+            onShowChanges={onShowChanges}
+            onCreatePr={onCreatePr}
+            creating={running}
+          />
+        )}
         {(images.length > 0 || context.length > 0) && (
           <div className="composer__attachments">
             {images.map((img, i) => (
