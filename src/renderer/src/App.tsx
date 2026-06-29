@@ -1334,6 +1334,9 @@ export default function App(): JSX.Element {
             commands={commands}
             vision={visionSupported}
             lastUserMessage={lastUserText(chat.items)}
+            changes={workspace ? workingTreeStats : undefined}
+            onShowChanges={() => setChangesOpen(true)}
+            onCreatePr={canChat ? onCreatePr : undefined}
             onCommand={onCommand}
             onSend={onSend}
             onCancel={chat.cancel}
