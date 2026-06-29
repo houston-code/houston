@@ -103,7 +103,15 @@ export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
     // against under `~/.node-gyp` (its "devdir"), so `npm install` of any package
     // with a native build step fails on that write under the sandbox. Redirect the
     // devdir via the npm config env so node-gyp (standalone or via npm) picks it up.
-    npm_config_devdir: join(cache, 'node-gyp')
+    npm_config_devdir: join(cache, 'node-gyp'),
+    // More build toolchains whose caches default under $HOME, so a sandboxed
+    // build/install fails on the cache write. Deno and Bun expose a dedicated
+    // cache-dir env; Gradle only has GRADLE_USER_HOME (cache + config together), so
+    // redirecting it fixes the common case and a user needing `~/.gradle/gradle.
+    // properties` can still set it per command.
+    GRADLE_USER_HOME: join(cache, 'gradle'),
+    DENO_DIR: join(cache, 'deno'),
+    BUN_INSTALL_CACHE_DIR: join(cache, 'bun')
   }
 }
 
