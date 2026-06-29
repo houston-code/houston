@@ -38,6 +38,11 @@ export const IPC = {
   ollamaSupportsTools: 'ollama:supportsTools',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
+  // "Open project in…" — launch an external editor / reveal in the file manager.
+  // A user gesture (not the agent); see main/openInEditor.ts.
+  editorsList: 'editors:list',
+  openInEditor: 'editor:open',
+  revealInFileManager: 'fileManager:reveal',
   // Conversations
   conversationList: 'conversation:list',
   conversationSearch: 'conversation:search',

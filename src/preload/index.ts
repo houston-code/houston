@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
 import type { AppSettings, ApprovalPolicy, IntegrationsInfo, ModelOption } from '@shared/types'
+import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import type {
@@ -51,6 +52,16 @@ const api = {
     ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),
   /** Status of optional integrations (gh CLI, formatters) for the Settings hint. */
   getIntegrations: (): Promise<IntegrationsInfo> => ipcRenderer.invoke(IPC.integrationsGet),
+
+  // "Open project in…" (a user gesture; launches an external editor / file manager)
+  /** Which supported editors can be launched on this machine, for the "Open in…" menu. */
+  listEditors: (): Promise<EditorStatus[]> => ipcRenderer.invoke(IPC.editorsList),
+  /** Open a project folder in an external editor (by editor id). */
+  openInEditor: (editorId: string, dir: string): Promise<OpenResult> =>
+    ipcRenderer.invoke(IPC.openInEditor, editorId, dir),
+  /** Reveal a folder in the OS file manager (Finder / Explorer). */
+  revealInFileManager: (target: string): Promise<OpenResult> =>
+    ipcRenderer.invoke(IPC.revealInFileManager, target),
 
   // Conversations
   listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),

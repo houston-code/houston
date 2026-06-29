@@ -22,6 +22,7 @@ import { sanitizeAttachments } from '@shared/images'
 import { checkForUpdates, takePendingWhatsNew } from './updater'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { getIntegrations } from './integrations'
+import { detectEditors, openProjectInEditor, revealInFileManager } from './openInEditor'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
@@ -240,6 +241,13 @@ export function registerIpc(): void {
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
   ipcMain.handle(IPC.integrationsGet, () => getIntegrations())
+
+  // "Open project in…" — user gesture, launches an external editor / file manager.
+  ipcMain.handle(IPC.editorsList, () => detectEditors())
+  ipcMain.handle(IPC.openInEditor, (_event, editorId: string, dir: string) =>
+    openProjectInEditor(editorId, dir)
+  )
+  ipcMain.handle(IPC.revealInFileManager, (_event, target: string) => revealInFileManager(target))
 
   // Conversations
   ipcMain.handle(IPC.conversationList, () => listConversations())

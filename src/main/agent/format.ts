@@ -58,18 +58,29 @@ export interface BinLookupOptions {
 }
 
 /**
+ * The full path to `bin` if found on PATH or in the standard install dirs, else
+ * null. Pure name (no slash) only — a formatter/editor binary is never an arbitrary
+ * path. Returns the resolved path (not just a boolean) so callers that must *spawn*
+ * the binary work even when launched with a stripped PATH (e.g. from the macOS Dock,
+ * where a shim in /usr/local/bin or /opt/homebrew/bin wouldn't be on PATH).
+ */
+export function resolveBinaryPath(bin: string, opts: BinLookupOptions = {}): string | null {
+  const env = opts.env ?? process.env
+  const exists = opts.exists ?? existsSync
+  if (!bin || bin.includes('/')) return null
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    if (dir && exists(join(dir, bin))) return join(dir, bin)
+  }
+  for (const dir of EXTRA_BIN_DIRS) if (exists(join(dir, bin))) return join(dir, bin)
+  return null
+}
+
+/**
  * Whether `bin` can be found on PATH or in the standard install dirs. Pure name
  * (no slash) only — a formatter binary is never an arbitrary path.
  */
 export function hasBinary(bin: string, opts: BinLookupOptions = {}): boolean {
-  const env = opts.env ?? process.env
-  const exists = opts.exists ?? existsSync
-  if (!bin || bin.includes('/')) return false
-  for (const dir of (env.PATH ?? '').split(delimiter)) {
-    if (dir && exists(join(dir, bin))) return true
-  }
-  for (const dir of EXTRA_BIN_DIRS) if (exists(join(dir, bin))) return true
-  return false
+  return resolveBinaryPath(bin, opts) !== null
 }
 
 /** Lower-cased extension of `path` without the leading dot (empty if none). */

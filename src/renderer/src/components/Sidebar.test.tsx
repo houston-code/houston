@@ -1,5 +1,5 @@
-import { createEvent, fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import { Sidebar, type SidebarProps } from './Sidebar'
@@ -500,6 +500,78 @@ describe('Sidebar — moving chats between groups', () => {
 
     openConvMenu('Alpha')
     expect(screen.queryByText('Remove from group')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — Open in (per-chat menu)', () => {
+  // These tests install a fake editor bridge; clear it so later tests see no api.
+  afterEach(() => {
+    window.api = undefined as unknown as typeof window.api
+  })
+
+  /** Stub the editor bridge the ⋯ menu calls; returns the spies for assertions. */
+  function installEditorApi(available = ['vscode', 'cursor']) {
+    const listEditors = vi.fn(() =>
+      Promise.resolve([
+        { id: 'vscode', label: 'VS Code', available: available.includes('vscode') },
+        { id: 'cursor', label: 'Cursor', available: available.includes('cursor') },
+        { id: 'zed', label: 'Zed', available: available.includes('zed') }
+      ])
+    )
+    const openInEditor = vi.fn(() => Promise.resolve({ ok: true }))
+    const revealInFileManager = vi.fn(() => Promise.resolve({ ok: true }))
+    window.api = { listEditors, openInEditor, revealInFileManager } as unknown as typeof window.api
+    return { listEditors, openInEditor, revealInFileManager }
+  }
+
+  it('opens the chat workspace in a detected editor', async () => {
+    const api = installEditorApi()
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Alpha', workspace: '/Users/me/proj' })]
+    })
+    render(<Sidebar {...props} />)
+
+    openConvMenu('Alpha')
+    await waitFor(() => expect(api.listEditors).toHaveBeenCalled())
+    fireEvent.click(await screen.findByRole('button', { name: 'VS Code' }))
+    await waitFor(() => expect(api.openInEditor).toHaveBeenCalledWith('vscode', '/Users/me/proj'))
+  })
+
+  it('lists only installed editors and a Reveal item', async () => {
+    installEditorApi(['vscode']) // cursor + zed not installed
+    const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
+    render(<Sidebar {...props} />)
+
+    openConvMenu('Alpha')
+    expect(await screen.findByRole('button', { name: 'VS Code' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cursor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Zed' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /reveal in/i })).toBeInTheDocument()
+  })
+
+  it('reveals the chat workspace in the file manager', async () => {
+    const api = installEditorApi([])
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Alpha', workspace: '/Users/me/proj' })]
+    })
+    render(<Sidebar {...props} />)
+
+    openConvMenu('Alpha')
+    fireEvent.click(await screen.findByRole('button', { name: /reveal in/i }))
+    await waitFor(() => expect(api.revealInFileManager).toHaveBeenCalledWith('/Users/me/proj'))
+  })
+
+  it('keeps the menu open and shows why when a launch fails', async () => {
+    installEditorApi(['vscode'])
+    window.api.openInEditor = vi.fn(() =>
+      Promise.resolve({ ok: false, error: "VS Code isn't installed." })
+    )
+    const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
+    render(<Sidebar {...props} />)
+
+    openConvMenu('Alpha')
+    fireEvent.click(await screen.findByRole('button', { name: 'VS Code' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("VS Code isn't installed.")
   })
 })
 
