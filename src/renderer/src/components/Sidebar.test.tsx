@@ -47,6 +47,8 @@ function baseProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     onRenameGroup: vi.fn(),
     onDeleteGroup: vi.fn(),
     onToggleGroupCollapsed: vi.fn(),
+    collapsedSections: {},
+    onToggleSectionCollapsed: vi.fn(),
     ...overrides
   }
 }
@@ -316,6 +318,50 @@ describe('Sidebar — group collapse', () => {
     // The only "＋ New group" affordance lives inside a conversation's ⋯ menu,
     // which is closed here — so none is visible in the footer.
     expect(screen.queryByText('＋ New group')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — built-in section collapse', () => {
+  it('clicking the Ungrouped header toggles it via onToggleSectionCollapsed', () => {
+    // A group exists, so the Ungrouped header is rendered (and now collapsible).
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [makeConv({ id: 'u', title: 'Loose chat' })]
+    })
+    render(<Sidebar {...props} />)
+
+    const head = screen.getByText('Ungrouped').closest('.section-head') as HTMLElement
+    expect(within(head).getByText('▾')).toBeInTheDocument() // expanded chevron
+    fireEvent.click(screen.getByText('Ungrouped'))
+    expect(props.onToggleSectionCollapsed).toHaveBeenCalledWith('ungrouped')
+    // It's a built-in section, not a group, so the group handler is untouched.
+    expect(props.onToggleGroupCollapsed).not.toHaveBeenCalled()
+  })
+
+  it('hides Ungrouped chats and flips the chevron when collapsed', () => {
+    const props = baseProps({
+      groups: [{ id: 'g1', name: 'Work' }],
+      conversations: [makeConv({ id: 'u', title: 'Loose chat' })],
+      collapsedSections: { ungrouped: true }
+    })
+    render(<Sidebar {...props} />)
+
+    const head = screen.getByText('Ungrouped').closest('.section-head') as HTMLElement
+    expect(within(head).getByText('▸')).toBeInTheDocument() // collapsed chevron
+    expect(screen.queryByText('Loose chat')).not.toBeInTheDocument()
+  })
+
+  it('collapses the Pinned section too', () => {
+    const props = baseProps({
+      conversations: [makeConv({ id: 'p', title: 'Important', pinned: true })],
+      collapsedSections: { pinned: true }
+    })
+    render(<Sidebar {...props} />)
+
+    fireEvent.click(screen.getByText('Pinned'))
+    expect(props.onToggleSectionCollapsed).toHaveBeenCalledWith('pinned')
+    // Collapsed → the pinned chat is hidden.
+    expect(screen.queryByText('Important')).not.toBeInTheDocument()
   })
 })
 

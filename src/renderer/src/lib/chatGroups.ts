@@ -34,7 +34,9 @@ const bySectionOrder = (a: ConversationMeta, b: ConversationMeta): number => {
 
 export function buildSidebarSections(
   conversations: ConversationMeta[],
-  groups: ChatGroup[]
+  groups: ChatGroup[],
+  /** Collapsed state for the built-in sections ('pinned', 'ungrouped'). */
+  collapsedSections: Record<string, boolean> = {}
 ): SidebarSection[] {
   const groupById = new Map(groups.map((g) => [g.id, g]))
   const pinned: ConversationMeta[] = []
@@ -63,7 +65,7 @@ export function buildSidebarSections(
       kind: 'pinned',
       id: 'pinned',
       name: 'Pinned',
-      collapsed: false,
+      collapsed: collapsedSections.pinned ?? false,
       conversations: pinned.sort(bySectionOrder)
     })
   }
@@ -84,7 +86,7 @@ export function buildSidebarSections(
       kind: 'ungrouped',
       id: 'ungrouped',
       name: groups.length > 0 || pinned.length > 0 ? 'Ungrouped' : 'Chats',
-      collapsed: false,
+      collapsed: collapsedSections.ungrouped ?? false,
       conversations: ungrouped.sort(bySectionOrder)
     })
   }

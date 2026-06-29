@@ -242,6 +242,12 @@ export interface AppSettings {
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /**
+   * Collapsed state for the sidebar's built-in sections, keyed by section id
+   * ('pinned', 'ungrouped'). Custom groups keep their own collapsed flag on the
+   * group; these two aren't groups, so their state lives here. Absent = expanded.
+   */
+  collapsedSections?: Record<string, boolean>
+  /**
    * Width (px) of the left sidebar. Clamped to [SIDEBAR_MIN_WIDTH,
    * SIDEBAR_MAX_WIDTH] on read; falls back to SIDEBAR_DEFAULT_WIDTH when unset.
    */

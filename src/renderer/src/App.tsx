@@ -580,6 +580,18 @@ export default function App(): JSX.Element {
     [saveGroups]
   )
 
+  // Collapse a built-in section (Pinned / Ungrouped) — not a custom group, so its
+  // state lives in settings.collapsedSections keyed by section id.
+  const onToggleSectionCollapsed = useCallback(async (sectionId: string) => {
+    const current = await window.api.getSettings()
+    const prev = current.collapsedSections ?? {}
+    const fresh = await window.api.saveSettings({
+      ...current,
+      collapsedSections: { ...prev, [sectionId]: !prev[sectionId] }
+    })
+    setSettings(fresh)
+  }, [])
+
   const onDeleteGroup = useCallback(
     async (groupId: string) => {
       // Return member chats to "Ungrouped" before dropping the group.
@@ -1168,6 +1180,8 @@ export default function App(): JSX.Element {
         onRenameGroup={onRenameGroup}
         onDeleteGroup={onDeleteGroup}
         onToggleGroupCollapsed={onToggleGroupCollapsed}
+        collapsedSections={settings.collapsedSections ?? {}}
+        onToggleSectionCollapsed={onToggleSectionCollapsed}
       />
 
       {!sidebarCollapsed && (

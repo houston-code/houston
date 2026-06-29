@@ -478,12 +478,6 @@ body.is-resizing {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.section-head__toggle:disabled {
-  cursor: default;
-}
-.section-head--group .section-head__toggle {
-  cursor: pointer;
-}
 .section-head__chevron {
   font-size: 9px;
   width: 9px;
