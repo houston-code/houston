@@ -2144,31 +2144,6 @@ pre.diff {
 .changes-file__head:hover {
   background: var(--bg-hover);
 }
-.changes-file__badge {
-  flex-shrink: 0;
-  width: 17px;
-  height: 17px;
-  display: grid;
-  place-items: center;
-  border-radius: 5px;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  color: #fff;
-}
-.changes-file__badge--added,
-.changes-file__badge--untracked {
-  background: var(--ok);
-}
-.changes-file__badge--modified {
-  background: var(--warn);
-}
-.changes-file__badge--deleted {
-  background: var(--danger);
-}
-.changes-file__badge--renamed {
-  background: var(--accent);
-}
 .changes-file__path {
   flex: 1;
   min-width: 0;
