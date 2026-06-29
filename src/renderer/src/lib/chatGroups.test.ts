@@ -72,6 +72,21 @@ describe('buildSidebarSections', () => {
     expect(sections[0].collapsed).toBe(true)
   })
 
+  it('reflects collapsedSections for the built-in pinned and ungrouped sections', () => {
+    const sections = buildSidebarSections(
+      [conv('a', 2, { pinned: true }), conv('b', 1)],
+      [],
+      { pinned: true, ungrouped: false }
+    )
+    expect(sections.find((s) => s.kind === 'pinned')?.collapsed).toBe(true)
+    expect(sections.find((s) => s.kind === 'ungrouped')?.collapsed).toBe(false)
+  })
+
+  it('defaults built-in sections to expanded when no collapsed state is given', () => {
+    const sections = buildSidebarSections([conv('a', 1, { pinned: true }), conv('b', 1)], [])
+    expect(sections.every((s) => !s.collapsed)).toBe(true)
+  })
+
   it('sorts manually-ordered chats by their order, ascending', () => {
     // Despite recency (c newest), the manual order wins: a(0), b(1), c(2).
     const sections = buildSidebarSections(

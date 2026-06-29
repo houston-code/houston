@@ -67,6 +67,10 @@ export interface SidebarProps {
   onRenameGroup: (groupId: string, name: string) => void
   onDeleteGroup: (groupId: string) => void
   onToggleGroupCollapsed: (groupId: string) => void
+  /** Collapsed state for the built-in sections ('pinned', 'ungrouped'). */
+  collapsedSections: Record<string, boolean>
+  /** Toggle a built-in section's collapsed state (not a custom group). */
+  onToggleSectionCollapsed: (sectionId: string) => void
 }
 
 /** A single-line input used for renaming a chat or a group in place. */
@@ -411,15 +415,14 @@ function GroupHeader({
   const [menuOpen, setMenuOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const isGroup = section.kind === 'group'
+  // Every section header collapses; only custom groups also rename / delete.
+  const toggleCollapsed = (): void =>
+    isGroup ? props.onToggleGroupCollapsed(section.id) : props.onToggleSectionCollapsed(section.id)
 
   return (
     <div className={`section-head section-head--${section.kind}`}>
-      <button
-        className="section-head__toggle"
-        onClick={() => isGroup && props.onToggleGroupCollapsed(section.id)}
-        disabled={!isGroup}
-      >
-        {isGroup && <span className="section-head__chevron">{section.collapsed ? '▸' : '▾'}</span>}
+      <button className="section-head__toggle" onClick={toggleCollapsed}>
+        <span className="section-head__chevron">{section.collapsed ? '▸' : '▾'}</span>
         {renaming ? (
           <InlineEdit
             value={section.name}
@@ -657,7 +660,7 @@ function SidebarSectionView({
 
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
-  const sections = buildSidebarSections(conversations, groups)
+  const sections = buildSidebarSections(conversations, groups, props.collapsedSections)
   // Which conversation/group is currently being renamed (id), if any.
   const [renamingConv, setRenamingConv] = useState<string | null>(null)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
