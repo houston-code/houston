@@ -18,13 +18,23 @@ describe('FilePreview', () => {
 
   it('renders text with the path and a line-number gutter', async () => {
     installApi({ kind: 'text', text: 'line one\nline two', truncated: false, bytes: 17 })
-    render(<FilePreview workspace="/repo" path="src/a.ts" onReveal={vi.fn()} />)
+    // .txt isn't a highlighted language, so the pane is a single plain text node.
+    const { container } = render(<FilePreview workspace="/repo" path="src/a.txt" onReveal={vi.fn()} />)
     expect(await screen.findByText('line one', { exact: false })).toBeInTheDocument()
-    expect(screen.getByText('src/a.ts')).toBeInTheDocument()
+    expect(screen.getByText('src/a.txt')).toBeInTheDocument()
     // Two lines → a "1\n2" gutter.
-    expect(screen.getByText((_, el) => el?.className === 'file-preview__gutter')).toHaveTextContent(
-      '1 2'
+    expect(container.querySelector('.file-preview__gutter')?.textContent).toBe('1\n2\n')
+  })
+
+  it('syntax-highlights a known code language into token spans', async () => {
+    installApi({ kind: 'text', text: 'const x = 1', truncated: false, bytes: 11 })
+    const { container } = render(<FilePreview workspace="/repo" path="src/a.ts" onReveal={vi.fn()} />)
+    const pane = await screen.findByText(
+      (_, el) => el?.className === 'file-preview__text hljs'
     )
+    expect(pane.querySelector('.hljs-keyword')).not.toBeNull() // `const`
+    // The full source text survives across the token spans.
+    expect(container.querySelector('.file-preview__text')?.textContent).toBe('const x = 1')
   })
 
   it('notes truncation for a capped large file', async () => {
@@ -60,26 +70,26 @@ describe('FilePreview', () => {
 
   it('renders markdown files, with a Source toggle back to raw text', async () => {
     installApi({ kind: 'text', text: '# Title\n\nbody text', truncated: false, bytes: 17 })
-    render(<FilePreview workspace="/repo" path="README.md" onReveal={vi.fn()} />)
+    const { container } = render(<FilePreview workspace="/repo" path="README.md" onReveal={vi.fn()} />)
     // Rendered view: an <h1> heading, not literal "# Title".
     expect(await screen.findByRole('heading', { level: 1, name: 'Title' })).toBeInTheDocument()
     expect(screen.queryByText('# Title', { exact: false })).not.toBeInTheDocument()
 
-    // Toggle to source shows the raw markdown in the code pane.
+    // Toggle to source shows the raw markdown in the (highlighted) code pane.
     fireEvent.click(screen.getByRole('button', { name: 'Source' }))
-    expect(screen.getByText('# Title', { exact: false })).toBeInTheDocument()
+    expect(container.querySelector('.file-preview__text')?.textContent).toContain('# Title')
     expect(screen.queryByRole('heading', { name: 'Title' })).not.toBeInTheDocument()
   })
 
   it('renders an SVG file as an image, toggleable to source', async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>'
     installApi({ kind: 'text', text: svg, truncated: false, bytes: svg.length })
-    render(<FilePreview workspace="/repo" path="icon.svg" onReveal={vi.fn()} />)
+    const { container } = render(<FilePreview workspace="/repo" path="icon.svg" onReveal={vi.fn()} />)
     const img = await screen.findByAltText('icon.svg')
     expect(img.getAttribute('src')).toBe(`data:image/svg+xml,${encodeURIComponent(svg)}`)
 
     fireEvent.click(screen.getByRole('button', { name: 'Source' }))
-    expect(screen.getByText(/rect width/, { exact: false })).toBeInTheDocument()
+    expect(container.querySelector('.file-preview__text')?.textContent).toContain('rect width')
     expect(screen.queryByAltText('icon.svg')).not.toBeInTheDocument()
   })
 

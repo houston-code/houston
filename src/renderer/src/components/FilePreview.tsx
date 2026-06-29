@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FilePreview as FilePreviewData } from '@shared/files'
 import { humanSize, MAX_PREVIEW_TEXT_BYTES } from '@shared/files'
 import { imageDataUrl } from '@shared/images'
+import { highlightFile } from '../lib/highlight'
 import { Markdown } from './Markdown'
 
 /** Text files that can also render visually, with a Source/Preview toggle. */
@@ -75,6 +76,13 @@ export function FilePreview({
     return s
   }, [data])
 
+  // Syntax-highlighted HTML for the code pane, or null to render the raw text
+  // (unknown language, too large, or hljs failed). hljs escapes its input.
+  const highlighted = useMemo(
+    () => (path && data?.kind === 'text' ? highlightFile(path, data.text) : null),
+    [path, data]
+  )
+
   if (!path) {
     return (
       <div className="file-preview file-preview--empty">
@@ -131,7 +139,14 @@ export function FilePreview({
                 <pre className="file-preview__gutter" aria-hidden="true">
                   {gutter}
                 </pre>
-                <pre className="file-preview__text">{data.text}</pre>
+                {highlighted != null ? (
+                  <pre
+                    className="file-preview__text hljs"
+                    dangerouslySetInnerHTML={{ __html: highlighted }}
+                  />
+                ) : (
+                  <pre className="file-preview__text">{data.text}</pre>
+                )}
               </div>
               {data.truncated && (
                 <p className="file-preview__note">
