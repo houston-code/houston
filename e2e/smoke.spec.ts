@@ -32,7 +32,14 @@ test('app boots and renders the UI', async () => {
   const { executablePath, args, mode } = resolveLaunch()
   test.info().annotations.push({ type: 'launch-mode', description: mode })
 
-  const app: ElectronApplication = await electron.launch({ executablePath, args })
+  // Isolate userData: this test accepts the first-run legal gate, which persists
+  // `legalAcceptedVersion`. Without isolation that write lands in the developer's
+  // REAL profile, so the gate never shows for them again. Use a throwaway dir.
+  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
+  const app: ElectronApplication = await electron.launch({
+    executablePath,
+    args: [...args, `--user-data-dir=${userDataDir}`]
+  })
 
   try {
     const window = await app.firstWindow()
@@ -51,6 +58,7 @@ test('app boots and renders the UI', async () => {
     await expect(window.locator('.app')).toBeVisible()
   } finally {
     await app.close()
+    rmSync(userDataDir, { recursive: true, force: true })
   }
 })
 
