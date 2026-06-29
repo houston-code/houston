@@ -311,43 +311,44 @@ function ConvRow({
             </button>
             <div className="menu__sep" />
             <OpenInSubmenu workspace={conv.workspace} editors={editors} onDone={close} />
-            <div className="menu__label">Move to</div>
-            {groups.map((g) => (
-              <button
-                key={g.id}
-                className="menu__item menu__item--indent"
-                onClick={() => {
-                  props.onMove(conv.id, g.id)
-                  close()
-                }}
-              >
-                {conv.groupId === g.id ? '● ' : '○ '}
-                {g.name}
-              </button>
-            ))}
-            <button
-              className="menu__item menu__item--indent"
-              onClick={() => {
-                void props.onCreateGroup().then((id) => {
-                  props.onMove(conv.id, id)
-                  onStartRenameGroup(id)
-                })
-                close()
-              }}
-            >
-              ＋ New group
-            </button>
-            {conv.groupId && (
+            <MenuExpander label="Move to group">
+              {groups.map((g) => (
+                <button
+                  key={g.id}
+                  className="menu__item menu__item--indent"
+                  onClick={() => {
+                    props.onMove(conv.id, g.id)
+                    close()
+                  }}
+                >
+                  {conv.groupId === g.id ? '● ' : '○ '}
+                  {g.name}
+                </button>
+              ))}
               <button
                 className="menu__item menu__item--indent"
                 onClick={() => {
-                  props.onMove(conv.id, null)
+                  void props.onCreateGroup().then((id) => {
+                    props.onMove(conv.id, id)
+                    onStartRenameGroup(id)
+                  })
                   close()
                 }}
               >
-                <Icon name="removeFromGroup" /> Remove from group
+                ＋ New group
               </button>
-            )}
+              {conv.groupId && (
+                <button
+                  className="menu__item menu__item--indent"
+                  onClick={() => {
+                    props.onMove(conv.id, null)
+                    close()
+                  }}
+                >
+                  <Icon name="removeFromGroup" /> Remove from group
+                </button>
+              )}
+            </MenuExpander>
             <div className="menu__sep" />
             <button
               className="menu__item"
