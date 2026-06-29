@@ -174,6 +174,26 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
     add when a real workflow needs it, so they're bundled here rather than shipped
     piecemeal.
 
+- **Integrated-terminal enhancements.** The in-app terminal ships today as a
+  resizable, multi-tab panel of full PTY sessions (interactive programs, colours,
+  resize), window-global with each tab's working directory captured at creation.
+  Four follow-ups remain deferred:
+  - **Per-conversation terminals.** Bind terminal tabs to the active conversation
+    (and its worktree) instead of sharing one window-global set. *Why deferred:*
+    needs a per-conversation session model and lifecycle (spawn/teardown on chat
+    switch, or keep-alive policy) — more than a tweak to the current global registry.
+  - **Scrollback persistence across restarts.** Today a tab's scrollback lives only
+    in its xterm instance and is lost when the app quits. *Why deferred:* a PTY has
+    no history of its own, so this needs a persisted per-tab output buffer with a
+    size cap and a rehydration path on launch.
+  - **Split panes.** More than one terminal visible at once within the panel. *Why
+    deferred:* a real layout/focus model (split tree, resizers, active-pane routing)
+    on top of the existing single-active-tab view.
+  - **Shell-integration cwd tracking.** Follow the shell's working directory live
+    (e.g. OSC 7 / prompt markers) so the tab label and new-tab cwd track where the
+    user has `cd`'d. *Why deferred:* needs an escape-sequence handler and shell-side
+    integration, and degrades unevenly across shells.
+
 ## Out of scope — non-goals
 
 These are capabilities that conflict with Houston's **bring-your-own-model**
