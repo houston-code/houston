@@ -265,6 +265,10 @@ export interface AppSettings {
   terminalHeight?: number
   /** Whether the integrated terminal panel is open. */
   terminalOpen?: boolean
+  /** Width (px) of the right-hand preview panel. */
+  previewWidth?: number
+  /** Whether the preview panel is open. */
+  previewOpen?: boolean
   /**
    * Highest legal-terms version (see LEGAL_VERSION in @shared/legal) the user has
    * accepted via the first-run gate. Absent/older than LEGAL_VERSION means the

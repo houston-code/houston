@@ -16,6 +16,9 @@ export function Titlebar({
   onClearFinishedTasks,
   changes,
   onShowChanges,
+  onTogglePreview,
+  previewOpen,
+  previewCount,
   onToggleTerminal,
   terminalOpen
 }: {
@@ -27,6 +30,10 @@ export function Titlebar({
   /** Working-tree change counts; highlights the Changes button and shows a +/− badge. */
   changes?: { fileCount: number; added: number; removed: number }
   onShowChanges?: () => void
+  onTogglePreview?: () => void
+  previewOpen?: boolean
+  /** Number of running dev servers with a detected URL — shown as a badge when > 0. */
+  previewCount?: number
   onToggleTerminal?: () => void
   terminalOpen?: boolean
 }): JSX.Element {
@@ -41,6 +48,20 @@ export function Titlebar({
             onSelect={onSelectTask}
             onClearFinished={onClearFinishedTasks ?? (() => {})}
           />
+        )}
+        {onTogglePreview && (
+          <button
+            type="button"
+            className={`titlebar__action${previewOpen ? ' titlebar__action--active' : ''}`}
+            onClick={onTogglePreview}
+            title="Toggle the preview panel"
+            aria-pressed={previewOpen}
+          >
+            <span aria-hidden="true">▣</span> Preview
+            {!!previewCount && previewCount > 0 && (
+              <span className="titlebar__badge">{previewCount}</span>
+            )}
+          </button>
         )}
         {onShowChanges && (
           <button

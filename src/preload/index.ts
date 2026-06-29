@@ -19,6 +19,7 @@ import type {
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import type { UpdateCheckResult, WhatsNew } from '@shared/update'
+import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
 /**
  * The bridge object exposed to the renderer as `window.api`.
@@ -264,6 +265,24 @@ const api = {
     ipcRenderer.on(IPC.menuOpenSettings, listener)
     return () => ipcRenderer.removeListener(IPC.menuOpenSettings, listener)
   },
+
+  // Live preview dock (started dev servers; see main/preview.ts)
+  /** List the dev servers detected from the agent's started background shells. */
+  listPreviewServers: (): Promise<PreviewServer[]> => ipcRenderer.invoke(IPC.previewListServers),
+  /** Subscribe to changes in the detected server set. Returns an unsubscribe fn. */
+  onPreviewServersChanged: (cb: (servers: PreviewServer[]) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, servers: PreviewServer[]): void => cb(servers)
+    ipcRenderer.on(IPC.previewServersChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.previewServersChanged, listener)
+  },
+  /** Position + show/hide the native preview panes to match the dock's layout. */
+  syncPreviewPanes: (specs: PreviewPaneSpec[], visible: boolean): void =>
+    ipcRenderer.send(IPC.previewSync, specs, visible),
+  /** Reload a single preview pane (e.g. once the server finishes starting). */
+  reloadPreviewPane: (id: string): void => ipcRenderer.send(IPC.previewReload, id),
+  /** Open a preview's loopback URL in the OS browser (validated loopback-only in main). */
+  openPreviewExternal: (url: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.previewOpenExternal, url),
 
   // Updates
   /** Manually check the update feed (also broadcasts onUpdateAvailable when newer). */

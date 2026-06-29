@@ -43,6 +43,8 @@ import {
   SIDEBAR_RAIL_WIDTH
 } from './lib/sidebar'
 import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
+import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
+import { usePreviewServers } from './hooks/usePreviewServers'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
@@ -67,6 +69,9 @@ const SettingsModal = lazy(() =>
 const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel })))
 const TerminalDock = lazy(() =>
   import('./components/TerminalDock').then((m) => ({ default: m.TerminalDock }))
+)
+const PreviewDock = lazy(() =>
+  import('./components/PreviewDock').then((m) => ({ default: m.PreviewDock }))
 )
 const WhatsNewModal = lazy(() =>
   import('./components/WhatsNewModal').then((m) => ({ default: m.WhatsNewModal }))
@@ -169,8 +174,17 @@ export default function App(): JSX.Element {
   // closed) so terminal sessions and scrollback survive hide/show.
   const [terminalMounted, setTerminalMounted] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH)
   const appRef = useRef<HTMLDivElement>(null)
   const chat = useChat(currentId)
+
+  // Dev servers the agent started (auto-detected loopback URLs) — drives the Preview dock.
+  const previewServers = usePreviewServers()
+  const previewableCount = useMemo(
+    () => previewServers.filter((s) => s.running && s.url).length,
+    [previewServers]
+  )
 
   const refreshConversations = useCallback(async () => {
     setConversations(await window.api.listConversations())
@@ -192,6 +206,8 @@ export default function App(): JSX.Element {
         setTerminalOpen(true)
         setTerminalMounted(true)
       }
+      if (typeof s.previewWidth === 'number') setPreviewWidth(clampPreviewWidth(s.previewWidth))
+      if (s.previewOpen) setPreviewOpen(true)
       await refreshConversations()
     })()
   }, [refreshConversations])
@@ -803,6 +819,51 @@ export default function App(): JSX.Element {
     [terminalHeight, persistTerminal]
   )
 
+  // ---- Preview dock (toggle + resizable width, persisted) ----
+
+  const persistPreview = useCallback(
+    async (patch: Pick<Partial<AppSettings>, 'previewWidth' | 'previewOpen'>) => {
+      const fresh = await window.api.saveSettings({ ...(await window.api.getSettings()), ...patch })
+      setSettings(fresh)
+    },
+    []
+  )
+
+  const togglePreview = useCallback(() => {
+    setPreviewOpen((open) => {
+      const next = !open
+      void persistPreview({ previewOpen: next })
+      return next
+    })
+  }, [persistPreview])
+
+  // Drag the panel's left edge: update the width CSS variable live (no re-render of
+  // the transcript while dragging), then commit on release. Dragging left grows the
+  // panel, so width increases as the cursor's X decreases.
+  const onPreviewResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startW = previewWidth
+      document.body.classList.add('is-resizing')
+      const onMove = (ev: MouseEvent): void => {
+        const w = clampPreviewWidth(startW + (startX - ev.clientX))
+        appRef.current?.style.setProperty('--preview-w', `${w}px`)
+      }
+      const onUp = (ev: MouseEvent): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        document.body.classList.remove('is-resizing')
+        const w = clampPreviewWidth(startW + (startX - ev.clientX))
+        setPreviewWidth(w)
+        void persistPreview({ previewWidth: w })
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [previewWidth, persistPreview]
+  )
+
   const onRevert = useCallback(async () => {
     const n = await chat.revertCheckpoint()
     if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
@@ -956,6 +1017,13 @@ export default function App(): JSX.Element {
         run: toggleTerminal
       },
       {
+        id: 'act-toggle-preview',
+        title: previewOpen ? 'Hide preview panel' : 'Show preview panel',
+        section: 'Actions',
+        keywords: 'browser localhost dev server web',
+        run: togglePreview
+      },
+      {
         id: 'act-change-folder',
         title: 'Open a different project folder',
         section: 'Actions',
@@ -1051,6 +1119,7 @@ export default function App(): JSX.Element {
     workspace,
     currentId,
     sidebarCollapsed,
+    previewOpen,
     settings?.approvalPolicy,
     settings?.providers,
     settings?.selected,
@@ -1058,6 +1127,7 @@ export default function App(): JSX.Element {
     onNewChat,
     toggleSidebar,
     toggleTerminal,
+    togglePreview,
     onChangeWorkspace,
     onImportConversation,
     onCompact,
@@ -1195,7 +1265,8 @@ export default function App(): JSX.Element {
       style={
         {
           '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`,
-          '--terminal-h': `${terminalHeight}px`
+          '--terminal-h': `${terminalHeight}px`,
+          '--preview-w': `${previewOpen ? previewWidth : 0}px`
         } as CSSProperties
       }
     >
@@ -1256,6 +1327,9 @@ export default function App(): JSX.Element {
           onClearFinishedTasks={clearFinishedTasks}
           changes={workspace ? workingTreeStats : undefined}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
+          onTogglePreview={togglePreview}
+          previewOpen={previewOpen}
+          previewCount={previewableCount}
           onToggleTerminal={toggleTerminal}
           terminalOpen={terminalOpen}
         />
@@ -1400,6 +1474,19 @@ export default function App(): JSX.Element {
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
       </div>
+
+      {previewOpen && (
+        <Suspense fallback={null}>
+          <PreviewDock
+            servers={previewServers}
+            // A full-screen overlay paints above the native preview views; hide them
+            // (but keep them alive) while one is open so a preview can't cover it.
+            occluded={settingsOpen || changesOpen || paletteOpen || helpOpen || !!whatsNew}
+            onResizeMouseDown={onPreviewResizeMouseDown}
+            onClose={togglePreview}
+          />
+        </Suspense>
+      )}
 
       <Suspense fallback={null}>
         {settingsOpen && (

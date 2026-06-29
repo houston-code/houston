@@ -2,12 +2,20 @@ import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import type { BackgroundShellInfo } from '@shared/agent'
 import { killProcessTree } from '../sandbox'
+import { detectLocalUrl } from './loopback'
+import type { PreviewServer } from '@shared/preview'
 
 /**
  * Registry of background shells started by `run_shell` with `background: true`.
  * Each keeps a rolling output buffer the agent can poll with `read_shell_output`
  * and terminate with `kill_shell`. Shells persist across tool calls until killed
  * or the app quits (see killAllShells, wired on app shutdown).
+ *
+ * Each shell's output is also sniffed for the loopback URL a dev server announces
+ * on startup (see detectLocalUrl); the first match is exposed as `previewUrl` and
+ * powers the renderer's Preview dock. The `onShellsChanged` listeners fire when a
+ * shell appears, first reveals a URL, or exits, so both the background-tasks
+ * indicator and the Preview dock refresh live without polling.
  */
 
 interface Shell {
@@ -28,6 +36,8 @@ interface Shell {
   exitedAt: number | null
   /** Conversation whose agent run spawned this shell (for renderer navigation). */
   conversationId?: string
+  /** First loopback URL the server printed (e.g. http://localhost:5173), if any. */
+  previewUrl?: string
 }
 
 /** Keep at most this many trailing bytes per stream (rolling window). */
@@ -36,10 +46,11 @@ const MAX_BUF = 2_000_000
 const shells = new Map<string, Shell>()
 
 /**
- * Listeners notified whenever the shell registry changes (a shell starts or
- * exits). The IPC layer subscribes to broadcast the new list to the renderer so
- * the background-tasks indicator stays live without polling. Kept here,
- * Electron-free, so the registry stays unit-testable.
+ * Listeners notified whenever the shell registry changes (a shell starts, exits,
+ * or first reveals its dev-server URL). The IPC layer subscribes to broadcast the
+ * new list to the renderer so the background-tasks indicator and the Preview dock
+ * stay live without polling. Kept here, Electron-free, so the registry stays
+ * unit-testable.
  */
 const changedListeners = new Set<(shells: BackgroundShellInfo[]) => void>()
 
@@ -73,7 +84,11 @@ export function unreadSlice(buffer: string, produced: number, cursor: number): s
 }
 
 /** Register a freshly spawned background child and start capturing its output. */
-export function registerShell(command: string, child: ChildProcess, conversationId?: string): string {
+export function registerShell(
+  command: string,
+  child: ChildProcess,
+  conversationId?: string
+): string {
   const id = randomUUID().slice(0, 8)
   const shell: Shell = {
     id,
@@ -91,15 +106,29 @@ export function registerShell(command: string, child: ChildProcess, conversation
     exitedAt: null,
     ...(conversationId ? { conversationId } : {})
   }
+  // Sniff a freshly arrived chunk for the dev server's loopback URL until one is
+  // found. Most servers print it on a single line early on, so scanning the chunk
+  // (not the whole rolling buffer) is enough and bounded. A first match is a
+  // registry change (the Preview dock can now show the pane), so notify.
+  const sniff = (chunk: string): void => {
+    if (shell.previewUrl) return
+    const url = detectLocalUrl(chunk)
+    if (url) {
+      shell.previewUrl = url
+      notifyShellsChanged()
+    }
+  }
   child.stdout?.on('data', (c: Buffer) => {
     const s = c.toString()
     shell.stdoutProduced += s.length
     shell.stdout = appendCapped(shell.stdout, s)
+    sniff(s)
   })
   child.stderr?.on('data', (c: Buffer) => {
     const s = c.toString()
     shell.stderrProduced += s.length
     shell.stderr = appendCapped(shell.stderr, s)
+    sniff(s)
   })
   child.on('close', (code) => {
     shell.running = false
@@ -156,6 +185,21 @@ export function listShells(): BackgroundShellInfo[] {
     startedAt: s.startedAt,
     exitedAt: s.exitedAt,
     ...(s.conversationId ? { conversationId: s.conversationId } : {})
+  }))
+}
+
+/**
+ * The started dev servers the Preview dock can show: every background shell,
+ * mapped to the renderer-facing shape (its detected loopback URL, if any). The
+ * renderer decides which are previewable (running + has a URL) — see
+ * selectPreviewPanes.
+ */
+export function listPreviewServers(): PreviewServer[] {
+  return [...shells.values()].map((s) => ({
+    id: s.id,
+    command: s.command,
+    running: s.running,
+    ...(s.previewUrl ? { url: s.previewUrl } : {})
   }))
 }
 

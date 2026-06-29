@@ -1,8 +1,9 @@
-import { ipcMain, dialog, app, BrowserWindow, clipboard } from 'electron'
+import { ipcMain, dialog, app, BrowserWindow, clipboard, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
+import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import type {
   AgentEvent,
   AgentSendRequest,
@@ -38,13 +39,14 @@ import {
   runningConversationIds,
   onActiveRunsChanged
 } from './agent/loop'
-import { listShells, onShellsChanged } from './agent/shells'
+import { listShells, listPreviewServers, onShellsChanged } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, type DrainIO } from './agent/drain'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import { restoreCheckpoint, reapplyCheckpoint, getConversationCheckpoint } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
 import { setTerminalFocused } from './menu'
+import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { loadCommands } from './agent/commands'
@@ -627,12 +629,16 @@ export function registerIpc(): void {
   // queried once on load, then kept current via the shellsChanged broadcast.
   ipcMain.handle(IPC.shellList, () => listShells())
 
-  // Push the shell registry to every renderer whenever one starts or exits, so the
-  // tasks indicator stays live without polling. Broadcast for the same reason as
-  // the running-set push above (a shell can exit while another window is focused).
+  // Push the shell registry to every renderer whenever one starts, exits, or first
+  // reveals its dev-server URL, so the tasks indicator AND the Preview dock stay
+  // live without polling. Broadcast for the same reason as the running-set push
+  // above (a shell can change while another window is focused).
   onShellsChanged((shells) => {
+    const servers = listPreviewServers()
     for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.shellsChanged, shells)
+      if (win.webContents.isDestroyed()) continue
+      win.webContents.send(IPC.shellsChanged, shells)
+      win.webContents.send(IPC.previewServersChanged, servers)
     }
   })
 
@@ -671,4 +677,21 @@ export function registerIpc(): void {
   // Fire-and-forget focus signal so the ⌘W menu handler knows whether to close
   // the active terminal tab or the window.
   ipcMain.on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
+
+  // ---- Live preview dock (started dev servers) ----
+
+  ipcMain.handle(IPC.previewListServers, (): PreviewServer[] => listPreviewServers())
+  // Reconcile the native preview views to the renderer-measured rectangles. A
+  // fire-and-forget send: it runs on every dock resize / overlay toggle, so it
+  // must stay cheap and never block the renderer.
+  ipcMain.on(IPC.previewSync, (_event, specs: PreviewPaneSpec[], visible: boolean) =>
+    syncPreviewPanes(specs, visible)
+  )
+  ipcMain.on(IPC.previewReload, (_event, id: string) => reloadPreviewPane(id))
+  // Open a preview's URL in the OS browser — user-initiated, but re-validate
+  // loopback-only so a stale/spoofed URL can't turn this into an open-redirect.
+  ipcMain.handle(IPC.previewOpenExternal, async (_event, url: string): Promise<void> => {
+    assertLoopbackUrl(url)
+    await shell.openExternal(url)
+  })
 }
