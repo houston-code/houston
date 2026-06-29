@@ -21,6 +21,15 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   public surface and packaging separate from the Electron app. One-shot headless
   runs (`Houston -p "<prompt>"`, see the README) already cover scripting/CI.
 
+- **Terminal-first TUI (interactive).** A stay-resident, interactive terminal
+  client you converse with directly — streaming output, in-terminal approvals /
+  elicitation, keybindings (incl. vim), status line, and themes — as opposed to the
+  existing *non-interactive* one-shot headless CLI (`Houston -p "<prompt>"`, see the
+  README). *Why deferred:* it's a second client surface on top of the existing agent
+  core — the agent engine and headless plumbing already exist to back it, but it
+  needs a terminal renderer, an input/keybinding layer, and an in-terminal
+  approval/elicitation UX. A terminal UX is a distinct product surface from the GUI.
+
 - **SSRF hardening: pin resolved IPs (DNS-rebinding).** The network-egress tools
   (`web_fetch`, `view_localhost`) validate the URL's *host literal* — `web_fetch`
   blocks private/loopback/metadata IPs and re-checks on each redirect hop;
@@ -179,11 +188,10 @@ and nothing is silently dropped):
   *hosted* bot/app side, which needs a multi-tenant backend and an OAuth app
   registration that don't fit a single-user desktop app.
 
-- **IDE / editor embedding and a terminal TUI** (VS Code/JetBrains extensions,
-  remote TUI, ~32 bundled terminal themes, vim keybindings, status line, terminal
-  title). Houston is a standalone GUI desktop app — it has its own themes, status
-  bar, and shortcuts; a terminal UX is a different product surface. (IDE extension
-  also listed under *Deferred — polish*.)
+- **IDE / editor embedding** (VS Code/JetBrains extensions). Houston is a
+  standalone GUI desktop app — it has its own themes, status bar, and shortcuts; an
+  editor-embedded surface is a different product. (IDE extension also listed under
+  *Deferred — polish*.)
 
 - **Record & Replay / Computer-Use skill capture.** Turning a demonstrated
   desktop workflow into a reusable skill needs OS-level computer-use automation,
