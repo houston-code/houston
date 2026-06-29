@@ -52,31 +52,53 @@ describe('worktreePath', () => {
 })
 
 describe('getRepoInfo', () => {
+  // The paths below don't exist on the test machine, so force the existence probe
+  // true to exercise the git branches (real-disk behaviour is covered separately).
+  const onDisk = (): boolean => true
+
   it('returns the main worktree root, current branch, and branch list', async () => {
     const exec = fakeGit({
       'worktree list': () => worktreeList('/repo', 'main'),
       'rev-parse --abbrev-ref': () => 'feature\n',
       'for-each-ref': () => 'feature\nmain\nold\n'
     })
-    const info = await getRepoInfo('/repo/sub', exec)
+    const info = await getRepoInfo('/repo/sub', exec, onDisk)
     expect(info).toEqual({
       isRepo: true,
       root: '/repo',
       currentBranch: 'feature',
-      branches: ['feature', 'main', 'old']
+      branches: ['feature', 'main', 'old'],
+      exists: true
     })
   })
 
-  it('reports not-a-repo when worktree listing fails', async () => {
+  it('reports an existing non-repo folder as isRepo:false, exists:true', async () => {
     const exec: GitRun = async () => {
       throw new Error('not a git repository')
     }
-    expect(await getRepoInfo('/tmp/x', exec)).toEqual({
+    expect(await getRepoInfo('/tmp/x', exec, onDisk)).toEqual({
       isRepo: false,
       root: '',
       currentBranch: null,
-      branches: []
+      branches: [],
+      exists: true
     })
+  })
+
+  it('short-circuits a missing directory to exists:false without spawning git', async () => {
+    let called = false
+    const exec: GitRun = async () => {
+      called = true
+      return ''
+    }
+    expect(await getRepoInfo('/gone', exec, () => false)).toEqual({
+      isRepo: false,
+      root: '',
+      currentBranch: null,
+      branches: [],
+      exists: false
+    })
+    expect(called).toBe(false)
   })
 
   it('treats a detached HEAD as no current branch', async () => {
@@ -85,7 +107,7 @@ describe('getRepoInfo', () => {
       'rev-parse': () => 'HEAD\n',
       'for-each-ref': () => 'main\n'
     })
-    const info = await getRepoInfo('/repo', exec)
+    const info = await getRepoInfo('/repo', exec, onDisk)
     expect(info.currentBranch).toBeNull()
   })
 })

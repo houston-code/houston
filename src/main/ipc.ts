@@ -190,7 +190,8 @@ export function registerIpc(): void {
   // current branch, and local branches to pick a base from. Read-only; a non-repo
   // folder just reports isRepo:false so the UI hides the worktree option.
   ipcMain.handle(IPC.gitRepoInfo, async (_event, workspace: string) => {
-    if (!workspace) return { isRepo: false, root: '', currentBranch: null, branches: [] }
+    if (!workspace)
+      return { isRepo: false, root: '', currentBranch: null, branches: [], exists: false }
     return getRepoInfo(workspace)
   })
 
@@ -273,7 +274,10 @@ export function registerIpc(): void {
           branch: input.worktree.branch,
           base: input.worktree.base
         })
-        rememberWorkspace(wt.path)
+        // Remember the durable repo root as the recent workspace, NOT the worktree
+        // dir: the worktree is per-chat and gets torn down, so remembering its path
+        // would leave a dead default that seeds the next new chat with a phantom repo.
+        rememberWorkspace(wt.repoRoot)
         return createConversation({
           workspace: wt.path,
           providerId: input.providerId,

@@ -14,7 +14,7 @@ import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
 import { log } from './logger'
-import { getSettings, updateSettings } from './store'
+import { getSettings, updateSettings, pruneRecentWorkspaces } from './store'
 import { LEGAL_VERSION } from '@shared/legal'
 import { startRun, resolveApproval, resolveQuestion, activeRunCount } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
@@ -208,6 +208,9 @@ if (headless) {
   app.whenReady().then(() => {
     log.info(`Houston ${app.getVersion()} starting`)
     log.info(`sandbox backend = ${activeBackendId()} (sandboxed=${isSandboxed()})`)
+    // Drop recents whose folder vanished since last launch (e.g. a worktree removed
+    // with its chat) so a deleted dir can't seed the next new chat's workspace.
+    pruneRecentWorkspaces()
     registerIpc()
     buildAppMenu()
     createWindow()

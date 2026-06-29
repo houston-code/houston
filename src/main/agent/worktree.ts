@@ -45,7 +45,13 @@ function runGit(args: string[], cwd: string): Promise<string> {
   })
 }
 
-const EMPTY_REPO: RepoInfo = { isRepo: false, root: '', currentBranch: null, branches: [] }
+const EMPTY_REPO: RepoInfo = {
+  isRepo: false,
+  root: '',
+  currentBranch: null,
+  branches: [],
+  exists: false
+}
 
 /**
  * Turn a free-form branch name into a filesystem-safe slug for the worktree dir
@@ -81,18 +87,29 @@ export function worktreePath(
 /**
  * Read repo info for the new-chat worktree picker: the main worktree root, the
  * current branch, and the local branch list. Read-only git; never throws (a
- * non-repo just yields {@link EMPTY_REPO}). `exec` is injectable for tests.
+ * non-repo just yields {@link EMPTY_REPO}). A path that no longer exists on disk
+ * short-circuits to `exists: false` so callers can drop a stale default workspace
+ * (e.g. a deleted worktree) rather than treat it like a plain non-repo folder.
+ * `exec` and the existence probe are injectable for tests.
  */
-export async function getRepoInfo(workspace: string, exec: GitRun = runGit): Promise<RepoInfo> {
+export async function getRepoInfo(
+  workspace: string,
+  exec: GitRun = runGit,
+  exists: (p: string) => boolean = existsSync
+): Promise<RepoInfo> {
+  // A missing directory isn't a non-repo folder — it's gone. Report that distinctly
+  // (and skip the git spawn, which would only fail with ENOENT on the cwd anyway).
+  if (!exists(workspace)) return { ...EMPTY_REPO, exists: false }
   let root: string
   try {
     // First worktree entry is always the main worktree — the right base for nesting.
     const out = await exec(['worktree', 'list', '--porcelain'], workspace)
     const main = parseWorktreePorcelain(out)[0]
-    if (!main) return EMPTY_REPO
+    if (!main) return { ...EMPTY_REPO, exists: true }
     root = main.path
   } catch {
-    return EMPTY_REPO
+    // The path exists but isn't inside a git repo — a valid plain workspace.
+    return { ...EMPTY_REPO, exists: true }
   }
   let currentBranch: string | null = null
   try {
@@ -111,7 +128,7 @@ export async function getRepoInfo(workspace: string, exec: GitRun = runGit): Pro
   } catch {
     // best-effort — an empty list just means no base suggestions
   }
-  return { isRepo: true, root, currentBranch, branches }
+  return { isRepo: true, root, currentBranch, branches, exists: true }
 }
 
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */
