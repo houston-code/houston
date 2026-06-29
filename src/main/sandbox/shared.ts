@@ -92,7 +92,13 @@ export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
     // on macOS, which XDG_CACHE_HOME doesn't cover), so `go build`/`go test`/`go mod`
     // would hit the same write-denial. Redirect both explicitly.
     GOCACHE: join(cache, 'go-build'),
-    GOMODCACHE: join(cache, 'go-mod')
+    GOMODCACHE: join(cache, 'go-mod'),
+    // Cargo downloads the registry index + crate sources into `~/.cargo`, so
+    // `cargo build`/`test`/`fetch` fail on that write under the sandbox. CARGO_HOME
+    // is the only redirect lever (there's no separate cache dir); pointing it here
+    // fixes the common public-crates.io case. A user relying on `~/.cargo/config.toml`
+    // or private-registry credentials there can still set CARGO_HOME per command.
+    CARGO_HOME: join(cache, 'cargo')
   }
 }
 
