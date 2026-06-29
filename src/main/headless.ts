@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
+import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import type { AgentEvent, AgentRunRequest } from '@shared/agent'
 
 /**
@@ -20,6 +21,13 @@ export interface HeadlessOptions {
   /** Defaults to 'plan' (read-only) so a headless run can't edit/run unless asked. */
   approvalPolicy: ApprovalPolicy
   json: boolean
+  /**
+   * Accept the legal terms (Terms of Use, Privacy Policy, License) for this and
+   * future runs. Required the first time headless mode is used on a profile that
+   * hasn't accepted them (the GUI shows a gate; headless has no UI, so it's a
+   * flag). Once accepted it's persisted, so later runs don't need it.
+   */
+  acceptTerms: boolean
 }
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
@@ -49,6 +57,7 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   let model: string | undefined
   let approvalPolicy: ApprovalPolicy = 'plan'
   let json = false
+  let acceptTerms = false
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
@@ -76,11 +85,13 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
       approvalPolicy = 'full-auto'
     } else if (name === '--json') {
       json = true
+    } else if (name === '--accept-terms') {
+      acceptTerms = true
     }
   }
 
   if (prompt === undefined || prompt === '') return null
-  return { prompt, cwd, providerId, model, approvalPolicy, json }
+  return { prompt, cwd, providerId, model, approvalPolicy, json, acceptTerms }
 }
 
 /** Resolve the provider + model to use for a headless run from flags and settings. */
@@ -111,6 +122,8 @@ export function resolveHeadlessModel(
 
 export interface HeadlessDeps {
   getSettings: () => AppSettings
+  /** Persist acceptance of the current legal terms (sets legalAcceptedVersion). */
+  recordLegalAcceptance: () => void
   startRun: (req: AgentRunRequest, send: (e: AgentEvent) => void) => Promise<void>
   resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
   resolveQuestion: (runId: string, callId: string, answer: string) => void
@@ -128,6 +141,26 @@ export interface HeadlessDeps {
  */
 export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Promise<number> {
   const settings = deps.getSettings()
+
+  // Legal gate: the GUI shows a blocking acceptance dialog on first run; headless
+  // has no UI, so it requires --accept-terms once. Acceptance is then persisted,
+  // so later runs (and the GUI) don't ask again. Exit code 2 distinguishes
+  // "terms not accepted" from a normal run failure (1).
+  if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
+    if (!opts.acceptTerms) {
+      deps.err(
+        'You must accept the Houston Terms of Use, Privacy Policy, and License before using headless mode.\n' +
+          `  Terms:   ${TERMS_URL}\n` +
+          `  Privacy: ${PRIVACY_URL}\n` +
+          `  License: ${LICENSE_URL}\n` +
+          'Re-run with --accept-terms to accept (recorded once; later runs won’t ask).\n'
+      )
+      return 2
+    }
+    deps.recordLegalAcceptance()
+    if (!opts.json) deps.err('· Houston terms accepted (recorded for future runs)\n')
+  }
+
   const resolved = resolveHeadlessModel(settings, opts)
   if ('error' in resolved) {
     deps.err(`${resolved.error}\n`)
