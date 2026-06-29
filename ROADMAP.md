@@ -97,14 +97,31 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 ## Deferred — polish
 
-- **Clickable file paths in the transcript.** Linkify `path:line` references in the
-  agent's replies so a click opens the file. The open-in-editor plumbing now exists
-  (each chat's ⋯ menu has an "Open in" submenu that launches the chat's working
-  directory in VS Code / Cursor / Windsurf / Zed / Xcode, or reveals it in the file
-  manager), so the remaining work is per-file/line opens from the transcript. *Why
-  still deferred:* doing it well needs reliable path-detection in prose (to avoid
-  false positives) and changes to the actively-evolving Markdown / tool-row
-  renderers — more than a polish pass.
+- **Open a specific file from the diff, changes list, and tool results.** The
+  project-level opener already exists — each chat's ⋯ menu has an "Open in" submenu
+  that launches the chat's working directory in VS Code / Cursor / Windsurf / Zed /
+  Xcode, or reveals it in the file manager. The next step is opening a *single file*
+  (and ideally a line) from the surfaces that already carry it as **structured** data:
+  a diff hunk, the changed-files list, an edit/write tool-result card. The path is
+  known exactly, so there's no prose parsing and no false-positive risk. *What's still
+  needed:* (1) the backend opens a *directory* only
+  ([`openInEditor.ts`](src/main/openInEditor.ts)); a file+line open needs each
+  editor's goto syntax, which only the **CLI** carries (`code -g file:line`, `zed
+  file:line:col`, Xcode `xed --line`). That's in tension with the current macOS launch
+  strategy, which deliberately prefers `open -a <app>` (resolve by app name via
+  LaunchServices) over a bare `code` on PATH — a VS Code fork's shim can shadow it —
+  and `open -a` can't pass a line. So line-accurate opens want a careful per-editor
+  path (the CLI when it's unambiguously the right editor, or a URL scheme), not the
+  project opener reused as-is. (2) A single click needs a *default* editor to open
+  into — there's no room to pick one per click, unlike the submenu — so a
+  preferred-editor setting returns with it.
+
+- **Linkify file paths in transcript prose.** Turn `path:line` references inside the
+  agent's free-form replies into clickable links, reusing the file opener above.
+  *Why still deferred:* it needs reliable path-detection in prose to avoid linkifying
+  things that merely look like paths, plus changes to the actively-evolving Markdown
+  renderer ([`Markdown.tsx`](src/renderer/src/components/Markdown.tsx)) — the
+  genuinely hard part, and separable from the structured-surface opens above.
 
 - **`.gitignore`-aware search & `glob`.** Neither `search_files` nor `glob` honors
   a project's `.gitignore`: both skip a fixed set (`node_modules`, `.git`,
