@@ -14,7 +14,8 @@ import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
 import { log } from './logger'
-import { getSettings } from './store'
+import { getSettings, updateSettings } from './store'
+import { LEGAL_VERSION } from '@shared/legal'
 import { startRun, resolveApproval, resolveQuestion, activeRunCount } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
 import { parseHeadlessArgs, runHeadless } from './headless'
@@ -186,6 +187,9 @@ if (headless) {
     try {
       code = await runHeadless(headless, {
         getSettings,
+        recordLegalAcceptance: () => {
+          updateSettings({ legalAcceptedVersion: LEGAL_VERSION })
+        },
         startRun,
         resolveApproval,
         resolveQuestion,

@@ -345,6 +345,9 @@ Run a single prompt without opening the window — useful for scripts, pipelines
 and CI. Pass `-p`/`--prompt` to the app binary:
 
 ```bash
+# first headless use on a profile: accept the terms once (recorded for later runs)
+Houston -p "Summarize the architecture" --cwd ~/code/myproj --accept-terms
+
 # read-only by default (plan mode): analysis / Q&A, no edits or commands
 /Applications/Houston.app/Contents/MacOS/Houston -p "Summarize the architecture" --cwd ~/code/myproj
 
@@ -357,9 +360,16 @@ Houston -p "List the TODOs" --json
 
 Flags: `--cwd <dir>` (project folder, default the current directory),
 `--provider <id>` / `--model <id>` (default your selected model), `--approval
-<plan|ask|auto-edit|full-auto>` (default `plan`), `--json`. Assistant text streams
-to stdout, tool activity to stderr, and the process exits non-zero on error. It
-reuses your saved settings and Keychain-stored API keys.
+<plan|ask|auto-edit|full-auto>` (default `plan`), `--json`, `--accept-terms`.
+Assistant text streams to stdout, tool activity to stderr, and the process exits
+non-zero on error. It reuses your saved settings and Keychain-stored API keys.
+
+**First-run terms.** The GUI shows a one-time gate to accept the
+[Terms of Use](docs/TERMS.md), [Privacy Policy](docs/PRIVACY.md), and
+[License](LICENSE) before use. Headless mode has no UI, so the first time you run
+it on a profile that hasn't accepted them you must pass `--accept-terms`;
+acceptance is then persisted (shared with the GUI), so later runs don't need it.
+Without it, the run prints the terms links and exits with code `2`.
 
 ## Develop
 

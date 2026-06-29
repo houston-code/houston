@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettings } from '@shared/types'
 import type { AgentEvent } from '@shared/agent'
+import { LEGAL_VERSION } from '@shared/legal'
 import { parseHeadlessArgs, resolveHeadlessModel, runHeadless, type HeadlessDeps } from './headless'
 
 describe('parseHeadlessArgs', () => {
@@ -24,8 +25,14 @@ describe('parseHeadlessArgs', () => {
       providerId: 'openai',
       model: 'gpt',
       approvalPolicy: 'plan',
-      json: true
+      json: true,
+      acceptTerms: false
     })
+  })
+
+  it('parses --accept-terms (defaults to false)', () => {
+    expect(parseHeadlessArgs(['-p', 'x'], '/d')?.acceptTerms).toBe(false)
+    expect(parseHeadlessArgs(['-p', 'x', '--accept-terms'], '/d')?.acceptTerms).toBe(true)
   })
 
   it('honors --full-auto and a valid --approval, ignoring an invalid one', () => {
@@ -88,8 +95,18 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
   const err: string[] = []
   const approvals: Array<[string, string, string]> = []
   const questions: Array<[string, string, string]> = []
+  // Default profile has already accepted the current terms, so existing-behavior
+  // tests aren't about the gate. Gate tests override getSettings.
+  let accepted = 0
   const d: HeadlessDeps = {
-    getSettings: () => settings({ selected: { providerId: 'anthropic', model: 'claude' } }),
+    getSettings: () =>
+      settings({
+        selected: { providerId: 'anthropic', model: 'claude' },
+        legalAcceptedVersion: LEGAL_VERSION
+      }),
+    recordLegalAcceptance: () => {
+      accepted++
+    },
     startRun: async (_req, send) => {
       for (const e of events) send(e)
     },
@@ -100,10 +117,16 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
     newId: () => 'run-1',
     ...extra
   }
-  return { d, out, err, approvals, questions }
+  return { d, out, err, approvals, questions, accepted: () => accepted }
 }
 
-const baseOpts = { prompt: 'hi', cwd: '/proj', approvalPolicy: 'plan' as const, json: false }
+const baseOpts = {
+  prompt: 'hi',
+  cwd: '/proj',
+  approvalPolicy: 'plan' as const,
+  json: false,
+  acceptTerms: false
+}
 
 describe('runHeadless', () => {
   it('streams assistant text to stdout and returns 0', async () => {
@@ -166,7 +189,50 @@ describe('runHeadless', () => {
   })
 
   it('returns 1 when no model is configured', async () => {
-    const { d } = deps([], { getSettings: () => settings({ providers: [], selected: null }) })
+    const { d } = deps([], {
+      getSettings: () =>
+        settings({ providers: [], selected: null, legalAcceptedVersion: LEGAL_VERSION })
+    })
     expect(await runHeadless(baseOpts, d)).toBe(1)
+  })
+
+  it('refuses to run until terms are accepted, pointing to --accept-terms (exit 2)', async () => {
+    let ran = false
+    const { d, err, accepted } = deps([], {
+      // No legalAcceptedVersion → not yet accepted.
+      getSettings: () => settings({ selected: { providerId: 'anthropic', model: 'claude' } }),
+      startRun: async () => {
+        ran = true
+      }
+    })
+    const code = await runHeadless(baseOpts, d)
+    expect(code).toBe(2)
+    expect(ran).toBe(false)
+    expect(accepted()).toBe(0)
+    expect(err.join('')).toContain('--accept-terms')
+  })
+
+  it('accepts with --accept-terms on an unaccepted profile, records it, and runs', async () => {
+    let ran = false
+    const { d, accepted, err } = deps([], {
+      getSettings: () => settings({ selected: { providerId: 'anthropic', model: 'claude' } }),
+      startRun: async (_req, send) => {
+        ran = true
+        send({ runId: 'run-1', type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const code = await runHeadless({ ...baseOpts, acceptTerms: true }, d)
+    expect(code).toBe(0)
+    expect(ran).toBe(true)
+    expect(accepted()).toBe(1)
+    expect(err.join('')).toContain('terms accepted')
+  })
+
+  it('does not require --accept-terms once terms are already accepted', async () => {
+    // Default deps profile has already accepted the current terms.
+    const { d, accepted } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    const code = await runHeadless(baseOpts, d)
+    expect(code).toBe(0)
+    expect(accepted()).toBe(0)
   })
 })
