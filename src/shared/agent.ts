@@ -100,6 +100,14 @@ export interface ChatRequest {
   maxTokens?: number
   /** Enable model reasoning at this effort (omit/`off` to disable). */
   reasoningEffort?: ReasoningEffort
+  /**
+   * Whether the selected model supports reasoning, from the host's capability
+   * metadata (`ModelOption.caps.reasoning`). Overrides the adapter's name-based
+   * heuristic per-field: `true` forces reasoning on for a host-routed model the
+   * id-regex wouldn't recognize (e.g. `deepseek/deepseek-r1`); `false` forces it
+   * off; `undefined` falls back to the heuristic.
+   */
+  reasoningCapable?: boolean
   /** How to request the reasoning summary (OpenAI Responses; `none` = no summary). */
   reasoningSummary?: ReasoningSummary
   /** Response verbosity (OpenAI Responses). */

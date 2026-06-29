@@ -92,6 +92,16 @@ describe('openai reasoning_effort', () => {
   it('clamps xhigh to high for the Chat Completions path', () => {
     expect(openaiReasoningEffort('gpt-5', 'xhigh')).toBe('high')
   })
+
+  it('honors a host-listed capability over the id heuristic', () => {
+    // A host-routed reasoning model the regex doesn't recognize still gets an effort.
+    expect(openaiReasoningEffort('deepseek/deepseek-r1', 'high')).toBeUndefined()
+    expect(openaiReasoningEffort('deepseek/deepseek-r1', 'high', true)).toBe('high')
+    // An explicit false suppresses it even for a model the heuristic would match.
+    expect(openaiReasoningEffort('gpt-5', 'medium', false)).toBeUndefined()
+    // Still gated on effort being on.
+    expect(openaiReasoningEffort('deepseek/deepseek-r1', 'off', true)).toBeUndefined()
+  })
 })
 
 describe('openai Responses reasoning', () => {

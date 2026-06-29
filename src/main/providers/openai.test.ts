@@ -254,3 +254,39 @@ describe('modelOptionFromListing', () => {
     expect(modelOptionFromListing({ id: 'b', context_length: 'big' })).toEqual({ id: 'b' })
   })
 })
+
+describe('openai adapter: reasoning_effort gating', () => {
+  beforeEach(() => {
+    h.create.mockReset()
+    h.ctor.mockReset()
+  })
+
+  /** Run one turn and return the body passed to chat.completions.create. */
+  async function createBody(req: Partial<ChatRequest>): Promise<Record<string, unknown>> {
+    h.create.mockResolvedValue(streamOf([stopChunk()]))
+    const provider = createOpenAIProvider('k', 'https://openrouter.ai/api/v1')
+    for await (const _e of provider.streamChat({
+      model: 'deepseek/deepseek-r1',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    })) {
+      void _e
+    }
+    return h.create.mock.calls[0][0] as Record<string, unknown>
+  }
+
+  it('sends reasoning_effort for a host-listed reasoning model the regex misses', async () => {
+    const body = await createBody({ reasoningEffort: 'high', reasoningCapable: true })
+    expect(body.reasoning_effort).toBe('high')
+  })
+
+  it('omits reasoning_effort when the host says the model cannot reason', async () => {
+    const body = await createBody({ reasoningEffort: 'high', reasoningCapable: false })
+    expect(body).not.toHaveProperty('reasoning_effort')
+  })
+
+  it('falls back to the id heuristic when capability is unknown', async () => {
+    const body = await createBody({ reasoningEffort: 'high' })
+    expect(body).not.toHaveProperty('reasoning_effort') // deepseek-r1 isn't matched by the regex
+  })
+})

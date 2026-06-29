@@ -94,7 +94,9 @@ export function createOpenAIProvider(
       }))
 
       // o-series / gpt-5 accept reasoning_effort; other models reject it, so it's gated.
-      const reasoningEffort = openaiReasoningEffort(req.model, req.reasoningEffort)
+      // A host-listed reasoning capability (req.reasoningCapable) overrides the id
+      // heuristic, covering host-routed reasoning models the regex doesn't know.
+      const reasoningEffort = openaiReasoningEffort(req.model, req.reasoningEffort, req.reasoningCapable)
 
       const stream = await client.chat.completions.create(
         {
