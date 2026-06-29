@@ -59,6 +59,7 @@ function readImageFile(file: File): Promise<ImageAttachment | null> {
 const DOUBLE_ESC_MS = 500
 
 export function Composer({
+  conversationId,
   disabled,
   running,
   workspace,
@@ -69,6 +70,8 @@ export function Composer({
   onSend,
   onCancel
 }: {
+  /** The open conversation (null for a not-yet-created new chat); keys the draft. */
+  conversationId: string | null
   disabled: boolean
   running: boolean
   workspace: string | null
@@ -81,8 +84,10 @@ export function Composer({
   onSend: (text: string, images?: ImageAttachment[]) => void
   onCancel: () => void
 }): JSX.Element {
-  // Seed from the persisted draft so text typed but not sent survives a restart.
-  const [text, setText] = useState(loadComposerDraft)
+  // Seed from this conversation's persisted draft so text typed but not sent
+  // survives a restart. App.tsx keys the Composer by conversation, so this only
+  // runs when the open chat changes — loading that chat's own draft.
+  const [text, setText] = useState(() => loadComposerDraft(conversationId))
   const [images, setImages] = useState<ImageAttachment[]>([])
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
@@ -105,12 +110,14 @@ export function Composer({
     if (!vision) setImages((prev) => (prev.length ? [] : prev))
   }, [vision])
 
-  // Persist the unsent draft so it survives an app restart. Every path that
-  // changes the field goes through setText, so watching `text` covers both
-  // saving as the user types and clearing on submit (setText('') → removeItem).
+  // Persist the unsent draft (per conversation) so it survives an app restart.
+  // Every path that changes the field goes through setText, so watching `text`
+  // covers both saving as the user types and clearing on submit (setText('') →
+  // removeItem). `conversationId` is fixed for the component's lifetime (App.tsx
+  // keys the Composer by it), so the draft is always saved under the open chat.
   useEffect(() => {
-    saveComposerDraft(text)
-  }, [text])
+    saveComposerDraft(conversationId, text)
+  }, [conversationId, text])
 
   const addFiles = async (files: File[]): Promise<void> => {
     const read = await Promise.all(files.map(readImageFile))
