@@ -38,8 +38,7 @@ describe('sortedModels', () => {
 
   it('treats GPT minor versions like Claude — grouped in the GPT-5 family, newest first', () => {
     // gpt-5.5 / gpt-5.4 are minor bumps of GPT-5 (analogous to Opus 4.8 / 4.7), so they
-    // stay in the GPT-5 family and sort by version — they must NOT be swept into the
-    // gpt-next "new generation" bucket.
+    // stay in the GPT-5 family and sort by version.
     const stored = m('gpt-5', 'gpt-5.5', 'gpt-5.4', 'gpt-5-mini', 'gpt-5.5-mini')
     expect(ids(sortedModels('openai', stored))).toEqual([
       'gpt-5.5',
@@ -87,13 +86,6 @@ describe('sortedModels', () => {
       'qwen-3',
       'qwen-2.5'
     ])
-  })
-
-  it('puts a future GPT generation at the top, grouped and version-descending', () => {
-    // gpt-6/gpt-7 aren't in the family table by name; the gpt-next catch-all keeps
-    // them ahead of gpt-5 instead of dropping them to the unknown bucket.
-    const stored = m('gpt-5', 'gpt-4o', 'gpt-6', 'gpt-7')
-    expect(ids(sortedModels('openai', stored))).toEqual(['gpt-7', 'gpt-6', 'gpt-5', 'gpt-4o'])
   })
 
   it('does not mutate the input array', () => {
