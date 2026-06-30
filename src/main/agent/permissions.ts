@@ -1,4 +1,3 @@
-import { minimatch } from 'minimatch'
 import type { PermissionRule } from '@shared/types'
 
 /**
@@ -49,17 +48,28 @@ function tokenizeShellCommand(command: string): string[] {
 
 /**
  * Whether a single path-like segment escapes the workspace: an absolute path
- * (`/etc/...`), a home-relative path (`~`, `~/...`), or a relative path that
- * climbs above the workspace root via `..` (`../x`, `a/../../b`). A relative path
- * that climbs then returns (`a/../b`) stays inside and does not escape.
+ * (`/etc/...`), a home path (`~`, `~/...`, `$HOME/...`, `${HOME}/...`), a Windows
+ * drive-absolute (`C:\...`, `C:/...`) or UNC (`\\server\share`) path, or a relative
+ * path that climbs above the workspace root via `..` (`../x`, `a/../../b`, `..\x`).
+ * A relative path that climbs then returns (`a/../b`) stays inside and does not escape.
  */
 function segmentEscapesWorkspace(seg: string): boolean {
   if (!seg) return false
+  // POSIX absolute / home, and the unexpanded $HOME env var (a common stand-in for
+  // `~`). The `$HOME`/`${HOME}` checks are boundary-anchored so `$HOMEWORK` doesn't trip.
   if (seg.startsWith('/') || seg === '~' || seg.startsWith('~/')) return true
-  // Only paths can climb out; a token with no "/" and no ".." can't.
-  if (!seg.includes('/') && seg !== '..') return false
+  if (seg === '$HOME' || seg.startsWith('$HOME/')) return true
+  if (seg === '${HOME}' || seg.startsWith('${HOME}/')) return true
+  // Windows drive-absolute (`C:\` or `C:/`) and UNC (`\\host\share`) paths.
+  if (/^[A-Za-z]:[\\/]/.test(seg)) return true
+  if (seg.startsWith('\\\\')) return true
+  // Treat backslashes as separators too, so Windows-style relative climbs (`..\x`)
+  // are analysed the same as POSIX ones. Only paths can climb out; a token with no
+  // separator and no ".." can't.
+  const norm = seg.replace(/\\/g, '/')
+  if (!norm.includes('/') && norm !== '..') return false
   let depth = 0
-  for (const part of seg.split('/')) {
+  for (const part of norm.split('/')) {
     if (part === '' || part === '.') continue
     if (part === '..') {
       depth -= 1
@@ -92,14 +102,31 @@ export function shellReferencesExternalPath(command: string): boolean {
   return false
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Whether `subject` matches a permission `pattern`, where `*` is the only wildcard
+ * and — unlike a path glob — it spans ANY characters, including `/`. This is the
+ * crux for URLs and nested paths: a rule like `https://host/*` or `src/*` must match
+ * `https://host/a/b` and `src/a/b.ts`, not just one path segment. A segment-scoped
+ * `*` silently under-matches, which for an `allow` rule means needless re-prompts
+ * and for a `deny` rule means it fails to fire at all.
+ */
+function globMatches(pattern: string, subject: string): boolean {
+  const re = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`)
+  return re.test(subject)
+}
+
 function patternMatches(pattern: string, subject: string): boolean {
   const p = pattern.trim()
   if (!p || p === '*') return true
-  // Glob match (commands have no "/" so minimatch's "*" spans the whole token);
-  // dot:true so leading-dot paths still match.
-  if (minimatch(subject, p, { dot: true })) return true
-  // Fall back to a prefix match for convenience ("git status" matches "git").
-  return subject === p || subject.startsWith(`${p} `)
+  if (globMatches(p, subject)) return true
+  // Bare-prefix convenience: a wildcard-free rule also matches at a command (" ") or
+  // path/URL ("/") boundary, so `https://host` covers `https://host/x` and `src`
+  // covers `src/a.ts` — without forcing the user to append `/*`.
+  return subject === p || subject.startsWith(`${p} `) || subject.startsWith(`${p}/`)
 }
 
 /** First matching rule's action for a single subject, or null. */
@@ -120,23 +147,16 @@ function normalizeShellCommand(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 /**
- * Match a permission pattern against a shell command. Unlike {@link patternMatches}
- * (which uses minimatch, where `*` stops at `/` because the subject is a path), a
- * shell command is NOT a path — `/` is just a character — so here `*` matches any
- * run of characters including `/`. Without this, a deny rule like `*rm -rf*` would
- * fail to match `rm -rf /tmp/x` and silently not fire. Falls back to a prefix match
- * for convenience ("git" matches "git status").
+ * Match a permission pattern against a shell command. `*` matches any run of
+ * characters including `/` (a command is not a path — `/` is just a character),
+ * so a deny rule like `*rm -rf*` fires on `rm -rf /tmp/x`. Falls back to a prefix
+ * match for convenience ("git" matches "git status").
  */
 function shellCommandMatches(pattern: string, command: string): boolean {
   const p = pattern.trim()
   if (!p || p === '*') return true
-  const re = new RegExp(`^${p.split('*').map(escapeRegExp).join('.*')}$`)
-  if (re.test(command)) return true
+  if (globMatches(p, command)) return true
   return command === p || command.startsWith(`${p} `)
 }
 
