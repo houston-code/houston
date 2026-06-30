@@ -67,6 +67,8 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('gpt-5')).toBe(400_000)
     expect(contextWindowFor('gpt-5-mini')).toBe(400_000)
     expect(contextWindowFor('gpt-5-nano')).toBe(400_000)
+    expect(contextWindowFor('gpt-5.5')).toBe(400_000) // minor bumps stay on the GPT-5 window
+    expect(contextWindowFor('gpt-5.4')).toBe(400_000)
     expect(contextWindowFor('gpt-4o')).toBe(128_000)
     expect(contextWindowFor('gpt-4o-mini')).toBe(128_000)
     expect(contextWindowFor('gpt-4.1')).toBe(1_000_000)

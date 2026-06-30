@@ -37,9 +37,12 @@ const ANTHROPIC: FamilyRule[] = [
   { name: 'haiku', test: /haiku/ }
 ]
 const OPENAI: FamilyRule[] = [
-  // Catch-all for a future GPT generation (gpt-6+, gpt-10+): ranked top so a new
-  // flagship leads its provider and sorts by version, instead of dropping to the
-  // unknown bucket at the bottom. Must precede the gpt-5 rule (5 is excluded here).
+  // GPT *minor* versions (gpt-5.5, gpt-5.4) stay in the gpt-5 family below and sort by
+  // version, exactly like Claude's Opus 4.8/4.7. This catch-all is only for a new
+  // integer *generation* (gpt-6+, gpt-10+): ranked top so a new flagship leads its
+  // provider instead of dropping to the unknown bucket. It must precede the gpt-5 rule
+  // and must NOT match gpt-5.x — a dot is a minor bump, which `\d\d` (two adjacent
+  // digits) doesn't match, so gpt-5.5 falls through to the gpt-5 family.
   { name: 'gpt-next', test: /gpt-(?:[6-9]|\d\d)/ },
   { name: 'gpt-5', test: /gpt-5/ },
   { name: 'gpt-4.1', test: /gpt-4\.1/ },

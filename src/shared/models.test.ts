@@ -36,6 +36,20 @@ describe('sortedModels', () => {
     ])
   })
 
+  it('treats GPT minor versions like Claude — grouped in the GPT-5 family, newest first', () => {
+    // gpt-5.5 / gpt-5.4 are minor bumps of GPT-5 (analogous to Opus 4.8 / 4.7), so they
+    // stay in the GPT-5 family and sort by version — they must NOT be swept into the
+    // gpt-next "new generation" bucket.
+    const stored = m('gpt-5', 'gpt-5.5', 'gpt-5.4', 'gpt-5-mini', 'gpt-5.5-mini')
+    expect(ids(sortedModels('openai', stored))).toEqual([
+      'gpt-5.5',
+      'gpt-5.5-mini', // same version (5.5), base before mini
+      'gpt-5.4',
+      'gpt-5',
+      'gpt-5-mini'
+    ])
+  })
+
   it('keeps Gemini tiers grouped (pro before flash) and newest version first', () => {
     const stored = m('gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite')
     expect(ids(sortedModels('gemini', stored))).toEqual([
