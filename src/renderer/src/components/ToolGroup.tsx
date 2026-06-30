@@ -186,8 +186,22 @@ function ToolRow({
           <button className="btn btn--sm" onClick={() => onApprove(item.id, 'always')}>
             Allow for run
           </button>
+          <button
+            className="btn btn--sm"
+            title="Save a permission rule so this is allowed in future runs too"
+            onClick={() => onApprove(item.id, 'rule-allow')}
+          >
+            Always allow
+          </button>
           <button className="btn btn--sm btn--danger" onClick={() => onApprove(item.id, 'deny')}>
             Deny
+          </button>
+          <button
+            className="btn btn--sm btn--danger"
+            title="Save a permission rule so this is denied in future runs too"
+            onClick={() => onApprove(item.id, 'rule-deny')}
+          >
+            Always deny
           </button>
         </div>
       )}

@@ -127,10 +127,16 @@ describe('ToolGroup', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Allow for run' }))
     expect(onApprove).toHaveBeenCalledWith('call-7', 'always')
 
+    fireEvent.click(screen.getByRole('button', { name: 'Always allow' }))
+    expect(onApprove).toHaveBeenCalledWith('call-7', 'rule-allow')
+
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
     expect(onApprove).toHaveBeenCalledWith('call-7', 'deny')
 
-    expect(onApprove).toHaveBeenCalledTimes(3)
+    fireEvent.click(screen.getByRole('button', { name: 'Always deny' }))
+    expect(onApprove).toHaveBeenCalledWith('call-7', 'rule-deny')
+
+    expect(onApprove).toHaveBeenCalledTimes(5)
   })
 
   it('opens the diff by default for an awaiting-approval edit and renders an add/del stat', () => {

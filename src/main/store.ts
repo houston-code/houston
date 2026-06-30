@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import type { AppSettings, ProviderConfig } from '@shared/types'
+import type { AppSettings, PermissionRule, ProviderConfig } from '@shared/types'
 import { backfillDefaultModels, defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 import { SEARCH_PROVIDERS } from '@shared/search'
 import { hasKey } from './secrets'
@@ -83,6 +83,22 @@ export function saveSettings(next: AppSettings): AppSettings {
 
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   return saveSettings({ ...getSettings(), ...patch })
+}
+
+/**
+ * Persist a permission rule from an in-prompt "Always allow" / "Always deny" choice.
+ * Prepended so it wins over the user's existing (often broader) rules, and deduped so
+ * repeated clicks don't pile up identical rules. Returns the updated settings (or the
+ * current ones unchanged when the rule already exists).
+ */
+export function addPermissionRule(rule: PermissionRule): AppSettings {
+  const current = getSettings().permissionRules ?? []
+  if (
+    current.some((r) => r.action === rule.action && r.tool === rule.tool && r.match === rule.match)
+  ) {
+    return getSettings()
+  }
+  return updateSettings({ permissionRules: [rule, ...current] })
 }
 
 /** Look up a provider by id from current settings. */

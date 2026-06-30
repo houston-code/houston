@@ -4,13 +4,14 @@ import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
-import type {
-  AgentEvent,
-  AgentSendRequest,
-  ChatMessage,
-  ConversationMeta,
-  DeleteConversationResult,
-  ToolApprovalDecision
+import {
+  isToolApprovalDecision,
+  type AgentEvent,
+  type AgentSendRequest,
+  type ChatMessage,
+  type ConversationMeta,
+  type DeleteConversationResult,
+  type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import {
@@ -604,6 +605,9 @@ export function registerIpc(): void {
   ipcMain.handle(
     IPC.agentApprove,
     (_event, runId: string, callId: string, decision: ToolApprovalDecision) => {
+      // Validate at the boundary: an unknown decision must not reach the loop (where
+      // it would be treated as a non-deny "approve" and silently run the call).
+      if (!isToolApprovalDecision(decision)) return
       resolveApproval(runId, callId, decision)
     }
   )

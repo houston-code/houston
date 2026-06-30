@@ -20,6 +20,7 @@ import type {
   ConversationWorktree
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
+import { clearConversationOverride } from './agent/overrides'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
@@ -147,6 +148,8 @@ function toMeta(conv: Conversation): ConversationMeta {
 export function deleteConversation(id: string): void {
   const path = filePath(id)
   if (existsSync(path)) rmSync(path)
+  // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
+  clearConversationOverride(id)
 }
 
 /** Whether a conversation matches a (lowercased) query in its title or any message text. Pure. */

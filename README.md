@@ -154,9 +154,12 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   See [Headless / scripting](#headless--scripting).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only —
   the agent researches and proposes a plan, with writes and shell commands
-  blocked), *ask every time*, *auto-approve edits*, or *full auto*. Approve, deny,
-  or allow-for-the-run on each tool call. File edits show an inline red/green
-  **diff** so you can review exactly what changes before approving.
+  blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
+  call you can approve once, deny, *allow for the run* (auto-approves that kind of
+  tool for the rest of the conversation), or *always allow* / *always deny* — which
+  saves a permission rule so the choice sticks across future runs. File edits show
+  an inline red/green **diff** so you can review exactly what changes before
+  approving.
 - **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
   *deny* / *ask* permission rules (checked before your global ones) — e.g. always
   ask before touching `infra/**`. For safety a project file can only *tighten*:
