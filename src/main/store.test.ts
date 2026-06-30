@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { PermissionRule } from '@shared/types'
 
 /**
  * Migration behaviour for the settings store. `getSettings()` runs `migrate()` on the
@@ -74,6 +75,36 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await import('./store')
     expect(getSettings().schemaVersion).toBe(2)
+  })
+})
+
+describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
+  const seed = (permissionRules: PermissionRule[]): void =>
+    writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])], permissionRules })
+
+  it('prepends a new rule and persists it', async () => {
+    seed([])
+    const { addPermissionRule, getSettings } = await import('./store')
+    const rule: PermissionRule = { action: 'allow', tool: 'web_fetch', match: 'https://x.com/*' }
+    addPermissionRule(rule)
+    expect(getSettings().permissionRules).toEqual([rule])
+  })
+
+  it('prepends ahead of existing rules so the newest wins', async () => {
+    const existing: PermissionRule = { action: 'ask', tool: '*', match: '**' }
+    seed([existing])
+    const { addPermissionRule, getSettings } = await import('./store')
+    const rule: PermissionRule = { action: 'deny', tool: 'run_shell', match: 'rm -rf build' }
+    addPermissionRule(rule)
+    expect(getSettings().permissionRules).toEqual([rule, existing])
+  })
+
+  it('dedupes an identical rule (repeated clicks do not pile up)', async () => {
+    const rule: PermissionRule = { action: 'allow', tool: 'web_fetch', match: 'https://x.com' }
+    seed([rule])
+    const { addPermissionRule, getSettings } = await import('./store')
+    addPermissionRule({ action: 'allow', tool: 'web_fetch', match: 'https://x.com' })
+    expect(getSettings().permissionRules).toEqual([rule])
   })
 })
 

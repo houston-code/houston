@@ -292,7 +292,24 @@ export interface AgentSendRequest {
   approvalPolicy: ApprovalPolicy
 }
 
-export type ToolApprovalDecision = 'allow' | 'deny' | 'always'
+/**
+ * The user's verdict on a tool-approval prompt:
+ * - `allow`      — run this one call.
+ * - `deny`       — refuse this one call.
+ * - `always`     — "Allow for run": auto-approve this tool KIND for the rest of the
+ *                  conversation (in-memory; see agent/overrides.ts).
+ * - `rule-allow` — "Always allow": persist an `allow` permission rule for this call's
+ *                  tool + subject (survives restarts), then run it.
+ * - `rule-deny`  — "Always deny": persist a `deny` permission rule, then refuse it.
+ */
+export const TOOL_APPROVAL_DECISIONS = ['allow', 'deny', 'always', 'rule-allow', 'rule-deny'] as const
+
+export type ToolApprovalDecision = (typeof TOOL_APPROVAL_DECISIONS)[number]
+
+/** Runtime guard for a value arriving over IPC — reject anything off the list. */
+export function isToolApprovalDecision(v: unknown): v is ToolApprovalDecision {
+  return typeof v === 'string' && (TOOL_APPROVAL_DECISIONS as readonly string[]).includes(v)
+}
 
 /** One suggested answer to an `ask_user` question. */
 export interface QuestionOption {

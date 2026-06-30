@@ -12,11 +12,11 @@ import type {
   ToolCall,
   ToolSchema
 } from '@shared/agent'
-import { isApprovalPolicy, type ApprovalPolicy } from '@shared/types'
+import { isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
 import { DEFAULT_COMPACTION_THRESHOLD, resolveShellOutputBudget } from '@shared/defaults'
 import { turnCostUsd } from '@shared/usage'
-import { getProvider, getSettings } from '../store'
+import { addPermissionRule, getProvider, getSettings } from '../store'
 import { getKey } from '../secrets'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
@@ -38,6 +38,7 @@ import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedErr
 import { isBlockedByPlan, decideApproval } from './approval'
 import { missingToolResults } from './repair'
 import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
+import { grantConversationOverride, overrideForConversation } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun } from './checkpoints'
 import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed } from '../sandbox'
@@ -108,8 +109,14 @@ interface RunState {
    */
   pendingApprovals: Map<string, { name: string; summary: string; kind: ToolKind; sandboxed?: boolean }>
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
-  /** Flipped to true once the user chooses "always" — auto-approve the rest. */
-  override: boolean
+  /**
+   * Tool KINDS the user granted "Allow for run" on. A call is auto-approved when its
+   * kind is in this set — per-kind, so allowing a write never silently also allows
+   * network/MCP. Seeded from the conversation's accumulated grants (so the consent
+   * spans the whole chat, not just this turn) and extended as the user approves more.
+   * See {@link overrideForConversation}.
+   */
+  override: Set<ToolKind>
   /**
    * Per-run consent specifically to run UNCONFINED shell commands. On a host with no
    * enforceable sandbox, a generic `override` (granted for an unrelated tool) does NOT
@@ -289,14 +296,17 @@ export async function startRun(
   }
 
   const abort = new AbortController()
+  // Seed "Allow for run" consent from any the user granted earlier in this
+  // conversation, so it carries across turns rather than resetting each message.
+  const seededOverride = overrideForConversation(conversationId)
   const run: RunState = {
     abort,
     approvals: new Map(),
     questions: new Map(),
     pendingApprovals: new Map(),
     pendingQuestions: new Map(),
-    override: false,
-    shellUnsandboxedOverride: false,
+    override: seededOverride.kinds,
+    shellUnsandboxedOverride: seededOverride.unsandboxedShell,
     policy: req.approvalPolicy
   }
   runs.set(runId, run)
@@ -456,7 +466,9 @@ export async function startRun(
 
     // Shared tool-execution context. `run.policy` and `run.override` are read at
     // call time so a mid-run policy change or an "Allow for run" decision earlier
-    // in the turn takes effect.
+    // in the turn takes effect. `allowNetwork` governs the shell sandbox's network
+    // access, so it tracks the shell grant: full-auto, or "Allow for run" on a shell
+    // command (granting an unrelated kind no longer loosens shell networking).
     const makeToolContext = (
       callId: string,
       attachImage: (i: ImageAttachment) => void,
@@ -464,7 +476,7 @@ export async function startRun(
     ): ToolContext => ({
       workspace,
       roots,
-      allowNetwork: run.policy === 'full-auto' || run.override,
+      allowNetwork: run.policy === 'full-auto' || run.override.has('shell'),
       signal: abort.signal,
       ...(conversationId ? { conversationId } : {}),
       shellSession,
@@ -905,7 +917,7 @@ export async function startRun(
             ruleAction,
             policy: run.policy,
             kind: tool.kind,
-            override: run.override,
+            override: run.override.has(tool.kind),
             shellSandboxed: isSandboxed(),
             shellUnsandboxedOverride: run.shellUnsandboxedOverride,
             shellEscapesWorkspace
@@ -933,12 +945,26 @@ export async function startRun(
             // Resolved (or cancelled) — it's no longer awaiting the user.
             run.pendingApprovals.delete(call.id)
             if (decision === 'always') {
-              run.override = true
+              // "Allow for run" — auto-approve this KIND for the rest of the run, and
+              // remember it on the conversation so later turns inherit the consent.
+              run.override.add(tool.kind)
               // "Allow for run" on an unconfined-shell prompt is the conscious consent
               // to keep running unsandboxed; a generic override never sets this.
               if (unsandboxedShell) run.shellUnsandboxedOverride = true
+              grantConversationOverride(conversationId, tool.kind, unsandboxedShell)
+            } else if (decision === 'rule-allow' || decision === 'rule-deny') {
+              // "Always allow/deny" — persist a permission rule for this tool + subject
+              // so the choice survives restarts, and splice it into this run's rules
+              // (after the project rules, which only tighten) so it takes effect now.
+              const rule: PermissionRule = {
+                action: decision === 'rule-allow' ? 'allow' : 'deny',
+                tool: call.name,
+                match: permissionSubject(call.name, call.arguments) || '*'
+              }
+              addPermissionRule(rule)
+              permissionRules.splice(projectConfig.permissionRules.length, 0, rule)
             }
-            approved = decision !== 'deny'
+            approved = decision !== 'deny' && decision !== 'rule-deny'
           }
 
           if (!approved) {

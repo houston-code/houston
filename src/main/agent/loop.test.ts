@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, ChatMessage, Provider, ProviderStreamEvent } from '@shared/agent'
+import type {
+  AgentEvent,
+  ChatMessage,
+  Provider,
+  ProviderStreamEvent,
+  ToolApprovalDecision
+} from '@shared/agent'
 import type { ApprovalPolicy } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
@@ -11,6 +17,9 @@ import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 const h = vi.hoisted(() => ({
   provider: null as Provider | null,
   mcpDefs: [] as ToolDef[],
+  // Rules captured from the addPermissionRule mock, so tests can assert what an
+  // "Always allow/deny" decision persisted.
+  addedRules: [] as unknown[],
   settings: {
     compactionThreshold: 0,
     reasoningEffort: 'off',
@@ -28,6 +37,9 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../store', () => ({
   getSettings: () => h.settings,
+  addPermissionRule: (rule: unknown) => {
+    h.addedRules.push(rule)
+  },
   getProvider: () => ({
     id: 'anthropic',
     kind: 'anthropic',
@@ -96,6 +108,7 @@ let ws: string
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loop-'))
   h.pluginEvents = []
+  h.addedRules = []
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -116,7 +129,7 @@ async function run(
     messages?: ChatMessage[]
     policy?: ApprovalPolicy
     userText?: string
-    onApproval?: (callId: string, decide: (d: 'allow' | 'deny' | 'always') => void) => void
+    onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
     onQuestion?: (callId: string, answer: (a: string) => void) => void
   }
 ): Promise<RunResult> {
@@ -452,6 +465,89 @@ describe('startRun', () => {
       (e) => e.type === 'tool_result' && e.name === 'write_file' && !e.ok
     )
     expect((blocked as { output: string }).output).toMatch(/Plan mode/)
+  })
+
+  it('"Allow for run" is per-kind: a write grant does not auto-approve shell', async () => {
+    const approvals: string[] = []
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: 'a' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: 'b' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo hi' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (callId, decide) => {
+        approvals.push(callId)
+        decide(callId === 'w1' ? 'always' : 'deny') // grant writes for the run; reject the shell
+      }
+    })
+    // w1 prompted (granted), w2 auto-approved by the write grant, s1 still prompted —
+    // the grant did not leak across kinds.
+    expect(approvals).toEqual(['w1', 's1'])
+    expect(readFileSync(join(ws, 'two.txt'), 'utf8')).toBe('b')
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'w1',
+      's1'
+    ])
+  })
+
+  it('"Always deny" persists a rule and denies the current and future calls', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'write_file', arguments: { path: 'secret.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'd2', name: 'write_file', arguments: { path: 'secret.txt', content: 'y' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => decide('rule-deny')
+    })
+    expect(h.addedRules).toContainEqual({ action: 'deny', tool: 'write_file', match: 'secret.txt' })
+    // Only d1 prompted; d2 was auto-denied by the freshly-added rule.
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'd1'
+    ])
+    expect(existsSync(join(ws, 'secret.txt'))).toBe(false)
+    expect(r.events.filter((e) => e.type === 'tool_result' && !e.ok)).toHaveLength(2)
+  })
+
+  it('"Always allow" persists a rule and auto-approves the current and future calls', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'a1', name: 'write_file', arguments: { path: 'notes.txt', content: 'one' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'a2', name: 'write_file', arguments: { path: 'notes.txt', content: 'two' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => decide('rule-allow')
+    })
+    expect(h.addedRules).toContainEqual({ action: 'allow', tool: 'write_file', match: 'notes.txt' })
+    // Only a1 prompted; a2 auto-approved by the rule, and both writes ran.
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'a1'
+    ])
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('two')
   })
 
   it('rejects an unknown mid-run policy (fails closed, keeps prompting)', async () => {
