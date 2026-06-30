@@ -54,6 +54,26 @@ describe('shellReferencesExternalPath', () => {
     expect(shellReferencesExternalPath("cat '../escape'")).toBe(true)
     expect(shellReferencesExternalPath('echo "hello world"')).toBe(false)
   })
+
+  it('flags the unexpanded $HOME / ${HOME} env var', () => {
+    expect(shellReferencesExternalPath('cat $HOME/.ssh/id_rsa')).toBe(true)
+    expect(shellReferencesExternalPath('cat ${HOME}/.netrc')).toBe(true)
+    expect(shellReferencesExternalPath('grep x --file=$HOME/.aws/credentials')).toBe(true)
+    // Boundary-anchored: a different var that merely starts with HOME is not flagged.
+    expect(shellReferencesExternalPath('echo $HOMEWORK')).toBe(false)
+  })
+
+  it('flags Windows drive-absolute and UNC paths', () => {
+    expect(shellReferencesExternalPath('type C:\\Users\\me\\secret.txt')).toBe(true)
+    expect(shellReferencesExternalPath('type C:/Windows/System32/config')).toBe(true)
+    expect(shellReferencesExternalPath('dir \\\\server\\share')).toBe(true)
+  })
+
+  it('flags backslash relative climbs', () => {
+    expect(shellReferencesExternalPath('type ..\\..\\outside')).toBe(true)
+    // A backslash path that stays inside does not escape.
+    expect(shellReferencesExternalPath('type sub\\file.txt')).toBe(false)
+  })
 })
 
 describe('matchRule', () => {
@@ -86,6 +106,40 @@ describe('matchRule', () => {
 
   it('does not match a different tool', () => {
     expect(matchRule(rules, 'web_fetch', 'git status')).toBeNull()
+  })
+
+  describe('glob `*` spans `/` for URLs and nested paths', () => {
+    it('a URL glob matches across path segments', () => {
+      const r: PermissionRule[] = [
+        { action: 'allow', tool: 'web_fetch', match: 'https://docs.example.com/*' }
+      ]
+      expect(matchRule(r, 'web_fetch', 'https://docs.example.com/3/library/os.html')).toBe('allow')
+      expect(matchRule(r, 'web_fetch', 'https://other.example.com/x')).toBeNull()
+    })
+
+    it('a deny URL glob fires on nested paths (no silent under-match)', () => {
+      const r: PermissionRule[] = [
+        { action: 'deny', tool: 'web_fetch', match: 'https://evil.example.com/*' }
+      ]
+      expect(matchRule(r, 'web_fetch', 'https://evil.example.com/track/pixel?x=1')).toBe('deny')
+    })
+
+    it('a bare host/dir prefix covers its sub-paths', () => {
+      const url: PermissionRule[] = [
+        { action: 'deny', tool: 'web_fetch', match: 'https://evil.example.com' }
+      ]
+      expect(matchRule(url, 'web_fetch', 'https://evil.example.com')).toBe('deny')
+      expect(matchRule(url, 'web_fetch', 'https://evil.example.com/a/b')).toBe('deny')
+
+      const dir: PermissionRule[] = [{ action: 'allow', tool: 'read_file', match: 'src' }]
+      expect(matchRule(dir, 'read_file', 'src/a/b/c.ts')).toBe('allow')
+    })
+
+    it('a path glob spans nested directories', () => {
+      const r: PermissionRule[] = [{ action: 'allow', tool: 'read_file', match: 'src/*' }]
+      expect(matchRule(r, 'read_file', 'src/a/b/c.ts')).toBe('allow')
+      expect(matchRule(r, 'read_file', 'lib/a.ts')).toBeNull()
+    })
   })
 
   it('prefix-matches a bare command pattern', () => {
