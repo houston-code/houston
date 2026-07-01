@@ -21,14 +21,17 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   public surface and packaging separate from the Electron app. One-shot headless
   runs (`Houston -p "<prompt>"`, see the README) already cover scripting/CI.
 
-- **Terminal-first TUI (interactive).** A stay-resident, interactive terminal
-  client you converse with directly — streaming output, in-terminal approvals /
-  elicitation, keybindings (incl. vim), status line, and themes — as opposed to the
-  existing *non-interactive* one-shot headless CLI (`Houston -p "<prompt>"`, see the
-  README). *Why deferred:* it's a second client surface on top of the existing agent
-  core — the agent engine and headless plumbing already exist to back it, but it
-  needs a terminal renderer, an input/keybinding layer, and an in-terminal
-  approval/elicitation UX. A terminal UX is a distinct product surface from the GUI.
+- **Terminal-first TUI (interactive) — foundation shipped, polish remaining.**
+  A stay-resident, interactive terminal client you converse with directly
+  (`Houston -i`, see the README). *Shipped:* a line-streaming REPL over the shared
+  agent core — live output, inline approvals (with a diff preview on writes and an
+  unsandboxed-shell warning), `ask_user` elicitation, slash commands, a session
+  cost meter, and sessions persisted as conversations (resumable, shared with the
+  GUI). *Still deferred:* a **full-screen** TUI (alternate-buffer rendering with
+  themes, vim keybindings, and a status line) and `@`-mention Tab completion. *Why
+  deferred:* the full-screen layer means a terminal UI framework (e.g. Ink), which
+  is ESM-only against a CJS main bundle — an integration that needs verifying
+  before it's shipped; the current REPL covers the interactive workflow without it.
 
 - **Composer screenshot capture.** The composer's `+` attachment menu attaches
   files, a folder, the working-tree diff, a clipboard payload, and a link (and
