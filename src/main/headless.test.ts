@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent } from '@shared/agent'
+import type { AgentEvent, ChatMessage } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
 import {
   legalAcceptanceMessage,
@@ -32,13 +32,22 @@ describe('parseHeadlessArgs', () => {
       model: 'gpt',
       approvalPolicy: 'plan',
       json: true,
-      acceptTerms: false
+      acceptTerms: false,
+      continueSession: false,
+      resumeId: undefined
     })
   })
 
   it('parses --accept-terms (defaults to false)', () => {
     expect(parseHeadlessArgs(['-p', 'x'], '/d')?.acceptTerms).toBe(false)
     expect(parseHeadlessArgs(['-p', 'x', '--accept-terms'], '/d')?.acceptTerms).toBe(true)
+  })
+
+  it('parses --continue and --resume <id>', () => {
+    expect(parseHeadlessArgs(['-p', 'x'], '/d')).toMatchObject({ continueSession: false, resumeId: undefined })
+    expect(parseHeadlessArgs(['-p', 'x', '--continue'], '/d')?.continueSession).toBe(true)
+    expect(parseHeadlessArgs(['-p', 'x', '--resume', 'conv-9'], '/d')?.resumeId).toBe('conv-9')
+    expect(parseHeadlessArgs(['-p', 'x', '--resume=conv-9'], '/d')?.resumeId).toBe('conv-9')
   })
 
   it('honors --full-auto and a valid --approval, ignoring an invalid one', () => {
@@ -149,7 +158,8 @@ const baseOpts = {
   cwd: '/proj',
   approvalPolicy: 'plan' as const,
   json: false,
-  acceptTerms: false
+  acceptTerms: false,
+  continueSession: false
 }
 
 describe('runHeadless', () => {
@@ -258,5 +268,88 @@ describe('runHeadless', () => {
     const code = await runHeadless(baseOpts, d)
     expect(code).toBe(0)
     expect(accepted()).toBe(0)
+  })
+
+  /** A session store fake + a startRun that echoes messages to onMessages. */
+  function withSession(seed: Array<{ id: string; workspace: string; messages: ChatMessage[] }> = []) {
+    const store = new Map(seed.map((s) => [s.id, { ...s }]))
+    let seq = 0
+    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    const startedWith: { conversationId?: string; messages: ChatMessage[] }[] = []
+    d.startRun = async (req, send, onMessages) => {
+      startedWith.push({ conversationId: req.conversationId, messages: req.messages.map((m) => ({ ...m })) })
+      onMessages?.([...req.messages, { role: 'assistant', content: 'ok' }])
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    d.session = {
+      load: ({ workspace, id }) => {
+        if (id) return store.get(id) ?? null
+        const recent = [...store.values()].filter((c) => c.workspace === workspace).at(-1)
+        return recent ?? null
+      },
+      create: ({ workspace }) => {
+        const id = `conv-${++seq}`
+        store.set(id, { id, workspace, messages: [] })
+        return { id }
+      },
+      setMessages: (id, messages) => {
+        const c = store.get(id)
+        if (c) c.messages = messages
+      }
+    }
+    return { d, store, startedWith }
+  }
+
+  it('creates and persists a conversation for a plain run', async () => {
+    const { d, store, startedWith } = withSession()
+    await runHeadless(baseOpts, d)
+    expect(startedWith[0].conversationId).toBe('conv-1')
+    expect(startedWith[0].messages).toEqual([{ role: 'user', content: 'hi' }])
+    // The run's messages were persisted (so a later --continue can find them).
+    expect(store.get('conv-1')?.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'ok' }
+    ])
+  })
+
+  it('--continue seeds the most recent session for the cwd', async () => {
+    const { d, startedWith } = withSession([
+      { id: 'old', workspace: '/proj', messages: [{ role: 'user', content: 'earlier' }] }
+    ])
+    await runHeadless({ ...baseOpts, continueSession: true }, d)
+    expect(startedWith[0].conversationId).toBe('old')
+    expect(startedWith[0].messages).toEqual([
+      { role: 'user', content: 'earlier' },
+      { role: 'user', content: 'hi' }
+    ])
+  })
+
+  it('--resume <id> seeds a specific session', async () => {
+    const { d, startedWith } = withSession([
+      { id: 'a', workspace: '/proj', messages: [{ role: 'user', content: 'from-a' }] },
+      { id: 'b', workspace: '/proj', messages: [{ role: 'user', content: 'from-b' }] }
+    ])
+    await runHeadless({ ...baseOpts, resumeId: 'a' }, d)
+    expect(startedWith[0].conversationId).toBe('a')
+    expect(startedWith[0].messages[0]).toEqual({ role: 'user', content: 'from-a' })
+  })
+
+  it('--continue with no prior session starts fresh', async () => {
+    const { d, startedWith } = withSession()
+    await runHeadless({ ...baseOpts, continueSession: true }, d)
+    expect(startedWith[0].conversationId).toBe('conv-1') // a fresh one
+    expect(startedWith[0].messages).toEqual([{ role: 'user', content: 'hi' }])
+  })
+
+  it('stays ephemeral (no conversation id) when no session store is wired', async () => {
+    const started: (string | undefined)[] = []
+    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
+      startRun: async (req, send) => {
+        started.push(req.conversationId)
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    await runHeadless(baseOpts, d)
+    expect(started[0]).toBeUndefined()
   })
 })
