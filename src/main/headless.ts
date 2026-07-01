@@ -31,7 +31,7 @@ export interface HeadlessOptions {
 }
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
-function flagValue(argv: string[], i: number): { value?: string; next: number } {
+export function flagValue(argv: string[], i: number): { value?: string; next: number } {
   const arg = argv[i]
   const eq = arg.indexOf('=')
   if (eq >= 0) return { value: arg.slice(eq + 1), next: i }
@@ -40,7 +40,7 @@ function flagValue(argv: string[], i: number): { value?: string; next: number } 
   return { value: v, next: i + 1 }
 }
 
-function nameOf(arg: string): string {
+export function nameOf(arg: string): string {
   const eq = arg.indexOf('=')
   return eq >= 0 ? arg.slice(0, eq) : arg
 }
