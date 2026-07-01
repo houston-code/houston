@@ -1,0 +1,48 @@
+name: SBOM
+
+# Publish a Software Bill of Materials (CycloneDX + SPDX) for the production
+# dependency closure. Generated with npm's built-in `npm sbom` (npm 10+, no extra
+# tooling to vendor). Kept OFF the per-PR path on purpose: the dependency set only
+# changes when the lockfile does, and per-PR CI already bills three ubuntu jobs — so
+# this runs on pushes to main (each release-bound commit gets a fresh SBOM) and on
+# demand, at the cheapest ubuntu x1 multiplier.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      # `npm sbom` only reads the dependency tree; skip postinstall's native rebuild
+      # (electron-rebuild) since node-pty doesn't need compiling to enumerate deps.
+      - run: npm ci --ignore-scripts
+      - name: Generate SBOMs (production dependency closure)
+        run: |
+          npm sbom --sbom-format cyclonedx --omit dev > sbom.cyclonedx.json
+          npm sbom --sbom-format spdx --omit dev > sbom.spdx.json
+      # Fail loudly if a format emitted an empty or malformed document rather than
+      # uploading a hollow SBOM that reads as "we have one" — the same fail-closed
+      # stance as scripts/verify-bundled-binaries.mjs.
+      - name: Verify SBOMs are valid and non-empty
+        run: |
+          for f in sbom.cyclonedx.json sbom.spdx.json; do
+            node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const n=(j.components||j.packages||[]).length; if(!n){console.error('::error::'+process.argv[1]+' has no components'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries)')" "$f"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: houston-sbom
+          path: |
+            sbom.cyclonedx.json
+            sbom.spdx.json
+          if-no-files-found: error
