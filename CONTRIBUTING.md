@@ -79,5 +79,8 @@ npm test
 npm run build
 ```
 
-Keep commits focused and incremental. By submitting a contribution you agree to
-license it under the project's [MIT License](LICENSE).
+Keep commits focused and incremental.
+
+Houston is proprietary software (see [LICENSE](LICENSE)), not MIT-licensed. The terms
+for accepting outside contributions are being finalized; this note will be updated once
+they are settled.
