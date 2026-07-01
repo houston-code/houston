@@ -690,6 +690,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let pendingImages: ImageAttachment[] = []
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
+  // A synthetic message to run next without a composer read — used by the plan
+  // review flow to auto-send "proceed" after the user accepts a plan.
+  let autoInput: string | null = null
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -714,18 +717,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   )
 
   for (;;) {
-    // A persistent status line above the composer: model, policy, cwd, cost, and
-    // context-window fill — so live session state is always visible.
-    deps.io.out(
-      `${renderStatusLine({ providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens }, columns(), paint)}\n`
-    )
-    const line = await deps.io.readLine(composerPrompt(policy, paint))
-    if (line === null) break // Ctrl-D
-    const text = line.trim()
-    if (!text) continue
-    // Persist composer submissions (commands included) for cross-restart recall;
-    // approval/question answers go through a different read and aren't saved.
-    deps.persistHistory?.(text)
+    let text: string
+    if (autoInput !== null) {
+      // A plan-accept (or similar) queued a message; run it without a composer read.
+      text = autoInput
+      autoInput = null
+    } else {
+      // A persistent status line above the composer: model, policy, cwd, cost, and
+      // context-window fill — so live session state is always visible.
+      deps.io.out(
+        `${renderStatusLine({ providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens }, columns(), paint)}\n`
+      )
+      const line = await deps.io.readLine(composerPrompt(policy, paint))
+      if (line === null) break // Ctrl-D
+      text = line.trim()
+      if (!text) continue
+      // Persist composer submissions (commands included) for cross-restart recall;
+      // approval/question answers go through a different read and aren't saved.
+      deps.persistHistory?.(text)
+    }
 
     if (text.startsWith('/')) {
       const result = parseSlashCommand(text, deps.getSettings())
@@ -876,8 +886,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.startSpinner?.('Working')
 
+    // Track whether this turn produced a plan (assistant text) and how it ended,
+    // to offer a plan→execute handoff when running under plan mode.
+    let sawText = false
+    let endedCleanly = false
     const send = (e: AgentEvent): void => {
       if (e.type === 'text') {
+        sawText = true
         deps.io.out(md.push(e.delta))
         return
       }
@@ -957,6 +972,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· compacted ${e.summarized} messages\n`, 'dim'))
           break
         case 'done':
+          endedCleanly = e.stopReason === 'end_turn'
           deps.io.out('\n')
           break
       }
@@ -972,6 +988,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts
     activeRunId = null
+
+    // Plan-mode handoff: when a plan-mode turn presents a plan and stops, offer to
+    // switch to auto-edit and carry it out — the decision point plan mode is for,
+    // instead of manually /approval-ing and re-asking.
+    if (policy === 'plan' && sawText && endedCleanly) {
+      deps.io.out(
+        paint('\nPlan ready. Run it? [y] switch to auto-edit and proceed · anything else keeps planning\n', 'magenta')
+      )
+      const ans = await deps.io.readLine('> ', { discardPending: true })
+      if (parseApprovalAnswer(ans ?? '') === 'allow') {
+        policy = 'auto-edit'
+        autoInput = 'Proceed with the plan you just described.'
+        deps.io.out(paint('· switching to auto-edit and carrying out the plan\n', 'dim'))
+      }
+    }
   }
 
   deps.io.out(paint('\nBye.\n', 'dim'))

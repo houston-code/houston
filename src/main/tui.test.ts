@@ -929,6 +929,44 @@ describe('runTui', () => {
     expect(t.text()).toContain('capability info is unavailable')
   })
 
+  it('plan mode: accepting a plan switches to auto-edit and auto-runs it', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'text', delta: 'Here is the plan.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['make a plan', 'y', null]) // prompt, accept, then EOF
+    d.io = t.io
+    await runTui({ ...opts, approvalPolicy: 'plan' }, d)
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[0].policy).toBe('plan')
+    expect(rec.runs[1].policy).toBe('auto-edit')
+    expect(rec.runs[1].messages.at(-1)!.content).toBe('Proceed with the plan you just described.')
+  })
+
+  it('plan mode: declining keeps planning and does not re-run', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'text', delta: 'A plan.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['plan it', 'n', null])
+    d.io = t.io
+    await runTui({ ...opts, approvalPolicy: 'plan' }, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].policy).toBe('plan')
+  })
+
+  it('no plan prompt outside plan mode', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'text', delta: 'answer' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    await runTui(opts, d) // default policy 'ask'
+    expect(rec.runs).toHaveLength(1)
+    expect(t.text()).not.toContain('Plan ready')
+  })
+
   it('/theme switches the palette (with color on)', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['/theme bright', null])
