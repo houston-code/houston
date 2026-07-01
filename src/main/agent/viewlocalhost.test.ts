@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   captureLocalhost,
   formatConsole,
   isBlockedSubresourceHost,
   isLoopbackHost,
   loadWithDeadline,
+  resetCaptureBackend,
+  setCaptureBackend,
   validateLocalhostUrl,
   type CaptureSession,
   type ConsoleEntry,
@@ -225,5 +227,35 @@ describe('loadWithDeadline', () => {
     const p = loadWithDeadline(session, 'http://localhost:3000/', 1000, ac.signal)
     ac.abort()
     await expect(p).rejects.toThrow(/cancelled/)
+  })
+})
+
+describe('capture backend injection', () => {
+  afterEach(() => resetCaptureBackend())
+
+  it('throws a clear error when no backend is wired and no deps are passed', async () => {
+    resetCaptureBackend()
+    await expect(captureLocalhost({ url: 'http://localhost:3000' })).rejects.toThrow(/not configured/)
+  })
+
+  it('uses the wired backend when deps are omitted', async () => {
+    const { session, closed } = fakeSession({ screenshot: async () => Buffer.from('wired') })
+    const open = vi.fn(async () => session)
+    setCaptureBackend({ open })
+
+    const cap = await captureLocalhost({ url: 'http://localhost:3000' })
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(cap.png.toString()).toBe('wired')
+    expect(closed()).toBe(true)
+  })
+
+  it('lets explicit deps override the wired backend', async () => {
+    const wired = vi.fn()
+    setCaptureBackend({ open: wired })
+    const { session } = fakeSession({ screenshot: async () => Buffer.from('explicit') })
+
+    const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    expect(wired).not.toHaveBeenCalled()
+    expect(cap.png.toString()).toBe('explicit')
   })
 })

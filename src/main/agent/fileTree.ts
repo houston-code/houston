@@ -1,4 +1,4 @@
-// eslint-disable-next-line no-restricted-imports -- host-capability gesture (Finder/Explorer reveal); not agent-engine code and only imported by the shell (ipc.ts). Electron injection tracked with the viewlocalhost cleanup.
+// eslint-disable-next-line no-restricted-imports -- host-capability gesture (Finder/Explorer reveal); not agent-engine code (only the shell's ipc.ts imports it). Belongs outside agent/; relocating it is the remaining electron-in-engine cleanup.
 import { shell } from 'electron'
 import { promises as fs, existsSync, realpathSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
