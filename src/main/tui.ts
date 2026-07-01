@@ -403,8 +403,13 @@ export interface TuiIo {
    * Read one line, showing `prompt`. Resolves null on end-of-input (Ctrl-D),
    * which ends the session. Used for the composer, approvals, and questions
    * alike — the driver only ever has one read outstanding at a time.
+   *
+   * `discardPending` drops any input buffered before the prompt is shown. The
+   * driver sets it for security-sensitive reads (approvals, questions) so
+   * type-ahead the user entered while output was streaming can't silently answer
+   * a prompt they never saw.
    */
-  readLine: (prompt: string) => Promise<string | null>
+  readLine: (prompt: string, opts?: { discardPending?: boolean }) => Promise<string | null>
   /**
    * Register a handler for an interrupt (Ctrl-C). The driver uses it to cancel
    * the in-flight run without exiting. Optional so tests can drive interrupts
@@ -499,8 +504,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
-      // Release an approval/question prompt that may be blocking on input, so the
-      // aborted run doesn't leave the loop waiting on a read that will never come.
+      // Show that the interrupt registered — otherwise an aborted turn just stops
+      // with no feedback — then release any approval/question prompt blocked on
+      // input so the aborted run doesn't leave the loop waiting on a dead read.
+      deps.io.out(paint('\n^C interrupted\n', 'dim'))
       deps.io.cancelRead?.()
     }
   })
@@ -625,14 +632,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               const diff = extractDiff(toolArgs.get(e.callId) ?? {})
               if (diff) deps.io.out(`${colorizeDiff(diff, paint)}\n`)
             }
-            const ans = await deps.io.readLine('> ')
+            const ans = await deps.io.readLine('> ', { discardPending: true })
             deps.resolveApproval(e.runId, e.callId, parseApprovalAnswer(ans ?? ''))
           })
           break
         case 'tool_question':
           enqueue(async () => {
             deps.io.out(`${renderQuestion(e.question, e.options, e.multiSelect ?? false, paint)}\n`)
-            const ans = await deps.io.readLine('> ')
+            const ans = await deps.io.readLine('> ', { discardPending: true })
             deps.resolveQuestion(
               e.runId,
               e.callId,
