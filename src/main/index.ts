@@ -208,6 +208,10 @@ if (tui) {
     }
     // Colorize only when the environment says so (TTY, NO_COLOR, TERM, FORCE_COLOR).
     tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
+    // Load highlight.js lazily (dynamic import) so it stays out of the module graph
+    // that index.test.ts loads — only the real interactive path pulls it in.
+    const { highlightToHtml } = await import('./syntax')
+    const { default: hljs } = await import('highlight.js/lib/common')
     let code = 1
     try {
       code = await runTui(tui, {
@@ -220,6 +224,7 @@ if (tui) {
         resolveQuestion,
         cancelRun,
         io: createTerminalIo(),
+        highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
         persist: {
           create: ({ workspace, providerId, model }) =>
             createConversation({ workspace, providerId, model }),
