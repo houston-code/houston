@@ -525,6 +525,8 @@ export interface TuiDeps {
   now?: () => number
   /** Terminal width for the status line + wrapping; injectable. Defaults to 80. */
   columns?: () => number
+  /** Persist a submitted composer line to history (for Up/Down across restarts). */
+  persistHistory?: (line: string) => void
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
    * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
@@ -619,6 +621,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (line === null) break // Ctrl-D
     const text = line.trim()
     if (!text) continue
+    // Persist composer submissions (commands included) for cross-restart recall;
+    // approval/question answers go through a different read and aren't saved.
+    deps.persistHistory?.(text)
 
     if (text.startsWith('/')) {
       const result = parseSlashCommand(text, deps.getSettings())
