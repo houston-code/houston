@@ -17,9 +17,11 @@ import { initUpdates } from './updater'
 import { log } from './logger'
 import { getSettings, updateSettings, pruneRecentWorkspaces } from './store'
 import { LEGAL_VERSION } from '@shared/legal'
-import { startRun, resolveApproval, resolveQuestion, activeRunCount } from './agent/loop'
+import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
 import { parseHeadlessArgs, runHeadless } from './headless'
+import { parseTuiArgs, runTui, type TuiIo } from './tui'
+import { createInterface } from 'node:readline'
 import { activeBackendId, isSandboxed } from './sandbox'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
@@ -183,12 +185,87 @@ function createWindow(): void {
   }
 }
 
+/**
+ * Real terminal I/O for interactive mode, backed by node:readline. Kept here (not
+ * in tui.ts) so the driver stays pure and unit-testable — this is the thin adapter
+ * that binds it to stdin/stdout.
+ */
+function createTerminalIo(): TuiIo {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  let pending: ((line: string | null) => void) | null = null
+  rl.on('close', () => {
+    // Ctrl-D (or a closed stdin) ends any outstanding read with EOF.
+    if (pending) {
+      const resolve = pending
+      pending = null
+      resolve(null)
+    }
+  })
+  return {
+    out: (s) => process.stdout.write(s),
+    readLine: (prompt) =>
+      new Promise<string | null>((resolve) => {
+        pending = resolve
+        rl.question(prompt, (answer) => {
+          pending = null
+          resolve(answer)
+        })
+      }),
+    onInterrupt: (handler) => rl.on('SIGINT', handler),
+    cancelRead: () => {
+      if (pending) {
+        const resolve = pending
+        pending = null
+        resolve(null)
+      }
+    }
+  }
+}
+
+// Interactive terminal mode: `Houston -i [--cwd dir] [--approval policy] ...`.
+// A stay-resident REPL with no window; checked before headless so a lone `-i`
+// (no `-p`) picks the interactive path.
+const tui = parseTuiArgs(process.argv, process.cwd())
+
 // One-shot headless mode: `Houston -p "<prompt>" [--cwd dir] [--full-auto] [--json]`.
 // Runs the agent without a window and exits with a status code; everything else
 // (GUI, IPC, auto-update) is skipped.
-const headless = parseHeadlessArgs(process.argv, process.cwd())
+const headless = tui ? null : parseHeadlessArgs(process.argv, process.cwd())
 
-if (headless) {
+if (tui) {
+  app.whenReady().then(async () => {
+    // Interactive mode needs a real terminal for the composer and inline
+    // approval prompts. In a pipe/CI there's no TTY to read from — point the
+    // user at headless (`-p`) rather than hanging on a dead stdin.
+    if (!process.stdin.isTTY) {
+      process.stderr.write('Interactive mode (-i) needs a terminal. In a pipe, use `-p "<prompt>"`.\n')
+      app.exit(2)
+      return
+    }
+    // Only colorize a real terminal, and honor the NO_COLOR convention.
+    tui.color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
+    let code = 1
+    try {
+      code = await runTui(tui, {
+        getSettings,
+        recordLegalAcceptance: () => {
+          updateSettings({ legalAcceptedVersion: LEGAL_VERSION })
+        },
+        startRun,
+        resolveApproval,
+        resolveQuestion,
+        cancelRun,
+        io: createTerminalIo()
+      })
+    } catch (e) {
+      process.stderr.write(`Fatal: ${(e as Error).message}\n`)
+    } finally {
+      killAllShells()
+      disconnectAllMcp()
+      app.exit(code)
+    }
+  })
+} else if (headless) {
   app.whenReady().then(async () => {
     let code = 1
     try {

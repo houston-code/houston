@@ -152,6 +152,10 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   stdout — `Houston -p "<prompt>"` (read-only by default; add `--full-auto` to let
   it edit/run, `--json` for machine-readable events). Good for scripts and CI.
   See [Headless / scripting](#headless--scripting).
+- **Interactive terminal.** A stay-resident REPL in your terminal — `Houston -i`.
+  Conversation streams live, tool approvals and questions are answered inline, and
+  slash commands (`/model`, `/approval`, `/clear`, …) switch settings mid-session.
+  See [Interactive terminal](#interactive-terminal).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only —
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
@@ -386,6 +390,44 @@ non-zero on error. It reuses your saved settings and Keychain-stored API keys.
 it on a profile that hasn't accepted them you must pass `--accept-terms`;
 acceptance is then persisted (shared with the GUI), so later runs don't need it.
 Without it, the run prints the terms links and exits with code `2`.
+
+## Interactive terminal
+
+Prefer to stay in the terminal? Run a persistent, interactive session — a REPL you
+converse with directly, with no window:
+
+```bash
+# start an interactive session in the current directory
+Houston -i
+
+# pick the folder, model, and starting approval policy up front
+Houston -i --cwd ~/code/myproj --model claude --approval auto-edit
+```
+
+The conversation streams live as the agent works: assistant text and reasoning,
+tool activity, and token/cost. When a tool needs approval (under `ask` /
+`auto-edit`) you answer inline — `y` to allow, `n` to deny, `a` to always allow
+that kind — and a shell command with no OS sandbox is flagged before you approve
+it. When the agent asks a question (`ask_user`) the options are listed and you pick
+a number or type your own answer. Press `Ctrl-C` to interrupt the current turn
+(the session stays open); `Ctrl-D` to exit.
+
+Slash commands adjust the session without restarting:
+
+| Command | Effect |
+| --- | --- |
+| `/model [id]` | list configured models, or switch (`providerId`, `providerId/model`, or a bare model id) |
+| `/approval [policy]` | show or set the policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`) |
+| `/clear`, `/new` | start a fresh conversation |
+| `/cwd` | show the working directory |
+| `/help` | list commands |
+| `/exit`, `/quit` | leave |
+
+Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
+(default `ask`), `--full-auto`, and `--accept-terms`. It reuses your saved settings
+and Keychain-stored API keys, and the first-run terms gate applies the same way —
+interactive mode asks you to accept once (or pass `--accept-terms`). Running in a
+pipe (no TTY) isn't interactive; use headless `-p` there instead.
 
 ## Develop
 
