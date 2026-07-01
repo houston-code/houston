@@ -290,10 +290,11 @@ describe('startRun', () => {
     expect(outputs).toContain('BBB')
   })
 
-  it('runs the read subset of a MIXED turn concurrently, with the write sequential/approved, results in original order', async () => {
-    // A barrier that only releases once BOTH parallelizable reads have entered
-    // execute — if the reads ran sequentially, the second would never start
-    // before the first resolved and this would deadlock (test times out).
+  it('runs the LEADING read subset of a MIXED turn concurrently, with the trailing write sequential/approved, results in original order', async () => {
+    // A barrier that only releases once BOTH leading reads have entered execute —
+    // if the reads ran sequentially, the second would never start before the first
+    // resolved and this would deadlock (test times out). The reads LEAD the turn
+    // (nothing encumbered precedes them), so they are the parallel group.
     let arrived = 0
     let release!: () => void
     const barrier = new Promise<void>((r) => (release = r))
@@ -332,10 +333,11 @@ describe('startRun', () => {
       },
       turns: [
         [
-          // Original order: read_a, write, read_b — the write sits BETWEEN the reads.
+          // Original order: read_a, read_b, write — the two reads LEAD, the write
+          // trails. The leading reads parallelize; the write runs after.
           { type: 'tool_call', call: { id: 'ra', name: 'read_a', arguments: {} } },
-          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'W' } } },
           { type: 'tool_call', call: { id: 'rb', name: 'read_b', arguments: {} } },
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'W' } } },
           { type: 'done', stopReason: 'tool_use' }
         ],
         [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
@@ -347,19 +349,19 @@ describe('startRun', () => {
     // The write actually ran (sequential path, approved).
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('W')
 
-    // Every tool_result is present and in the ORIGINAL call order (ra, w1, rb),
+    // Every tool_result is present and in the ORIGINAL call order (ra, rb, w1),
     // both in the emitted events and in the persisted message log.
     const resultOrder = r.events
       .filter((e) => e.type === 'tool_result')
       .map((e) => (e as { callId: string }).callId)
-    expect(resultOrder).toEqual(['ra', 'w1', 'rb'])
+    expect(resultOrder).toEqual(['ra', 'rb', 'w1'])
 
     const toolMsgs = r.messages.filter((m) => m.role === 'tool')
-    expect(toolMsgs.map((m) => m.toolCallId)).toEqual(['ra', 'w1', 'rb'])
+    expect(toolMsgs.map((m) => m.toolCallId)).toEqual(['ra', 'rb', 'w1'])
     // The two read results keep their exact content and their original positions,
-    // even though they resolved concurrently and out of order relative to the write.
+    // even though they resolved concurrently.
     expect(toolMsgs[0].content).toBe('RESULT_A')
-    expect(toolMsgs[2].content).toBe('RESULT_B')
+    expect(toolMsgs[1].content).toBe('RESULT_B')
   }, 20_000)
 
   it('rejects a tool call with invalid arguments before dispatch and returns a repair message', async () => {
@@ -431,6 +433,106 @@ describe('startRun', () => {
     expect(result?.ok).toBe(false)
     expect(result?.output).toContain('Invalid arguments')
     expect(result?.output).toContain('content')
+  })
+
+  it('preserves intra-turn read-after-write: a read after a write in the same turn observes the WRITTEN content', async () => {
+    // [write_file X, read_file X] in one turn. Because the read follows the write,
+    // it must run sequentially AFTER the write (not race ahead in the parallel
+    // group), so it observes the just-written content rather than a stale/absent
+    // file. Regression guard for the read-after-write ordering fix.
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'w1', name: 'write_file', arguments: { path: 'note.txt', content: 'FRESH' } }
+          },
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+
+    // The write ran, then the read saw its output.
+    expect(readFileSync(join(ws, 'note.txt'), 'utf8')).toBe('FRESH')
+    const readResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'read_file') as
+      | { ok: boolean; output: string }
+      | undefined
+    expect(readResult?.ok).toBe(true)
+    expect(readResult?.output).toContain('FRESH')
+
+    // Results are appended in original call order (write, then read).
+    const toolMsgs = r.messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs.map((m) => m.toolCallId)).toEqual(['w1', 'r1'])
+    expect(toolMsgs[1].content).toContain('FRESH')
+  })
+
+  it('runs a leading parallel read group where one read has invalid args: the valid read executes, the invalid one is repaired, both appear in original order', async () => {
+    // Two leading reads (parallel group): the first has bad args (repaired without
+    // a tool_start, never executed), the second is valid and runs. Both produce a
+    // tool_result in original order, and the invalid one carries the repair message.
+    let validExecuted = false
+    const strictRead: ToolDef = {
+      kind: 'read',
+      summarize: () => 'strict read',
+      schema: {
+        name: 'strict_read',
+        description: 'requires a string path',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false
+        }
+      },
+      execute: async () => 'SHOULD NOT RUN'
+    }
+    const okRead: ToolDef = {
+      kind: 'read',
+      summarize: () => 'ok read',
+      schema: { name: 'ok_read', description: 'ok read', parameters: { type: 'object', properties: {} } },
+      execute: async () => {
+        validExecuted = true
+        return 'VALID_OUTPUT'
+      }
+    }
+    h.mcpDefs = [strictRead, okRead]
+
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          // Both lead the turn, so both are in the parallel group.
+          { type: 'tool_call', call: { id: 'bad', name: 'strict_read', arguments: { path: 123 } } },
+          { type: 'tool_call', call: { id: 'good', name: 'ok_read', arguments: {} } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+
+    // The valid read executed; the invalid one never did.
+    expect(validExecuted).toBe(true)
+
+    // No tool_start was emitted for the refused (invalid-args) call.
+    const startedIds = r.events
+      .filter((e) => e.type === 'tool_start')
+      .map((e) => (e as { callId: string }).callId)
+    expect(startedIds).toContain('good')
+    expect(startedIds).not.toContain('bad')
+
+    // Both results are present, in ORIGINAL call order (bad, good).
+    const resultOrder = r.events
+      .filter((e) => e.type === 'tool_result')
+      .map((e) => (e as { callId: string }).callId)
+    expect(resultOrder).toEqual(['bad', 'good'])
+
+    const toolMsgs = r.messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs.map((m) => m.toolCallId)).toEqual(['bad', 'good'])
+    expect(toolMsgs[0].content).toContain('Invalid arguments')
+    expect(toolMsgs[1].content).toBe('VALID_OUTPUT')
   })
 
   it('retries a transient failure, then succeeds (nothing streamed yet)', async () => {
@@ -1223,6 +1325,59 @@ describe('ask_user', () => {
       expect(r2?.content).toBe(INTERRUPTED_TOOL_RESULT)
       // Neither file was actually written.
       expect(existsSync(join(ws, 'a.txt'))).toBe(false)
+      expect(existsSync(join(ws, 'b.txt'))).toBe(false)
+    })
+
+    it('preserves already-completed real outputs when a sequential turn is stopped mid-sequence', async () => {
+      // Two writes in one turn under full-auto (no approval prompts, so both run
+      // without blocking). Stop the run the moment the FIRST write's result is
+      // emitted: the second iteration's abort check returns before it runs. Because
+      // each result is flushed INLINE, the first write's real output must survive —
+      // only the un-run second call gets the interrupted placeholder. Guards against
+      // the abort-drops-completed-outputs regression (which risked duplicated side
+      // effects on continuation).
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'DONE' } } },
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'b.txt', content: 'NEVER' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ])
+      const runId = 'run-stop-mid-sequential'
+      let messages: ChatMessage[] = []
+      const send = (e: AgentEvent): void => {
+        // Stop the instant the first write's result is emitted — synchronously, so
+        // the abort signal is set before the second call's top-of-loop abort check
+        // runs (mirrors the renderer stopping between two streamed results).
+        if (e.type === 'tool_result' && e.callId === 'w1') cancelRun(runId)
+      }
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'write both files' }]
+        },
+        send,
+        (m) => {
+          messages = m
+        }
+      )
+
+      // The first write really happened and its result is the REAL output, not the
+      // interrupted placeholder.
+      expect(existsSync(join(ws, 'a.txt'))).toBe(true)
+      const r1 = messages.find((m) => m.role === 'tool' && m.toolCallId === 'w1')
+      expect(r1?.content).not.toBe(INTERRUPTED_TOOL_RESULT)
+      expect(r1?.content).toContain('a.txt')
+
+      // The second write never ran; it carries the interruption placeholder and the
+      // file was never created (no duplicate side effect on continuation).
+      expect(missingToolResults(messages)).toEqual([])
+      const r2 = messages.find((m) => m.role === 'tool' && m.toolCallId === 'w2')
+      expect(r2?.content).toBe(INTERRUPTED_TOOL_RESULT)
       expect(existsSync(join(ws, 'b.txt'))).toBe(false)
     })
   })

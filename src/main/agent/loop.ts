@@ -835,20 +835,19 @@ export async function startRun(
 
       // ---------------------------------------------------------------------
       // Tool dispatch. A turn can mix parallelizable reads with encumbered calls
-      // (writes/shell/network/MCP/gated/hooked/ask_user). We run the independent
-      // read subset CONCURRENTLY while the rest runs SEQUENTIALLY in its original
-      // relative order, then append every tool_result to the message log in the
-      // ORIGINAL call order — so the transcript and the window the model sees are
-      // identical to a fully-sequential run. The all-reads case is just the
-      // partition where `sequential` is empty; the all-encumbered case is the one
-      // where `parallel` is empty (fully sequential, exactly as before).
+      // (writes/shell/network/MCP/gated/hooked/ask_user). We run the CONTIGUOUS
+      // LEADING run of unencumbered reads CONCURRENTLY, then the rest — the first
+      // encumbered call and everything after it (including any later reads) —
+      // SEQUENTIALLY in its original relative order. Because the parallel group is
+      // entirely before the sequential group in original order, results are flushed
+      // (tool_result + appended to the log) INLINE as each call finalizes, still in
+      // ORIGINAL call order, so the transcript and the model's window match a
+      // fully-sequential run — and a read that follows a write in the same turn sees
+      // the write. The all-reads case is the partition where `sequential` is empty;
+      // a turn led by an encumbered call has `parallel` empty (fully sequential).
       // ---------------------------------------------------------------------
 
-      // Per-call outcome, ready to emit + append. `slots` is indexed by the call's
-      // original position so we can flush results in model-visible order regardless
-      // of the order the parallel/sequential groups actually finished in. A slot may
-      // stay undefined only if the run aborts mid-sequential-dispatch — that early
-      // return emits its own terminal 'done' and never reaches the flush.
+      // Per-call outcome, ready to emit + append.
       interface CallResult {
         call: ToolCall
         output: string
@@ -856,7 +855,42 @@ export async function startRun(
         images: ImageAttachment[]
         documents: DocumentAttachment[]
       }
-      const slots: (CallResult | undefined)[] = new Array(toolCalls.length)
+
+      // Flush one finalized call: emit tool_result, fire the onToolResult plugin
+      // event, and append the tool message — so each tool_use is answered exactly
+      // once and the persisted log stays provider-valid (role alternation, matched
+      // toolCallId pairing). Called INLINE the moment a call finalizes (parallel
+      // group in original order right after Promise.all; sequential group one at a
+      // time) so a mid-turn abort never discards an already-completed real result:
+      // whatever has been appended persists, and only not-yet-run calls get the
+      // interrupted placeholder from the finally block's repair pass.
+      const flushResult = async (r: CallResult): Promise<void> => {
+        emit({
+          type: 'tool_result',
+          callId: r.call.id,
+          name: r.call.name,
+          ok: r.ok,
+          output: r.output,
+          ...(r.images.length ? { images: r.images } : {})
+        })
+        await plugins.emit('onToolResult', {
+          tool: r.call.name,
+          input: r.call.arguments,
+          output: r.output,
+          ok: r.ok
+        })
+        messages.push({
+          role: 'tool',
+          content: r.output,
+          toolCallId: r.call.id,
+          toolName: r.call.name,
+          ...(r.images.length ? { images: r.images } : {}),
+          ...(r.documents.length ? { documents: r.documents } : {})
+        })
+        // Persist after each append so a mid-turn abort return (which skips the
+        // trailing onMessages) still leaves completed results in the saved log.
+        onMessages?.(messages)
+      }
 
       // Validate a call's arguments against its declared schema BEFORE any
       // dispatch. On a mismatch we short-circuit to a model-friendly repair
@@ -878,26 +912,30 @@ export async function startRun(
         }
       }
 
-      // Partition this turn's calls. `isParallelCall` already excludes ask_user,
-      // MCP, writes/shell/network, gated (deny/ask) rules, and hooked tools.
+      // Partition this turn's calls into the CONTIGUOUS LEADING run of unencumbered
+      // reads and the sequential rest (the first encumbered call and everything
+      // after it, including later reads). Because the parallel group is entirely
+      // before the sequential group in original order, we can flush each group's
+      // results as soon as they finalize and still keep the model-visible order.
       const { parallel, sequential } = partitionCalls(toolCalls, isParallelCall)
 
-      // --- Parallel group: unencumbered reads, all dispatched at once. ---------
+      // --- Parallel group: leading unencumbered reads, all dispatched at once. --
       // These need no approval, plan check, hooks, or checkpoint, so there's no
-      // ordering constraint between them. We still validate each before executing
-      // and emit tool_start for the ones that actually run (renderer + plugins see
-      // the call). Results land in their original slot; the ordered flush below
-      // emits tool_result/appends messages in call order.
-      for (const { call } of parallel) {
-        const invalid = validationFailure(call)
-        if (invalid) continue // tool_start intentionally not emitted for a refused call
+      // ordering constraint between them. Validate each ONCE up front (reused for
+      // both the tool_start decision and the execute map), emit tool_start for the
+      // ones that actually run, then dispatch via Promise.all and flush the results
+      // in original call order.
+      const parallelValidation = parallel.map(({ call }) => validationFailure(call))
+      for (let p = 0; p < parallel.length; p++) {
+        if (parallelValidation[p]) continue // tool_start intentionally not emitted for a refused call
+        const { call } = parallel[p]
         emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
         await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
       }
       const parallelResults = await Promise.all(
-        parallel.map(async ({ call, index }): Promise<[number, CallResult]> => {
-          const invalid = validationFailure(call)
-          if (invalid) return [index, invalid]
+        parallel.map(async ({ call }, p): Promise<CallResult> => {
+          const invalid = parallelValidation[p]
+          if (invalid) return invalid
           const images: ImageAttachment[] = []
           const documents: DocumentAttachment[] = []
           let output: string
@@ -915,19 +953,21 @@ export async function startRun(
             output = `Error: ${(e as Error).message}`
             ok = false
           }
-          return [index, { call, output, ok, images, documents }]
+          return { call, output, ok, images, documents }
         })
       )
-      for (const [index, result] of parallelResults) slots[index] = result
+      for (const result of parallelResults) await flushResult(result)
 
-      // --- Sequential group: everything else, one call at a time. --------------
-      // Preserves the original relative order of the encumbered calls and every
-      // existing semantic: unknown-tool, deny rule, plan block, approval prompts,
-      // "Allow for run"/rule persistence, Pre/PostToolUse hooks, write checkpoints,
-      // format/diagnostics-on-save, and per-call abort checks. Identical to the old
-      // sequential path, except the outcome is stored in `slots[index]` (flushed in
-      // order below) instead of being emitted/appended inline.
-      for (const { call, index } of sequential) {
+      // --- Sequential group: the first encumbered call and everything after it,
+      // one call at a time. -----------------------------------------------------
+      // Preserves the original relative order and every existing semantic:
+      // unknown-tool, deny rule, plan block, approval prompts, "Allow for run"/rule
+      // persistence, Pre/PostToolUse hooks, write checkpoints, format/diagnostics-
+      // on-save, and per-call abort checks. Each outcome is flushed INLINE the
+      // moment it finalizes, so an abort partway through this loop leaves the
+      // already-completed real results in the log (only the not-yet-run calls get
+      // the interrupted placeholder from the finally block).
+      for (const { call } of sequential) {
         if (abort.signal.aborted) {
           emit({ type: 'done', stopReason: 'aborted' })
           return
@@ -1122,47 +1162,15 @@ export async function startRun(
           }
         }
 
-        slots[index] = {
+        await flushResult({
           call,
           output,
           ok,
           images: toolImages,
           documents: toolDocs
-        }
+        })
       }
 
-      // --- Ordered flush. -------------------------------------------------------
-      // Emit tool_result + fire the onToolResult plugin event + append the tool
-      // message, all in ORIGINAL call order, so each tool_use is answered exactly
-      // once and the persisted log stays provider-valid (role alternation, matched
-      // toolCallId pairing). Every slot is populated: the sequential path fills its
-      // slots inline and only leaves them empty on an early abort return (which
-      // never reaches here). A `!` guard keeps that invariant explicit.
-      for (let i = 0; i < toolCalls.length; i++) {
-        const r = slots[i]!
-        emit({
-          type: 'tool_result',
-          callId: r.call.id,
-          name: r.call.name,
-          ok: r.ok,
-          output: r.output,
-          ...(r.images.length ? { images: r.images } : {})
-        })
-        await plugins.emit('onToolResult', {
-          tool: r.call.name,
-          input: r.call.arguments,
-          output: r.output,
-          ok: r.ok
-        })
-        messages.push({
-          role: 'tool',
-          content: r.output,
-          toolCallId: r.call.id,
-          toolName: r.call.name,
-          ...(r.images.length ? { images: r.images } : {}),
-          ...(r.documents.length ? { documents: r.documents } : {})
-        })
-      }
       onMessages?.(messages)
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
