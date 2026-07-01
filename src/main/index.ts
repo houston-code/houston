@@ -24,13 +24,18 @@ import { LEGAL_VERSION } from '@shared/legal'
 import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
 import { parseHeadlessArgs, runHeadless } from './headless'
-import { parseTuiArgs, runTui, makePainter } from './tui'
+import { parseTuiArgs, runTui, makePainter, mediaTypeForImagePath } from './tui'
 import { createTerminalIo, resolveColor } from './tui-io'
 import { makeCompleter } from './tui-complete'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
+import {
+  isSupportedImageType,
+  exceedsImageSizeLimit,
+  SUPPORTED_IMAGE_TYPES
+} from '@shared/images'
 import {
   createConversation,
   setMessages,
@@ -272,6 +277,19 @@ if (tui) {
         resolveQuestion,
         cancelRun,
         persistHistory,
+        loadImage: (p) => {
+          const mediaType = mediaTypeForImagePath(p)
+          if (!mediaType || !isSupportedImageType(mediaType)) {
+            return { error: `unsupported image type (use ${SUPPORTED_IMAGE_TYPES.join(', ')})` }
+          }
+          try {
+            const data = readFileSync(join(tui.cwd, p)).toString('base64')
+            if (exceedsImageSizeLimit(data)) return { error: 'image is too large' }
+            return { image: { mediaType, data } }
+          } catch {
+            return { error: `could not read ${p}` }
+          }
+        },
         capabilities: async () => {
           const s = getSettings()
           const [skills, agents] = await Promise.all([loadSkills(tui.cwd), loadAgents(tui.cwd)])

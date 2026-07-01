@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import type { AgentEvent, AgentRunRequest, ChatMessage, QuestionOption } from '@shared/agent'
+import type { ImageAttachment } from '@shared/images'
 import { contextWindowFor, contextPercent } from '@shared/usage'
 import { truncateVisible } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
@@ -421,6 +422,24 @@ function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s
 }
 
+/** Media type for an image path by extension, or null if not a supported image. */
+export function mediaTypeForImagePath(path: string): string | null {
+  const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
+  switch (ext) {
+    case 'png':
+      return 'image/png'
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'gif':
+      return 'image/gif'
+    case 'webp':
+      return 'image/webp'
+    default:
+      return null
+  }
+}
+
 // --- Slash commands ----------------------------------------------------------
 
 export type SlashResult =
@@ -431,6 +450,7 @@ export type SlashResult =
   | { kind: 'fork' }
   | { kind: 'capability'; which: 'skills' | 'agents' | 'mcp' | 'hooks' }
   | { kind: 'set-theme'; theme: ThemeName }
+  | { kind: 'image'; path: string }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
   | { kind: 'unknown'; name: string }
@@ -467,6 +487,8 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
       if (isThemeName(arg)) return { kind: 'set-theme', theme: arg }
       return { kind: 'handled' } // no/invalid arg → driver lists themes
     }
+    case 'image':
+      return arg ? { kind: 'image', path: arg } : { kind: 'handled' }
     case 'approval': {
       if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
@@ -526,6 +548,7 @@ export const HELP_TEXT = [
   '  /skills /agents       list workspace skills / custom agents',
   '  /mcp /hooks           list configured MCP servers / hooks',
   '  /theme [name]         list or switch color theme (default | bright | mono)',
+  '  /image <path>         attach an image to your next message',
   '  /cwd                  show the working directory',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
@@ -600,6 +623,8 @@ export interface TuiDeps {
   persistHistory?: (line: string) => void
   /** Snapshot of the workspace's skills / agents / MCP servers / hooks, for /mcp etc. */
   capabilities?: () => Promise<CapabilitySnapshot>
+  /** Read + validate an image file for `/image`; returns the attachment or an error. */
+  loadImage?: (path: string) => { image: ImageAttachment } | { error: string }
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
    * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
@@ -661,6 +686,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // until then, or after `/clear` starts a fresh one.
   let conversationId: string | null = null
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
+  // Image attachments staged via /image, attached to (and cleared by) the next turn.
+  let pendingImages: ImageAttachment[] = []
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
   const nowFn = deps.now ?? Date.now
@@ -758,6 +785,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(`${renderCapabilityList(labels[result.which], snap[result.which], paint)}\n`)
         continue
       }
+      if (result.kind === 'image') {
+        if (!deps.loadImage) {
+          deps.io.out(paint('· image attachments are unavailable\n', 'dim'))
+          continue
+        }
+        if (pendingImages.length >= 8) {
+          deps.io.out(paint('· already have 8 images staged (the max)\n', 'yellow'))
+          continue
+        }
+        const loaded = deps.loadImage(result.path)
+        if ('error' in loaded) {
+          deps.io.out(paint(`· ${loaded.error}\n`, 'yellow'))
+          continue
+        }
+        pendingImages.push(loaded.image)
+        deps.io.out(paint(`· attached ${result.path} (${pendingImages.length} staged)\n`, 'dim'))
+        continue
+      }
       if (result.kind === 'set-approval') {
         policy = result.policy
         deps.io.out(paint(`· approval policy → ${policy}\n`, 'dim'))
@@ -783,7 +828,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       continue
     }
 
-    messages.push({ role: 'user', content: text })
+    messages.push({
+      role: 'user',
+      content: text,
+      ...(pendingImages.length ? { images: pendingImages } : {})
+    })
+    pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session
     // survives restarts and is resumable. Ephemeral when no store is injected.
     if (deps.persist && !conversationId) {
