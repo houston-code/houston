@@ -9,7 +9,7 @@ import type { ProviderConfig } from '@shared/types'
 
 const secrets = vi.hoisted(() => ({ key: null as string | null, stored: false }))
 
-vi.mock('../secrets', () => ({
+vi.mock('../agentHost', () => ({
   getKey: () => secrets.key,
   hasStoredKey: () => secrets.stored
 }))

@@ -19,6 +19,7 @@
  * whatever the dev server serves is untrusted.
  */
 
+// eslint-disable-next-line no-restricted-imports -- host-capability tool: the offscreen BrowserWindow screenshot backend genuinely needs Electron at runtime. The pure orchestration above is already behind the CaptureDeps seam; extracting this default `open` factory to the shell (so loop.ts injects it) is the follow-up that fully frees the engine.
 import { BrowserWindow, session, type Session } from 'electron'
 // The loopback host classifier and URL validator are shared with the live Preview
 // dock (preview.ts) and the background-shell URL detector; re-export them so this

@@ -35,7 +35,7 @@ const h = vi.hoisted(() => ({
   pluginEvents: [] as Array<{ event: string; payload: unknown }>
 }))
 
-vi.mock('../store', () => ({
+vi.mock('../agentHost', () => ({
   getSettings: () => h.settings,
   addPermissionRule: (rule: unknown) => {
     h.addedRules.push(rule)
@@ -48,9 +48,9 @@ vi.mock('../store', () => ({
     requiresKey: false,
     hasKey: true,
     builtIn: true
-  })
+  }),
+  getKey: () => null
 }))
-vi.mock('../secrets', () => ({ getKey: () => null }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
 vi.mock('./git', () => ({ gitContext: async () => '' }))

@@ -16,6 +16,7 @@ import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
 import { log } from './logger'
 import { getSettings, updateSettings, pruneRecentWorkspaces } from './store'
+import { wireAgentHost } from './wireAgentHost'
 import { LEGAL_VERSION } from '@shared/legal'
 import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
@@ -37,6 +38,11 @@ process.on('unhandledRejection', (reason) => log.error('unhandledRejection', rea
 // resolved userData/Keychain, so stored keys would land in / be read from an
 // inconsistent location and silently fail to persist.
 app.setName(APP_NAME)
+
+// Bind the agent engine to the Electron-backed settings/secret storage before any
+// run can start (all three clients — GUI, headless, TUI — boot through here). The
+// engine itself never imports store/secrets, so this is the single wiring point.
+wireAgentHost()
 
 let mainWindow: BrowserWindow | null = null
 

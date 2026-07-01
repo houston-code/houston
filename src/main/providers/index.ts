@@ -1,6 +1,6 @@
 import type { Provider } from '@shared/agent'
 import type { ModelOption, ProviderConfig } from '@shared/types'
-import { getKey, hasStoredKey } from '../secrets'
+import { getKey, hasStoredKey } from '../agentHost'
 import { createAnthropicProvider, listAnthropicModels } from './anthropic'
 import { createOpenAIProvider, listOpenAIModels } from './openai'
 import { createResponsesProvider } from './responses'

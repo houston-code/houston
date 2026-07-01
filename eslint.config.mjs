@@ -26,5 +26,44 @@ export default tseslint.config(
       ],
       'no-empty': ['error', { allowEmptyCatch: true }]
     }
+  },
+  {
+    // Keep the agent engine's dependency graph Electron-free so it stays portable
+    // to non-Electron hosts (the full-screen TUI as its own bundle, a future
+    // embeddable SDK) and unit-testable without a running app. Engine code reads
+    // settings/secrets via the injected `agentHost` accessor, never `store` /
+    // `secrets` (which import electron) or `electron` directly. The two existing
+    // host-capability tools that genuinely need Electron at runtime
+    // (`viewlocalhost` — offscreen BrowserWindow screenshot; `fileTree` — Finder
+    // reveal) carry a documented `eslint-disable` until their capabilities are
+    // injected too. Tests mock the boundary, so they're exempt.
+    files: [
+      'src/main/agent/**/*.ts',
+      'src/main/providers/**/*.ts',
+      'src/main/mcp/**/*.ts',
+      'src/main/sandbox/**/*.ts'
+    ],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'electron',
+              message:
+                'Agent-engine code must not import electron directly — inject host capabilities via ../agentHost so the engine stays portable (TUI/SDK). See agentHost.ts.'
+            }
+          ],
+          patterns: [
+            {
+              group: ['**/store', '**/secrets'],
+              message:
+                'Agent-engine code must stay Electron-free: read settings/secrets from ../agentHost, not store/secrets (which import electron). See agentHost.ts.'
+            }
+          ]
+        }
+      ]
+    }
   }
 )

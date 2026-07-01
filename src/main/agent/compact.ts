@@ -1,7 +1,7 @@
 import type { ChatMessage } from '@shared/agent'
 import { contextWindowFor } from '@shared/usage'
 import { createProvider } from '../providers'
-import { getProvider } from '../store'
+import { getProvider } from '../agentHost'
 import { getConversation, setMessages } from '../conversations'
 import {
   KEEP_RECENT_USER_TURNS,
