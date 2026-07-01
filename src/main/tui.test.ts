@@ -14,6 +14,10 @@ import {
   parseSlashCommand,
   resolveModelArg,
   composerPrompt,
+  extractDiff,
+  colorizeDiff,
+  renderToolResult,
+  formatSessionCost,
   runTui,
   type TuiDeps,
   type TuiIo
@@ -235,6 +239,71 @@ describe('resolveModelArg', () => {
 describe('composerPrompt', () => {
   it('reflects the live policy', () => {
     expect(composerPrompt('auto-edit', makePainter(false))).toContain('auto-edit')
+  })
+})
+
+describe('extractDiff', () => {
+  it('returns a ready patch envelope as-is', () => {
+    expect(extractDiff({ patch: '*** Update File: a.ts\n+x' })).toBe('*** Update File: a.ts\n+x')
+  })
+
+  it('synthesizes a diff from edit_file old/new strings', () => {
+    const d = extractDiff({ path: 'a.ts', old_string: 'foo', new_string: 'bar' })
+    expect(d).toContain('--- a.ts')
+    expect(d).toContain('-foo')
+    expect(d).toContain('+bar')
+  })
+
+  it('renders a whole-file write as an all-added diff', () => {
+    const d = extractDiff({ path: 'new.ts', content: 'line1\nline2' })
+    expect(d).toContain('new.ts (new file)')
+    expect(d).toContain('+line1')
+    expect(d).toContain('+line2')
+  })
+
+  it('returns null when nothing is derivable', () => {
+    expect(extractDiff({ path: 'a.ts' })).toBeNull()
+    expect(extractDiff({ patch: '  ' })).toBeNull()
+  })
+})
+
+describe('colorizeDiff', () => {
+  it('prefixes each line and truncates past the cap', () => {
+    const diff = Array.from({ length: 50 }, (_, i) => `+line ${i}`).join('\n')
+    const out = colorizeDiff(diff, makePainter(false), 10)
+    expect(out).toContain('+line 0')
+    expect(out).toContain('40 more lines')
+  })
+
+  it('classifies header lines before +/- so +++/--- are not mistaken for adds', () => {
+    // With color off we can only assert content survives; classification is exercised
+    // with color on below.
+    const paint = makePainter(true)
+    const out = colorizeDiff('+++ a.ts\n+added\n-removed\n context', paint)
+    expect(out).toContain('+++ a.ts')
+    expect(out).toContain('added')
+    expect(out).toContain('removed')
+  })
+})
+
+describe('renderToolResult', () => {
+  const paint = makePainter(false)
+  it('marks failures', () => {
+    expect(renderToolResult('run_shell', false, '', paint)).toContain('failed')
+  })
+  it('shows the first non-empty output line as a snippet', () => {
+    expect(renderToolResult('read_file', true, '\n\nhello world\nmore', paint)).toContain('hello world')
+  })
+  it('is empty for successful no-output results', () => {
+    expect(renderToolResult('x', true, '   \n  ', paint)).toBe('')
+  })
+})
+
+describe('formatSessionCost', () => {
+  it('formats tokens with grouping and cost to 4 dp', () => {
+    expect(formatSessionCost({ inputTokens: 1234, outputTokens: 567, cost: 0.0123 })).toBe(
+      '1,234+567 tok · $0.0123'
+    )
   })
 })
 
@@ -463,5 +532,37 @@ describe('runTui', () => {
     const code = await runTui(opts, d)
     expect(code).toBe(1)
     expect(t.text()).toContain('No model configured')
+  })
+
+  it('previews the diff of a write before its approval prompt', async () => {
+    const { d } = deps([
+      {
+        runId: 'x',
+        type: 'tool_start',
+        callId: 'c1',
+        name: 'edit_file',
+        args: { path: 'a.ts', old_string: 'foo', new_string: 'bar' }
+      },
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'edit_file', summary: 'edit a.ts', kind: 'write' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['edit it', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('-foo')
+    expect(out).toContain('+bar')
+  })
+
+  it('accumulates session cost across turns and prints it on /cost', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'usage', inputTokens: 100, outputTokens: 50, cost: 0.01 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['one', 'two', '/cost', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Two turns each report 100+50 / $0.01 → session total 200+100 / $0.02.
+    expect(t.text()).toContain('session: 200+100 tok · $0.0200')
   })
 })

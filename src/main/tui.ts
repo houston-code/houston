@@ -142,6 +142,64 @@ export function parseApprovalAnswer(answer: string): 'allow' | 'deny' | 'always'
   return 'deny'
 }
 
+/**
+ * Reconstruct a reviewable diff from a write tool's arguments (captured at
+ * `tool_start`), so an edit can be seen before it's approved. Handles the shapes
+ * of the built-in write tools: `apply_patch` (a ready patch envelope), `edit_file`
+ * (old→new strings), and `write_file` (whole-file content). Returns null when no
+ * diff can be derived.
+ */
+export function extractDiff(args: Record<string, unknown>): string | null {
+  const path = typeof args.path === 'string' ? args.path : undefined
+  if (typeof args.patch === 'string' && args.patch.trim()) return args.patch
+  if (typeof args.old_string === 'string' && typeof args.new_string === 'string') {
+    const header = path ? `--- ${path}\n+++ ${path}\n` : ''
+    const minus = args.old_string.split('\n').map((l) => `-${l}`).join('\n')
+    const plus = args.new_string.split('\n').map((l) => `+${l}`).join('\n')
+    return `${header}${minus}\n${plus}`
+  }
+  if (typeof args.content === 'string') {
+    const header = path ? `+++ ${path} (new file)\n` : ''
+    return header + args.content.split('\n').map((l) => `+${l}`).join('\n')
+  }
+  return null
+}
+
+/** Colorize a unified diff, capped at `maxLines` so a huge edit doesn't flood the terminal. */
+export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): string {
+  const lines = diff.split('\n')
+  const shown = lines.slice(0, maxLines).map((l) => {
+    // Header markers must be checked before +/- since `+++`/`---` also start with them.
+    if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('@@')) return paint(l, 'cyan')
+    if (l.startsWith('+')) return paint(l, 'green')
+    if (l.startsWith('-')) return paint(l, 'red')
+    return paint(l, 'dim')
+  })
+  if (lines.length > maxLines) shown.push(paint(`… ${lines.length - maxLines} more lines`, 'dim'))
+  return shown.map((l) => `  ${l}`).join('\n')
+}
+
+/** One-line result summary: a failure marker, or a dimmed snippet of the output's first content line. */
+export function renderToolResult(name: string, ok: boolean, output: string, paint: Painter): string {
+  if (!ok) return paint(`  ✗ ${name} failed`, 'red')
+  const firstLine = output.split('\n').find((l) => l.trim()) ?? ''
+  const snippet = truncate(firstLine.trim(), 80)
+  return snippet ? paint(`  ↳ ${snippet}`, 'dim') : ''
+}
+
+/** Running token/cost totals for the session. */
+export interface SessionCost {
+  inputTokens: number
+  outputTokens: number
+  cost: number
+}
+
+/** Format a cost total, e.g. "1,234+567 tok · $0.0123". */
+export function formatSessionCost(c: SessionCost): string {
+  const n = (v: number): string => v.toLocaleString('en-US')
+  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · $${c.cost.toFixed(4)}`
+}
+
 /** The prompt shown for an `ask_user` question: the question plus numbered options. */
 export function renderQuestion(
   question: string,
@@ -233,6 +291,7 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
     }
     case 'help':
     case 'cwd':
+    case 'cost':
     case 'model?':
       return { kind: 'handled' }
     default:
@@ -273,6 +332,7 @@ export const HELP_TEXT = [
   '  /model [id]           list models, or switch (providerId, providerId/model, or model)',
   '  /approval [policy]    show or set policy (plan | ask | auto-edit | full-auto)',
   '  /clear, /new          start a fresh conversation',
+  '  /cost                 show session token + cost totals',
   '  /cwd                  show the working directory',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
@@ -367,6 +427,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let policy = opts.approvalPolicy
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
+  const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
 
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
@@ -415,7 +476,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       // 'handled' — informational commands print here where the state lives.
-      handleInfoCommand(text, { providerId, model, policy, cwd: opts.cwd }, deps, paint)
+      handleInfoCommand(text, { providerId, model, policy, cwd: opts.cwd, sessionCost }, deps, paint)
       continue
     }
 
@@ -436,6 +497,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     const enqueue = (task: () => Promise<void>): void => {
       prompts = prompts.then(task).catch(() => {})
     }
+    // Args captured at tool_start, so a write approval can show the actual diff
+    // (the approval event itself only carries a human summary).
+    const toolArgs = new Map<string, Record<string, unknown>>()
 
     const send = (e: AgentEvent): void => {
       switch (e.type) {
@@ -446,14 +510,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(e.delta, 'dim'))
           break
         case 'tool_start':
+          toolArgs.set(e.callId, e.args)
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
-        case 'tool_result':
-          if (!e.ok) deps.io.out(paint(`  ✗ ${e.name} failed\n`, 'red'))
+        case 'tool_result': {
+          const line = renderToolResult(e.name, e.ok, e.output, paint)
+          if (line) deps.io.out(`${line}\n`)
+          toolArgs.delete(e.callId)
           break
+        }
         case 'tool_approval':
           enqueue(async () => {
             deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
+            // For a write, show the diff being approved when we can reconstruct it.
+            if (e.kind === 'write') {
+              const diff = extractDiff(toolArgs.get(e.callId) ?? {})
+              if (diff) deps.io.out(`${colorizeDiff(diff, paint)}\n`)
+            }
             const ans = await deps.io.readLine('> ')
             deps.resolveApproval(e.runId, e.callId, parseApprovalAnswer(ans ?? ''))
           })
@@ -470,9 +543,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           })
           break
         case 'usage':
+          sessionCost.inputTokens += e.inputTokens
+          sessionCost.outputTokens += e.outputTokens
+          sessionCost.cost += e.cost
           deps.io.out(
             paint(
-              `\n· ${e.inputTokens}+${e.outputTokens} tok · $${e.cost.toFixed(4)}\n`,
+              `\n· ${e.inputTokens}+${e.outputTokens} tok · $${e.cost.toFixed(4)}` +
+                `  (session ${formatSessionCost(sessionCost)})\n`,
               'dim'
             )
           )
@@ -506,7 +583,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
 function handleInfoCommand(
   line: string,
-  state: { providerId: string; model: string; policy: ApprovalPolicy; cwd: string },
+  state: {
+    providerId: string
+    model: string
+    policy: ApprovalPolicy
+    cwd: string
+    sessionCost: SessionCost
+  },
   deps: TuiDeps,
   paint: Painter
 ): void {
@@ -517,6 +600,10 @@ function handleInfoCommand(
   }
   if (name === 'cwd') {
     deps.io.out(`${state.cwd}\n`)
+    return
+  }
+  if (name === 'cost') {
+    deps.io.out(paint(`session: ${formatSessionCost(state.sessionCost)}\n`, 'dim'))
     return
   }
   if (name === 'approval') {
