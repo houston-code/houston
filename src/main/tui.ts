@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import type { AgentEvent, AgentRunRequest, ChatMessage, QuestionOption } from '@shared/agent'
+import { contextWindowFor, contextPercent } from '@shared/usage'
+import { truncateVisible } from './tui-wrap'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 
 /**
@@ -198,6 +200,56 @@ export interface SessionCost {
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
   return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · $${c.cost.toFixed(4)}`
+}
+
+/** Status marker for a subagent row, printed as a discrete line in line mode. */
+export function subagentGlyph(status: 'running' | 'done' | 'error'): string {
+  return status === 'done' ? '✓' : status === 'error' ? '✗' : '·'
+}
+
+export interface StatusState {
+  providerId: string
+  model: string
+  policy: ApprovalPolicy
+  cwd: string
+  cost: SessionCost
+  /** Current context size in tokens (last turn's input tokens); 0 until a turn runs. */
+  contextTokens: number
+}
+
+/** Shorten a path for the status line: `~` for home, and only the last two segments. */
+export function shortCwd(cwd: string, home = process.env.HOME): string {
+  let p = cwd
+  if (home && (p === home || p.startsWith(`${home}/`))) p = `~${p.slice(home.length)}`
+  const segs = p.split('/').filter(Boolean)
+  if (segs.length <= 2) return p
+  return `${p.startsWith('~') ? '~/' : '…/'}${segs.slice(-2).join('/')}`
+}
+
+/**
+ * A one-line status footer shown above the composer: model, approval policy, cwd,
+ * session cost, and context-window fill (a green→yellow→red mini bar + percent).
+ * Truncated to `width` so it never wraps.
+ */
+export function renderStatusLine(s: StatusState, width: number, paint: Painter): string {
+  const pct = contextPercent(s.contextTokens, contextWindowFor(s.model))
+  const parts = [
+    paint(`${s.providerId}/${s.model}`, 'cyan'),
+    paint(s.policy, 'dim'),
+    paint(shortCwd(s.cwd), 'dim'),
+    `$${s.cost.cost.toFixed(4)}`
+  ]
+  if (pct !== null) {
+    const tone = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green'
+    parts.push(`${paint(contextBar(pct), tone)} ${paint(`${pct}%`, tone)}`)
+  }
+  return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
+}
+
+/** A tiny 10-cell context-fill bar like `▓▓▓░░░░░░░`. */
+function contextBar(pct: number, cells = 10): string {
+  const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * cells)
+  return `${'▓'.repeat(filled)}${'░'.repeat(cells - filled)}`
 }
 
 // --- Session persistence -----------------------------------------------------
@@ -446,6 +498,8 @@ export interface TuiDeps {
   newId?: () => string
   /** Clock for relative timestamps; injectable for tests. Defaults to Date.now. */
   now?: () => number
+  /** Terminal width for the status line + wrapping; injectable. Defaults to 80. */
+  columns?: () => number
 }
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
@@ -499,7 +553,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // until then, or after `/clear` starts a fresh one.
   let conversationId: string | null = null
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
+  // Estimated current context size (last turn's input tokens), for the status line.
+  let contextTokens = 0
   const nowFn = deps.now ?? Date.now
+  const columns = deps.columns ?? (() => 80)
 
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
@@ -521,6 +578,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   )
 
   for (;;) {
+    // A persistent status line above the composer: model, policy, cwd, cost, and
+    // context-window fill — so live session state is always visible.
+    deps.io.out(
+      `${renderStatusLine({ providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens }, columns(), paint)}\n`
+    )
     const line = await deps.io.readLine(composerPrompt(policy, paint))
     if (line === null) break // Ctrl-D
     const text = line.trim()
@@ -624,6 +686,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           toolArgs.delete(e.callId)
           break
         }
+        case 'tool_progress':
+          if (e.message.trim()) deps.io.out(paint(`  … ${truncate(e.message.trim(), 80)}\n`, 'dim'))
+          break
+        case 'subagent':
+          // Line mode can't update a row in place, so print discrete markers: a
+          // start line, then a done/error line, indented under the parent tool.
+          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${e.label}\n`, 'dim'))
+          break
+        case 'retry':
+          deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          break
         case 'tool_approval':
           enqueue(async () => {
             deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
@@ -651,6 +724,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           sessionCost.inputTokens += e.inputTokens
           sessionCost.outputTokens += e.outputTokens
           sessionCost.cost += e.cost
+          // Current context size ≈ the tokens sent this turn; feeds the status line.
+          contextTokens = e.inputTokens
           deps.io.out(
             paint(
               `\n· ${e.inputTokens}+${e.outputTokens} tok · $${e.cost.toFixed(4)}` +
