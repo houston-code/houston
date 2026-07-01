@@ -324,7 +324,25 @@ if (tui) {
         resolveApproval,
         resolveQuestion,
         out: (s) => process.stdout.write(s),
-        err: (s) => process.stderr.write(s)
+        err: (s) => process.stderr.write(s),
+        // Persist headless runs as conversations (shared with the TUI/GUI) so
+        // --continue / --resume and an interactive `-i` handoff can pick them up.
+        session: {
+          load: ({ workspace, id }) => {
+            const conv = id
+              ? getConversation(id)
+              : (() => {
+                  const meta = listConversations()
+                    .filter((c) => c.workspace === workspace)
+                    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+                  return meta ? getConversation(meta.id) : null
+                })()
+            return conv ? { id: conv.id, messages: conv.messages } : null
+          },
+          create: ({ workspace, providerId, model }) =>
+            createConversation({ workspace, providerId, model }),
+          setMessages
+        }
       })
     } catch (e) {
       process.stderr.write(`Fatal: ${(e as Error).message}\n`)

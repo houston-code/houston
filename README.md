@@ -376,13 +376,21 @@ Houston -p "Add a unit test for utils/date.ts and run the suite" --cwd . --full-
 
 # machine-readable: one JSON object per agent event
 Houston -p "List the TODOs" --json
+
+# continue the last session in this folder — then take over interactively
+Houston -p "Now add tests for it" --continue
+Houston -i   # /resume picks up the same conversation
 ```
 
 Flags: `--cwd <dir>` (project folder, default the current directory),
 `--provider <id>` / `--model <id>` (default your selected model), `--approval
-<plan|ask|auto-edit|full-auto>` (default `plan`), `--json`, `--accept-terms`.
-Assistant text streams to stdout, tool activity to stderr, and the process exits
-non-zero on error. It reuses your saved settings and Keychain-stored API keys.
+<plan|ask|auto-edit|full-auto>` (default `plan`), `--json`, `--accept-terms`,
+`--continue` (resume the most recent session in the folder), `--resume <id>`
+(resume a specific one). Assistant text streams to stdout, tool activity to
+stderr, and the process exits non-zero on error. It reuses your saved settings and
+Keychain-stored API keys. Each run is saved as a conversation (shared with the app
+and the interactive `-i` session), so you can script a prompt and then take over
+where it left off.
 
 **First-run terms.** The GUI shows a one-time gate to accept the
 [Terms of Use](docs/TERMS.md), [Privacy Policy](docs/PRIVACY.md), and

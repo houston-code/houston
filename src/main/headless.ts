@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
-import type { AgentEvent, AgentRunRequest } from '@shared/agent'
+import type { AgentEvent, AgentRunRequest, ChatMessage } from '@shared/agent'
 
 /**
  * One-shot headless mode: run a single prompt through the agent loop without the
@@ -21,6 +21,10 @@ export interface HeadlessOptions {
   /** Defaults to 'plan' (read-only) so a headless run can't edit/run unless asked. */
   approvalPolicy: ApprovalPolicy
   json: boolean
+  /** `--continue`: resume the most recent session in this folder (script → take over). */
+  continueSession: boolean
+  /** `--resume <id>`: resume a specific saved session (e.g. one started in the TUI). */
+  resumeId?: string
   /**
    * Accept the legal terms (Terms of Use, Privacy Policy, License) for this and
    * future runs. Required the first time headless mode is used on a profile that
@@ -58,12 +62,20 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   let approvalPolicy: ApprovalPolicy = 'plan'
   let json = false
   let acceptTerms = false
+  let continueSession = false
+  let resumeId: string | undefined
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
     if (name === '-p' || name === '--prompt') {
       const { value, next } = flagValue(argv, i)
       prompt = value
+      i = next
+    } else if (name === '--continue') {
+      continueSession = true
+    } else if (name === '--resume') {
+      const { value, next } = flagValue(argv, i)
+      resumeId = value
       i = next
     } else if (name === '-C' || name === '--cwd') {
       const { value, next } = flagValue(argv, i)
@@ -91,7 +103,7 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   }
 
   if (prompt === undefined || prompt === '') return null
-  return { prompt, cwd, providerId, model, approvalPolicy, json, acceptTerms }
+  return { prompt, cwd, providerId, model, approvalPolicy, json, acceptTerms, continueSession, resumeId }
 }
 
 /** Resolve the provider + model to use for a headless run from flags and settings. */
@@ -142,12 +154,28 @@ export interface HeadlessDeps {
   getSettings: () => AppSettings
   /** Persist acceptance of the current legal terms (sets legalAcceptedVersion). */
   recordLegalAcceptance: () => void
-  startRun: (req: AgentRunRequest, send: (e: AgentEvent) => void) => Promise<void>
+  startRun: (
+    req: AgentRunRequest,
+    send: (e: AgentEvent) => void,
+    onMessages?: (messages: ChatMessage[]) => void
+  ) => Promise<void>
   resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
   resolveQuestion: (runId: string, callId: string, answer: string) => void
   out: (s: string) => void
   err: (s: string) => void
   newId?: () => string
+  /**
+   * Session persistence (shared with the TUI/GUI). When present, a headless run is
+   * saved as a conversation — so `--continue`/`--resume` can pick it up later and
+   * an interactive `-i` session can take over where a script left off. Absent →
+   * the run is ephemeral, exactly as before.
+   */
+  session?: {
+    /** Load the target conversation: by `id`, else the most recent for `workspace`. */
+    load: (opts: { workspace: string; id?: string }) => { id: string; messages: ChatMessage[] } | null
+    create: (input: { workspace: string; providerId: string; model: string }) => { id: string }
+    setMessages: (id: string, messages: ChatMessage[]) => void
+  }
 }
 
 /**
@@ -180,14 +208,40 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     return 1
   }
 
+  // Session continuity: with --continue / --resume, seed the prior conversation's
+  // messages so the run picks up where a previous run (or a TUI session) left off;
+  // otherwise start a fresh conversation. Persisted (when a store is wired) so the
+  // next --continue — or an interactive `-i` /resume — can take over from here.
+  let conversationId: string | undefined
+  const messages: ChatMessage[] = []
+  if (deps.session) {
+    const wantsPrior = opts.continueSession || opts.resumeId !== undefined
+    const prior = wantsPrior ? deps.session.load({ workspace: opts.cwd, id: opts.resumeId }) : null
+    if (wantsPrior && !prior) {
+      deps.err('· no prior session to resume — starting a fresh one\n')
+    }
+    if (prior) {
+      conversationId = prior.id
+      messages.push(...prior.messages)
+    } else {
+      conversationId = deps.session.create({
+        workspace: opts.cwd,
+        providerId: resolved.providerId,
+        model: resolved.model
+      }).id
+    }
+  }
+  messages.push({ role: 'user', content: opts.prompt })
+
   const runId = (deps.newId ?? randomUUID)()
   const req: AgentRunRequest = {
     runId,
+    ...(conversationId ? { conversationId } : {}),
     workspace: opts.cwd,
     providerId: resolved.providerId,
     model: resolved.model,
     approvalPolicy: opts.approvalPolicy,
-    messages: [{ role: 'user', content: opts.prompt }]
+    messages
   }
 
   let failed = false
@@ -228,6 +282,8 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     }
   }
 
-  await deps.startRun(req, send)
+  await deps.startRun(req, send, (m) => {
+    if (deps.session && conversationId) deps.session.setMessages(conversationId, m)
+  })
   return failed ? 1 : 0
 }
