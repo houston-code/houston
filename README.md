@@ -420,10 +420,16 @@ Slash commands adjust the session without restarting:
 | `/model [id]` | list configured models, or switch (`providerId`, `providerId/model`, or a bare model id) |
 | `/approval [policy]` | show or set the policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`) |
 | `/clear`, `/new` | start a fresh conversation |
+| `/resume` | list and reopen a saved session in this folder |
 | `/cost` | show session token + cost totals |
 | `/cwd` | show the working directory |
 | `/help` | list commands |
 | `/exit`, `/quit` | leave |
+
+Each session is saved as an ordinary conversation, so it survives restarts and
+shows up in the desktop app's sidebar — one history across both clients. `/resume`
+lists recent sessions for the current folder and reopens one where you left off;
+`/clear` starts a fresh one.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
 (default `ask`), `--full-auto`, and `--accept-terms`. It reuses your saved settings

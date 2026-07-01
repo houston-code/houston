@@ -21,6 +21,7 @@ import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun }
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
 import { parseHeadlessArgs, runHeadless } from './headless'
 import { parseTuiArgs, runTui, type TuiIo } from './tui'
+import { createConversation, setMessages, listConversations, getConversation } from './conversations'
 import { createInterface } from 'node:readline'
 import { activeBackendId, isSandboxed } from './sandbox'
 
@@ -255,7 +256,23 @@ if (tui) {
         resolveApproval,
         resolveQuestion,
         cancelRun,
-        io: createTerminalIo()
+        io: createTerminalIo(),
+        persist: {
+          create: ({ workspace, providerId, model }) =>
+            createConversation({ workspace, providerId, model }),
+          setMessages,
+          // Recent conversations for this folder, newest first, for the `/resume` picker.
+          list: (workspace) =>
+            listConversations()
+              .filter((c) => c.workspace === workspace)
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .slice(0, 20)
+              .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+          get: (id) => {
+            const conv = getConversation(id)
+            return conv ? { messages: conv.messages } : null
+          }
+        }
       })
     } catch (e) {
       process.stderr.write(`Fatal: ${(e as Error).message}\n`)
