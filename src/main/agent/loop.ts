@@ -29,11 +29,20 @@ import {
   PRESENT_PLAN_NAME,
   VIEW_LOCALHOST_NAME,
   getTool,
+  resolveInRoots,
   toolSchemas,
   type ToolDef,
   type ToolContext,
   type ToolKind
 } from './tools'
+import { parsePatch } from './apply-patch'
+import {
+  ReadCache,
+  isCacheableRead,
+  readDeps,
+  writePaths,
+  writeTouchesUnknownPaths
+} from './readCache'
 import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
@@ -505,6 +514,11 @@ export async function startRun(
       getTool(name) ??
       (findTools && name === findTools.schema.name ? findTools : undefined) ??
       mcpToolDefs.find((d) => d.schema.name === name)
+    // Whether any Pre/PostToolUse hook matches this tool. A hook implies ordering or
+    // an observed side-effect, so the read cache must not short-circuit such a call.
+    const hasMatchingHook = (name: string): boolean =>
+      matchingHooks(settings.hooks, 'PreToolUse', name).length > 0 ||
+      matchingHooks(settings.hooks, 'PostToolUse', name).length > 0
     // The schemas advertised to the model this turn: built-ins, plus either every
     // MCP schema (small setups) or just find_tools + already-revealed MCP tools
     // (lazy). Recomputed each turn so tools revealed via find_tools then appear.
@@ -780,10 +794,7 @@ export async function startRun(
         call.name,
         permissionSubject(call.name, call.arguments)
       )
-      const hasHook =
-        matchingHooks(settings.hooks, 'PreToolUse', call.name).length > 0 ||
-        matchingHooks(settings.hooks, 'PostToolUse', call.name).length > 0
-      return isParallelizableRead(tool.kind, ruleAction, hasHook)
+      return isParallelizableRead(tool.kind, ruleAction, hasMatchingHook(call.name))
     }
 
     // Context compaction state. `messages` is always the full, persisted log; what
@@ -793,6 +804,42 @@ export async function startRun(
     let cut = 0
     let summaryMsgs: ChatMessage[] = []
     let lastInputTokens = 0
+
+    // Run-scoped content-addressed cache for repeated read-only tool calls. Created
+    // here so it lives exactly as long as this run — an identical `read_file`/`glob`/
+    // `search_files`/etc. later in the run is served from memory instead of re-hitting
+    // the filesystem, cutting tokens/latency/cost on the re-read pattern. It is
+    // dropped when startRun returns (GC'd with the closure), so it never leaks across
+    // runs. Correctness is preserved by invalidating on every mutation: a write drops
+    // the entries depending on the touched path(s); a shell call clears the cache
+    // wholesale (a command can change any file). See readCache.ts.
+    const readCache = new ReadCache()
+    // Map a tool's `path` argument to a canonical absolute path the way the file
+    // tools do, so cache dependencies and write-invalidation keys line up exactly.
+    const resolvePath = (rel: string): string => resolveInRoots(roots, rel)
+    // Files an apply_patch touches, for path-precise cache invalidation.
+    const patchPaths = (patch: string): string[] => {
+      try {
+        return parsePatch(patch).flatMap((op) =>
+          op.type === 'update' && op.moveTo ? [op.path, op.moveTo] : [op.path]
+        )
+      } catch {
+        return []
+      }
+    }
+    // Invalidate cached reads after a mutating tool call. A write invalidates the
+    // paths it touched (or everything, if those paths can't be determined); shell —
+    // and anything else non-read that changes state — clears the cache wholesale.
+    const invalidateForMutation = (name: string, kind: ToolKind, args: Record<string, unknown>): void => {
+      if (kind === 'write') {
+        const touched = writePaths(name, args, resolvePath, patchPaths)
+        if (writeTouchesUnknownPaths(touched)) readCache.invalidateAll()
+        else readCache.invalidatePaths(touched)
+      } else {
+        // shell/network/mcp: a command or side-effect can change arbitrary files.
+        readCache.invalidateAll()
+      }
+    }
 
     // Summarize messages[cut..newCut), fold the result into the synthetic summary,
     // and advance `cut`. Shared by the proactive (pre-send, threshold-driven) path
@@ -1238,6 +1285,21 @@ export async function startRun(
         parallel.map(async ({ call }, p): Promise<CallResult> => {
           const invalid = parallelValidation[p]
           if (invalid) return invalid
+          // Serve an identical repeat from the run cache. A parallel call is always
+          // hook-free (isParallelCall excludes hooked tools), but not every read is
+          // cacheable — only the pure, on-disk-deterministic ones (isCacheableRead).
+          // A stateful read like read_shell_output runs here too and must NOT cache.
+          const cacheable = isCacheableRead(call.name, lookupTool(call.name)!.kind)
+          const cached = cacheable ? readCache.get(call.name, call.arguments) : undefined
+          if (cached) {
+            return {
+              call,
+              output: cached.output,
+              ok: cached.ok,
+              images: cached.images,
+              documents: cached.documents
+            }
+          }
           const images: ImageAttachment[] = []
           const documents: DocumentAttachment[] = []
           let output: string
@@ -1254,6 +1316,14 @@ export async function startRun(
           } catch (e) {
             output = `Error: ${(e as Error).message}`
             ok = false
+          }
+          if (cacheable) {
+            readCache.set(
+              call.name,
+              call.arguments,
+              { output, ok, images, documents },
+              readDeps(call.name, call.arguments, resolvePath)
+            )
           }
           return { call, output, ok, images, documents }
         })
@@ -1411,18 +1481,42 @@ export async function startRun(
               }
               emit({ type: 'tool_start', callId: call.id, name: call.name, args: execArgs, kind: tool.kind })
               await plugins.emit('onToolStart', { tool: call.name, input: execArgs })
-              try {
-                output = await tool.execute(
-                  execArgs,
-                  makeToolContext(
-                    call.id,
-                    (img) => toolImages.push(img),
-                    (doc) => toolDocs.push(doc)
+              // Serve identical read-only calls from the run cache. We only consult
+              // it when there's no matching hook for this tool (a hook implies the
+              // tool's result may be side-effect-gated or observed, so re-run it),
+              // mirroring the parallel fast-path's hook exclusion. When a read is
+              // cache-eligible there is no matching hook, so execArgs === call.arguments
+              // and the key matches the parallel fast-path's.
+              const cacheable = isCacheableRead(call.name, tool.kind)
+              const useCache = cacheable && !hasMatchingHook(call.name)
+              const cached = useCache ? readCache.get(call.name, call.arguments) : undefined
+              if (cached) {
+                output = cached.output
+                ok = cached.ok
+                for (const img of cached.images) toolImages.push(img)
+                for (const doc of cached.documents) toolDocs.push(doc)
+              } else {
+                try {
+                  output = await tool.execute(
+                    execArgs,
+                    makeToolContext(
+                      call.id,
+                      (img) => toolImages.push(img),
+                      (doc) => toolDocs.push(doc)
+                    )
                   )
-                )
-              } catch (e) {
-                output = `Error: ${(e as Error).message}`
-                ok = false
+                } catch (e) {
+                  output = `Error: ${(e as Error).message}`
+                  ok = false
+                }
+                if (useCache) {
+                  readCache.set(
+                    call.name,
+                    call.arguments,
+                    { output, ok, images: [...toolImages], documents: [...toolDocs] },
+                    readDeps(call.name, call.arguments, resolvePath)
+                  )
+                }
               }
               // PostToolUse hooks run after the tool; their output is shown to the agent.
               const post = await runHooks(
@@ -1480,6 +1574,15 @@ export async function startRun(
                 } catch {
                   // Diagnostics are best-effort feedback — never fail the edit.
                 }
+              }
+              // Invalidate cached reads that this mutation could have staled. A write
+              // drops the entries depending on the path(s) it touched; a shell (or any
+              // other non-read) call clears the cache wholesale, since a command can
+              // change arbitrary files. Runs regardless of `ok` — a failed write may
+              // have partially applied, and a failed shell command may still have had
+              // side effects — so we never serve a stale read afterwards.
+              if (tool.kind !== 'read') {
+                invalidateForMutation(call.name, tool.kind, execArgs)
               }
             }
           }

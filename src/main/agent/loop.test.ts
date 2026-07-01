@@ -19,6 +19,9 @@ import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 const h = vi.hoisted(() => ({
   provider: null as Provider | null,
   mcpDefs: [] as ToolDef[],
+  // Probe tools installed under real builtin names via the `./tools` getTool mock,
+  // so a test can exercise the loop with a counting stand-in for e.g. `read_file`.
+  probeTools: [] as ToolDef[],
   // Rules captured from the addPermissionRule mock, so tests can assert what an
   // "Always allow/deny" decision persisted.
   addedRules: [] as unknown[],
@@ -58,6 +61,18 @@ vi.mock('../agentHost', () => ({
 }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
+// Partial mock of the tool registry so a test can install a *counting* probe under a
+// real builtin name (e.g. `read_file`, which the read cache's allowlist accepts) and
+// have the loop's `getTool` resolve to the probe instead of the real filesystem tool.
+// Any probe present in `h.probeTools` shadows the builtin of the same name; every
+// other lookup delegates to the real registry so unrelated behavior is unchanged.
+vi.mock('./tools', async (importActual) => {
+  const actual = await importActual<typeof import('./tools')>()
+  return {
+    ...actual,
+    getTool: (name: string): unknown => h.probeTools.find((t) => t.schema.name === name) ?? actual.getTool(name)
+  }
+})
 vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 // Stub the plugin loader with a host that records every event the loop fires, so
@@ -120,6 +135,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
   h.mcpDefs = []
+  h.probeTools = []
   vi.restoreAllMocks()
 })
 
@@ -1588,6 +1604,253 @@ describe('ask_user', () => {
 
     it('returns nothing for a conversation with no live run', () => {
       expect(pendingPromptsForConversation('no-such-conversation')).toEqual([])
+    })
+  })
+
+  describe('read cache (per-run, content-addressed)', () => {
+    // A read tool that counts executions and echoes a `path` arg, so we can prove a
+    // repeat was served from cache (no re-execute) and that a mutation re-runs it.
+    // Installed under the real builtin name `read_file` (on the cache allowlist) via
+    // the `./tools` getTool mock, so the cache actually memoizes it.
+    let reads: number
+    const probeRead = (): ToolDef => ({
+      kind: 'read',
+      summarize: () => 'probe read',
+      schema: {
+        name: 'read_file',
+        description: 'A counting read tool.',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false
+        }
+      },
+      execute: async (args) => {
+        reads += 1
+        return `read#${reads} of ${String(args.path)}`
+      }
+    })
+    // A stateful read whose output INCREMENTS on every execute — a cursor-advancing
+    // poll like `read_shell_output`. It is read-kind but NOT on the cache allowlist,
+    // so a repeated identical call must RE-EXECUTE (never replay a stale chunk).
+    let polls: number
+    const probeStatefulRead = (): ToolDef => ({
+      kind: 'read',
+      summarize: () => 'poll shell output',
+      schema: {
+        name: 'read_shell_output',
+        description: 'Returns output since the last read (cursor advances each call).',
+        parameters: {
+          type: 'object',
+          properties: { id: { type: 'string' } },
+          required: ['id'],
+          additionalProperties: false
+        }
+      },
+      execute: async () => {
+        polls += 1
+        return `chunk#${polls}`
+      }
+    })
+    // A write tool that reports a `path`, exercising path-precise invalidation.
+    const probeWrite = (): ToolDef => ({
+      kind: 'write',
+      summarize: () => 'probe write',
+      schema: {
+        name: 'probe_write',
+        description: 'A no-op write tool.',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false
+        }
+      },
+      execute: async (args) => `wrote ${String(args.path)}`
+    })
+    // A shell tool, to prove a shell call clears the cache wholesale.
+    const probeShell = (): ToolDef => ({
+      kind: 'shell',
+      summarize: () => 'probe shell',
+      schema: {
+        name: 'probe_shell',
+        description: 'A no-op shell tool.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false }
+      },
+      execute: async () => 'ran'
+    })
+
+    beforeEach(() => {
+      reads = 0
+      polls = 0
+    })
+
+    const readCall = (id: string, path: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'read_file', arguments: { path } }
+    })
+    const outputs = (r: RunResult): string[] =>
+      r.events.filter((e) => e.type === 'tool_result').map((e) => (e as { output: string }).output)
+
+    it('serves a repeated identical read from the cache (no re-execute)', async () => {
+      h.probeTools = [probeRead()]
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [readCall('a', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [readCall('b', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // The tool executed once; the second identical call was a cache hit that
+      // replayed the first result verbatim.
+      expect(reads).toBe(1)
+      expect(outputs(r)).toEqual(['read#1 of a.ts', 'read#1 of a.ts'])
+    })
+
+    it('misses on different args', async () => {
+      h.probeTools = [probeRead()]
+      await run({
+        policy: 'full-auto',
+        turns: [
+          [readCall('a', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [readCall('b', 'b.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(reads).toBe(2)
+    })
+
+    it('invalidates a read of a path after a write to that path', async () => {
+      h.probeTools = [probeRead()]
+      h.mcpDefs = [probeWrite()]
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [readCall('r1', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [
+            { type: 'tool_call', call: { id: 'w1', name: 'probe_write', arguments: { path: 'a.ts' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [readCall('r2', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // The write to a.ts dropped the cached read, so the second read re-executed.
+      expect(reads).toBe(2)
+      const readOutputs = outputs(r).filter((o) => o.startsWith('read#'))
+      expect(readOutputs).toEqual(['read#1 of a.ts', 'read#2 of a.ts'])
+    })
+
+    it('leaves a read cached when a write touches a DIFFERENT path', async () => {
+      h.probeTools = [probeRead()]
+      h.mcpDefs = [probeWrite()]
+      await run({
+        policy: 'full-auto',
+        turns: [
+          [readCall('r1', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [
+            { type: 'tool_call', call: { id: 'w1', name: 'probe_write', arguments: { path: 'other.ts' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [readCall('r2', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // a.ts was untouched by the write to other.ts, so the second read is a hit.
+      expect(reads).toBe(1)
+    })
+
+    it('invalidates the whole cache after a shell call', async () => {
+      h.probeTools = [probeRead()]
+      h.mcpDefs = [probeShell()]
+      await run({
+        policy: 'full-auto',
+        // A shell-kind call auto-approves only on a confining host (macOS): on an
+        // unsandboxed host (Linux CI) an unconfined shell prompts even under
+        // full-auto, so resolve the approval or the run would hang. See
+        // decideApproval — `kind:'shell' && !shellSandboxed`.
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [readCall('r1', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'probe_shell', arguments: {} } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [readCall('r2', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // A shell command can change any file, so the read is re-executed afterward.
+      expect(reads).toBe(2)
+    })
+
+    it('does not leak the cache across separate runs', async () => {
+      h.probeTools = [probeRead()]
+      await run({
+        policy: 'full-auto',
+        turns: [
+          [readCall('a', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(reads).toBe(1)
+      // A brand-new run starts with an empty cache — the same read executes again.
+      await run({
+        policy: 'full-auto',
+        turns: [
+          [readCall('a', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(reads).toBe(2)
+    })
+
+    it('caches reads within a single parallel (multi-read) turn is not required, but a later repeat hits', async () => {
+      // Two identical reads in ONE turn take the parallel fast-path and both execute
+      // (they race), then the cache is populated; a repeat in a LATER turn hits.
+      h.probeTools = [probeRead()]
+      await run({
+        policy: 'full-auto',
+        turns: [
+          [
+            readCall('a', 'a.ts'),
+            { type: 'tool_call', call: { id: 'b', name: 'read_file', arguments: { path: 'b.ts' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [readCall('c', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // Turn 1 executed both reads (2); turn 2's read of a.ts was a cache hit.
+      expect(reads).toBe(2)
+    })
+
+    // The HIGH bug this cache fix guards against: `read` kind means "no approval
+    // needed", NOT "side-effect-free". A stateful read like read_shell_output is a
+    // cursor-advancing poll — caching it would replay the first chunk forever and
+    // hang a background-shell polling loop. It must RE-EXECUTE on every identical call.
+    it('re-executes a stateful read (read_shell_output) instead of replaying a stale chunk', async () => {
+      h.probeTools = [probeStatefulRead()]
+      const pollCall = (id: string): ProviderStreamEvent => ({
+        type: 'tool_call',
+        call: { id, name: 'read_shell_output', arguments: { id: 'shell-1' } }
+      })
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [pollCall('p1'), { type: 'done', stopReason: 'tool_use' }],
+          // Byte-identical repeat of the poll — a naive read cache would replay chunk#1.
+          [pollCall('p2'), { type: 'done', stopReason: 'tool_use' }],
+          [pollCall('p3'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // Every identical poll re-executed and advanced the cursor — no stale replay.
+      expect(polls).toBe(3)
+      const pollOutputs = outputs(r).filter((o) => o.startsWith('chunk#'))
+      expect(pollOutputs).toEqual(['chunk#1', 'chunk#2', 'chunk#3'])
     })
   })
 })
