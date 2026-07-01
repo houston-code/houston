@@ -418,9 +418,8 @@ by reasoning, tool activity with a snippet of each result (including live progre
 and any nested subagents), and a per-turn plus running session token/cost meter. A status
 line above the composer keeps the model, approval policy, working directory,
 session cost, and context-window fill in view at all times. When a tool needs approval (under `ask` / `auto-edit`)
-you answer inline — `y` to allow, `n` to deny, `a` to always allow that kind — a
-file edit shows its **diff** before you approve, and a shell command with no OS
-sandbox is flagged. When the agent asks a question (`ask_user`) the options are
+you answer with an **arrow-key picker** (or type `y`/`n`/`a`) — a file edit shows
+its **diff** before you approve, and a shell command with no OS sandbox is flagged. When the agent asks a question (`ask_user`) the options are
 listed and you pick a number or type your own answer. In **plan mode**, once the
 agent presents a plan and stops, you're offered a one-key handoff — accept to
 switch to `auto-edit` and carry it out, or keep planning. While the agent works, a

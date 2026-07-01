@@ -629,6 +629,54 @@ describe('runTui', () => {
     expect(t.reads.find((r) => r.prompt !== '> ')?.discardPending).toBe(false)
   })
 
+  it('uses the arrow-key picker for an approval when available', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null]) // no typed approval answer needed
+    t.io.select = async () => ({ kind: 'commit', value: 'always' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'always']])
+  })
+
+  it('falls back to typing when the picker returns type', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', 'n', null]) // typed answer used after picker declines
+    t.io.select = async () => ({ kind: 'type' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+  })
+
+  it('picker cancel denies an approval (safe default)', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null])
+    t.io.select = async () => ({ kind: 'cancel' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+  })
+
+  it('uses the picker for an ask_user question', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which?', options: [{ label: 'Alpha' }, { label: 'Beta' }] },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['choose', null])
+    t.io.select = async () => ({ kind: 'commit', value: 'Beta' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.questions).toEqual([['run-1', 'q1', 'Beta']])
+  })
+
   it('prompts for and resolves an ask_user question by option number', async () => {
     const { d, rec } = deps([
       {

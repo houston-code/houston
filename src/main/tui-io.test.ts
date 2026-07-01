@@ -117,6 +117,15 @@ describe('createTerminalIo lifecycle', () => {
     f.fire('SIGINT')
     expect(interrupted).toBe(true)
   })
+
+  it('select() falls back to typing when there is no TTY (the test env)', async () => {
+    const f = fakeRl()
+    const io = createTerminalIo({ createInterface: () => f.rl, write: () => {}, drainInput: () => {} })
+    // process.stdin.isTTY is false under vitest → the picker can't run, so it
+    // returns `type` and the driver uses the typed prompt instead.
+    const r = await io.select?.({ title: 'x', options: [{ label: 'A', value: 'a' }] })
+    expect(r).toEqual({ kind: 'type' })
+  })
 })
 
 /** A controllable scheduler + clock + output capture for spinner tests. */
