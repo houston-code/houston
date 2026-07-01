@@ -1,5 +1,5 @@
 import type { ChatMessage, Provider } from '@shared/agent'
-import { getProvider } from '../store'
+import { getProvider } from '../agentHost'
 import { createProvider } from '../providers'
 import { getConversation, needsGeneratedTitle, setGeneratedTitle } from '../conversations'
 

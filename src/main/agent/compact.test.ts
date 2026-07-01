@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
 }))
 
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
-vi.mock('../store', () => ({ getProvider: () => ({ id: 'anthropic', kind: 'anthropic' }) }))
+vi.mock('../agentHost', () => ({ getProvider: () => ({ id: 'anthropic', kind: 'anthropic' }) }))
 vi.mock('../conversations', () => ({
   getConversation: () => h.conv,
   setMessages: (_id: string, m: ChatMessage[]) => {
