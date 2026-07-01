@@ -5,6 +5,7 @@ import type { AgentEvent, AgentRunRequest, ChatMessage, QuestionOption } from '@
 import { contextWindowFor, contextPercent } from '@shared/usage'
 import { truncateVisible } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
+import { htmlToAnsi } from './syntax'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 
 /**
@@ -501,6 +502,12 @@ export interface TuiDeps {
   now?: () => number
   /** Terminal width for the status line + wrapping; injectable. Defaults to 80. */
   columns?: () => number
+  /**
+   * Optional syntax highlighter returning highlight.js token HTML for a fenced
+   * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
+   * dependency stays at the entry point and the driver + its tests need no hljs.
+   */
+  highlightHtml?: (lang: string, code: string) => string | null
 }
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
@@ -671,7 +678,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Assistant text streams through a markdown renderer that emits whole blocks
     // as they finalize. Any non-text event flushes the pending block first, so
     // text always renders before the tool line / prompt that follows it.
-    const md = new MarkdownStream({ paint, width: columns() })
+    const highlight = deps.highlightHtml
+      ? (lang: string, code: string): string => {
+          const html = deps.highlightHtml?.(lang, code)
+          return html ? htmlToAnsi(html, paint) : code
+        }
+      : undefined
+    const md = new MarkdownStream({ paint, width: columns(), highlight })
     const flushMd = (): void => {
       const s = md.flush()
       if (s) deps.io.out(s)
