@@ -7,6 +7,7 @@ import { contextWindowFor, contextPercent } from '@shared/usage'
 import { truncateVisible } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
 import { htmlToAnsi } from './syntax'
+import type { PickerSpec, PickerOutcome } from './tui-picker'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 
 /**
@@ -593,6 +594,12 @@ export interface TuiIo {
   startSpinner?: (label: string) => void
   setSpinnerLabel?: (label: string) => void
   stopSpinner?: () => void
+  /**
+   * Present an arrow-key selectable picker (for approvals / `ask_user`). Resolves
+   * with the committed value, a request to fall back to typing, or a cancel.
+   * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
+   */
+  select?: (spec: PickerSpec) => Promise<PickerOutcome>
 }
 
 export interface TuiDeps {
@@ -927,25 +934,51 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         case 'tool_approval':
           enqueue(async () => {
+            // Context (name, kind, unsandboxed warning) + the diff for a write.
             deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
-            // For a write, show the diff being approved when we can reconstruct it.
             if (e.kind === 'write') {
               const diff = extractDiff(toolArgs.get(e.callId) ?? {})
               if (diff) deps.io.out(`${colorizeDiff(diff, paint)}\n`)
             }
-            const ans = await deps.io.readLine('> ', { discardPending: true })
-            deps.resolveApproval(e.runId, e.callId, parseApprovalAnswer(ans ?? ''))
+            let decision: 'allow' | 'deny' | 'always' | null = null
+            if (deps.io.select) {
+              const r = await deps.io.select({
+                title: 'Choose:',
+                options: [
+                  { label: 'Allow', value: 'allow' },
+                  { label: 'Deny', value: 'deny' },
+                  { label: 'Always allow this kind', value: 'always' }
+                ]
+              })
+              if (r.kind === 'commit') decision = r.value as 'allow' | 'deny' | 'always'
+              else if (r.kind === 'cancel') decision = 'deny' // safe default
+              // 'type' → fall through to the typed prompt below
+            }
+            if (decision === null) {
+              const ans = await deps.io.readLine('> ', { discardPending: true })
+              decision = parseApprovalAnswer(ans ?? '')
+            }
+            deps.resolveApproval(e.runId, e.callId, decision)
           })
           break
         case 'tool_question':
           enqueue(async () => {
             deps.io.out(`${renderQuestion(e.question, e.options, e.multiSelect ?? false, paint)}\n`)
-            const ans = await deps.io.readLine('> ', { discardPending: true })
-            deps.resolveQuestion(
-              e.runId,
-              e.callId,
-              resolveQuestionAnswer(ans ?? '', e.options, e.multiSelect ?? false)
-            )
+            let answer: string | null = null
+            if (deps.io.select) {
+              const r = await deps.io.select({
+                title: e.question,
+                multiSelect: e.multiSelect ?? false,
+                options: e.options.map((o) => ({ label: o.label, value: o.label, description: o.description }))
+              })
+              if (r.kind === 'commit') answer = r.value
+              // cancel/type → fall through so the user can still type a custom answer
+            }
+            if (answer === null) {
+              const ans = await deps.io.readLine('> ', { discardPending: true })
+              answer = resolveQuestionAnswer(ans ?? '', e.options, e.multiSelect ?? false)
+            }
+            deps.resolveQuestion(e.runId, e.callId, answer)
           })
           break
         case 'usage':

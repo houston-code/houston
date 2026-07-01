@@ -1,5 +1,13 @@
-import { createInterface as nodeCreateInterface } from 'node:readline'
+import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { spinnerFrame, type TuiIo, type Painter } from './tui'
+import {
+  initialPickerState,
+  reducePicker,
+  renderPicker,
+  keyToPickerKey,
+  type PickerSpec,
+  type PickerOutcome
+} from './tui-picker'
 
 /** Carriage-return + erase-line: rewinds to column 0 and clears the current line. */
 const CLEAR_LINE = '\r\x1b[2K'
@@ -171,6 +179,75 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     stopSpinner: () => {
       spinnerLabel = null
       stopTimer(true)
-    }
+    },
+    select: (spec) => runPicker(spec, rl, rawWrite, paint)
   }
+}
+
+/**
+ * Run an arrow-key picker in transient raw mode, then restore the readline state.
+ * Bounded strictly to this call — raw mode is entered and exited here, never held
+ * across streaming output. Redraws only the picker's own N-line region
+ * (cursor-up + erase-to-end + reprint, erase-before-write) so it stays tear-free.
+ *
+ * MANUAL-VERIFY: the raw-mode / keypress plumbing can't run in CI (no TTY). The
+ * pure model + view + key mapping are unit-tested (tui-picker.test.ts); this
+ * adapter is the thin, defensively-guarded binding to stdin. Any failure resolves
+ * to `type`/`cancel`, so the driver falls back to the tested typed prompt (and an
+ * approval cancel is a safe deny).
+ */
+function runPicker(
+  spec: PickerSpec,
+  rl: ReadlineLike,
+  write: (s: string) => void,
+  paint: Painter
+): Promise<PickerOutcome> {
+  const stdin = process.stdin
+  // No real terminal, or no raw mode available → let the driver use the typed path.
+  if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve({ kind: 'type' })
+
+  return new Promise<PickerOutcome>((resolve) => {
+    let state = initialPickerState(spec)
+    let prevCount = 0
+    let done = false
+
+    const draw = (first: boolean): void => {
+      if (!first && prevCount > 0) write(`\x1b[${prevCount}A\x1b[0J`) // up N lines, erase to end
+      const lines = renderPicker(state, paint)
+      prevCount = lines.length
+      write(`${lines.join('\n')}\n`)
+    }
+    const finish = (outcome: PickerOutcome): void => {
+      if (done) return
+      done = true
+      try {
+        stdin.removeListener('keypress', onKey)
+        stdin.setRawMode(false)
+        rl.resume() // hand input back to readline for the next read
+        rl.pause()
+      } catch {
+        /* best-effort restore */
+      }
+      resolve(outcome)
+    }
+    const onKey = (_str: string, key: { name?: string; sequence?: string; ctrl?: boolean }): void => {
+      const pk = keyToPickerKey(key ?? {})
+      if (!pk) return
+      const { state: next, outcome } = reducePicker(state, pk)
+      state = next
+      if (outcome) finish(outcome)
+      else draw(false)
+    }
+
+    try {
+      rl.pause()
+      emitKeypressEvents(stdin)
+      stdin.setRawMode(true)
+      stdin.resume()
+      stdin.on('keypress', onKey)
+      draw(true)
+    } catch {
+      finish({ kind: 'type' })
+    }
+  })
 }
