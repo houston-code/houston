@@ -4,6 +4,7 @@ import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shar
 import type { AgentEvent, AgentRunRequest, ChatMessage, QuestionOption } from '@shared/agent'
 import { contextWindowFor, contextPercent } from '@shared/usage'
 import { truncateVisible } from './tui-wrap'
+import { MarkdownStream } from './markdown-ansi'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 
 /**
@@ -667,12 +668,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
     const toolArgs = new Map<string, Record<string, unknown>>()
+    // Assistant text streams through a markdown renderer that emits whole blocks
+    // as they finalize. Any non-text event flushes the pending block first, so
+    // text always renders before the tool line / prompt that follows it.
+    const md = new MarkdownStream({ paint, width: columns() })
+    const flushMd = (): void => {
+      const s = md.flush()
+      if (s) deps.io.out(s)
+    }
 
     const send = (e: AgentEvent): void => {
+      if (e.type === 'text') {
+        deps.io.out(md.push(e.delta))
+        return
+      }
+      flushMd()
       switch (e.type) {
-        case 'text':
-          deps.io.out(e.delta)
-          break
         case 'reasoning':
           deps.io.out(paint(e.delta, 'dim'))
           break

@@ -1,5 +1,5 @@
 import { memo, useState } from 'react'
-import { parseMarkdown, safeHref, type Block, type Inline } from '../lib/markdown'
+import { parseMarkdown, safeHref, type Block, type Inline } from '@shared/markdown'
 import { copyText } from '../lib/clipboard'
 
 /** Render an inline node tree. Keys are positional — the tree is static per render. */

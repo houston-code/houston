@@ -404,9 +404,10 @@ Houston -i
 Houston -i --cwd ~/code/myproj --model claude --approval auto-edit
 ```
 
-The conversation streams live as the agent works: assistant text and reasoning,
-tool activity with a snippet of each result (including live progress and any
-nested subagents), and a per-turn plus running session token/cost meter. A status
+The conversation streams live as the agent works: assistant replies are rendered
+as markdown (headings, lists, tables, code blocks) right in the terminal, followed
+by reasoning, tool activity with a snippet of each result (including live progress
+and any nested subagents), and a per-turn plus running session token/cost meter. A status
 line above the composer keeps the model, approval policy, working directory,
 session cost, and context-window fill in view at all times. When a tool needs approval (under `ask` / `auto-edit`)
 you answer inline — `y` to allow, `n` to deny, `a` to always allow that kind — a
