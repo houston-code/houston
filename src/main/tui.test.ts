@@ -350,14 +350,24 @@ describe('resume picker', () => {
 function fakeIo(inputs: Array<string | null>) {
   const out: string[] = []
   const interrupts: Array<() => void> = []
+  const reads: Array<{ prompt: string; discardPending: boolean }> = []
   let idx = 0
   const io: TuiIo = {
     out: (s) => out.push(s),
-    readLine: async () => (idx < inputs.length ? inputs[idx++] : null),
+    readLine: async (prompt, opts) => {
+      reads.push({ prompt, discardPending: Boolean(opts?.discardPending) })
+      return idx < inputs.length ? inputs[idx++] : null
+    },
     onInterrupt: (h) => interrupts.push(h),
     cancelRead: () => {}
   }
-  return { io, out, text: () => out.join(''), fireInterrupt: () => interrupts.forEach((h) => h()) }
+  return {
+    io,
+    out,
+    reads,
+    text: () => out.join(''),
+    fireInterrupt: () => interrupts.forEach((h) => h())
+  }
 }
 
 interface Recorder {
@@ -469,6 +479,9 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.approvals).toEqual([['run-1', 'c1', 'allow']])
+    // The approval read discards type-ahead; the composer read does not.
+    expect(t.reads.find((r) => r.prompt === '> ')?.discardPending).toBe(true)
+    expect(t.reads.find((r) => r.prompt !== '> ')?.discardPending).toBe(false)
   })
 
   it('prompts for and resolves an ask_user question by option number', async () => {
@@ -567,6 +580,8 @@ describe('runTui', () => {
     }
     await runTui(opts, d)
     expect(rec.cancels).toEqual([`run-1`])
+    // The interrupt is acknowledged visibly rather than stopping silently.
+    expect(t.text()).toContain('^C interrupted')
     void runs
   })
 

@@ -20,9 +20,9 @@ import { LEGAL_VERSION } from '@shared/legal'
 import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
 import { parseHeadlessArgs, runHeadless } from './headless'
-import { parseTuiArgs, runTui, type TuiIo } from './tui'
+import { parseTuiArgs, runTui } from './tui'
+import { createTerminalIo, resolveColor } from './tui-io'
 import { createConversation, setMessages, listConversations, getConversation } from './conversations'
-import { createInterface } from 'node:readline'
 import { activeBackendId, isSandboxed } from './sandbox'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
@@ -186,43 +186,6 @@ function createWindow(): void {
   }
 }
 
-/**
- * Real terminal I/O for interactive mode, backed by node:readline. Kept here (not
- * in tui.ts) so the driver stays pure and unit-testable — this is the thin adapter
- * that binds it to stdin/stdout.
- */
-function createTerminalIo(): TuiIo {
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  let pending: ((line: string | null) => void) | null = null
-  rl.on('close', () => {
-    // Ctrl-D (or a closed stdin) ends any outstanding read with EOF.
-    if (pending) {
-      const resolve = pending
-      pending = null
-      resolve(null)
-    }
-  })
-  return {
-    out: (s) => process.stdout.write(s),
-    readLine: (prompt) =>
-      new Promise<string | null>((resolve) => {
-        pending = resolve
-        rl.question(prompt, (answer) => {
-          pending = null
-          resolve(answer)
-        })
-      }),
-    onInterrupt: (handler) => rl.on('SIGINT', handler),
-    cancelRead: () => {
-      if (pending) {
-        const resolve = pending
-        pending = null
-        resolve(null)
-      }
-    }
-  }
-}
-
 // Interactive terminal mode: `Houston -i [--cwd dir] [--approval policy] ...`.
 // A stay-resident REPL with no window; checked before headless so a lone `-i`
 // (no `-p`) picks the interactive path.
@@ -243,8 +206,8 @@ if (tui) {
       app.exit(2)
       return
     }
-    // Only colorize a real terminal, and honor the NO_COLOR convention.
-    tui.color = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
+    // Colorize only when the environment says so (TTY, NO_COLOR, TERM, FORCE_COLOR).
+    tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
     let code = 1
     try {
       code = await runTui(tui, {
