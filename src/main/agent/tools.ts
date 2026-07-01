@@ -86,8 +86,9 @@ export interface ToolContext {
   /**
    * The full, un-compacted message log for this run (injected by the loop). Lets the
    * `recall_history` tool page back into earlier turns after compaction/eviction has
-   * summarized or elided them from the sent window. Read-only — the tool never
-   * mutates it.
+   * summarized or elided them from the sent window. Returns a copy of the loop's array,
+   * so callers can't reassign it; the message objects are shared, so treat them as
+   * read-only.
    */
   getHistory?: () => ChatMessage[]
 }

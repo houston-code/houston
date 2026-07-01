@@ -574,7 +574,9 @@ export async function startRun(
       attachDocument,
       captureLocalhost,
       // The recall tool reads the full, un-compacted log. Return a shallow copy so a
-      // tool can never mutate the loop's persisted `messages` through this handle.
+      // tool can't reassign the loop's `messages` array through this handle (push/splice/
+      // reorder). The ChatMessage objects are shared by reference, so callers must treat
+      // them as read-only; recall_history only reads, so no deep clone is warranted.
       getHistory: () => [...messages]
     })
 

@@ -71,6 +71,36 @@ describe('filesInPlay', () => {
     )
     expect(filesInPlay(msgs, 3)).toEqual(['f19.ts', 'f18.ts', 'f17.ts'])
   })
+
+  it('extracts every file named by an apply_patch envelope, including a rename destination', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: new.ts',
+      '+export const x = 1',
+      '*** Delete File: gone.ts',
+      '*** Update File: old.ts',
+      '*** Move to: renamed.ts',
+      ' a',
+      '-b',
+      '+B',
+      '*** End Patch'
+    ].join('\n')
+    const msgs: ChatMessage[] = [
+      toolCall('read_file', { path: 'seed.ts' }),
+      toolCall('apply_patch', { patch })
+    ]
+    // Most recent first: the patch's files (in envelope order) ahead of the earlier read.
+    expect(filesInPlay(msgs)).toEqual(['new.ts', 'gone.ts', 'old.ts', 'renamed.ts', 'seed.ts'])
+  })
+
+  it('skips an apply_patch call with a missing or malformed patch', () => {
+    const msgs: ChatMessage[] = [
+      toolCall('apply_patch', { patch: 'not a real patch envelope' }),
+      toolCall('apply_patch', {}), // no patch arg
+      toolCall('edit_file', { path: 'real.ts' })
+    ]
+    expect(filesInPlay(msgs)).toEqual(['real.ts'])
+  })
 })
 
 describe('buildPinnedMemory', () => {
