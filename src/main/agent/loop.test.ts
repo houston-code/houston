@@ -290,6 +290,149 @@ describe('startRun', () => {
     expect(outputs).toContain('BBB')
   })
 
+  it('runs the read subset of a MIXED turn concurrently, with the write sequential/approved, results in original order', async () => {
+    // A barrier that only releases once BOTH parallelizable reads have entered
+    // execute — if the reads ran sequentially, the second would never start
+    // before the first resolved and this would deadlock (test times out).
+    let arrived = 0
+    let release!: () => void
+    const barrier = new Promise<void>((r) => (release = r))
+    const reach = async (): Promise<void> => {
+      if (++arrived === 2) release()
+      await barrier
+    }
+    // Two read-kind tools (parallelizable) registered as MCP defs so we control
+    // their execution, plus the real write_file (sequential + approval).
+    const readA: ToolDef = {
+      kind: 'read',
+      summarize: () => 'read A',
+      schema: { name: 'read_a', description: 'read A', parameters: { type: 'object', properties: {} } },
+      execute: async () => {
+        await reach()
+        return 'RESULT_A'
+      }
+    }
+    const readB: ToolDef = {
+      kind: 'read',
+      summarize: () => 'read B',
+      schema: { name: 'read_b', description: 'read B', parameters: { type: 'object', properties: {} } },
+      execute: async () => {
+        await reach()
+        return 'RESULT_B'
+      }
+    }
+    h.mcpDefs = [readA, readB]
+
+    const approvals: string[] = []
+    const r = await run({
+      policy: 'ask',
+      onApproval: (callId, decide) => {
+        approvals.push(callId)
+        decide('allow')
+      },
+      turns: [
+        [
+          // Original order: read_a, write, read_b — the write sits BETWEEN the reads.
+          { type: 'tool_call', call: { id: 'ra', name: 'read_a', arguments: {} } },
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'W' } } },
+          { type: 'tool_call', call: { id: 'rb', name: 'read_b', arguments: {} } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+
+    // Only the write prompted for approval — the reads never do.
+    expect(approvals).toEqual(['w1'])
+    // The write actually ran (sequential path, approved).
+    expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('W')
+
+    // Every tool_result is present and in the ORIGINAL call order (ra, w1, rb),
+    // both in the emitted events and in the persisted message log.
+    const resultOrder = r.events
+      .filter((e) => e.type === 'tool_result')
+      .map((e) => (e as { callId: string }).callId)
+    expect(resultOrder).toEqual(['ra', 'w1', 'rb'])
+
+    const toolMsgs = r.messages.filter((m) => m.role === 'tool')
+    expect(toolMsgs.map((m) => m.toolCallId)).toEqual(['ra', 'w1', 'rb'])
+    // The two read results keep their exact content and their original positions,
+    // even though they resolved concurrently and out of order relative to the write.
+    expect(toolMsgs[0].content).toBe('RESULT_A')
+    expect(toolMsgs[2].content).toBe('RESULT_B')
+  }, 20_000)
+
+  it('rejects a tool call with invalid arguments before dispatch and returns a repair message', async () => {
+    // read_file requires `path`; sending a number where a string belongs must be
+    // repaired (not executed) so the model self-corrects — and the file the model
+    // was "reading" is never touched.
+    let executed = false
+    const badRead: ToolDef = {
+      kind: 'read',
+      summarize: () => 'bad read',
+      schema: {
+        name: 'strict_read',
+        description: 'requires a string path',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false
+        }
+      },
+      execute: async () => {
+        executed = true
+        return 'SHOULD NOT RUN'
+      }
+    }
+    h.mcpDefs = [badRead]
+
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'b1', name: 'strict_read', arguments: { path: 123 } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'noted' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+
+    expect(executed).toBe(false)
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'strict_read') as
+      | { ok: boolean; output: string }
+      | undefined
+    expect(result?.ok).toBe(false)
+    expect(result?.output).toContain('Invalid arguments')
+    expect(result?.output).toContain('path')
+    // A repaired call still gets a matching tool message (log stays provider-valid).
+    expect(r.messages.filter((m) => m.role === 'tool' && m.toolCallId === 'b1')).toHaveLength(1)
+  })
+
+  it('rejects invalid args for a write BEFORE prompting for approval', async () => {
+    // write_file needs path + content; omit content. The call must be repaired
+    // without ever prompting the user to approve an unrunnable write.
+    const r = await run({
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'bw', name: 'write_file', arguments: { path: 'x.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'noted' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    expect(types(r)).not.toContain('tool_approval')
+    expect(existsSync(join(ws, 'x.txt'))).toBe(false)
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'write_file') as
+      | { ok: boolean; output: string }
+      | undefined
+    expect(result?.ok).toBe(false)
+    expect(result?.output).toContain('Invalid arguments')
+    expect(result?.output).toContain('content')
+  })
+
   it('retries a transient failure, then succeeds (nothing streamed yet)', async () => {
     const turns: ProviderStreamEvent[][] = [
       [{ type: 'error', message: 'Overloaded' }],
