@@ -27,6 +27,7 @@ import {
   renderStatusLine,
   spinnerFrame,
   renderCapabilityList,
+  mediaTypeForImagePath,
   runTui,
   type TuiDeps,
   type TuiIo,
@@ -245,6 +246,11 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/theme', s)).toEqual({ kind: 'handled' })
   })
 
+  it('recognizes /image with a path', () => {
+    expect(parseSlashCommand('/image shot.png', s)).toEqual({ kind: 'image', path: 'shot.png' })
+    expect(parseSlashCommand('/image', s)).toEqual({ kind: 'handled' }) // no path
+  })
+
   it('sets a valid approval policy, else stays informational', () => {
     expect(parseSlashCommand('/approval auto-edit', s)).toEqual({ kind: 'set-approval', policy: 'auto-edit' })
     expect(parseSlashCommand('/approval bogus', s)).toEqual({ kind: 'handled' })
@@ -431,6 +437,20 @@ describe('renderCapabilityList', () => {
   })
   it('shows a "none" note when empty', () => {
     expect(renderCapabilityList('MCP servers', [], paint)).toContain('No mcp servers active')
+  })
+})
+
+describe('mediaTypeForImagePath', () => {
+  it('maps supported image extensions', () => {
+    expect(mediaTypeForImagePath('a.png')).toBe('image/png')
+    expect(mediaTypeForImagePath('a.JPG')).toBe('image/jpeg')
+    expect(mediaTypeForImagePath('a.jpeg')).toBe('image/jpeg')
+    expect(mediaTypeForImagePath('a.gif')).toBe('image/gif')
+    expect(mediaTypeForImagePath('a.webp')).toBe('image/webp')
+  })
+  it('returns null for unsupported / extensionless', () => {
+    expect(mediaTypeForImagePath('a.txt')).toBeNull()
+    expect(mediaTypeForImagePath('noext')).toBeNull()
   })
 })
 
@@ -878,6 +898,27 @@ describe('runTui', () => {
     expect(out).toContain('pdf')
     expect(out).toContain('github')
     expect(out).toContain('No agents active') // empty list
+  })
+
+  it('/image stages an attachment that rides on the next turn', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.loadImage = (p) => ({ image: { mediaType: 'image/png', data: `b64:${p}` } })
+    const t = fakeIo(['/image shot.png', 'what is this?', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const msg = rec.runs[0].messages.at(-1)!
+    expect(msg.content).toBe('what is this?')
+    expect(msg.images).toEqual([{ mediaType: 'image/png', data: 'b64:shot.png' }])
+  })
+
+  it('/image surfaces a load error and stages nothing', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.loadImage = () => ({ error: 'unsupported image type' })
+    const t = fakeIo(['/image bad.txt', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('unsupported image type')
+    expect(rec.runs[0].messages.at(-1)!.images).toBeUndefined()
   })
 
   it('reports capability info unavailable without a provider', async () => {
