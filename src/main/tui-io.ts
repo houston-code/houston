@@ -43,6 +43,10 @@ export interface TerminalIoDeps {
   schedule?: (fn: () => void, ms: number) => () => void
   /** Clock for the elapsed timer. Defaults to Date.now. */
   now?: () => number
+  /** readline Tab-completer (slash commands + @-files). Wired at the entry point. */
+  completer?: (line: string, cb: (err: null, result: [string[], string]) => void) => void
+  /** Initial Up/Down history (newest last), seeded into readline. */
+  history?: string[]
 }
 
 /**
@@ -70,7 +74,14 @@ function defaultDrain(): void {
 export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const rl =
     deps.createInterface?.() ??
-    (nodeCreateInterface({ input: process.stdin, output: process.stdout }) as unknown as ReadlineLike)
+    (nodeCreateInterface({
+      input: process.stdin,
+      output: process.stdout,
+      // Tab-complete slash commands + @-file mentions, and seed persisted history
+      // (readline drives Up/Down navigation once the array is seeded, newest last).
+      completer: deps.completer,
+      history: deps.history ? [...deps.history].reverse() : undefined
+    }) as unknown as ReadlineLike)
   const rawWrite = deps.write ?? ((s: string) => void process.stdout.write(s))
   const drainInput = deps.drainInput ?? defaultDrain
   const paint = deps.paint ?? ((s: string) => s)

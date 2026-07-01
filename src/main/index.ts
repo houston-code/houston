@@ -2,6 +2,8 @@ import { app, screen, BrowserWindow, dialog } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { APP_NAME } from '@shared/constants'
 import { openExternalSafely } from './safeExternal'
 import { isAllowedNavigation } from './navigation'
@@ -24,6 +26,9 @@ import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
 import { parseHeadlessArgs, runHeadless } from './headless'
 import { parseTuiArgs, runTui, makePainter } from './tui'
 import { createTerminalIo, resolveColor } from './tui-io'
+import { makeCompleter } from './tui-complete'
+import { parseHistory, serializeHistory, appendHistory } from './tui-history'
+import { findFiles } from './agent/mentions'
 import { createConversation, setMessages, listConversations, getConversation } from './conversations'
 import { activeBackendId, isSandboxed } from './sandbox'
 
@@ -46,6 +51,15 @@ app.setName(APP_NAME)
 // settings + secret storage, and the view_localhost screenshot backend.
 wireAgentHost()
 wireLocalhostCapture()
+
+/** Read a file, returning null if it doesn't exist / can't be read. */
+function safeRead(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+}
 
 let mainWindow: BrowserWindow | null = null
 
@@ -221,6 +235,22 @@ if (tui) {
     // that index.test.ts loads — only the real interactive path pulls it in.
     const { highlightToHtml } = await import('./syntax')
     const { default: hljs } = await import('highlight.js/lib/common')
+
+    // Per-workspace composer history (Up/Down recall across restarts). Keyed by a
+    // hash of the cwd so each project keeps its own history under userData.
+    const histDir = join(app.getPath('userData'), 'tui-history')
+    const histFile = join(histDir, `${createHash('sha1').update(tui.cwd).digest('hex').slice(0, 16)}.txt`)
+    let history = parseHistory(safeRead(histFile))
+    const persistHistory = (line: string): void => {
+      history = appendHistory(line, history)
+      try {
+        mkdirSync(histDir, { recursive: true })
+        writeFileSync(histFile, serializeHistory(history), { mode: 0o600 })
+      } catch (e) {
+        log.warn(`failed to persist TUI history: ${String(e)}`)
+      }
+    }
+
     let code = 1
     try {
       code = await runTui(tui, {
@@ -232,7 +262,12 @@ if (tui) {
         resolveApproval,
         resolveQuestion,
         cancelRun,
-        io: createTerminalIo({ paint: makePainter(tui.color) }),
+        persistHistory,
+        io: createTerminalIo({
+          paint: makePainter(tui.color),
+          history,
+          completer: makeCompleter((q) => findFiles(tui.cwd, q))
+        }),
         highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
         persist: {
           create: ({ workspace, providerId, model }) =>

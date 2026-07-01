@@ -417,6 +417,10 @@ listed and you pick a number or type your own answer. While the agent works, a s
 with the current activity). Press `Ctrl-C` to interrupt the current turn (the
 session stays open); `Ctrl-D` to exit.
 
+Press **Tab** to complete slash-command names and `@`-file mentions (fuzzy over the
+workspace), and **Up/Down** to recall previous prompts — history persists per
+project across restarts.
+
 Slash commands adjust the session without restarting:
 
 | Command | Effect |

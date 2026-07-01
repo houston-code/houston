@@ -823,6 +823,20 @@ describe('runTui', () => {
     expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:read_file', 'stop'])
   })
 
+  it('persists composer submissions to history, not approval answers', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const saved: string[] = []
+    d.persistHistory = (l) => saved.push(l)
+    const t = fakeIo(['run ls', 'y', '/help', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // The composer lines are saved; the approval answer 'y' is not.
+    expect(saved).toEqual(['run ls', '/help'])
+  })
+
   it('stops the spinner when a run is interrupted', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'aborted' }])
     const t = fakeIo(['task', null])
