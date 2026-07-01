@@ -21,7 +21,7 @@ import { LEGAL_VERSION } from '@shared/legal'
 import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
 import { parseHeadlessArgs, runHeadless } from './headless'
-import { parseTuiArgs, runTui } from './tui'
+import { parseTuiArgs, runTui, makePainter } from './tui'
 import { createTerminalIo, resolveColor } from './tui-io'
 import { createConversation, setMessages, listConversations, getConversation } from './conversations'
 import { activeBackendId, isSandboxed } from './sandbox'
@@ -229,7 +229,7 @@ if (tui) {
         resolveApproval,
         resolveQuestion,
         cancelRun,
-        io: createTerminalIo(),
+        io: createTerminalIo({ paint: makePainter(tui.color) }),
         highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
         persist: {
           create: ({ workspace, providerId, model }) =>

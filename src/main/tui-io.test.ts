@@ -118,3 +118,91 @@ describe('createTerminalIo lifecycle', () => {
     expect(interrupted).toBe(true)
   })
 })
+
+/** A controllable scheduler + clock + output capture for spinner tests. */
+function spinnerHarness() {
+  const writes: string[] = []
+  let ticks: Array<() => void> = []
+  let nowMs = 1000
+  const f = fakeRl()
+  const io = createTerminalIo({
+    createInterface: () => f.rl,
+    write: (s) => writes.push(s),
+    drainInput: () => {},
+    now: () => nowMs,
+    schedule: (fn) => {
+      ticks.push(fn)
+      return () => {
+        ticks = ticks.filter((t) => t !== fn)
+      }
+    }
+  })
+  return {
+    io,
+    f,
+    writes,
+    text: () => writes.join(''),
+    tick: () => ticks.forEach((fn) => fn()),
+    scheduled: () => ticks.length,
+    advance: (ms: number) => {
+      nowMs += ms
+    }
+  }
+}
+
+describe('createTerminalIo spinner', () => {
+  it('schedules a redraw on start and draws the label + elapsed', () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    expect(h.scheduled()).toBe(1)
+    h.tick()
+    expect(h.text()).toContain('Working')
+    expect(h.text()).toContain('0s')
+    expect(h.text()).toContain('\r') // single-line redraw
+  })
+
+  it('advances the elapsed timer', () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    h.advance(3000)
+    h.tick()
+    expect(h.text()).toContain('3s')
+  })
+
+  it('relabels via setSpinnerLabel', () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    h.io.setSpinnerLabel?.('read_file')
+    h.tick()
+    expect(h.text()).toContain('read_file')
+  })
+
+  it('clears the spinner line before real output', () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    h.io.out('hello\n')
+    // A clear precedes the real text.
+    expect(h.text().indexOf('\x1b[2K')).toBeLessThan(h.text().indexOf('hello'))
+  })
+
+  it('stops: cancels the timer and erases the line', () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    expect(h.scheduled()).toBe(1)
+    h.io.stopSpinner?.()
+    expect(h.scheduled()).toBe(0)
+    expect(h.text()).toContain('\x1b[2K')
+  })
+
+  it('pauses the spinner during a read and resumes after', async () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    const p = h.io.readLine('> ', { discardPending: true })
+    // Reading pauses the redraw timer while the prompt is on screen.
+    expect(h.scheduled()).toBe(0)
+    h.f.submit('y')
+    await p
+    // Turn still active → spinner resumes.
+    expect(h.scheduled()).toBe(1)
+  })
+})

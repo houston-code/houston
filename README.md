@@ -413,8 +413,9 @@ session cost, and context-window fill in view at all times. When a tool needs ap
 you answer inline — `y` to allow, `n` to deny, `a` to always allow that kind — a
 file edit shows its **diff** before you approve, and a shell command with no OS
 sandbox is flagged. When the agent asks a question (`ask_user`) the options are
-listed and you pick a number or type your own answer. Press `Ctrl-C` to interrupt
-the current turn (the session stays open); `Ctrl-D` to exit.
+listed and you pick a number or type your own answer. While the agent works, a spinner with an elapsed timer shows it's alive (labelled
+with the current activity). Press `Ctrl-C` to interrupt the current turn (the
+session stays open); `Ctrl-D` to exit.
 
 Slash commands adjust the session without restarting:
 

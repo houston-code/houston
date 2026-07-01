@@ -1,5 +1,8 @@
 import { createInterface as nodeCreateInterface } from 'node:readline'
-import type { TuiIo } from './tui'
+import { spinnerFrame, type TuiIo, type Painter } from './tui'
+
+/** Carriage-return + erase-line: rewinds to column 0 and clears the current line. */
+const CLEAR_LINE = '\r\x1b[2K'
 
 /**
  * Real terminal I/O for interactive mode (`Houston -i`), backed by node:readline.
@@ -34,6 +37,12 @@ export interface TerminalIoDeps {
   write?: (s: string) => void
   /** Discard buffered type-ahead before a sensitive read. Defaults to draining stdin. */
   drainInput?: () => void
+  /** Painter for spinner frames (matches the session's color setting). */
+  paint?: Painter
+  /** Schedule a repeating tick; returns a canceller. Injectable for tests. */
+  schedule?: (fn: () => void, ms: number) => () => void
+  /** Clock for the elapsed timer. Defaults to Date.now. */
+  now?: () => number
 }
 
 /**
@@ -62,8 +71,16 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   const rl =
     deps.createInterface?.() ??
     (nodeCreateInterface({ input: process.stdin, output: process.stdout }) as unknown as ReadlineLike)
-  const write = deps.write ?? ((s: string) => void process.stdout.write(s))
+  const rawWrite = deps.write ?? ((s: string) => void process.stdout.write(s))
   const drainInput = deps.drainInput ?? defaultDrain
+  const paint = deps.paint ?? ((s: string) => s)
+  const now = deps.now ?? Date.now
+  const schedule =
+    deps.schedule ??
+    ((fn: () => void, ms: number): (() => void) => {
+      const id = setInterval(fn, ms)
+      return () => clearInterval(id)
+    })
 
   let pending: ((line: string | null) => void) | null = null
   const settle = (line: string | null): void => {
@@ -74,6 +91,34 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     }
   }
 
+  // --- Spinner: a single redrawn line, erased before any real output. This is the
+  // ONLY in-place redraw in the TUI; confining it to one line + erase-before-write
+  // keeps the transcript tear-free.
+  let spinnerLabel: string | null = null
+  let spinnerStart = 0
+  let tick = 0
+  let cancelTimer: (() => void) | null = null
+  const drawSpinner = (): void => {
+    if (spinnerLabel === null) return
+    rawWrite(CLEAR_LINE + spinnerFrame(tick++, spinnerLabel, Math.floor((now() - spinnerStart) / 1000), paint))
+  }
+  const startTimer = (): void => {
+    if (!cancelTimer && spinnerLabel !== null) cancelTimer = schedule(drawSpinner, 100)
+  }
+  const stopTimer = (erase: boolean): void => {
+    if (cancelTimer) {
+      cancelTimer()
+      cancelTimer = null
+    }
+    if (erase) rawWrite(CLEAR_LINE)
+  }
+  const out = (s: string): void => {
+    // Clear the spinner line before real output so streamed text never lands on a
+    // spinner frame; the timer redraws it on the next tick, on the fresh line.
+    if (cancelTimer) rawWrite(CLEAR_LINE)
+    rawWrite(s)
+  }
+
   // Start idle → paused, so keystrokes typed before the first read (or while
   // output streams between reads) aren't echoed into the transcript.
   rl.pause()
@@ -81,10 +126,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   rl.on('close', () => settle(null))
 
   return {
-    out: write,
+    out,
     readLine: (prompt, opts) =>
       new Promise<string | null>((resolve) => {
         pending = resolve
+        // Pause the spinner while a prompt is on screen so it can't repaint over it.
+        stopTimer(true)
         // Drop type-ahead before a security-sensitive prompt so a stray buffered
         // 'y' can't answer an approval the user never actually saw.
         if (opts?.discardPending) drainInput()
@@ -92,6 +139,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rl.question(prompt, (answer) => {
           rl.pause() // back to idle: stop echoing until the next read
           pending = null
+          startTimer() // resume the spinner if the turn is still running
           resolve(answer)
         })
       }),
@@ -99,6 +147,19 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     cancelRead: () => {
       settle(null)
       rl.pause()
+    },
+    startSpinner: (label) => {
+      spinnerLabel = label
+      spinnerStart = now()
+      tick = 0
+      startTimer()
+    },
+    setSpinnerLabel: (label) => {
+      if (spinnerLabel !== null) spinnerLabel = label
+    },
+    stopSpinner: () => {
+      spinnerLabel = null
+      stopTimer(true)
     }
   }
 }
