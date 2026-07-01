@@ -18,6 +18,7 @@ export function Titlebar({
   changes,
   onShowFiles,
   onShowChanges,
+  onShowScorecard,
   onTogglePreview,
   previewOpen,
   previewCount,
@@ -33,6 +34,8 @@ export function Titlebar({
   changes?: { fileCount: number; added: number; removed: number }
   onShowFiles?: () => void
   onShowChanges?: () => void
+  /** Open the local-only per-model loop scorecard. */
+  onShowScorecard?: () => void
   onTogglePreview?: () => void
   previewOpen?: boolean
   /** Number of running dev servers with a detected URL — shown as a badge when > 0. */
@@ -94,6 +97,16 @@ export function Titlebar({
                 <span className="diff-stat__del">−{changes.removed}</span>
               </span>
             )}
+          </button>
+        )}
+        {onShowScorecard && (
+          <button
+            type="button"
+            className="titlebar__action"
+            onClick={onShowScorecard}
+            title="Per-model loop scorecard (computed on-device from local data)"
+          >
+            <span aria-hidden="true">▤</span> Scorecard
           </button>
         )}
         {onToggleTerminal && (
