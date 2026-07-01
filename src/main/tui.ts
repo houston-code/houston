@@ -8,6 +8,7 @@ import { truncateVisible } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
+import { ComposerBuffer } from './tui-composer'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 
 /**
@@ -735,9 +736,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(
         `${renderStatusLine({ providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens }, columns(), paint)}\n`
       )
-      const line = await deps.io.readLine(composerPrompt(policy, paint))
-      if (line === null) break // Ctrl-D
-      text = line.trim()
+      // Read a (possibly multi-line) message: a trailing backslash or an open code
+      // fence keeps reading, so a fenced snippet isn't split at the first newline.
+      const composer = new ComposerBuffer()
+      let raw: string | null = null
+      for (;;) {
+        const p = composer.pending ? paint('… ', 'dim') : composerPrompt(policy, paint)
+        const line = await deps.io.readLine(p)
+        if (line === null) {
+          if (composer.pending) raw = composer.flush() // EOF mid-entry → submit what we have
+          break
+        }
+        const done = composer.push(line)
+        if (done !== null) {
+          raw = done
+          break
+        }
+      }
+      if (raw === null) break // clean Ctrl-D at an empty composer → exit
+      text = raw.trim()
       if (!text) continue
       // Persist composer submissions (commands included) for cross-restart recall;
       // approval/question answers go through a different read and aren't saved.
