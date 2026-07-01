@@ -5,6 +5,7 @@ import { LEGAL_VERSION } from '@shared/legal'
 import {
   parseTuiArgs,
   makePainter,
+  isThemeName,
   renderToolStart,
   toolArgHint,
   renderApprovalPrompt,
@@ -95,6 +96,21 @@ describe('makePainter', () => {
     expect(s).toContain('hi')
     expect(s).toContain('\x1b[31m')
     expect(s.endsWith('\x1b[0m')).toBe(true)
+  })
+
+  it('applies the bright theme (high-intensity foregrounds)', () => {
+    expect(makePainter(true, 'bright')('x', 'cyan')).toContain('\x1b[96m')
+  })
+
+  it('mono theme drops color but keeps bold structure', () => {
+    const paint = makePainter(true, 'mono')
+    expect(paint('x', 'cyan')).toBe('x') // no color code emitted
+    expect(paint('x', 'bold')).toContain('\x1b[1m') // structure preserved
+  })
+
+  it('isThemeName guards known themes', () => {
+    expect(isThemeName('bright')).toBe(true)
+    expect(isThemeName('nope')).toBe(false)
   })
 })
 
@@ -220,6 +236,13 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/agents', s)).toEqual({ kind: 'capability', which: 'agents' })
     expect(parseSlashCommand('/mcp', s)).toEqual({ kind: 'capability', which: 'mcp' })
     expect(parseSlashCommand('/hooks', s)).toEqual({ kind: 'capability', which: 'hooks' })
+  })
+
+  it('sets a valid theme, else stays informational', () => {
+    expect(parseSlashCommand('/theme bright', s)).toEqual({ kind: 'set-theme', theme: 'bright' })
+    expect(parseSlashCommand('/theme mono', s)).toEqual({ kind: 'set-theme', theme: 'mono' })
+    expect(parseSlashCommand('/theme bogus', s)).toEqual({ kind: 'handled' })
+    expect(parseSlashCommand('/theme', s)).toEqual({ kind: 'handled' })
   })
 
   it('sets a valid approval policy, else stays informational', () => {
@@ -863,6 +886,23 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('capability info is unavailable')
+  })
+
+  it('/theme switches the palette (with color on)', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/theme bright', null])
+    d.io = t.io
+    await runTui({ ...opts, color: true }, d)
+    // The confirmation line is painted with the bright palette.
+    expect(t.text()).toContain('theme → bright')
+  })
+
+  it('/theme with no arg lists the available themes', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/theme', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('default, bright, mono')
   })
 
   it('/fork with no active conversation is a no-op', async () => {

@@ -23,6 +23,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'agents', description: 'list custom agents' },
   { name: 'mcp', description: 'list configured MCP servers' },
   { name: 'hooks', description: 'list configured hooks' },
+  { name: 'theme', description: 'list or switch color theme' },
   { name: 'cwd', description: 'show the working directory' },
   { name: 'exit', description: 'leave' },
   { name: 'quit', description: 'leave' }

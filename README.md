@@ -441,6 +441,7 @@ Slash commands adjust the session without restarting:
 | `/cost` | show session token + cost totals |
 | `/skills`, `/agents` | list the workspace's skills / custom agents |
 | `/mcp`, `/hooks` | list configured MCP servers / hooks |
+| `/theme [name]` | list or switch color theme (`default` / `bright` / `mono`) |
 | `/cwd` | show the working directory |
 | `/help` | list commands |
 | `/exit`, `/quit` | leave |

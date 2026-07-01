@@ -86,23 +86,43 @@ export function parseTuiArgs(argv: string[], defaultCwd: string): TuiOptions | n
 // render functions are pure and testable (assert on content, and that color=false
 // emits no escape codes), and so a non-TTY / NO_COLOR run is styling-free.
 
-const ANSI = {
-  reset: '\x1b[0m',
-  dim: '\x1b[2m',
-  bold: '\x1b[1m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  magenta: '\x1b[35m',
-  cyan: '\x1b[36m'
+/**
+ * Color themes: each maps a style key to its SGR sequence. `default` is standard
+ * ANSI; `bright` uses the high-intensity foregrounds (for dark terminals);
+ * `mono` keeps structure (bold/dim) but drops color (light terminals / a11y).
+ * The style keys are identical across themes, so every renderer is theme-agnostic.
+ */
+export const THEMES = {
+  default: {
+    reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+    red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m',
+    blue: '\x1b[34m', magenta: '\x1b[35m', cyan: '\x1b[36m'
+  },
+  bright: {
+    reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+    red: '\x1b[91m', green: '\x1b[92m', yellow: '\x1b[93m',
+    blue: '\x1b[94m', magenta: '\x1b[95m', cyan: '\x1b[96m'
+  },
+  mono: {
+    reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+    red: '', green: '', yellow: '', blue: '', magenta: '', cyan: ''
+  }
 } as const
 
-export type Painter = (s: string, ...styles: Array<keyof typeof ANSI>) => string
+export type ThemeName = keyof typeof THEMES
+export type Painter = (s: string, ...styles: Array<keyof (typeof THEMES)['default']>) => string
 
-export function makePainter(color: boolean): Painter {
+export function isThemeName(v: string): v is ThemeName {
+  return v in THEMES
+}
+
+export function makePainter(color: boolean, theme: ThemeName = 'default'): Painter {
   if (!color) return (s) => s
-  return (s, ...styles) => `${styles.map((k) => ANSI[k]).join('')}${s}${ANSI.reset}`
+  const palette = THEMES[theme] ?? THEMES.default
+  return (s, ...styles) => {
+    const codes = styles.map((k) => palette[k]).filter(Boolean).join('')
+    return codes ? `${codes}${s}${palette.reset}` : s
+  }
 }
 
 /** One-line summary of a tool starting, e.g. "· read_file  src/x.ts". */
@@ -410,6 +430,7 @@ export type SlashResult =
   | { kind: 'resume'; query: string }
   | { kind: 'fork' }
   | { kind: 'capability'; which: 'skills' | 'agents' | 'mcp' | 'hooks' }
+  | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
   | { kind: 'unknown'; name: string }
@@ -442,6 +463,10 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
     case 'mcp':
     case 'hooks':
       return { kind: 'capability', which: name }
+    case 'theme': {
+      if (isThemeName(arg)) return { kind: 'set-theme', theme: arg }
+      return { kind: 'handled' } // no/invalid arg → driver lists themes
+    }
     case 'approval': {
       if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
@@ -500,6 +525,7 @@ export const HELP_TEXT = [
   '  /cost                 show session token + cost totals',
   '  /skills /agents       list workspace skills / custom agents',
   '  /mcp /hooks           list configured MCP servers / hooks',
+  '  /theme [name]         list or switch color theme (default | bright | mono)',
   '  /cwd                  show the working directory',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
@@ -594,7 +620,9 @@ export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
  * id (like headless), so nothing is persisted and turns can't collide.
  */
 export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
-  const paint = makePainter(opts.color)
+  // Reassigned by /theme (takes effect from the next output); the spinner keeps
+  // the initial theme since its painter lives in the terminal adapter.
+  let paint = makePainter(opts.color)
   const settings = deps.getSettings()
   const newId = deps.newId ?? randomUUID
 
@@ -739,6 +767,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         providerId = result.providerId
         model = result.model
         deps.io.out(paint(`· model → ${providerId} / ${model}\n`, 'dim'))
+        continue
+      }
+      if (result.kind === 'set-theme') {
+        paint = makePainter(opts.color, result.theme)
+        deps.io.out(paint(`· theme → ${result.theme}\n`, 'dim'))
         continue
       }
       if (result.kind === 'unknown') {
@@ -918,6 +951,10 @@ function handleInfoCommand(
   }
   if (name === 'cost') {
     deps.io.out(paint(`session: ${formatSessionCost(state.sessionCost)}\n`, 'dim'))
+    return
+  }
+  if (name === 'theme') {
+    deps.io.out(paint(`themes: ${Object.keys(THEMES).join(', ')}  (usage: /theme <name>)\n`, 'dim'))
     return
   }
   if (name === 'approval') {
