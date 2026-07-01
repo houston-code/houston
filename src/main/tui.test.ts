@@ -25,6 +25,7 @@ import {
   shortCwd,
   renderStatusLine,
   spinnerFrame,
+  renderCapabilityList,
   runTui,
   type TuiDeps,
   type TuiIo,
@@ -214,6 +215,13 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/fork', s)).toEqual({ kind: 'fork' })
   })
 
+  it('recognizes capability commands', () => {
+    expect(parseSlashCommand('/skills', s)).toEqual({ kind: 'capability', which: 'skills' })
+    expect(parseSlashCommand('/agents', s)).toEqual({ kind: 'capability', which: 'agents' })
+    expect(parseSlashCommand('/mcp', s)).toEqual({ kind: 'capability', which: 'mcp' })
+    expect(parseSlashCommand('/hooks', s)).toEqual({ kind: 'capability', which: 'hooks' })
+  })
+
   it('sets a valid approval policy, else stays informational', () => {
     expect(parseSlashCommand('/approval auto-edit', s)).toEqual({ kind: 'set-approval', policy: 'auto-edit' })
     expect(parseSlashCommand('/approval bogus', s)).toEqual({ kind: 'handled' })
@@ -387,6 +395,19 @@ describe('status line & progress', () => {
     expect(spinnerFrame(1, 'Thinking', 4, paint)).toContain('⠙')
     // wraps around the frame set
     expect(spinnerFrame(10, 'x', 0, paint)).toContain('⠋')
+  })
+})
+
+describe('renderCapabilityList', () => {
+  const paint = makePainter(false)
+  it('renders a labelled list with details', () => {
+    const out = renderCapabilityList('Skills', [{ name: 'pdf', detail: 'work with PDFs' }], paint)
+    expect(out).toContain('Skills:')
+    expect(out).toContain('pdf')
+    expect(out).toContain('work with PDFs')
+  })
+  it('shows a "none" note when empty', () => {
+    expect(renderCapabilityList('MCP servers', [], paint)).toContain('No mcp servers active')
   })
 })
 
@@ -817,6 +838,31 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(fp.store.size).toBe(2)
     expect([...fp.store.values()].some((c) => c.title.endsWith('(fork)'))).toBe(true)
+  })
+
+  it('/mcp and /skills render the capability snapshot', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.capabilities = async () => ({
+      skills: [{ name: 'pdf', detail: 'PDFs' }],
+      agents: [],
+      mcp: [{ name: 'github', detail: 'gh' }],
+      hooks: []
+    })
+    const t = fakeIo(['/skills', '/mcp', '/agents', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('pdf')
+    expect(out).toContain('github')
+    expect(out).toContain('No agents active') // empty list
+  })
+
+  it('reports capability info unavailable without a provider', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/hooks', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('capability info is unavailable')
   })
 
   it('/fork with no active conversation is a no-op', async () => {

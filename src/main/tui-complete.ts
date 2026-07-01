@@ -19,6 +19,10 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'resume', description: 'reopen (or search) a saved session' },
   { name: 'fork', description: 'branch the current session into a copy' },
   { name: 'cost', description: 'session token + cost totals' },
+  { name: 'skills', description: 'list workspace skills' },
+  { name: 'agents', description: 'list custom agents' },
+  { name: 'mcp', description: 'list configured MCP servers' },
+  { name: 'hooks', description: 'list configured hooks' },
   { name: 'cwd', description: 'show the working directory' },
   { name: 'exit', description: 'leave' },
   { name: 'quit', description: 'leave' }

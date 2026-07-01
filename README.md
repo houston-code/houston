@@ -439,6 +439,8 @@ Slash commands adjust the session without restarting:
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
 | `/cost` | show session token + cost totals |
+| `/skills`, `/agents` | list the workspace's skills / custom agents |
+| `/mcp`, `/hooks` | list configured MCP servers / hooks |
 | `/cwd` | show the working directory |
 | `/help` | list commands |
 | `/exit`, `/quit` | leave |

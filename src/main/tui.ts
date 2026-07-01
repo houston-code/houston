@@ -311,6 +311,34 @@ export function parseResumeSelection(answer: string, convs: ResumeEntry[]): stri
   return null
 }
 
+// --- Capability introspection ------------------------------------------------
+// Read-only views of what the agent can reach in this workspace — skills, custom
+// agents, MCP servers, hooks — so a terminal user can see the capability surface
+// before granting approvals, without opening the GUI.
+
+export interface CapabilityItem {
+  name: string
+  detail?: string
+}
+
+export interface CapabilitySnapshot {
+  skills: CapabilityItem[]
+  agents: CapabilityItem[]
+  mcp: CapabilityItem[]
+  hooks: CapabilityItem[]
+}
+
+/** Render a labelled capability list, or a dim "none" note when empty. */
+export function renderCapabilityList(label: string, items: CapabilityItem[], paint: Painter): string {
+  if (!items.length) return paint(`No ${label.toLowerCase()} active in this folder.`, 'dim')
+  const lines = [paint(`${label}:`, 'bold')]
+  for (const it of items) {
+    const detail = it.detail ? paint(` — ${truncate(it.detail, 70)}`, 'dim') : ''
+    lines.push(`  ${paint(it.name, 'cyan')}${detail}`)
+  }
+  return lines.join('\n')
+}
+
 /** Compact relative time like "just now", "3m ago", "2h ago", "5d ago". */
 export function formatRelativeTime(then: number, now: number): string {
   const s = Math.max(0, Math.floor((now - then) / 1000))
@@ -381,6 +409,7 @@ export type SlashResult =
   | { kind: 'clear' }
   | { kind: 'resume'; query: string }
   | { kind: 'fork' }
+  | { kind: 'capability'; which: 'skills' | 'agents' | 'mcp' | 'hooks' }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
   | { kind: 'unknown'; name: string }
@@ -408,6 +437,11 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
       return { kind: 'resume', query: arg }
     case 'fork':
       return { kind: 'fork' }
+    case 'skills':
+    case 'agents':
+    case 'mcp':
+    case 'hooks':
+      return { kind: 'capability', which: name }
     case 'approval': {
       if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
@@ -464,6 +498,8 @@ export const HELP_TEXT = [
   '  /resume [query]       list (or search) and reopen a saved session',
   '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
+  '  /skills /agents       list workspace skills / custom agents',
+  '  /mcp /hooks           list configured MCP servers / hooks',
   '  /cwd                  show the working directory',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
@@ -536,6 +572,8 @@ export interface TuiDeps {
   columns?: () => number
   /** Persist a submitted composer line to history (for Up/Down across restarts). */
   persistHistory?: (line: string) => void
+  /** Snapshot of the workspace's skills / agents / MCP servers / hooks, for /mcp etc. */
+  capabilities?: () => Promise<CapabilitySnapshot>
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
    * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
@@ -680,6 +718,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         conversationId = forked.id
         deps.io.out(paint('· forked — continuing on a copy, original left intact\n', 'dim'))
+        continue
+      }
+      if (result.kind === 'capability') {
+        if (!deps.capabilities) {
+          deps.io.out(paint('· capability info is unavailable\n', 'dim'))
+          continue
+        }
+        const snap = await deps.capabilities()
+        const labels = { skills: 'Skills', agents: 'Agents', mcp: 'MCP servers', hooks: 'Hooks' }
+        deps.io.out(`${renderCapabilityList(labels[result.which], snap[result.which], paint)}\n`)
         continue
       }
       if (result.kind === 'set-approval') {
