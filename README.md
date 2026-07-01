@@ -405,12 +405,13 @@ Houston -i --cwd ~/code/myproj --model claude --approval auto-edit
 ```
 
 The conversation streams live as the agent works: assistant text and reasoning,
-tool activity, and token/cost. When a tool needs approval (under `ask` /
-`auto-edit`) you answer inline — `y` to allow, `n` to deny, `a` to always allow
-that kind — and a shell command with no OS sandbox is flagged before you approve
-it. When the agent asks a question (`ask_user`) the options are listed and you pick
-a number or type your own answer. Press `Ctrl-C` to interrupt the current turn
-(the session stays open); `Ctrl-D` to exit.
+tool activity with a snippet of each result, and a per-turn plus running
+session token/cost meter. When a tool needs approval (under `ask` / `auto-edit`)
+you answer inline — `y` to allow, `n` to deny, `a` to always allow that kind — a
+file edit shows its **diff** before you approve, and a shell command with no OS
+sandbox is flagged. When the agent asks a question (`ask_user`) the options are
+listed and you pick a number or type your own answer. Press `Ctrl-C` to interrupt
+the current turn (the session stays open); `Ctrl-D` to exit.
 
 Slash commands adjust the session without restarting:
 
@@ -419,6 +420,7 @@ Slash commands adjust the session without restarting:
 | `/model [id]` | list configured models, or switch (`providerId`, `providerId/model`, or a bare model id) |
 | `/approval [policy]` | show or set the policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`) |
 | `/clear`, `/new` | start a fresh conversation |
+| `/cost` | show session token + cost totals |
 | `/cwd` | show the working directory |
 | `/help` | list commands |
 | `/exit`, `/quit` | leave |
