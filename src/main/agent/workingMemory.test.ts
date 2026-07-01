@@ -1,0 +1,123 @@
+import { describe, expect, it } from 'vitest'
+import type { ChatMessage } from '@shared/agent'
+import {
+  PINNED_MEMORY_PREFIX,
+  buildPinnedMemory,
+  buildPinnedMessages,
+  filesInPlay,
+  latestTodos,
+  originalTask
+} from './workingMemory'
+
+function toolCall(name: string, args: Record<string, unknown>): ChatMessage {
+  return { role: 'assistant', content: '', toolCalls: [{ id: `c-${name}`, name, arguments: args }] }
+}
+
+describe('originalTask', () => {
+  it('returns the first user message, trimmed', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: '  Build a login page  ' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'now add tests' }
+    ]
+    expect(originalTask(msgs)).toBe('Build a login page')
+  })
+
+  it('is empty when there is no user turn', () => {
+    expect(originalTask([{ role: 'assistant', content: 'hi' }])).toBe('')
+    expect(originalTask([])).toBe('')
+  })
+})
+
+describe('latestTodos', () => {
+  it('recovers the most recent todo_write list', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      toolCall('todo_write', { todos: [{ content: 'first', status: 'completed' }] }),
+      { role: 'tool', content: 'ok', toolCallId: 'c-todo_write', toolName: 'todo_write' },
+      toolCall('todo_write', {
+        todos: [
+          { content: 'a', status: 'completed' },
+          { content: 'b', status: 'in_progress' }
+        ]
+      })
+    ]
+    const todos = latestTodos(msgs)
+    expect(todos).toHaveLength(2)
+    expect(todos[1]).toEqual({ content: 'b', status: 'in_progress' })
+  })
+
+  it('is empty when there is no todo_write and tolerates malformed args', () => {
+    expect(latestTodos([{ role: 'user', content: 'x' }])).toEqual([])
+    expect(latestTodos([toolCall('todo_write', { todos: 'nope' })])).toEqual([])
+  })
+})
+
+describe('filesInPlay', () => {
+  it('collects file paths from file tools, most recent first and deduped', () => {
+    const msgs: ChatMessage[] = [
+      toolCall('read_file', { path: 'a.ts' }),
+      toolCall('edit_file', { path: 'b.ts' }),
+      toolCall('read_file', { path: 'a.ts' }), // dup of a.ts
+      toolCall('run_shell', { command: 'ls' }), // not a file tool
+      toolCall('write_file', { path: 'c.ts' })
+    ]
+    expect(filesInPlay(msgs)).toEqual(['c.ts', 'a.ts', 'b.ts'])
+  })
+
+  it('honors the max cap', () => {
+    const msgs: ChatMessage[] = Array.from({ length: 20 }, (_, i) =>
+      toolCall('read_file', { path: `f${i}.ts` })
+    )
+    expect(filesInPlay(msgs, 3)).toEqual(['f19.ts', 'f18.ts', 'f17.ts'])
+  })
+})
+
+describe('buildPinnedMemory', () => {
+  it('assembles task, todos, and files into a labeled block', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Add OAuth login' },
+      toolCall('read_file', { path: 'src/auth.ts' }),
+      toolCall('todo_write', { todos: [{ content: 'wire provider', status: 'in_progress' }] })
+    ]
+    const block = buildPinnedMemory(msgs)
+    expect(block.startsWith(PINNED_MEMORY_PREFIX)).toBe(true)
+    expect(block).toContain('Original task:')
+    expect(block).toContain('Add OAuth login')
+    expect(block).toContain('Current todo list:')
+    expect(block).toContain('wire provider')
+    expect(block).toContain('Files in play')
+    expect(block).toContain('src/auth.ts')
+  })
+
+  it('omits absent sections and returns empty when there is no task', () => {
+    const block = buildPinnedMemory([{ role: 'user', content: 'Just chat' }])
+    expect(block).toContain('Original task:')
+    expect(block).not.toContain('Current todo list:')
+    expect(block).not.toContain('Files in play')
+
+    expect(buildPinnedMemory([])).toBe('')
+    expect(buildPinnedMemory([{ role: 'assistant', content: 'hi' }])).toBe('')
+  })
+
+  it('clips a very long task to keep the block bounded', () => {
+    const huge = 'x'.repeat(5000)
+    const block = buildPinnedMemory([{ role: 'user', content: huge }])
+    expect(block.length).toBeLessThan(huge.length)
+    expect(block).toContain('…')
+  })
+})
+
+describe('buildPinnedMessages', () => {
+  it('returns a user/assistant pair when there is something to pin', () => {
+    const pair = buildPinnedMessages([{ role: 'user', content: 'Do the thing' }])
+    expect(pair).toHaveLength(2)
+    expect(pair[0].role).toBe('user')
+    expect(pair[0].content).toContain(PINNED_MEMORY_PREFIX)
+    expect(pair[1].role).toBe('assistant')
+  })
+
+  it('returns [] when there is nothing to pin', () => {
+    expect(buildPinnedMessages([])).toEqual([])
+  })
+})

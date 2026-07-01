@@ -3,6 +3,7 @@ import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'nod
 import { minimatch } from 'minimatch'
 import type {
   AgentQuestion,
+  ChatMessage,
   DocumentAttachment,
   JSONSchema,
   QuestionOption,
@@ -82,6 +83,13 @@ export interface ToolContext {
   ghExec?: GhExec
   /** Ask the user a structured question and resolve with their answer (injected by the loop). */
   askUser?: (q: AgentQuestion) => Promise<string>
+  /**
+   * The full, un-compacted message log for this run (injected by the loop). Lets the
+   * `recall_history` tool page back into earlier turns after compaction/eviction has
+   * summarized or elided them from the sent window. Read-only — the tool never
+   * mutates it.
+   */
+  getHistory?: () => ChatMessage[]
 }
 
 export interface ToolDef {
@@ -1943,6 +1951,119 @@ const askUser: ToolDef = {
   }
 }
 
+/**
+ * Render one earlier message as a compact, labeled line for the recall result:
+ * `#<index> <role>[/<tool>]: <text>`. Tool-call arguments and any body are folded
+ * in so a matched turn is legible without pulling the raw log. The per-message text
+ * is bounded so one huge message can't dominate; the whole result is clamped again
+ * by the caller.
+ */
+function formatRecallMessage(m: ChatMessage, index: number): string {
+  const label = m.toolName ? `${m.role}/${m.toolName}` : m.role
+  const parts: string[] = []
+  if (m.content.trim()) parts.push(m.content.trim())
+  for (const call of m.toolCalls ?? []) {
+    parts.push(`→ ${call.name}(${JSON.stringify(call.arguments)})`)
+  }
+  if ((m.images?.length ?? 0) > 0) parts.push(`[${m.images?.length} image(s)]`)
+  if ((m.documents?.length ?? 0) > 0) parts.push(`[${m.documents?.length} document(s)]`)
+  const body = parts.join(' ').replace(/\s+/g, ' ').trim()
+  const RECALL_PER_MSG = 1500
+  const clipped = body.length > RECALL_PER_MSG ? `${body.slice(0, RECALL_PER_MSG)}…` : body
+  return `#${index} ${label}: ${clipped}`
+}
+
+const recallHistory: ToolDef = {
+  kind: 'read',
+  summarize: (a) => {
+    const q = str(a, 'query')
+    const from = num(a, 'from')
+    const to = num(a, 'to')
+    if (q) return `Recall history matching "${q}"`
+    if (from !== undefined || to !== undefined) return `Recall history (messages ${from ?? 0}–${to ?? 'end'})`
+    return 'Recall earlier conversation history'
+  },
+  schema: {
+    name: 'recall_history',
+    description:
+      'Page back into the EARLIER conversation after older turns have been compacted or their large tool ' +
+      'outputs elided from your context. This reads your own full, un-summarized message log (read-only, no ' +
+      'side effects). Filter by a substring `query` (case-insensitive; matches message text and tool-call ' +
+      'arguments) and/or a message-index range (`from`/`to`, 0-based, as shown in the `#N` labels of a prior ' +
+      'recall). Returns the matching earlier messages as compact labeled lines. Use it to recover a detail ' +
+      '(a path, a value, an earlier decision) you no longer see rather than re-reading files or re-running ' +
+      'commands. Output is size-capped; narrow the query or range if you need more of a specific message.',
+    parameters: objectSchema(
+      {
+        query: {
+          type: 'string',
+          description: 'Case-insensitive substring to match against message text and tool-call arguments.'
+        },
+        from: {
+          type: 'number',
+          description: 'First message index to include (0-based, inclusive). Omit to start at the beginning.'
+        },
+        to: {
+          type: 'number',
+          description: 'Last message index to include (0-based, inclusive). Omit to read to the end.'
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of matching messages to return (most recent matches win). Default 30.'
+        }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    if (!ctx.getHistory) {
+      return '[Conversation history is not available in this context.]'
+    }
+    const history = ctx.getHistory()
+    if (history.length === 0) return '[No earlier conversation history yet.]'
+
+    const from = num(args, 'from')
+    const to = num(args, 'to')
+    const query = str(args, 'query').trim().toLowerCase()
+    const limit = Math.max(1, Math.min(200, Math.floor(num(args, 'limit') ?? 30)))
+
+    const lo = from !== undefined ? Math.max(0, Math.floor(from)) : 0
+    const hi = to !== undefined ? Math.min(history.length - 1, Math.floor(to)) : history.length - 1
+
+    // Collect matches within the range. When a query is given, match against both
+    // the message text and its tool-call arguments so a recalled path/command hits.
+    const matched: string[] = []
+    for (let i = lo; i <= hi; i++) {
+      const m = history[i]
+      if (query) {
+        const hay = (
+          m.content +
+          ' ' +
+          (m.toolCalls ?? []).map((c) => `${c.name} ${JSON.stringify(c.arguments)}`).join(' ')
+        ).toLowerCase()
+        if (!hay.includes(query)) continue
+      }
+      matched.push(formatRecallMessage(m, i))
+    }
+
+    if (matched.length === 0) {
+      return query
+        ? `[No earlier messages match "${str(args, 'query')}" in range ${lo}–${hi}.]`
+        : `[No earlier messages in range ${lo}–${hi}.]`
+    }
+
+    // Keep the most recent `limit` matches (they are usually the relevant ones), but
+    // present them in chronological order. Note if earlier matches were dropped.
+    const dropped = matched.length - limit
+    const shown = dropped > 0 ? matched.slice(matched.length - limit) : matched
+    const header =
+      dropped > 0
+        ? `Showing the ${limit} most recent of ${matched.length} matching messages (${dropped} earlier match${dropped === 1 ? '' : 'es'} omitted; narrow the query or range to see them).\n`
+        : `Showing ${matched.length} matching message${matched.length === 1 ? '' : 's'}.\n`
+    return clampToolResult(header + shown.join('\n'), ctx.shellOutputMaxBytes)
+  }
+}
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -1962,6 +2083,7 @@ export const TOOLS: ToolDef[] = [
   todoWrite,
   prSweep,
   askUser,
+  recallHistory,
   dispatchAgent,
   reviewChanges,
   gitStatus,

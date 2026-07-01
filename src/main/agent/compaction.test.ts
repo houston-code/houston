@@ -4,9 +4,13 @@ import {
   COMPACTION_SUMMARY_PREFIX,
   DOCUMENT_TOKENS_ESTIMATE,
   IMAGE_TOKENS_ESTIMATE,
+  EVICT_KEEP_RECENT_TURNS,
+  EVICT_MIN_BYTES,
   buildSummaryMessages,
   buildSummaryRequestMessages,
   estimateTokens,
+  evictStaleToolResults,
+  evictionStub,
   findCompactionCut,
   findCompactionCutByBudget,
   findForcedCompactionCut,
@@ -248,5 +252,117 @@ describe('buildSummaryRequestMessages', () => {
     const req = buildSummaryRequestMessages([], head)
     expect(req[0].role).toBe('user') // head starts with a user message
     expect(req[req.length - 1].role).toBe('user') // the instruction
+  })
+})
+
+/** A window whose first turns carry large tool results, the last `recent` turns kept. */
+function windowWithLargeToolResults(totalTurns: number): ChatMessage[] {
+  const big = 'z'.repeat(EVICT_MIN_BYTES + 500)
+  const msgs: ChatMessage[] = []
+  for (let t = 0; t < totalTurns; t++) {
+    msgs.push({ role: 'user', content: `q${t}` })
+    msgs.push({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: `c${t}`, name: 'read_file', arguments: { path: `f${t}.ts` } }]
+    })
+    msgs.push({ role: 'tool', content: big, toolCallId: `c${t}`, toolName: 'read_file' })
+    msgs.push({ role: 'assistant', content: `a${t}` })
+  }
+  return msgs
+}
+
+describe('evictionStub', () => {
+  it('names the tool, subject, and byte count and points at recall', () => {
+    const stub = evictionStub('read_file', 'src/big.ts', 12345)
+    expect(stub).toBe('[earlier read_file result on src/big.ts, 12345 bytes elided — recall_history or re-run to view]')
+  })
+
+  it('omits the subject clause when there is none, and falls back to "tool"', () => {
+    expect(evictionStub(undefined, '', 10)).toBe('[earlier tool result, 10 bytes elided — recall_history or re-run to view]')
+  })
+})
+
+describe('evictStaleToolResults', () => {
+  it('evicts stale + large tool results but keeps recent ones verbatim', () => {
+    const total = EVICT_KEEP_RECENT_TURNS + 2 // 2 turns are stale
+    const window = windowWithLargeToolResults(total)
+    const out = evictStaleToolResults(window)
+
+    const toolMsgs = out.filter((m) => m.role === 'tool')
+    const stubbed = toolMsgs.filter((m) => m.content.startsWith('[earlier '))
+    const verbatim = toolMsgs.filter((m) => !m.content.startsWith('[earlier '))
+    expect(stubbed).toHaveLength(2) // the two oldest turns
+    expect(verbatim).toHaveLength(EVICT_KEEP_RECENT_TURNS)
+
+    // Stub names the tool + subject (from the matching tool_use path arg).
+    expect(stubbed[0].content).toContain('read_file result on f0.ts')
+    // toolCallId/toolName preserved so pairing stays valid.
+    expect(stubbed[0].toolCallId).toBe('c0')
+    expect(stubbed[0].toolName).toBe('read_file')
+  })
+
+  it('does not mutate the input window', () => {
+    const window = windowWithLargeToolResults(EVICT_KEEP_RECENT_TURNS + 1)
+    const before = JSON.stringify(window)
+    evictStaleToolResults(window)
+    expect(JSON.stringify(window)).toBe(before)
+  })
+
+  it('keeps small stale tool results verbatim', () => {
+    // Same shape, but tiny tool outputs — below the byte threshold, so kept.
+    const msgs: ChatMessage[] = []
+    for (let t = 0; t < EVICT_KEEP_RECENT_TURNS + 2; t++) {
+      msgs.push({ role: 'user', content: `q${t}` })
+      msgs.push({
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: `c${t}`, name: 'read_file', arguments: { path: `f${t}.ts` } }]
+      })
+      msgs.push({ role: 'tool', content: 'ok', toolCallId: `c${t}`, toolName: 'read_file' })
+      msgs.push({ role: 'assistant', content: `a${t}` })
+    }
+    const out = evictStaleToolResults(msgs)
+    expect(out).toBe(msgs) // unchanged reference — nothing evicted
+  })
+
+  it('leaves an already-stubbed result alone (no recall/eviction ping-pong)', () => {
+    const window = windowWithLargeToolResults(EVICT_KEEP_RECENT_TURNS + 1)
+    // Pre-stub the oldest tool result.
+    const oldToolIdx = window.findIndex((m) => m.role === 'tool')
+    window[oldToolIdx] = {
+      ...window[oldToolIdx],
+      content: '[earlier read_file result on f0.ts, 3000 bytes elided — recall_history or re-run to view]'
+    }
+    const out = evictStaleToolResults(window)
+    expect(out[oldToolIdx].content).toBe(window[oldToolIdx].content)
+  })
+
+  it('evicts a stale tool result carrying attachments even when its text is small', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'q0' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c0', name: 'read_file', arguments: { path: 'img.png' } }] },
+      {
+        role: 'tool',
+        content: '[image attached]',
+        toolCallId: 'c0',
+        toolName: 'read_file',
+        images: [{ mediaType: 'image/png', data: 'AAAA' }]
+      },
+      { role: 'assistant', content: 'a0' }
+    ]
+    // Pad with recent kept turns so turn 0 is stale.
+    for (let t = 1; t <= EVICT_KEEP_RECENT_TURNS; t++) {
+      msgs.push({ role: 'user', content: `q${t}` }, { role: 'assistant', content: `a${t}` })
+    }
+    const out = evictStaleToolResults(msgs)
+    const stub = out.find((m) => m.role === 'tool')!
+    expect(stub.content.startsWith('[earlier ')).toBe(true)
+    expect(stub.images).toBeUndefined() // attachment dropped
+  })
+
+  it('returns the input unchanged when nothing is old enough to be stale', () => {
+    const window = windowWithLargeToolResults(EVICT_KEEP_RECENT_TURNS)
+    expect(evictStaleToolResults(window)).toBe(window)
   })
 })
