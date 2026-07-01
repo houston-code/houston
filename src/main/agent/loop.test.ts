@@ -360,8 +360,14 @@ describe('startRun', () => {
     // (older turns folded away) where the first, overflowing send did not.
     expect(summarized).toBe(true)
     expect(mainSends).toHaveLength(2)
-    expect(mainSends[0][0].content).not.toContain('COMPACTED SUMMARY')
-    expect(mainSends[1][0].content).toContain('COMPACTED SUMMARY')
+    // Durable context prepends a pinned working-memory block ahead of everything, so
+    // the summary no longer sits at index 0 — assert on the window contents instead.
+    const joined = (w: ChatMessage[]): string => w.map((m) => m.content).join('\n')
+    expect(joined(mainSends[0])).not.toContain('COMPACTED SUMMARY')
+    expect(joined(mainSends[1])).toContain('COMPACTED SUMMARY')
+    // The pinned block rides both sends and carries the original task verbatim.
+    expect(joined(mainSends[0])).toContain('Pinned working memory')
+    expect(joined(mainSends[1])).toContain('Pinned working memory')
   })
 
   it('surfaces a clear error when even the latest turn overflows the window', async () => {

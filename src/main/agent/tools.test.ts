@@ -68,6 +68,7 @@ describe('tool registry', () => {
       'pr_sweep',
       'read_file',
       'read_shell_output',
+      'recall_history',
       'review_changes',
       'run_shell',
       'search_files',
@@ -132,6 +133,59 @@ describe('ask_user', () => {
     const withAsk: ToolContext = { ...ctx, askUser: async () => '   ' }
     const out = await getTool('ask_user')!.execute({ question: 'anything?' }, withAsk)
     expect(out).toContain('did not provide an answer')
+  })
+})
+
+describe('recall_history', () => {
+  const history: import('@shared/agent').ChatMessage[] = [
+    { role: 'user', content: 'Add OAuth login' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'c0', name: 'read_file', arguments: { path: 'src/auth.ts' } }]
+    },
+    { role: 'tool', content: 'export function login() {}', toolCallId: 'c0', toolName: 'read_file' },
+    { role: 'assistant', content: 'The login helper lives in src/auth.ts.' }
+  ]
+
+  const withHistory: ToolContext = { workspace: '/tmp', allowNetwork: false, getHistory: () => history }
+
+  it('is a read tool allowed in plan mode', () => {
+    const tool = getTool('recall_history')!
+    expect(tool.kind).toBe('read')
+    expect(tool.blockedInPlan).toBeFalsy()
+  })
+
+  it('reports gracefully when no history handle is present', async () => {
+    const out = await run('recall_history', {})
+    expect(out).toContain('not available')
+  })
+
+  it('filters by a case-insensitive query across text and tool-call arguments', async () => {
+    const byText = await getTool('recall_history')!.execute({ query: 'oauth' }, withHistory)
+    expect(byText).toContain('Add OAuth login')
+    expect(byText).toContain('#0 user:')
+
+    // "src/auth.ts" only appears in the tool_use arguments, not message text.
+    const byArgs = await getTool('recall_history')!.execute({ query: 'src/auth.ts' }, withHistory)
+    expect(byArgs).toContain('read_file')
+    expect(byArgs).toContain('src/auth.ts')
+  })
+
+  it('honors a from/to index range', async () => {
+    const out = await getTool('recall_history')!.execute({ from: 3, to: 3 }, withHistory)
+    expect(out).toContain('#3 assistant:')
+    expect(out).not.toContain('#0 user:')
+  })
+
+  it('reports when nothing matches', async () => {
+    const out = await getTool('recall_history')!.execute({ query: 'nonexistent-term' }, withHistory)
+    expect(out).toContain('No earlier messages match')
+  })
+
+  it('labels tool turns with their tool name', async () => {
+    const out = await getTool('recall_history')!.execute({ query: 'export function' }, withHistory)
+    expect(out).toContain('#2 tool/read_file:')
   })
 })
 

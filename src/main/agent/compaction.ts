@@ -233,3 +233,123 @@ export function buildSummaryMessages(summary: string): ChatMessage[] {
     { role: 'assistant', content: COMPACTION_ACK }
   ]
 }
+
+// ---- Tool-result eviction ----
+
+/**
+ * Keep tool results from the most recent this-many turns (a "turn" starts at a
+ * `user` message) verbatim; older ones are eligible for eviction. Three turns is
+ * enough that the model still sees the full detail of what it just did.
+ */
+export const EVICT_KEEP_RECENT_TURNS = 3
+
+/**
+ * Only evict a tool result whose text is at least this many bytes. Small results
+ * (a short command's output, a one-line status) cost little context and are worth
+ * keeping verbatim; the win is in dropping the large stale ones (a big file read, a
+ * verbose build log) whose detail the model has almost certainly moved past.
+ */
+export const EVICT_MIN_BYTES = 2000
+
+export interface EvictionParams {
+  /** Turns (from the newest backwards) whose tool results are kept verbatim. */
+  keepRecentTurns?: number
+  /** Minimum byte size for a stale tool result to be replaced by a stub. */
+  minBytes?: number
+}
+
+/** UTF-8 byte length of a string (multibyte-safe, matches the provider's accounting). */
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, 'utf8')
+}
+
+/**
+ * The compact stub that replaces an evicted tool result. Names the tool and a short
+ * subject so the model knows what it lost and how to get it back — `recall_history`
+ * pages the pre-eviction transcript, or it can simply re-run the tool.
+ */
+export function evictionStub(toolName: string | undefined, subject: string, bytes: number): string {
+  const tool = toolName?.trim() || 'tool'
+  const subj = subject.trim() ? ` on ${subject.trim()}` : ''
+  return `[earlier ${tool} result${subj}, ${bytes} bytes elided — recall_history or re-run to view]`
+}
+
+/**
+ * A short subject line for a tool result, recovered from the assistant `tool_use`
+ * that requested it: the `path`, `pattern`, `query`, `command`, or `url` argument.
+ * Empty when nothing usable is found (the stub then omits the subject clause).
+ */
+function subjectFor(call: { arguments: Record<string, unknown> } | undefined): string {
+  if (!call) return ''
+  const args = call.arguments
+  for (const key of ['path', 'file', 'pattern', 'query', 'command', 'cmd', 'url']) {
+    const v = args[key]
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 120)
+  }
+  return ''
+}
+
+/**
+ * Replace STALE + LARGE tool results in a sent window with a compact stub, keeping
+ * recent and small ones verbatim. This is a more surgical alternative to whole-turn
+ * compaction: it shrinks the big, low-value tool outputs the model has moved past
+ * while leaving every other message (including the assistant `tool_use` that asked
+ * for the result) exactly in place — so role alternation and `toolCallId` pairing
+ * stay valid, and no dangling `tool_use` is created.
+ *
+ * PURE: returns a NEW array; the input (and the persisted log it comes from) is
+ * never mutated. Only the ephemeral copy sent to the provider is affected, so the
+ * transcript, fork/export, and future compaction still see the full results. The
+ * evicted result's attachments (images/documents) are dropped too — they are the
+ * bulk of a stale read's real token cost.
+ *
+ * "Stale" = belongs to a turn older than the most recent `keepRecentTurns` turns.
+ * "Large" = the result text is at least `minBytes` bytes. An already-stubbed result
+ * (recall/eviction output) is left alone so recall + eviction can't ping-pong.
+ */
+export function evictStaleToolResults(
+  window: ChatMessage[],
+  params: EvictionParams = {}
+): ChatMessage[] {
+  const keepRecentTurns = params.keepRecentTurns ?? EVICT_KEEP_RECENT_TURNS
+  const minBytes = params.minBytes ?? EVICT_MIN_BYTES
+
+  // Find the index where the "recent" tail begins: the start of the k-th-from-last
+  // turn (a turn boundary sits at each `user` message). Tool results at or after
+  // this index are kept verbatim; only earlier ones are eligible for eviction.
+  const userIdx: number[] = []
+  for (let i = 0; i < window.length; i++) {
+    if (window[i].role === 'user') userIdx.push(i)
+  }
+  const keepFrom =
+    userIdx.length > keepRecentTurns ? userIdx[userIdx.length - keepRecentTurns] : 0
+  if (keepFrom === 0) return window // nothing is old enough to be stale
+
+  // Index assistant tool_use calls by id so a stub can name the tool's subject.
+  const callById = new Map<string, { arguments: Record<string, unknown> }>()
+  for (const m of window) {
+    for (const call of m.toolCalls ?? []) callById.set(call.id, call)
+  }
+
+  let changed = false
+  const out = window.map((m, i) => {
+    if (i >= keepFrom) return m
+    if (m.role !== 'tool') return m
+    if (m.content.startsWith('[earlier ')) return m // already a stub — don't re-elide
+    const bytes = byteLength(m.content)
+    const hasAttachment = (m.images?.length ?? 0) > 0 || (m.documents?.length ?? 0) > 0
+    // Attachments have a big real token cost even when the result text is short;
+    // evict a tool result that is large by text OR carries any attachment.
+    if (bytes < minBytes && !hasAttachment) return m
+    changed = true
+    const subject = subjectFor(m.toolCallId ? callById.get(m.toolCallId) : undefined)
+    const stub: ChatMessage = {
+      role: 'tool',
+      content: evictionStub(m.toolName, subject, bytes),
+      ...(m.toolCallId ? { toolCallId: m.toolCallId } : {}),
+      ...(m.toolName ? { toolName: m.toolName } : {})
+    }
+    return stub
+  })
+  return changed ? out : window
+}

@@ -60,11 +60,13 @@ import {
   buildSummaryMessages,
   buildSummaryRequestMessages,
   estimateTokens,
+  evictStaleToolResults,
   findCompactionCut,
   findForcedCompactionCut,
   isContextOverflowError,
   summarizationSystemPrompt
 } from './compaction'
+import { buildPinnedMessages } from './workingMemory'
 
 const MAX_ITERATIONS = 40
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
@@ -569,7 +571,10 @@ export async function startRun(
       },
       attachImage,
       attachDocument,
-      captureLocalhost
+      captureLocalhost,
+      // The recall tool reads the full, un-compacted log. Return a shallow copy so a
+      // tool can never mutate the loop's persisted `messages` through this handle.
+      getHistory: () => [...messages]
     })
 
     /** True if a call is a read-only tool with no gating — safe to run concurrently. */
@@ -624,6 +629,20 @@ export async function startRun(
       }
     }
 
+    // Assemble the window actually sent to the provider from the persisted log. Three
+    // durable-context transforms layer on top of the summary + kept tail, and NONE of
+    // them mutate `messages` — only this ephemeral copy:
+    //   1. Pinned working memory (original task, live todo list, files in play) is
+    //      prepended ahead of everything so it survives compaction/eviction losslessly.
+    //   2. summaryMsgs stands in for the compacted head (turns before `cut`).
+    //   3. Stale + large tool results in the kept tail are replaced by compact stubs
+    //      (recoverable via recall_history) — surgical, unlike whole-turn compaction.
+    const buildWindow = (): ChatMessage[] => [
+      ...buildPinnedMessages(messages),
+      ...summaryMsgs,
+      ...evictStaleToolResults(messages.slice(cut))
+    ]
+
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
@@ -641,7 +660,7 @@ export async function startRun(
       // visible transcript (persisted `messages`) is untouched — only the window
       // sent to the provider shrinks.
       if (threshold > 0) {
-        const windowNow = [...summaryMsgs, ...messages.slice(cut)]
+        const windowNow = buildWindow()
         const size = Math.max(estimateTokens(system, windowNow) + toolTokens, lastInputTokens)
         if (size > threshold) {
           const newCut = findCompactionCut(messages, cut, KEEP_RECENT_USER_TURNS)
@@ -654,7 +673,7 @@ export async function startRun(
         }
       }
 
-      let sendMessages = [...summaryMsgs, ...messages.slice(cut)]
+      let sendMessages = buildWindow()
 
       // Re-read the thinking controls fresh each model turn rather than using the
       // run-start `settings` snapshot, so changing the reasoning level mid-run —
@@ -735,7 +754,7 @@ export async function startRun(
               return
             }
             if (outcome === 'ok') {
-              sendMessages = [...summaryMsgs, ...messages.slice(cut)]
+              sendMessages = buildWindow()
               attempt = -1 // reset the transient-retry budget for the smaller request
               continue streaming
             }
