@@ -17,6 +17,7 @@ import { initUpdates } from './updater'
 import { log } from './logger'
 import { getSettings, updateSettings, pruneRecentWorkspaces } from './store'
 import { wireAgentHost } from './wireAgentHost'
+import { wireLocalhostCapture } from './localhostCapture'
 import { LEGAL_VERSION } from '@shared/legal'
 import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
@@ -39,10 +40,12 @@ process.on('unhandledRejection', (reason) => log.error('unhandledRejection', rea
 // inconsistent location and silently fail to persist.
 app.setName(APP_NAME)
 
-// Bind the agent engine to the Electron-backed settings/secret storage before any
-// run can start (all three clients — GUI, headless, TUI — boot through here). The
-// engine itself never imports store/secrets, so this is the single wiring point.
+// Bind the agent engine to its Electron-backed host capabilities before any run
+// can start (all three clients — GUI, headless, TUI — boot through here). The
+// engine never imports electron/store/secrets, so these are the wiring points:
+// settings + secret storage, and the view_localhost screenshot backend.
 wireAgentHost()
+wireLocalhostCapture()
 
 let mainWindow: BrowserWindow | null = null
 
