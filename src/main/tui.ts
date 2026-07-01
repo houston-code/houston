@@ -200,6 +200,56 @@ export function formatSessionCost(c: SessionCost): string {
   return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · $${c.cost.toFixed(4)}`
 }
 
+// --- Session persistence -----------------------------------------------------
+// The TUI persists each session as an ordinary conversation (via the same store
+// the GUI uses), so sessions survive restarts, can be resumed with `/resume`, and
+// show up in the GUI's sidebar — one history across both clients.
+
+/** A persisted conversation, minimally described for the resume picker. */
+export interface ResumeEntry {
+  id: string
+  title: string
+  updatedAt: number
+}
+
+/** Persistence hooks, injected so the driver stays testable without a real store. */
+export interface TuiPersist {
+  create: (input: { workspace: string; providerId: string; model: string }) => { id: string }
+  setMessages: (id: string, messages: ChatMessage[]) => void
+  list: (workspace: string) => ResumeEntry[]
+  get: (id: string) => { messages: ChatMessage[] } | null
+}
+
+/** Render a numbered picker of recent conversations for `/resume`. */
+export function renderConversationList(convs: ResumeEntry[], now: number, paint: Painter): string {
+  if (!convs.length) return paint('No saved sessions in this folder yet.', 'dim')
+  const lines = [paint('Recent sessions:', 'bold')]
+  convs.forEach((c, i) => {
+    const when = paint(formatRelativeTime(c.updatedAt, now), 'dim')
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${c.title}  ${when}`)
+  })
+  lines.push(paint('  Enter a number to resume, or anything else to cancel', 'dim'))
+  return lines.join('\n')
+}
+
+/** Map a resume selection (1-based index) to a conversation id, or null to cancel. */
+export function parseResumeSelection(answer: string, convs: ResumeEntry[]): string | null {
+  const n = Number(answer.trim())
+  if (Number.isInteger(n) && n >= 1 && n <= convs.length) return convs[n - 1].id
+  return null
+}
+
+/** Compact relative time like "just now", "3m ago", "2h ago", "5d ago". */
+export function formatRelativeTime(then: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - then) / 1000))
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
 /** The prompt shown for an `ask_user` question: the question plus numbered options. */
 export function renderQuestion(
   question: string,
@@ -257,6 +307,7 @@ export type SlashResult =
   | { kind: 'handled' }
   | { kind: 'exit' }
   | { kind: 'clear' }
+  | { kind: 'resume' }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
   | { kind: 'unknown'; name: string }
@@ -279,6 +330,8 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
     case 'clear':
     case 'new':
       return { kind: 'clear' }
+    case 'resume':
+      return { kind: 'resume' }
     case 'approval': {
       if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
@@ -332,6 +385,7 @@ export const HELP_TEXT = [
   '  /model [id]           list models, or switch (providerId, providerId/model, or model)',
   '  /approval [policy]    show or set policy (plan | ask | auto-edit | full-auto)',
   '  /clear, /new          start a fresh conversation',
+  '  /resume               list and reopen a saved session in this folder',
   '  /cost                 show session token + cost totals',
   '  /cwd                  show the working directory',
   '  /exit, /quit          leave (or press Ctrl-D)',
@@ -378,7 +432,15 @@ export interface TuiDeps {
   resolveQuestion: (runId: string, callId: string, answer: string) => void
   cancelRun: (runId: string) => void
   io: TuiIo
+  /**
+   * Optional persistence. When present, each session is saved as a conversation
+   * (resumable with `/resume`, visible in the GUI); when absent, the session is
+   * ephemeral — kept only in memory, exactly like a one-shot headless run.
+   */
+  persist?: TuiPersist
   newId?: () => string
+  /** Clock for relative timestamps; injectable for tests. Defaults to Date.now. */
+  now?: () => number
 }
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
@@ -427,7 +489,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let policy = opts.approvalPolicy
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
+  // The persisted conversation backing this session, created lazily on the first
+  // turn (so merely opening and closing the REPL doesn't litter history). Null
+  // until then, or after `/clear` starts a fresh one.
+  let conversationId: string | null = null
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
+  const nowFn = deps.now ?? Date.now
 
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
@@ -457,7 +524,32 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'exit') break
       if (result.kind === 'clear') {
         messages = []
+        conversationId = null // next turn starts (and persists) a fresh conversation
         deps.io.out(paint('· conversation cleared\n', 'dim'))
+        continue
+      }
+      if (result.kind === 'resume') {
+        if (!deps.persist) {
+          deps.io.out(paint('· resume is unavailable (no session store)\n', 'dim'))
+          continue
+        }
+        const convs = deps.persist.list(opts.cwd)
+        deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
+        if (!convs.length) continue
+        const ans = await deps.io.readLine('> ')
+        const id = ans === null ? null : parseResumeSelection(ans, convs)
+        if (!id) {
+          deps.io.out(paint('· cancelled\n', 'dim'))
+          continue
+        }
+        const conv = deps.persist.get(id)
+        if (!conv) {
+          deps.io.out(paint('· that session could not be loaded\n', 'dim'))
+          continue
+        }
+        conversationId = id
+        messages = conv.messages
+        deps.io.out(paint(`· resumed — ${messages.length} message(s)\n`, 'dim'))
         continue
       }
       if (result.kind === 'set-approval') {
@@ -481,10 +573,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
 
     messages.push({ role: 'user', content: text })
+    // Lazily open a persisted conversation on the first turn so the session
+    // survives restarts and is resumable. Ephemeral when no store is injected.
+    if (deps.persist && !conversationId) {
+      conversationId = deps.persist.create({ workspace: opts.cwd, providerId, model }).id
+    }
     const runId = newId()
     activeRunId = runId
     const req: AgentRunRequest = {
       runId,
+      ...(conversationId ? { conversationId } : {}),
       workspace: opts.cwd,
       providerId,
       model,
@@ -571,6 +669,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
     await deps.startRun(req, send, (m: ChatMessage[]) => {
       messages = m
+      // Mirror the GUI: persist the running message log so the session is durable
+      // and resumable even if it's interrupted mid-turn.
+      if (deps.persist && conversationId) deps.persist.setMessages(conversationId, m)
     })
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts

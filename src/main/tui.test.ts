@@ -18,9 +18,14 @@ import {
   colorizeDiff,
   renderToolResult,
   formatSessionCost,
+  parseResumeSelection,
+  formatRelativeTime,
+  renderConversationList,
   runTui,
   type TuiDeps,
-  type TuiIo
+  type TuiIo,
+  type TuiPersist,
+  type ResumeEntry
 } from './tui'
 
 const settings = (over: Partial<AppSettings> = {}): AppSettings =>
@@ -307,6 +312,38 @@ describe('formatSessionCost', () => {
   })
 })
 
+describe('formatRelativeTime', () => {
+  const now = 10_000_000_000
+  it('buckets by magnitude', () => {
+    expect(formatRelativeTime(now - 10_000, now)).toBe('just now')
+    expect(formatRelativeTime(now - 5 * 60_000, now)).toBe('5m ago')
+    expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe('3h ago')
+    expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe('2d ago')
+  })
+  it('never goes negative', () => {
+    expect(formatRelativeTime(now + 5000, now)).toBe('just now')
+  })
+})
+
+describe('resume picker', () => {
+  const convs: ResumeEntry[] = [
+    { id: 'a', title: 'First', updatedAt: 1 },
+    { id: 'b', title: 'Second', updatedAt: 2 }
+  ]
+  it('renders a numbered list, or an empty note', () => {
+    const out = renderConversationList(convs, 100, makePainter(false))
+    expect(out).toContain('1. First')
+    expect(out).toContain('2. Second')
+    expect(renderConversationList([], 100, makePainter(false))).toContain('No saved sessions')
+  })
+  it('maps a valid index to its id, else null', () => {
+    expect(parseResumeSelection('2', convs)).toBe('b')
+    expect(parseResumeSelection('0', convs)).toBeNull()
+    expect(parseResumeSelection('9', convs)).toBeNull()
+    expect(parseResumeSelection('cancel', convs)).toBeNull()
+  })
+})
+
 // --- runTui integration (fully dependency-injected, no real terminal) --------
 
 /** A scripted terminal: readLine drains `inputs` in order, null when exhausted. */
@@ -365,6 +402,38 @@ function deps(
     newId: () => `run-${runs.length + 1}`
   }
   return { d, rec: { runs, approvals, questions, cancels, accepted: () => accepted } }
+}
+
+/** An in-memory conversation store standing in for conversations.ts. */
+function fakePersist(seed: Array<ResumeEntry & { messages: ChatMessage[] }> = []) {
+  const store = new Map<
+    string,
+    { title: string; updatedAt: number; workspace: string; messages: ChatMessage[] }
+  >()
+  for (const s of seed) {
+    store.set(s.id, { title: s.title, updatedAt: s.updatedAt, workspace: '/proj', messages: s.messages })
+  }
+  let seq = 0
+  const persist: TuiPersist = {
+    create: ({ workspace }) => {
+      const id = `conv-${++seq}`
+      store.set(id, { title: 'New chat', updatedAt: 0, workspace, messages: [] })
+      return { id }
+    },
+    setMessages: (id, messages) => {
+      const c = store.get(id)
+      if (c) c.messages = messages
+    },
+    list: (workspace) =>
+      [...store.entries()]
+        .filter(([, c]) => c.workspace === workspace)
+        .map(([id, c]) => ({ id, title: c.title, updatedAt: c.updatedAt })),
+    get: (id) => {
+      const c = store.get(id)
+      return c ? { messages: c.messages } : null
+    }
+  }
+  return { persist, store }
 }
 
 const opts = {
@@ -564,5 +633,73 @@ describe('runTui', () => {
     await runTui(opts, d)
     // Two turns each report 100+50 / $0.01 → session total 200+100 / $0.02.
     expect(t.text()).toContain('session: 200+100 tok · $0.0200')
+  })
+
+  it('persists the session as a conversation on the first turn', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    const t = fakeIo(['hello', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(fp.store.size).toBe(1)
+    expect([...fp.store.values()][0].messages).toEqual([{ role: 'user', content: 'hello' }])
+  })
+
+  it('/clear opens a fresh conversation on the next turn', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    const t = fakeIo(['first', '/clear', 'second', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(fp.store.size).toBe(2) // two distinct persisted conversations
+  })
+
+  it('/resume loads a saved session and continues it', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {}, (req) => req.messages)
+    const fp = fakePersist([
+      {
+        id: 'saved',
+        title: 'Old',
+        updatedAt: 5,
+        messages: [
+          { role: 'user', content: 'earlier' },
+          { role: 'assistant', content: 'reply' }
+        ]
+      }
+    ])
+    d.persist = fp.persist
+    d.now = () => 1000
+    const t = fakeIo(['/resume', '1', 'continue', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // The post-resume turn carries the loaded history plus the new message...
+    expect(rec.runs[0].messages).toEqual([
+      { role: 'user', content: 'earlier' },
+      { role: 'assistant', content: 'reply' },
+      { role: 'user', content: 'continue' }
+    ])
+    // ...in the SAME conversation — no new one is created.
+    expect(fp.store.size).toBe(1)
+  })
+
+  it('/resume cancels on a non-numeric choice without loading', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist([{ id: 'saved', title: 'Old', updatedAt: 5, messages: [] }])
+    d.persist = fp.persist
+    const t = fakeIo(['/resume', 'nah', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toContain('cancelled')
+  })
+
+  it('reports resume as unavailable without a store', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/resume', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('resume is unavailable')
   })
 })
