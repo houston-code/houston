@@ -66,6 +66,8 @@ export const IPC = {
   conversationImport: 'conversation:import',
   conversationOrganize: 'conversation:organize',
   conversationReorder: 'conversation:reorder',
+  /** Aggregate a local-only per-model loop scorecard over every persisted chat. */
+  conversationScorecard: 'conversation:scorecard',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
   // Agent

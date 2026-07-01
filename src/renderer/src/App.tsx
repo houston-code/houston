@@ -70,6 +70,9 @@ const DiffPanel = lazy(() => import('./components/DiffPanel').then((m) => ({ def
 const FilesPanel = lazy(() =>
   import('./components/FilesPanel').then((m) => ({ default: m.FilesPanel }))
 )
+const Scorecard = lazy(() =>
+  import('./components/Scorecard').then((m) => ({ default: m.Scorecard }))
+)
 const TerminalDock = lazy(() =>
   import('./components/TerminalDock').then((m) => ({ default: m.TerminalDock }))
 )
@@ -153,6 +156,7 @@ export default function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [scorecardOpen, setScorecardOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteSeed, setPaletteSeed] = useState('')
@@ -1049,6 +1053,13 @@ export default function App(): JSX.Element {
         run: () => setFindOpen(true)
       },
       {
+        id: 'act-scorecard',
+        title: 'Show loop scorecard',
+        section: 'Actions',
+        keywords: 'stats models cost tokens usage metrics tools',
+        run: () => setScorecardOpen(true)
+      },
+      {
         id: 'act-help',
         title: 'Keyboard shortcuts',
         section: 'Actions',
@@ -1201,7 +1212,16 @@ export default function App(): JSX.Element {
       } else if (action === 'cycle-mode') {
         // Shift+Tab is reverse-focus in dialogs — let their focus trap (or the find
         // bar) have it; only hijack it for mode-cycling in the main chat view.
-        if (paletteOpen || helpOpen || settingsOpen || changesOpen || filesOpen || findOpen) return
+        if (
+          paletteOpen ||
+          helpOpen ||
+          settingsOpen ||
+          changesOpen ||
+          filesOpen ||
+          scorecardOpen ||
+          findOpen
+        )
+          return
         e.preventDefault()
         cyclePolicy()
       } else if (action === 'escape') {
@@ -1213,6 +1233,7 @@ export default function App(): JSX.Element {
         else if (settingsOpen) setSettingsOpen(false)
         else if (changesOpen) setChangesOpen(false)
         else if (filesOpen) setFilesOpen(false)
+        else if (scorecardOpen) setScorecardOpen(false)
         else if (chat.running) chat.cancel()
       }
     }
@@ -1235,6 +1256,7 @@ export default function App(): JSX.Element {
     settingsOpen,
     changesOpen,
     filesOpen,
+    scorecardOpen,
     chat.running,
     chat.cancel
   ])
@@ -1341,6 +1363,7 @@ export default function App(): JSX.Element {
           changes={workspace ? workingTreeStats : undefined}
           onShowFiles={workspace ? () => setFilesOpen(true) : undefined}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
+          onShowScorecard={() => setScorecardOpen(true)}
           onTogglePreview={togglePreview}
           previewOpen={previewOpen}
           previewCount={previewableCount}
@@ -1512,6 +1535,8 @@ export default function App(): JSX.Element {
         )}
 
         {filesOpen && <FilesPanel workspace={workspace} onClose={() => setFilesOpen(false)} />}
+
+        {scorecardOpen && <Scorecard onClose={() => setScorecardOpen(false)} />}
 
         {changesOpen && (
           <DiffPanel

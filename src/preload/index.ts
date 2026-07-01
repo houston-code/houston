@@ -19,6 +19,7 @@ import type {
   ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
+import type { Scorecard } from '@shared/scorecard'
 import type { UpdateCheckResult, WhatsNew } from '@shared/update'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
@@ -86,6 +87,9 @@ const api = {
     ipcRenderer.invoke(IPC.conversationSearch, query),
   getConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationGet, id),
+  /** Aggregate a local-only per-model loop scorecard over every persisted chat.
+   *  Computed on-device from local files — nothing is ever transmitted. */
+  getScorecard: (): Promise<Scorecard> => ipcRenderer.invoke(IPC.conversationScorecard),
   createConversation: (input: {
     workspace: string
     providerId: string

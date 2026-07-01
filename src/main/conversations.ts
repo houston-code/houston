@@ -20,6 +20,7 @@ import type {
   ConversationWorktree
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
+import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import { clearConversationOverride } from './agent/overrides'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
@@ -133,6 +134,36 @@ export function listConversations(): ConversationMeta[] {
     }
   }
   return metas.sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/**
+ * Aggregate a per-model "loop scorecard" over EVERY persisted conversation,
+ * entirely on-device. Reads each conversation JSON from userData/conversations,
+ * feeds only the model id, cumulative usage totals, message log, and errored flag
+ * into the pure {@link buildScorecard} aggregator, and returns the result.
+ *
+ * STRICT PRIVACY: this is a local-only scan — it never transmits anything, makes
+ * no network calls, and reads no data beyond the user's own conversation files.
+ * The heavy scan (one file read per conversation) lives here in the main process,
+ * off the render path, exposed to the renderer via a single request/response IPC
+ * call rather than recomputed on every event.
+ */
+export function computeScorecard(): Scorecard {
+  const files = readdirSync(dir()).filter((f) => f.endsWith('.json'))
+  const inputs = []
+  for (const f of files) {
+    const conv = read(f.replace(/\.json$/, ''))
+    if (!conv) continue
+    inputs.push({
+      model: conv.model,
+      messages: conv.messages,
+      usage: conv.usage,
+      // A stored `lastError` means the most recent run failed — the same signal
+      // toMeta() folds into the lightweight `errored` flag.
+      errored: !!conv.lastError
+    })
+  }
+  return buildScorecard(inputs)
 }
 
 /**

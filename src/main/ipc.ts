@@ -65,6 +65,7 @@ import {
   importConversation,
   organizeConversation,
   reorderConversations,
+  computeScorecard,
   addUsage,
   mergeRunningTotals,
   setMessages,
@@ -318,6 +319,8 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.conversationList, () => listConversations())
   ipcMain.handle(IPC.conversationSearch, (_event, query: string) => searchConversations(query))
   ipcMain.handle(IPC.conversationGet, (_event, id: string) => getConversation(id))
+  // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
+  ipcMain.handle(IPC.conversationScorecard, () => computeScorecard())
   ipcMain.handle(
     IPC.conversationCreate,
     async (
