@@ -33,7 +33,8 @@ import {
 import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
-import { isParallelizableRead } from './scheduling'
+import { isParallelizableRead, partitionCalls } from './scheduling'
+import { validateToolArgs, validationError } from './argValidation'
 import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
 import { missingToolResults } from './repair'
@@ -813,69 +814,101 @@ export async function startRun(
         return
       }
 
-      // Fast path: when every call in the turn is an unencumbered read, run them
-      // concurrently. Any write/shell/network/mcp call, gating rule, or hook makes
-      // the whole turn fall back to the sequential path below (unchanged).
-      if (toolCalls.length > 1 && toolCalls.every(isParallelCall)) {
-        for (const call of toolCalls) {
-          emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
-          await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
+      // ---------------------------------------------------------------------
+      // Tool dispatch. A turn can mix parallelizable reads with encumbered calls
+      // (writes/shell/network/MCP/gated/hooked/ask_user). We run the independent
+      // read subset CONCURRENTLY while the rest runs SEQUENTIALLY in its original
+      // relative order, then append every tool_result to the message log in the
+      // ORIGINAL call order — so the transcript and the window the model sees are
+      // identical to a fully-sequential run. The all-reads case is just the
+      // partition where `sequential` is empty; the all-encumbered case is the one
+      // where `parallel` is empty (fully sequential, exactly as before).
+      // ---------------------------------------------------------------------
+
+      // Per-call outcome, ready to emit + append. `slots` is indexed by the call's
+      // original position so we can flush results in model-visible order regardless
+      // of the order the parallel/sequential groups actually finished in. A slot may
+      // stay undefined only if the run aborts mid-sequential-dispatch — that early
+      // return emits its own terminal 'done' and never reaches the flush.
+      interface CallResult {
+        call: ToolCall
+        output: string
+        ok: boolean
+        images: ImageAttachment[]
+        documents: DocumentAttachment[]
+      }
+      const slots: (CallResult | undefined)[] = new Array(toolCalls.length)
+
+      // Validate a call's arguments against its declared schema BEFORE any
+      // dispatch. On a mismatch we short-circuit to a model-friendly repair
+      // result (ok:false) instead of executing — the model self-corrects next
+      // turn. Returns the repair CallResult, or null when the args are acceptable
+      // (or the tool is unknown, which the caller reports separately). Applied in
+      // both the parallel and the sequential path.
+      const validationFailure = (call: ToolCall): CallResult | null => {
+        const tool = lookupTool(call.name)
+        if (!tool) return null
+        const issues = validateToolArgs(call.arguments, tool.schema.parameters)
+        if (issues.length === 0) return null
+        return {
+          call,
+          output: validationError(call.name, tool.schema.parameters, issues),
+          ok: false,
+          images: [],
+          documents: []
         }
-        const results = await Promise.all(
-          toolCalls.map(async (call) => {
-            const images: ImageAttachment[] = []
-            const documents: DocumentAttachment[] = []
-            let output: string
-            let ok = true
-            try {
-              output = await lookupTool(call.name)!.execute(
-                call.arguments,
-                makeToolContext(
-                  call.id,
-                  (i) => images.push(i),
-                  (d) => documents.push(d)
-                )
-              )
-            } catch (e) {
-              output = `Error: ${(e as Error).message}`
-              ok = false
-            }
-            return { call, output, ok, images, documents }
-          })
-        )
-        for (const r of results) {
-          emit({
-            type: 'tool_result',
-            callId: r.call.id,
-            name: r.call.name,
-            ok: r.ok,
-            output: r.output,
-            ...(r.images.length ? { images: r.images } : {})
-          })
-          await plugins.emit('onToolResult', {
-            tool: r.call.name,
-            input: r.call.arguments,
-            output: r.output,
-            ok: r.ok
-          })
-          messages.push({
-            role: 'tool',
-            content: r.output,
-            toolCallId: r.call.id,
-            toolName: r.call.name,
-            ...(r.images.length ? { images: r.images } : {}),
-            ...(r.documents.length ? { documents: r.documents } : {})
-          })
-        }
-        onMessages?.(messages)
-        if (abort.signal.aborted) {
-          emit({ type: 'done', stopReason: 'aborted' })
-          return
-        }
-        continue
       }
 
-      for (const call of toolCalls) {
+      // Partition this turn's calls. `isParallelCall` already excludes ask_user,
+      // MCP, writes/shell/network, gated (deny/ask) rules, and hooked tools.
+      const { parallel, sequential } = partitionCalls(toolCalls, isParallelCall)
+
+      // --- Parallel group: unencumbered reads, all dispatched at once. ---------
+      // These need no approval, plan check, hooks, or checkpoint, so there's no
+      // ordering constraint between them. We still validate each before executing
+      // and emit tool_start for the ones that actually run (renderer + plugins see
+      // the call). Results land in their original slot; the ordered flush below
+      // emits tool_result/appends messages in call order.
+      for (const { call } of parallel) {
+        const invalid = validationFailure(call)
+        if (invalid) continue // tool_start intentionally not emitted for a refused call
+        emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
+        await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
+      }
+      const parallelResults = await Promise.all(
+        parallel.map(async ({ call, index }): Promise<[number, CallResult]> => {
+          const invalid = validationFailure(call)
+          if (invalid) return [index, invalid]
+          const images: ImageAttachment[] = []
+          const documents: DocumentAttachment[] = []
+          let output: string
+          let ok = true
+          try {
+            output = await lookupTool(call.name)!.execute(
+              call.arguments,
+              makeToolContext(
+                call.id,
+                (i) => images.push(i),
+                (d) => documents.push(d)
+              )
+            )
+          } catch (e) {
+            output = `Error: ${(e as Error).message}`
+            ok = false
+          }
+          return [index, { call, output, ok, images, documents }]
+        })
+      )
+      for (const [index, result] of parallelResults) slots[index] = result
+
+      // --- Sequential group: everything else, one call at a time. --------------
+      // Preserves the original relative order of the encumbered calls and every
+      // existing semantic: unknown-tool, deny rule, plan block, approval prompts,
+      // "Allow for run"/rule persistence, Pre/PostToolUse hooks, write checkpoints,
+      // format/diagnostics-on-save, and per-call abort checks. Identical to the old
+      // sequential path, except the outcome is stored in `slots[index]` (flushed in
+      // order below) instead of being emitted/appended inline.
+      for (const { call, index } of sequential) {
         if (abort.signal.aborted) {
           emit({ type: 'done', stopReason: 'aborted' })
           return
@@ -891,8 +924,15 @@ export async function startRun(
           ? matchRule(permissionRules, call.name, permissionSubject(call.name, call.arguments))
           : null
 
+        // Validate arguments before any gating so a malformed call is repaired
+        // rather than prompting the user to approve a call that can't run.
+        const invalid = tool ? validationFailure(call) : null
+
         if (!tool) {
           output = `Unknown tool: ${call.name}`
+          ok = false
+        } else if (invalid) {
+          output = invalid.output
           ok = false
         } else if (ruleAction === 'deny') {
           output = 'Denied by a permission rule.'
@@ -1063,24 +1103,51 @@ export async function startRun(
           }
         }
 
+        slots[index] = {
+          call,
+          output,
+          ok,
+          images: toolImages,
+          documents: toolDocs
+        }
+      }
+
+      // --- Ordered flush. -------------------------------------------------------
+      // Emit tool_result + fire the onToolResult plugin event + append the tool
+      // message, all in ORIGINAL call order, so each tool_use is answered exactly
+      // once and the persisted log stays provider-valid (role alternation, matched
+      // toolCallId pairing). Every slot is populated: the sequential path fills its
+      // slots inline and only leaves them empty on an early abort return (which
+      // never reaches here). A `!` guard keeps that invariant explicit.
+      for (let i = 0; i < toolCalls.length; i++) {
+        const r = slots[i]!
         emit({
           type: 'tool_result',
-          callId: call.id,
-          name: call.name,
-          ok,
-          output,
-          ...(toolImages.length ? { images: toolImages } : {})
+          callId: r.call.id,
+          name: r.call.name,
+          ok: r.ok,
+          output: r.output,
+          ...(r.images.length ? { images: r.images } : {})
         })
-        await plugins.emit('onToolResult', { tool: call.name, input: call.arguments, output, ok })
+        await plugins.emit('onToolResult', {
+          tool: r.call.name,
+          input: r.call.arguments,
+          output: r.output,
+          ok: r.ok
+        })
         messages.push({
           role: 'tool',
-          content: output,
-          toolCallId: call.id,
-          toolName: call.name,
-          ...(toolImages.length ? { images: toolImages } : {}),
-          ...(toolDocs.length ? { documents: toolDocs } : {})
+          content: r.output,
+          toolCallId: r.call.id,
+          toolName: r.call.name,
+          ...(r.images.length ? { images: r.images } : {}),
+          ...(r.documents.length ? { documents: r.documents } : {})
         })
-        onMessages?.(messages)
+      }
+      onMessages?.(messages)
+      if (abort.signal.aborted) {
+        emit({ type: 'done', stopReason: 'aborted' })
+        return
       }
     }
 
