@@ -361,6 +361,29 @@ describe('evictStaleToolResults', () => {
     expect(stub.images).toBeUndefined() // attachment dropped
   })
 
+  it('evicts a stale tool result carrying document attachments even when its text is small', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'q0' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c0', name: 'read_file', arguments: { path: 'doc.pdf' } }] },
+      {
+        role: 'tool',
+        content: '[document attached]',
+        toolCallId: 'c0',
+        toolName: 'read_file',
+        documents: [{ mediaType: 'application/pdf', data: 'AAAA' }]
+      },
+      { role: 'assistant', content: 'a0' }
+    ]
+    // Pad with recent kept turns so turn 0 is stale.
+    for (let t = 1; t <= EVICT_KEEP_RECENT_TURNS; t++) {
+      msgs.push({ role: 'user', content: `q${t}` }, { role: 'assistant', content: `a${t}` })
+    }
+    const out = evictStaleToolResults(msgs)
+    const stub = out.find((m) => m.role === 'tool')!
+    expect(stub.content.startsWith('[earlier ')).toBe(true)
+    expect(stub.documents).toBeUndefined() // attachment dropped
+  })
+
   it('returns the input unchanged when nothing is old enough to be stale', () => {
     const window = windowWithLargeToolResults(EVICT_KEEP_RECENT_TURNS)
     expect(evictStaleToolResults(window)).toBe(window)
