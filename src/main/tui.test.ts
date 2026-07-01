@@ -21,6 +21,9 @@ import {
   parseResumeSelection,
   formatRelativeTime,
   renderConversationList,
+  subagentGlyph,
+  shortCwd,
+  renderStatusLine,
   runTui,
   type TuiDeps,
   type TuiIo,
@@ -322,6 +325,53 @@ describe('formatRelativeTime', () => {
   })
   it('never goes negative', () => {
     expect(formatRelativeTime(now + 5000, now)).toBe('just now')
+  })
+})
+
+describe('status line & progress', () => {
+  const paint = makePainter(false)
+
+  it('subagentGlyph maps status', () => {
+    expect(subagentGlyph('running')).toBe('·')
+    expect(subagentGlyph('done')).toBe('✓')
+    expect(subagentGlyph('error')).toBe('✗')
+  })
+
+  it('shortCwd abbreviates home and deep paths', () => {
+    expect(shortCwd('/Users/x/proj', '/Users/x')).toBe('~/proj')
+    expect(shortCwd('/a/b/c/d/e', '/nope')).toBe('…/d/e')
+    expect(shortCwd('/a/b', '/nope')).toBe('/a/b')
+  })
+
+  it('renders model, policy, cost, and a context bar', () => {
+    const line = renderStatusLine(
+      { providerId: 'anthropic', model: 'claude-opus-4-8', policy: 'ask', cwd: '/p', cost: { inputTokens: 0, outputTokens: 0, cost: 0.5 }, contextTokens: 500_000 },
+      120,
+      paint
+    )
+    expect(line).toContain('anthropic/claude-opus-4-8')
+    expect(line).toContain('ask')
+    expect(line).toContain('$0.5000')
+    expect(line).toContain('50%') // 500k of a 1M window
+    expect(line).toMatch(/[▓░]/)
+  })
+
+  it('omits the context bar until a turn has run', () => {
+    const line = renderStatusLine(
+      { providerId: 'p', model: 'claude-opus-4-8', policy: 'plan', cwd: '/p', cost: { inputTokens: 0, outputTokens: 0, cost: 0 }, contextTokens: 0 },
+      120,
+      paint
+    )
+    expect(line).not.toMatch(/%/)
+  })
+
+  it('truncates to the given width', () => {
+    const line = renderStatusLine(
+      { providerId: 'anthropic', model: 'claude-opus-4-8', policy: 'ask', cwd: '/very/long/path/here', cost: { inputTokens: 0, outputTokens: 0, cost: 0 }, contextTokens: 0 },
+      20,
+      paint
+    )
+    expect(line.length).toBeLessThanOrEqual(20)
   })
 })
 
@@ -716,5 +766,35 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('resume is unavailable')
+  })
+
+  it('prints a status line before the composer prompt', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.now = () => 0
+    const t = fakeIo([null]) // EOF immediately
+    d.io = t.io
+    await runTui(opts, d)
+    // Model + policy appear before we ever read input.
+    expect(t.text()).toContain('anthropic/claude')
+    expect(t.text()).toContain('ask')
+  })
+
+  it('renders tool_progress, subagent, and retry events', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'retry', attempt: 2, max: 5, message: 'network hiccup' },
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'review_changes', args: {} },
+      { runId: 'x', type: 'tool_progress', callId: 'c1', message: 'reviewing correctness' },
+      { runId: 'x', type: 'subagent', parentCallId: 'c1', id: 's1', label: 'Correctness', status: 'running' },
+      { runId: 'x', type: 'subagent', parentCallId: 'c1', id: 's1', label: 'Correctness', status: 'done' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['review', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('retrying (2/5)')
+    expect(out).toContain('reviewing correctness')
+    expect(out).toContain('· Correctness')
+    expect(out).toContain('✓ Correctness')
   })
 })
