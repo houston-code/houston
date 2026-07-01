@@ -207,6 +207,13 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/new', s)).toEqual({ kind: 'clear' })
   })
 
+  it('recognizes resume (with optional query), sessions alias, and fork', () => {
+    expect(parseSlashCommand('/resume', s)).toEqual({ kind: 'resume', query: '' })
+    expect(parseSlashCommand('/resume auth bug', s)).toEqual({ kind: 'resume', query: 'auth bug' })
+    expect(parseSlashCommand('/sessions', s)).toEqual({ kind: 'resume', query: '' })
+    expect(parseSlashCommand('/fork', s)).toEqual({ kind: 'fork' })
+  })
+
   it('sets a valid approval policy, else stays informational', () => {
     expect(parseSlashCommand('/approval auto-edit', s)).toEqual({ kind: 'set-approval', policy: 'auto-edit' })
     expect(parseSlashCommand('/approval bogus', s)).toEqual({ kind: 'handled' })
@@ -501,6 +508,17 @@ function fakePersist(seed: Array<ResumeEntry & { messages: ChatMessage[] }> = []
       [...store.entries()]
         .filter(([, c]) => c.workspace === workspace)
         .map(([id, c]) => ({ id, title: c.title, updatedAt: c.updatedAt })),
+    search: (workspace, query) =>
+      [...store.entries()]
+        .filter(([, c]) => c.workspace === workspace && c.title.toLowerCase().includes(query.toLowerCase()))
+        .map(([id, c]) => ({ id, title: c.title, updatedAt: c.updatedAt })),
+    fork: (id) => {
+      const c = store.get(id)
+      if (!c) return null
+      const fid = `conv-${++seq}`
+      store.set(fid, { ...c, title: `${c.title} (fork)`, messages: [...c.messages] })
+      return { id: fid }
+    },
     get: (id) => {
       const c = store.get(id)
       return c ? { messages: c.messages } : null
@@ -771,6 +789,45 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(rec.runs).toHaveLength(0)
     expect(t.text()).toContain('cancelled')
+  })
+
+  it('/resume <query> searches by title', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist([
+      { id: 'a', title: 'Auth refactor', updatedAt: 2, messages: [] },
+      { id: 'b', title: 'CSS tweaks', updatedAt: 1, messages: [] }
+    ])
+    d.persist = fp.persist
+    d.now = () => 100
+    const t = fakeIo(['/resume auth', 'x', null]) // list is filtered, then cancel
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('Auth refactor')
+    expect(out).not.toContain('CSS tweaks')
+  })
+
+  it('/fork branches the current conversation onto a copy', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    // First a turn creates conv-1, then /fork copies it to conv-2.
+    const t = fakeIo(['start', '/fork', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(fp.store.size).toBe(2)
+    expect([...fp.store.values()].some((c) => c.title.endsWith('(fork)'))).toBe(true)
+  })
+
+  it('/fork with no active conversation is a no-op', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    const t = fakeIo(['/fork', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(fp.store.size).toBe(0)
+    expect(t.text()).toContain('nothing to fork')
   })
 
   it('reports resume as unavailable without a store', async () => {

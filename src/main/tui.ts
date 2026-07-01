@@ -286,6 +286,10 @@ export interface TuiPersist {
   setMessages: (id: string, messages: ChatMessage[]) => void
   list: (workspace: string) => ResumeEntry[]
   get: (id: string) => { messages: ChatMessage[] } | null
+  /** Recent sessions in this folder whose title/content matches `query`. */
+  search: (workspace: string, query: string) => ResumeEntry[]
+  /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
+  fork: (id: string) => { id: string } | null
 }
 
 /** Render a numbered picker of recent conversations for `/resume`. */
@@ -375,7 +379,8 @@ export type SlashResult =
   | { kind: 'handled' }
   | { kind: 'exit' }
   | { kind: 'clear' }
-  | { kind: 'resume' }
+  | { kind: 'resume'; query: string }
+  | { kind: 'fork' }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
   | { kind: 'unknown'; name: string }
@@ -399,7 +404,10 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
     case 'new':
       return { kind: 'clear' }
     case 'resume':
-      return { kind: 'resume' }
+    case 'sessions':
+      return { kind: 'resume', query: arg }
+    case 'fork':
+      return { kind: 'fork' }
     case 'approval': {
       if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
@@ -453,7 +461,8 @@ export const HELP_TEXT = [
   '  /model [id]           list models, or switch (providerId, providerId/model, or model)',
   '  /approval [policy]    show or set policy (plan | ask | auto-edit | full-auto)',
   '  /clear, /new          start a fresh conversation',
-  '  /resume               list and reopen a saved session in this folder',
+  '  /resume [query]       list (or search) and reopen a saved session',
+  '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
   '  /cwd                  show the working directory',
   '  /exit, /quit          leave (or press Ctrl-D)',
@@ -639,7 +648,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· resume is unavailable (no session store)\n', 'dim'))
           continue
         }
-        const convs = deps.persist.list(opts.cwd)
+        const query = result.query.trim()
+        const convs = query ? deps.persist.search(opts.cwd, query) : deps.persist.list(opts.cwd)
         deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
         if (!convs.length) continue
         const ans = await deps.io.readLine('> ')
@@ -656,6 +666,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         conversationId = id
         messages = conv.messages
         deps.io.out(paint(`· resumed — ${messages.length} message(s)\n`, 'dim'))
+        continue
+      }
+      if (result.kind === 'fork') {
+        if (!deps.persist || !conversationId) {
+          deps.io.out(paint('· nothing to fork yet — start a conversation first\n', 'dim'))
+          continue
+        }
+        const forked = deps.persist.fork(conversationId)
+        if (!forked) {
+          deps.io.out(paint('· could not fork this session\n', 'dim'))
+          continue
+        }
+        conversationId = forked.id
+        deps.io.out(paint('· forked — continuing on a copy, original left intact\n', 'dim'))
         continue
       }
       if (result.kind === 'set-approval') {

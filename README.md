@@ -428,7 +428,8 @@ Slash commands adjust the session without restarting:
 | `/model [id]` | list configured models, or switch (`providerId`, `providerId/model`, or a bare model id) |
 | `/approval [policy]` | show or set the policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`) |
 | `/clear`, `/new` | start a fresh conversation |
-| `/resume` | list and reopen a saved session in this folder |
+| `/resume [query]` | list (or search by title) and reopen a saved session |
+| `/fork` | branch the current session into a copy, leaving the original intact |
 | `/cost` | show session token + cost totals |
 | `/cwd` | show the working directory |
 | `/help` | list commands |

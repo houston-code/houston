@@ -29,7 +29,14 @@ import { createTerminalIo, resolveColor } from './tui-io'
 import { makeCompleter } from './tui-complete'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { findFiles } from './agent/mentions'
-import { createConversation, setMessages, listConversations, getConversation } from './conversations'
+import {
+  createConversation,
+  setMessages,
+  listConversations,
+  getConversation,
+  searchConversations,
+  forkConversation
+} from './conversations'
 import { activeBackendId, isSandboxed } from './sandbox'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
@@ -280,6 +287,16 @@ if (tui) {
               .sort((a, b) => b.updatedAt - a.updatedAt)
               .slice(0, 20)
               .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+          search: (workspace, query) =>
+            searchConversations(query)
+              .filter((c) => c.workspace === workspace)
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .slice(0, 20)
+              .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+          fork: (id) => {
+            const forked = forkConversation(id)
+            return forked ? { id: forked.id } : null
+          },
           get: (id) => {
             const conv = getConversation(id)
             return conv ? { messages: conv.messages } : null
