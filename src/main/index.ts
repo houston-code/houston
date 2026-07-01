@@ -29,6 +29,8 @@ import { createTerminalIo, resolveColor } from './tui-io'
 import { makeCompleter } from './tui-complete'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { findFiles } from './agent/mentions'
+import { loadSkills } from './agent/skills'
+import { loadAgents } from './agent/agents'
 import {
   createConversation,
   setMessages,
@@ -270,6 +272,16 @@ if (tui) {
         resolveQuestion,
         cancelRun,
         persistHistory,
+        capabilities: async () => {
+          const s = getSettings()
+          const [skills, agents] = await Promise.all([loadSkills(tui.cwd), loadAgents(tui.cwd)])
+          return {
+            skills: skills.map((k) => ({ name: k.name, detail: k.description })),
+            agents: agents.map((a) => ({ name: a.name, detail: a.description })),
+            mcp: (s.mcpServers ?? []).map((m) => ({ name: m.name ?? m.id, detail: m.id })),
+            hooks: (s.hooks ?? []).map((h) => ({ name: h.event, detail: `${h.matcher} → ${h.command}` }))
+          }
+        },
         io: createTerminalIo({
           paint: makePainter(tui.color),
           history,
