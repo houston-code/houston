@@ -429,7 +429,8 @@ activity). Press `Ctrl-C` to interrupt the current turn (the session stays open)
 
 Press **Tab** to complete slash-command names and `@`-file mentions (fuzzy over the
 workspace), and **Up/Down** to recall previous prompts — history persists per
-project across restarts.
+project across restarts. A message can span multiple lines: end a line with `\` to
+continue, or open a ``` code fence and it keeps reading until the fence closes.
 
 Slash commands adjust the session without restarting:
 

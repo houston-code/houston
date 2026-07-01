@@ -614,6 +614,15 @@ describe('runTui', () => {
     expect(t.text()).toContain('Bye.')
   })
 
+  it('assembles a multi-line message (backslash continuation) into one turn', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['first line \\', 'second line', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages).toEqual([{ role: 'user', content: 'first line \nsecond line' }])
+  })
+
   it('prompts for and records an approval decision', async () => {
     const { d, rec } = deps([
       { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
