@@ -24,6 +24,7 @@ import {
   subagentGlyph,
   shortCwd,
   renderStatusLine,
+  spinnerFrame,
   runTui,
   type TuiDeps,
   type TuiIo,
@@ -373,6 +374,13 @@ describe('status line & progress', () => {
     )
     expect(line.length).toBeLessThanOrEqual(20)
   })
+
+  it('spinnerFrame cycles frames and shows the label + elapsed seconds', () => {
+    expect(spinnerFrame(0, 'Thinking', 4, paint)).toBe('⠋ Thinking 4s')
+    expect(spinnerFrame(1, 'Thinking', 4, paint)).toContain('⠙')
+    // wraps around the frame set
+    expect(spinnerFrame(10, 'x', 0, paint)).toContain('⠋')
+  })
 })
 
 describe('resume picker', () => {
@@ -401,6 +409,7 @@ function fakeIo(inputs: Array<string | null>) {
   const out: string[] = []
   const interrupts: Array<() => void> = []
   const reads: Array<{ prompt: string; discardPending: boolean }> = []
+  const spinner: string[] = [] // 'start:label' | 'label:x' | 'stop'
   let idx = 0
   const io: TuiIo = {
     out: (s) => out.push(s),
@@ -409,12 +418,16 @@ function fakeIo(inputs: Array<string | null>) {
       return idx < inputs.length ? inputs[idx++] : null
     },
     onInterrupt: (h) => interrupts.push(h),
-    cancelRead: () => {}
+    cancelRead: () => {},
+    startSpinner: (l) => spinner.push(`start:${l}`),
+    setSpinnerLabel: (l) => spinner.push(`label:${l}`),
+    stopSpinner: () => spinner.push('stop')
   }
   return {
     io,
     out,
     reads,
+    spinner,
     text: () => out.join(''),
     fireInterrupt: () => interrupts.forEach((h) => h())
   }
@@ -796,5 +809,30 @@ describe('runTui', () => {
     expect(out).toContain('reviewing correctness')
     expect(out).toContain('· Correctness')
     expect(out).toContain('✓ Correctness')
+  })
+
+  it('drives the spinner across a turn: start, relabel on events, stop', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'reasoning', delta: 'hmm' },
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'read_file', args: {} },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:read_file', 'stop'])
+  })
+
+  it('stops the spinner when a run is interrupted', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'aborted' }])
+    const t = fakeIo(['task', null])
+    d.io = t.io
+    const orig = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      t.fireInterrupt()
+      return orig(req, send, onMessages)
+    }
+    await runTui(opts, d)
+    expect(t.spinner).toContain('stop')
   })
 })

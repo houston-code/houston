@@ -209,6 +209,20 @@ export function subagentGlyph(status: 'running' | 'done' | 'error'): string {
   return status === 'done' ? '✓' : status === 'error' ? '✗' : '·'
 }
 
+/** Braille spinner frames (Dots animation). */
+export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+/**
+ * One spinner frame, e.g. `⠋ Thinking 4s`. The terminal adapter prefixes a
+ * carriage-return + clear-line and redraws only this single line, so it never
+ * scrolls or tears — the one and only in-place redraw in the TUI, kept minimal on
+ * purpose to preserve the otherwise append-only (flicker-free) model.
+ */
+export function spinnerFrame(tick: number, label: string, elapsedSec: number, paint: Painter): string {
+  const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
+  return `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${elapsedSec}s`, 'dim')}`
+}
+
 export interface StatusState {
   providerId: string
   model: string
@@ -476,6 +490,15 @@ export interface TuiIo {
    * and hang the loop. No-op when nothing is being read.
    */
   cancelRead?: () => void
+  /**
+   * Show a single-line activity spinner with an elapsed timer while a turn runs,
+   * so a slow first token or a silent tool doesn't look like a hang. The adapter
+   * redraws only that one line and erases it before any real output. All three are
+   * optional and no-ops off-TTY / in tests (the driver never depends on them).
+   */
+  startSpinner?: (label: string) => void
+  setSpinnerLabel?: (label: string) => void
+  stopSpinner?: () => void
 }
 
 export interface TuiDeps {
@@ -569,6 +592,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
+      deps.io.stopSpinner?.()
       // Show that the interrupt registered — otherwise an aborted turn just stops
       // with no feedback — then release any approval/question prompt blocked on
       // input so the aborted run doesn't leave the loop waiting on a dead read.
@@ -689,6 +713,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const s = md.flush()
       if (s) deps.io.out(s)
     }
+    // Liveness while the agent works (relabelled per event; erased on any output).
+    deps.io.startSpinner?.('Working')
 
     const send = (e: AgentEvent): void => {
       if (e.type === 'text') {
@@ -698,9 +724,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       flushMd()
       switch (e.type) {
         case 'reasoning':
+          deps.io.setSpinnerLabel?.('Thinking')
           deps.io.out(paint(e.delta, 'dim'))
           break
         case 'tool_start':
+          deps.io.setSpinnerLabel?.(e.name)
           toolArgs.set(e.callId, e.args)
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
@@ -719,6 +747,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`    ${subagentGlyph(e.status)} ${e.label}\n`, 'dim'))
           break
         case 'retry':
+          deps.io.setSpinnerLabel?.('Retrying')
           deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
           break
         case 'tool_approval':
@@ -779,6 +808,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // and resumable even if it's interrupted mid-turn.
       if (deps.persist && conversationId) deps.persist.setMessages(conversationId, m)
     })
+    deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts
     activeRunId = null
