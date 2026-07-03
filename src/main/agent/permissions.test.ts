@@ -176,6 +176,26 @@ describe('matchRule', () => {
       expect(matchRule(rules, 'run_shell', 'echo `rm -rf /tmp/x`')).toBe('deny')
     })
 
+    it('does not let a paren inside a $(...) body hide a command from a narrow allow rule', () => {
+      // A literal `(` in the substitution body used to defeat the extraction regex,
+      // leaving `echo $(rm -rf ... "()")` matching `echo *` and auto-approving `rm`.
+      const allowEcho: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: 'echo *' }]
+      expect(matchRule(allowEcho, 'run_shell', 'echo $(rm -rf ~/x "()")')).toBeNull()
+      expect(matchRule(rules, 'run_shell', 'echo $(rm -rf /tmp/x "()")')).toBe('deny')
+    })
+
+    it('inspects process-substitution bodies (<(...) and >(...))', () => {
+      const allowDiff: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: 'diff *' }]
+      expect(matchRule(allowDiff, 'run_shell', 'diff <(ls) <(rm -rf x)')).toBeNull()
+      expect(matchRule(rules, 'run_shell', 'diff <(ls) <(rm -rf /tmp/x)')).toBe('deny')
+      expect(matchRule(rules, 'run_shell', 'tee >(rm -rf /tmp/x)')).toBe('deny')
+    })
+
+    it('inspects nested substitution bodies', () => {
+      expect(matchRule(rules, 'run_shell', 'echo $(echo $(rm -rf /tmp/x))')).toBe('deny')
+      expect(matchRule(rules, 'run_shell', 'cat <(diff <(rm -rf /tmp/x) <(ls))')).toBe('deny')
+    })
+
     it('normalizes whitespace so spacing tricks cannot dodge a deny rule', () => {
       expect(matchRule(rules, 'run_shell', 'rm    -rf   /tmp/x')).toBe('deny')
     })
@@ -190,6 +210,21 @@ describe('splitShellCommand', () => {
   it('extracts command-substitution and backtick bodies as their own segments', () => {
     expect(splitShellCommand('echo $(whoami)')).toContain('whoami')
     expect(splitShellCommand('echo `id`')).toContain('id')
+  })
+
+  it('extracts a substitution body even when it contains balanced parens', () => {
+    expect(splitShellCommand('echo $(rm -rf ~/x "()")')).toContain('rm -rf ~/x "()"')
+  })
+
+  it('extracts process-substitution bodies', () => {
+    const segs = splitShellCommand('diff <(ls) <(rm -rf x)')
+    expect(segs).toContain('ls')
+    expect(segs).toContain('rm -rf x')
+  })
+
+  it('expands nested substitution bodies', () => {
+    expect(splitShellCommand('echo $(echo $(id))')).toContain('id')
+    expect(splitShellCommand('cat <(diff <(whoami) <(ls))')).toContain('whoami')
   })
 
   it('returns the whole command for a simple command', () => {

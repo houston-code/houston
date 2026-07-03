@@ -173,25 +173,92 @@ function matchOneShell(rules: PermissionRule[], command: string): PermissionRule
  * Best-effort split of a shell command into the simple commands it would actually
  * run, so a permission rule can be required to cover EVERY one. Splits on the
  * control operators (`&&`, `||`, `;`, `|`, `&`, newline) and additionally pulls
- * out the bodies of command substitutions (`$(...)` and backticks), which run
- * their own commands. NOT a full shell parser — it deliberately over-segments
+ * out the bodies of command substitutions (`$(...)`, backticks) AND process
+ * substitutions (`<(...)`, `>(...)`) — all of which run their own commands,
+ * including when nested. NOT a full shell parser — it deliberately over-segments
  * (more pieces ⇒ stricter), so an `allow` rule can't auto-approve a compound
  * command that smuggles in an unapproved sub-command.
+ *
+ * A hand-written scanner (not one regex) is used because the substitution bodies
+ * nest: `$(rm -rf "(x)")` has a paren inside, and `<(diff <(a) <(b))` nests three
+ * deep. The previous `\$\(([^()]*)\)` regex couldn't span an inner `(`, so a body
+ * containing one leaked back into the outer command and matched a narrow `allow`
+ * rule (e.g. `echo *`), auto-approving the smuggled command; `<(...)`/`>(...)`
+ * were not recognized at all.
  */
 export function splitShellCommand(command: string): string[] {
   const segments: string[] = []
-  const subRe = /\$\(([^()]*)\)|`([^`]*)`/g
-  let m: RegExpExecArray | null
-  while ((m = subRe.exec(command)) !== null) {
-    const inner = (m[1] ?? m[2] ?? '').trim()
-    if (inner) segments.push(inner)
+  collectShellSegments(command, segments, 0)
+  return segments.length ? segments : [command.trim()]
+}
+
+/** Cap on substitution nesting so a pathologically deep command can't recurse forever. */
+const MAX_SUBST_DEPTH = 32
+
+/**
+ * Peel command/process-substitution bodies out of `command` — recursing so a body
+ * that itself chains commands or nests further substitutions is fully expanded —
+ * then split the residual on the shell control operators. Nested parens are
+ * balanced so substitution boundaries are found correctly.
+ */
+function collectShellSegments(command: string, segments: string[], depth: number): void {
+  const recurse = (inner: string): void => {
+    if (depth < MAX_SUBST_DEPTH) {
+      collectShellSegments(inner, segments, depth + 1)
+    } else {
+      // Too deep to keep expanding — surface the body opaquely so it still can't
+      // match a narrow allow rule (over-segment ⇒ stricter, never looser).
+      const t = inner.trim()
+      if (t) segments.push(t)
+    }
   }
-  const outer = command.replace(subRe, ' ')
+  let outer = ''
+  for (let i = 0; i < command.length; ) {
+    const two = command.slice(i, i + 2)
+    if (two === '$(' || two === '<(' || two === '>(') {
+      const close = matchClosingParen(command, i + 1)
+      if (close === -1) {
+        // Unbalanced (a shell syntax error) — treat the rest as a command body too
+        // so nothing hides behind the unterminated opener, then stop scanning.
+        recurse(command.slice(i + 2))
+        outer += ' '
+        break
+      }
+      recurse(command.slice(i + 2, close))
+      outer += ' '
+      i = close + 1
+    } else if (command[i] === '`') {
+      const close = command.indexOf('`', i + 1)
+      if (close === -1) {
+        recurse(command.slice(i + 1))
+        outer += ' '
+        break
+      }
+      recurse(command.slice(i + 1, close))
+      outer += ' '
+      i = close + 1
+    } else {
+      outer += command[i]
+      i += 1
+    }
+  }
   for (const part of outer.split(/\|\||&&|[;\n|&]/)) {
     const p = part.trim()
     if (p) segments.push(p)
   }
-  return segments.length ? segments : [command.trim()]
+}
+
+/** Index of the `)` that closes the `(` at `open` (honoring nesting), or -1 if unbalanced. */
+function matchClosingParen(s: string, open: number): number {
+  let depth = 0
+  for (let i = open; i < s.length; i++) {
+    if (s[i] === '(') depth += 1
+    else if (s[i] === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return -1
 }
 
 /**
