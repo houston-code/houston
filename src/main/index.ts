@@ -2,8 +2,6 @@ import { app, screen, BrowserWindow, dialog } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { APP_NAME } from '@shared/constants'
 import { openExternalSafely } from './safeExternal'
 import { isAllowedNavigation } from './navigation'
@@ -17,34 +15,15 @@ import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
 import { log } from './logger'
-import { getSettings, updateSettings, pruneRecentWorkspaces } from './store'
-import { setUserDataDir, getUserDataDir } from './userData'
+import { pruneRecentWorkspaces } from './store'
+import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
 import { wireLocalhostCapture } from './localhostCapture'
-import { LEGAL_VERSION } from '@shared/legal'
-import { startRun, resolveApproval, resolveQuestion, activeRunCount, cancelRun } from './agent/loop'
+import { activeRunCount } from './agent/loop'
 import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
-import { parseHeadlessArgs, runHeadless } from './headless'
-import { parseTuiArgs, runTui, makePainter, mediaTypeForImagePath } from './tui'
-import { createTerminalIo, resolveColor } from './tui-io'
-import { makeCompleter } from './tui-complete'
-import { parseHistory, serializeHistory, appendHistory } from './tui-history'
-import { findFiles } from './agent/mentions'
-import { loadSkills } from './agent/skills'
-import { loadAgents } from './agent/agents'
-import {
-  isSupportedImageType,
-  exceedsImageSizeLimit,
-  SUPPORTED_IMAGE_TYPES
-} from '@shared/images'
-import {
-  createConversation,
-  setMessages,
-  listConversations,
-  getConversation,
-  searchConversations,
-  forkConversation
-} from './conversations'
+import { parseHeadlessArgs } from './headless'
+import { parseTuiArgs } from './tui'
+import { runTuiEntry, runHeadlessEntry } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
@@ -71,15 +50,6 @@ setUserDataDir(app.getPath('userData'))
 // settings + secret storage, and the view_localhost screenshot backend.
 wireAgentHost()
 wireLocalhostCapture()
-
-/** Read a file, returning null if it doesn't exist / can't be read. */
-function safeRead(path: string): string | null {
-  try {
-    return readFileSync(path, 'utf8')
-  } catch {
-    return null
-  }
-}
 
 let mainWindow: BrowserWindow | null = null
 
@@ -240,153 +210,14 @@ const tui = parseTuiArgs(process.argv, process.cwd())
 const headless = tui ? null : parseHeadlessArgs(process.argv, process.cwd())
 
 if (tui) {
+  // The full client wiring lives in terminalEntry.ts, shared verbatim with the
+  // standalone CLI (src/cli) — only the exit call is Electron's.
   app.whenReady().then(async () => {
-    // Interactive mode needs a real terminal for the composer and inline
-    // approval prompts. In a pipe/CI there's no TTY to read from — point the
-    // user at headless (`-p`) rather than hanging on a dead stdin.
-    if (!process.stdin.isTTY) {
-      process.stderr.write('Interactive mode (-i) needs a terminal. In a pipe, use `-p "<prompt>"`.\n')
-      app.exit(2)
-      return
-    }
-    // Colorize only when the environment says so (TTY, NO_COLOR, TERM, FORCE_COLOR).
-    tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
-    // Load highlight.js lazily (dynamic import) so it stays out of the module graph
-    // that index.test.ts loads — only the real interactive path pulls it in.
-    const { highlightToHtml } = await import('./syntax')
-    const { default: hljs } = await import('highlight.js/lib/common')
-
-    // Per-workspace composer history (Up/Down recall across restarts). Keyed by a
-    // hash of the cwd so each project keeps its own history under userData.
-    const histDir = join(getUserDataDir(), 'tui-history')
-    const histFile = join(histDir, `${createHash('sha1').update(tui.cwd).digest('hex').slice(0, 16)}.txt`)
-    let history = parseHistory(safeRead(histFile))
-    const persistHistory = (line: string): void => {
-      history = appendHistory(line, history)
-      try {
-        mkdirSync(histDir, { recursive: true })
-        writeFileSync(histFile, serializeHistory(history), { mode: 0o600 })
-      } catch (e) {
-        log.warn(`failed to persist TUI history: ${String(e)}`)
-      }
-    }
-
-    let code = 1
-    try {
-      code = await runTui(tui, {
-        getSettings,
-        recordLegalAcceptance: () => {
-          updateSettings({ legalAcceptedVersion: LEGAL_VERSION })
-        },
-        startRun,
-        resolveApproval,
-        resolveQuestion,
-        cancelRun,
-        persistHistory,
-        loadImage: (p) => {
-          const mediaType = mediaTypeForImagePath(p)
-          if (!mediaType || !isSupportedImageType(mediaType)) {
-            return { error: `unsupported image type (use ${SUPPORTED_IMAGE_TYPES.join(', ')})` }
-          }
-          try {
-            const data = readFileSync(join(tui.cwd, p)).toString('base64')
-            if (exceedsImageSizeLimit(data)) return { error: 'image is too large' }
-            return { image: { mediaType, data } }
-          } catch {
-            return { error: `could not read ${p}` }
-          }
-        },
-        capabilities: async () => {
-          const s = getSettings()
-          const [skills, agents] = await Promise.all([loadSkills(tui.cwd), loadAgents(tui.cwd)])
-          return {
-            skills: skills.map((k) => ({ name: k.name, detail: k.description })),
-            agents: agents.map((a) => ({ name: a.name, detail: a.description })),
-            mcp: (s.mcpServers ?? []).map((m) => ({ name: m.name ?? m.id, detail: m.id })),
-            hooks: (s.hooks ?? []).map((h) => ({ name: h.event, detail: `${h.matcher} → ${h.command}` }))
-          }
-        },
-        io: createTerminalIo({
-          paint: makePainter(tui.color),
-          history,
-          completer: makeCompleter((q) => findFiles(tui.cwd, q))
-        }),
-        highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
-        persist: {
-          create: ({ workspace, providerId, model }) =>
-            createConversation({ workspace, providerId, model }),
-          setMessages,
-          // Recent conversations for this folder, newest first, for the `/resume` picker.
-          list: (workspace) =>
-            listConversations()
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
-              .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
-          search: (workspace, query) =>
-            searchConversations(query)
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
-              .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
-          fork: (id) => {
-            const forked = forkConversation(id)
-            return forked ? { id: forked.id } : null
-          },
-          get: (id) => {
-            const conv = getConversation(id)
-            return conv ? { messages: conv.messages } : null
-          }
-        }
-      })
-    } catch (e) {
-      process.stderr.write(`Fatal: ${(e as Error).message}\n`)
-    } finally {
-      killAllShells()
-      disconnectAllMcp()
-      app.exit(code)
-    }
+    app.exit(await runTuiEntry(tui))
   })
 } else if (headless) {
   app.whenReady().then(async () => {
-    let code = 1
-    try {
-      code = await runHeadless(headless, {
-        getSettings,
-        recordLegalAcceptance: () => {
-          updateSettings({ legalAcceptedVersion: LEGAL_VERSION })
-        },
-        startRun,
-        resolveApproval,
-        resolveQuestion,
-        out: (s) => process.stdout.write(s),
-        err: (s) => process.stderr.write(s),
-        // Persist headless runs as conversations (shared with the TUI/GUI) so
-        // --continue / --resume and an interactive `-i` handoff can pick them up.
-        session: {
-          load: ({ workspace, id }) => {
-            const conv = id
-              ? getConversation(id)
-              : (() => {
-                  const meta = listConversations()
-                    .filter((c) => c.workspace === workspace)
-                    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
-                  return meta ? getConversation(meta.id) : null
-                })()
-            return conv ? { id: conv.id, messages: conv.messages } : null
-          },
-          create: ({ workspace, providerId, model }) =>
-            createConversation({ workspace, providerId, model }),
-          setMessages
-        }
-      })
-    } catch (e) {
-      process.stderr.write(`Fatal: ${(e as Error).message}\n`)
-    } finally {
-      killAllShells()
-      disconnectAllMcp()
-      app.exit(code)
-    }
+    app.exit(await runHeadlessEntry(headless))
   })
 } else {
   app.whenReady().then(() => {
