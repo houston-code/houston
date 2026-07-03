@@ -10,6 +10,7 @@ import {
   rmSync
 } from 'node:fs'
 import { join } from 'node:path'
+import { CONVERSATION_SCHEMA_VERSION } from '@shared/agent'
 import type {
   AgentEvent,
   ChatMessage,
@@ -35,20 +36,94 @@ function filePath(id: string): string {
   return join(dir(), `${id}.json`)
 }
 
+/**
+ * Minimal structural check on a parsed conversation file: the fields every code
+ * path dereferences without guards (title/messages in search and title
+ * derivation, model/usage in the scorecard, updatedAt in list sorting). Deliberately
+ * shallow beyond messages — optional fields and forward-compatible extras pass
+ * through untouched. Not a trust boundary (these are our own files; imports go
+ * through validateImportedConversation) — this only keeps one corrupt file from
+ * crashing every list/search/scorecard scan.
+ */
+function isConversationShape(raw: unknown): raw is Conversation {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false
+  const o = raw as Record<string, unknown>
+  if (
+    typeof o.id !== 'string' ||
+    typeof o.title !== 'string' ||
+    typeof o.workspace !== 'string' ||
+    typeof o.providerId !== 'string' ||
+    typeof o.model !== 'string' ||
+    typeof o.createdAt !== 'number' ||
+    typeof o.updatedAt !== 'number' ||
+    !Array.isArray(o.messages)
+  ) {
+    return false
+  }
+  return o.messages.every(
+    (m) =>
+      typeof m === 'object' &&
+      m !== null &&
+      typeof (m as Record<string, unknown>).role === 'string' &&
+      typeof (m as Record<string, unknown>).content === 'string'
+  )
+}
+
+/**
+ * Upgrade a shape-valid conversation from the version it was written at to the
+ * current one, mirroring the settings store's migrate(). Version-gated steps go
+ * here as the on-disk format evolves, oldest first, e.g.:
+ *   if (fromVersion < 2) { ...rewrite v1 fields... }
+ * v1 is the first stamped version; unversioned legacy files (fromVersion 0) are
+ * shape-identical to v1, so today the only change is stamping the version.
+ */
+function migrate(conv: Conversation): Conversation {
+  return { ...conv, schemaVersion: CONVERSATION_SCHEMA_VERSION }
+}
+
+/**
+ * Move an unreadable conversation file aside as `<id>.json.corrupt` instead of
+ * silently dropping it from the list: the chat visibly disappears either way, but
+ * the bytes survive for manual recovery, the store stops re-parsing the file on
+ * every scan, and the rename is logged. Never throws — quarantine failure just
+ * leaves the file in place to be skipped again.
+ */
+function quarantine(path: string, reason: string): void {
+  try {
+    renameSync(path, `${path}.corrupt`)
+    console.error(`[conversations] quarantined ${path} -> ${path}.corrupt (${reason})`)
+  } catch (e) {
+    console.error(
+      `[conversations] failed to quarantine ${path} (${reason}):`,
+      (e as Error)?.message ?? e
+    )
+  }
+}
+
 function read(id: string): Conversation | null {
   const path = filePath(id)
   if (!existsSync(path)) return null
+  let raw: unknown
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as Conversation
+    raw = JSON.parse(readFileSync(path, 'utf8'))
   } catch {
+    quarantine(path, 'invalid JSON')
     return null
   }
+  if (!isConversationShape(raw)) {
+    quarantine(path, 'not a conversation shape')
+    return null
+  }
+  return migrate(raw)
 }
 
 function write(conv: Conversation): void {
   const path = filePath(conv.id)
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(conv, null, 2), 'utf8')
+  // Stamp on every write, whatever the call path, so a file read as legacy (v0)
+  // converges to the current version the first time it's touched.
+  const toWrite: Conversation = { ...conv, schemaVersion: CONVERSATION_SCHEMA_VERSION }
+  writeFileSync(tmp, JSON.stringify(toWrite, null, 2), 'utf8')
   renameSync(tmp, path)
 }
 
@@ -62,6 +137,7 @@ export function createConversation(input: {
   const now = Date.now()
   const conv: Conversation = {
     id: randomUUID(),
+    schemaVersion: CONVERSATION_SCHEMA_VERSION,
     title: 'New chat',
     workspace: input.workspace,
     providerId: input.providerId,
@@ -110,6 +186,7 @@ export function importConversation(
   const now = Date.now()
   const conv: Conversation = {
     id: randomUUID(),
+    schemaVersion: CONVERSATION_SCHEMA_VERSION,
     title: data.title,
     workspace: resolved.workspace,
     providerId: data.providerId ?? resolved.providerId,
@@ -172,7 +249,8 @@ export function computeScorecard(): Scorecard {
  * `errored` carries the failed-run flag forward without the message payload.
  */
 function toMeta(conv: Conversation): ConversationMeta {
-  const { messages: _messages, lastError, ...rest } = conv
+  // schemaVersion is a storage detail — keep it out of the UI list payload.
+  const { messages: _messages, lastError, schemaVersion: _schemaVersion, ...rest } = conv
   return { ...rest, errored: !!lastError }
 }
 
