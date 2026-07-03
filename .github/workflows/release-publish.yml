@@ -114,9 +114,26 @@ jobs:
           fi
       - if: matrix.os == 'macos-14'
         run: npm run test:e2e
+      # Standalone CLI (README "Standalone CLI" section): one platform-independent
+      # houston-cli.cjs per release. Built on the Linux leg only — the bundle is
+      # pure JS, so any leg would produce the same bytes; Linux runs LAST in the
+      # serialized matrix, so the draft release is guaranteed to exist before the
+      # upload. On dry_run it's built (not published) and lands in the artifact.
+      - name: Build standalone CLI
+        if: matrix.os == 'ubuntu-22.04'
+        run: npm run build:cli
+      - name: Attach standalone CLI to the release
+        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          gh release upload "$tag" out/cli/houston-cli.cjs -R piyushvijay/houston-releases --clobber
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
-      # artifact only in that case.
+      # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
+      # leg; upload-artifact errors only when a leg matches NOTHING, so the desktop
+      # patterns keep the other legs green.)
       - if: ${{ inputs.dry_run }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -129,6 +146,7 @@ jobs:
             release/*.AppImage
             release/*.deb
             release/latest*.yml
+            out/cli/houston-cli.cjs
           if-no-files-found: error
 
   finalize:
