@@ -8,19 +8,25 @@ import type { PermissionRule } from '@shared/types'
  * Migration behaviour for the settings store. `getSettings()` runs `migrate()` on the
  * raw on-disk JSON, so we drive it by writing a `settings.json` and importing the
  * module fresh (the module caches the loaded settings, so each case resets modules).
- * `electron.app.getPath` is pointed at a temp dir and `./secrets` is stubbed — these
- * tests are about the provider/model migration, not key storage.
+ * The userData seam is pointed at a temp dir and the injected hasKey check is
+ * stubbed false — these tests are about the provider/model migration, not key
+ * storage.
  */
 
 const state = vi.hoisted(() => ({ userData: '' }))
 
-vi.mock('electron', () => ({
-  app: { getPath: () => state.userData }
+vi.mock('./userData', () => ({
+  getUserDataDir: () => state.userData
 }))
 
-vi.mock('./secrets', () => ({
-  hasKey: () => false
-}))
+type StoreModule = typeof import('./store')
+
+/** Fresh store module with the credential-presence seam wired (always "no key"). */
+async function loadStore(): Promise<StoreModule> {
+  const store = await import('./store')
+  store.configureHasKey(() => false)
+  return store
+}
 
 function openaiProvider(modelIds: string[]): unknown {
   return {
@@ -39,7 +45,7 @@ function writeSettings(obj: unknown): void {
 }
 
 async function loadOpenAIModelIds(): Promise<string[]> {
-  const { getSettings } = await import('./store')
+  const { getSettings } = await loadStore()
   return getSettings().providers.find((p) => p.id === 'openai')!.models.map((m) => m.id)
 }
 
@@ -73,7 +79,7 @@ describe('settings migration — model backfill', () => {
 
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
-    const { getSettings } = await import('./store')
+    const { getSettings } = await loadStore()
     expect(getSettings().schemaVersion).toBe(2)
   })
 })
@@ -84,7 +90,7 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
 
   it('prepends a new rule and persists it', async () => {
     seed([])
-    const { addPermissionRule, getSettings } = await import('./store')
+    const { addPermissionRule, getSettings } = await loadStore()
     const rule: PermissionRule = { action: 'allow', tool: 'web_fetch', match: 'https://x.com/*' }
     addPermissionRule(rule)
     expect(getSettings().permissionRules).toEqual([rule])
@@ -93,7 +99,7 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
   it('prepends ahead of existing rules so the newest wins', async () => {
     const existing: PermissionRule = { action: 'ask', tool: '*', match: '**' }
     seed([existing])
-    const { addPermissionRule, getSettings } = await import('./store')
+    const { addPermissionRule, getSettings } = await loadStore()
     const rule: PermissionRule = { action: 'deny', tool: 'run_shell', match: 'rm -rf build' }
     addPermissionRule(rule)
     expect(getSettings().permissionRules).toEqual([rule, existing])
@@ -102,7 +108,7 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
   it('dedupes an identical rule (repeated clicks do not pile up)', async () => {
     const rule: PermissionRule = { action: 'allow', tool: 'web_fetch', match: 'https://x.com' }
     seed([rule])
-    const { addPermissionRule, getSettings } = await import('./store')
+    const { addPermissionRule, getSettings } = await loadStore()
     addPermissionRule({ action: 'allow', tool: 'web_fetch', match: 'https://x.com' })
     expect(getSettings().permissionRules).toEqual([rule])
   })
@@ -113,7 +119,7 @@ describe('recent workspaces — existence pruning', () => {
     const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
     const b = mkdtempSync(join(tmpdir(), 'ws-b-'))
     try {
-      const { rememberWorkspace } = await import('./store')
+      const { rememberWorkspace } = await loadStore()
       rememberWorkspace(a)
       expect(rememberWorkspace(b).recentWorkspaces).toEqual([b, a])
       // Re-remembering an existing live entry moves it to the front (deduped).
@@ -128,7 +134,7 @@ describe('recent workspaces — existence pruning', () => {
     const live = mkdtempSync(join(tmpdir(), 'ws-live-'))
     const gone = mkdtempSync(join(tmpdir(), 'ws-gone-'))
     try {
-      const { rememberWorkspace } = await import('./store')
+      const { rememberWorkspace } = await loadStore()
       rememberWorkspace(live)
       expect(rememberWorkspace(gone).recentWorkspaces).toEqual([gone, live])
       rmSync(gone, { recursive: true, force: true })
@@ -143,7 +149,7 @@ describe('recent workspaces — existence pruning', () => {
     const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
     const b = mkdtempSync(join(tmpdir(), 'ws-b-'))
     try {
-      const { rememberWorkspace, pruneRecentWorkspaces, getSettings } = await import('./store')
+      const { rememberWorkspace, pruneRecentWorkspaces, getSettings } = await loadStore()
       rememberWorkspace(a)
       rememberWorkspace(b)
       // All folders exist — prune changes nothing.

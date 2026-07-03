@@ -7,14 +7,14 @@ import type { Conversation } from '@shared/agent'
 /**
  * Storage-layer behaviour for the conversation *list* projection: it strips the
  * heavy message log and the verbose `lastError`, surfacing only a lightweight
- * `errored` boolean the background-tasks indicator reads. `app.getPath` points at
- * a temp dir so the on-disk read path runs for real.
+ * `errored` boolean the background-tasks indicator reads. The userData seam points
+ * at a temp dir so the on-disk read path runs for real.
  */
 
 const state = vi.hoisted(() => ({ userData: '' }))
 
-vi.mock('electron', () => ({
-  app: { getPath: () => state.userData }
+vi.mock('./userData', () => ({
+  getUserDataDir: () => state.userData
 }))
 
 // Store-issued ids are randomUUID()s; fixtures use fixed UUIDs so they pass the id guard.

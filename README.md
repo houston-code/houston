@@ -156,6 +156,10 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   Conversation streams live, tool approvals and questions are answered inline, and
   slash commands (`/model`, `/approval`, `/clear`, …) switch settings mid-session.
   See [Interactive terminal](#interactive-terminal).
+- **Standalone CLI.** The same `-p` and `-i` clients as a single-file Node script —
+  no desktop app, no Chromium, no display server, ~60 MB of RAM instead of a
+  desktop app's footprint. Runs on headless Linux servers and small VPSes; API
+  keys come from environment variables. See [Standalone CLI](#standalone-cli-no-desktop-app).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only —
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
@@ -327,6 +331,7 @@ Grab the artifact for your platform:
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
+| Any (terminal only) | Node ≥ 22 | `houston-cli.cjs` — the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i` | **No** — re-download to update |
 
 > **The builds are unsigned.** First-run warnings to expect:
 > - **macOS** — Gatekeeper warns. Right-click the app → **Open** → **Open**, or remove
@@ -466,6 +471,57 @@ Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
 and Keychain-stored API keys, and the first-run terms gate applies the same way —
 interactive mode asks you to accept once (or pass `--accept-terms`). Running in a
 pipe (no TTY) isn't interactive; use headless `-p` there instead.
+
+## Standalone CLI (no desktop app)
+
+Both terminal clients above also ship as a **standalone CLI**: a single-file Node
+script with no Electron inside — no Chromium is ever loaded, no display server is
+needed, and a full run peaks around **60 MB of RAM**, so it works on headless
+Linux servers and small VPSes where the desktop app cannot even start.
+
+```bash
+# grab houston-cli.cjs from the latest release, then:
+node houston-cli.cjs --help          # or: chmod +x houston-cli.cjs && ./houston-cli.cjs
+ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --cwd ~/code/myproj --accept-terms
+ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -i
+```
+
+Requires **Node ≥ 22** — that's the only dependency. All the flags, slash
+commands, approvals, sandboxing, and session persistence described in
+[Headless / scripting](#headless--scripting) and
+[Interactive terminal](#interactive-terminal) work identically: it is the same
+client code, built without the desktop shell. (From a source checkout:
+`npm run build:cli` produces `out/cli/houston-cli.cjs`.)
+
+**API keys.** The desktop app's keys live in the OS keychain (Electron
+`safeStorage`) and can't be read outside it, so the CLI resolves credentials in
+this order:
+
+1. Environment variables — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+   `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), and web-search keys
+   (`TAVILY_API_KEY`, `BRAVE_API_KEY`, `EXA_API_KEY`). Any provider id —
+   including custom endpoints — also works via `HOUSTON_API_KEY_<ID>` (the id
+   uppercased, non-alphanumerics as `_`).
+2. `cli-credentials.json` in the profile dir — a flat
+   `{"<provider-id>": "<key>"}` map for keys that should persist across shells.
+   Create it yourself and `chmod 600` it; it is plaintext by design (a headless
+   box has no OS keyring), and the CLI warns if it's readable by other users.
+
+Local providers (Ollama, LM Studio) need no key at all — point the CLI at the
+same machine and it just works.
+
+**One profile, shared.** The CLI reads and writes the same per-user profile as
+the desktop app (settings, conversations, terminal history), so on a machine
+with both installed, `-i` sessions from the CLI appear in the app's sidebar and
+vice versa. Set `HOUSTON_DATA_DIR` to use an isolated profile (useful for CI
+and servers).
+
+**What's desktop-only.** Capabilities that genuinely need the desktop shell are
+absent, and say so rather than failing silently: `view_localhost` (screenshots
+of a local dev server need Chromium) reports it is unavailable in this context;
+the live Preview dock, integrated terminal, and auto-update are GUI features.
+Fast file search uses `ripgrep` from your `PATH` when present and falls back to
+a built-in search otherwise.
 
 ## Develop
 

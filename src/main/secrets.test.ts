@@ -17,8 +17,11 @@ const state = vi.hoisted(() => ({
   encryptionAvailable: true
 }))
 
+vi.mock('./userData', () => ({
+  getUserDataDir: () => state.userData
+}))
+
 vi.mock('electron', () => ({
-  app: { getPath: () => state.userData },
   safeStorage: {
     isEncryptionAvailable: () => state.encryptionAvailable,
     encryptString: (s: string) => Buffer.from(`v1:${s}`, 'utf8'),

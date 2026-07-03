@@ -1,21 +1,43 @@
-import { app } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { getUserDataDir } from './userData'
 import type { AppSettings, PermissionRule, ProviderConfig } from '@shared/types'
 import { backfillDefaultModels, defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 import { SEARCH_PROVIDERS } from '@shared/search'
-import { hasKey } from './secrets'
 
 /**
  * Persistent app settings (everything except secrets). Stored as JSON in userData.
- * `hasKey` on each provider is recomputed from the secrets store on every read and
- * is never persisted here.
+ * `hasKey` on each provider is recomputed from the credential store on every read
+ * and is never persisted here.
  */
+
+/**
+ * Injected "is a usable credential stored for this id?" check, used to attach the
+ * live `hasKey` flags. A seam rather than an import: `./secrets` pulls in electron
+ * (safeStorage), which would make every consumer of the store Electron-bound. The
+ * Electron shell wires `secrets.hasKey` at startup (wireAgentHost.ts); the
+ * standalone CLI wires its env-var/credential-file check.
+ */
+let hasKeyFn: ((id: string) => boolean) | null = null
+
+/** Bind the credential-presence check. Call once during startup, before any read. */
+export function configureHasKey(fn: (id: string) => boolean): void {
+  hasKeyFn = fn
+}
+
+function hasKey(id: string): boolean {
+  if (!hasKeyFn) {
+    throw new Error(
+      'Credential check not configured — call configureHasKey() during startup before reading settings.'
+    )
+  }
+  return hasKeyFn(id)
+}
 
 let cache: AppSettings | null = null
 
 function settingsPath(): string {
-  return join(app.getPath('userData'), 'settings.json')
+  return join(getUserDataDir(), 'settings.json')
 }
 
 function migrate(raw: Partial<AppSettings>): AppSettings {

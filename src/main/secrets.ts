@@ -1,6 +1,7 @@
-import { app, safeStorage } from 'electron'
+import { safeStorage } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { getUserDataDir } from './userData'
 
 /**
  * Credential storage. Secrets are encrypted with Electron `safeStorage`, which on
@@ -41,7 +42,7 @@ interface SecretsFile {
 }
 
 function secretsPath(): string {
-  return join(app.getPath('userData'), 'secrets.json')
+  return join(getUserDataDir(), 'secrets.json')
 }
 
 function load(): SecretsFile {

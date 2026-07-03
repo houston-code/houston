@@ -18,12 +18,17 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 - **Programmatic SDK.** A stable, importable API for embedding the agent in other
   Node programs (beyond the one-shot CLI below). *Why deferred:* needs a versioned
-  public surface and packaging separate from the Electron app. One-shot headless
-  runs (`Houston -p "<prompt>"`, see the README) already cover scripting/CI.
+  public surface. The packaging groundwork now exists — the standalone CLI
+  (`npm run build:cli`, see the README) already bundles the engine without
+  Electron via the userData/credentials/agentHost seams — but an SDK is an API
+  commitment, not just a bundle. One-shot headless runs (`Houston -p "<prompt>"`)
+  already cover scripting/CI.
 
 - **Terminal-first TUI (interactive) — foundation shipped, polish remaining.**
   A stay-resident, interactive terminal client you converse with directly
-  (`Houston -i`, see the README). *Shipped:* a line-streaming REPL over the shared
+  (`Houston -i`, see the README) — also available Electron-free as the standalone
+  CLI (single-file Node bundle; runs on headless servers, ~60 MB RSS). *Shipped:*
+  a line-streaming REPL over the shared
   agent core — live output, inline approvals (with a diff preview on writes and an
   unsandboxed-shell warning), `ask_user` elicitation, slash commands, a session
   cost meter, and sessions persisted as conversations (resumable, shared with the

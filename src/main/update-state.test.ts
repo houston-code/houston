@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readLastSeenVersion, writeLastSeenVersion } from './update-state'
 
-// The module imports `electron` only for app.getPath in the default-path helper;
-// every test here passes an explicit path, so a minimal stub is enough.
-vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
+// The module reads the userData seam only in the default-path helper; every test
+// here passes an explicit path, so a minimal stub is enough.
+vi.mock('./userData', () => ({ getUserDataDir: () => tmpdir() }))
 
 const dirs: string[] = []
 function tempFile(): string {

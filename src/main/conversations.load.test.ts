@@ -11,14 +11,14 @@ import { CONVERSATION_SCHEMA_VERSION } from '@shared/agent'
  * of every id-keyed filesystem primitive. A file that fails to parse or isn't
  * conversation-shaped must be moved aside as `<id>.json.corrupt` — bytes
  * preserved for recovery — never silently dropped; a non-UUID id must never
- * reach the filesystem at all. `app.getPath` points at a temp dir so the real
- * fs read/write/rename paths run.
+ * reach the filesystem at all. The userData seam points at a temp dir so the
+ * real fs read/write/rename paths run.
  */
 
 const state = vi.hoisted(() => ({ userData: '' }))
 
-vi.mock('electron', () => ({
-  app: { getPath: () => state.userData }
+vi.mock('./userData', () => ({
+  getUserDataDir: () => state.userData
 }))
 
 // Store-issued ids are randomUUID()s; fixtures use fixed UUIDs so they pass the id guard.

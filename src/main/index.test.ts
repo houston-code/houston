@@ -12,9 +12,10 @@ const setName = vi.fn()
 // Never resolves, so the whenReady callback (registerIpc/createWindow) never runs.
 const whenReady = vi.fn(() => new Promise<void>(() => {}))
 const on = vi.fn()
+const getPath = vi.fn(() => '/tmp/houston-test-userdata')
 
 vi.mock('electron', () => ({
-  app: { setName, whenReady, on, getName: vi.fn(), getPath: vi.fn() },
+  app: { setName, whenReady, on, getName: vi.fn(), getPath },
   shell: { openExternal: vi.fn() },
   BrowserWindow: vi.fn()
 }))
@@ -30,6 +31,20 @@ describe('main entry app identity', () => {
     expect(setName).toHaveBeenCalledWith(APP_NAME)
     // setName must run before whenReady is awaited, not inside its callback.
     expect(setName.mock.invocationCallOrder[0]).toBeLessThan(
+      whenReady.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('wires the userData seam from getPath, after setName and before whenReady', async () => {
+    await import('./index')
+
+    expect(getPath).toHaveBeenCalledWith('userData')
+    // The profile dir must resolve AFTER setName (it derives from the app name)
+    // and BEFORE ready, so every consumer of the seam sees the final location.
+    expect(setName.mock.invocationCallOrder[0]).toBeLessThan(
+      getPath.mock.invocationCallOrder[0]
+    )
+    expect(getPath.mock.invocationCallOrder[0]).toBeLessThan(
       whenReady.mock.invocationCallOrder[0]
     )
   })

@@ -1,0 +1,87 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  cliGetKey,
+  cliHasKey,
+  envVarCandidates,
+  genericEnvVar,
+  resetCredentialWarnings
+} from './credentials'
+
+let dir: string
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'houston-cli-creds-'))
+  resetCredentialWarnings()
+})
+
+afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+function writeCreds(obj: unknown, mode = 0o600): void {
+  const path = join(dir, 'cli-credentials.json')
+  writeFileSync(path, JSON.stringify(obj))
+  chmodSync(path, mode)
+}
+
+describe('env var mapping', () => {
+  it('maps built-in provider ids to their conventional variables', () => {
+    expect(envVarCandidates('anthropic')).toEqual(['ANTHROPIC_API_KEY', 'HOUSTON_API_KEY_ANTHROPIC'])
+    expect(envVarCandidates('gemini')).toEqual([
+      'GEMINI_API_KEY',
+      'GOOGLE_API_KEY',
+      'HOUSTON_API_KEY_GEMINI'
+    ])
+    expect(envVarCandidates('web-search:brave')).toContain('BRAVE_API_KEY')
+  })
+
+  it('sanitizes arbitrary ids into the generic form', () => {
+    expect(genericEnvVar('my custom.provider-2')).toBe('HOUSTON_API_KEY_MY_CUSTOM_PROVIDER_2')
+  })
+
+  it('prefers a well-known variable, then the generic, then the file', () => {
+    writeCreds({ anthropic: 'from-file' })
+    const deps = { dataDir: dir, warn: vi.fn() }
+    expect(cliGetKey('anthropic', { ...deps, env: { ANTHROPIC_API_KEY: 'from-env' } })).toBe('from-env')
+    expect(cliGetKey('anthropic', { ...deps, env: { HOUSTON_API_KEY_ANTHROPIC: 'generic' } })).toBe('generic')
+    expect(cliGetKey('anthropic', { ...deps, env: {} })).toBe('from-file')
+  })
+})
+
+describe('credentials file', () => {
+  it('returns null when the file or the id is absent', () => {
+    const deps = { dataDir: dir, env: {}, warn: vi.fn() }
+    expect(cliGetKey('anthropic', deps)).toBeNull()
+    writeCreds({ openai: 'sk-x' })
+    expect(cliGetKey('anthropic', deps)).toBeNull()
+    expect(cliHasKey('openai', deps)).toBe(true)
+  })
+
+  it('treats malformed JSON and non-string values as absent', () => {
+    const deps = { dataDir: dir, env: {}, warn: vi.fn() }
+    writeFileSync(join(dir, 'cli-credentials.json'), 'not json{')
+    expect(cliGetKey('anthropic', deps)).toBeNull()
+    writeCreds({ anthropic: 42 })
+    expect(cliGetKey('anthropic', deps)).toBeNull()
+  })
+
+  it('warns once when the file is readable by other users', () => {
+    if (process.platform === 'win32') return
+    writeCreds({ anthropic: 'sk-x' }, 0o644)
+    const warn = vi.fn()
+    const deps = { dataDir: dir, env: {}, warn }
+    expect(cliGetKey('anthropic', deps)).toBe('sk-x')
+    expect(cliGetKey('anthropic', deps)).toBe('sk-x')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('chmod 600')
+  })
+
+  it('does not warn for owner-only permissions', () => {
+    if (process.platform === 'win32') return
+    writeCreds({ anthropic: 'sk-x' }, 0o600)
+    const warn = vi.fn()
+    expect(cliGetKey('anthropic', { dataDir: dir, env: {}, warn })).toBe('sk-x')
+    expect(warn).not.toHaveBeenCalled()
+  })
+})

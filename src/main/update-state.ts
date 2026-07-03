@@ -1,6 +1,6 @@
-import { app } from 'electron'
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { getUserDataDir } from './userData'
 
 /**
  * Tiny persisted record of the app version the user last ran, used to detect an
@@ -15,7 +15,7 @@ interface UpdateState {
 }
 
 function defaultPath(): string {
-  return join(app.getPath('userData'), 'update-state.json')
+  return join(getUserDataDir(), 'update-state.json')
 }
 
 /** The version recorded on the previous run, or null if none (fresh install). */

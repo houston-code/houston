@@ -1,6 +1,6 @@
-import { app } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { getUserDataDir } from './userData'
 
 /**
  * Persists the main window's bounds so a launch restores wherever the user last
@@ -17,7 +17,7 @@ export interface WindowBounds {
 }
 
 function statePath(): string {
-  return join(app.getPath('userData'), 'window-state.json')
+  return join(getUserDataDir(), 'window-state.json')
 }
 
 function isBounds(v: unknown): v is WindowBounds {
