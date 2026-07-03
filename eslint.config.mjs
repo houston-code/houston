@@ -65,5 +65,36 @@ export default tseslint.config(
         }
       ]
     }
+  },
+  {
+    // The standalone CLI ships as a plain Node bundle — Electron isn't installed
+    // where it runs, so nothing under src/cli may import it, directly or via the
+    // one shell module that still does (`secrets`, whose safeStorage needs a
+    // running desktop app; the CLI's credential source is src/cli/credentials.ts).
+    // The build (scripts/build-cli.mjs) also fails if electron reaches the bundle
+    // graph transitively; this rule just catches it earlier, in the editor.
+    files: ['src/cli/**/*.ts'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'electron',
+              message:
+                'The standalone CLI runs without Electron — wire host capabilities in the entry (see src/cli/index.ts) instead.'
+            }
+          ],
+          patterns: [
+            {
+              group: ['**/secrets'],
+              message:
+                'secrets.ts needs Electron safeStorage; the CLI resolves credentials via ./credentials (env-first).'
+            }
+          ]
+        }
+      ]
+    }
   }
 )
