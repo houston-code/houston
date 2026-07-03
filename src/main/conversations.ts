@@ -37,6 +37,22 @@ function filePath(id: string): string {
 }
 
 /**
+ * Store-issued conversation ids are always randomUUID()s, so anything else is
+ * "no such conversation" — checked BEFORE an id becomes a filename. This closes
+ * the renderer-IPC → filePath() traversal path (a `../`-laden id escaping the
+ * conversations dir) for every filesystem primitive keyed by id — read, delete,
+ * and the quarantine rename — at the two entry points that accept ids. It also
+ * means a hand-placed non-UUID-named .json file in the directory is ignored by
+ * the list/search/scorecard scans rather than parsed (Houston never writes such
+ * files, and ignoring is safer than quarantine-renaming a file we don't own).
+ */
+const CONVERSATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function isConversationId(id: string): boolean {
+  return CONVERSATION_ID_RE.test(id)
+}
+
+/**
  * Minimal structural check on a parsed conversation file: the fields every code
  * path dereferences without guards (title/messages in search and title
  * derivation, model/usage in the scorecard, updatedAt in list sorting). Deliberately
@@ -101,6 +117,7 @@ function quarantine(path: string, reason: string): void {
 }
 
 function read(id: string): Conversation | null {
+  if (!isConversationId(id)) return null
   const path = filePath(id)
   if (!existsSync(path)) return null
   let raw: unknown
@@ -255,6 +272,7 @@ function toMeta(conv: Conversation): ConversationMeta {
 }
 
 export function deleteConversation(id: string): void {
+  if (!isConversationId(id)) return
   const path = filePath(id)
   if (existsSync(path)) rmSync(path)
   // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
