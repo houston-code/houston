@@ -1,22 +1,21 @@
-// eslint-disable-next-line no-restricted-imports -- host-capability gesture (Finder/Explorer reveal); not agent-engine code (only the shell's ipc.ts imports it). Belongs outside agent/; relocating it is the remaining electron-in-engine cleanup.
-import { shell } from 'electron'
-import { promises as fs, existsSync, realpathSync } from 'node:fs'
+import { promises as fs, realpathSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
-import type { OpenResult } from '@shared/editors'
 import { MAX_PREVIEW_TEXT_BYTES, type FileEntry, type FilePreview } from '@shared/files'
 import { imageMediaTypeForPath, MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import { resolveInWorkspace } from './tools'
 
 /**
  * Backs the Finder-like "Files" panel: a lazy, one-level-at-a-time directory
- * listing of the workspace plus a reveal-in-file-manager action. Unlike the
- * `@`-mention search (which walks the whole tree to fuzzy-match a query), this
- * returns only a directory's immediate children so even a huge repo expands
- * cheaply — the renderer fetches deeper levels on demand as folders open.
+ * listing of the workspace. Unlike the `@`-mention search (which walks the whole
+ * tree to fuzzy-match a query), this returns only a directory's immediate
+ * children so even a huge repo expands cheaply — the renderer fetches deeper
+ * levels on demand as folders open. (The panel's reveal-in-file-manager action
+ * lives with the other OS-open gestures in `../openInEditor.ts`, keeping this
+ * module — and the agent engine — free of `electron`.)
  *
  * It is a *user gesture* (never an agent tool) but stays confined to the
  * workspace via {@link resolveInWorkspace}, whose realpath check also blocks a
- * committed symlink from listing or revealing anything outside the project.
+ * committed symlink from listing anything outside the project.
  */
 
 /**
@@ -124,18 +123,4 @@ export async function readWorkspaceFile(workspace: string, relPath: string): Pro
   }
   if (buf.subarray(0, BINARY_SNIFF_BYTES).includes(0)) return { kind: 'binary', bytes }
   return { kind: 'text', text: buf.toString('utf8'), truncated: bytes > MAX_PREVIEW_TEXT_BYTES, bytes }
-}
-
-/** Reveal a workspace-relative path in the OS file manager (Finder / Explorer). */
-export function revealWorkspacePath(workspace: string, relPath: string): OpenResult {
-  if (!workspace || !relPath) return { ok: false, error: 'No file to reveal.' }
-  let abs: string
-  try {
-    abs = resolveInWorkspace(realpathSync(workspace), relPath)
-  } catch {
-    return { ok: false, error: 'Path is outside the workspace.' }
-  }
-  if (!existsSync(abs)) return { ok: false, error: 'That file no longer exists.' }
-  shell.showItemInFolder(abs)
-  return { ok: true }
 }

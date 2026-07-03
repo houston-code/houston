@@ -1,9 +1,10 @@
 import { shell } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { resolveBinaryPath } from './agent/format'
+import { resolveInWorkspace } from './agent/tools'
 import { log } from './logger'
 import { EDITORS, editorById, type EditorDef, type EditorStatus, type OpenResult } from '@shared/editors'
 
@@ -126,5 +127,24 @@ export function openProjectInEditor(editorId: string, dir: string, deps: OpenDep
 export function revealInFileManager(target: string): OpenResult {
   if (!isOpenableDir(target, existsSync)) return { ok: false, error: 'No folder to reveal.' }
   shell.showItemInFolder(target)
+  return { ok: true }
+}
+
+/**
+ * Reveal a workspace-relative path in the OS file manager (Finder / Explorer).
+ * Backs the Files panel's reveal action — a user gesture, but the target is
+ * confined to the workspace via {@link resolveInWorkspace}, whose realpath check
+ * also blocks a committed symlink from revealing anything outside the project.
+ */
+export function revealWorkspacePath(workspace: string, relPath: string): OpenResult {
+  if (!workspace || !relPath) return { ok: false, error: 'No file to reveal.' }
+  let abs: string
+  try {
+    abs = resolveInWorkspace(realpathSync(workspace), relPath)
+  } catch {
+    return { ok: false, error: 'Path is outside the workspace.' }
+  }
+  if (!existsSync(abs)) return { ok: false, error: 'That file no longer exists.' }
+  shell.showItemInFolder(abs)
   return { ok: true }
 }

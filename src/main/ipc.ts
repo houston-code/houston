@@ -26,7 +26,12 @@ import { readPickedFile } from './pickedFiles'
 import { checkForUpdates, takePendingWhatsNew } from './updater'
 import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
 import { getIntegrations } from './integrations'
-import { detectEditors, openProjectInEditor, revealInFileManager } from './openInEditor'
+import {
+  detectEditors,
+  openProjectInEditor,
+  revealInFileManager,
+  revealWorkspacePath
+} from './openInEditor'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
@@ -50,7 +55,7 @@ import { setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
-import { listDirectory, readWorkspaceFile, revealWorkspacePath } from './agent/fileTree'
+import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { getRepoInfo, createWorktree, removeWorktree } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'

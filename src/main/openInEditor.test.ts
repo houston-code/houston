@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { EDITORS } from '@shared/editors'
 
 // Hoisted mocks for the side-effecting deps the module pulls in. The pure logic
@@ -16,7 +19,8 @@ import {
   detectEditors,
   planEditorLaunch,
   openProjectInEditor,
-  revealInFileManager
+  revealInFileManager,
+  revealWorkspacePath
 } from './openInEditor'
 
 const code = EDITORS.find((e) => e.id === 'vscode')!
@@ -152,6 +156,40 @@ describe('revealInFileManager', () => {
 
   it('rejects a missing path without revealing', () => {
     expect(revealInFileManager('/no/such/dir/xyz123').ok).toBe(false)
+    expect(showItemInFolder).not.toHaveBeenCalled()
+  })
+})
+
+describe('revealWorkspacePath', () => {
+  let root: string
+
+  beforeEach(() => {
+    // realpath so macOS's /var -> /private/var symlink doesn't trip containment.
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'houston-reveal-')))
+    writeFileSync(join(root, 'a.txt'), 'hi')
+  })
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('reveals a file inside the workspace', () => {
+    expect(revealWorkspacePath(root, 'a.txt').ok).toBe(true)
+    expect(showItemInFolder).toHaveBeenCalledWith(join(root, 'a.txt'))
+  })
+
+  it('refuses a path that escapes the workspace', () => {
+    const res = revealWorkspacePath(root, '../outside.txt')
+    expect(res.ok).toBe(false)
+    expect(showItemInFolder).not.toHaveBeenCalled()
+  })
+
+  it('refuses a file that no longer exists', () => {
+    expect(revealWorkspacePath(root, 'gone.txt').ok).toBe(false)
+    expect(showItemInFolder).not.toHaveBeenCalled()
+  })
+
+  it('refuses empty workspace or path', () => {
+    expect(revealWorkspacePath('', 'a.txt').ok).toBe(false)
+    expect(revealWorkspacePath(root, '').ok).toBe(false)
     expect(showItemInFolder).not.toHaveBeenCalled()
   })
 })
