@@ -1298,4 +1298,40 @@ describe('symlink confinement (file tools run outside the sandbox)', () => {
     await run('write_file', { path: 'inside-link', content: 'updated' })
     expect(readFileSync(join(workspace, 'real.txt'), 'utf8')).toBe('updated')
   })
+
+  // A *dangling* symlink (its target doesn't exist yet) still exists as a link and
+  // would be FOLLOWED by write_file/apply_patch, creating the file at the target.
+  // realpathSync throws ENOENT on it — the same error a genuinely-missing path
+  // gives — so the containment check must not mistake it for a to-be-created file.
+  it('write_file refuses a dangling symlink pointing OUTSIDE the workspace', async () => {
+    const target = join(outside, 'planted.txt') // does not exist yet
+    symlinkSync(target, join(workspace, 'dangling-out'))
+    await expect(
+      run('write_file', { path: 'dangling-out', content: 'PWNED' })
+    ).rejects.toThrow(/symlink/i)
+    expect(existsSync(target)).toBe(false)
+  })
+
+  it('write_file refuses a path under a dangling symlinked directory pointing OUTSIDE', async () => {
+    symlinkSync(join(outside, 'nodir'), join(workspace, 'dangling-dir')) // target dir missing
+    await expect(
+      run('write_file', { path: 'dangling-dir/new.txt', content: 'x' })
+    ).rejects.toThrow(/symlink/i)
+    expect(existsSync(join(outside, 'nodir'))).toBe(false)
+  })
+
+  it('apply_patch refuses to add a file through a dangling symlink pointing OUTSIDE', async () => {
+    symlinkSync(join(outside, 'added.txt'), join(workspace, 'dangling-add')) // target missing
+    const p = ['*** Begin Patch', '*** Add File: dangling-add', '+pwned', '*** End Patch'].join('\n')
+    await expect(run('apply_patch', { patch: p })).rejects.toThrow(/symlink/i)
+    expect(existsSync(join(outside, 'added.txt'))).toBe(false)
+  })
+
+  it('still allows a dangling symlink whose (missing) target is INSIDE the workspace', async () => {
+    // A link to a not-yet-created file inside the workspace is a legitimate write
+    // target — writing through it must create the real file within the workspace.
+    symlinkSync(join(workspace, 'made.txt'), join(workspace, 'dangling-inside'))
+    await run('write_file', { path: 'dangling-inside', content: 'created' })
+    expect(readFileSync(join(workspace, 'made.txt'), 'utf8')).toBe('created')
+  })
 })
