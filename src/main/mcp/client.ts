@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { flattenMcpContent } from '@shared/mcp'
+import { sanitizeChildEnv } from '../childEnv'
 
 /**
  * A minimal MCP client over the stdio transport: it spawns the server process and
@@ -69,7 +70,11 @@ export class McpClient {
     cwd?: string
   }): Promise<void> {
     const child = this.spawnFn(opts.command, opts.args ?? [], {
-      env: { ...process.env, ...opts.env },
+      // Strip the launching shell's credential-bearing vars so a malicious or
+      // compromised MCP server can't harvest ambient secrets (AWS keys, GH_TOKEN,
+      // *_API_KEY, …) on startup. A server that legitimately needs a token still
+      // gets it: `opts.env` (from McpServerConfig.env) is applied AFTER the strip.
+      env: { ...sanitizeChildEnv(), ...opts.env },
       cwd: opts.cwd
     })
     this.child = child

@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
+import { sanitizeChildEnv } from '../childEnv'
 import type {
   SandboxBackend,
   SandboxRunOptions,
@@ -78,11 +79,17 @@ export function pkgCacheDir(env: NodeJS.ProcessEnv = process.env): string {
  * real HOME config (`~/.npmrc` auth tokens, `~/.gitconfig`) stays readable, since
  * the profile allows reads everywhere. The agent can still override any of these
  * per command (e.g. `npm install --cache …`).
+ *
+ * Credential-bearing vars (AWS keys, `GH_TOKEN`, `*_API_KEY`, …) are stripped via
+ * {@link sanitizeChildEnv} before the spread, so a prompt-injected command can't
+ * `env | curl` a secret the user happened to export into the launching shell. The
+ * `PATH` we augment and the cache redirects are set explicitly below, so they're
+ * unaffected by the strip.
  */
 export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const cache = pkgCacheDir(baseEnv)
   return {
-    ...baseEnv,
+    ...sanitizeChildEnv(baseEnv),
     PATH: augmentPath(baseEnv),
     npm_config_cache: join(cache, 'npm'),
     YARN_CACHE_FOLDER: join(cache, 'yarn'),

@@ -76,6 +76,43 @@ describe('McpClient (fake stdio server)', () => {
     client.close()
   })
 
+  it('spawns the server with a sanitized env (secrets stripped, opts.env re-added)', async () => {
+    let captured: { env?: NodeJS.ProcessEnv; cwd?: string } | undefined
+    const stdout = new EventEmitter()
+    const stdin = {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+        if (msg.id === undefined) return true
+        const result = msg.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : {}
+        queueMicrotask(() =>
+          stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+        )
+        return true
+      }
+    }
+    const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    const spawnFn = ((_cmd: string, _args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string }) => {
+      captured = options
+      return child
+    }) as unknown as SpawnFn
+
+    // A secret exported into the launching shell must NOT reach the MCP server…
+    process.env.HOUSTON_TEST_LEAK_TOKEN = 'ghp_should_not_leak'
+    try {
+      const client = new McpClient(spawnFn)
+      await client.connect({ command: 'fake', env: { MY_SERVER_TOKEN: 'legit-config-token' } })
+      client.close()
+    } finally {
+      delete process.env.HOUSTON_TEST_LEAK_TOKEN
+    }
+
+    expect(captured?.env?.HOUSTON_TEST_LEAK_TOKEN).toBeUndefined()
+    // …but a token the server config supplies via opts.env still does.
+    expect(captured?.env?.MY_SERVER_TOKEN).toBe('legit-config-token')
+    // Non-secret ambient vars (e.g. PATH) pass through so the server can be found.
+    expect(captured?.env?.PATH).toBe(process.env.PATH)
+  })
+
   it('marks the client closed on process exit so later calls fail fast', async () => {
     const stdout = new EventEmitter()
     const stdin = {
