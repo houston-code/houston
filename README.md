@@ -318,8 +318,8 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
 
 Grab the artifact for your platform:
 
-| Platform | Minimum OS | Download | Auto-updates? |
-|----------|------------|----------|---------------|
+| Platform | Minimum OS | Download | Update notifications? |
+|----------|------------|----------|-----------------------|
 | macOS (Apple Silicon) | macOS 12 Monterey | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | macOS (Intel) | macOS 12 Monterey | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
@@ -333,13 +333,17 @@ Grab the artifact for your platform:
 >   cert. Click **More info** → **Run anyway**.
 > - **Linux** — AppImage/deb are unsigned (conventional).
 >
+> **No platform auto-downloads or auto-installs updates while the builds are unsigned.**
+> "Yes" above means the app checks the update feed and shows a banner linking to
+> **Releases** for a manual download — see [Updates](#updates).
+>
 > **Linux needs glibc 2.35 or newer** (Ubuntu 22.04+, Debian 12+, Fedora 36+). The floor
 > is set by the build toolchain: the native `node-pty` addon is compiled on Ubuntu 22.04
 > (glibc 2.35), and the bundled `ast-grep`/`ripgrep` are glibc builds — so musl distros
 > (Alpine) aren't supported. The runner is pinned so this floor stays put rather than
 > creeping up with newer CI images.
 >
-> **Both mac arches auto-update from one feed.** arm64 and Intel build on separate
+> **Both mac arches update from one feed.** arm64 and Intel build on separate
 > runners, and electron-builder emits one `latest-mac.yml` per build — naively publishing
 > both would clobber one another ([electron-builder#5592](https://github.com/electron-userland/electron-builder/issues/5592)).
 > So the release pipeline merges the x64 files into the arm64 feed
@@ -495,12 +499,17 @@ AppImage feeds (+ `latest-*.yml`) are what `electron-updater` uses to auto-updat
 installed app (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
 fails if a vendored binary is missing, so a build can't silently ship without search.
 
-Every PR set to auto-merge builds macOS arm64, Windows x64, and Linux x64 in CI (each on
-its own runner, against the merged state), smoke-tests the packaged macOS app with
-Playwright, and uploads the artifacts (`houston-mac-arm64` / `houston-win-x64` /
-`houston-linux-x64`) on the workflow run — grab a build from the **Actions** tab without
-building locally. The macOS **x64 (Intel)** build runs only in the release pipeline (the
-prepare gate and the publish job), keeping its 10×-billed macOS minutes off the per-PR path.
+Per-PR CI runs on Linux only (×1 Actions-minute multiplier): the unit gate (lint +
+typecheck + vitest), the real bubblewrap sandbox exercise, and a `dist:linux` packaging
+smoke that gates merge but uploads no artifact. The full matrix — Linux x64, macOS arm64,
+macOS x64 (Intel), and Windows x64, each packaging on its own runner — runs nightly in
+[`nightly-build.yml`](.github/workflows/nightly-build.yml), which also smoke-tests the
+packaged macOS app with Playwright and uploads inspection-only artifacts
+(`nightly-linux-x64` / `nightly-mac-arm64` / `nightly-mac-x64` / `nightly-win-x64`,
+3-day retention) — grab a build from that run in the **Actions** tab without building
+locally. The same matrix gates a release in `release-prepare.yml`, and
+`release-publish.yml` builds and publishes the Release artifacts — keeping macOS (×10)
+and Windows (×2) billed minutes off the per-PR path.
 
 ## Updates
 
