@@ -40,6 +40,7 @@ import {
   resolveApproval,
   resolveQuestion,
   setRunPolicy,
+  runOwner,
   activeRunForConversation,
   pendingPromptsForConversation,
   runningConversationIds,
@@ -153,6 +154,30 @@ function makeIo(sender: WebContents): DrainIO {
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
     emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
   }
+}
+
+/**
+ * Upper bound on an `ask_user` answer accepted over IPC. Real answers are a short
+ * option label or a line or two of free text; anything past this is a
+ * malformed/hostile renderer, so we cap it before it becomes a tool result the
+ * model must carry. Generous but bounded.
+ */
+export const MAX_QUESTION_ANSWER_LEN = 100_000
+
+/**
+ * Authorize a run-control IPC call (approve / answer / set-policy / cancel) against
+ * the run's owner. Every AgentEvent broadcasts its runId to *every* window, so a
+ * renderer can observe a runId for a run it doesn't own; without this gate any
+ * window could approve/deny another window's dangerous tool call, inject an answer
+ * into its ask_user prompt, escalate its policy to full-auto, or cancel it. The
+ * owner is the WebContents that started the run (recorded in {@link startRun}); we
+ * compare it to the caller's WebContents id. A run with no recorded owner — already
+ * finished, or never registered — returns undefined, and the loop resolvers no-op
+ * on unknown runIds anyway, so those are allowed through rather than special-cased.
+ */
+function callerOwnsRun(event: { sender: WebContents }, runId: string): boolean {
+  const owner = runOwner(runId)
+  return owner === undefined || owner === event.sender.id
 }
 
 /** Register every IPC handler the renderer can call. */
@@ -549,14 +574,20 @@ export function registerIpc(): void {
     setMessages(conv.id, messages)
     updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
 
-    void runAndDrain(makeIo(event.sender), conv.id, {
-      runId: req.runId,
-      workspace: conv.workspace,
-      providerId: req.providerId,
-      model: req.model,
-      approvalPolicy: req.approvalPolicy,
-      messages
-    })
+    void runAndDrain(
+      makeIo(event.sender),
+      conv.id,
+      {
+        runId: req.runId,
+        workspace: conv.workspace,
+        providerId: req.providerId,
+        model: req.model,
+        approvalPolicy: req.approvalPolicy,
+        messages
+      },
+      // Record the starting window so only it can approve/answer/cancel this run.
+      event.sender.id
+    )
   })
 
   // Re-run the last turn after a failure: run on the conversation's existing
@@ -586,18 +617,26 @@ export function registerIpc(): void {
         })
         return
       }
-      void runAndDrain(makeIo(event.sender), conv.id, {
-        runId: req.runId,
-        workspace: conv.workspace,
-        providerId: req.providerId,
-        model: req.model,
-        approvalPolicy: req.approvalPolicy,
-        messages: conv.messages
-      })
+      void runAndDrain(
+        makeIo(event.sender),
+        conv.id,
+        {
+          runId: req.runId,
+          workspace: conv.workspace,
+          providerId: req.providerId,
+          model: req.model,
+          approvalPolicy: req.approvalPolicy,
+          messages: conv.messages
+        },
+        // Record the starting window so only it can approve/answer/cancel this run.
+        event.sender.id
+      )
     }
   )
 
-  ipcMain.handle(IPC.agentCancel, (_event, runId: string) => {
+  ipcMain.handle(IPC.agentCancel, (event, runId: string) => {
+    // Only the window that started the run may cancel it (runIds are broadcast to all).
+    if (!callerOwnsRun(event, runId)) return
     cancelRun(runId)
   })
 
@@ -619,10 +658,12 @@ export function registerIpc(): void {
 
   ipcMain.handle(
     IPC.agentApprove,
-    (_event, runId: string, callId: string, decision: ToolApprovalDecision) => {
+    (event, runId: string, callId: string, decision: ToolApprovalDecision) => {
       // Validate at the boundary: an unknown decision must not reach the loop (where
       // it would be treated as a non-deny "approve" and silently run the call).
       if (!isToolApprovalDecision(decision)) return
+      // Only the window that started the run may resolve its approval prompts.
+      if (!callerOwnsRun(event, runId)) return
       resolveApproval(runId, callId, decision)
     }
   )
@@ -630,8 +671,14 @@ export function registerIpc(): void {
   // Deliver the user's answer to a pending ask_user question.
   ipcMain.handle(
     IPC.agentRespondQuestion,
-    (_event, runId: string, callId: string, answer: string) => {
-      resolveQuestion(runId, callId, answer)
+    (event, runId: string, callId: string, answer: string) => {
+      // Validate at the boundary (mirrors agentApprove's decision guard): a non-string
+      // answer is malformed, and an unbounded one must not become an oversized tool
+      // result — cap its length before it reaches the loop.
+      if (typeof answer !== 'string') return
+      // Only the window that started the run may answer its ask_user prompts.
+      if (!callerOwnsRun(event, runId)) return
+      resolveQuestion(runId, callId, answer.slice(0, MAX_QUESTION_ANSWER_LEN))
     }
   )
 
@@ -639,7 +686,10 @@ export function registerIpc(): void {
   // agent is working takes effect on its next tool call, not just the next turn.
   ipcMain.handle(
     IPC.agentSetPolicy,
-    (_event, runId: string, policy: AppSettings['approvalPolicy']) => {
+    (event, runId: string, policy: AppSettings['approvalPolicy']) => {
+      // Only the window that started the run may change its policy — otherwise any
+      // window could silently escalate a live run to full-auto.
+      if (!callerOwnsRun(event, runId)) return
       setRunPolicy(runId, policy)
     }
   )

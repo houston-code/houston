@@ -134,6 +134,15 @@ interface RunState {
    * than only on the next turn. Read at call time everywhere policy is gated.
    */
   policy: ApprovalPolicy
+  /**
+   * The id of the WebContents (renderer window) that started this run, when it was
+   * started from the GUI. Recorded so the IPC layer can reject run-control calls
+   * (approve / answer / set-policy / cancel) that arrive from any *other* window:
+   * every AgentEvent broadcasts its runId to every window, so knowing a runId can't
+   * imply the right to control the run. Undefined for TUI/headless runs, which have
+   * no WebContents and reach the resolvers directly rather than over IPC.
+   */
+  owner?: number
 }
 
 const runs = new Map<string, RunState>()
@@ -260,6 +269,16 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
 }
 
 /**
+ * The id of the WebContents that started a run, or undefined for a TUI/headless
+ * run (no owner) or an unknown/finished run. The IPC layer reads this to authorize
+ * run-control calls at the boundary — only the owning window may approve/answer/
+ * set-policy/cancel a run, since runIds are broadcast to every window.
+ */
+export function runOwner(runId: string): number | undefined {
+  return runs.get(runId)?.owner
+}
+
+/**
  * Update the active approval policy for an in-flight run. Subsequent tool calls
  * in the same run are gated by the new policy immediately; finished or unknown
  * runs are a no-op. A pending approval prompt is intentionally left as-is — the
@@ -284,7 +303,13 @@ function waitForApproval(run: RunState, callId: string): Promise<ToolApprovalDec
 export async function startRun(
   req: AgentRunRequest,
   send: (e: AgentEvent) => void,
-  onMessages?: (messages: ChatMessage[]) => void
+  onMessages?: (messages: ChatMessage[]) => void,
+  /**
+   * The WebContents id of the renderer starting this run, recorded on the RunState
+   * so IPC run-control calls can be authorized against it (see {@link runOwner}).
+   * Omitted for TUI/headless runs, which drive the resolvers directly.
+   */
+  owner?: number
 ): Promise<void> {
   const { runId, conversationId } = req
 
@@ -309,7 +334,8 @@ export async function startRun(
     pendingQuestions: new Map(),
     override: seededOverride.kinds,
     shellUnsandboxedOverride: seededOverride.unsandboxedShell,
-    policy: req.approvalPolicy
+    policy: req.approvalPolicy,
+    ...(owner !== undefined ? { owner } : {})
   }
   runs.set(runId, run)
   if (conversationId) {

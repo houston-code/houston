@@ -30,7 +30,14 @@ export interface DrainIO {
 export async function runAndDrain(
   io: DrainIO,
   conversationId: string,
-  runReq: AgentRunRequest
+  runReq: AgentRunRequest,
+  /**
+   * The WebContents id of the renderer that started this run, threaded down to the
+   * loop so IPC run-control calls can be authorized against the owning window. It
+   * carries through to the queue drain below so a queued follow-up turn stays owned
+   * by the same window. Omitted for non-GUI callers (tests, headless).
+   */
+  owner?: number
 ): Promise<void> {
   let terminal: 'natural' | 'aborted' | 'error' = 'natural'
   let errorMessage = ''
@@ -48,7 +55,12 @@ export async function runAndDrain(
   // Tag the run with its conversation so the loop enforces one live run per
   // conversation (a second would interleave its setMessages writes and corrupt
   // the log). The slot is freed when this run ends, before any queue drain below.
-  await startRun({ ...runReq, conversationId }, send, (msgs) => setMessages(conversationId, msgs))
+  await startRun(
+    { ...runReq, conversationId },
+    send,
+    (msgs) => setMessages(conversationId, msgs),
+    owner
+  )
   if (terminal === 'natural') {
     // Upgrade the placeholder title to a model-written summary (once per chat).
     // Fire-and-forget: it must not delay the queue drain or the turn's completion.
@@ -58,7 +70,7 @@ export async function runAndDrain(
       model: runReq.model,
       onTitle: (title) => io.emitTitleChanged?.(conversationId, title)
     })
-    drainQueue(io, conversationId)
+    drainQueue(io, conversationId, owner)
   } else if (terminal === 'error') {
     // Persist the failure so the "last turn failed" Retry banner survives a reload.
     // Aborts fall through untouched — a cancel isn't a failure worth re-running.
@@ -67,7 +79,7 @@ export async function runAndDrain(
 }
 
 /** Dispatch a conversation's queued messages as one combined follow-up turn. */
-export function drainQueue(io: DrainIO, conversationId: string): void {
+export function drainQueue(io: DrainIO, conversationId: string, owner?: number): void {
   const taken = takeQueue(conversationId)
   if (!taken) return
   const { text, images } = combineQueued(taken.items)
@@ -96,12 +108,17 @@ export function drainQueue(io: DrainIO, conversationId: string): void {
   })
   io.emitQueueChanged(conversationId, [])
 
-  void runAndDrain(io, conversationId, {
-    runId,
-    workspace: conv.workspace,
-    providerId: taken.providerId,
-    model: taken.model,
-    approvalPolicy: taken.approvalPolicy,
-    messages
-  })
+  void runAndDrain(
+    io,
+    conversationId,
+    {
+      runId,
+      workspace: conv.workspace,
+      providerId: taken.providerId,
+      model: taken.model,
+      approvalPolicy: taken.approvalPolicy,
+      messages
+    },
+    owner
+  )
 }
