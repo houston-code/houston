@@ -1,4 +1,4 @@
-import { promises as fs, realpathSync } from 'node:fs'
+import { promises as fs, realpathSync, lstatSync, readlinkSync } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import type {
@@ -166,19 +166,38 @@ function realpathWithinRoots(roots: string[], abs: string): boolean {
   })
   let tail = ''
   let probe = abs
-  for (;;) {
+  // Bound the walk: realpathSync already rejects true symlink cycles with ELOOP,
+  // but this also caps the manual dangling-symlink hops below so nothing can spin.
+  for (let guard = 0; guard < 4096; guard++) {
     try {
       const realBase = realpathSync(probe)
       const real = tail ? resolve(realBase, tail) : realBase
       return realRoots.some((root) => isWithin(root, real))
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false // ELOOP/EACCES → deny
+      // realpathSync throws ENOENT for two very different cases: a path component
+      // that genuinely doesn't exist yet (a to-be-created file) OR a *dangling*
+      // symlink whose target is missing. The latter still exists as a link and
+      // WOULD be followed on write, so it must be resolved through its target —
+      // treating its own name as a plain not-yet-existing tail would silently drop
+      // an out-of-root target and allow a write to escape the workspace.
+      let link: string | null = null
+      try {
+        if (lstatSync(probe).isSymbolicLink()) link = readlinkSync(probe)
+      } catch {
+        // lstat/readlink failed → `probe` truly doesn't exist; walk up to its parent.
+      }
+      if (link !== null) {
+        probe = resolve(dirname(probe), link) // re-check against the link's target
+        continue
+      }
       const parent = dirname(probe)
       if (parent === probe) return false // reached the fs root without resolving
       tail = tail ? join(basename(probe), tail) : basename(probe)
       probe = parent
     }
   }
+  return false // exceeded the walk bound → fail closed
 }
 
 /** The allowed roots for a tool call (workspace plus any added directories). */
