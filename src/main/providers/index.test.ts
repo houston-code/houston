@@ -7,11 +7,16 @@ import type { ProviderConfig } from '@shared/types'
  * user whether to enter a key or re-enter the one that silently went stale.
  */
 
-const secrets = vi.hoisted(() => ({ key: null as string | null, stored: false }))
+const secrets = vi.hoisted(() => ({
+  key: null as string | null,
+  stored: false,
+  headers: {} as Record<string, string>
+}))
 
 vi.mock('../agentHost', () => ({
   getKey: () => secrets.key,
-  hasStoredKey: () => secrets.stored
+  hasStoredKey: () => secrets.stored,
+  getSecretHeaders: () => secrets.headers
 }))
 
 import { createProvider, ProviderError } from './index'

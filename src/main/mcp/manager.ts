@@ -1,6 +1,8 @@
 import type { McpServerConfig } from '@shared/types'
+import { mcpHeaderScope } from '@shared/types'
 import { mcpToolName } from '@shared/mcp'
 import type { ToolDef } from '../agent/tools'
+import { getSecretHeaders } from '../agentHost'
 import { McpClient, type McpConnection } from './client'
 import { McpHttpClient } from './http-client'
 import { McpSseClient } from './sse-client'
@@ -54,8 +56,15 @@ function transportOf(c: McpServerConfig): Transport {
   return !c.command && c.url ? 'http' : 'stdio'
 }
 
-function configKey(c: McpServerConfig): string {
-  return JSON.stringify([transportOf(c), c.command, c.args ?? [], c.url, c.headers ?? {}, c.enabled])
+// The real header values live in the encrypted secrets store, not on the config
+// (which carries masked values). Resolve them for both the change-detection signature
+// and the actual connect, so editing a header value still triggers a reconnect.
+function resolveHeaders(c: McpServerConfig): Record<string, string> {
+  return getSecretHeaders(mcpHeaderScope(c.id))
+}
+
+function configKey(c: McpServerConfig, headers: Record<string, string>): string {
+  return JSON.stringify([transportOf(c), c.command, c.args ?? [], c.url, headers, c.enabled])
 }
 
 // Serialize reconciliation so overlapping runs can't interleave on the shared
@@ -80,7 +89,8 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
 
   for (const c of enabled) {
     const existing = connections.get(c.id)
-    const key = configKey(c)
+    const headers = resolveHeaders(c)
+    const key = configKey(c, headers)
     // Reuse only a live connection with the same config; reconnect if the config
     // changed or the cached client has since died (so calls don't hang on it).
     if (existing && existing.key === key && !existing.client.isClosed) continue
@@ -89,8 +99,8 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
     const client: McpConnection =
       transport === 'http' ? createHttpClient() : transport === 'sse' ? createSseClient() : createClient()
     try {
-      if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers: c.headers })
-      else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers: c.headers })
+      if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers })
+      else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers })
       else await (client as McpClient).connect({ command: c.command, args: c.args })
       connections.set(c.id, { key, client })
     } catch (e) {

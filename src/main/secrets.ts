@@ -39,6 +39,10 @@ export type StoredCredential = ApiKeyCredential | OAuthCredential
 interface SecretsFile {
   // providerId -> base64(ciphertext of a JSON-encoded StoredCredential)
   keys: Record<string, string>
+  // scope ("provider:<id>" | "mcp:<id>") -> base64(ciphertext of a JSON header map).
+  // Custom-header values can be bearer tokens, so they're encrypted here rather than
+  // persisted in cleartext in settings.json. See store.ts for how they're moved out.
+  headers?: Record<string, string>
 }
 
 function secretsPath(): string {
@@ -50,7 +54,7 @@ function load(): SecretsFile {
   if (!existsSync(path)) return { keys: {} }
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<SecretsFile>
-    return { keys: parsed.keys ?? {} }
+    return { keys: parsed.keys ?? {}, headers: parsed.headers ?? {} }
   } catch {
     return { keys: {} }
   }
@@ -161,4 +165,55 @@ export function getKey(providerId: string): string | null {
   const cred = getCredential(providerId)
   if (!cred) return null
   return cred.type === 'api-key' ? cred.key : cred.access
+}
+
+// ---- Custom-header secrets (provider / MCP server auth headers) ----
+//
+// A header map is stored as a single encrypted JSON blob per `scope`
+// ("provider:<id>" / "mcp:<id>"; see @shared/types header-scope helpers), mirroring
+// how credentials are stored per provider id. Header VALUES can be bearer tokens, so
+// this keeps them out of settings.json (cleartext) and out of the renderer.
+
+/** Main-process only. Decrypted header map for a scope, or `{}` if none/undecryptable. */
+export function getSecretHeaders(scope: string): Record<string, string> {
+  const stored = load().headers?.[scope]
+  if (!stored) return {}
+  try {
+    assertEncryptionAvailable()
+    const plaintext = safeStorage.decryptString(Buffer.from(stored, 'base64'))
+    const parsed = JSON.parse(plaintext) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Encrypt and persist a header map for a scope. An empty map removes the entry, so a
+ * provider/server that no longer has any custom headers leaves no stale ciphertext.
+ */
+export function setSecretHeaders(scope: string, headers: Record<string, string>): void {
+  const data = load()
+  const map = data.headers ?? (data.headers = {})
+  if (Object.keys(headers).length === 0) {
+    if (!(scope in map)) return
+    delete map[scope]
+  } else {
+    assertEncryptionAvailable()
+    map[scope] = safeStorage.encryptString(JSON.stringify(headers)).toString('base64')
+  }
+  persist(data)
+}
+
+export function deleteSecretHeaders(scope: string): void {
+  const data = load()
+  if (data.headers && scope in data.headers) {
+    delete data.headers[scope]
+    persist(data)
+  }
 }

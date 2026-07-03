@@ -2,11 +2,17 @@ import { parseTuiArgs } from '../main/tui'
 import { parseHeadlessArgs } from '../main/headless'
 import { runTuiEntry, runHeadlessEntry } from '../main/terminalEntry'
 import { configureAgentHost } from '../main/agentHost'
-import { addPermissionRule, configureHasKey, getProvider, getSettings } from '../main/store'
+import {
+  addPermissionRule,
+  configureHasKey,
+  configureHeaderSecrets,
+  getProvider,
+  getSettings
+} from '../main/store'
 import { setUserDataDir } from '../main/userData'
 import { log } from '../main/logger'
 import { resolveUserDataDir } from './paths'
-import { cliGetKey, cliHasKey } from './credentials'
+import { cliGetHeaders, cliGetKey, cliHasKey } from './credentials'
 
 /**
  * Standalone CLI entry — the interactive TUI (`-i`) and one-shot headless (`-p`)
@@ -53,6 +59,9 @@ Credentials (checked in this order):
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / HOUSTON_API_KEY_<ID>
   <profile>/cli-credentials.json — {"<provider-id>": "<key>"} with 0600 perms
 
+Custom provider/MCP auth headers (optional):
+  <profile>/cli-headers.json — {"provider:<id>"|"mcp:<id>": {"<Header>": "<value>"}} with 0600 perms
+
 Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 `
 
@@ -60,12 +69,20 @@ Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 export function wireCliHost(): void {
   setUserDataDir(resolveUserDataDir())
   configureHasKey((id) => cliHasKey(id))
+  // Header secrets come from cli-headers.json (see cliGetHeaders); the CLI has no UI
+  // that writes them, so set/remove are no-ops — settings saves just preserve the keys.
+  configureHeaderSecrets({
+    get: (scope) => cliGetHeaders(scope),
+    set: () => {},
+    remove: () => {}
+  })
   configureAgentHost({
     getProvider,
     getSettings,
     addPermissionRule,
     getKey: (id) => cliGetKey(id),
-    hasStoredKey: (id) => cliHasKey(id)
+    hasStoredKey: (id) => cliHasKey(id),
+    getSecretHeaders: (scope) => cliGetHeaders(scope)
   })
 }
 

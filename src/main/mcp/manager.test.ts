@@ -1,10 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { McpServerConfig } from '@shared/types'
+import { mcpHeaderScope } from '@shared/types'
 import { mcpToolName } from '@shared/mcp'
 import { McpClient, type SpawnFn } from './client'
 import { McpHttpClient, type FetchFn } from './http-client'
 import { McpSseClient, type SseConnectFn, type SseEvent } from './sse-client'
+
+// The manager resolves each server's secret headers through the agent host. Back it
+// with a mutable map so a test can rotate a stored header value and assert the change
+// is seen — the masked config the manager receives never carries the real value.
+const host = vi.hoisted(() => ({ headers: {} as Record<string, Record<string, string>> }))
+vi.mock('../agentHost', () => ({
+  getSecretHeaders: (scope: string) => host.headers[scope] ?? {}
+}))
+
 import {
   _setMcpClientFactory,
   _setMcpHttpClientFactory,
@@ -101,6 +111,7 @@ afterEach(() => {
   _setMcpClientFactory(null)
   _setMcpHttpClientFactory(null)
   _setMcpSseClientFactory(null)
+  host.headers = {}
 })
 
 describe('mcp manager', () => {
@@ -126,6 +137,18 @@ describe('mcp manager', () => {
     expect(created).toHaveLength(2)
     expect(created[0].isClosed).toBe(true)
     expect(created[1].isClosed).toBe(false)
+  })
+
+  it('reconnects when a stored header value changes (the masked config is unchanged)', async () => {
+    useFactory(okSpawn())
+    await getMcpToolDefs([cfg()])
+    expect(created).toHaveLength(1)
+    // Rotate the secret behind the same (masked) config — the manager must notice via
+    // the resolved headers, not the config object, and reconnect.
+    host.headers[mcpHeaderScope('srv')] = { Authorization: 'Bearer rotated' }
+    await getMcpToolDefs([cfg()])
+    expect(created).toHaveLength(2)
+    expect(created[0].isClosed).toBe(true)
   })
 
   it('closes and drops a server that is removed', async () => {

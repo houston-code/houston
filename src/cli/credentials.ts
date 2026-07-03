@@ -90,9 +90,53 @@ function keyFromFile(id: string, dataDir: string, warn: (m: string) => void): st
   }
 }
 
-/** Test-only: reset the once-per-process permissions warning. */
+/** Warn once per process about a group/world-readable headers file. */
+let warnedLooseHeaderPerms = false
+
+/** Test-only: reset the once-per-process permissions warnings. */
 export function resetCredentialWarnings(): void {
   warnedLoosePerms = false
+  warnedLooseHeaderPerms = false
+}
+
+/**
+ * Custom auth/attribution headers for a provider or MCP-server scope, for the CLI.
+ * Header values can be bearer tokens, so — like keys — the desktop app keeps them in
+ * safeStorage, which is unreadable here; the CLI resolves them from `cli-headers.json`
+ * in the profile dir: a `{ "<scope>": { "<Header>": "<value>" } }` map, where a scope
+ * is `provider:<id>` or `mcp:<id>` (see the header-scope helpers in @shared/types).
+ * Plaintext by design and warned-on when group/world-readable, matching the keys file.
+ * Returns `{}` when absent or malformed — a run just sends no custom headers.
+ */
+export function cliGetHeaders(scope: string, deps: CredentialDeps = {}): Record<string, string> {
+  const dataDir = deps.dataDir ?? getUserDataDir()
+  const warn = deps.warn ?? ((m: string) => process.stderr.write(m))
+  const path = join(dataDir, 'cli-headers.json')
+  let raw: string
+  try {
+    if (process.platform !== 'win32' && !warnedLooseHeaderPerms) {
+      const mode = statSync(path).mode
+      if ((mode & 0o077) !== 0) {
+        warnedLooseHeaderPerms = true
+        warn(`Warning: ${path} is readable by other users — run: chmod 600 "${path}"\n`)
+      }
+    }
+    raw = readFileSync(path, 'utf8')
+  } catch {
+    return {} // no headers file — the common case
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const entry = parsed?.[scope]
+    if (!entry || typeof entry !== 'object') return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(entry as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v
+    }
+    return out
+  } catch {
+    return {} // malformed JSON: treat as absent rather than crashing a run
+  }
 }
 
 /** Resolve a credential: environment first, then cli-credentials.json. */

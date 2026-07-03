@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Conversation } from '@shared/agent'
@@ -93,6 +93,13 @@ describe('current-version round-trip', () => {
     const created = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
     const meta = listConversations().find((c) => c.id === created.id)!
     expect('schemaVersion' in meta).toBe(false)
+  })
+
+  it('writes the transcript 0o600 (owner-only — transcripts can capture echoed secrets)', async () => {
+    const { createConversation } = await import('./conversations')
+    const created = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const mode = statSync(convPath(created.id)).mode & 0o777
+    expect(mode).toBe(0o600)
   })
 })
 

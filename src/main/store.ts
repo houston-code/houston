@@ -1,14 +1,23 @@
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { getUserDataDir } from './userData'
-import type { AppSettings, PermissionRule, ProviderConfig } from '@shared/types'
+import type { AppSettings, McpServerConfig, PermissionRule, ProviderConfig } from '@shared/types'
+import {
+  REDACTED_HEADER_VALUE,
+  isRedactedHeaderValue,
+  mcpHeaderScope,
+  providerHeaderScope
+} from '@shared/types'
 import { backfillDefaultModels, defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 import { SEARCH_PROVIDERS } from '@shared/search'
 
 /**
  * Persistent app settings (everything except secrets). Stored as JSON in userData.
  * `hasKey` on each provider is recomputed from the credential store on every read
- * and is never persisted here.
+ * and is never persisted here. Custom-header VALUES are likewise never persisted here
+ * — they can be bearer tokens, so they live in the encrypted secret store (moved out
+ * here via the injected header-secret seam) and only their keys, with redacted values,
+ * survive round-trips through disk and the renderer.
  */
 
 /**
@@ -32,6 +41,34 @@ function hasKey(id: string): boolean {
     )
   }
   return hasKeyFn(id)
+}
+
+/**
+ * Injected store for custom-header VALUES (a provider/MCP-server bearer token). A seam
+ * for the same reason as {@link configureHasKey}: the real backing is `./secrets`
+ * (electron safeStorage), which the store must not import so it stays portable. The
+ * Electron shell wires the safeStorage-backed maps (wireAgentHost.ts); the standalone
+ * CLI wires its env/file source. `get` returns `{}` for an unknown scope.
+ */
+export interface HeaderSecretStore {
+  get(scope: string): Record<string, string>
+  set(scope: string, headers: Record<string, string>): void
+  remove(scope: string): void
+}
+let headerSecrets: HeaderSecretStore | null = null
+
+/** Bind the header-secret store. Call once during startup, before any settings read. */
+export function configureHeaderSecrets(store: HeaderSecretStore): void {
+  headerSecrets = store
+}
+
+function requireHeaderSecrets(): HeaderSecretStore {
+  if (!headerSecrets) {
+    throw new Error(
+      'Header-secret store not configured — call configureHeaderSecrets() during startup before reading settings.'
+    )
+  }
+  return headerSecrets
 }
 
 let cache: AppSettings | null = null
@@ -69,36 +106,161 @@ function loadFromDisk(): AppSettings {
   }
 }
 
+// ---- Custom-header secrets ----
+//
+// Header values can be bearer tokens, so they're handled like the API key: the real
+// values live in the encrypted secrets store, keyed by scope. On disk (settings.json)
+// and to the renderer only the header KEYS survive, with the values redacted. The
+// secrets store is the source of truth for request-building (providers/index.ts,
+// mcp/manager.ts read it directly).
+
+/** On-disk redaction: keep the header keys, blank the values. */
+function redactHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return headers
+  return Object.fromEntries(Object.keys(headers).map((k) => [k, '']))
+}
+
+/** Renderer mask: keep the header keys, show a stored value as the mask placeholder. */
+function maskHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return headers
+  return Object.fromEntries(Object.keys(headers).map((k) => [k, REDACTED_HEADER_VALUE]))
+}
+
+function sameHeaders(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ak = Object.keys(a)
+  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k])
+}
+
+/**
+ * Reconcile one scope's headers against the secret store and return the on-disk
+ * redacted form (keys kept, values blanked). A redacted incoming value — the renderer
+ * mask or the on-disk blank — means "unchanged": carry the stored secret forward. Any
+ * other value is a freshly entered secret (or legacy cleartext read off disk) that
+ * replaces it; `migrated` flags that so the caller can rewrite a legacy file.
+ *
+ * The on-disk key set (`diskKeys`) is tracked separately from the secret map: the
+ * profile is shared with the standalone CLI, whose store can't read the desktop's
+ * encrypted values, so a redacted key with no locally-resolvable secret is preserved
+ * on disk rather than dropped — otherwise the CLI saving settings would strip the
+ * desktop's header keys. A header is only removed by dropping its key entirely.
+ */
+function reconcileScope(
+  scope: string,
+  incoming: Record<string, string> | undefined
+): { headers?: Record<string, string>; migrated: boolean } {
+  if (!incoming) return { headers: incoming, migrated: false }
+  const store = requireHeaderSecrets()
+  const existing = store.get(scope)
+  const secretMap: Record<string, string> = {}
+  const diskKeys: string[] = []
+  let sawPlaintext = false
+  for (const [k, v] of Object.entries(incoming)) {
+    diskKeys.push(k) // the key stays visible on disk / to the renderer either way
+    if (isRedactedHeaderValue(v)) {
+      if (existing[k] !== undefined) secretMap[k] = existing[k]
+    } else {
+      secretMap[k] = v
+      sawPlaintext = true
+    }
+  }
+  try {
+    if (Object.keys(secretMap).length === 0) {
+      // Guard the delete on `existing` being non-empty so a transient decrypt failure
+      // (which also yields {}) can't wipe recoverable ciphertext.
+      if (Object.keys(existing).length) store.remove(scope)
+    } else if (!sameHeaders(secretMap, existing)) {
+      store.set(scope, secretMap)
+    }
+  } catch {
+    // Secret store unavailable (e.g. no OS keyring): don't strip or corrupt anything —
+    // leave the incoming config as-is. persist() still keeps values off disk and the
+    // renderer still sees them masked.
+    return { headers: incoming, migrated: false }
+  }
+  return {
+    headers: diskKeys.length ? Object.fromEntries(diskKeys.map((k) => [k, ''])) : undefined,
+    migrated: sawPlaintext
+  }
+}
+
+/**
+ * Pull every provider's and MCP server's secret header values into the encrypted
+ * store, returning settings whose header values are redacted for disk. `migrated`
+ * flags that cleartext was present (a legacy file), so the caller rewrites it.
+ */
+function extractHeaderSecrets(settings: AppSettings): { settings: AppSettings; migrated: boolean } {
+  let migrated = false
+  const take = (scope: string, headers?: Record<string, string>): Record<string, string> | undefined => {
+    const r = reconcileScope(scope, headers)
+    if (r.migrated) migrated = true
+    return r.headers
+  }
+  const providers: ProviderConfig[] = settings.providers.map((p) => ({
+    ...p,
+    headers: take(providerHeaderScope(p.id), p.headers)
+  }))
+  const mcpServers: McpServerConfig[] | undefined = settings.mcpServers?.map((s) => ({
+    ...s,
+    headers: take(mcpHeaderScope(s.id), s.headers)
+  }))
+  return {
+    settings: { ...settings, providers, mcpServers: mcpServers ?? settings.mcpServers },
+    migrated
+  }
+}
+
 function persist(settings: AppSettings): void {
   const path = settingsPath()
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.tmp`
-  // Don't persist the derived hasKey flag.
+  // Don't persist the derived hasKey flag, and never write custom-header values in
+  // cleartext — their secrets live in the encrypted store (moved out by
+  // extractHeaderSecrets before we get here); this strips the values as a safety net
+  // so a stray real value can't leak to disk even if that step is bypassed.
   const toWrite: AppSettings = {
     ...settings,
-    providers: settings.providers.map((p) => ({ ...p, hasKey: false })),
+    providers: settings.providers.map((p) => ({ ...p, hasKey: false, headers: redactHeaders(p.headers) })),
+    mcpServers: settings.mcpServers?.map((s) => ({ ...s, headers: redactHeaders(s.headers) })),
     searchKeyStatus: undefined // derived, recomputed on read
   }
-  writeFileSync(tmp, JSON.stringify(toWrite, null, 2), 'utf8')
+  // 0600 — owner read/write only. Matches secrets.json: even with header secrets moved
+  // out, settings.json still holds workspace paths, prompts, and MCP endpoints.
+  writeFileSync(tmp, JSON.stringify(toWrite, null, 2), { encoding: 'utf8', mode: 0o600 })
   renameSync(tmp, path)
 }
 
-/** Attach the live `hasKey` flag from the secrets store. */
+/**
+ * Attach the live `hasKey` flag from the secrets store, and mask every custom-header
+ * value so a stored secret never reaches the renderer — only the keys, with a mask
+ * placeholder marking that a value exists.
+ */
 function withKeyFlags(settings: AppSettings): AppSettings {
   return {
     ...settings,
-    providers: settings.providers.map((p) => ({ ...p, hasKey: hasKey(p.id) })),
+    providers: settings.providers.map((p) => ({
+      ...p,
+      hasKey: hasKey(p.id),
+      headers: maskHeaders(p.headers)
+    })),
+    mcpServers: settings.mcpServers?.map((s) => ({ ...s, headers: maskHeaders(s.headers) })),
     searchKeyStatus: Object.fromEntries(SEARCH_PROVIDERS.map((p) => [p.id, hasKey(p.keyId)]))
   }
 }
 
 export function getSettings(): AppSettings {
-  if (!cache) cache = loadFromDisk()
+  if (!cache) {
+    const { settings, migrated } = extractHeaderSecrets(loadFromDisk())
+    cache = settings
+    // A legacy settings.json with cleartext header values: rewrite it now (0600, values
+    // stripped) so the plaintext doesn't linger on disk until the next explicit save.
+    if (migrated) persist(cache)
+  }
   return withKeyFlags(cache)
 }
 
 export function saveSettings(next: AppSettings): AppSettings {
-  cache = { ...next, schemaVersion: SETTINGS_SCHEMA_VERSION }
+  const { settings } = extractHeaderSecrets({ ...next, schemaVersion: SETTINGS_SCHEMA_VERSION })
+  cache = settings
   persist(cache)
   return withKeyFlags(cache)
 }

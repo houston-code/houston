@@ -5,6 +5,7 @@ import {
   configureAgentHost,
   getKey,
   getProvider,
+  getSecretHeaders,
   getSettings,
   hasStoredKey,
   resetAgentHost,
@@ -27,6 +28,7 @@ describe('agentHost', () => {
     expect(() => getProvider('anthropic')).toThrow(/not configured/)
     expect(() => getKey('anthropic')).toThrow(/not configured/)
     expect(() => hasStoredKey('anthropic')).toThrow(/not configured/)
+    expect(() => getSecretHeaders('provider:anthropic')).toThrow(/not configured/)
     expect(() => addPermissionRule({} as PermissionRule)).toThrow(/not configured/)
   })
 
@@ -39,7 +41,8 @@ describe('agentHost', () => {
       getSettings: vi.fn(() => settings),
       addPermissionRule: vi.fn(() => settings),
       getKey: vi.fn(() => 'sk-test'),
-      hasStoredKey: vi.fn(() => true)
+      hasStoredKey: vi.fn(() => true),
+      getSecretHeaders: vi.fn(() => ({ Authorization: 'Bearer t' }))
     }
     configureAgentHost(host)
 
@@ -51,6 +54,8 @@ describe('agentHost', () => {
     expect(getKey('anthropic')).toBe('sk-test')
     expect(host.getKey).toHaveBeenCalledWith('anthropic')
     expect(hasStoredKey('anthropic')).toBe(true)
+    expect(getSecretHeaders('provider:anthropic')).toEqual({ Authorization: 'Bearer t' })
+    expect(host.getSecretHeaders).toHaveBeenCalledWith('provider:anthropic')
   })
 
   it('lets a later configure call replace the wired host', () => {
@@ -59,7 +64,8 @@ describe('agentHost', () => {
       getSettings: () => ({}) as AppSettings,
       addPermissionRule: () => ({}) as AppSettings,
       getKey: () => 'first',
-      hasStoredKey: () => false
+      hasStoredKey: () => false,
+      getSecretHeaders: () => ({})
     })
     expect(getKey('x')).toBe('first')
 
@@ -68,7 +74,8 @@ describe('agentHost', () => {
       getSettings: () => ({}) as AppSettings,
       addPermissionRule: () => ({}) as AppSettings,
       getKey: () => 'second',
-      hasStoredKey: () => true
+      hasStoredKey: () => true,
+      getSecretHeaders: () => ({})
     })
     expect(getKey('x')).toBe('second')
     expect(hasStoredKey('x')).toBe(true)

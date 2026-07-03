@@ -27,6 +27,13 @@ export interface AgentHost {
   getKey(providerId: string): string | null
   /** True when some ciphertext is stored for a provider (decryptable or not). */
   hasStoredKey(providerId: string): boolean
+  /**
+   * Decrypted custom-header map for a scope ("provider:<id>" / "mcp:<id>"; see the
+   * header-scope helpers in @shared/types), or `{}` if none. Header values are
+   * secrets, so they're pulled from the store and merged into requests here in the
+   * engine rather than travelling on the config (which carries masked values).
+   */
+  getSecretHeaders(scope: string): Record<string, string>
 }
 
 let host: AgentHost | null = null
@@ -68,4 +75,8 @@ export function getKey(providerId: string): string | null {
 
 export function hasStoredKey(providerId: string): boolean {
   return requireHost().hasStoredKey(providerId)
+}
+
+export function getSecretHeaders(scope: string): Record<string, string> {
+  return requireHost().getSecretHeaders(scope)
 }
