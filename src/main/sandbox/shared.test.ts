@@ -177,6 +177,25 @@ describe('sandboxEnv', () => {
     expect(env.FOO).toBe('bar')
     expect(env.PATH).toContain('/usr/bin')
   })
+
+  it('strips credential-bearing vars from the launching shell (defense-in-depth)', () => {
+    const env = sandboxEnv({
+      PATH: '/usr/bin',
+      HOME: '/Users/me',
+      TMPDIR: '/tmp',
+      AWS_SECRET_ACCESS_KEY: 'AKIA-super-secret',
+      GH_TOKEN: 'ghp_leakme',
+      OPENAI_API_KEY: 'sk-leakme'
+    })
+    // Secrets never reach the sandboxed child…
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+    expect(env.GH_TOKEN).toBeUndefined()
+    expect(env.OPENAI_API_KEY).toBeUndefined()
+    // …while the augmented PATH, HOME, and cache redirects still do.
+    expect(env.PATH).toContain('/usr/bin')
+    expect(env.HOME).toBe('/Users/me')
+    expect(env.npm_config_cache).toBe(`${pkgCacheDir({ TMPDIR: '/tmp' })}${sep}npm`)
+  })
 })
 
 describe('clampToolResult', () => {

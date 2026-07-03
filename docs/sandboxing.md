@@ -29,6 +29,29 @@ broadly-available primitive with the same shape, which is why its backend runs
 unconfined. The rest of this document records *why* the obvious Windows candidates were
 rejected, so the decision isn't re-litigated from scratch.
 
+## Environment sanitization (all backends)
+
+The sandbox is a *filesystem/network* jail, not an environment one — a child can read
+files essentially everywhere, and the process environment isn't a path it can be denied.
+A GUI-launched Houston inherits the full environment of the shell that started it, which
+routinely holds exported credentials (`AWS_*`, `GH_TOKEN`, assorted `*_API_KEY`s). So
+before spawning any `run_shell` child — or an MCP stdio server, which is a third-party
+process — Houston strips credential-bearing vars from the inherited environment
+([`src/main/childEnv.ts`](../src/main/childEnv.ts), wired through
+[`sandbox/shared.ts`](../src/main/sandbox/shared.ts) `sandboxEnv` and
+[`mcp/client.ts`](../src/main/mcp/client.ts)). Without this, a prompt-injected command
+with network could `env | curl` those secrets out, and a compromised MCP server would
+receive them all on startup.
+
+It's a **denylist** (drop names matching `/(_KEY|_TOKEN|_SECRET|PASSWORD|CREDENTIAL|_AUTH)/i`
+plus the `AWS_` namespace and the GitHub tokens), not a strict allowlist, because the
+sandbox runs an open-ended toolchain that reads an unpredictable tail of ordinary config
+vars (`NODE_ENV`, `CI`, `DATABASE_URL`, proxies, …) that must survive. This is
+defense-in-depth: Houston's own provider keys never travel through the environment (they
+go via SDK constructor params), so it hardens the user's *ambient* shell secrets rather
+than fixing an active leak. An MCP server that legitimately needs a token still receives
+it — `McpServerConfig.env` is re-applied after the strip.
+
 ## Windows: why not AppContainer?
 
 AppContainer is the closest Windows security primitive. A process runs under a token
