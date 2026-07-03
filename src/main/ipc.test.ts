@@ -1,5 +1,49 @@
-import { describe, expect, it } from 'vitest'
-import { resolveDeleteAction } from './ipc'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { IPC } from '@shared/constants'
+
+// Hoisted holders the mocks close over, so each test can steer run ownership and
+// observe the loop resolvers the handlers call.
+const h = vi.hoisted(() => ({
+  // channel -> the handler registered via ipcMain.handle, captured at registerIpc().
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  cancelRun: vi.fn(),
+  resolveApproval: vi.fn(),
+  resolveQuestion: vi.fn(),
+  setRunPolicy: vi.fn(),
+  // Configured per test to return the WebContents id that "owns" a run.
+  runOwner: vi.fn<(runId: string) => number | undefined>()
+}))
+
+// Mock electron so registerIpc can register (and we can capture) its handlers
+// without a real Electron runtime. Nothing in the import graph touches an electron
+// API at module load, so a sparse surface is enough.
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: (channel: string, fn: (...args: unknown[]) => unknown) => h.handlers.set(channel, fn),
+    on: () => {}
+  },
+  app: { getVersion: () => '0.0.0-test', getPath: () => '/tmp', getName: () => 'Houston', on: () => {} },
+  dialog: {},
+  clipboard: {},
+  shell: {},
+  BrowserWindow: { getAllWindows: () => [], fromWebContents: () => null }
+}))
+
+// Mock the agent loop: the four run-control resolvers become spies, and runOwner is
+// steerable so we can assert the handlers gate on the run's recorded owner.
+vi.mock('./agent/loop', () => ({
+  cancelRun: h.cancelRun,
+  resolveApproval: h.resolveApproval,
+  resolveQuestion: h.resolveQuestion,
+  setRunPolicy: h.setRunPolicy,
+  runOwner: h.runOwner,
+  activeRunForConversation: vi.fn(() => null),
+  pendingPromptsForConversation: vi.fn(() => []),
+  runningConversationIds: vi.fn(() => []),
+  onActiveRunsChanged: vi.fn(() => () => {})
+}))
+
+import { MAX_QUESTION_ANSWER_LEN, registerIpc, resolveDeleteAction } from './ipc'
 
 /**
  * The delete-confirmation dialog used to be a two-button `window.confirm` whose
@@ -30,5 +74,112 @@ describe('resolveDeleteAction', () => {
 
   it('never removes a worktree that does not exist, even on button 2', () => {
     expect(resolveDeleteAction(false, 2)).toEqual({ delete: true, removeWorktree: false })
+  })
+})
+
+/**
+ * Run-control IPC (approve / answer / set-policy / cancel) is authorized against the
+ * run's OWNER — the WebContents that started it — not the runId alone. Every
+ * AgentEvent broadcasts its runId to every window, so without this gate any window
+ * that merely observed a runId could approve/deny another window's dangerous tool
+ * call, inject an answer into its ask_user prompt, escalate it to full-auto, or
+ * cancel it. Here the handlers are captured from a mocked ipcMain and driven with a
+ * fake IpcMainInvokeEvent whose sender.id is (or isn't) the recorded owner.
+ */
+describe('run-control IPC ownership', () => {
+  const OWNER = 7
+  const OTHER = 99
+  const RUN = 'run-1'
+  const CALL = 'call-1'
+
+  // A fake IpcMainInvokeEvent — only event.sender.id is read by the handlers.
+  const from = (senderId: number) => ({ sender: { id: senderId } })
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+
+  // Register the handlers once, then reset spies + point every run at OWNER.
+  registerIpc()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    h.runOwner.mockReturnValue(OWNER)
+  })
+
+  describe('agentApprove', () => {
+    it('resolves the approval when the owning window calls', () => {
+      handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'allow')
+      expect(h.resolveApproval).toHaveBeenCalledWith(RUN, CALL, 'allow')
+    })
+
+    it('rejects a mismatched-sender approve — the run is untouched', () => {
+      handler(IPC.agentApprove)(from(OTHER), RUN, CALL, 'allow')
+      expect(h.resolveApproval).not.toHaveBeenCalled()
+    })
+
+    it('keeps the isToolApprovalDecision guard: an off-list decision never reaches the loop', () => {
+      handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'nonsense')
+      expect(h.resolveApproval).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('agentRespondQuestion', () => {
+    it('delivers the answer when the owning window calls', () => {
+      handler(IPC.agentRespondQuestion)(from(OWNER), RUN, CALL, 'Postgres')
+      expect(h.resolveQuestion).toHaveBeenCalledWith(RUN, CALL, 'Postgres')
+    })
+
+    it('rejects a mismatched-sender answer — no answer is injected', () => {
+      handler(IPC.agentRespondQuestion)(from(OTHER), RUN, CALL, 'evil')
+      expect(h.resolveQuestion).not.toHaveBeenCalled()
+    })
+
+    it('rejects a non-string answer', () => {
+      handler(IPC.agentRespondQuestion)(from(OWNER), RUN, CALL, { not: 'a string' })
+      expect(h.resolveQuestion).not.toHaveBeenCalled()
+    })
+
+    it('caps an over-long answer at MAX_QUESTION_ANSWER_LEN before it reaches the loop', () => {
+      const huge = 'x'.repeat(MAX_QUESTION_ANSWER_LEN + 5_000)
+      handler(IPC.agentRespondQuestion)(from(OWNER), RUN, CALL, huge)
+      expect(h.resolveQuestion).toHaveBeenCalledTimes(1)
+      const delivered = h.resolveQuestion.mock.calls[0][2] as string
+      expect(delivered).toHaveLength(MAX_QUESTION_ANSWER_LEN)
+      expect(delivered).toBe(huge.slice(0, MAX_QUESTION_ANSWER_LEN))
+    })
+  })
+
+  describe('agentSetPolicy', () => {
+    it('sets the policy when the owning window calls', () => {
+      handler(IPC.agentSetPolicy)(from(OWNER), RUN, 'full-auto')
+      expect(h.setRunPolicy).toHaveBeenCalledWith(RUN, 'full-auto')
+    })
+
+    it('rejects a mismatched-sender policy change — no silent escalation to full-auto', () => {
+      handler(IPC.agentSetPolicy)(from(OTHER), RUN, 'full-auto')
+      expect(h.setRunPolicy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('agentCancel', () => {
+    it('cancels the run when the owning window calls', () => {
+      handler(IPC.agentCancel)(from(OWNER), RUN)
+      expect(h.cancelRun).toHaveBeenCalledWith(RUN)
+    })
+
+    it('rejects a mismatched-sender cancel — the run keeps going', () => {
+      handler(IPC.agentCancel)(from(OTHER), RUN)
+      expect(h.cancelRun).not.toHaveBeenCalled()
+    })
+  })
+
+  // A finished/unknown run has no recorded owner; runOwner returns undefined and the
+  // loop resolvers already no-op on unknown runIds, so the gate lets the call through
+  // rather than depending on which window happens to still be open.
+  it('allows a call for a run with no recorded owner (finished/unknown)', () => {
+    h.runOwner.mockReturnValue(undefined)
+    handler(IPC.agentCancel)(from(OTHER), RUN)
+    expect(h.cancelRun).toHaveBeenCalledWith(RUN)
   })
 })
