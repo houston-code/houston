@@ -257,7 +257,19 @@ export interface ConversationError {
   message: string
 }
 
+/**
+ * Version stamped into every persisted conversation file, mirroring
+ * SETTINGS_SCHEMA_VERSION for settings. Bump it alongside a version-gated step in
+ * the conversation store's migrate() whenever the on-disk format changes, so old
+ * files are upgraded on load instead of surfacing as runtime breakage. Files
+ * written before versioning existed carry no `schemaVersion` and are treated as
+ * version 0 (shape-identical to v1).
+ */
+export const CONVERSATION_SCHEMA_VERSION = 1
+
 export interface Conversation extends ConversationMeta {
+  /** Absent only in legacy (pre-versioning) files on disk; stamped on every write. */
+  schemaVersion?: number
   messages: ChatMessage[]
   usage?: ConversationUsage
   /** Present when the most recent run failed; powers the persisted Retry banner. */
