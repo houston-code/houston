@@ -7,9 +7,11 @@
  * `*_API_KEY`s). Spreading that environment wholesale into a child means a
  * prompt-injected model with shell + network can `env | curl` those secrets
  * straight out, and a malicious or compromised MCP server receives every one of
- * them on startup. Houston's own provider keys never travel through the
- * environment (they're passed via SDK constructor params), so this is
- * defense-in-depth against the user's *ambient* shell secrets, not a fix for an
+ * them on startup. Houston hands provider keys to SDKs via constructor params,
+ * never through a child's environment — and the standalone CLI's env-supplied
+ * keys (ANTHROPIC_API_KEY, HOUSTON_API_KEY_<ID>, …) are `_KEY`-shaped, so the
+ * filter below withholds them from children too. This is defense-in-depth
+ * against credentials sitting in Houston's own environment, not a fix for an
  * active key leak — but it's cheap to close.
  *
  * The filter is a denylist rather than a strict allowlist on purpose: the sandbox
