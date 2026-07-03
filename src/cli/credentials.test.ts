@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  cliGetHeaders,
   cliGetKey,
   cliHasKey,
   envVarCandidates,
@@ -83,5 +84,43 @@ describe('credentials file', () => {
     const warn = vi.fn()
     expect(cliGetKey('anthropic', { dataDir: dir, env: {}, warn })).toBe('sk-x')
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('headers file', () => {
+  function writeHeaders(obj: unknown, mode = 0o600): void {
+    const path = join(dir, 'cli-headers.json')
+    writeFileSync(path, JSON.stringify(obj))
+    chmodSync(path, mode)
+  }
+
+  it('returns the header map for a scope, and {} for an unknown scope or absent file', () => {
+    const deps = { dataDir: dir, warn: vi.fn() }
+    expect(cliGetHeaders('provider:openai', deps)).toEqual({}) // no file yet
+    writeHeaders({ 'provider:openai': { Authorization: 'Bearer tok', 'X-Title': 'Houston' } })
+    expect(cliGetHeaders('provider:openai', deps)).toEqual({
+      Authorization: 'Bearer tok',
+      'X-Title': 'Houston'
+    })
+    expect(cliGetHeaders('mcp:other', deps)).toEqual({})
+  })
+
+  it('drops non-string values and treats malformed JSON as absent', () => {
+    const deps = { dataDir: dir, warn: vi.fn() }
+    writeHeaders({ 'provider:openai': { Authorization: 'Bearer tok', bad: 42 } })
+    expect(cliGetHeaders('provider:openai', deps)).toEqual({ Authorization: 'Bearer tok' })
+    writeFileSync(join(dir, 'cli-headers.json'), 'not json{')
+    expect(cliGetHeaders('provider:openai', deps)).toEqual({})
+  })
+
+  it('warns once when the headers file is readable by other users', () => {
+    if (process.platform === 'win32') return
+    writeHeaders({ 'provider:openai': { Authorization: 'Bearer tok' } }, 0o644)
+    const warn = vi.fn()
+    const deps = { dataDir: dir, warn }
+    cliGetHeaders('provider:openai', deps)
+    cliGetHeaders('provider:openai', deps)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('chmod 600')
   })
 })

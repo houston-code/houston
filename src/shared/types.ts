@@ -1,13 +1,51 @@
 /**
  * Core types shared between the main and renderer processes.
  *
- * IMPORTANT: nothing in here may carry a raw API key. The renderer only ever
- * learns whether a provider *has* a key (`hasKey`), never the key itself.
+ * IMPORTANT: nothing in here may carry a raw secret. The renderer only ever learns
+ * whether a provider *has* a key (`hasKey`), never the key itself. The same applies
+ * to custom-header VALUES (`ProviderConfig.headers` / `McpServerConfig.headers`),
+ * which can carry a bearer token: their real values live only in the encrypted
+ * secrets store and are masked to `REDACTED_HEADER_VALUE` before a config leaves the
+ * main process — see `src/main/store.ts` and `src/main/secrets.ts`.
  */
 
 import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
 
 export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'
+
+/**
+ * The placeholder the main process substitutes for every custom-header VALUE before
+ * a `ProviderConfig` / `McpServerConfig` is handed to the renderer or written to
+ * settings.json. Header values can carry a bearer token, so — like API keys — the
+ * real values live only in the encrypted secrets store (see `src/main/secrets.ts`).
+ *
+ * The renderer shows this mask for a header that already has a stored value. On
+ * save, a header whose value is still this mask (or empty — the on-disk redaction)
+ * is treated as "unchanged" and its stored value is preserved; any other value is a
+ * newly entered secret that replaces it. Renaming a header's key while leaving the
+ * mask in place drops the value (there's nothing to carry forward under the new key).
+ */
+export const REDACTED_HEADER_VALUE = '••••••••'
+
+/**
+ * True for a header value that carries no secret: the on-disk redaction (empty) or the
+ * renderer mask. Any all-bullet string counts, not just the exact mask, so an
+ * accidental edit of the shown `••••••••` is still read as "unchanged" rather than
+ * being stored verbatim as a bogus token.
+ */
+export function isRedactedHeaderValue(value: string): boolean {
+  return value === '' || /^•+$/.test(value)
+}
+
+/** Secrets-store scope key for a provider's custom headers. */
+export function providerHeaderScope(providerId: string): string {
+  return `provider:${providerId}`
+}
+
+/** Secrets-store scope key for an MCP server's custom headers. */
+export function mcpHeaderScope(serverId: string): string {
+  return `mcp:${serverId}`
+}
 
 /**
  * How a provider authenticates.
@@ -56,7 +94,12 @@ export interface ProviderConfig {
    * `HTTP-Referer`/`X-Title` attribution, or a gateway's custom auth header. Sent
    * in addition to the SDK's own `Authorization` (the API key). Honored on the
    * OpenAI / OpenAI-compatible and Anthropic paths (the ones that take a `baseUrl`).
-   * Never carries the API key itself — that stays in the secrets store.
+   *
+   * A header value can itself be a secret (a gateway bearer token), so the VALUES
+   * are treated like the API key: they live only in the encrypted secrets store and
+   * are merged in by the main process at request-build time (see
+   * `src/main/providers/index.ts`). On any config that leaves the main process the
+   * values are masked to `REDACTED_HEADER_VALUE`; only the header keys are visible.
    */
   headers?: Record<string, string>
   /** Known/curated model ids. Users can edit these or fetch live from the provider. */
@@ -124,6 +167,11 @@ export interface McpServerConfig {
    * Extra HTTP headers sent on every request — e.g. a static bearer token
    * (`Authorization: Bearer …`) or a custom auth header. http/sse only. This is
    * fixed-header auth, not OAuth dynamic registration.
+   *
+   * Header VALUES can be secrets, so — like a provider's headers — they live only in
+   * the encrypted secrets store and are merged in by the main process when the server
+   * is connected (see `src/main/mcp/manager.ts`). On any config that leaves the main
+   * process the values are masked to `REDACTED_HEADER_VALUE`; only the keys are shown.
    */
   headers?: Record<string, string>
   enabled: boolean

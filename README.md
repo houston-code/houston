@@ -510,6 +510,14 @@ this order:
 Local providers (Ollama, LM Studio) need no key at all — point the CLI at the
 same machine and it just works.
 
+**Custom auth headers.** A provider or MCP server can carry custom HTTP headers
+(a gateway bearer token, attribution headers). Like keys, their values are kept
+in the OS keychain by the desktop app and can't be read outside it, so the CLI
+resolves them from `cli-headers.json` in the profile dir — a
+`{"provider:<id>"|"mcp:<id>": {"<Header>": "<value>"}}` map. Create it yourself
+and `chmod 600` it; same plaintext-by-design tradeoff and loose-permissions
+warning as the credentials file.
+
 **One profile, shared.** The CLI reads and writes the same per-user profile as
 the desktop app (settings, conversations, terminal history), so on a machine
 with both installed, `-i` sessions from the CLI appear in the app's sidebar and

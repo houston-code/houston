@@ -1,19 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { PermissionRule } from '@shared/types'
+import type { McpServerConfig, PermissionRule } from '@shared/types'
+import { REDACTED_HEADER_VALUE, mcpHeaderScope, providerHeaderScope } from '@shared/types'
 
 /**
  * Migration behaviour for the settings store. `getSettings()` runs `migrate()` on the
  * raw on-disk JSON, so we drive it by writing a `settings.json` and importing the
  * module fresh (the module caches the loaded settings, so each case resets modules).
- * The userData seam is pointed at a temp dir and the injected hasKey check is
- * stubbed false — these tests are about the provider/model migration, not key
- * storage.
+ * The userData seam is pointed at a temp dir; the injected hasKey check is stubbed
+ * false and the injected header-secret store is an in-memory map — these tests are
+ * about the provider/model migration and header handling, not key encryption
+ * (secrets.test.ts covers the real safeStorage-backed store).
  */
 
 const state = vi.hoisted(() => ({ userData: '' }))
+// In-memory stand-in for the encrypted header store, so header round-trips are
+// observable without a real Keychain.
+const headerStore = vi.hoisted(() => ({ map: {} as Record<string, Record<string, string>> }))
 
 vi.mock('./userData', () => ({
   getUserDataDir: () => state.userData
@@ -21,10 +26,22 @@ vi.mock('./userData', () => ({
 
 type StoreModule = typeof import('./store')
 
-/** Fresh store module with the credential-presence seam wired (always "no key"). */
+/**
+ * Fresh store module with the injected seams wired: the credential-presence check
+ * (always "no key") and an in-memory header-secret store backed by `headerStore.map`.
+ */
 async function loadStore(): Promise<StoreModule> {
   const store = await import('./store')
   store.configureHasKey(() => false)
+  store.configureHeaderSecrets({
+    get: (scope) => headerStore.map[scope] ?? {},
+    set: (scope, headers) => {
+      headerStore.map[scope] = { ...headers }
+    },
+    remove: (scope) => {
+      delete headerStore.map[scope]
+    }
+  })
   return store
 }
 
@@ -51,6 +68,7 @@ async function loadOpenAIModelIds(): Promise<string[]> {
 
 beforeEach(() => {
   state.userData = mkdtempSync(join(tmpdir(), 'houston-store-'))
+  headerStore.map = {}
   vi.resetModules()
 })
 
@@ -162,5 +180,137 @@ describe('recent workspaces — existence pruning', () => {
       rmSync(a, { recursive: true, force: true })
       rmSync(b, { recursive: true, force: true })
     }
+  })
+})
+
+describe('settings.json file permissions', () => {
+  it('writes settings.json 0o600 (owner read/write only)', async () => {
+    const { updateSettings } = await loadStore()
+    updateSettings({ theme: 'dark' })
+    const mode = statSync(join(state.userData, 'settings.json')).mode & 0o777
+    expect(mode).toBe(0o600)
+  })
+})
+
+describe('custom-header secrets', () => {
+  const providerWithHeaders = (headers: Record<string, string>): unknown => ({
+    id: 'openai',
+    kind: 'openai',
+    label: 'OpenAI',
+    baseUrl: 'https://gateway/v1',
+    headers,
+    models: [{ id: 'gpt-5' }],
+    requiresKey: true,
+    hasKey: false,
+    builtIn: true
+  })
+
+  const httpServer = (headers: Record<string, string>): McpServerConfig => ({
+    id: 'remote',
+    transport: 'http',
+    command: '',
+    url: 'https://x/mcp',
+    headers,
+    enabled: true
+  })
+
+  const readDisk = (): { providers: { id: string; headers?: Record<string, string> }[] } =>
+    JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
+
+  it('moves cleartext provider header values off disk into the secret store and masks them to the renderer', async () => {
+    writeSettings({
+      schemaVersion: 2,
+      providers: [providerWithHeaders({ Authorization: 'Bearer secret-tok', 'X-Title': 'Houston' })]
+    })
+    const { getSettings } = await loadStore()
+    const settings = getSettings()
+
+    // The renderer sees the header keys, but every value is the mask — never the token.
+    const provider = settings.providers.find((p) => p.id === 'openai')!
+    expect(provider.headers).toEqual({
+      Authorization: REDACTED_HEADER_VALUE,
+      'X-Title': REDACTED_HEADER_VALUE
+    })
+    expect(JSON.stringify(settings)).not.toContain('secret-tok')
+
+    // Real values were moved into the (mocked) encrypted store...
+    expect(headerStore.map[providerHeaderScope('openai')]).toEqual({
+      Authorization: 'Bearer secret-tok',
+      'X-Title': 'Houston'
+    })
+    // ...and stripped from settings.json on disk (keys kept, values blanked).
+    const disk = readDisk()
+    expect(disk.providers.find((p) => p.id === 'openai')!.headers).toEqual({
+      Authorization: '',
+      'X-Title': ''
+    })
+    expect(JSON.stringify(disk)).not.toContain('secret-tok')
+  })
+
+  it('applies the same masking + extraction to MCP server headers', async () => {
+    writeSettings({
+      schemaVersion: 2,
+      providers: [openaiProvider(['gpt-5'])],
+      mcpServers: [httpServer({ Authorization: 'Bearer mcp-tok' })]
+    })
+    const { getSettings } = await loadStore()
+    const settings = getSettings()
+
+    const server = settings.mcpServers!.find((s) => s.id === 'remote')!
+    expect(server.headers).toEqual({ Authorization: REDACTED_HEADER_VALUE })
+    expect(headerStore.map[mcpHeaderScope('remote')]).toEqual({ Authorization: 'Bearer mcp-tok' })
+    expect(JSON.stringify(settings)).not.toContain('mcp-tok')
+  })
+
+  it('preserves a stored value when the renderer saves back the mask, and stores a newly entered one', async () => {
+    writeSettings({
+      schemaVersion: 2,
+      providers: [providerWithHeaders({ Authorization: 'Bearer original' })]
+    })
+    const { getSettings, saveSettings } = await loadStore()
+
+    // The renderer keeps Authorization masked (unchanged) and adds a new secret header.
+    const loaded = getSettings()
+    loaded.providers.find((p) => p.id === 'openai')!.headers = {
+      Authorization: REDACTED_HEADER_VALUE,
+      'X-Extra': 'Bearer brand-new'
+    }
+    saveSettings(loaded)
+    expect(headerStore.map[providerHeaderScope('openai')]).toEqual({
+      Authorization: 'Bearer original',
+      'X-Extra': 'Bearer brand-new'
+    })
+
+    // Dropping a header on save removes its stored secret.
+    const again = getSettings()
+    again.providers.find((p) => p.id === 'openai')!.headers = { Authorization: REDACTED_HEADER_VALUE }
+    saveSettings(again)
+    expect(headerStore.map[providerHeaderScope('openai')]).toEqual({ Authorization: 'Bearer original' })
+  })
+
+  it('treats a partially-edited mask as unchanged rather than storing bogus bullets', async () => {
+    writeSettings({
+      schemaVersion: 2,
+      providers: [providerWithHeaders({ Authorization: 'Bearer real' })]
+    })
+    const { getSettings, saveSettings } = await loadStore()
+    const loaded = getSettings()
+    // Simulate the user nudging the shown mask (fewer bullets) but not really editing it.
+    loaded.providers.find((p) => p.id === 'openai')!.headers = { Authorization: '••••' }
+    saveSettings(loaded)
+    expect(headerStore.map[providerHeaderScope('openai')]).toEqual({ Authorization: 'Bearer real' })
+  })
+
+  it('does not churn the secret store on an unrelated save (mask round-trips as unchanged)', async () => {
+    writeSettings({
+      schemaVersion: 2,
+      providers: [providerWithHeaders({ Authorization: 'Bearer keep-me' })]
+    })
+    const { getSettings, updateSettings } = await loadStore()
+    getSettings() // migrate
+    updateSettings({ theme: 'dark' }) // an unrelated change that round-trips masked headers
+    expect(headerStore.map[providerHeaderScope('openai')]).toEqual({ Authorization: 'Bearer keep-me' })
+    // Disk still carries no cleartext value.
+    expect(JSON.stringify(readDisk())).not.toContain('keep-me')
   })
 })

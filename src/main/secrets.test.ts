@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -36,12 +36,15 @@ vi.mock('electron', () => ({
 
 import {
   deleteKey,
+  deleteSecretHeaders,
   getCredential,
   getKey,
+  getSecretHeaders,
   hasKey,
   hasStoredKey,
   setCredential,
-  setKey
+  setKey,
+  setSecretHeaders
 } from './secrets'
 
 beforeEach(() => {
@@ -130,5 +133,58 @@ describe('secrets store', () => {
   it('setKey writes a credential that getCredential reads back as api-key', () => {
     setKey('openai', 'sk-y')
     expect(getCredential('openai')).toEqual({ type: 'api-key', key: 'sk-y' })
+  })
+})
+
+describe('secret headers store', () => {
+  it('round-trips an encrypted header map for a scope', () => {
+    setSecretHeaders('provider:openai', { Authorization: 'Bearer tok', 'X-Title': 'Houston' })
+    expect(getSecretHeaders('provider:openai')).toEqual({
+      Authorization: 'Bearer tok',
+      'X-Title': 'Houston'
+    })
+  })
+
+  it('keeps header scopes independent (provider vs mcp with the same id)', () => {
+    setSecretHeaders('provider:x', { Authorization: 'Bearer p' })
+    setSecretHeaders('mcp:x', { Authorization: 'Bearer m' })
+    expect(getSecretHeaders('provider:x')).toEqual({ Authorization: 'Bearer p' })
+    expect(getSecretHeaders('mcp:x')).toEqual({ Authorization: 'Bearer m' })
+  })
+
+  it('returns {} when nothing is stored for a scope', () => {
+    expect(getSecretHeaders('provider:missing')).toEqual({})
+  })
+
+  it('setSecretHeaders with an empty map removes the entry (no stale ciphertext)', () => {
+    setSecretHeaders('mcp:remote', { Authorization: 'Bearer tok' })
+    setSecretHeaders('mcp:remote', {})
+    expect(getSecretHeaders('mcp:remote')).toEqual({})
+    // The scope is gone from the raw file, not just decrypting to {}.
+    const raw = JSON.parse(readFileSync(join(state.userData, 'secrets.json'), 'utf8'))
+    expect(raw.headers?.['mcp:remote']).toBeUndefined()
+  })
+
+  it('deleteSecretHeaders removes a stored scope', () => {
+    setSecretHeaders('provider:openai', { Authorization: 'Bearer tok' })
+    deleteSecretHeaders('provider:openai')
+    expect(getSecretHeaders('provider:openai')).toEqual({})
+  })
+
+  it('returns {} for a stored-but-undecryptable header map', () => {
+    setSecretHeaders('provider:openai', { Authorization: 'Bearer tok' })
+    state.failDecrypt = true
+    expect(getSecretHeaders('provider:openai')).toEqual({})
+  })
+
+  it('stores header ciphertext, not the plaintext token, on disk', () => {
+    setSecretHeaders('provider:openai', { Authorization: 'Bearer super-secret' })
+    const raw = readFileSync(join(state.userData, 'secrets.json'), 'utf8')
+    expect(raw).not.toContain('super-secret')
+    // The header blob and the credential keys live in separate maps.
+    setKey('openai', 'sk-key')
+    const parsed = JSON.parse(readFileSync(join(state.userData, 'secrets.json'), 'utf8'))
+    expect(parsed.keys.openai).toBeTruthy()
+    expect(parsed.headers['provider:openai']).toBeTruthy()
   })
 })
