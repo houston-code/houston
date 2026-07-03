@@ -5,14 +5,14 @@ import { join } from 'node:path'
 
 /**
  * The window-state module persists the main window's bounds and decides what to
- * open with on launch. `electron.app.getPath` is pointed at a temp dir so the
+ * open with on launch. The userData seam is pointed at a temp dir so the
  * load/save round-trips hit real files; `pickStartupBounds` is pure.
  */
 
 const state = vi.hoisted(() => ({ userData: '' }))
 
-vi.mock('electron', () => ({
-  app: { getPath: () => state.userData }
+vi.mock('./userData', () => ({
+  getUserDataDir: () => state.userData
 }))
 
 const WORK_AREA = { x: 0, y: 0, width: 1920, height: 1080 }

@@ -1,4 +1,3 @@
-import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import {
   readFileSync,
@@ -23,11 +22,12 @@ import type {
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import { clearConversationOverride } from './agent/overrides'
+import { getUserDataDir } from './userData'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
 
 function dir(): string {
-  const d = join(app.getPath('userData'), 'conversations')
+  const d = join(getUserDataDir(), 'conversations')
   mkdirSync(d, { recursive: true })
   return d
 }

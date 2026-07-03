@@ -1,6 +1,6 @@
-import { app } from 'electron'
 import { appendFileSync, mkdirSync, statSync, renameSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { getUserDataDir } from './userData'
 
 /**
  * Minimal file logger for the main process. Appends timestamped lines to
@@ -30,7 +30,9 @@ function stringifyError(e: unknown): string {
 }
 
 function logFilePath(): string {
-  const dir = join(app.getPath('userData'), 'logs')
+  // Throws if the userData seam isn't wired yet; the caller's catch keeps that
+  // silent, preserving the "logging never breaks the app" contract.
+  const dir = join(getUserDataDir(), 'logs')
   mkdirSync(dir, { recursive: true })
   return join(dir, 'houston.log')
 }

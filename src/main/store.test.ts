@@ -14,8 +14,8 @@ import type { PermissionRule } from '@shared/types'
 
 const state = vi.hoisted(() => ({ userData: '' }))
 
-vi.mock('electron', () => ({
-  app: { getPath: () => state.userData }
+vi.mock('./userData', () => ({
+  getUserDataDir: () => state.userData
 }))
 
 vi.mock('./secrets', () => ({

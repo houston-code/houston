@@ -18,6 +18,7 @@ import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates } from './updater'
 import { log } from './logger'
 import { getSettings, updateSettings, pruneRecentWorkspaces } from './store'
+import { setUserDataDir, getUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
 import { wireLocalhostCapture } from './localhostCapture'
 import { LEGAL_VERSION } from '@shared/legal'
@@ -58,6 +59,11 @@ process.on('unhandledRejection', (reason) => log.error('unhandledRejection', rea
 // resolved userData/Keychain, so stored keys would land in / be read from an
 // inconsistent location and silently fail to persist.
 app.setName(APP_NAME)
+
+// Bind the shared shell modules (store/secrets/conversations/logger/…) to
+// Electron's per-user profile dir. They read it via the userData seam instead of
+// importing electron, so the standalone CLI can wire the same path Electron-free.
+setUserDataDir(app.getPath('userData'))
 
 // Bind the agent engine to its Electron-backed host capabilities before any run
 // can start (all three clients — GUI, headless, TUI — boot through here). The
@@ -252,7 +258,7 @@ if (tui) {
 
     // Per-workspace composer history (Up/Down recall across restarts). Keyed by a
     // hash of the cwd so each project keeps its own history under userData.
-    const histDir = join(app.getPath('userData'), 'tui-history')
+    const histDir = join(getUserDataDir(), 'tui-history')
     const histFile = join(histDir, `${createHash('sha1').update(tui.cwd).digest('hex').slice(0, 16)}.txt`)
     let history = parseHistory(safeRead(histFile))
     const persistHistory = (line: string): void => {

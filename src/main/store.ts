@@ -1,6 +1,6 @@
-import { app } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { getUserDataDir } from './userData'
 import type { AppSettings, PermissionRule, ProviderConfig } from '@shared/types'
 import { backfillDefaultModels, defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 import { SEARCH_PROVIDERS } from '@shared/search'
@@ -15,7 +15,7 @@ import { hasKey } from './secrets'
 let cache: AppSettings | null = null
 
 function settingsPath(): string {
-  return join(app.getPath('userData'), 'settings.json')
+  return join(getUserDataDir(), 'settings.json')
 }
 
 function migrate(raw: Partial<AppSettings>): AppSettings {
