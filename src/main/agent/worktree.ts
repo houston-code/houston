@@ -50,7 +50,13 @@ const EMPTY_REPO: RepoInfo = {
   root: '',
   currentBranch: null,
   branches: [],
+  isLinkedWorktreeRoot: false,
   exists: false
+}
+
+/** Normalize a path for equality checks: forward slashes, no trailing slash. */
+function normPath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
 /**
@@ -86,7 +92,8 @@ export function worktreePath(
 
 /**
  * Read repo info for the new-chat worktree picker: the main worktree root, the
- * current branch, and the local branch list. Read-only git; never throws (a
+ * current branch, the local branch list, and whether the queried path is itself
+ * a linked worktree's root. Read-only git; never throws (a
  * non-repo just yields {@link EMPTY_REPO}). A path that no longer exists on disk
  * short-circuits to `exists: false` so callers can drop a stale default workspace
  * (e.g. a deleted worktree) rather than treat it like a plain non-repo folder.
@@ -101,12 +108,18 @@ export async function getRepoInfo(
   // (and skip the git spawn, which would only fail with ENOENT on the cwd anyway).
   if (!exists(workspace)) return { ...EMPTY_REPO, exists: false }
   let root: string
+  let isLinkedWorktreeRoot: boolean
   try {
     // First worktree entry is always the main worktree — the right base for nesting.
     const out = await exec(['worktree', 'list', '--porcelain'], workspace)
-    const main = parseWorktreePorcelain(out)[0]
+    const entries = parseWorktreePorcelain(out)
+    const main = entries[0]
     if (!main) return { ...EMPTY_REPO, exists: true }
     root = main.path
+    // Flag only an exact match on a linked worktree's root — a subdirectory of
+    // one (or of the main worktree) is a deliberate scope, not a stale checkout.
+    const ws = normPath(workspace)
+    isLinkedWorktreeRoot = entries.slice(1).some((e) => normPath(e.path) === ws)
   } catch {
     // The path exists but isn't inside a git repo — a valid plain workspace.
     return { ...EMPTY_REPO, exists: true }
@@ -128,7 +141,7 @@ export async function getRepoInfo(
   } catch {
     // best-effort — an empty list just means no base suggestions
   }
-  return { isRepo: true, root, currentBranch, branches, exists: true }
+  return { isRepo: true, root, currentBranch, branches, isLinkedWorktreeRoot, exists: true }
 }
 
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */

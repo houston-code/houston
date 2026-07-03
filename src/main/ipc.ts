@@ -256,7 +256,14 @@ export function registerIpc(): void {
   // folder just reports isRepo:false so the UI hides the worktree option.
   ipcMain.handle(IPC.gitRepoInfo, async (_event, workspace: string) => {
     if (!workspace)
-      return { isRepo: false, root: '', currentBranch: null, branches: [], exists: false }
+      return {
+        isRepo: false,
+        root: '',
+        currentBranch: null,
+        branches: [],
+        isLinkedWorktreeRoot: false,
+        exists: false
+      }
     return getRepoInfo(workspace)
   })
 
