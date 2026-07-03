@@ -151,6 +151,14 @@ export interface RepoInfo {
   /** Local branch names, newest-committed first, for picking a base. */
   branches: string[]
   /**
+   * True when the queried path is itself the root of a linked (non-main)
+   * worktree — e.g. a per-chat checkout inherited from a previously-open chat.
+   * False for the main root, for any subdirectory, and for non-repos, so the
+   * new-chat UI can re-anchor only genuine worktree roots and honor a
+   * deliberately-picked subdirectory.
+   */
+  isLinkedWorktreeRoot: boolean
+  /**
    * Whether the queried path still exists on disk. Distinguishes a valid
    * non-repo folder (`exists: true, isRepo: false`) from a path that has since
    * been deleted — e.g. a torn-down worktree left behind in the recents — so the

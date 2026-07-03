@@ -14,7 +14,7 @@ import type { ConversationMeta, ReasoningEffort, RepoInfo } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { modelCapabilities } from '@shared/usage'
-import { branchNameError, suggestBranch } from './lib/worktree'
+import { branchNameError, planNewChatWorkspace, suggestBranch } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
 import { useRunningConversations } from './hooks/useRunningConversations'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -322,8 +322,9 @@ export default function App(): JSX.Element {
   )
 
   // For a not-yet-started chat, load the repo's git info and seed fresh worktree
-  // defaults: a new worktree (on for git repos), a suggested branch name, and the
-  // current branch as the base. Re-runs when the folder changes.
+  // defaults: a new worktree (on for a repo root, off for a picked subdirectory),
+  // a suggested branch name, and the current branch as the base. Re-runs when the
+  // folder changes.
   useEffect(() => {
     if (currentId !== null || !workspace) {
       setRepoInfo(null)
@@ -332,26 +333,28 @@ export default function App(): JSX.Element {
     let cancelled = false
     void window.api.getRepoInfo(workspace).then((info) => {
       if (cancelled) return
+      const plan = planNewChatWorkspace(info, workspace)
       // The default workspace points at a folder that no longer exists (e.g. a
       // torn-down worktree left in the recents). Drop it rather than anchoring a new
       // chat to a phantom repo — clearing it falls back to the folder picker.
-      if (!info.exists) {
+      if (plan.action === 'drop') {
         setRepoInfo(null)
         setLastWorkspace(null)
         return
       }
-      // Anchor a new chat to the repo's MAIN worktree, not whatever linked worktree
-      // the previously-open chat used. Otherwise getRepoInfo reports that prior
-      // chat's branch as "current", and the base picker would default to (and offer
-      // to fork from) it instead of the repo's mainline. Re-point at the canonical
-      // root and let this effect re-run.
-      const norm = (p: string): string => p.replace(/\/+$/, '')
-      if (info.isRepo && info.root && norm(info.root) !== norm(workspace)) {
-        setLastWorkspace(info.root)
+      // A workspace that IS a linked worktree's root (a "New chat" opened from a
+      // worktree-backed chat inherits that chat's checkout) re-anchors to the
+      // repo's MAIN worktree — otherwise the base picker would default to (and
+      // offer to fork from) that chat's branch instead of the repo's mainline.
+      // Re-point at the canonical root and let this effect re-run. A picked
+      // subdirectory of the repo is honored as-is (with the worktree toggle
+      // defaulting off, so sending doesn't re-root the chat either).
+      if (plan.action === 'reanchor') {
+        setLastWorkspace(plan.root)
         return
       }
       setRepoInfo(info)
-      setWorktreeMode(info.isRepo)
+      setWorktreeMode(plan.worktreeDefault)
       setBranchName(suggestBranch())
       setBaseBranch(info.currentBranch ?? '')
     })

@@ -26,8 +26,11 @@ function fakeGit(
   }
 }
 
-const worktreeList = (mainPath: string, branch = 'main'): string =>
-  `worktree ${mainPath}\nHEAD abc123\nbranch refs/heads/${branch}\n\n`
+const worktreeList = (mainPath: string, branch = 'main', linked: string[] = []): string =>
+  [
+    `worktree ${mainPath}\nHEAD abc123\nbranch refs/heads/${branch}\n\n`,
+    ...linked.map((p, i) => `worktree ${p}\nHEAD def45${i}\nbranch refs/heads/wt-${i}\n\n`)
+  ].join('')
 
 describe('slugifyBranch', () => {
   it('lowercases and replaces non-alphanumerics with dashes', () => {
@@ -68,8 +71,25 @@ describe('getRepoInfo', () => {
       root: '/repo',
       currentBranch: 'feature',
       branches: ['feature', 'main', 'old'],
+      isLinkedWorktreeRoot: false,
       exists: true
     })
+  })
+
+  it('flags a linked worktree root, but not the main root or a subdirectory of one', async () => {
+    const exec = fakeGit({
+      'worktree list': () => worktreeList('/repo', 'main', ['/repo/.houston/worktrees/x']),
+      'rev-parse --abbrev-ref': () => 'wt-0\n',
+      'for-each-ref': () => 'main\n'
+    })
+    const at = async (ws: string): Promise<boolean> =>
+      (await getRepoInfo(ws, exec, onDisk)).isLinkedWorktreeRoot
+    expect(await at('/repo/.houston/worktrees/x')).toBe(true)
+    // Trailing slashes don't hide the match.
+    expect(await at('/repo/.houston/worktrees/x/')).toBe(true)
+    expect(await at('/repo')).toBe(false)
+    expect(await at('/repo/sub')).toBe(false)
+    expect(await at('/repo/.houston/worktrees/x/sub')).toBe(false)
   })
 
   it('reports an existing non-repo folder as isRepo:false, exists:true', async () => {
@@ -81,6 +101,7 @@ describe('getRepoInfo', () => {
       root: '',
       currentBranch: null,
       branches: [],
+      isLinkedWorktreeRoot: false,
       exists: true
     })
   })
@@ -96,6 +117,7 @@ describe('getRepoInfo', () => {
       root: '',
       currentBranch: null,
       branches: [],
+      isLinkedWorktreeRoot: false,
       exists: false
     })
     expect(called).toBe(false)

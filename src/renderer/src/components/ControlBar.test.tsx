@@ -10,6 +10,7 @@ const repo: RepoInfo = {
   root: '/Users/me/projects/houston',
   currentBranch: 'main',
   branches: ['main', 'develop'],
+  isLinkedWorktreeRoot: false,
   exists: true
 }
 

@@ -263,7 +263,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   running in a fresh, isolated worktree on its own branch — so the agent's edits
   never touch your current checkout. Right after the folder picker in the control
   bar you choose the base branch to fork from and name the new branch (or untick
-  *New worktree* to work in the repo directly); the worktree is created on your
+  *New worktree* to work in the repo directly); picking a subdirectory of a repo
+  keeps the chat scoped to that folder instead (the toggle defaults off there).
+  The worktree is created on your
   first message, under `.houston/worktrees/` and kept out of the parent repo's
   `git status` via `.git/info/exclude`. Deleting the chat offers to remove the
   worktree too (uncommitted or unmerged work is always kept).
