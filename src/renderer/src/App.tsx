@@ -1315,6 +1315,17 @@ export default function App(): JSX.Element {
   const worktreeBlocked =
     creatingWorktree && branchNameError(branchName, repoInfo?.branches ?? []) !== null
   const canChat = Boolean(settings.selected && workspace && selectionReady && !worktreeBlocked)
+  // The specific reason the composer is disabled, so its placeholder names the real
+  // blocker instead of always saying "pick a model and folder".
+  const disabledReason = !workspace
+    ? 'Choose a project folder to start…'
+    : !settings.selected
+      ? 'Pick a model to start…'
+      : !selectionReady
+        ? 'Set an API key for this model in Settings…'
+        : worktreeBlocked
+          ? 'Enter a valid worktree branch name to start…'
+          : undefined
   // Only offer the image-attachment affordance when the selected model can see
   // images. Resolve host-reported capabilities first (same source the model picker
   // uses) so a host-listed vision model isn't denied the attach buttons by the
@@ -1525,6 +1536,7 @@ export default function App(): JSX.Element {
             key={currentId ?? 'new'}
             conversationId={currentId}
             disabled={!canChat}
+            disabledReason={disabledReason}
             running={chat.running}
             workspace={workspace}
             commands={commands}
