@@ -344,11 +344,13 @@ Grab the artifact for your platform:
 > "Yes" above means the app checks the update feed and shows a banner linking to
 > **Releases** for a manual download — see [Updates](#updates).
 >
-> **Linux needs glibc 2.35 or newer** (Ubuntu 22.04+, Debian 12+, Fedora 36+). The floor
-> is set by the build toolchain: the native `node-pty` addon is compiled on Ubuntu 22.04
-> (glibc 2.35), and the bundled `ast-grep`/`ripgrep` are glibc builds — so musl distros
-> (Alpine) aren't supported. The runner is pinned so this floor stays put rather than
-> creeping up with newer CI images.
+> **Linux needs glibc 2.35 or newer** (Ubuntu 22.04+, Debian 12+, Fedora 36+) — **for the
+> desktop app.** The floor is set by the build toolchain: the native `node-pty` addon is
+> compiled on Ubuntu 22.04 (glibc 2.35), and the bundled `ast-grep`/`ripgrep` are glibc
+> builds — so musl distros (Alpine) can't run the desktop packages. The runner is pinned so
+> this floor stays put rather than creeping up with newer CI images. **The standalone CLI is
+> exempt:** it's a pure-JS bundle with no native addon and no bundled binaries, so it runs
+> on any platform with Node ≥ 22, Alpine/musl included.
 >
 > **Both mac arches update from one feed.** arm64 and Intel build on separate
 > runners, and electron-builder emits one `latest-mac.yml` per build — naively publishing
@@ -480,7 +482,8 @@ needed, and a full run peaks around **60 MB of RAM**, so it works on headless
 Linux servers and small VPSes where the desktop app cannot even start.
 
 ```bash
-# grab houston-cli.cjs from the latest release, then:
+# grab houston-cli.cjs from the latest release (optionally verify it:
+# sha256sum -c houston-cli.cjs.sha256), then:
 node houston-cli.cjs --help          # or: chmod +x houston-cli.cjs && ./houston-cli.cjs
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --cwd ~/code/myproj --accept-terms
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -i
@@ -525,11 +528,14 @@ vice versa. Set `HOUSTON_DATA_DIR` to use an isolated profile (useful for CI
 and servers).
 
 **What's desktop-only.** Capabilities that genuinely need the desktop shell are
-absent, and say so rather than failing silently: `view_localhost` (screenshots
-of a local dev server need Chromium) reports it is unavailable in this context;
-the live Preview dock, integrated terminal, and auto-update are GUI features.
-Fast file search uses `ripgrep` from your `PATH` when present and falls back to
-a built-in search otherwise.
+absent: `view_localhost` (screenshots of a local dev server need Chromium) is not
+offered to the model at all in the CLI; the live Preview dock, integrated
+terminal, and auto-update are GUI features. Search tools degrade gracefully:
+`search_files` uses `ripgrep` from your `PATH` when present and falls back to a
+built-in search otherwise, while `ast_grep` (structural search) needs an
+`ast-grep` binary on your `PATH` or via `HOUSTON_AST_GREP` — the desktop app
+bundles one, the single-file CLI does not — and reports it is unavailable when
+none is found.
 
 ## Develop
 

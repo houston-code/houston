@@ -162,7 +162,7 @@ export async function searchStructural(o: StructuralSearchOptions): Promise<stri
   if (!o.lang) throw new Error('lang is required (e.g. "ts", "tsx", "py", "rust", "go").')
   if (!o.binPath) {
     throw new Error(
-      'ast-grep is not available. The packaged app bundles it; in development install it (e.g. `brew install ast-grep`) or set HOUSTON_AST_GREP to its path.'
+      'ast-grep is not available. The desktop app bundles it; on other setups (a source checkout or the standalone CLI) install it (e.g. `brew install ast-grep`) or set HOUSTON_AST_GREP to its path.'
     )
   }
   const { matches, error } = await runAstGrep({
