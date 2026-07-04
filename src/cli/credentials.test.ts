@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  cliCollectSecrets,
   cliGetHeaders,
   cliGetKey,
   cliHasKey,
@@ -122,5 +123,43 @@ describe('headers file', () => {
     cliGetHeaders('provider:openai', deps)
     expect(warn).toHaveBeenCalledTimes(1)
     expect(String(warn.mock.calls[0][0])).toContain('chmod 600')
+  })
+})
+
+describe('cliCollectSecrets', () => {
+  function writeHeaders(obj: unknown): void {
+    writeFileSync(join(dir, 'cli-headers.json'), JSON.stringify(obj))
+  }
+
+  it('collects known env vars, generic overrides, and file credentials', () => {
+    writeCreds({ custom: 'file-key-longenough' })
+    const env = {
+      ANTHROPIC_API_KEY: 'anthropic-env-key',
+      HOUSTON_API_KEY_ACME: 'acme-generic-key',
+      UNRELATED_VAR: 'not-a-known-secret-name'
+    }
+    expect(cliCollectSecrets({ dataDir: dir, env }).sort()).toEqual(
+      ['acme-generic-key', 'anthropic-env-key', 'file-key-longenough'].sort()
+    )
+  })
+
+  it('ignores short env values and unknown env names', () => {
+    const env = { ANTHROPIC_API_KEY: 'short', RANDOM: 'a-long-but-unknown-name-value' }
+    expect(cliCollectSecrets({ dataDir: dir, env })).toEqual([])
+  })
+
+  it('collects the opaque token out of a header value, not the scheme word', () => {
+    const token = 'a'.repeat(24)
+    writeHeaders({
+      'provider:acme': {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    })
+    expect(cliCollectSecrets({ dataDir: dir, env: {} })).toEqual([token])
+  })
+
+  it('returns [] when no sources are present', () => {
+    expect(cliCollectSecrets({ dataDir: dir, env: {} })).toEqual([])
   })
 })

@@ -32,7 +32,9 @@ const h = vi.hoisted(() => ({
     projectPlugins: true
   } as Record<string, unknown>,
   // Records every plugin lifecycle event the loop fires, for assertions.
-  pluginEvents: [] as Array<{ event: string; payload: unknown }>
+  pluginEvents: [] as Array<{ event: string; payload: unknown }>,
+  // Known secret values the tool-result redactor should strip; set per test.
+  secrets: [] as string[]
 }))
 
 vi.mock('../agentHost', () => ({
@@ -49,7 +51,8 @@ vi.mock('../agentHost', () => ({
     hasKey: true,
     builtIn: true
   }),
-  getKey: () => null
+  getKey: () => null,
+  collectSecrets: () => h.secrets
 }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
@@ -109,6 +112,7 @@ beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loop-'))
   h.pluginEvents = []
   h.addedRules = []
+  h.secrets = []
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -204,6 +208,42 @@ describe('startRun', () => {
     const result = r.events.find((e) => e.type === 'tool_result')
     expect(result).toMatchObject({ name: 'read_file', ok: true })
     expect((result as { output: string }).output).toContain('the secret')
+  })
+
+  it('redacts stored secrets from a tool result before the model, UI, and transcript see it', async () => {
+    h.secrets = ['stored-opaque-credential-value-xyz']
+    // A file the agent reads that happens to contain this install's own credential (an
+    // opaque value with no recognizable token format) plus a token-shaped third-party
+    // secret we hold no stored copy of — exercising both redaction layers.
+    writeFileSync(
+      join(ws, 'config.env'),
+      'KEY=stored-opaque-credential-value-xyz\nGH=ghp_' + 'A'.repeat(36)
+    )
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'config.env' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'read it' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const emitted = r.events.find((e) => e.type === 'tool_result') as { output: string }
+    // Known-value redaction strips the stored key; pattern redaction strips the GitHub token.
+    expect(emitted.output).not.toContain('stored-opaque-credential-value-xyz')
+    expect(emitted.output).toContain('[redacted:secret]')
+    expect(emitted.output).toContain('[redacted:github-token]')
+    // The redacted text — not the plaintext — is what was persisted to the transcript
+    // and fed back to the model as the tool message.
+    const toolMsg = r.messages.find((m) => m.role === 'tool')
+    expect(String(toolMsg?.content)).not.toContain('stored-opaque-credential-value-xyz')
+    expect(String(toolMsg?.content)).toContain('[redacted:secret]')
+    // The onToolResult plugin event also saw the scrubbed output.
+    const pluginResult = h.pluginEvents.find((e) => e.event === 'onToolResult')?.payload as {
+      output: string
+    }
+    expect(pluginResult.output).not.toContain('stored-opaque-credential-value-xyz')
   })
 
   it('prompts for a write under "ask" and writes the file when allowed', async () => {

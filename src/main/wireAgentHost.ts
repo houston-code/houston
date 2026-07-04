@@ -7,6 +7,7 @@ import {
   getSettings
 } from './store'
 import {
+  collectSecretValues,
   deleteSecretHeaders,
   getKey,
   getSecretHeaders,
@@ -14,6 +15,8 @@ import {
   hasStoredKey,
   setSecretHeaders
 } from './secrets'
+import { configureLogRedactor } from './logger'
+import { redactSecrets } from './agent/redact'
 
 /**
  * Bind the agent engine's host accessors (see `agentHost.ts`) plus the store's
@@ -29,12 +32,15 @@ import {
 export function wireAgentHost(): void {
   configureHasKey(hasKey)
   configureHeaderSecrets({ get: getSecretHeaders, set: setSecretHeaders, remove: deleteSecretHeaders })
+  // Scrub stored secrets (and token-shaped strings) from every log line.
+  configureLogRedactor((message) => redactSecrets(message, collectSecretValues()))
   configureAgentHost({
     getProvider,
     getSettings,
     addPermissionRule,
     getKey,
     hasStoredKey,
-    getSecretHeaders
+    getSecretHeaders,
+    collectSecrets: collectSecretValues
   })
 }

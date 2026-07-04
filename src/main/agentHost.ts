@@ -34,6 +34,12 @@ export interface AgentHost {
    * engine rather than travelling on the config (which carries masked values).
    */
   getSecretHeaders(scope: string): Record<string, string>
+  /**
+   * Every plaintext secret value this install holds (provider keys, OAuth tokens,
+   * custom-header secrets), for the tool-result/log redactor (see `agent/redact.ts`).
+   * Optional: a host that can't enumerate its secrets just gets pattern-only redaction.
+   */
+  collectSecrets?(): string[]
 }
 
 let host: AgentHost | null = null
@@ -79,4 +85,9 @@ export function hasStoredKey(providerId: string): boolean {
 
 export function getSecretHeaders(scope: string): Record<string, string> {
   return requireHost().getSecretHeaders(scope)
+}
+
+/** All plaintext secret values for redaction, or `[]` if the host can't enumerate them. */
+export function collectSecrets(): string[] {
+  return requireHost().collectSecrets?.() ?? []
 }
