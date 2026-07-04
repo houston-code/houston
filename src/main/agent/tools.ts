@@ -923,11 +923,14 @@ const webFetch: ToolDef = {
   }
 }
 
+/** Tool name for the localhost screenshot tool — shared so the loop can gate it on capture availability. */
+export const VIEW_LOCALHOST_NAME = 'view_localhost'
+
 const viewLocalhost: ToolDef = {
   kind: 'network',
   summarize: (a) => `View ${str(a, 'url')}`,
   schema: {
-    name: 'view_localhost',
+    name: VIEW_LOCALHOST_NAME,
     description:
       'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s console output. The screenshot is returned as an image you can view directly — so you can SEE the web UI you built and iterate on it, instead of guessing. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval.',
     parameters: objectSchema(

@@ -33,8 +33,15 @@ export function buildSystemPrompt(
   capabilities?: string,
   gitStatus?: string,
   providerId?: string,
-  model?: string
+  model?: string,
+  // Defaults true (desktop). The standalone CLI has no browser engine to screenshot
+  // with, so it passes false and the view_localhost line is dropped — matching the
+  // toolset, which omits the tool there too (see loop.ts).
+  viewLocalhostAvailable = true
 ): string {
+  const viewLocalhostLine = viewLocalhostAvailable
+    ? "\n- view_localhost: load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser and get back a screenshot plus the page's console output — use it to SEE and iterate on a web UI you built (requires approval)"
+    : ''
   const base = `You are Houston, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
 
 Working directory: ${workspace} (project: "${basename(workspace)}")
@@ -51,8 +58,7 @@ You have these tools:
 - run_shell: run a shell command, sandboxed to the project directory (set background:true for long-running processes like dev servers)
 - read_shell_output: read new output from a background shell
 - kill_shell: stop a background shell
-- web_fetch: fetch an http/https URL and read it as text (requires approval)
-- view_localhost: load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser and get back a screenshot plus the page's console output — use it to SEE and iterate on a web UI you built (requires approval)
+- web_fetch: fetch an http/https URL and read it as text (requires approval)${viewLocalhostLine}
 - web_search: search the web for current information (requires approval; needs a key in Settings)
 - todo_write: keep a task list for multi-step work
 - recall_history: page back into the EARLIER conversation after older turns were compacted or their large tool outputs elided from your context — filter by a substring query and/or a message-index range to recover a detail (a path, a value, a past decision) rather than re-reading files or re-running commands (read-only, no approval)

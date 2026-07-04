@@ -23,6 +23,7 @@ import { loadProjectRules } from './rules'
 import { loadProjectConfig } from './projectConfig'
 import {
   ASK_USER_NAME,
+  VIEW_LOCALHOST_NAME,
   getTool,
   toolSchemas,
   type ToolDef,
@@ -45,7 +46,7 @@ import { isSandboxed } from '../sandbox'
 import { formatFile } from './format'
 import { runSubAgent } from './subagent'
 import { reviewWorkspaceChanges } from './review'
-import { captureLocalhost } from './viewlocalhost'
+import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills } from './skills'
@@ -406,6 +407,10 @@ export async function startRun(
     // Git + GitHub awareness folded into the prompt. githubContext is a pure PATH
     // probe (no network), so the run start never triggers unapproved egress.
     const gitStatus = [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
+    // view_localhost screenshots via an offscreen browser the Electron shell wires
+    // at startup. The standalone CLI wires none, so drop the tool from the schema
+    // set and the prompt rather than offering one that fails after an approval.
+    const localhostCaptureAvailable = isCaptureBackendConfigured()
     const system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
@@ -414,7 +419,8 @@ export async function startRun(
       capabilities,
       gitStatus,
       req.providerId,
-      req.model
+      req.model,
+      localhostCaptureAvailable
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // When a lot of MCP tools are connected, sending every schema on every turn
@@ -434,7 +440,7 @@ export async function startRun(
     // MCP schema (small setups) or just find_tools + already-revealed MCP tools
     // (lazy). Recomputed each turn so tools revealed via find_tools then appear.
     const buildTools = (): ToolSchema[] => [
-      ...toolSchemas(),
+      ...toolSchemas().filter((s) => localhostCaptureAvailable || s.name !== VIEW_LOCALHOST_NAME),
       ...(findTools ? [findTools.schema] : []),
       ...mcpToolDefs
         .filter((d) => !lazyMcp || revealedMcp.has(d.schema.name))
@@ -597,7 +603,9 @@ export async function startRun(
       },
       attachImage,
       attachDocument,
-      captureLocalhost,
+      // Undefined on the CLI (no backend wired) so the view_localhost guard reads
+      // cleanly; the tool is already filtered out of the schema set above.
+      captureLocalhost: localhostCaptureAvailable ? captureLocalhost : undefined,
       // The recall tool reads the full, un-compacted log. Return a shallow copy so a
       // tool can't reassign the loop's `messages` array through this handle (push/splice/
       // reorder). The ChatMessage objects are shared by reference, so callers must treat
