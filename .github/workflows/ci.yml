@@ -51,10 +51,31 @@ jobs:
       - run: npm test
       # Standalone CLI: bundle + smoke (seconds). build-cli.mjs fails if electron
       # reaches the CLI bundle graph, so this gates the no-electron boundary on
-      # every PR; the --version run proves the bundle actually executes on the
-      # runner's bare Node.
+      # every PR.
       - run: npm run build:cli
-      - run: node out/cli/houston-cli.cjs --version
+      - name: Smoke the standalone CLI on bare Node
+        run: |
+          set -euo pipefail
+          # Run from a scratch dir with NO node_modules beside it: the bundle's
+          # contract is that it runs on bare Node (a headless server), and running
+          # it from the repo root would let any un-bundled `require` resolve against
+          # the repo's installed deps and pass — masking exactly what this gates.
+          iso="$(mktemp -d)"
+          cp out/cli/houston-cli.cjs "$iso/"
+          # --version must print the injected package version (not the "dev"
+          # fallback), proving the build define landed and the bundle executes.
+          ver="$(node -p "require('./package.json').version")"
+          got="$(cd "$iso" && node houston-cli.cjs --version)"
+          echo "houston-cli --version -> $got (expected $ver)"
+          [ "$got" = "$ver" ] || { echo "::error::CLI --version printed '$got', expected '$ver'"; exit 1; }
+          # Exercise a real client path, not just --version: a `-p` run with an
+          # isolated profile and no key must load the engine graph + host wiring and
+          # exit non-zero with the friendly "No model configured" message — no
+          # display server, no network.
+          out="$(cd "$iso" && HOUSTON_DATA_DIR="$iso/profile" node houston-cli.cjs -p ping --cwd "$iso" --accept-terms 2>&1)" && code=0 || code=$?
+          echo "$out"
+          [ "$code" -ne 0 ] || { echo "::error::CLI -p with no key unexpectedly exited 0"; exit 1; }
+          echo "$out" | grep -q "No model configured" || { echo "::error::CLI -p did not surface the expected 'No model configured' error"; exit 1; }
 
   # Exercise the Linux bubblewrap backend for REAL — the macOS-bound developer can't
   # run it locally, so CI is the source of truth. Installs bubblewrap, enables
