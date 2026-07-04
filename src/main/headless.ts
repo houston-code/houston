@@ -240,6 +240,15 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
   }
   messages.push({ role: 'user', content: opts.prompt })
 
+  // Surface the conversation id so a script can capture it and later `--resume`
+  // this exact session — the only place it's observable (‑‑continue is
+  // recency-based, and no agent event carries the persistent id). JSON mode gets
+  // a typed line on stdout; text mode a stderr marker, keeping stdout clean.
+  if (conversationId) {
+    if (opts.json) deps.out(`${JSON.stringify({ type: 'session', conversationId })}\n`)
+    else deps.err(`· session ${conversationId}\n`)
+  }
+
   const runId = (deps.newId ?? randomUUID)()
   const req: AgentRunRequest = {
     runId,
@@ -252,6 +261,11 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
   }
 
   let failed = false
+  // Accumulate token/cost so text mode can print a one-line total on completion
+  // (JSON mode carries the raw `usage` events instead).
+  let inTok = 0
+  let outTok = 0
+  let cost = 0
   const send = (e: AgentEvent): void => {
     if (opts.json) {
       deps.out(`${JSON.stringify(e)}\n`)
@@ -262,6 +276,28 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         break
       case 'tool_start':
         if (!opts.json) deps.err(`· ${e.name}\n`)
+        break
+      case 'tool_result':
+        // Surface failures (successes are noise) so a script tailing stderr sees a
+        // tool error instead of silence — mirrors the TUI's ✗ marker.
+        if (!opts.json && !e.ok) deps.err(`· ${e.name} failed\n`)
+        break
+      case 'retry':
+        if (!opts.json) deps.err(`· retrying (${e.attempt}/${e.max})… ${e.message}\n`)
+        break
+      case 'limit':
+        // A capped run (step/output limit) completes with a non-error stop reason,
+        // so without this a truncated run is indistinguishable from success in text
+        // mode. Surface it (JSON mode already carries the `limit` event).
+        if (!opts.json)
+          deps.err(
+            `· stopped early — reached the ${e.reason === 'max-steps' ? 'step' : 'output'} limit; the result may be incomplete\n`
+          )
+        break
+      case 'usage':
+        inTok += e.inputTokens
+        outTok += e.outputTokens
+        cost += e.cost
         break
       case 'tool_approval':
         if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
@@ -283,7 +319,10 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         deps.err(`Error: ${e.message}\n`)
         break
       case 'done':
-        if (!opts.json) deps.out('\n')
+        if (!opts.json) {
+          deps.out('\n')
+          if (inTok || outTok || cost) deps.err(`· ${inTok}+${outTok} tok · $${cost.toFixed(4)}\n`)
+        }
         if (e.stopReason === 'error' || e.stopReason === 'aborted') failed = true
         break
     }

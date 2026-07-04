@@ -399,11 +399,15 @@ Flags: `--cwd <dir>` (project folder, default the current directory),
 `--provider <id>` / `--model <id>` (default your selected model), `--approval
 <plan|ask|auto-edit|full-auto>` (default `plan`), `--json`, `--accept-terms`,
 `--continue` (resume the most recent session in the folder), `--resume <id>`
-(resume a specific one). Assistant text streams to stdout, tool activity to
-stderr, and the process exits non-zero on error. It reuses your saved settings and
-Keychain-stored API keys. Each run is saved as a conversation (shared with the app
-and the interactive `-i` session), so you can script a prompt and then take over
-where it left off.
+(resume a specific one). Assistant text streams to stdout, tool activity — plus a
+one-line token/cost total, failed tools, and an early-stop notice if the run hits
+a step/output limit — to stderr, and the process exits non-zero on error. It
+reuses your saved settings and Keychain-stored API keys. Each run is saved as a
+conversation (shared with the app and the interactive `-i` session), so you can
+script a prompt and then take over where it left off. The run prints its session
+id (`· session <id>` on stderr, or a `{"type":"session","conversationId":…}` line
+first in `--json`) so a script can capture it and `--resume <id>` that exact
+session later.
 
 **First-run terms.** The GUI shows a one-time gate to accept the
 [Terms of Use](docs/TERMS.md), [Privacy Policy](docs/PRIVACY.md), and
