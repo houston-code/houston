@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { createInterface } from 'node:readline'
+import { PassThrough } from 'node:stream'
 import { resolveColor, createTerminalIo, type ReadlineLike } from './tui-io'
 
 describe('resolveColor', () => {
@@ -35,7 +37,7 @@ function fakeRl() {
   const calls: string[] = []
   let answer: ((a: string) => void) | null = null
   const rl: ReadlineLike = {
-    question: (_q, cb) => {
+    question: (_q, _opts, cb) => {
       calls.push('question')
       answer = cb
     },
@@ -105,6 +107,30 @@ describe('createTerminalIo lifecycle', () => {
     io.cancelRead?.()
     await expect(p).resolves.toBeNull()
     expect(f.calls.filter((c) => c === 'pause')).toHaveLength(2) // initial + cancel
+  })
+
+  it('cancelRead cancels the underlying question so the next read is not corrupted', async () => {
+    // Regression: uses a REAL node:readline (the fake can't reproduce it). Before
+    // the AbortSignal fix, cancelRead left the first rl.question registered, so
+    // the next read reused its stale prompt and delivered the user's line to the
+    // dead callback — the new read never resolved.
+    const input = new PassThrough()
+    const output = new PassThrough()
+    output.resume() // drain readline's escape output
+    const io = createTerminalIo({
+      createInterface: () =>
+        createInterface({ input, output, terminal: true }) as unknown as ReadlineLike,
+      write: () => {},
+      drainInput: () => {}
+    })
+    // An approval-style read, then a Ctrl-C cancel of it.
+    const first = io.readLine('APPROVE> ')
+    io.cancelRead?.()
+    await expect(first).resolves.toBeNull()
+    // The next composer read must receive the user's line (not the abandoned one).
+    const second = io.readLine('compose> ')
+    input.write('hello world\n')
+    await expect(second).resolves.toBe('hello world')
   })
 
   it('registers SIGINT and close handlers', () => {
@@ -201,6 +227,18 @@ describe('createTerminalIo spinner', () => {
     h.io.stopSpinner?.()
     expect(h.scheduled()).toBe(0)
     expect(h.text()).toContain('\x1b[2K')
+  })
+
+  it('stops the spinner while a picker is on screen', async () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    expect(h.text()).toBe('') // scheduled, but nothing drawn until the first tick
+    // select() erases the spinner line before showing the picker (like readLine),
+    // then the no-TTY test env falls back to `type`.
+    const r = await h.io.select?.({ title: 'x', options: [{ label: 'A', value: 'a' }] })
+    expect(r).toEqual({ kind: 'type' })
+    expect(h.text()).toContain('\x1b[2K') // spinner line erased for the picker
+    expect(h.scheduled()).toBe(1) // and the spinner resumes (turn still active)
   })
 
   it('pauses the spinner during a read and resumes after', async () => {
