@@ -38,6 +38,9 @@ export function resolveUserDataDir(deps: ResolvePathDeps = {}): string {
   if (override) return override
 
   if (platform === 'darwin') return join(home, 'Library', 'Application Support', APP_NAME)
-  if (platform === 'win32') return join(env['APPDATA'] ?? join(home, 'AppData', 'Roaming'), APP_NAME)
-  return join(env['XDG_CONFIG_HOME'] ?? join(home, '.config'), APP_NAME)
+  // Treat an empty string as unset (Chromium does), not as a relative "" path —
+  // otherwise an exported-but-empty %APPDATA% / $XDG_CONFIG_HOME would fork the
+  // profile into a cwd-relative "Houston" dir instead of the real default.
+  if (platform === 'win32') return join(env['APPDATA'] || join(home, 'AppData', 'Roaming'), APP_NAME)
+  return join(env['XDG_CONFIG_HOME'] || join(home, '.config'), APP_NAME)
 }

@@ -129,7 +129,14 @@ export function resolveHeadlessModel(
   const ready = settings.providers.find((p) => (!p.requiresKey || p.hasKey) && p.models.length > 0)
   if (ready) return { providerId: ready.id, model: pick(ready) }
 
-  return { error: 'No model configured. Set one in the app, or pass --provider/--model.' }
+  // Host-neutral: this path is shared by the desktop app's headless mode and the
+  // standalone CLI, so it can't point at "the app". Both honor --provider/--model,
+  // and both need a provider with a usable API key first (the CLI documents its
+  // env-var / cli-credentials.json options in --help).
+  return {
+    error:
+      'No model configured. Pass --provider and --model, or set up a provider with an API key first.'
+  }
 }
 
 /**

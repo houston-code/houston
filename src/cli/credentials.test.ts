@@ -59,12 +59,21 @@ describe('credentials file', () => {
     expect(cliHasKey('openai', deps)).toBe(true)
   })
 
-  it('treats malformed JSON and non-string values as absent', () => {
-    const deps = { dataDir: dir, env: {}, warn: vi.fn() }
-    writeFileSync(join(dir, 'cli-credentials.json'), 'not json{')
+  it('warns once on malformed JSON (treated as absent); non-string values are absent silently', () => {
+    const warn = vi.fn()
+    const deps = { dataDir: dir, env: {}, warn }
+    const path = join(dir, 'cli-credentials.json')
+    writeFileSync(path, 'not json{')
+    chmodSync(path, 0o600) // isolate the malformed warning from the loose-perms one
     expect(cliGetKey('anthropic', deps)).toBeNull()
-    writeCreds({ anthropic: 42 })
+    expect(cliGetKey('openai', deps)).toBeNull() // a second read in the same process
+    expect(warn).toHaveBeenCalledTimes(1) // once per process, not per read
+    expect(String(warn.mock.calls[0][0])).toContain('not valid JSON')
+
+    warn.mockClear()
+    writeCreds({ anthropic: 42 }) // valid JSON, non-string value → absent, no warning
     expect(cliGetKey('anthropic', deps)).toBeNull()
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('warns once when the file is readable by other users', () => {
@@ -105,12 +114,20 @@ describe('headers file', () => {
     expect(cliGetHeaders('mcp:other', deps)).toEqual({})
   })
 
-  it('drops non-string values and treats malformed JSON as absent', () => {
-    const deps = { dataDir: dir, warn: vi.fn() }
+  it('drops non-string values silently, and warns once on malformed JSON', () => {
+    const warn = vi.fn()
+    const deps = { dataDir: dir, warn }
     writeHeaders({ 'provider:openai': { Authorization: 'Bearer tok', bad: 42 } })
     expect(cliGetHeaders('provider:openai', deps)).toEqual({ Authorization: 'Bearer tok' })
-    writeFileSync(join(dir, 'cli-headers.json'), 'not json{')
+    expect(warn).not.toHaveBeenCalled() // valid JSON, just a non-string value
+
+    const path = join(dir, 'cli-headers.json')
+    writeFileSync(path, 'not json{')
+    chmodSync(path, 0o600) // isolate the malformed warning from the loose-perms one
     expect(cliGetHeaders('provider:openai', deps)).toEqual({})
+    expect(cliGetHeaders('mcp:x', deps)).toEqual({}) // second read, same process
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('not valid JSON')
   })
 
   it('warns once when the headers file is readable by other users', () => {

@@ -118,7 +118,12 @@ describe('resolveHeadlessModel', () => {
 
   it('errors when nothing is configured', () => {
     const s = settings({ providers: [], selected: null })
-    expect(resolveHeadlessModel(s, {})).toHaveProperty('error')
+    const result = resolveHeadlessModel(s, {})
+    expect(result).toHaveProperty('error')
+    // Host-neutral: shared with the standalone CLI, so it must not say "the app".
+    const error = (result as { error: string }).error
+    expect(error).not.toMatch(/in the app/i)
+    expect(error).toContain('--provider')
   })
 })
 
