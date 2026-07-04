@@ -211,6 +211,11 @@ function ConvRow({
   return (
     <div
       className={`conv ${active ? 'conv--active' : ''} ${dragging ? 'conv--dragging' : ''}`}
+      // Keyboard-reachable so a row can be opened without the mouse. Not renaming:
+      // the inline input owns focus/keys then. `aria-current` marks the open chat.
+      tabIndex={renaming ? -1 : 0}
+      aria-current={active ? 'true' : undefined}
+      aria-label={conv.title}
       // Renaming swaps in a text input; dragging would hijack its selection.
       draggable={!renaming}
       onDragStart={(e) => {
@@ -221,6 +226,13 @@ function ConvRow({
       }}
       onDragEnd={() => setDragging(false)}
       onClick={() => !renaming && props.onSelect(conv.id)}
+      onKeyDown={(e) => {
+        // Only when the row itself is focused — not a nested control (⋯ menu).
+        if (!renaming && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault()
+          props.onSelect(conv.id)
+        }
+      }}
     >
       {/* The dot's slot is always present so the title never shifts when a run
           starts/stops; only its visibility (and accessible name) toggle. */}

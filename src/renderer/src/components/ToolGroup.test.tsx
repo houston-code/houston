@@ -53,6 +53,22 @@ describe('ToolGroup', () => {
     expect(screen.queryByText('hello from the shell')).not.toBeInTheDocument()
   })
 
+  it('expands an output row from the keyboard (Enter / Space)', () => {
+    const items: ToolItem[] = [
+      tool({ id: 'a', name: 'run_shell', status: 'done', args: { command: 'echo hi' }, output: 'shell output' })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    const head = container.querySelector('.tool-row__head--clickable') as HTMLElement
+    // The row is a focusable button for assistive tech.
+    expect(head).toHaveAttribute('role', 'button')
+    expect(head).toHaveAttribute('tabindex', '0')
+
+    fireEvent.keyDown(head, { key: 'Enter' })
+    expect(screen.getByText('shell output')).toBeInTheDocument()
+    fireEvent.keyDown(head, { key: ' ' })
+    expect(screen.queryByText('shell output')).not.toBeInTheDocument()
+  })
+
   it('does not make an output-less, diff-less row expandable', () => {
     const items: ToolItem[] = [
       tool({ id: 'a', name: 'run_shell', status: 'running', args: { command: 'sleep 1' } })
