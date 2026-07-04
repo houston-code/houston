@@ -50,10 +50,18 @@ function setup(tasks: BackgroundTask[], onSelect = vi.fn(), onClearFinished = vi
 }
 
 describe('BackgroundTasks', () => {
-  it('counts every in-progress task (chats + terminals) and announces it', () => {
-    setup([chatRunning, termRunning, chatDone])
+  it('counts running agent work (chats + shells) but not idle terminals', () => {
+    // A chat + a shell run count; the running terminal does not inflate the badge.
+    setup([chatRunning, termRunning, shellRunning, chatDone])
     const btn = screen.getByRole('button', { name: /background tasks, 2 running/i })
     expect(within(btn).getByText('2')).toBeInTheDocument()
+  })
+
+  it('does not light the badge for a terminal alone', () => {
+    setup([termRunning])
+    const btn = screen.getByRole('button', { name: /^background tasks$/i })
+    expect(within(btn).queryByText(/^\d+$/)).not.toBeInTheDocument()
+    expect(btn).not.toHaveClass('titlebar__action--active')
   })
 
   it('omits the count when nothing is running', () => {
