@@ -50,12 +50,12 @@ function renderPicker(over?: {
 describe('ModelPicker', () => {
   it('shows the selected model with its context window on the trigger', () => {
     renderPicker()
-    expect(screen.getByTitle('Model')).toHaveTextContent('GPT-5 · 400k')
+    expect(screen.getByRole('combobox')).toHaveTextContent('GPT-5 · 400k')
   })
 
   it('orders models by the curated default order, not the stored order', () => {
     renderPicker()
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox'))
     const names = screen.getAllByRole('option').map((o) => o.textContent)
     // Stored order was gpt-4o, o3, gpt-5, gpt-5-mini — display restores GPT-5 first.
     expect(names[0]).toContain('GPT-5')
@@ -66,7 +66,7 @@ describe('ModelPicker', () => {
 
   it('annotates each model with its context window', () => {
     renderPicker()
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox'))
     // Exact names so the bare "GPT-5" doesn't also match "GPT-5 mini".
     expect(screen.getByRole('option', { name: 'GPT-5 400k' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'GPT-5 mini 400k' })).toBeInTheDocument()
@@ -76,14 +76,14 @@ describe('ModelPicker', () => {
 
   it('marks the current model as the selected option', () => {
     renderPicker()
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox'))
     const selected = screen.getByRole('option', { selected: true })
     expect(selected).toHaveTextContent('GPT-5')
   })
 
   it('selects a model on click and closes the menu', () => {
     const { onSelect } = renderPicker()
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox'))
     fireEvent.click(screen.getByRole('option', { name: /GPT-4o/ }))
     expect(onSelect).toHaveBeenCalledWith({ providerId: 'openai', model: 'gpt-4o' })
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
@@ -91,16 +91,35 @@ describe('ModelPicker', () => {
 
   it('navigates with the arrow keys and selects with Enter', () => {
     const { onSelect } = renderPicker()
-    const trigger = screen.getByTitle('Model')
+    const trigger = screen.getByRole('combobox')
     fireEvent.click(trigger) // opens with gpt-5 active
     fireEvent.keyDown(trigger, { key: 'ArrowDown' }) // -> gpt-5-mini
     fireEvent.keyDown(trigger, { key: 'Enter' })
     expect(onSelect).toHaveBeenCalledWith({ providerId: 'openai', model: 'gpt-5-mini' })
   })
 
+  it('selects with a lone Space on the active option', () => {
+    const onSelect = vi.fn()
+    renderPicker({ onSelect })
+    const trigger = screen.getByRole('combobox')
+    fireEvent.click(trigger) // opens with gpt-5 active
+    fireEvent.keyDown(trigger, { key: ' ' })
+    expect(onSelect).toHaveBeenCalledWith({ providerId: 'openai', model: 'gpt-5' })
+  })
+
+  it('lets Space extend an in-progress type-ahead instead of selecting', () => {
+    const onSelect = vi.fn()
+    renderPicker({ onSelect })
+    const trigger = screen.getByRole('combobox')
+    fireEvent.click(trigger)
+    fireEvent.keyDown(trigger, { key: 'g' }) // starts a type-ahead buffer
+    fireEvent.keyDown(trigger, { key: ' ' }) // extends it, does not select
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
   it('closes on Escape without selecting', () => {
     const { onSelect } = renderPicker()
-    const trigger = screen.getByTitle('Model')
+    const trigger = screen.getByRole('combobox')
     fireEvent.click(trigger)
     expect(screen.getByRole('listbox')).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
@@ -110,8 +129,8 @@ describe('ModelPicker', () => {
 
   it('shows a placeholder group when a provider has no models', () => {
     renderPicker({ settings: settingsWith([]), selected: null })
-    expect(screen.getByTitle('Model')).toHaveTextContent('Select a model…')
-    fireEvent.click(screen.getByTitle('Model'))
+    expect(screen.getByRole('combobox')).toHaveTextContent('Select a model…')
+    fireEvent.click(screen.getByRole('combobox'))
     const group = screen.getByRole('group', { name: 'OpenAI (GPT)' })
     expect(within(group).getByText(/no models configured/)).toBeInTheDocument()
     expect(screen.queryByRole('option')).not.toBeInTheDocument()
@@ -122,7 +141,7 @@ describe('ModelPicker', () => {
       providers: [provider({ id: 'openai', hasKey: false, models: OPENAI_STORED })]
     } as unknown as AppSettings
     renderPicker({ settings, selected: { providerId: 'openai', model: 'gpt-5' } })
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox'))
     expect(screen.getByRole('group', { name: 'OpenAI (GPT) (no key)' })).toBeInTheDocument()
   })
 })
@@ -268,7 +287,7 @@ describe('ModelPicker — host-listed capabilities', () => {
         onSelect={vi.fn()}
       />
     )
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox'))
     const opt = screen.getByRole('option', { name: /deepseek/ })
     expect(within(opt).getByTitle('Supports tool calling')).toBeInTheDocument()
     expect(within(opt).getByTitle('Accepts images (vision)')).toBeInTheDocument()
@@ -283,7 +302,7 @@ describe('ModelPicker — host-listed capabilities', () => {
         onSelect={vi.fn()}
       />
     )
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox'))
     expect(screen.getByRole('option', { name: /deepseek\/deepseek-r1 128k/ })).toBeInTheDocument()
   })
 })

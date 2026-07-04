@@ -84,7 +84,7 @@ export function CommandPalette({
           onKeyDown={onKeyDown}
         />
         {filtered.length === 0 ? (
-          <div className="command-palette__empty">No matching commands</div>
+          <div className="command-palette__empty">No matching commands, chats, or models</div>
         ) : (
           <ul className="command-palette__list" id="command-palette-list" role="listbox" ref={listRef}>
             {filtered.map((it, i) => {

@@ -72,7 +72,7 @@ describe('CommandPalette', () => {
     render(<CommandPalette items={items} onClose={() => {}} />)
     const input = screen.getByRole('combobox')
     fireEvent.change(input, { target: { value: 'zzzzz' } })
-    expect(screen.getByText('No matching commands')).toBeInTheDocument()
+    expect(screen.getByText('No matching commands, chats, or models')).toBeInTheDocument()
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(Object.values(runs).every((r) => r.mock.calls.length === 0)).toBe(true)
   })

@@ -2,9 +2,10 @@ import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
 import type { ConversationWorktree, ReasoningEffort, RepoInfo } from '@shared/agent'
 import {
   contextPercent,
-  contextWindowFor,
   formatTokens,
   formatUsd,
+  resolveCapabilities,
+  resolveContextWindow,
   type SessionUsage
 } from '@shared/usage'
 import { branchNameError } from '../lib/worktree'
@@ -91,7 +92,14 @@ export function ControlBar({
   const repoRoot = repoInfo?.isRepo ? repoInfo.root : currentWorktree?.repoRoot
   const folderLabel = repoRoot ? basename(repoRoot) : workspace ? basename(workspace) : null
 
-  const ctxWindow = selected ? contextWindowFor(selected.model) : null
+  // Resolve the model's context window and reasoning support from host-reported
+  // metadata first (same source the model picker uses), falling back to name
+  // heuristics — so the usage meter and the "Think:" control agree with the picker.
+  const selectedModelOpt = provider?.models.find((m) => m.id === selected?.model)
+  const ctxWindow = selected ? resolveContextWindow(selected.model, selectedModelOpt?.caps) : null
+  const hasReasoning = selected
+    ? resolveCapabilities(selected.model, selectedModelOpt?.caps).reasoning
+    : true
   const pct = usage ? contextPercent(usage.context, ctxWindow) : null
   const meterClass = pct === null ? '' : pct >= 95 ? ' usage__fill--danger' : pct >= 80 ? ' usage__fill--warn' : ''
 
@@ -180,8 +188,14 @@ export function ControlBar({
       <select
         className="control control--select"
         value={settings.reasoningEffort ?? 'off'}
+        disabled={!hasReasoning}
+        aria-label="Reasoning effort"
         onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
-        title="How hard the model should think before answering (supported models only)"
+        title={
+          hasReasoning
+            ? 'How hard the model should think before answering'
+            : 'The selected model has no reasoning mode'
+        }
       >
         {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
           <option key={r} value={r}>
@@ -193,6 +207,7 @@ export function ControlBar({
       <select
         className="control control--select"
         value={settings.approvalPolicy}
+        aria-label="Approval mode"
         onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
         title="How much the agent may do without asking"
       >

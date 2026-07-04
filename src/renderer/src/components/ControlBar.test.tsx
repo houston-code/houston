@@ -71,7 +71,7 @@ describe('ControlBar', () => {
     render(<ControlBar {...baseProps()} />)
 
     // The trigger shows the selected model and its context window.
-    const trigger = screen.getByTitle('Model')
+    const trigger = screen.getByRole('combobox', { name: /Claude Opus/ })
     expect(trigger).toHaveTextContent('Claude Opus')
     expect(trigger).toHaveTextContent('200k')
 
@@ -92,7 +92,7 @@ describe('ControlBar', () => {
     const props = baseProps()
     render(<ControlBar {...props} />)
 
-    fireEvent.click(screen.getByTitle('Model'))
+    fireEvent.click(screen.getByRole('combobox', { name: /Claude Opus/ }))
     fireEvent.click(screen.getByRole('option', { name: /claude-haiku/ }))
 
     expect(props.onSelectModel).toHaveBeenCalledWith({ providerId: 'anthropic', model: 'claude-haiku' })
@@ -122,6 +122,30 @@ describe('ControlBar', () => {
     const warn = screen.getByRole('button', { name: /Set API key/ })
     fireEvent.click(warn)
     expect(noKey.onOpenSettings).toHaveBeenCalledOnce()
+  })
+
+  it('disables the reasoning control for a model without a reasoning mode', () => {
+    const withReasoning = makeSettings()
+    withReasoning.providers[0].models = [{ id: 'm1', label: 'M1', caps: { reasoning: true } }]
+    render(
+      <ControlBar
+        {...baseProps()}
+        settings={withReasoning}
+        selected={{ providerId: 'anthropic', model: 'm1' }}
+      />
+    )
+    expect(screen.getByRole('combobox', { name: 'Reasoning effort' })).toBeEnabled()
+
+    const noReasoning = makeSettings()
+    noReasoning.providers[0].models = [{ id: 'm2', label: 'M2', caps: { reasoning: false } }]
+    render(
+      <ControlBar
+        {...baseProps()}
+        settings={noReasoning}
+        selected={{ providerId: 'anthropic', model: 'm2' }}
+      />
+    )
+    expect(screen.getAllByRole('combobox', { name: 'Reasoning effort' })[1]).toBeDisabled()
   })
 
   it('hides the worktree editor unless it is a new chat in a git repo', () => {
