@@ -18,6 +18,8 @@ export interface InputQueue {
   remove: (id: string) => void
   /** Discard the open conversation's queue. */
   clear: () => void
+  /** Dispatch the open conversation's queued messages now (e.g. after Stop). */
+  flush: () => void
 }
 
 /**
@@ -87,5 +89,13 @@ export function useInputQueue(conversationId: string | null): InputQueue {
     })
   }, [])
 
-  return { queued, enqueue, remove, clear }
+  // Dispatch now. Main clears the queue and pushes IPC.agentQueueChanged (which the
+  // effect above applies), then streams the follow-up run's turn_start for adoption.
+  const flush = useCallback(() => {
+    const cid = convIdRef.current
+    if (!cid) return
+    void window.api.flushQueue(cid)
+  }, [])
+
+  return { queued, enqueue, remove, clear, flush }
 }

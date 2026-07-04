@@ -95,6 +95,8 @@ export const IPC = {
   agentQueueRemove: 'agent:queue:remove',
   agentQueueClear: 'agent:queue:clear',
   agentQueueList: 'agent:queue:list',
+  // Dispatch a conversation's queued messages now (e.g. after Stop leaves them held).
+  agentQueueFlush: 'agent:queue:flush',
   agentQueueChanged: 'agent:queue:changed',
   checkpointRestore: 'checkpoint:restore',
   checkpointReapply: 'checkpoint:reapply',

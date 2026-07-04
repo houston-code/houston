@@ -1,4 +1,4 @@
-import { ipcMain, dialog, app, BrowserWindow, clipboard, shell } from 'electron'
+import { ipcMain, dialog, BrowserWindow, clipboard, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
@@ -48,7 +48,8 @@ import {
 } from './agent/loop'
 import { listShells, listPreviewServers, onShellsChanged } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
-import { runAndDrain, type DrainIO } from './agent/drain'
+import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
+import { version as APP_VERSION } from '../../package.json'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import { restoreCheckpoint, reapplyCheckpoint, getConversationCheckpoint } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
@@ -182,7 +183,9 @@ function callerOwnsRun(event: { sender: WebContents }, runId: string): boolean {
 
 /** Register every IPC handler the renderer can call. */
 export function registerIpc(): void {
-  ipcMain.handle(IPC.appGetVersion, () => app.getVersion())
+  // Use the bundled package.json version (inlined at build): `app.getVersion()`
+  // reports Electron's own version in an unpackaged dev run, not Houston's.
+  ipcMain.handle(IPC.appGetVersion, () => APP_VERSION)
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   ipcMain.handle(IPC.updateCheck, () => checkForUpdates())
@@ -655,6 +658,14 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.agentQueueList, (_event, conversationId: string): QueuedInputMeta[] =>
     listQueue(conversationId)
   )
+  // Dispatch a conversation's queued messages immediately as one combined turn.
+  // Used by the queue bar's "Send now" after Stop/error leaves items held (the
+  // auto-flush only fires on a natural finish). No-op if a run is already active
+  // for the conversation — that run's own natural finish will drain the queue.
+  ipcMain.handle(IPC.agentQueueFlush, (event, conversationId: string): void => {
+    if (activeRunForConversation(conversationId)) return
+    drainQueue(makeIo(event.sender), conversationId, event.sender.id)
+  })
 
   ipcMain.handle(
     IPC.agentApprove,

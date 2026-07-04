@@ -165,6 +165,9 @@ const api = {
   /** Read a conversation's current queue (e.g. when opening it). */
   listQueue: (conversationId: string): Promise<QueuedInputMeta[]> =>
     ipcRenderer.invoke(IPC.agentQueueList, conversationId),
+  /** Dispatch a conversation's queued messages now (e.g. "Send now" after Stop). */
+  flushQueue: (conversationId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.agentQueueFlush, conversationId),
   /** Subscribe to main-initiated queue changes (an auto-flush). Returns an unsubscribe fn. */
   onQueueChanged: (
     cb: (payload: { conversationId: string; items: QueuedInputMeta[] }) => void

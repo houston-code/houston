@@ -153,15 +153,26 @@ export function useChat(conversationId: string | null = null): ChatController {
     setRunning(true)
     setCheckpoint(null)
     setErrored(false)
-    await window.api.startAgent({
-      runId,
-      conversationId: params.conversationId,
-      userText: params.userText,
-      images: params.images,
-      providerId: params.providerId,
-      model: params.model,
-      approvalPolicy: params.approvalPolicy
-    })
+    try {
+      await window.api.startAgent({
+        runId,
+        conversationId: params.conversationId,
+        userText: params.userText,
+        images: params.images,
+        providerId: params.providerId,
+        model: params.model,
+        approvalPolicy: params.approvalPolicy
+      })
+    } catch {
+      // The IPC call itself failed (bridge/serialization) before any run started —
+      // otherwise the Stop button would stay lit forever with no run behind it.
+      // A run that starts and then fails reports back via an `error` event instead.
+      if (runIdRef.current === runId) {
+        setRunning(false)
+        runIdRef.current = null
+        setErrored(true)
+      }
+    }
   }, [])
 
   const retry = useCallback(async (params: RetryParams) => {
@@ -169,7 +180,15 @@ export function useChat(conversationId: string | null = null): ChatController {
     runIdRef.current = runId
     setRunning(true)
     setErrored(false)
-    await window.api.retryAgent({ runId, ...params })
+    try {
+      await window.api.retryAgent({ runId, ...params })
+    } catch {
+      if (runIdRef.current === runId) {
+        setRunning(false)
+        runIdRef.current = null
+        setErrored(true)
+      }
+    }
   }, [])
 
   const cancel = useCallback(() => {
