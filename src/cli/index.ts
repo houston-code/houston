@@ -10,9 +10,10 @@ import {
   getSettings
 } from '../main/store'
 import { setUserDataDir } from '../main/userData'
-import { log } from '../main/logger'
+import { configureLogRedactor, log } from '../main/logger'
+import { redactSecrets } from '../main/agent/redact'
 import { resolveUserDataDir } from './paths'
-import { cliGetHeaders, cliGetKey, cliHasKey } from './credentials'
+import { cliCollectSecrets, cliGetHeaders, cliGetKey, cliHasKey } from './credentials'
 
 /**
  * Standalone CLI entry — the interactive TUI (`-i`) and one-shot headless (`-p`)
@@ -88,6 +89,8 @@ Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 export function wireCliHost(): void {
   setUserDataDir(resolveUserDataDir())
   configureHasKey((id) => cliHasKey(id))
+  // Scrub stored secrets (and token-shaped strings) from every log line.
+  configureLogRedactor((message) => redactSecrets(message, cliCollectSecrets()))
   // Header secrets come from cli-headers.json (see cliGetHeaders); the CLI has no UI
   // that writes them, so set/remove are no-ops — settings saves just preserve the keys.
   configureHeaderSecrets({
@@ -101,7 +104,8 @@ export function wireCliHost(): void {
     addPermissionRule,
     getKey: (id) => cliGetKey(id),
     hasStoredKey: (id) => cliHasKey(id),
-    getSecretHeaders: (scope) => cliGetHeaders(scope)
+    getSecretHeaders: (scope) => cliGetHeaders(scope),
+    collectSecrets: () => cliCollectSecrets()
   })
 }
 

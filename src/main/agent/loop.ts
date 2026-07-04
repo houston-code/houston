@@ -16,7 +16,8 @@ import { isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@sha
 import type { ImageAttachment } from '@shared/images'
 import { DEFAULT_COMPACTION_THRESHOLD, resolveShellOutputBudget } from '@shared/defaults'
 import { turnCostUsd } from '@shared/usage'
-import { addPermissionRule, getKey, getProvider, getSettings } from '../agentHost'
+import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
+import { createSecretRedactor } from './redact'
 import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
@@ -498,6 +499,13 @@ export async function startRun(
     const ghPath = resolveGh()
     const ghExec = ghPath ? runGh(ghPath) : undefined
 
+    // Redact secrets from every tool result before it reaches the model, the renderer,
+    // or the on-disk transcript — so an agent that reads an env var or a config file
+    // can't exfiltrate a stored credential (or a token-shaped secret from the user's
+    // files) by echoing it back. Built once from this install's stored secrets; see
+    // redact.ts. Snapshotted at run start, so a key added mid-run applies next run.
+    const redact = createSecretRedactor(collectSecrets())
+
     // Shared tool-execution context. `run.policy` and `run.override` are read at
     // call time so a mid-run policy change or an "Allow for run" decision earlier
     // in the turn takes effect. `allowNetwork` governs the shell sandbox's network
@@ -900,23 +908,27 @@ export async function startRun(
       // whatever has been appended persists, and only not-yet-run calls get the
       // interrupted placeholder from the finally block's repair pass.
       const flushResult = async (r: CallResult): Promise<void> => {
+        // Strip secrets once, here at the single choke point every tool result passes
+        // through, so the redacted text is what fans out to all three sinks below (UI
+        // event, plugin event, model/transcript message) — none see the plaintext.
+        const output = redact(r.output)
         emit({
           type: 'tool_result',
           callId: r.call.id,
           name: r.call.name,
           ok: r.ok,
-          output: r.output,
+          output,
           ...(r.images.length ? { images: r.images } : {})
         })
         await plugins.emit('onToolResult', {
           tool: r.call.name,
           input: r.call.arguments,
-          output: r.output,
+          output,
           ok: r.ok
         })
         messages.push({
           role: 'tool',
-          content: r.output,
+          content: output,
           toolCallId: r.call.id,
           toolName: r.call.name,
           ...(r.images.length ? { images: r.images } : {}),

@@ -35,6 +35,7 @@ vi.mock('electron', () => ({
 }))
 
 import {
+  collectSecretValues,
   deleteKey,
   deleteSecretHeaders,
   getCredential,
@@ -186,5 +187,50 @@ describe('secret headers store', () => {
     const parsed = JSON.parse(readFileSync(join(state.userData, 'secrets.json'), 'utf8'))
     expect(parsed.keys.openai).toBeTruthy()
     expect(parsed.headers['provider:openai']).toBeTruthy()
+  })
+})
+
+describe('collectSecretValues', () => {
+  it('collects api keys and both OAuth tokens', () => {
+    setKey('anthropic', 'sk-ant-longenoughkey')
+    setCredential('openai', {
+      type: 'oauth',
+      access: 'access-token-longenough',
+      refresh: 'refresh-token-longenough'
+    })
+    expect(collectSecretValues().sort()).toEqual(
+      ['access-token-longenough', 'refresh-token-longenough', 'sk-ant-longenoughkey'].sort()
+    )
+  })
+
+  it('drops credential values below the length floor', () => {
+    setKey('tiny', 'short') // 5 chars < MIN_CREDENTIAL_LEN
+    expect(collectSecretValues()).toEqual([])
+  })
+
+  it('collects the opaque token out of a header value, not the scheme word', () => {
+    const token = 'a'.repeat(24)
+    setSecretHeaders('provider:acme', {
+      Authorization: `Bearer ${token}`, // → the long token, not "Bearer"
+      'Content-Type': 'application/json', // short-ish, common → not a secret
+      'X-Trace': 'has spaces in it so not opaque' // all short words → not a secret
+    })
+    expect(collectSecretValues()).toEqual([token])
+  })
+
+  it('skips undecryptable entries rather than throwing', () => {
+    setKey('anthropic', 'sk-ant-longenoughkey')
+    state.failDecrypt = true
+    expect(collectSecretValues()).toEqual([])
+  })
+
+  it('caches until a write invalidates it', () => {
+    setKey('anthropic', 'sk-ant-longenoughkey')
+    expect(collectSecretValues()).toEqual(['sk-ant-longenoughkey'])
+    // A later write is reflected (the cache was dropped on persist).
+    setKey('openai', 'sk-openai-longenough')
+    expect(collectSecretValues().sort()).toEqual(
+      ['sk-ant-longenoughkey', 'sk-openai-longenough'].sort()
+    )
   })
 })

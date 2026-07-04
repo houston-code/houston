@@ -156,6 +156,57 @@ export function cliGetHeaders(scope: string, deps: CredentialDeps = {}): Record<
   }
 }
 
+/** Read a JSON object from `path`, or `{}` if absent/malformed. No perms warning — the
+ *  normal key/header resolution path already surfaces that. */
+function readJsonObject(path: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Secret-shaped opaque tokens inside a header value (see the desktop store's
+ *  equivalent): a header is often `Scheme token`, so take each whitespace-delimited run
+ *  long enough to be a credential rather than a scheme word or a common value. */
+function secretTokensFromHeader(value: string): string[] {
+  return value.split(/\s+/).filter((t) => t.length >= 20)
+}
+
+/**
+ * Every plaintext secret the CLI can resolve, for the tool-result/log redactor (see
+ * main/agent/redact.ts). Pulls from the same three sources as key/header resolution:
+ * credential env vars, cli-credentials.json, and cli-headers.json. Best-effort —
+ * unreadable or malformed sources contribute nothing.
+ */
+export function cliCollectSecrets(deps: CredentialDeps = {}): string[] {
+  const env = deps.env ?? process.env
+  const dataDir = deps.dataDir ?? getUserDataDir()
+  const out = new Set<string>()
+
+  // Env: the well-known per-provider vars plus any generic HOUSTON_API_KEY_* override.
+  const knownEnvNames = new Set<string>(Object.values(ENV_ALIASES).flat())
+  for (const [name, value] of Object.entries(env)) {
+    if (!value || value.length < 8) continue
+    if (knownEnvNames.has(name) || name.startsWith('HOUSTON_API_KEY_')) out.add(value)
+  }
+
+  // cli-credentials.json: a flat { "<id>": "<key>" } map.
+  for (const v of Object.values(readJsonObject(join(dataDir, 'cli-credentials.json')))) {
+    if (typeof v === 'string' && v.length >= 8) out.add(v)
+  }
+
+  // cli-headers.json: { "<scope>": { "<Header>": "<value>" } } — only secret-shaped tokens.
+  for (const entry of Object.values(readJsonObject(join(dataDir, 'cli-headers.json')))) {
+    if (!entry || typeof entry !== 'object') continue
+    for (const v of Object.values(entry as Record<string, unknown>)) {
+      if (typeof v === 'string') for (const tok of secretTokensFromHeader(v)) out.add(tok)
+    }
+  }
+  return [...out]
+}
+
 /** Resolve a credential: environment first, then cli-credentials.json. */
 export function cliGetKey(id: string, deps: CredentialDeps = {}): string | null {
   const env = deps.env ?? process.env

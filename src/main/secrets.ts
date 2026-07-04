@@ -67,6 +67,8 @@ function persist(data: SecretsFile): void {
   // 0600 — owner read/write only.
   writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 })
   renameSync(tmp, path)
+  // Any credential/header change invalidates the redactor's cached value list.
+  cachedSecretValues = null
 }
 
 function assertEncryptionAvailable(): void {
@@ -216,4 +218,63 @@ export function deleteSecretHeaders(scope: string): void {
     delete data.headers[scope]
     persist(data)
   }
+}
+
+// ---- Secret enumeration (for redaction) ----
+
+/**
+ * Minimum length for a stored credential value to be worth redacting. Real API keys
+ * and OAuth tokens are far longer; this only guards a pathological short value from
+ * becoming an over-eager exact-match against tool output.
+ */
+const MIN_CREDENTIAL_LEN = 8
+
+/**
+ * Secret-shaped opaque tokens inside a custom-header VALUE, worth redacting by exact
+ * match. Unlike API keys, the header store holds *every* custom header the user added —
+ * innocuous ones (`Content-Type: application/json`) included — so redacting a short or
+ * common value everywhere it appears in tool output would corrupt legitimate content.
+ * A header value is often `Scheme token` (e.g. `Bearer <jwt>`) or a bare token, so we
+ * take each whitespace-delimited run long enough to be a credential rather than a scheme
+ * word or a common value. The `Bearer` prefix isn't secret; the long run after it is.
+ */
+const MIN_HEADER_TOKEN_LEN = 20
+function secretTokensFromHeader(value: string): string[] {
+  return value.split(/\s+/).filter((t) => t.length >= MIN_HEADER_TOKEN_LEN)
+}
+
+/** Cached result of {@link collectSecretValues}; dropped on any write via {@link persist}. */
+let cachedSecretValues: string[] | null = null
+
+/**
+ * Main-process only. Every plaintext secret value this install holds — provider API
+ * keys, OAuth access/refresh tokens, and secret-shaped custom-header values — for the
+ * redactor to strip from tool results and logs (see `agent/redact.ts`). Best-effort:
+ * undecryptable entries are skipped and the whole thing degrades to `[]` rather than
+ * throwing. Cached until the next credential/header write.
+ */
+export function collectSecretValues(): string[] {
+  if (cachedSecretValues) return cachedSecretValues
+  const out = new Set<string>()
+  try {
+    const data = load()
+    for (const providerId of Object.keys(data.keys)) {
+      const cred = getCredential(providerId)
+      if (!cred) continue
+      const values = cred.type === 'api-key' ? [cred.key] : [cred.access, cred.refresh]
+      for (const v of values) {
+        if (v && v.length >= MIN_CREDENTIAL_LEN) out.add(v)
+      }
+    }
+    for (const scope of Object.keys(data.headers ?? {})) {
+      for (const v of Object.values(getSecretHeaders(scope))) {
+        for (const tok of secretTokensFromHeader(v)) out.add(tok)
+      }
+    }
+  } catch {
+    // Never let secret enumeration break a run; a partial/empty list just means less
+    // redaction, not a crash.
+  }
+  cachedSecretValues = [...out]
+  return cachedSecretValues
 }
