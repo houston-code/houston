@@ -268,8 +268,31 @@ export function SettingsModal({
   const [busy, setBusy] = useState<string | null>(null)
   const [newLabel, setNewLabel] = useState('')
   const [newUrl, setNewUrl] = useState('')
+  // A key/model action error, shown inline in the footer (vs a blocking alert()).
+  const [formError, setFormError] = useState<string | null>(null)
+  // True once a close is requested while there are unsaved edits — the footer then
+  // asks to confirm rather than discarding silently.
+  const [confirmingClose, setConfirmingClose] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
-  useFocusTrap(modalRef, onClose)
+
+  // A stable digest of the persisted-settings baseline (derived key flags stripped,
+  // since those change via the key actions, not "unsaved edits"). Updated whenever
+  // the working settings are persisted, so the dirty check reflects real edits.
+  const digest = (s: AppSettings): string =>
+    JSON.stringify({
+      ...s,
+      providers: s.providers.map((p) => ({ ...p, hasKey: false })),
+      searchKeyStatus: undefined
+    })
+  const savedDigest = useRef(digest(initial))
+  const isDirty = digest(settings) !== savedDigest.current
+
+  // Guard close (X / backdrop / Esc): warn once when there are unsaved edits.
+  const requestClose = (): void => {
+    if (isDirty) setConfirmingClose(true)
+    else onClose()
+  }
+  useFocusTrap(modalRef, requestClose)
 
   // Live-preview the selected color theme while the modal is open, so the user
   // sees the change before committing. If they close without saving we revert to
@@ -341,8 +364,11 @@ export function SettingsModal({
   const rules = settings.permissionRules ?? []
   const setRules = (next: PermissionRule[]): void =>
     setSettings((s) => ({ ...s, permissionRules: next }))
+  // Default to 'ask', not 'allow': an all-approving rule shouldn't be one careless
+  // click + Save away (the empty match pattern would otherwise auto-approve every
+  // run_shell call).
   const addRule = (): void =>
-    setRules([...rules, { action: 'allow', tool: 'run_shell', match: '' }])
+    setRules([...rules, { action: 'ask', tool: 'run_shell', match: '' }])
   const patchRule = (i: number, patch: Partial<PermissionRule>): void =>
     setRules(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const removeRule = (i: number): void => setRules(rules.filter((_, idx) => idx !== i))
@@ -377,24 +403,34 @@ export function SettingsModal({
     setServers(servers.map((sv, idx) => (idx === i ? { ...sv, ...patch } : sv)))
   const removeServer = (i: number): void => setServers(servers.filter((_, idx) => idx !== i))
 
-  // Persist the current (non-secret) edits, then run a key/model action that returns fresh settings.
-  const persistThen = async (action: () => Promise<AppSettings>): Promise<void> => {
-    await window.api.saveSettings(settings)
-    const fresh = await action()
-    setSettings(fresh)
-  }
+  // An API key lives in the OS secret store, not settings.json — so saving/removing
+  // one is its own action and must NOT persist the modal's other (unsaved) edits.
+  // We merge just the derived key flags from main's response into the working copy,
+  // keeping every pending edit intact so Cancel still discards them.
+  const applyKeyResult = (fresh: AppSettings, id: string, has: boolean): void =>
+    setSettings((s) => ({
+      ...s,
+      providers: s.providers.map((p) => {
+        const fp = fresh.providers.find((x) => x.id === p.id)
+        // The just-(un)keyed provider is definitive; others take main's recomputed
+        // flag (a new unsaved provider isn't in `fresh`, so fall back to `has`).
+        return { ...p, hasKey: p.id === id ? has : (fp?.hasKey ?? p.hasKey) }
+      }),
+      searchKeyStatus: fresh.searchKeyStatus
+    }))
 
   const saveKey = async (id: string): Promise<void> => {
     const key = keyInputs[id]?.trim()
     if (!key) return
     setBusy(id)
+    setFormError(null)
     try {
-      await persistThen(() => window.api.setKey(id, key))
+      applyKeyResult(await window.api.setKey(id, key), id, true)
       setKeyInputs((k) => ({ ...k, [id]: '' }))
     } catch (e) {
       // Surface storage failures (e.g. OS Keychain unavailable) instead of
       // letting the key silently vanish.
-      alert(`Could not save API key: ${(e as Error).message}`)
+      setFormError(`Could not save API key: ${(e as Error).message}`)
     } finally {
       setBusy(null)
     }
@@ -402,8 +438,11 @@ export function SettingsModal({
 
   const removeKey = async (id: string): Promise<void> => {
     setBusy(id)
+    setFormError(null)
     try {
-      await persistThen(() => window.api.deleteKey(id))
+      applyKeyResult(await window.api.deleteKey(id), id, false)
+    } catch (e) {
+      setFormError(`Could not remove API key: ${(e as Error).message}`)
     } finally {
       setBusy(null)
     }
@@ -411,8 +450,14 @@ export function SettingsModal({
 
   const fetchModels = async (id: string): Promise<void> => {
     setBusy(id)
+    setFormError(null)
     try {
+      // listModels reads the provider's config from the persisted settings, so the
+      // working edits must be saved first. That commits them — including the
+      // previewed theme — so lock in the theme too and refresh the dirty baseline.
       await window.api.saveSettings(settings)
+      committed.current = true
+      savedDigest.current = digest(settings)
       const fetched = await window.api.listModels(id)
       // Adopt fetched ids + capability metadata, but keep any curated label the
       // user already had for that id (the listing rarely carries display labels).
@@ -421,7 +466,7 @@ export function SettingsModal({
       )
       patchProvider(id, { models: fetched.map((m) => ({ ...m, label: m.label ?? prev.get(m.id)?.label })) })
     } catch (e) {
-      alert(`Could not fetch models: ${(e as Error).message}`)
+      setFormError(`Could not fetch models: ${(e as Error).message}`)
     } finally {
       setBusy(null)
     }
@@ -470,6 +515,7 @@ export function SettingsModal({
     const fresh = await window.api.saveSettings(settings)
     // Lock in the previewed theme: skip the revert-on-unmount below.
     committed.current = true
+    savedDigest.current = digest(settings)
     onSaved(fresh)
     onClose()
   }
@@ -486,7 +532,7 @@ export function SettingsModal({
     integrations != null && integrations.formatters.some((f) => f.installed) ? 'ok' : 'warn'
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={requestClose}>
       <div
         className="modal"
         ref={modalRef}
@@ -498,7 +544,7 @@ export function SettingsModal({
       >
         <div className="modal__head">
           <h2 id="settings-title">Settings</h2>
-          <button className="modal__close" onClick={onClose} aria-label="Close settings">
+          <button className="modal__close" onClick={requestClose} aria-label="Close settings">
             ✕
           </button>
         </div>
@@ -1306,12 +1352,36 @@ export function SettingsModal({
         </div>
 
         <div className="modal__foot">
-          <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn btn--accent" onClick={save}>
-            Save
-          </button>
+          {formError && (
+            <span
+              role="alert"
+              style={{ marginRight: 'auto', color: 'var(--danger)', fontSize: '12px' }}
+            >
+              {formError}
+            </span>
+          )}
+          {confirmingClose ? (
+            <>
+              <span style={{ marginRight: 'auto', color: 'var(--text-dim)', fontSize: '13px' }}>
+                Discard unsaved changes?
+              </span>
+              <button className="btn" onClick={() => setConfirmingClose(false)}>
+                Keep editing
+              </button>
+              <button className="btn btn--danger" onClick={onClose}>
+                Discard
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn" onClick={requestClose}>
+                Cancel
+              </button>
+              <button className="btn btn--accent" onClick={save}>
+                Save
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

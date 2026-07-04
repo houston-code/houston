@@ -174,12 +174,12 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }))
     expect(screen.queryAllByPlaceholderText('tool (or *)')).toHaveLength(1)
 
-    // The single new editable rule row carries the default action/tool.
+    // The single new editable rule row defaults to the safe 'ask' action.
     expect(screen.getByPlaceholderText('tool (or *)')).toHaveValue('run_shell')
-    expect(screen.getByDisplayValue('Allow')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Ask')).toBeInTheDocument()
   })
 
-  it('saves an API key: persists settings first, then calls setKey with the typed value', async () => {
+  it('saves an API key via setKey without persisting the modal’s other edits', async () => {
     const api = installApi()
     renderModal()
 
@@ -189,11 +189,9 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
 
     await waitFor(() => expect(api.setKey).toHaveBeenCalledWith('anthropic', 'sk-secret'))
-    // persistThen saves the (unsecreted) settings before storing the secret.
-    expect(api.saveSettings).toHaveBeenCalled()
-    expect(api.saveSettings.mock.invocationCallOrder[0]).toBeLessThan(
-      api.setKey.mock.invocationCallOrder[0]
-    )
+    // A key is a secret, not a settings edit — storing it must not persist the
+    // working copy (so Cancel still discards unrelated edits).
+    expect(api.saveSettings).not.toHaveBeenCalled()
     // The input is cleared after a successful save.
     await waitFor(() => expect(keyInput).toHaveValue(''))
   })
@@ -243,6 +241,41 @@ describe('SettingsModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  it('warns before discarding unsaved edits, and discards only on confirm', () => {
+    installApi()
+    const { onClose } = renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: '+ Add rule' })) // now dirty
+
+    // Cancel while dirty asks to confirm instead of closing.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByText('Discard unsaved changes?')).toBeInTheDocument()
+
+    // Keep editing dismisses the prompt without closing.
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByText('Discard unsaved changes?')).not.toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+
+    // Discard actually closes.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a key-save failure inline instead of a blocking alert', async () => {
+    const api = installApi({ setKey: vi.fn(() => Promise.reject(new Error('Keychain unavailable'))) })
+    renderModal()
+
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), {
+      target: { value: 'sk-secret' }
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Keychain unavailable/)
+    expect(api.saveSettings).not.toHaveBeenCalled()
   })
 
   it('closes on Escape (focus trap) and not on inner clicks', () => {
