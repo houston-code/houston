@@ -1,7 +1,7 @@
 import type { AppSettings, ProviderConfig } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 
-export const SETTINGS_SCHEMA_VERSION = 2
+export const SETTINGS_SCHEMA_VERSION = 3
 
 /**
  * Default context-compaction threshold in tokens. Comfortable for large-context
@@ -40,11 +40,14 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'anthropic',
       kind: 'anthropic',
       label: 'Anthropic (Claude)',
+      // Labels are the lowercase model ids the provider's own model API returns, so a
+      // seeded model reads the same as one added via Fetch.
       models: [
-        { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
-        { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-        { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-        { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' }
+        { id: 'claude-fable-5', label: 'claude-fable-5' },
+        { id: 'claude-opus-4-8', label: 'claude-opus-4.8' },
+        { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4.6' },
+        { id: 'claude-haiku-4-5', label: 'claude-haiku-4.5' },
+        { id: 'claude-opus-4-7', label: 'claude-opus-4.7' }
       ],
       defaultModel: 'claude-opus-4-8',
       requiresKey: true,
@@ -56,11 +59,11 @@ export function defaultProviders(): ProviderConfig[] {
       kind: 'openai',
       label: 'OpenAI (GPT)',
       models: [
-        { id: 'gpt-5', label: 'GPT-5' },
-        { id: 'gpt-5-mini', label: 'GPT-5 mini' },
-        { id: 'gpt-5-nano', label: 'GPT-5 nano' },
-        { id: 'gpt-4o', label: 'GPT-4o' },
-        { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
+        { id: 'gpt-5', label: 'gpt-5' },
+        { id: 'gpt-5-mini', label: 'gpt-5-mini' },
+        { id: 'gpt-5-nano', label: 'gpt-5-nano' },
+        { id: 'gpt-4o', label: 'gpt-4o' },
+        { id: 'gpt-4o-mini', label: 'gpt-4o-mini' },
         { id: 'o3', label: 'o3' },
         { id: 'o4-mini', label: 'o4-mini' }
       ],
@@ -74,9 +77,9 @@ export function defaultProviders(): ProviderConfig[] {
       kind: 'gemini',
       label: 'Google (Gemini)',
       models: [
-        { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-        { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-        { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' }
+        { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
+        { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
+        { id: 'gemini-2.0-flash', label: 'gemini-2.0-flash' }
       ],
       defaultModel: 'gemini-2.5-pro',
       requiresKey: true,
@@ -115,14 +118,24 @@ export function defaultProviders(): ProviderConfig[] {
  * endpoints and the local providers' empty lists are left exactly as the user left
  * them. New default models are appended, so the user's ordering and `defaultModel`
  * are preserved.
+ *
+ * `onlyIds` scopes the backfill to a specific set of model ids. A later schema bump
+ * that introduces a single new default (e.g. a new Claude model) passes it so the
+ * upgrade adds just that model — a full backfill would re-add every other default the
+ * user has since deleted, which the version-gated migration exists to prevent. Omit it
+ * for the first-run/pre-v2 path, which seeds the whole default set.
  */
-export function backfillDefaultModels(saved: ProviderConfig[]): ProviderConfig[] {
+export function backfillDefaultModels(
+  saved: ProviderConfig[],
+  onlyIds?: readonly string[]
+): ProviderConfig[] {
+  const only = onlyIds ? new Set(onlyIds) : null
   const defaults = new Map(defaultProviders().map((p) => [p.id, p]))
   return saved.map((p) => {
     const def = defaults.get(p.id)
     if (!def) return p
     const have = new Set(p.models.map((m) => m.id))
-    const additions = def.models.filter((m) => !have.has(m.id))
+    const additions = def.models.filter((m) => !have.has(m.id) && (!only || only.has(m.id)))
     return additions.length ? { ...p, models: [...p.models, ...additions] } : p
   })
 }

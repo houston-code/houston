@@ -51,6 +51,28 @@ describe('defaultSettings', () => {
     )
     expect(openai.defaultModel).toBe('gpt-5')
   })
+
+  it('seeds claude-fable-5 on the Anthropic provider', () => {
+    const anthropic = defaultSettings().providers.find((p) => p.id === 'anthropic')!
+    expect(anthropic.models.map((m) => m.id)).toContain('claude-fable-5')
+  })
+
+  it('labels built-in models with their lowercase id form', () => {
+    // Seeded labels match what each provider's model API returns, so a curated model
+    // reads the same as a fetched one.
+    const anthropic = defaultSettings().providers.find((p) => p.id === 'anthropic')!
+    expect(anthropic.models).toEqual(
+      expect.arrayContaining([
+        { id: 'claude-fable-5', label: 'claude-fable-5' },
+        { id: 'claude-opus-4-8', label: 'claude-opus-4.8' }
+      ])
+    )
+    for (const p of defaultSettings().providers) {
+      for (const model of p.models) {
+        expect(model.label ?? '').toBe((model.label ?? '').toLowerCase())
+      }
+    }
+  })
 })
 
 describe('backfillDefaultModels', () => {
@@ -74,6 +96,26 @@ describe('backfillDefaultModels', () => {
     const saved = [provider({ id: 'openai', models: [{ id: 'gpt-5' }] })]
     const ids = backfillDefaultModels(saved)[0].models.map((m) => m.id)
     expect(ids.filter((id) => id === 'gpt-5')).toHaveLength(1)
+  })
+
+  it('with onlyIds, appends just those ids and leaves other missing defaults out', () => {
+    // The v3-style scoped call: seed Fable without re-adding other Claude defaults the
+    // user has since deleted.
+    const saved = [
+      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-opus-4-8' }] })
+    ]
+    const models = backfillDefaultModels(saved, ['claude-fable-5'])[0].models
+    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5'])
+    // The appended model carries its curated (lowercase) label.
+    expect(models.find((m) => m.id === 'claude-fable-5')?.label).toBe('claude-fable-5')
+  })
+
+  it('with onlyIds, does not re-add an already-present scoped id', () => {
+    const saved = [
+      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-fable-5' }] })
+    ]
+    const ids = backfillDefaultModels(saved, ['claude-fable-5'])[0].models.map((m) => m.id)
+    expect(ids).toEqual(['claude-fable-5'])
   })
 
   it('leaves custom (non-built-in) providers untouched', () => {

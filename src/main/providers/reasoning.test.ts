@@ -18,10 +18,21 @@ describe('anthropic thinking', () => {
   })
 
   it('gates on model support', () => {
+    expect(anthropicSupportsThinking('claude-fable-5')).toBe(true)
     expect(anthropicSupportsThinking('claude-opus-4-8')).toBe(true)
     expect(anthropicSupportsThinking('claude-sonnet-4-6')).toBe(true)
     expect(anthropicSupportsThinking('claude-haiku-4-5')).toBe(true)
     expect(anthropicSupportsThinking('claude-3-5-sonnet')).toBe(false)
+  })
+
+  it('routes Fable through adaptive thinking with the xhigh tier', () => {
+    // Fable has no legacy budget shape and does expose xhigh, like Opus 4.7/4.8.
+    expect(anthropicThinking('claude-fable-5', 'high')).toMatchObject({
+      kind: 'adaptive',
+      effort: 'high',
+      display: 'summarized'
+    })
+    expect(anthropicThinking('claude-fable-5', 'xhigh')).toMatchObject({ effort: 'xhigh' })
   })
 
   // Opus 4.7/4.8 (and Fable/Mythos) 400 on the legacy enabled+budget_tokens shape;

@@ -29,7 +29,9 @@ export interface ModelPricing {
  */
 export function modelPricing(model: string): ModelPricing | null {
   const m = model.toLowerCase()
-  // Anthropic (Claude) — current per-MTok rates for the 4.x line.
+  // Anthropic (Claude) — current per-MTok rates. Fable / Mythos are the flagship
+  // tier and priced above Opus; check them before the opus/sonnet/haiku families.
+  if (m.includes('fable') || m.includes('mythos')) return { input: 10, output: 50 }
   if (m.includes('opus')) return { input: 5, output: 25 }
   if (m.includes('sonnet')) return { input: 3, output: 15 }
   if (m.includes('haiku')) return { input: 1, output: 5 }
@@ -166,9 +168,9 @@ function hasReasoning(m: string): boolean {
   // main/providers/reasoning.ts (openaiSupportsReasoning): an "o<digit>" or
   // "gpt-5" at the start of the id.
   if (/^(o\d|gpt-5)/.test(m)) return true
-  // Anthropic extended thinking — Claude 3.7 and the 4.x family. Mirrors
-  // anthropicSupportsThinking in main/providers/reasoning.ts.
-  if (/claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-)/.test(m)) return true
+  // Anthropic extended thinking — Claude 3.7, the 4.x family, and Fable / Mythos.
+  // Mirrors anthropicSupportsThinking in main/providers/reasoning.ts.
+  if (/claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-|fable|mythos)/.test(m)) return true
   // Google: Gemini 2.5 ("thinking") models reason. Mirrors geminiSupportsThinking.
   if (m.includes('gemini') && /2\.5|thinking/.test(m)) return true
   return false
