@@ -55,7 +55,11 @@ export function BackgroundTasks({
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
 
-  const runningCount = tasks.filter((t) => t.status === 'running').length
+  // The attention badge counts agent work (chats + background shells) only — an
+  // integrated terminal is user-opened and stays "running" the whole time it's
+  // open, so counting it would keep the badge permanently lit. Terminals still
+  // appear in the list below; they just don't nag from the titlebar.
+  const runningCount = tasks.filter((t) => t.status === 'running' && t.kind !== 'terminal').length
   const hasFinished = tasks.some((t) => t.status !== 'running')
   const now = Date.now()
 

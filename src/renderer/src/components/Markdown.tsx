@@ -1,6 +1,7 @@
-import { memo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { parseMarkdown, safeHref, type Block, type Inline } from '@shared/markdown'
 import { copyText } from '../lib/clipboard'
+import { highlightCode } from '../lib/highlight'
 
 /** Render an inline node tree. Keys are positional — the tree is static per render. */
 function renderInline(nodes: Inline[]): JSX.Element[] {
@@ -44,6 +45,9 @@ function CodeBlock({ lang, value }: { lang: string; value: string }): JSX.Elemen
       setTimeout(() => setCopied(false), 1200)
     })
   }
+  // hljs escapes its input, so the returned token HTML is safe to inject; a null
+  // result (unknown language / too large) falls back to the escaped raw text.
+  const highlighted = useMemo(() => highlightCode(lang, value), [lang, value])
   return (
     <div className="md-codeblock">
       <div className="md-codeblock__bar">
@@ -53,7 +57,11 @@ function CodeBlock({ lang, value }: { lang: string; value: string }): JSX.Elemen
         </button>
       </div>
       <pre className="md-codeblock__pre">
-        <code>{value}</code>
+        {highlighted !== null ? (
+          <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+        ) : (
+          <code>{value}</code>
+        )}
       </pre>
     </div>
   )

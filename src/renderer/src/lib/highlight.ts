@@ -55,3 +55,20 @@ export function highlightFile(path: string, text: string): string | null {
     return null
   }
 }
+
+/**
+ * Highlight a fenced code block whose language is a markdown info-string (e.g.
+ * `ts`, `py`, `bash`). Resolves shorthand ids through the same extension map, then
+ * hljs's own aliases; returns null (raw text) when the language is unknown, the
+ * block is too large, or hljs throws. Never auto-detects.
+ */
+export function highlightCode(lang: string, text: string): string | null {
+  if (!lang || text.length > MAX_HIGHLIGHT_BYTES) return null
+  const resolved = EXT_LANG[lang.toLowerCase()] ?? lang.toLowerCase()
+  if (!hljs.getLanguage(resolved)) return null
+  try {
+    return hljs.highlight(text, { language: resolved, ignoreIllegals: true }).value
+  } catch {
+    return null
+  }
+}
