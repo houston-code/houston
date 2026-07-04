@@ -279,7 +279,8 @@ describe('runHeadless', () => {
   function withSession(seed: Array<{ id: string; workspace: string; messages: ChatMessage[] }> = []) {
     const store = new Map(seed.map((s) => [s.id, { ...s }]))
     let seq = 0
-    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    const base = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    const { d } = base
     const startedWith: { conversationId?: string; messages: ChatMessage[] }[] = []
     d.startRun = async (req, send, onMessages) => {
       startedWith.push({ conversationId: req.conversationId, messages: req.messages.map((m) => ({ ...m })) })
@@ -302,7 +303,7 @@ describe('runHeadless', () => {
         if (c) c.messages = messages
       }
     }
-    return { d, store, startedWith }
+    return { d, store, startedWith, out: base.out, err: base.err }
   }
 
   it('creates and persists a conversation for a plain run', async () => {
@@ -348,7 +349,7 @@ describe('runHeadless', () => {
 
   it('stays ephemeral (no conversation id) when no session store is wired', async () => {
     const started: (string | undefined)[] = []
-    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
+    const { d, err } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
       startRun: async (req, send) => {
         started.push(req.conversationId)
         send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
@@ -356,5 +357,54 @@ describe('runHeadless', () => {
     })
     await runHeadless(baseOpts, d)
     expect(started[0]).toBeUndefined()
+    // Nothing to resume → no session marker emitted.
+    expect(err.join('')).not.toContain('· session')
+  })
+
+  it('emits the session id to stderr in text mode so a script can capture it for --resume', async () => {
+    const { d, err, out } = withSession()
+    await runHeadless(baseOpts, d)
+    expect(err.join('')).toContain('· session conv-1')
+    // stdout stays clean (assistant text only) — the id is a stderr marker.
+    expect(out.join('')).not.toContain('conv-1')
+  })
+
+  it('emits the session id as the first JSON line in --json mode', async () => {
+    const { d, out } = withSession()
+    await runHeadless({ ...baseOpts, json: true }, d)
+    const first = out.join('').trim().split('\n')[0]
+    expect(JSON.parse(first)).toEqual({ type: 'session', conversationId: 'conv-1' })
+  })
+
+  it('surfaces a step/output limit in text mode so a capped run is not silent', async () => {
+    const { d, err } = deps([
+      { runId: 'run-1', type: 'limit', reason: 'max-steps' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    const code = await runHeadless(baseOpts, d)
+    expect(code).toBe(0) // a limit is not an error
+    expect(err.join('')).toMatch(/stopped early.*step limit/)
+  })
+
+  it('surfaces a failed tool result in text mode, but not a successful one', async () => {
+    const { d, err } = deps([
+      { runId: 'run-1', type: 'tool_result', callId: 'c1', name: 'run_shell', ok: false, output: 'nope' },
+      { runId: 'run-1', type: 'tool_result', callId: 'c2', name: 'read_file', ok: true, output: 'data' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    const e = err.join('')
+    expect(e).toContain('· run_shell failed')
+    expect(e).not.toContain('read_file')
+  })
+
+  it('prints a token/cost summary on completion in text mode', async () => {
+    const { d, err } = deps([
+      { runId: 'run-1', type: 'usage', inputTokens: 100, outputTokens: 20, cost: 0.01 },
+      { runId: 'run-1', type: 'usage', inputTokens: 50, outputTokens: 5, cost: 0.005 },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    expect(err.join('')).toContain('· 150+25 tok · $0.0150')
   })
 })
