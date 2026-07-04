@@ -187,9 +187,17 @@ export function ModelPicker({
     } else if (e.key === 'End') {
       e.preventDefault()
       reveal(flat.length - 1)
-    } else if (e.key === 'Enter' || e.key === ' ') {
+    } else if (e.key === 'Enter') {
       e.preventDefault()
       if (flat[active]) choose(flat[active])
+    } else if (e.key === ' ') {
+      e.preventDefault()
+      // Space extends an in-progress type-ahead (so multi-word labels like
+      // "Claude Opus 4.8" are reachable); a lone Space still selects the active
+      // option, the standard listbox behavior.
+      const t = typeahead.current
+      if (t.buf && Date.now() - t.at <= 700) typeAhead(' ')
+      else if (flat[active]) choose(flat[active])
     } else if (e.key === 'Tab') {
       setOpen(false)
     } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -205,7 +213,7 @@ export function ModelPicker({
           ref={btnRef}
           type="button"
           className={`control control--select control--model${lacksTools ? ' control--model-warn' : ''}`}
-          title="Model"
+          title={selected ? triggerLabel : 'Select a model'}
           role="combobox"
           aria-haspopup="listbox"
           aria-expanded={open}

@@ -1036,7 +1036,7 @@ export default function App(): JSX.Element {
       },
       {
         id: 'act-toggle-terminal',
-        title: 'Toggle terminal',
+        title: 'Toggle the integrated terminal',
         section: 'Actions',
         hint: shortcutHint('toggle-terminal', mac, shortcuts),
         keywords: 'shell console',
@@ -1074,7 +1074,9 @@ export default function App(): JSX.Element {
         id: 'act-scorecard',
         title: 'Show loop scorecard',
         section: 'Actions',
-        keywords: 'stats models cost tokens usage metrics tools',
+        // No "model(s)" keyword: ⇧⌘M seeds the palette with "model", and this
+        // action shouldn't outrank the actual model list for that query.
+        keywords: 'stats cost tokens usage metrics loop tools',
         run: () => setScorecardOpen(true)
       },
       {
