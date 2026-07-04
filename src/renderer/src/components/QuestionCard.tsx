@@ -63,6 +63,8 @@ export function QuestionCard({
               <button
                 key={opt.label}
                 className={`question__option${on ? ' question__option--on' : ''}`}
+                // Multi-select options are toggles; single-select are one-shot actions.
+                aria-pressed={multi ? on : undefined}
                 onClick={() => choose(opt.label)}
               >
                 {multi && <span className="question__check">{on ? '☑' : '☐'}</span>}

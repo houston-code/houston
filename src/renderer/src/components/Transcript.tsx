@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { COMPACTION_SUMMARY_PREFIX, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import type { DisplayItem } from '../lib/items'
@@ -15,6 +15,16 @@ import { Icon } from './Icon'
  * `className` lets each turn place it (the assistant pins it to the top-right; the
  * user turn tucks it to the left of the right-aligned bubble — see global.css).
  */
+/** Visually hidden, but read by screen readers (for the live status region). */
+const SR_ONLY: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  overflow: 'hidden',
+  clipPath: 'inset(50%)',
+  whiteSpace: 'nowrap'
+}
+
 function CopyButton({ text, className }: { text: string; className?: string }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const copy = (): void => {
@@ -142,10 +152,27 @@ export function Transcript({
     setShowJump(false)
   }
 
-  const nodes = groupItems(items)
+  // Memoized so it isn't rebuilt when the Transcript re-renders for a non-content
+  // reason (e.g. the scroll-to-bottom button toggling).
+  const nodes = useMemo(() => groupItems(items), [items])
+
+  // A coarse, polite status for screen readers — the streaming transcript is
+  // otherwise silent to assistive tech. Announces on change only (not on mount).
+  const liveStatus = useMemo(() => {
+    const last = nodes[nodes.length - 1]
+    if (!last) return ''
+    if (last.kind === 'toolgroup' && last.items.some((i) => i.status === 'awaiting-approval'))
+      return 'The agent is waiting for your approval.'
+    if (last.kind === 'question') return 'The agent is asking a question.'
+    if (last.kind === 'assistant') return last.item.streaming ? 'The agent is responding…' : 'Response ready.'
+    return ''
+  }, [nodes])
 
   return (
     <div className="transcript-wrap">
+      <div aria-live="polite" aria-atomic="true" style={SR_ONLY}>
+        {liveStatus}
+      </div>
       <div className="transcript" ref={containerRef} onScroll={handleScroll}>
         <div className="transcript__inner">
           {nodes.map((node) => {

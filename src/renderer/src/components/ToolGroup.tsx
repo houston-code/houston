@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { parseTodosSafe, type Todo } from '@shared/todos'
@@ -106,6 +106,19 @@ function ToolRow({
       <div
         className={`tool-row__head${expandable ? ' tool-row__head--clickable' : ''}`}
         onClick={toggle}
+        {...(expandable
+          ? {
+              role: 'button',
+              tabIndex: 0,
+              'aria-expanded': open,
+              onKeyDown: (e: ReactKeyboardEvent) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  toggle()
+                }
+              }
+            }
+          : {})}
       >
         <StatusGlyph status={item.status} />
         <span className="tool-row__icon">{iconFor(item)}</span>
@@ -224,7 +237,19 @@ function ReadAggregateRow({ items }: { items: ToolItem[] }): JSX.Element {
   const status = combinedStatus(items)
   return (
     <div className={`tool-row tool-row--${status}`}>
-      <div className="tool-row__head tool-row__head--clickable" onClick={() => setOpen((v) => !v)}>
+      <div
+        className="tool-row__head tool-row__head--clickable"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setOpen((v) => !v)
+          }
+        }}
+      >
         <StatusGlyph status={status} />
         <span className="tool-row__icon">○</span>
         <span className="tool-row__verb">Read</span>

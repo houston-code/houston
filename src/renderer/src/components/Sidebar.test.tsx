@@ -88,6 +88,20 @@ describe('Sidebar — expanded rendering', () => {
     expect(inactive).not.toHaveClass('conv--active')
   })
 
+  it('selects a conversation from the keyboard (focusable row + Enter)', () => {
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })],
+      currentId: 'b'
+    })
+    render(<Sidebar {...props} />)
+
+    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    expect(alpha).toHaveAttribute('tabindex', '0')
+    // Dispatched on the row itself, so the handler's target === currentTarget guard passes.
+    fireEvent.keyDown(alpha, { key: 'Enter' })
+    expect(props.onSelect).toHaveBeenCalledWith('a')
+  })
+
   it('marks every chat with a live run, regardless of which is active', () => {
     const props = baseProps({
       conversations: [
