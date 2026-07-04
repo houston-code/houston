@@ -45,6 +45,7 @@ describe('formatTokens', () => {
 
 describe('contextWindowFor', () => {
   it('gives 1M-window Claude families their full window and the rest 200K', () => {
+    expect(contextWindowFor('claude-fable-5')).toBe(1_000_000)
     expect(contextWindowFor('claude-opus-4-8')).toBe(1_000_000)
     expect(contextWindowFor('claude-opus-4-7')).toBe(1_000_000)
     expect(contextWindowFor('claude-sonnet-4-6')).toBe(1_000_000)
@@ -110,6 +111,7 @@ describe('contextPercent', () => {
 
 describe('modelPricing', () => {
   it('matches Claude / GPT / Gemini families', () => {
+    expect(modelPricing('claude-fable-5')).toEqual({ input: 10, output: 50 })
     expect(modelPricing('claude-opus-4-8')).toEqual({ input: 5, output: 25 })
     expect(modelPricing('claude-sonnet-4-6')).toEqual({ input: 3, output: 15 })
     expect(modelPricing('claude-haiku-4-5')).toEqual({ input: 1, output: 5 })
@@ -150,7 +152,8 @@ describe('formatUsd', () => {
 describe('modelCapabilities', () => {
   // [model id, vision, reasoning] — one row per family/generation we care about.
   const table: Array<[string, boolean, boolean]> = [
-    // Anthropic Claude — multimodal from 3 onward; thinking from 3.7 / 4.x.
+    // Anthropic Claude — multimodal from 3 onward; thinking from 3.7 / 4.x / Fable.
+    ['claude-fable-5', true, true],
     ['claude-opus-4-8', true, true],
     ['claude-sonnet-4-6', true, true],
     ['claude-3-7-sonnet', true, true],

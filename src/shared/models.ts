@@ -32,6 +32,7 @@ interface FamilyRule {
 // tried in order, so more specific patterns must precede broader ones (gpt-4o before
 // the legacy gpt-4 catch-all). An id matching no rule sorts after all known families.
 const ANTHROPIC: FamilyRule[] = [
+  { name: 'fable', test: /fable/ },
   { name: 'opus', test: /opus/ },
   { name: 'sonnet', test: /sonnet/ },
   { name: 'haiku', test: /haiku/ }

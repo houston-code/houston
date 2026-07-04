@@ -86,6 +86,10 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   // install last wrote its settings. Version-gated so it runs once per upgrade —
   // a model the user deletes afterwards stays deleted instead of reappearing.
   if (fromVersion < 2) providers = backfillDefaultModels(providers)
+  // v3: seed the newly-added Claude Fable model into installs that already migrated to
+  // v2. Scoped to just that id — a full backfill here would re-add other defaults the
+  // user has since deleted, breaking the "stays deleted" guarantee above.
+  if (fromVersion < 3) providers = backfillDefaultModels(providers, ['claude-fable-5'])
   const merged: AppSettings = {
     ...base,
     ...raw,

@@ -33,9 +33,9 @@ const ANTHROPIC_BUDGET: Record<'low' | 'medium' | 'high', number> = {
 /** Extra output tokens to allow on top of the thinking budget for the reply. */
 export const ANTHROPIC_REPLY_HEADROOM = 8192
 
-/** Claude models that support thinking at all (3.7 and the 4.x family). */
+/** Claude models that support thinking at all (3.7, the 4.x family, and Fable / Mythos). */
 export function anthropicSupportsThinking(model: string): boolean {
-  return /claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-)/i.test(model)
+  return /claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-|fable|mythos)/i.test(model)
 }
 
 /**

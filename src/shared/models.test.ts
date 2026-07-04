@@ -23,6 +23,16 @@ describe('sortedModels', () => {
     ])
   })
 
+  it('ranks the Fable flagship family ahead of Opus/Sonnet/Haiku', () => {
+    const stored = m('claude-opus-4-8', 'claude-fable-5', 'claude-haiku-4-5', 'claude-sonnet-4-6')
+    expect(ids(sortedModels('anthropic', stored))).toEqual([
+      'claude-fable-5', // newest flagship family leads
+      'claude-opus-4-8',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5'
+    ])
+  })
+
   it('orders OpenAI families most-advanced first, with sizes and o-series version-descending', () => {
     const stored = m('gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano')
     expect(ids(sortedModels('openai', stored))).toEqual([
