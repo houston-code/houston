@@ -46,6 +46,51 @@ describe('Composer', () => {
     expect(props.onSend).not.toHaveBeenCalled()
   })
 
+  it('runs a fully-typed command on Enter without needing a second Enter', () => {
+    const props = baseProps()
+    render(<Composer {...props} />)
+
+    // No trailing space: the menu is open and "new" is fully typed.
+    const input = type('/new')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(props.onCommand).toHaveBeenCalledWith(expect.objectContaining({ name: 'new' }), '')
+  })
+
+  it('does not submit on the Enter that confirms an IME composition', () => {
+    const props = baseProps()
+    render(<Composer {...props} />)
+
+    const input = type('こんにちは')
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    expect(props.onSend).not.toHaveBeenCalled()
+
+    // The Enter that ends composition sends normally.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onSend).toHaveBeenCalledWith('こんにちは', undefined)
+  })
+
+  it('dismisses the command menu on an outside click', () => {
+    render(<Composer {...baseProps()} />)
+    type('/ne')
+    expect(screen.getByText('Start a new chat')).toBeInTheDocument()
+
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByText('Start a new chat')).not.toBeInTheDocument()
+  })
+
+  it('shows the disabled reason as the placeholder', () => {
+    render(
+      <Composer
+        {...baseProps({ disabled: true, disabledReason: 'Set an API key for this model in Settings…' })}
+      />
+    )
+    expect(screen.getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      'Set an API key for this model in Settings…'
+    )
+  })
+
   it('queues a message via Enter while a run is in progress', () => {
     const props = baseProps({ running: true })
     render(<Composer {...props} />)

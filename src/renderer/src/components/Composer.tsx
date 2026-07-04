@@ -80,6 +80,14 @@ function readImageFile(file: File): Promise<ImageAttachment | null> {
 /** Max gap between the two Esc presses that recalls the last message. */
 const DOUBLE_ESC_MS = 500
 
+/** Tallest the auto-growing textarea gets before it scrolls internally (matches
+ * the CSS `max-height`). */
+const MAX_TEXTAREA_PX = 200
+
+/** Debounce for persisting the draft, so a large paste isn't re-serialized to
+ * storage on every subsequent keystroke. */
+const DRAFT_SAVE_MS = 250
+
 /** The icon shown on a context-attachment chip, by kind. */
 const KIND_ICON: Record<ContextKind, IconName> = {
   file: 'file',
@@ -122,6 +130,7 @@ function AttachItem({
 export function Composer({
   conversationId,
   disabled,
+  disabledReason,
   running,
   workspace,
   commands,
@@ -137,6 +146,8 @@ export function Composer({
   /** The open conversation (null for a not-yet-created new chat); keys the draft. */
   conversationId: string | null
   disabled: boolean
+  /** Why the composer is disabled, shown as the placeholder (e.g. missing API key). */
+  disabledReason?: string
   running: boolean
   workspace: string | null
   commands: Command[]
@@ -194,13 +205,41 @@ export function Composer({
   }, [vision])
 
   // Persist the unsent draft (per conversation) so it survives an app restart.
-  // Every path that changes the field goes through setText, so watching `text`
-  // covers both saving as the user types and clearing on submit (setText('') →
-  // removeItem). `conversationId` is fixed for the component's lifetime (App.tsx
-  // keys the Composer by it), so the draft is always saved under the open chat.
+  // Debounced so a large pasted block isn't re-serialized to storage on every
+  // later keystroke; the unmount effect below flushes the latest text so a fast
+  // chat switch (within the debounce window) can't lose it. `conversationId` is
+  // fixed for the component's lifetime (App.tsx keys the Composer by it).
+  const draftRef = useRef({ conversationId, text })
+  draftRef.current = { conversationId, text }
   useEffect(() => {
-    saveComposerDraft(conversationId, text)
+    const t = setTimeout(() => saveComposerDraft(conversationId, text), DRAFT_SAVE_MS)
+    return () => clearTimeout(t)
   }, [conversationId, text])
+  useEffect(
+    () => () => {
+      const { conversationId: cid, text: txt } = draftRef.current
+      saveComposerDraft(cid, txt)
+    },
+    []
+  )
+
+  // Auto-grow the textarea to fit its content (up to a cap, then it scrolls), so
+  // multi-line drafts, recalled history, and pastes aren't crammed into one line.
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`
+  }, [text])
+
+  // Focus the field when the open chat changes (App.tsx keys the Composer by the
+  // conversation, so this is a fresh mount per switch), so keyboard-driven chat
+  // switches don't drop focus to <body>.
+  useEffect(() => {
+    if (!disabled) ref.current?.focus()
+    // Mount only; `disabled` is read for the initial decision.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Clear the notice timer on unmount so a pending fade can't fire into a gone tree.
   useEffect(() => () => clearNoticeTimer(), [])
@@ -219,6 +258,14 @@ export function Composer({
     const read = await Promise.all(files.map(readImageFile))
     const valid = read.filter((x): x is ImageAttachment => x !== null)
     if (valid.length) setImages((prev) => [...prev, ...valid].slice(0, MAX_ATTACHMENTS))
+    // Don't let images vanish without a word: readImageFile returns null for an
+    // unsupported type or an over-cap file, and the slice trims past the limit.
+    const dropped = read.length - valid.length
+    if (dropped > 0) {
+      flashNotice(`${dropped} image${dropped === 1 ? '' : 's'} couldn’t be attached (unsupported type or too large).`)
+    } else if (images.length + valid.length > MAX_ATTACHMENTS) {
+      flashNotice(`You can attach up to ${MAX_ATTACHMENTS} images.`)
+    }
   }
 
   const addImage = (img: ImageAttachment): void =>
@@ -395,21 +442,26 @@ export function Composer({
   })
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
-    if (!vision) return // model can't see images — let the paste fall through as text
     const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
-    if (files.length) {
-      e.preventDefault()
-      void addFiles(files)
+    if (files.length === 0) return
+    if (!vision) {
+      // Let any accompanying text paste through, but say why the image didn't attach.
+      flashNotice('Switch to a vision model to attach images.')
+      return
     }
+    e.preventDefault()
+    void addFiles(files)
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
-    if (!vision) return
     const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'))
-    if (files.length) {
-      e.preventDefault()
-      void addFiles(files)
+    if (files.length === 0) return
+    e.preventDefault()
+    if (!vision) {
+      flashNotice('Switch to a vision model to attach images.')
+      return
     }
+    void addFiles(files)
   }
 
   // A leading "/name" (no space yet) opens the command menu.
@@ -447,6 +499,23 @@ export function Composer({
   }, [mention, workspace])
 
   const showMentionMenu = mention !== null && suggestions.length > 0
+
+  // Dismiss the slash-command / @-mention menu on a click outside the field and
+  // the menu itself (e.g. into the transcript) — otherwise it floats there until
+  // the next edit, still hijacking Enter to complete rather than send.
+  useEffect(() => {
+    if (!showCmdMenu && !showMentionMenu) return
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node
+      if (ref.current?.contains(t)) return
+      if (t instanceof Element && t.closest('.mention-menu')) return
+      setCmdDismissed(true)
+      setMention(null)
+      setSuggestions([])
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [showCmdMenu, showMentionMenu])
 
   const sync = (value: string, cursor: number): void => {
     setText(value)
@@ -553,6 +622,11 @@ export function Composer({
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Ignore keydowns that are part of an IME composition (CJK etc.): the Enter /
+    // arrows that confirm or move within a candidate window must not submit the
+    // message or drive the menus. `keyCode === 229` catches browsers that report
+    // the composing keydown without `isComposing`.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (showCmdMenu) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -566,7 +640,11 @@ export function Composer({
       }
       if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
-        chooseCommand(cmdMatches[cmdIndex])
+        const chosen = cmdMatches[cmdIndex]
+        // Enter on an already fully-typed name runs the command (a second Enter
+        // shouldn't be needed); Tab, or Enter on a partial name, completes it.
+        if (e.key === 'Enter' && cmdPrefix === chosen.name) submit()
+        else chooseCommand(chosen)
         return
       }
       if (e.key === 'Escape') {
@@ -784,7 +862,7 @@ export function Composer({
           className="composer__input"
           placeholder={
             disabled
-              ? 'Pick a model and project folder to start…'
+              ? disabledReason ?? 'Pick a model and project folder to start…'
               : running
                 ? 'Queue a follow-up…  (sent when the current run finishes)'
                 : 'Ask Houston…  (@ file, / command, or + to attach)'
@@ -860,6 +938,7 @@ export function Composer({
                 type="button"
                 className="composer__send"
                 aria-label="Send"
+                title="Send (Enter · Shift+Enter for a new line)"
                 onClick={submit}
                 disabled={sendDisabled}
               >
