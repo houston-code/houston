@@ -121,7 +121,10 @@ function globMatches(pattern: string, subject: string): boolean {
 
 function patternMatches(pattern: string, subject: string): boolean {
   const p = pattern.trim()
-  if (!p || p === '*') return true
+  // An empty pattern matches NOTHING (the rule is inert), not everything — a blank
+  // match must never silently auto-approve/deny every call. Use `*` for match-all.
+  if (!p) return false
+  if (p === '*') return true
   if (globMatches(p, subject)) return true
   // Bare-prefix convenience: a wildcard-free rule also matches at a command (" ") or
   // path/URL ("/") boundary, so `https://host` covers `https://host/x` and `src`
@@ -155,7 +158,10 @@ function normalizeShellCommand(s: string): string {
  */
 function shellCommandMatches(pattern: string, command: string): boolean {
   const p = pattern.trim()
-  if (!p || p === '*') return true
+  // An empty pattern matches nothing (inert rule), not every command. `*` is the
+  // explicit match-all.
+  if (!p) return false
+  if (p === '*') return true
   if (globMatches(p, command)) return true
   return command === p || command.startsWith(`${p} `)
 }

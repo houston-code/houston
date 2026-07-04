@@ -151,6 +151,15 @@ describe('groupItems', () => {
     const items: DisplayItem[] = [tool('list_dir', { path: '.' }, 'l1'), asst]
     expect(groupItems(items).map((n) => n.kind)).toEqual(['assistant'])
   })
+
+  it('keeps a list_dir that is awaiting approval so its prompt is visible', () => {
+    // A permission rule can force a prompt on any tool; hiding it then would wedge
+    // the run on a prompt that renders nothing.
+    const awaiting: ToolItem = { ...tool('list_dir', { path: '.' }, 'l1'), status: 'awaiting-approval' }
+    const nodes = groupItems([awaiting])
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0].kind).toBe('toolgroup')
+  })
 })
 
 describe('foldReadRuns', () => {

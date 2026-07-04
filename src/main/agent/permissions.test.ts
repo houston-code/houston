@@ -146,9 +146,12 @@ describe('matchRule', () => {
     expect(matchRule([{ action: 'allow', tool: 'run_shell', match: 'npm test' }], 'run_shell', 'npm test -- --watch')).toBe('allow')
   })
 
-  it('empty / * match anything for the tool', () => {
+  it('* matches anything for the tool, but an empty pattern is inert (matches nothing)', () => {
     expect(matchRule([{ action: 'ask', tool: 'write_file', match: '*' }], 'write_file', 'anything.ts')).toBe('ask')
-    expect(matchRule([{ action: 'ask', tool: 'write_file', match: '' }], 'write_file', 'anything.ts')).toBe('ask')
+    // A blank match must NOT silently apply to every call — the rule falls through
+    // (null) so the approval policy decides, rather than auto-allowing/denying all.
+    expect(matchRule([{ action: 'ask', tool: 'write_file', match: '' }], 'write_file', 'anything.ts')).toBeNull()
+    expect(matchRule([{ action: 'allow', tool: 'run_shell', match: '' }], 'run_shell', 'rm -rf /')).toBeNull()
   })
 
   describe('run_shell chained-command safety', () => {

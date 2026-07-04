@@ -138,7 +138,10 @@ export function groupItems(items: DisplayItem[]): RenderNode[] {
 
   for (const item of items) {
     if (item.kind === 'tool') {
-      if (HIDDEN_TOOLS.has(item.name)) continue
+      // Navigation-only tools are hidden as noise — UNLESS one is awaiting the
+      // user's approval (a permission rule can force a prompt on any tool). Hiding
+      // it then would leave the run wedged on a prompt that renders nothing.
+      if (HIDDEN_TOOLS.has(item.name) && item.status !== 'awaiting-approval') continue
       if (!group) group = []
       group.push(item)
       continue
