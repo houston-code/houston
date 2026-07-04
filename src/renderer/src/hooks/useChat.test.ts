@@ -80,6 +80,19 @@ describe('useChat', () => {
     expect(result.current.items[0]).toMatchObject({ kind: 'user', text: 'hello' })
   })
 
+  it('clears the running state when startAgent rejects (no orphan Stop button)', async () => {
+    const { api } = installApi()
+    api.startAgent.mockRejectedValueOnce(new Error('bridge down'))
+    const { result } = renderHook(() => useChat())
+
+    await act(async () => {
+      await result.current.send({ ...SEND })
+    })
+
+    expect(result.current.running).toBe(false)
+    expect(result.current.errored).toBe(true)
+  })
+
   it('ignores events from a stale run', async () => {
     const { api, emit } = installApi()
     const { result } = renderHook(() => useChat())

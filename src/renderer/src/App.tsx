@@ -13,7 +13,7 @@ import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@sha
 import type { ConversationMeta, ReasoningEffort, RepoInfo } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
-import { modelCapabilities } from '@shared/usage'
+import { resolveCapabilities } from '@shared/usage'
 import { branchNameError, planNewChatWorkspace, suggestBranch } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
 import { useRunningConversations } from './hooks/useRunningConversations'
@@ -57,6 +57,7 @@ import { Transcript } from './components/Transcript'
 import { Composer } from './components/Composer'
 import { UpdateBanner } from './components/UpdateBanner'
 import { LegalGate } from './components/LegalGate'
+import { isAnyPopoverOpen } from './components/Popover'
 import { LEGAL_VERSION, needsLegalAcceptance } from '@shared/legal'
 import type { UpdateCheckResult, WhatsNew } from '@shared/update'
 
@@ -185,6 +186,12 @@ export default function App(): JSX.Element {
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH)
   const appRef = useRef<HTMLDivElement>(null)
+  // True while the first message of a new chat is creating its conversation/worktree,
+  // to reject a concurrent second send (see sendNow).
+  const creatingConvRef = useRef(false)
+  // Stable so the find bar's match-collection effect doesn't re-run (and reset to
+  // match #1) on every streaming delta that re-renders App.
+  const getTranscriptRoot = useCallback(() => document.querySelector<HTMLElement>('.transcript'), [])
   const chat = useChat(currentId)
 
   // Dev servers the agent started (auto-detected loopback URLs) — drives the Preview dock.
@@ -373,6 +380,12 @@ export default function App(): JSX.Element {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
+        // Creating the conversation (and, in worktree mode, `git worktree add`) can
+        // take a beat, during which the composer is still enabled and `currentId`
+        // is still null. Guard re-entry so a second Enter can't spawn a duplicate
+        // conversation / branch instead of appending to the first.
+        if (creatingConvRef.current) return
+        creatingConvRef.current = true
         let conv: Awaited<ReturnType<typeof window.api.createConversation>>
         try {
           conv = await window.api.createConversation({
@@ -388,6 +401,8 @@ export default function App(): JSX.Element {
           // checked) — surface it and keep the user on the new-chat screen.
           chat.notify(`Couldn't start the chat: ${(e as Error).message}`, 'error')
           return
+        } finally {
+          creatingConvRef.current = false
         }
         convId = conv.id
         setCurrentId(conv.id)
@@ -1166,6 +1181,10 @@ export default function App(): JSX.Element {
   // ⌘/ or ? help, ⌃` terminal, Esc to stop a run / close a dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // A handler nearer the event's target already consumed this key (e.g. a menu
+      // or dialog closed on its own Escape) — don't also read it as a global
+      // shortcut, or the same Escape would additionally cancel the running turn.
+      if (e.defaultPrevented) return
       // Plain-character shortcuts (e.g. `?`) must not fire while typing in a field;
       // mod-bearing chords (⌘…) still work everywhere, and Esc is always allowed.
       const inEditable = isEditableTarget(e.target)
@@ -1214,7 +1233,9 @@ export default function App(): JSX.Element {
         cycleChat(-1)
       } else if (action === 'cycle-mode') {
         // Shift+Tab is reverse-focus in dialogs — let their focus trap (or the find
-        // bar) have it; only hijack it for mode-cycling in the main chat view.
+        // bar) have it; only hijack it for mode-cycling in the main chat view. An
+        // open popover menu (model picker, ⋯ menu) is portaled to <body>, invisible
+        // to these flags, so consult its registry too.
         if (
           paletteOpen ||
           helpOpen ||
@@ -1222,7 +1243,8 @@ export default function App(): JSX.Element {
           changesOpen ||
           filesOpen ||
           scorecardOpen ||
-          findOpen
+          findOpen ||
+          isAnyPopoverOpen()
         )
           return
         e.preventDefault()
@@ -1291,9 +1313,13 @@ export default function App(): JSX.Element {
   const worktreeBlocked =
     creatingWorktree && branchNameError(branchName, repoInfo?.branches ?? []) !== null
   const canChat = Boolean(settings.selected && workspace && selectionReady && !worktreeBlocked)
-  // Only offer the image-attachment affordance when the selected model can see images.
+  // Only offer the image-attachment affordance when the selected model can see
+  // images. Resolve host-reported capabilities first (same source the model picker
+  // uses) so a host-listed vision model isn't denied the attach buttons by the
+  // name-only heuristic — and vice-versa.
+  const selectedModelOption = selectedProvider?.models.find((m) => m.id === settings.selected?.model)
   const visionSupported = settings.selected
-    ? modelCapabilities(settings.selected.model).vision
+    ? resolveCapabilities(settings.selected.model, selectedModelOption?.caps).vision
     : true
 
   return (
@@ -1378,10 +1404,7 @@ export default function App(): JSX.Element {
 
         {findOpen && (
           <Suspense fallback={null}>
-            <FindBar
-              getRoot={() => document.querySelector<HTMLElement>('.transcript')}
-              onClose={() => setFindOpen(false)}
-            />
+            <FindBar getRoot={getTranscriptRoot} onClose={() => setFindOpen(false)} />
           </Suspense>
         )}
 
@@ -1428,7 +1451,8 @@ export default function App(): JSX.Element {
         {queue.queued.length > 0 && (
           <div className="queue-bar">
             <span className="queue-bar__label">
-              {queue.queued.length} queued · sent when this run finishes
+              {queue.queued.length} queued ·{' '}
+              {chat.running ? 'sent when this run finishes' : 'the run stopped — send them now or clear'}
             </span>
             <ul className="queue-bar__items">
               {queue.queued.map((q) => {
@@ -1450,6 +1474,11 @@ export default function App(): JSX.Element {
                 )
               })}
             </ul>
+            {!chat.running && (
+              <button className="btn btn--sm btn--accent" onClick={queue.flush}>
+                Send now
+              </button>
+            )}
             <button className="btn btn--sm" onClick={queue.clear}>
               Clear
             </button>

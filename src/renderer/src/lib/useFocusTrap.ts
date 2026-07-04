@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
@@ -7,8 +7,17 @@ const FOCUSABLE =
  * Trap keyboard focus inside `ref` while it's mounted (for modal dialogs): focus
  * the first control on open, keep Tab/Shift+Tab within the dialog, close on
  * Escape, and restore focus to the previously-focused element on unmount.
+ *
+ * `onClose` is read through a ref so a caller passing an inline arrow (a fresh
+ * identity every render — the common case) doesn't re-run the effect: re-running
+ * it would tear the trap down (restoring focus to the pre-modal element) and
+ * re-arm it (yanking focus back to the dialog's first control) on every parent
+ * render, stealing focus from whatever the user was typing in.
  */
 export function useFocusTrap(ref: RefObject<HTMLElement | null>, onClose: () => void): void {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -22,7 +31,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, onClose: () => 
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.stopPropagation()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (e.key !== 'Tab') return
@@ -47,5 +56,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, onClose: () => 
       el.removeEventListener('keydown', onKeyDown)
       previouslyFocused?.focus?.()
     }
-  }, [ref, onClose])
+    // Intentionally not depending on `onClose`: it's read live through the ref so
+    // the trap arms once per mount and survives parent re-renders (see docblock).
+  }, [ref])
 }

@@ -15,6 +15,7 @@ function installApi(initial: Record<string, QueuedInputMeta[]> = {}) {
     ),
     dequeueInput: vi.fn((_cid: string, _id: string) => Promise.resolve([] as QueuedInputMeta[])),
     clearQueue: vi.fn((_cid: string) => Promise.resolve([] as QueuedInputMeta[])),
+    flushQueue: vi.fn((_cid: string) => Promise.resolve()),
     onQueueChanged: vi.fn((cb: QueueChangedHandler) => {
       onChanged = cb
       return () => {}
@@ -73,6 +74,22 @@ describe('useInputQueue', () => {
 
     act(() => result.current.clear())
     expect(api.clearQueue).toHaveBeenCalledWith('c1')
+  })
+
+  it('flush dispatches the open conversation’s queue via the bridge', async () => {
+    const { api } = installApi({ c1: [{ id: 'a', text: 'x', imageCount: 0 }] })
+    const { result } = renderHook(() => useInputQueue('c1'))
+    await waitFor(() => expect(result.current.queued).toHaveLength(1))
+
+    act(() => result.current.flush())
+    expect(api.flushQueue).toHaveBeenCalledWith('c1')
+  })
+
+  it('flush is a no-op with no conversation open', () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useInputQueue(null))
+    act(() => result.current.flush())
+    expect(api.flushQueue).not.toHaveBeenCalled()
   })
 
   it('applies a pushed change for the open conversation and ignores others', async () => {
