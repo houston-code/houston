@@ -31,7 +31,12 @@ const CLEAR_LINE = '\r\x1b[2K'
 
 /** The slice of a readline Interface this adapter drives (fakeable in tests). */
 export interface ReadlineLike {
-  question(query: string, cb: (answer: string) => void): void
+  /**
+   * Ask for a line. The `signal` cancels the outstanding question (node:readline
+   * ≥17) — the adapter aborts it on cancel/EOF so an abandoned question callback
+   * can't collide with the next read.
+   */
+  question(query: string, opts: { signal?: AbortSignal }, cb: (answer: string) => void): void
   pause(): void
   resume(): void
   on(event: string, cb: () => void): void
@@ -102,10 +107,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     })
 
   let pending: ((line: string | null) => void) | null = null
+  // The AbortController for the outstanding rl.question, so cancelRead / EOF can
+  // actually cancel it. Without this, node:readline keeps the abandoned question
+  // callback registered; the NEXT read then collides with it — the next prompt
+  // shows the stale text and the user's line is delivered to (and swallowed by)
+  // the dead callback, hanging the new read.
+  let questionAbort: AbortController | null = null
   const settle = (line: string | null): void => {
     if (pending) {
       const resolve = pending
       pending = null
+      questionAbort?.abort()
+      questionAbort = null
       resolve(line)
     }
   }
@@ -149,13 +162,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     readLine: (prompt, opts) =>
       new Promise<string | null>((resolve) => {
         pending = resolve
+        // A per-read AbortController so cancelRead / EOF can cancel this exact
+        // question (see `settle`), leaving no dangling callback for the next read.
+        const ac = new AbortController()
+        questionAbort = ac
         // Pause the spinner while a prompt is on screen so it can't repaint over it.
         stopTimer(true)
         // Drop type-ahead before a security-sensitive prompt so a stray buffered
         // 'y' can't answer an approval the user never actually saw.
         if (opts?.discardPending) drainInput()
         rl.resume()
-        rl.question(prompt, (answer) => {
+        rl.question(prompt, { signal: ac.signal }, (answer) => {
+          questionAbort = null
           rl.pause() // back to idle: stop echoing until the next read
           pending = null
           startTimer() // resume the spinner if the turn is still running
@@ -180,7 +198,17 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       spinnerLabel = null
       stopTimer(true)
     },
-    select: (spec) => runPicker(spec, rl, rawWrite, paint)
+    select: async (spec) => {
+      // Stop the spinner while the picker owns the screen (mirrors readLine): its
+      // 100ms redraw would otherwise paint frames into the picker's multi-line
+      // region and fight its cursor-up redraw, tearing it.
+      stopTimer(true)
+      try {
+        return await runPicker(spec, rl, rawWrite, paint)
+      } finally {
+        startTimer() // resume the spinner if a turn is still running
+      }
+    }
   }
 }
 
@@ -231,12 +259,19 @@ function runPicker(
       resolve(outcome)
     }
     const onKey = (_str: string, key: { name?: string; sequence?: string; ctrl?: boolean }): void => {
-      const pk = keyToPickerKey(key ?? {})
-      if (!pk) return
-      const { state: next, outcome } = reducePicker(state, pk)
-      state = next
-      if (outcome) finish(outcome)
-      else draw(false)
+      try {
+        const pk = keyToPickerKey(key ?? {})
+        if (!pk) return
+        const { state: next, outcome } = reducePicker(state, pk)
+        state = next
+        if (outcome) finish(outcome)
+        else draw(false)
+      } catch {
+        // A redraw/write failure (e.g. a broken pipe) must not escape the keypress
+        // handler as an uncaughtException with the listener still attached and raw
+        // mode still on. Fall back to the typed prompt; finish() restores both.
+        finish({ kind: 'type' })
+      }
     }
 
     try {

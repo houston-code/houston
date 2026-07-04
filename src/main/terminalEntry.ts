@@ -88,6 +88,9 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
   try {
     code = await runTui(tui, {
       getSettings,
+      // Real terminal width (re-read each turn) so status-line truncation and
+      // markdown wrapping track the actual terminal, not a hardcoded 80 columns.
+      columns: () => process.stdout.columns || 80,
       recordLegalAcceptance: () => {
         updateSettings({ legalAcceptedVersion: LEGAL_VERSION })
       },
