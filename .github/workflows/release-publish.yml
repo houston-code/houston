@@ -121,14 +121,26 @@ jobs:
       # upload. On dry_run it's built (not published) and lands in the artifact.
       - name: Build standalone CLI
         if: matrix.os == 'ubuntu-22.04'
-        run: npm run build:cli
+        run: |
+          npm run build:cli
+          # A downloaded .cjs has no package manager to verify it, so ship a
+          # checksum beside it: users can run `sha256sum -c houston-cli.cjs.sha256`.
+          # Built here (not in the attach step) so dry_run's artifact carries it too.
+          ( cd out/cli && sha256sum houston-cli.cjs > houston-cli.cjs.sha256 )
       - name: Attach standalone CLI to the release
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
-          gh release upload "$tag" out/cli/houston-cli.cjs -R piyushvijay/houston-releases --clobber
+          # Upload the bundle, its checksum, and the attribution notices together:
+          # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
+          # travel with the redistributed code (the .cjs ships no node_modules).
+          gh release upload "$tag" \
+            out/cli/houston-cli.cjs \
+            out/cli/houston-cli.cjs.sha256 \
+            THIRD-PARTY-NOTICES.md \
+            -R piyushvijay/houston-releases --clobber
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
       # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
@@ -147,6 +159,8 @@ jobs:
             release/*.deb
             release/latest*.yml
             out/cli/houston-cli.cjs
+            out/cli/houston-cli.cjs.sha256
+            THIRD-PARTY-NOTICES.md
           if-no-files-found: error
 
   finalize:
