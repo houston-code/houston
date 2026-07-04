@@ -160,6 +160,16 @@ export function resetCaptureBackend(): void {
   captureBackend = null
 }
 
+/**
+ * Whether a capture backend has been wired. Only the Electron shell wires one
+ * (`localhostCapture.ts`), so this is false on the standalone CLI — the loop uses
+ * it to drop `view_localhost` from the toolset and system prompt rather than
+ * offering a tool that can only fail.
+ */
+export function isCaptureBackendConfigured(): boolean {
+  return captureBackend !== null
+}
+
 function requireCaptureBackend(): CaptureDeps {
   if (!captureBackend) {
     throw new Error(

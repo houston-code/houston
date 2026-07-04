@@ -45,6 +45,25 @@ describe('buildSystemPrompt', () => {
     expect(buildSystemPrompt('/tmp/x', undefined, undefined, true)).toContain('PLAN MODE IS ON')
   })
 
+  it('lists view_localhost by default but omits it when capture is unavailable', () => {
+    expect(buildSystemPrompt('/tmp/x')).toContain('view_localhost')
+    const noCapture = buildSystemPrompt(
+      '/tmp/x',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    )
+    expect(noCapture).not.toContain('view_localhost')
+    // The neighbouring tool bullets must survive the removal.
+    expect(noCapture).toContain('- web_fetch:')
+    expect(noCapture).toContain('- web_search:')
+  })
+
   describe('per-model addendum', () => {
     const base = buildSystemPrompt('/tmp/x')
 
