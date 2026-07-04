@@ -34,4 +34,14 @@ describe('resolveUserDataDir', () => {
       resolveUserDataDir({ platform: 'darwin', env: { HOUSTON_DATA_DIR: '/srv/profile' }, home: HOME })
     ).toBe('/srv/profile')
   })
+
+  it('treats an empty XDG_CONFIG_HOME / APPDATA as unset (not a relative dir)', () => {
+    // An exported-but-empty var must not fork the profile into a cwd-relative dir.
+    expect(resolveUserDataDir({ platform: 'linux', env: { XDG_CONFIG_HOME: '' }, home: HOME })).toBe(
+      join(HOME, '.config', 'Houston')
+    )
+    expect(resolveUserDataDir({ platform: 'win32', env: { APPDATA: '' }, home: HOME })).toBe(
+      join(HOME, 'AppData', 'Roaming', 'Houston')
+    )
+  })
 })

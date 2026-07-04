@@ -26,16 +26,35 @@ import { cliGetHeaders, cliGetKey, cliHasKey } from './credentials'
  *   - credentials: env-first with an optional credentials file (credentials.ts) —
  *     Electron's safeStorage needs a running desktop app and an OS keyring.
  *
- * Capabilities that require Chromium stay desktop-only and degrade explicitly:
- * `view_localhost` (offscreen screenshot) reports it is unavailable in this
- * context when the agent calls it. The build (scripts/build-cli.mjs) fails if
- * `electron` ever sneaks into this entry's module graph.
+ * Capabilities that require Chromium stay desktop-only: `view_localhost`
+ * (offscreen screenshot) needs a capture backend the CLI never wires, so the loop
+ * omits it from the toolset entirely — the agent isn't offered a tool it can't
+ * use. The build (scripts/build-cli.mjs) fails if `electron` ever sneaks into this
+ * entry's module graph.
  */
 
 // Injected by the build (scripts/build-cli.mjs); absent under tsc/vitest.
 declare const __HOUSTON_VERSION__: string | undefined
 
 const VERSION = typeof __HOUSTON_VERSION__ === 'string' ? __HOUSTON_VERSION__ : 'dev'
+
+/** Node major this build targets (esbuild `target: node22`); older crashes cryptically. */
+const MIN_NODE_MAJOR = 22
+
+/**
+ * The bundle is emitted for Node 22, and `engines` doesn't govern a downloaded
+ * `.cjs`, so guard the runtime explicitly: an old Node otherwise dies with an
+ * opaque syntax/API error. Pure (takes the version string) so it's unit-testable.
+ * Returns an error message, or null when the runtime is new enough / unparseable.
+ */
+export function nodeVersionError(nodeVersion: string, min = MIN_NODE_MAJOR): string | null {
+  const major = Number.parseInt(nodeVersion.replace(/^v/, '').split('.')[0] ?? '', 10)
+  if (Number.isNaN(major)) return null // unrecognizable version — don't block on it
+  if (major < min) {
+    return `Houston CLI requires Node ${min} or newer (this is ${nodeVersion}). Install Node ${min}+ and re-run.`
+  }
+  return null
+}
 
 export const USAGE = `Houston CLI ${VERSION} — coding agent in your terminal (no desktop app required).
 
@@ -95,6 +114,13 @@ async function main(): Promise<number> {
   if (argv.includes('-v') || argv.includes('--version')) {
     process.stdout.write(`${VERSION}\n`)
     return 0
+  }
+
+  // Checked after -h/-v (those stay useful on any Node) but before any real work.
+  const versionError = nodeVersionError(process.version)
+  if (versionError) {
+    process.stderr.write(`${versionError}\n`)
+    return 1
   }
 
   wireCliHost()

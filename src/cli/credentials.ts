@@ -62,6 +62,8 @@ function keyFromEnv(id: string, env: NodeJS.ProcessEnv): string | null {
 
 /** Warn once per process about a group/world-readable credentials file. */
 let warnedLoosePerms = false
+/** Warn once per process about an unparseable credentials file. */
+let warnedMalformedCreds = false
 
 function keyFromFile(id: string, dataDir: string, warn: (m: string) => void): string | null {
   const path = join(dataDir, 'cli-credentials.json')
@@ -86,17 +88,27 @@ function keyFromFile(id: string, dataDir: string, warn: (m: string) => void): st
     const value = parsed?.[id]
     return typeof value === 'string' && value.length > 0 ? value : null
   } catch {
-    return null // malformed JSON: treat as absent rather than crashing a run
+    // Malformed JSON: don't crash the run, but the file exists and was meant to
+    // hold keys, so a silent "no key set" later would be baffling — say why.
+    if (!warnedMalformedCreds) {
+      warnedMalformedCreds = true
+      warn(`Warning: ${path} is not valid JSON — ignoring it. Expected {"<provider-id>": "<key>"}.\n`)
+    }
+    return null
   }
 }
 
 /** Warn once per process about a group/world-readable headers file. */
 let warnedLooseHeaderPerms = false
+/** Warn once per process about an unparseable headers file. */
+let warnedMalformedHeaders = false
 
-/** Test-only: reset the once-per-process permissions warnings. */
+/** Test-only: reset the once-per-process warnings. */
 export function resetCredentialWarnings(): void {
   warnedLoosePerms = false
   warnedLooseHeaderPerms = false
+  warnedMalformedCreds = false
+  warnedMalformedHeaders = false
 }
 
 /**
@@ -135,7 +147,12 @@ export function cliGetHeaders(scope: string, deps: CredentialDeps = {}): Record<
     }
     return out
   } catch {
-    return {} // malformed JSON: treat as absent rather than crashing a run
+    // Malformed JSON: don't crash the run, but say why the headers were ignored.
+    if (!warnedMalformedHeaders) {
+      warnedMalformedHeaders = true
+      warn(`Warning: ${path} is not valid JSON — ignoring it.\n`)
+    }
+    return {}
   }
 }
 
