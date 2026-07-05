@@ -72,6 +72,7 @@ describe('tool registry', () => {
       'review_changes',
       'run_shell',
       'search_files',
+      'skill',
       'todo_write',
       'view_localhost',
       'web_fetch',
@@ -1333,5 +1334,21 @@ describe('symlink confinement (file tools run outside the sandbox)', () => {
     symlinkSync(join(workspace, 'made.txt'), join(workspace, 'dangling-inside'))
     await run('write_file', { path: 'dangling-inside', content: 'created' })
     expect(readFileSync(join(workspace, 'made.txt'), 'utf8')).toBe('created')
+  })
+})
+
+describe('skill', () => {
+  it('delegates to useSkill and returns the instructions', async () => {
+    const withSkill: ToolContext = { ...ctx, useSkill: async (name) => `instructions for ${name}` }
+    expect(await getTool('skill')!.execute({ name: 'pdf' }, withSkill)).toBe('instructions for pdf')
+  })
+
+  it('errors when skills are unavailable in the context', async () => {
+    await expect(run('skill', { name: 'pdf' })).rejects.toThrow('Skills are not available')
+  })
+
+  it('requires a name', async () => {
+    const withSkill: ToolContext = { ...ctx, useSkill: async () => 'x' }
+    await expect(getTool('skill')!.execute({}, withSkill)).rejects.toThrow('name is required')
   })
 })

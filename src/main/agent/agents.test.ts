@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadAgents, AGENTS_DIR } from './agents'
-import { loadSkills, SKILLS_DIR } from './skills'
+import { loadSkills, loadSkillBody, resolveSkillInstructions, SKILLS_DIR } from './skills'
 import { buildCapabilities } from './capabilities'
 
 let ws: string
@@ -88,6 +88,38 @@ describe('loadSkills', () => {
   })
 })
 
+describe('loadSkillBody', () => {
+  it('returns the SKILL.md body with front-matter stripped', async () => {
+    writeSkill('pdf', '---\nname: PDF tools\ndescription: Work with PDFs\n---\nStep 1. Do the thing.\nStep 2. Done.')
+    const [skill] = await loadSkills(ws)
+    expect(await loadSkillBody(ws, skill)).toBe('Step 1. Do the thing.\nStep 2. Done.')
+  })
+
+  it('returns null when the instructions file is gone', async () => {
+    expect(await loadSkillBody(ws, { name: 'x', description: 'y', path: `${SKILLS_DIR}/x/SKILL.md` })).toBeNull()
+  })
+})
+
+describe('resolveSkillInstructions', () => {
+  it('returns a known skill\'s instructions (case-insensitive name)', async () => {
+    writeSkill('pdf', '---\nname: PDF tools\ndescription: Work with PDFs\n---\nFull instructions here.')
+    const skills = await loadSkills(ws)
+    expect(await resolveSkillInstructions(ws, skills, 'pdf tools')).toBe('Full instructions here.')
+  })
+
+  it('reports the available skills when the name is unknown', async () => {
+    writeSkill('pdf', '---\nname: PDF tools\ndescription: Work with PDFs\n---\nx')
+    const skills = await loadSkills(ws)
+    const out = await resolveSkillInstructions(ws, skills, 'spreadsheets')
+    expect(out).toContain('Unknown skill')
+    expect(out).toContain('PDF tools')
+  })
+
+  it('notes when there are no skills at all', async () => {
+    expect(await resolveSkillInstructions(ws, [], 'anything')).toContain('none defined')
+  })
+})
+
 describe('buildCapabilities', () => {
   it('is empty with nothing to advertise', () => {
     expect(buildCapabilities([], [])).toBe('')
@@ -101,5 +133,6 @@ describe('buildCapabilities', () => {
     expect(text).toContain('dispatch_agent')
     expect(text).toContain('sec: security')
     expect(text).toContain('.houston/skills/pdf/SKILL.md')
+    expect(text).toContain('skill({')
   })
 })
