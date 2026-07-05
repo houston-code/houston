@@ -576,6 +576,50 @@ export async function startRun(
           }
         })
       },
+      dispatchWritableSubAgent: (prompt, agentName) => {
+        // A writable subagent edits files and runs shell commands, sandboxed to the
+        // project (workspace roots + Seatbelt/bwrap) with no network. Reaching this
+        // means the dispatch_writable_agent call was already approved (kind:'write'),
+        // so the subagent works autonomously within that sandbox. A named agent must
+        // be marked `write: true`; otherwise steer the model to dispatch_agent.
+        const agent = agentName ? agentsByName.get(agentName) : undefined
+        if (agentName && !agent) return Promise.resolve(`Unknown agent: ${agentName}`)
+        if (agent && agent.write !== true) {
+          return Promise.resolve(
+            `Agent "${agentName}" is read-only. Use dispatch_agent for it, or add \`write: true\` to its .houston/agents file to allow changes.`
+          )
+        }
+        let subInput = 0
+        let subOutput = 0
+        return runSubAgent({
+          provider,
+          model: req.model,
+          workspace,
+          prompt,
+          signal: abort.signal,
+          writable: true,
+          roots,
+          // A fresh shell session so the subagent's cwd/env changes don't leak into
+          // the parent agent's persistent shell.
+          shellSession: createShellSession(workspace),
+          shellOutputMaxBytes: resolveShellOutputBudget(settings),
+          systemOverride: agent?.systemPrompt,
+          tools: agent?.tools,
+          onUsage: (u) => {
+            subInput += u.inputTokens ?? 0
+            subOutput += u.outputTokens ?? 0
+          }
+        }).finally(() => {
+          if (subInput || subOutput) {
+            emit({
+              type: 'usage',
+              inputTokens: 0,
+              outputTokens: subOutput,
+              cost: turnCostUsd(req.model, subInput, subOutput)
+            })
+          }
+        })
+      },
       dispatchReview: (base, paths, effort) => {
         // The review's nested subagent calls bill against the same model; total
         // their tokens and fold them into the conversation's usage when it ends.

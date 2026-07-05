@@ -4,10 +4,15 @@ import { parseFrontmatter } from '@shared/frontmatter'
 
 /**
  * Custom subagents defined in `.houston/agents/*.md`. Each file is a specialized
- * read-only research agent: optional front-matter `description`, and the body is
- * the agent's system prompt. The main agent can target one by name via
- * dispatch_agent({ agent: "<name>", ... }). Like the built-in subagent, custom
- * agents are read-only (no edits/shell/network), so they need no approvals.
+ * agent: optional front-matter `description`, and the body is the agent's system
+ * prompt. The main agent can target one by name via dispatch_agent({ agent:
+ * "<name>", ... }) for read-only work.
+ *
+ * By default a custom agent is read-only (no edits/shell/network), so it needs no
+ * approvals. Front-matter `write: true` opts it into a WRITABLE agent that can edit
+ * files and run shell commands (still sandboxed to the project, no network); it is
+ * reachable via dispatch_writable_agent, whose call is approval-gated like any other
+ * write. See src/main/agent/subagent.ts.
  */
 
 export const AGENTS_DIR = '.houston/agents'
@@ -20,11 +25,18 @@ export interface CustomAgent {
   /** The agent's system prompt (front-matter stripped). */
   systemPrompt: string
   /**
-   * Optional allow-list from front-matter `tools:` (comma/space separated).
-   * When present, narrows the read-only tools this agent may use; it can only
-   * restrict the default set, never grant write/shell/network access.
+   * Optional allow-list from front-matter `tools:` (comma/space separated). When
+   * present, narrows the tools this agent may use within its tier — it can only
+   * restrict the tier's set, never widen it (a read-only agent can't gain write
+   * tools this way; a writable agent's set already includes them).
    */
   tools?: string[]
+  /**
+   * Front-matter `write: true` — the agent may edit files and run shell commands
+   * (sandboxed to the project, no network). Absent/false keeps it read-only. Only
+   * dispatch_writable_agent honors this; dispatch_agent always runs read-only.
+   */
+  write?: boolean
 }
 
 function firstLine(s: string): string {
@@ -39,6 +51,11 @@ function parseTools(value: string | undefined): string[] | undefined {
     .map((t) => t.trim())
     .filter(Boolean)
   return tools.length ? tools : undefined
+}
+
+/** Parse a truthy front-matter flag (`true`/`yes`/`on`/`1`). */
+function parseBool(value: string | undefined): boolean {
+  return value !== undefined && /^(true|yes|on|1)$/i.test(value.trim())
 }
 
 export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
@@ -66,11 +83,13 @@ export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
     const systemPrompt = (body || raw).slice(0, MAX_PROMPT_CHARS)
     if (!systemPrompt) continue
     const tools = parseTools(data.tools)
+    const write = parseBool(data.write)
     agents.push({
       name,
       description: data.description || firstLine(systemPrompt) || name,
       systemPrompt,
-      ...(tools ? { tools } : {})
+      ...(tools ? { tools } : {}),
+      ...(write ? { write: true } : {})
     })
   }
   agents.sort((a, b) => a.name.localeCompare(b.name))

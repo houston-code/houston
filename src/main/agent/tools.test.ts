@@ -45,6 +45,7 @@ describe('tool registry', () => {
       'ask_user',
       'ast_grep',
       'dispatch_agent',
+      'dispatch_writable_agent',
       'edit_file',
       'gh_issue_comment',
       'gh_issue_create',

@@ -67,6 +67,13 @@ export interface ToolContext {
   searchProvider?: string
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
   dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
+  /**
+   * Run a WRITABLE subagent — edits files and runs shell commands, sandboxed to the
+   * project with no network (injected by the loop). Gated by the approval on the
+   * dispatch_writable_agent call, so the loop supplies this only when writes are
+   * permitted; the subagent then works autonomously within the sandbox.
+   */
+  dispatchWritableSubAgent?: (prompt: string, agent?: string) => Promise<string>
   /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
   dispatchReview?: (base?: string, paths?: string[], effort?: 'normal' | 'high') => Promise<string>
   /** Attach an image read by the agent to the tool result (injected by the loop). */
@@ -1149,6 +1156,43 @@ const dispatchAgent: ToolDef = {
   }
 }
 
+const dispatchWritableAgent: ToolDef = {
+  // Delegates write authority to a subagent, so the dispatch itself is gated by the
+  // normal write approval (and blocked in plan mode) — one consent covers the whole
+  // delegated task, which the subagent then carries out autonomously in the sandbox.
+  kind: 'write',
+  summarize: (a) => `Writable subagent: ${str(a, 'description') || 'task'}`,
+  schema: {
+    name: 'dispatch_writable_agent',
+    description:
+      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Everything it does is confined to the project sandbox with no network access. Approving this call grants the subagent write access for the whole delegated task (it will not prompt again per action), so scope the task clearly. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
+    parameters: objectSchema(
+      {
+        description: { type: 'string', description: 'A short label for the task (a few words).' },
+        prompt: {
+          type: 'string',
+          description:
+            'The full task for the subagent, with all the context and acceptance criteria it needs.'
+        },
+        agent: {
+          type: 'string',
+          description:
+            'Optional: the name of a custom agent (from .houston/agents, marked `write: true`) to use. Omit for the default writable agent.'
+        }
+      },
+      ['description', 'prompt']
+    )
+  },
+  async execute(args, ctx) {
+    const prompt = str(args, 'prompt')
+    if (!prompt) throw new Error('prompt is required.')
+    if (!ctx.dispatchWritableSubAgent) {
+      throw new Error('Writable subagents are not available in this context.')
+    }
+    return ctx.dispatchWritableSubAgent(prompt, str(args, 'agent') || undefined)
+  }
+}
+
 const reviewChanges: ToolDef = {
   kind: 'read', // spawns read-only reviewer subagents + read-only git — no side effects, no approval
   summarize: (a) => `Review changes${str(a, 'base') ? ` vs ${str(a, 'base')}` : ''}`,
@@ -2108,6 +2152,7 @@ export const TOOLS: ToolDef[] = [
   askUser,
   recallHistory,
   dispatchAgent,
+  dispatchWritableAgent,
   reviewChanges,
   gitStatus,
   gitDiff,
