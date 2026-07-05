@@ -1,5 +1,11 @@
-import { flattenMcpContent } from '@shared/mcp'
-import type { McpConnection, McpToolInfo } from './client'
+import { flattenMcpContent, flattenMcpResourceContents } from '@shared/mcp'
+import {
+  mcpResourcesCapable,
+  parseMcpResourceList,
+  type McpConnection,
+  type McpResourceInfo,
+  type McpToolInfo
+} from './client'
 
 /**
  * A minimal MCP client over the **streamable HTTP** transport (the remote
@@ -71,6 +77,7 @@ export class McpHttpClient implements McpConnection {
   private nextId = 1
   private closed = false
   tools: McpToolInfo[] = []
+  resources: McpResourceInfo[] = []
 
   constructor(private readonly fetchFn: FetchFn = fetch) {}
 
@@ -82,7 +89,7 @@ export class McpHttpClient implements McpConnection {
   async connect(opts: { url: string; headers?: Record<string, string> }): Promise<void> {
     this.url = opts.url
     this.extraHeaders = opts.headers ?? {}
-    await this.rpc(
+    const init = await this.rpc(
       'initialize',
       {
         protocolVersion: PROTOCOL_VERSION,
@@ -94,6 +101,21 @@ export class McpHttpClient implements McpConnection {
     await this.notify('notifications/initialized', {})
     const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
     this.tools = Array.isArray(listed?.tools) ? listed.tools : []
+
+    // Only ask for resources when the server declared the capability.
+    if (mcpResourcesCapable(init)) {
+      try {
+        this.resources = parseMcpResourceList(await this.rpc('resources/list', {}, INIT_TIMEOUT_MS))
+      } catch {
+        this.resources = []
+      }
+    }
+  }
+
+  /** Read a resource's contents by uri, flattened to text. */
+  async readResource(uri: string): Promise<string> {
+    const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS)
+    return flattenMcpResourceContents(res) || '[no content]'
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {

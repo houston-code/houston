@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { flattenMcpContent } from '@shared/mcp'
+import { flattenMcpContent, flattenMcpResourceContents } from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
 
 /**
@@ -20,16 +20,55 @@ export interface McpToolInfo {
   inputSchema?: Record<string, unknown>
 }
 
+/** A resource an MCP server exposes (addressed by uri), from `resources/list`. */
+export interface McpResourceInfo {
+  uri: string
+  name?: string
+  description?: string
+  mimeType?: string
+}
+
 /**
  * The transport-agnostic surface the manager uses. Implemented by McpClient
- * (stdio) and McpHttpClient (streamable HTTP) so the manager can treat them
- * uniformly once connected.
+ * (stdio), McpHttpClient (streamable HTTP), and McpSseClient so the manager can
+ * treat them uniformly once connected.
  */
 export interface McpConnection {
   readonly tools: McpToolInfo[]
+  /** Resources the server exposes; empty when the server doesn't support them. */
+  readonly resources: McpResourceInfo[]
   readonly isClosed: boolean
   callTool(name: string, args: Record<string, unknown>): Promise<string>
+  /** Read a resource's contents by uri (flattened to text). */
+  readResource(uri: string): Promise<string>
   close(): void
+}
+
+/** True if a server's initialize result declared the `resources` capability. */
+export function mcpResourcesCapable(initResult: unknown): boolean {
+  if (!initResult || typeof initResult !== 'object') return false
+  const caps = (initResult as { capabilities?: unknown }).capabilities
+  return !!caps && typeof caps === 'object' && 'resources' in (caps as object)
+}
+
+/** Parse a `resources/list` result into resource descriptors (drops malformed entries). */
+export function parseMcpResourceList(result: unknown): McpResourceInfo[] {
+  if (!result || typeof result !== 'object') return []
+  const list = (result as { resources?: unknown }).resources
+  if (!Array.isArray(list)) return []
+  const out: McpResourceInfo[] = []
+  for (const r of list) {
+    if (!r || typeof r !== 'object') continue
+    const item = r as Record<string, unknown>
+    if (typeof item.uri !== 'string') continue
+    out.push({
+      uri: item.uri,
+      ...(typeof item.name === 'string' ? { name: item.name } : {}),
+      ...(typeof item.description === 'string' ? { description: item.description } : {}),
+      ...(typeof item.mimeType === 'string' ? { mimeType: item.mimeType } : {})
+    })
+  }
+  return out
 }
 
 interface Pending {
@@ -54,6 +93,7 @@ export class McpClient {
   private buffer = ''
   private closed = false
   tools: McpToolInfo[] = []
+  resources: McpResourceInfo[] = []
 
   constructor(private readonly spawnFn: SpawnFn = nodeSpawn as unknown as SpawnFn) {}
 
@@ -82,7 +122,7 @@ export class McpClient {
     child.on('exit', () => this.failAll('MCP server process exited'))
     child.on('error', (e: Error) => this.failAll(`MCP server failed to start: ${e.message}`))
 
-    await this.request(
+    const init = await this.request(
       'initialize',
       {
         protocolVersion: PROTOCOL_VERSION,
@@ -97,6 +137,18 @@ export class McpClient {
       tools?: McpToolInfo[]
     }
     this.tools = Array.isArray(listed?.tools) ? listed.tools : []
+
+    // Only ask for resources when the server declared the capability — avoids an
+    // unsupported-method error (or a hang) against servers that don't offer them.
+    if (mcpResourcesCapable(init)) {
+      try {
+        this.resources = parseMcpResourceList(
+          await this.request('resources/list', {}, INIT_TIMEOUT_MS)
+        )
+      } catch {
+        this.resources = []
+      }
+    }
   }
 
   /** Call a tool and return its flattened text result. */
@@ -108,6 +160,12 @@ export class McpClient {
     )) as { content?: unknown; isError?: boolean }
     const text = flattenMcpContent(res?.content)
     return res?.isError ? `${text}\n[the MCP tool reported an error]`.trim() : text || '[no output]'
+  }
+
+  /** Read a resource's contents by uri, flattened to text. */
+  async readResource(uri: string): Promise<string> {
+    const res = await this.request('resources/read', { uri }, CALL_TIMEOUT_MS)
+    return flattenMcpResourceContents(res) || '[no content]'
   }
 
   close(): void {

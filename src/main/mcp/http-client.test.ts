@@ -32,7 +32,9 @@ describe('pickJsonRpc', () => {
 })
 
 /** Build a fake fetch that answers MCP JSON-RPC over HTTP. */
-function fakeServer(opts: { sse?: boolean; sessionId?: string; tool?: string } = {}): {
+function fakeServer(
+  opts: { sse?: boolean; sessionId?: string; tool?: string; resources?: boolean } = {}
+): {
   fetch: FetchFn
   calls: Array<{ method: string; headers: Record<string, string> }>
 } {
@@ -43,8 +45,17 @@ function fakeServer(opts: { sse?: boolean; sessionId?: string; tool?: string } =
     calls.push({ method: req.method, headers })
     const reply = (result: unknown): string => JSON.stringify({ jsonrpc: '2.0', id: req.id, result })
     let result: unknown = {}
-    if (req.method === 'tools/list') result = { tools: [{ name: opts.tool ?? 'echo' }] }
+    if (req.method === 'initialize') result = opts.resources ? { capabilities: { resources: {} } } : {}
+    else if (req.method === 'tools/list') result = { tools: [{ name: opts.tool ?? 'echo' }] }
     else if (req.method === 'tools/call') result = { content: [{ type: 'text', text: 'hi there' }] }
+    else if (req.method === 'resources/list')
+      result = {
+        resources: [
+          { uri: 'file:///a.txt', name: 'A', description: 'The A file', mimeType: 'text/plain' }
+        ]
+      }
+    else if (req.method === 'resources/read')
+      result = { contents: [{ uri: 'file:///a.txt', mimeType: 'text/plain', text: 'file contents' }] }
     const respHeaders = new Headers({
       'content-type': opts.sse ? 'text/event-stream' : 'application/json',
       ...(opts.sessionId && req.method === 'initialize' ? { 'mcp-session-id': opts.sessionId } : {})
@@ -80,6 +91,24 @@ describe('McpHttpClient', () => {
     const toolCall = calls.find((c) => c.method === 'tools/call')!
     expect(toolCall.headers['mcp-session-id']).toBe('sess-123')
     expect(toolCall.headers['authorization']).toBe('Bearer t')
+  })
+
+  it('lists and reads resources when the server declares the capability', async () => {
+    const { fetch, calls } = fakeServer({ resources: true })
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    expect(client.resources.map((r) => r.uri)).toEqual(['file:///a.txt'])
+    expect(client.resources[0]).toMatchObject({ name: 'A', mimeType: 'text/plain' })
+    expect(await client.readResource('file:///a.txt')).toBe('file contents')
+    expect(calls.some((c) => c.method === 'resources/list')).toBe(true)
+  })
+
+  it('does not request resources when the capability is absent', async () => {
+    const { fetch, calls } = fakeServer() // no resources capability declared
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    expect(client.resources).toEqual([])
+    expect(calls.some((c) => c.method === 'resources/list')).toBe(false)
   })
 
   it('rejects after close', async () => {
