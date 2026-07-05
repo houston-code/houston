@@ -71,6 +71,8 @@ import {
 import { buildPinnedMessages } from './workingMemory'
 
 const MAX_ITERATIONS = 40
+/** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
+const MAX_STOP_CONTINUATIONS = 3
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
 const MAX_STREAM_RETRIES = 3
 
@@ -412,7 +414,7 @@ export async function startRun(
     // at startup. The standalone CLI wires none, so drop the tool from the schema
     // set and the prompt rather than offering one that fails after an approval.
     const localhostCaptureAvailable = isCaptureBackendConfigured()
-    const system = buildSystemPrompt(
+    let system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
       rules.text,
@@ -652,11 +654,26 @@ export async function startRun(
     // and the reactive (post-overflow) recovery path.
     const compactTo = async (newCut: number): Promise<'ok' | 'aborted' | 'failed'> => {
       if (newCut <= cut) return 'failed'
+      // PreCompact: let a hook persist state or inject a note before older turns are
+      // summarized away. Any injected context is folded into the material being
+      // summarized so it carries into the summary. Best-effort and non-blocking —
+      // compaction must proceed to keep the turn within the context window.
+      const preCompact = await runHooks(
+        settings.hooks,
+        'PreCompact',
+        { tool: 'PreCompact', input: {} },
+        workspace,
+        abort.signal
+      )
+      const toSummarize = messages.slice(cut, newCut)
+      const material: ChatMessage[] = preCompact.additionalContext
+        ? [{ role: 'user', content: redact(preCompact.additionalContext) }, ...toSummarize]
+        : toSummarize
       try {
         const summary = await summarize(
           provider,
           req.model,
-          buildSummaryRequestMessages(summaryMsgs, messages.slice(cut, newCut)),
+          buildSummaryRequestMessages(summaryMsgs, material),
           abort.signal
         )
         if (!summary) return 'failed'
@@ -686,6 +703,46 @@ export async function startRun(
       ...summaryMsgs,
       ...evictStaleToolResults(messages.slice(cut))
     ]
+
+    // SessionStart: once, before the first turn. A hook can inject extra context,
+    // which we append to the system prompt for the whole run.
+    const sessionStart = await runHooks(
+      settings.hooks,
+      'SessionStart',
+      { tool: 'SessionStart', input: {} },
+      workspace,
+      abort.signal
+    )
+    if (sessionStart.additionalContext) {
+      system += `\n\n${redact(sessionStart.additionalContext)}`
+    }
+
+    // UserPromptSubmit: fires on the message that started this run. A hook can
+    // block the prompt outright, or inject context appended to the user's message.
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user')
+    const promptText = typeof lastUser?.content === 'string' ? lastUser.content : ''
+    const promptSubmit = await runHooks(
+      settings.hooks,
+      'UserPromptSubmit',
+      { tool: 'UserPromptSubmit', input: {}, prompt: promptText },
+      workspace,
+      abort.signal
+    )
+    if (promptSubmit.blocked) {
+      emit({
+        type: 'error',
+        message: `Blocked by a UserPromptSubmit hook:\n${promptSubmit.message || '(no output)'}`
+      })
+      return
+    }
+    if (promptSubmit.additionalContext && lastUser && typeof lastUser.content === 'string') {
+      lastUser.content += `\n\n${redact(promptSubmit.additionalContext)}`
+      onMessages?.(messages)
+    }
+
+    // How many times a Stop hook has forced the turn to continue, bounded so a
+    // misbehaving hook can't loop forever.
+    let stopContinuations = 0
 
     for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
       if (abort.signal.aborted) {
@@ -872,6 +929,35 @@ export async function startRun(
         // The model's reply was cut off at its output limit — say so rather than
         // presenting a truncated answer as complete.
         if (stopReason === 'max_tokens') emit({ type: 'limit', reason: 'max-output' })
+
+        // Stop hooks run when the agent would naturally end its turn. A blocking
+        // hook forces another turn — its reason is fed back as a user message —
+        // bounded by MAX_STOP_CONTINUATIONS so a hook can't spin forever. Skipped
+        // when the turn ended abnormally (max_tokens/aborted), where continuing
+        // would just repeat the failure.
+        if (stopReason === 'end_turn' && stopContinuations < MAX_STOP_CONTINUATIONS) {
+          const stop = await runHooks(
+            settings.hooks,
+            'Stop',
+            { tool: 'Stop', input: {} },
+            workspace,
+            abort.signal
+          )
+          if (abort.signal.aborted) {
+            emit({ type: 'done', stopReason: 'aborted' })
+            return
+          }
+          if (stop.blocked) {
+            stopContinuations++
+            messages.push({
+              role: 'user',
+              content: redact(stop.message) || 'A Stop hook requested that you keep working.'
+            })
+            onMessages?.(messages)
+            continue
+          }
+        }
+
         emit({ type: 'done', stopReason })
         return
       }
@@ -1051,93 +1137,114 @@ export async function startRun(
             'Blocked: Houston is in Plan mode (read-only). Do not modify files, run commands, or change remote/PR state. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
           ok = false
         } else {
-          // A permission rule can force-allow or force-ask; otherwise the policy
-          // decides — folding in the honest sandbox status so unconfined shell on a
-          // host without an enforceable sandbox is never silently auto-approved.
-          const shellEscapesWorkspace =
-            tool.kind === 'shell' &&
-            call.name === 'run_shell' &&
-            typeof call.arguments.command === 'string' &&
-            shellReferencesExternalPath(call.arguments.command)
-          const { mustApprove, unsandboxedShell } = decideApproval({
-            ruleAction,
-            policy: run.policy,
-            kind: tool.kind,
-            override: run.override.has(tool.kind),
-            shellSandboxed: isSandboxed(),
-            shellUnsandboxedOverride: run.shellUnsandboxedOverride,
-            shellEscapesWorkspace
-          })
-
-          let approved = true
-          if (mustApprove) {
-            // Track the prompt so it can be replayed if the renderer re-opens this
-            // conversation while the call is still blocking (the event is one-shot).
-            run.pendingApprovals.set(call.id, {
-              name: call.name,
-              summary: tool.summarize(call.arguments),
-              kind: tool.kind,
-              ...(unsandboxedShell ? { sandboxed: false } : {})
-            })
-            emit({
-              type: 'tool_approval',
-              callId: call.id,
-              name: call.name,
-              summary: tool.summarize(call.arguments),
-              kind: tool.kind,
-              ...(unsandboxedShell ? { sandboxed: false } : {})
-            })
-            const decision = await waitForApproval(run, call.id)
-            // Resolved (or cancelled) — it's no longer awaiting the user.
-            run.pendingApprovals.delete(call.id)
-            if (decision === 'always') {
-              // "Allow for run" — auto-approve this KIND for the rest of the run, and
-              // remember it on the conversation so later turns inherit the consent.
-              run.override.add(tool.kind)
-              // "Allow for run" on an unconfined-shell prompt is the conscious consent
-              // to keep running unsandboxed; a generic override never sets this.
-              if (unsandboxedShell) run.shellUnsandboxedOverride = true
-              grantConversationOverride(conversationId, tool.kind, unsandboxedShell)
-            } else if (decision === 'rule-allow' || decision === 'rule-deny') {
-              // "Always allow/deny" — persist a permission rule for this tool + subject
-              // so the choice survives restarts, and splice it into this run's rules
-              // (after the project rules, which only tighten) so it takes effect now.
-              const rule: PermissionRule = {
-                action: decision === 'rule-allow' ? 'allow' : 'deny',
-                tool: call.name,
-                match: permissionSubject(call.name, call.arguments) || '*'
-              }
-              addPermissionRule(rule)
-              permissionRules.splice(projectConfig.permissionRules.length, 0, rule)
+          // PreToolUse hooks run BEFORE the approval gate so a hook can auto-approve
+          // or deny the call and rewrite its arguments. The (possibly rewritten)
+          // execArgs drive the approval decision, snapshot, execution, and post-write
+          // steps; the logged tool_use keeps the model's original arguments.
+          const pre = await runHooks(
+            settings.hooks,
+            'PreToolUse',
+            { tool: call.name, input: call.arguments },
+            workspace,
+            abort.signal
+          )
+          // Resolve the arguments the tool actually runs with: a PreToolUse hook may
+          // rewrite them. An invalid rewrite fails the call rather than falling back to
+          // the model's original (possibly unsafe) args.
+          let execArgs = call.arguments
+          let rewriteError: string | null = null
+          if (!pre.blocked && pre.updatedInput) {
+            const issues = validateToolArgs(pre.updatedInput, tool.schema.parameters)
+            if (issues.length === 0) {
+              execArgs = pre.updatedInput
+            } else {
+              rewriteError = `A PreToolUse hook rewrote the input, but it was invalid:\n${validationError(call.name, tool.schema.parameters, issues)}`
             }
-            approved = decision !== 'deny' && decision !== 'rule-deny'
           }
 
-          if (!approved) {
-            output = 'Denied by the user.'
+          if (pre.blocked) {
+            output = `Blocked by a PreToolUse hook:\n${pre.message || '(no output)'}`
+            ok = false
+          } else if (rewriteError) {
+            output = rewriteError
             ok = false
           } else {
-            // PreToolUse hooks can block the call before it runs.
-            const pre = await runHooks(
-              settings.hooks,
-              'PreToolUse',
-              { tool: call.name, input: call.arguments },
-              workspace,
-              abort.signal
-            )
-            if (pre.blocked) {
-              output = `Blocked by a PreToolUse hook:\n${pre.message || '(no output)'}`
+            // A permission rule can force-allow or force-ask; otherwise the policy
+            // decides — folding in the honest sandbox status so unconfined shell on a
+            // host without an enforceable sandbox is never silently auto-approved.
+            const shellEscapesWorkspace =
+              tool.kind === 'shell' &&
+              call.name === 'run_shell' &&
+              typeof execArgs.command === 'string' &&
+              shellReferencesExternalPath(execArgs.command)
+            const { mustApprove, unsandboxedShell } = decideApproval({
+              ruleAction,
+              policy: run.policy,
+              kind: tool.kind,
+              override: run.override.has(tool.kind),
+              shellSandboxed: isSandboxed(),
+              shellUnsandboxedOverride: run.shellUnsandboxedOverride,
+              shellEscapesWorkspace
+            })
+
+            let approved = true
+            // A PreToolUse hook that explicitly approves skips the approval prompt.
+            if (mustApprove && !pre.approved) {
+              // Track the prompt so it can be replayed if the renderer re-opens this
+              // conversation while the call is still blocking (the event is one-shot).
+              run.pendingApprovals.set(call.id, {
+                name: call.name,
+                summary: tool.summarize(execArgs),
+                kind: tool.kind,
+                ...(unsandboxedShell ? { sandboxed: false } : {})
+              })
+              emit({
+                type: 'tool_approval',
+                callId: call.id,
+                name: call.name,
+                summary: tool.summarize(execArgs),
+                kind: tool.kind,
+                ...(unsandboxedShell ? { sandboxed: false } : {})
+              })
+              const decision = await waitForApproval(run, call.id)
+              // Resolved (or cancelled) — it's no longer awaiting the user.
+              run.pendingApprovals.delete(call.id)
+              if (decision === 'always') {
+                // "Allow for run" — auto-approve this KIND for the rest of the run, and
+                // remember it on the conversation so later turns inherit the consent.
+                run.override.add(tool.kind)
+                // "Allow for run" on an unconfined-shell prompt is the conscious consent
+                // to keep running unsandboxed; a generic override never sets this.
+                if (unsandboxedShell) run.shellUnsandboxedOverride = true
+                grantConversationOverride(conversationId, tool.kind, unsandboxedShell)
+              } else if (decision === 'rule-allow' || decision === 'rule-deny') {
+                // "Always allow/deny" — persist a permission rule for this tool + subject
+                // so the choice survives restarts, and splice it into this run's rules
+                // (after the project rules, which only tighten) so it takes effect now.
+                const rule: PermissionRule = {
+                  action: decision === 'rule-allow' ? 'allow' : 'deny',
+                  tool: call.name,
+                  match: permissionSubject(call.name, execArgs) || '*'
+                }
+                addPermissionRule(rule)
+                permissionRules.splice(projectConfig.permissionRules.length, 0, rule)
+              }
+              approved = decision !== 'deny' && decision !== 'rule-deny'
+            }
+
+            if (!approved) {
+              output = 'Denied by the user.'
               ok = false
             } else {
               // Snapshot the target's prior content so this turn's file changes can be reverted.
-              if (tool.kind === 'write' && typeof call.arguments.path === 'string') {
-                await recordOriginal(runId, roots, call.arguments.path)
+              if (tool.kind === 'write' && typeof execArgs.path === 'string') {
+                await recordOriginal(runId, roots, execArgs.path)
               }
-              emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
-              await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
+              emit({ type: 'tool_start', callId: call.id, name: call.name, args: execArgs })
+              await plugins.emit('onToolStart', { tool: call.name, input: execArgs })
               try {
                 output = await tool.execute(
-                  call.arguments,
+                  execArgs,
                   makeToolContext(
                     call.id,
                     (img) => toolImages.push(img),
@@ -1152,7 +1259,7 @@ export async function startRun(
               const post = await runHooks(
                 settings.hooks,
                 'PostToolUse',
-                { tool: call.name, input: call.arguments, result: output },
+                { tool: call.name, input: execArgs, result: output },
                 workspace,
                 abort.signal
               )
@@ -1166,10 +1273,10 @@ export async function startRun(
                 ok &&
                 settings.formatOnSave &&
                 tool.kind === 'write' &&
-                typeof call.arguments.path === 'string'
+                typeof execArgs.path === 'string'
               ) {
                 try {
-                  await formatFile(call.arguments.path, {
+                  await formatFile(execArgs.path, {
                     workspace,
                     roots,
                     signal: abort.signal
@@ -1180,8 +1287,8 @@ export async function startRun(
               }
               // Snapshot the file's final content (after any hook/formatter)
               // so the change can be faithfully redone after a revert.
-              if (ok && tool.kind === 'write' && typeof call.arguments.path === 'string') {
-                await recordResult(runId, roots, call.arguments.path)
+              if (ok && tool.kind === 'write' && typeof execArgs.path === 'string') {
+                await recordResult(runId, roots, execArgs.path)
               }
               // Diagnostics-on-save (opt-in): after a successful write, run a fast
               // checker (eslint/ruff/gofmt) on the file and append any problems so
@@ -1192,10 +1299,10 @@ export async function startRun(
                 ok &&
                 settings.diagnosticsOnSave &&
                 tool.kind === 'write' &&
-                typeof call.arguments.path === 'string'
+                typeof execArgs.path === 'string'
               ) {
                 try {
-                  const diag = await runPostEditDiagnostics(call.arguments.path, {
+                  const diag = await runPostEditDiagnostics(execArgs.path, {
                     workspace,
                     roots,
                     signal: abort.signal
@@ -1206,6 +1313,11 @@ export async function startRun(
                 }
               }
             }
+          }
+          // Surface any context a PreToolUse hook injected (unless it blocked, where
+          // the block reason is the message). Redacted with the rest at flushResult.
+          if (!pre.blocked && pre.additionalContext) {
+            output += `\n\n[PreToolUse hook]\n${pre.additionalContext}`
           }
         }
 
