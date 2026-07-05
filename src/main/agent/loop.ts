@@ -50,7 +50,7 @@ import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
-import { loadSkills } from './skills'
+import { loadSkills, resolveSkillInstructions } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
@@ -664,7 +664,10 @@ export async function startRun(
       // tool can't reassign the loop's `messages` array through this handle (push/splice/
       // reorder). The ChatMessage objects are shared by reference, so callers must treat
       // them as read-only; recall_history only reads, so no deep clone is warranted.
-      getHistory: () => [...messages]
+      getHistory: () => [...messages],
+      // Back the `skill` tool: resolve a skill name to its full instructions (or a
+      // note listing what's available) from the skills loaded for this run.
+      useSkill: (name) => resolveSkillInstructions(workspace, skills, name)
     })
 
     /** True if a call is a read-only tool with no gating — safe to run concurrently. */

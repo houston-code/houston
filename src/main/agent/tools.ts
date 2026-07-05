@@ -98,6 +98,11 @@ export interface ToolContext {
    * read-only.
    */
   getHistory?: () => ChatMessage[]
+  /**
+   * Load a project skill's full instructions by name (injected by the loop). Backs
+   * the `skill` tool; returns the SKILL.md body, or an "unknown skill" note.
+   */
+  useSkill?: (name: string) => Promise<string>
 }
 
 export interface ToolDef {
@@ -1125,6 +1130,31 @@ const webSearch: ToolDef = {
   }
 }
 
+const skillTool: ToolDef = {
+  kind: 'read', // returns instructions only — no side effects, no approval
+  summarize: (a) => `Skill: ${str(a, 'name') || '?'}`,
+  schema: {
+    name: 'skill',
+    description:
+      "Load a project skill's full instructions by name and follow them. Skills are reusable procedures defined for this project (they're listed in your context when any exist). The moment a task matches a listed skill, invoke this — before doing the work — to get the complete SKILL.md, then follow it exactly. Returns the instructions, or the list of available skills if the name is unknown.",
+    parameters: objectSchema(
+      {
+        name: {
+          type: 'string',
+          description: 'The exact name of the skill to load, as listed in your context.'
+        }
+      },
+      ['name']
+    )
+  },
+  async execute(args, ctx) {
+    const name = str(args, 'name')
+    if (!name) throw new Error('name is required.')
+    if (!ctx.useSkill) throw new Error('Skills are not available in this context.')
+    return ctx.useSkill(name)
+  }
+}
+
 const dispatchAgent: ToolDef = {
   kind: 'read', // spawns a read-only subagent — no side effects, no approval needed
   summarize: (a) => `Subagent: ${str(a, 'description') || 'research task'}`,
@@ -2148,6 +2178,7 @@ export const TOOLS: ToolDef[] = [
   viewLocalhost,
   webSearch,
   todoWrite,
+  skillTool,
   prSweep,
   askUser,
   recallHistory,

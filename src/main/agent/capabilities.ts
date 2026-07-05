@@ -20,9 +20,9 @@ export function buildCapabilities(agents: CustomAgent[], skills: Skill[]): strin
   }
 
   if (skills.length) {
-    const lines = skills.map((s) => `- ${s.name}: ${s.description} (read ${s.path} for instructions)`).join('\n')
+    const lines = skills.map((s) => `- ${s.name}: ${s.description} (${s.path})`).join('\n')
     parts.push(
-      `Skills available for this project. When a task matches one, read its SKILL.md for full instructions before proceeding:\n${lines}`
+      `Skills available for this project. When a task matches one, invoke skill({ name: "<name>" }) to load its full instructions and follow them before proceeding:\n${lines}`
     )
   }
 
