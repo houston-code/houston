@@ -178,13 +178,16 @@ export interface McpServerConfig {
 }
 
 /**
- * A tool-use hook: a shell command run before (PreToolUse) or after (PostToolUse)
- * a tool call. PreToolUse can block the call by exiting non-zero; PostToolUse
- * output is appended to the tool result. `matcher` is a glob over the tool name
- * (empty or `*` = all tools).
+ * A lifecycle hook: a user-authored shell command run at a point in the agent
+ * loop. The tool events (PreToolUse/PostToolUse) glob the tool name via `matcher`;
+ * the lifecycle events (UserPromptSubmit/SessionStart/Stop/PreCompact) have no tool
+ * and match only an empty or `*` matcher. A hook can steer the loop by printing a
+ * JSON directive on stdout (block/approve, reason, additionalContext, updatedInput,
+ * systemMessage); a non-zero exit blocks a blocking event, so exit-code-only hooks
+ * keep working. See src/main/agent/hooks.ts.
  */
 export interface Hook {
-  event: 'PreToolUse' | 'PostToolUse'
+  event: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'PreCompact'
   matcher: string
   command: string
 }

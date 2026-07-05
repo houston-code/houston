@@ -979,11 +979,16 @@ export function SettingsModal({
                   title="Hooks"
                   desc={
                     <>
-                      Shell commands run around tool calls (sandboxed to the project, no network).{' '}
-                      <strong>PreToolUse</strong> runs before a tool — a non-zero exit blocks it;{' '}
-                      <strong>PostToolUse</strong> runs after, and its output is shown to the agent
-                      (e.g. a formatter or test run). The call&apos;s context is in{' '}
-                      <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code>.
+                      Shell commands run at points in the agent loop (sandboxed to the project, no
+                      network). <strong>PreToolUse</strong> runs before a tool — a non-zero exit
+                      blocks it; <strong>PostToolUse</strong> runs after, and its output is shown to
+                      the agent. <strong>UserPromptSubmit</strong> / <strong>SessionStart</strong> /{' '}
+                      <strong>Stop</strong> / <strong>PreCompact</strong> run around the turn (a Stop
+                      hook that exits non-zero makes the agent keep working). Context is in{' '}
+                      <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code> /{' '}
+                      <code>$HOUSTON_USER_PROMPT</code>. A hook can also print a JSON directive (
+                      <code>{'{ decision, reason, additionalContext, updatedInput }'}</code>) on
+                      stdout to steer the loop.
                     </>
                   }
                 >
@@ -995,6 +1000,10 @@ export function SettingsModal({
                       >
                         <option value="PreToolUse">Pre</option>
                         <option value="PostToolUse">Post</option>
+                        <option value="UserPromptSubmit">Prompt</option>
+                        <option value="SessionStart">Session</option>
+                        <option value="Stop">Stop</option>
+                        <option value="PreCompact">Compact</option>
                       </select>
                       <input
                         list="tool-names"
