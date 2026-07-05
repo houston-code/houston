@@ -1541,3 +1541,48 @@ describe('ask_user', () => {
     })
   })
 })
+
+describe('dispatch_writable_agent', () => {
+  it('is approval-gated (kind:write) and runs a subagent that can edit files', async () => {
+    const r = await run({
+      turns: [
+        // main: delegate a writable task
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'write file', prompt: 'create out.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        // subagent: write the file
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'from subagent' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        // subagent: report back
+        [{ type: 'text', text: 'wrote out.txt' }, { type: 'done', stopReason: 'end_turn' }],
+        // main: finish
+        [{ type: 'text', text: 'delegated and done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const approval = r.events.find((e) => e.type === 'tool_approval')
+    expect(approval && 'name' in approval ? approval.name : '').toBe('dispatch_writable_agent')
+    expect(approval && 'kind' in approval ? approval.kind : '').toBe('write')
+    expect(existsSync(join(ws, 'out.txt'))).toBe(true)
+    expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('from subagent')
+  })
+
+  it('rejects an unknown named agent without running it', async () => {
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'x', prompt: 'do', agent: 'nope' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_writable_agent')
+    expect(typeof toolMsg?.content === 'string' && toolMsg.content).toContain('Unknown agent')
+  })
+})

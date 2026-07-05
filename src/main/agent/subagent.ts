@@ -1,43 +1,70 @@
 import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
-import { getTool } from './tools'
+import { getTool, type ToolContext } from './tools'
+import type { ShellSession } from './shell-session'
 
 /**
- * A read-only research subagent. The main agent delegates a scoped question to a
- * fresh nested loop with its own context; the subagent investigates with the
- * read-only tools and returns a synthesized report. Keeping it read-only means
- * it needs no approval prompts and can't make changes or leave the machine —
- * the parent agent does any writing, with the user in the loop as usual.
+ * A nested subagent: the main agent delegates a scoped task to a fresh loop with
+ * its own context, which investigates (and, when writable, acts) and returns a
+ * synthesized report.
+ *
+ * Two tiers:
+ * - Read-only (default): reads the project with the read tools, no approvals,
+ *   can't change anything or leave the machine — the parent does any writing.
+ * - Writable (opt-in): additionally edits files and runs shell commands, still
+ *   confined to the project sandbox (workspace roots for edits, Seatbelt/bwrap for
+ *   shell) with no network. The parent grants this by approving the
+ *   dispatch_writable_agent call; the subagent then works autonomously within that
+ *   sandbox, so its individual tool calls need no further prompts.
  */
 
-/** Tools a subagent may use — local, read-only, no network egress. */
+/** Tools any subagent may use — local, read-only, no network egress. */
 export const SUBAGENT_TOOLS = ['read_file', 'list_dir', 'glob', 'search_files', 'ast_grep'] as const
 
+/** Extra tools a WRITABLE subagent may use — edits + sandboxed shell (still no network). */
+export const SUBAGENT_WRITE_TOOLS = [
+  'write_file',
+  'edit_file',
+  'multi_edit',
+  'apply_patch',
+  'run_shell'
+] as const
+
 /**
- * Resolve the tool names a subagent may use. A custom agent's declared `tools`
- * can only *narrow* the read-only allow-list: any name not in SUBAGENT_TOOLS is
- * dropped, and an absent/empty list falls back to the full default set. This
- * keeps subagents read-only — there's no path to grant write/shell/network.
+ * Resolve the tool names a subagent may use. The base set is read-only, plus the
+ * write/shell tools when `writable`. A custom agent's declared `tools` can only
+ * *narrow* that base — any name outside it is dropped, and an absent/empty list
+ * falls back to the full base. So a read-only agent can never gain write tools, and
+ * a writable agent can restrict itself but not reach past the sandboxed set.
  */
-function resolveSubAgentTools(allowed: string[] | undefined): readonly string[] {
-  if (!allowed?.length) return SUBAGENT_TOOLS
-  const narrowed = SUBAGENT_TOOLS.filter((t) => allowed.includes(t))
-  return narrowed.length ? narrowed : SUBAGENT_TOOLS
+function resolveSubAgentTools(allowed: string[] | undefined, writable: boolean): readonly string[] {
+  const base: readonly string[] = writable
+    ? [...SUBAGENT_TOOLS, ...SUBAGENT_WRITE_TOOLS]
+    : SUBAGENT_TOOLS
+  if (!allowed?.length) return base
+  const narrowed = base.filter((t) => allowed.includes(t))
+  return narrowed.length ? narrowed : base
 }
 
 const MAX_SUBAGENT_ITERATIONS = 16
 const SUBAGENT_MAX_TOKENS = 4096
 
-/** Read-only constraints + reporting contract, shared by the default and custom agents. */
-function subAgentConstraints(workspace: string): string {
-  return `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files, ast_grep. You cannot edit files, run commands, or access the network.
+/** Tier-specific constraints + reporting contract, shared by the default and custom agents. */
+function subAgentConstraints(workspace: string, writable: boolean): string {
+  const capabilities = writable
+    ? `You are working inside the project at ${workspace}. You can READ (read_file, list_dir, glob, search_files, ast_grep) and make CHANGES: edit files (write_file, edit_file, multi_edit, apply_patch) and run shell commands (run_shell). All of it is confined to the project sandbox with no network access — you cannot reach outside the workspace or the internet.`
+    : `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files, ast_grep. You cannot edit files, run commands, or access the network.`
+  return `${capabilities}
 
-Your final message is your entire report back to the calling agent — make it self-contained: include the concrete findings (file paths, key code, answers) it needs, not a narration of your steps. Be concise.`
+Your final message is your entire report back to the calling agent — make it self-contained: include the concrete outcome (what you found or changed, file paths, key code) it needs, not a narration of your steps. Be concise.`
 }
 
-function subAgentSystemPrompt(workspace: string): string {
-  return `You are a research subagent. Another agent has delegated a focused question to you. Investigate efficiently, then answer it directly.
+function subAgentSystemPrompt(workspace: string, writable: boolean): string {
+  const role = writable
+    ? `You are an implementation subagent. Another agent has delegated a focused task to you. Carry it out end to end — make the edits and run the commands needed — then report what you did.`
+    : `You are a research subagent. Another agent has delegated a focused question to you. Investigate efficiently, then answer it directly.`
+  return `${role}
 
-${subAgentConstraints(workspace)}`
+${subAgentConstraints(workspace, writable)}`
 }
 
 export interface SubAgentOptions {
@@ -47,27 +74,50 @@ export interface SubAgentOptions {
   /** The task/question delegated to the subagent. */
   prompt: string
   signal: AbortSignal
-  /** A custom agent's system prompt to use instead of the default research one. */
+  /** A custom agent's system prompt to use instead of the default one. */
   systemOverride?: string
   /**
-   * A custom agent's declared tool allow-list. Intersected with SUBAGENT_TOOLS,
-   * so it can only narrow the read-only set, never expand it. Absent/empty => default.
+   * A custom agent's declared tool allow-list. Intersected with the tier's tools,
+   * so it can only narrow the set, never expand it. Absent/empty => the full tier.
    */
   tools?: string[]
+  /**
+   * Grant the write tier: the subagent may edit files and run shell commands
+   * (sandboxed, no network). Default false keeps it read-only.
+   */
+  writable?: boolean
+  /** Allowed roots for edits (workspace + added dirs). Defaults to [workspace]. */
+  roots?: string[]
+  /** Persistent shell state for run_shell (writable tier). */
+  shellSession?: ShellSession
+  /** Cap on a single shell command's output kept in a tool result. */
+  shellOutputMaxBytes?: number
   /** Called with each turn's token usage, so callers (e.g. a review) can total cost. */
   onUsage?: (usage: TokenUsage) => void
 }
 
-/** Run a read-only subagent loop to completion and return its final report text. */
+/** Run a subagent loop to completion and return its final report text. */
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const { provider, model, workspace, prompt, signal } = opts
-  const allowedTools = resolveSubAgentTools(opts.tools)
+  const writable = opts.writable === true
+  const allowedTools = resolveSubAgentTools(opts.tools, writable)
   const allowedToolSet = new Set<string>(allowedTools)
   const tools = allowedTools.map((name) => getTool(name)!.schema)
-  // A custom agent's prompt still gets the read-only constraints appended.
+  // A custom agent's prompt still gets the tier constraints appended.
   const system = opts.systemOverride
-    ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace)}`
-    : subAgentSystemPrompt(workspace)
+    ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace, writable)}`
+    : subAgentSystemPrompt(workspace, writable)
+  // Tool-execution context. Reads default their roots to [workspace]; the writable
+  // tier passes the real roots (for edits) and a shell session, and never allows
+  // network — so run_shell stays sandboxed with no egress.
+  const toolCtx: ToolContext = {
+    workspace,
+    roots: opts.roots ?? [workspace],
+    allowNetwork: false,
+    signal,
+    ...(opts.shellSession ? { shellSession: opts.shellSession } : {}),
+    ...(opts.shellOutputMaxBytes ? { shellOutputMaxBytes: opts.shellOutputMaxBytes } : {})
+  }
   const messages: ChatMessage[] = [{ role: 'user', content: prompt }]
   let lastText = ''
 
@@ -105,10 +155,12 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       const tool = allowedToolSet.has(call.name) ? getTool(call.name) : undefined
       let output: string
       if (!tool) {
-        output = `Tool not available to a read-only subagent: ${call.name}`
+        output = writable
+          ? `Tool not available to this subagent: ${call.name}`
+          : `Tool not available to a read-only subagent: ${call.name}`
       } else {
         try {
-          output = await tool.execute(call.arguments, { workspace, allowNetwork: false, signal })
+          output = await tool.execute(call.arguments, toolCtx)
         } catch (e) {
           output = `Error: ${(e as Error).message}`
         }

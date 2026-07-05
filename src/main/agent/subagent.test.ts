@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
-import { runSubAgent, SUBAGENT_TOOLS } from './subagent'
+import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
 
 let ws: string
 
@@ -188,5 +188,69 @@ describe('runSubAgent', () => {
       { inputTokens: 100, outputTokens: 10 },
       { inputTokens: 120, outputTokens: 8 }
     ])
+  })
+
+  describe('writable tier', () => {
+    it('offers the read tools plus the write/shell tools', async () => {
+      const seen = { tools: [] as string[] }
+      await runSubAgent({
+        provider: capturingProvider(seen),
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal,
+        writable: true
+      })
+      expect(seen.tools).toEqual([...SUBAGENT_TOOLS, ...SUBAGENT_WRITE_TOOLS])
+    })
+
+    it('keeps the read-only tier free of write tools', async () => {
+      const seen = { tools: [] as string[] }
+      await runSubAgent({
+        provider: capturingProvider(seen),
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal
+        // writable omitted → read-only
+      })
+      for (const w of SUBAGENT_WRITE_TOOLS) expect(seen.tools).not.toContain(w)
+    })
+
+    it('actually writes a file when writable', async () => {
+      const provider = scriptedProvider([
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'hello from subagent' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Wrote out.txt.' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      const report = await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'create out.txt',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws]
+      })
+      expect(report).toContain('Wrote out.txt')
+      expect(existsSync(join(ws, 'out.txt'))).toBe(true)
+      expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('hello from subagent')
+    })
+
+    it('a declared allow-list can narrow the writable tier to a subset', async () => {
+      const seen = { tools: [] as string[] }
+      await runSubAgent({
+        provider: capturingProvider(seen),
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal,
+        writable: true,
+        tools: ['read_file', 'edit_file', 'bogus']
+      })
+      expect(seen.tools).toEqual(['read_file', 'edit_file'])
+    })
   })
 })

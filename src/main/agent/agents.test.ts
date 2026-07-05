@@ -68,6 +68,24 @@ describe('loadAgents', () => {
     const [a] = await loadAgents(ws)
     expect(a.tools).toBeUndefined()
   })
+
+  it('parses `write: true` into a writable agent', async () => {
+    writeAgent('builder', '---\ndescription: Implements features\nwrite: true\n---\nYou implement changes.')
+    const [a] = await loadAgents(ws)
+    expect(a.write).toBe(true)
+  })
+
+  it('leaves write undefined by default (read-only)', async () => {
+    writeAgent('reader', '---\ndescription: Reads only\n---\nYou only read.')
+    const [a] = await loadAgents(ws)
+    expect(a.write).toBeUndefined()
+  })
+
+  it('treats a falsey write flag as read-only', async () => {
+    writeAgent('reader2', '---\nwrite: false\n---\nStill read-only.')
+    const [a] = await loadAgents(ws)
+    expect(a.write).toBeUndefined()
+  })
 })
 
 describe('loadSkills', () => {
