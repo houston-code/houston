@@ -66,10 +66,24 @@ export function anthropicSupportsXhigh(model: string): boolean {
   return /claude-(opus-4-(7|8)|fable|mythos)/i.test(model)
 }
 
+/**
+ * Legacy budget-thinking models that support **interleaved thinking** via the
+ * `interleaved-thinking-2025-05-14` beta header — the Claude 4.x Opus/Sonnet line
+ * (4.0 dated snapshots, 4.1, 4.5). It lets the model reason about each tool
+ * result before its next action instead of thinking only once per turn.
+ *
+ * Excludes Claude 3.7 (predates the feature) and Haiku 4.5 (accepts but ignores
+ * the header). Adaptive-thinking models (4.6+, Fable, Mythos) interleave
+ * automatically and never take this header, so they're out of scope here.
+ */
+export function anthropicSupportsInterleavedThinking(model: string): boolean {
+  return /claude-(opus|sonnet)-4-(\d{8}|1|5)\b/i.test(model)
+}
+
 /** Anthropic reasoning config: adaptive thinking (4.6+) or legacy budget thinking. */
 export type AnthropicThinking =
   | { kind: 'adaptive'; effort: OnEffort; display: 'summarized'; maxTokens: number }
-  | { kind: 'budget'; budgetTokens: number; maxTokens: number }
+  | { kind: 'budget'; budgetTokens: number; maxTokens: number; interleaved: boolean }
 
 /**
  * Anthropic reasoning config + the `max_tokens` to pair it with. Newer models
@@ -85,7 +99,12 @@ export function anthropicThinking(
   const budgetTokens = ANTHROPIC_BUDGET[clampToHigh(effort)]
   const maxTokens = budgetTokens + ANTHROPIC_REPLY_HEADROOM
   if (anthropicUsesLegacyThinking(model)) {
-    return { kind: 'budget', budgetTokens, maxTokens }
+    return {
+      kind: 'budget',
+      budgetTokens,
+      maxTokens,
+      interleaved: anthropicSupportsInterleavedThinking(model)
+    }
   }
   // Adaptive thinking: request a summary so the UI keeps streaming reasoning —
   // the 4.7/4.8 default is `omitted`, which would surface an empty thinking stream.

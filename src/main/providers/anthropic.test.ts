@@ -44,6 +44,11 @@ async function captureRequest(
   return h.stream.mock.calls.at(-1)![0] as Record<string, unknown>
 }
 
+/** The per-request options (2nd arg) the SDK was called with — headers, signal. */
+function lastRequestOptions(): { headers?: Record<string, string> } {
+  return (h.stream.mock.calls.at(-1)![1] ?? {}) as { headers?: Record<string, string> }
+}
+
 describe('anthropic request reasoning params', () => {
   beforeEach(() => h.stream.mockReset())
 
@@ -67,6 +72,23 @@ describe('anthropic request reasoning params', () => {
     expect(params.thinking).toMatchObject({ type: 'enabled' })
     expect((params.thinking as { budget_tokens: number }).budget_tokens).toBeGreaterThan(0)
     expect(params.output_config).toBeUndefined()
+  })
+
+  it('adds the interleaved-thinking beta header on a legacy Claude 4 model', async () => {
+    await captureRequest({ model: 'claude-sonnet-4-5-20250929', reasoningEffort: 'high' })
+    expect(lastRequestOptions().headers?.['anthropic-beta']).toBe('interleaved-thinking-2025-05-14')
+  })
+
+  it('does not send the interleaved beta header where it is unsupported or automatic', async () => {
+    // Haiku 4.5 ignores it, Opus 4.8 interleaves via adaptive thinking, off = no thinking.
+    for (const req of [
+      { model: 'claude-haiku-4-5', reasoningEffort: 'high' as const },
+      { model: 'claude-opus-4-8', reasoningEffort: 'high' as const },
+      { model: 'claude-sonnet-4-5-20250929', reasoningEffort: 'off' as const }
+    ]) {
+      await captureRequest(req)
+      expect(lastRequestOptions().headers?.['anthropic-beta']).toBeUndefined()
+    }
   })
 
   it('omits thinking and output_config when reasoning is off', async () => {

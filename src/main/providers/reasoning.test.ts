@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   anthropicThinking,
   anthropicSupportsThinking,
+  anthropicSupportsInterleavedThinking,
   openaiReasoningEffort,
   openaiResponsesReasoning,
   openaiSupportsReasoning,
@@ -70,6 +71,27 @@ describe('anthropic thinking', () => {
       const t = anthropicThinking(model, 'high')
       expect(t?.kind).toBe('budget')
     }
+  })
+
+  it('flags interleaved thinking on legacy Claude 4 Opus/Sonnet, not on 3.7 or Haiku 4.5', () => {
+    // Supported: the 4.x Opus/Sonnet legacy line takes the interleaved beta.
+    for (const model of [
+      'claude-opus-4-20250514',
+      'claude-sonnet-4-20250514',
+      'claude-opus-4-1-20250805',
+      'claude-opus-4-5-20251101',
+      'claude-sonnet-4-5-20250929'
+    ]) {
+      expect(anthropicSupportsInterleavedThinking(model)).toBe(true)
+      expect(anthropicThinking(model, 'high')).toMatchObject({ kind: 'budget', interleaved: true })
+    }
+    // Unsupported legacy models: header would be rejected (3.7) or ignored (Haiku 4.5).
+    for (const model of ['claude-3-7-sonnet-20250219', 'claude-haiku-4-5']) {
+      expect(anthropicSupportsInterleavedThinking(model)).toBe(false)
+      expect(anthropicThinking(model, 'high')).toMatchObject({ kind: 'budget', interleaved: false })
+    }
+    // Adaptive models never carry the flag (they interleave automatically).
+    expect(anthropicSupportsInterleavedThinking('claude-opus-4-8')).toBe(false)
   })
 
   it('keeps budget < max_tokens on the legacy path', () => {

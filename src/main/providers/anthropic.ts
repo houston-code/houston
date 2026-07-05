@@ -13,6 +13,14 @@ import { anthropicThinking } from './reasoning'
 const DEFAULT_MAX_TOKENS = 8192
 
 /**
+ * Beta header that turns on interleaved thinking for legacy budget-thinking
+ * models — the model then emits a fresh thinking block after each tool result
+ * instead of reasoning only once at the start of the turn. Adaptive-thinking
+ * models (4.6+) interleave automatically and must NOT be sent this header.
+ */
+const INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14'
+
+/**
  * Build the `thinking`/`redacted_thinking` content blocks that must lead an
  * assistant turn when extended thinking is enabled. Returns [] when thinking is
  * off or the turn has no (signed) reasoning to replay.
@@ -211,7 +219,14 @@ export function createAnthropicProvider(
               ? { thinking: { type: 'enabled' as const, budget_tokens: thinking.budgetTokens } }
               : {})
         },
-        { signal: req.signal }
+        {
+          signal: req.signal,
+          // Only legacy budget thinking needs the interleaved beta; adaptive
+          // models reject/ignore it and interleave on their own.
+          ...(thinking?.kind === 'budget' && thinking.interleaved
+            ? { headers: { 'anthropic-beta': INTERLEAVED_THINKING_BETA } }
+            : {})
+        }
       )
 
       // Buffer streamed tool-call JSON per content block index.
