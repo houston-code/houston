@@ -144,7 +144,67 @@ export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Pr
       })
     }
   }
+
+  // If any connected server exposes resources, add two meta-tools so the agent can
+  // discover and read them. Listing is local + side-effect-free (kind 'read');
+  // reading fetches from the external server, so it's gated like an MCP tool call.
+  if ([...connections.values()].some((c) => c.client.resources.length > 0)) {
+    defs.push(...resourceMetaTools())
+  }
   return defs
+}
+
+/** The `mcp_list_resources` / `mcp_read_resource` meta-tools (added only when some server has resources). */
+function resourceMetaTools(): ToolDef[] {
+  return [
+    {
+      kind: 'read',
+      summarize: () => 'List MCP resources',
+      schema: {
+        name: 'mcp_list_resources',
+        description:
+          'List the resources exposed by connected MCP servers — each with its server id, uri, and description. Read one with mcp_read_resource({ server, uri }).',
+        parameters: { type: 'object', properties: {} }
+      },
+      execute: () => {
+        const lines: string[] = []
+        for (const [id, conn] of connections) {
+          for (const r of conn.client.resources) {
+            const bits = [`server="${id}"`, `uri="${r.uri}"`]
+            if (r.name) bits.push(`name="${r.name}"`)
+            if (r.mimeType) bits.push(`mime="${r.mimeType}"`)
+            lines.push(`- ${bits.join(' ')}${r.description ? ` — ${r.description}` : ''}`)
+          }
+        }
+        return Promise.resolve(lines.length ? lines.join('\n') : 'No MCP resources are available.')
+      }
+    },
+    {
+      kind: 'mcp',
+      summarize: (a) => `Read MCP resource: ${typeof a.uri === 'string' ? a.uri : '?'}`,
+      schema: {
+        name: 'mcp_read_resource',
+        description:
+          "Read the contents of a resource exposed by a connected MCP server. Use mcp_list_resources first to find a resource's server id and uri.",
+        parameters: {
+          type: 'object',
+          properties: {
+            server: { type: 'string', description: 'The MCP server id (from mcp_list_resources).' },
+            uri: { type: 'string', description: 'The resource uri to read.' }
+          },
+          required: ['server', 'uri']
+        }
+      },
+      execute: (args) => {
+        const server = typeof args.server === 'string' ? args.server : ''
+        const uri = typeof args.uri === 'string' ? args.uri : ''
+        if (!server || !uri) return Promise.resolve('Both "server" and "uri" are required.')
+        const live = connections.get(server)
+        if (!live) return Promise.resolve(`[MCP server "${server}" is no longer connected]`)
+        return live.client.readResource(uri)
+      }
+    }
+  ]
 }
 
 /** Close every MCP connection (wired on app shutdown). */

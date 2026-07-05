@@ -1,5 +1,11 @@
-import { flattenMcpContent } from '@shared/mcp'
-import type { McpConnection, McpToolInfo } from './client'
+import { flattenMcpContent, flattenMcpResourceContents } from '@shared/mcp'
+import {
+  mcpResourcesCapable,
+  parseMcpResourceList,
+  type McpConnection,
+  type McpResourceInfo,
+  type McpToolInfo
+} from './client'
 
 /**
  * A minimal MCP client over the **legacy HTTP+SSE** transport (MCP protocol
@@ -143,6 +149,7 @@ export class McpSseClient implements McpConnection {
   /** Resolves once the server's `endpoint` event has set `postUrl`. */
   private endpointReady?: Promise<void>
   tools: McpToolInfo[] = []
+  resources: McpResourceInfo[] = []
 
   constructor(
     private readonly connectStream: SseConnectFn = openEventSourceStream,
@@ -174,7 +181,7 @@ export class McpSseClient implements McpConnection {
     })
 
     await this.waitForEndpoint(INIT_TIMEOUT_MS)
-    await this.rpc(
+    const init = await this.rpc(
       'initialize',
       {
         protocolVersion: PROTOCOL_VERSION,
@@ -186,6 +193,15 @@ export class McpSseClient implements McpConnection {
     await this.notify('notifications/initialized', {})
     const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
     this.tools = Array.isArray(listed?.tools) ? listed.tools : []
+
+    // Only ask for resources when the server declared the capability.
+    if (mcpResourcesCapable(init)) {
+      try {
+        this.resources = parseMcpResourceList(await this.rpc('resources/list', {}, INIT_TIMEOUT_MS))
+      } catch {
+        this.resources = []
+      }
+    }
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
@@ -195,6 +211,12 @@ export class McpSseClient implements McpConnection {
     }
     const text = flattenMcpContent(res?.content)
     return res?.isError ? `${text}\n[the MCP tool reported an error]`.trim() : text || '[no output]'
+  }
+
+  /** Read a resource's contents by uri, flattened to text. */
+  async readResource(uri: string): Promise<string> {
+    const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS)
+    return flattenMcpResourceContents(res) || '[no content]'
   }
 
   close(): void {

@@ -6,6 +6,7 @@ import { mcpToolName } from '@shared/mcp'
 import { McpClient, type SpawnFn } from './client'
 import { McpHttpClient, type FetchFn } from './http-client'
 import { McpSseClient, type SseConnectFn, type SseEvent } from './sse-client'
+import type { ToolContext } from '../agent/tools'
 
 // The manager resolves each server's secret headers through the agent host. Back it
 // with a mutable map so a test can rotate a stored header value and assert the change
@@ -32,6 +33,29 @@ function okSpawn(toolName = 'echo'): SpawnFn {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string }
         if (msg.id === undefined) return true
         const result = msg.method === 'tools/list' ? { tools: [{ name: toolName }] } : {}
+        queueMicrotask(() =>
+          stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+        )
+        return true
+      }
+    }
+    return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+  }) as unknown as SpawnFn
+}
+
+/** A fake stdio server that declares the resources capability and exposes one resource. */
+function resourcefulSpawn(): SpawnFn {
+  return (() => {
+    const stdout = new EventEmitter()
+    const stdin = {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+        if (msg.id === undefined) return true
+        let result: unknown = {}
+        if (msg.method === 'initialize') result = { capabilities: { resources: {} } }
+        else if (msg.method === 'tools/list') result = { tools: [{ name: 'echo' }] }
+        else if (msg.method === 'resources/list') result = { resources: [{ uri: 'mem://note', name: 'Note' }] }
+        else if (msg.method === 'resources/read') result = { contents: [{ uri: 'mem://note', text: 'the note body' }] }
         queueMicrotask(() =>
           stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
         )
@@ -128,6 +152,33 @@ describe('mcp manager', () => {
     await getMcpToolDefs([cfg()])
     expect(created).toHaveLength(1)
     expect(created[0].isClosed).toBe(false)
+  })
+
+  const noCtx = { workspace: '/tmp', allowNetwork: false } as ToolContext
+
+  it('adds resource meta-tools and reads a resource when a server exposes resources', async () => {
+    useFactory(resourcefulSpawn())
+    const defs = await getMcpToolDefs([cfg()])
+    const names = defs.map((d) => d.schema.name)
+    expect(names).toContain('mcp_list_resources')
+    expect(names).toContain('mcp_read_resource')
+    expect(defs.find((d) => d.schema.name === 'mcp_list_resources')!.kind).toBe('read')
+    expect(defs.find((d) => d.schema.name === 'mcp_read_resource')!.kind).toBe('mcp')
+
+    const list = await defs.find((d) => d.schema.name === 'mcp_list_resources')!.execute({}, noCtx)
+    expect(list).toContain('mem://note')
+    const read = await defs
+      .find((d) => d.schema.name === 'mcp_read_resource')!
+      .execute({ server: 'srv', uri: 'mem://note' }, noCtx)
+    expect(read).toBe('the note body')
+  })
+
+  it('omits resource meta-tools when no server exposes resources', async () => {
+    useFactory(okSpawn())
+    const defs = await getMcpToolDefs([cfg()])
+    const names = defs.map((d) => d.schema.name)
+    expect(names).not.toContain('mcp_list_resources')
+    expect(names).not.toContain('mcp_read_resource')
   })
 
   it('reconnects when the config changes, closing the old client', async () => {

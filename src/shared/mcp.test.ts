@@ -5,6 +5,7 @@ import {
   isMcpToolName,
   sanitizeServerId,
   flattenMcpContent,
+  flattenMcpResourceContents,
   parseHeaderLines
 } from './mcp'
 
@@ -63,5 +64,26 @@ describe('parseHeaderLines', () => {
 
   it('skips blank and malformed lines', () => {
     expect(parseHeaderLines('\nnotaheader\n: noKey\nA: 1')).toEqual({ A: '1' })
+  })
+})
+
+describe('flattenMcpResourceContents', () => {
+  it('concatenates text contents', () => {
+    const result = { contents: [{ uri: 'a', text: 'hello' }, { uri: 'b', text: 'world' }] }
+    expect(flattenMcpResourceContents(result)).toBe('hello\nworld')
+  })
+
+  it('notes a binary (blob) content instead of dumping it', () => {
+    const result = { contents: [{ uri: 'img://x', mimeType: 'image/png', blob: 'AAAA' }] }
+    const out = flattenMcpResourceContents(result)
+    expect(out).toContain('binary resource img://x')
+    expect(out).toContain('image/png')
+    expect(out).not.toContain('AAAA'.repeat(2)) // the raw base64 isn't included
+  })
+
+  it('returns empty for a malformed or empty result', () => {
+    expect(flattenMcpResourceContents(null)).toBe('')
+    expect(flattenMcpResourceContents({})).toBe('')
+    expect(flattenMcpResourceContents({ contents: 'nope' })).toBe('')
   })
 })

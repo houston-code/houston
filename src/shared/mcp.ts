@@ -78,3 +78,27 @@ export function flattenMcpContent(content: unknown): string {
   }
   return parts.join('\n').trim()
 }
+
+/**
+ * Flatten an MCP `resources/read` result's `contents` array into plain text.
+ * Text contents are concatenated; a binary (base64 `blob`) content is noted with
+ * its uri/mime rather than dumped, so a large binary can't flood the context.
+ */
+export function flattenMcpResourceContents(result: unknown): string {
+  if (!result || typeof result !== 'object') return ''
+  const contents = (result as { contents?: unknown }).contents
+  if (!Array.isArray(contents)) return ''
+  const parts: string[] = []
+  for (const c of contents) {
+    if (!c || typeof c !== 'object') continue
+    const item = c as { text?: unknown; blob?: unknown; mimeType?: unknown; uri?: unknown }
+    if (typeof item.text === 'string') {
+      parts.push(item.text)
+    } else if (typeof item.blob === 'string') {
+      const uri = typeof item.uri === 'string' ? item.uri : ''
+      const mime = typeof item.mimeType === 'string' ? item.mimeType : 'application/octet-stream'
+      parts.push(`[binary resource ${uri} (${mime}), ${item.blob.length} base64 chars]`.replace(/\s+/g, ' '))
+    }
+  }
+  return parts.join('\n').trim()
+}
