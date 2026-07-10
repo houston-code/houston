@@ -85,6 +85,50 @@ function UserBubble({
   )
 }
 
+/**
+ * The compact "Plan ready" marker for a plan the agent presented. While pending it's
+ * a button that re-opens the review panel; once resolved it shows the outcome. The
+ * plan's full content lives in the docked panel, not here.
+ */
+function PlanMarker({
+  title,
+  status,
+  onOpen
+}: {
+  title: string
+  status: 'pending' | 'accepted' | 'rejected' | 'superseded'
+  onOpen?: () => void
+}): JSX.Element {
+  const label =
+    status === 'accepted'
+      ? 'Accepted'
+      : status === 'rejected'
+        ? 'Rejected'
+        : status === 'superseded'
+          ? 'Revised'
+          : 'Review →'
+  const body = (
+    <>
+      <span className="plan-marker__icon" aria-hidden="true">
+        <Icon name="clipboard" />
+      </span>
+      <span className="plan-marker__text">
+        <span className="plan-marker__label">Plan ready</span>
+        <span className="plan-marker__title">{title}</span>
+      </span>
+      <span className={`plan-marker__status plan-marker__status--${status}`}>{label}</span>
+    </>
+  )
+  if (status === 'pending' && onOpen) {
+    return (
+      <button type="button" className="plan-marker plan-marker--open" onClick={onOpen}>
+        {body}
+      </button>
+    )
+  }
+  return <div className={`plan-marker plan-marker--${status}`}>{body}</div>
+}
+
 function AssistantMessage({
   text,
   streaming,
@@ -116,11 +160,14 @@ function AssistantMessage({
 export function Transcript({
   items,
   onApprove,
-  onAnswer
+  onAnswer,
+  onOpenPlan
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
   onAnswer: (callId: string, answer: string) => void
+  /** Re-open the review panel for a pending plan marker (clicked in the transcript). */
+  onOpenPlan?: (callId: string) => void
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -199,6 +246,15 @@ export function Transcript({
                 return <ToolGroup key={node.id} items={node.items} onApprove={onApprove} />
               case 'question':
                 return <QuestionCard key={node.id} item={node.item} onAnswer={onAnswer} />
+              case 'plan':
+                return (
+                  <PlanMarker
+                    key={node.id}
+                    title={node.item.plan.title}
+                    status={node.item.status}
+                    onOpen={onOpenPlan ? () => onOpenPlan(node.item.id) : undefined}
+                  />
+                )
               case 'notice':
                 return (
                   <div key={node.id} className={`notice notice--${node.item.tone}`}>

@@ -12,6 +12,7 @@ import type {
   AssistantItem,
   DisplayItem,
   NoticeItem,
+  PlanItem,
   QuestionItem,
   ToolItem,
   UserItem
@@ -51,12 +52,26 @@ function renderTranscript(
   handlers: Partial<{
     onApprove: (callId: string, decision: ToolApprovalDecision) => void
     onAnswer: (callId: string, answer: string) => void
+    onOpenPlan: (callId: string) => void
   }> = {}
 ) {
   const onApprove = handlers.onApprove ?? vi.fn()
   const onAnswer = handlers.onAnswer ?? vi.fn()
-  const result = render(<Transcript items={items} onApprove={onApprove} onAnswer={onAnswer} />)
-  return { ...result, onApprove, onAnswer }
+  const onOpenPlan = handlers.onOpenPlan ?? vi.fn()
+  const result = render(
+    <Transcript items={items} onApprove={onApprove} onAnswer={onAnswer} onOpenPlan={onOpenPlan} />
+  )
+  return { ...result, onApprove, onAnswer, onOpenPlan }
+}
+
+function planItem(over: Partial<PlanItem> = {}): PlanItem {
+  return {
+    kind: 'plan',
+    id: 'p1',
+    plan: { title: 'Persist the composer draft', steps: ['One'] },
+    status: 'pending',
+    ...over
+  }
 }
 
 describe('Transcript', () => {
@@ -321,5 +336,20 @@ describe('Transcript', () => {
     expect(inner.childElementCount).toBe(0)
     // Nothing to scroll back to, so no jump-to-bottom affordance.
     expect(screen.queryByTitle('Scroll to bottom')).not.toBeInTheDocument()
+  })
+
+  it('renders a pending plan as a marker that re-opens the panel on click', () => {
+    const { onOpenPlan } = renderTranscript([planItem()])
+    expect(screen.getByText('Plan ready')).toBeInTheDocument()
+    expect(screen.getByText('Persist the composer draft')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Plan ready/ }))
+    expect(onOpenPlan).toHaveBeenCalledWith('p1')
+  })
+
+  it('renders a resolved plan marker as a non-interactive status', () => {
+    renderTranscript([planItem({ status: 'accepted' })])
+    expect(screen.getByText('Accepted')).toBeInTheDocument()
+    // No button — a resolved plan can't be re-opened for a decision.
+    expect(screen.queryByRole('button', { name: /Plan ready/ })).not.toBeInTheDocument()
   })
 })

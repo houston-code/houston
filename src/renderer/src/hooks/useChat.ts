@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
-import type { AgentEvent, ToolApprovalDecision } from '@shared/agent'
+import type { AgentEvent, PlanDecision, PlanPayload, ToolApprovalDecision } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import type { SessionUsage } from '@shared/usage'
-import { reduceEvent, type DisplayItem } from '../lib/items'
+import { reduceEvent, type DisplayItem, type PlanStatus } from '../lib/items'
+
+/**
+ * A plan the agent has presented and is now blocking on, shown in the docked review
+ * panel. `revising` is set after the user requests changes — the panel stays up in a
+ * working state until the agent sends the revised plan (a fresh `plan_ready`).
+ */
+export interface PendingPlan {
+  callId: string
+  plan: PlanPayload
+  revising?: boolean
+}
 
 interface SendParams {
   conversationId: string
@@ -40,6 +51,10 @@ export interface ChatController {
   approve: (callId: string, decision: ToolApprovalDecision) => void
   /** Answer a pending `ask_user` question from the in-flight run. */
   answerQuestion: (callId: string, answer: string) => void
+  /** The plan the in-flight run is presenting for review, or null. Drives the panel. */
+  pendingPlan: PendingPlan | null
+  /** Resolve the pending `present_plan` review (accept / suggest changes / reject). */
+  resolvePlan: (callId: string, decision: PlanDecision) => void
   /** Change the approval policy of the in-flight run, if any (live mode switch). */
   setPolicy: (policy: ApprovalPolicy) => void
   /**
@@ -81,6 +96,7 @@ export function useChat(conversationId: string | null = null): ChatController {
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null)
   const [errored, setErrored] = useState(false)
+  const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null)
   const runIdRef = useRef<string | null>(null)
   // The open conversation, so we can adopt a main-initiated follow-up run (queued
   // input) that targets it and ignore background runs on other conversations.
@@ -129,11 +145,18 @@ export function useChat(conversationId: string | null = null): ChatController {
           reverted: false
         }))
       }
+      // A fresh plan (initial, or a revision after "suggest changes") opens/refreshes
+      // the review panel; the previous one, if any, is superseded in the transcript.
+      if (e.type === 'plan_ready') setPendingPlan({ callId: e.callId, plan: e.plan })
       setItems((prev) => reduceEvent(prev, e))
       if (e.type === 'error') setErrored(true)
       if (e.type === 'done' || e.type === 'error') {
         setRunning(false)
         runIdRef.current = null
+        // A run can only finish once its plan review is resolved (the tool unblocks
+        // it), so a plan still pending here means the run ended some other way — drop
+        // the now-unresolvable panel.
+        setPendingPlan(null)
       }
     })
   }, [])
@@ -203,6 +226,23 @@ export function useChat(conversationId: string | null = null): ChatController {
     if (runIdRef.current) void window.api.answerQuestion(runIdRef.current, callId, answer)
   }, [])
 
+  const resolvePlan = useCallback((callId: string, decision: PlanDecision) => {
+    if (!runIdRef.current) return
+    void window.api.resolvePlan(runIdRef.current, callId, decision)
+    // Optimistic UI: reflect the decision on the transcript marker immediately, and
+    // either close the panel (accept/reject) or hold it in a "revising" state until
+    // the agent sends the revised plan (suggest).
+    const status: PlanStatus =
+      decision.kind === 'accept' ? 'accepted' : decision.kind === 'reject' ? 'rejected' : 'superseded'
+    setItems((prev) =>
+      prev.map((it) => (it.kind === 'plan' && it.id === callId ? { ...it, status } : it))
+    )
+    setPendingPlan((prev) => {
+      if (!prev || prev.callId !== callId) return prev
+      return decision.kind === 'suggest' ? { ...prev, revising: true } : null
+    })
+  }, [])
+
   const setPolicy = useCallback((policy: ApprovalPolicy) => {
     if (runIdRef.current) void window.api.setAgentPolicy(runIdRef.current, policy)
   }, [])
@@ -228,6 +268,7 @@ export function useChat(conversationId: string | null = null): ChatController {
       setRunning(false)
       setUsage(nextUsage)
       setCheckpoint(null)
+      setPendingPlan(null)
       // Seed from the conversation's persisted failure so a reload restores the
       // "last turn failed" banner; a live run we adopt afterwards clears it.
       setErrored(nextErrored)
@@ -240,11 +281,14 @@ export function useChat(conversationId: string | null = null): ChatController {
     runIdRef.current = runId
     setRunning(true)
     setErrored(false)
-    // Re-render any approval/question still awaiting the user. reduceEvent upserts
-    // by callId, so replaying onto a transcript rebuilt from the log updates the
-    // matching row rather than duplicating it.
+    // Re-render any approval/question/plan still awaiting the user. reduceEvent
+    // upserts by callId, so replaying onto a transcript rebuilt from the log updates
+    // the matching row rather than duplicating it.
     if (pendingPrompts.length > 0) {
       setItems((prev) => pendingPrompts.reduce((acc, ev) => reduceEvent(acc, ev), prev))
+      // Re-open the review panel for a plan that was still awaiting a decision.
+      const plan = [...pendingPrompts].reverse().find((ev) => ev.type === 'plan_ready')
+      if (plan?.type === 'plan_ready') setPendingPlan({ callId: plan.callId, plan: plan.plan })
     }
   }, [])
 
@@ -267,6 +311,8 @@ export function useChat(conversationId: string | null = null): ChatController {
     cancel,
     approve,
     answerQuestion,
+    pendingPlan,
+    resolvePlan,
     setPolicy,
     seedCheckpoint,
     revertCheckpoint,

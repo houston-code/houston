@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
-import type { ConversationMeta, ReasoningEffort, RepoInfo } from '@shared/agent'
+import type { ConversationMeta, PlanDecision, ReasoningEffort, RepoInfo } from '@shared/agent'
 import { mergeCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { resolveCapabilities } from '@shared/usage'
@@ -44,6 +44,7 @@ import {
 } from './lib/sidebar'
 import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
 import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
+import { clampPlanWidth, PLAN_DEFAULT_WIDTH } from './lib/planPanel'
 import { usePreviewServers } from './hooks/usePreviewServers'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
@@ -54,6 +55,7 @@ import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
+import { PlanPanel } from './components/PlanPanel'
 import { Composer } from './components/Composer'
 import { UpdateBanner } from './components/UpdateBanner'
 import { LegalGate } from './components/LegalGate'
@@ -185,6 +187,10 @@ export default function App(): JSX.Element {
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH)
+  const [planWidth, setPlanWidth] = useState(PLAN_DEFAULT_WIDTH)
+  // The plan-review panel opens automatically when a plan is presented; this latches
+  // true only when the user dismisses it (×), hiding it without discarding the plan.
+  const [planClosed, setPlanClosed] = useState(false)
   const appRef = useRef<HTMLDivElement>(null)
   // True while the first message of a new chat is creating its conversation/worktree,
   // to reject a concurrent second send (see sendNow).
@@ -223,6 +229,7 @@ export default function App(): JSX.Element {
       }
       if (typeof s.previewWidth === 'number') setPreviewWidth(clampPreviewWidth(s.previewWidth))
       if (s.previewOpen) setPreviewOpen(true)
+      if (typeof s.planWidth === 'number') setPlanWidth(clampPlanWidth(s.planWidth))
       await refreshConversations()
     })()
   }, [refreshConversations])
@@ -890,6 +897,72 @@ export default function App(): JSX.Element {
     [previewWidth, persistPreview]
   )
 
+  // ---- Plan-review panel (Plan mode: docked, resizable width, persisted) ----
+
+  const pendingPlan = chat.pendingPlan
+  // The panel shows whenever a plan is pending unless the user has dismissed it.
+  const planPanelOpen = pendingPlan !== null && !planClosed
+
+  // A newly presented plan (or a revision) re-opens the panel even if the previous
+  // one was dismissed. Keyed on the callId so re-opening is per-plan.
+  const pendingPlanCallId = pendingPlan?.callId
+  useEffect(() => {
+    if (pendingPlanCallId) setPlanClosed(false)
+  }, [pendingPlanCallId])
+
+  const persistPlan = useCallback(
+    async (patch: Pick<Partial<AppSettings>, 'planWidth'>) => {
+      const fresh = await window.api.saveSettings({ ...(await window.api.getSettings()), ...patch })
+      setSettings(fresh)
+    },
+    []
+  )
+
+  // Drag the panel's left edge (mirrors the preview dock): update the width CSS
+  // variable live, then commit on release. Dragging left grows the panel.
+  const onPlanResizeMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startW = planWidth
+      document.body.classList.add('is-resizing')
+      const onMove = (ev: MouseEvent): void => {
+        const w = clampPlanWidth(startW + (startX - ev.clientX))
+        appRef.current?.style.setProperty('--plan-w', `${w}px`)
+      }
+      const onUp = (ev: MouseEvent): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        document.body.classList.remove('is-resizing')
+        const w = clampPlanWidth(startW + (startX - ev.clientX))
+        setPlanWidth(w)
+        void persistPlan({ planWidth: w })
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [planWidth, persistPlan]
+  )
+
+  // Re-open a dismissed plan panel from its transcript marker (pending plans only).
+  const onOpenPlan = useCallback(
+    (callId: string) => {
+      if (pendingPlan && pendingPlan.callId === callId) setPlanClosed(false)
+    },
+    [pendingPlan]
+  )
+
+  const onResolvePlan = useCallback(
+    (callId: string, decision: PlanDecision) => {
+      // Accepting leaves Plan mode: switch the (persisted, displayed) policy to the
+      // chosen edit mode so the dropdown agrees and later turns aren't read-only. The
+      // loop also flips the live run's policy as it resolves the decision.
+      if (decision.kind === 'accept') void onChangePolicy(decision.mode)
+      chat.resolvePlan(callId, decision)
+    },
+    [chat, onChangePolicy]
+  )
+
   const onRevert = useCallback(async () => {
     const n = await chat.revertCheckpoint()
     if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
@@ -1343,7 +1416,8 @@ export default function App(): JSX.Element {
         {
           '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`,
           '--terminal-h': `${terminalHeight}px`,
-          '--preview-w': `${previewOpen ? previewWidth : 0}px`
+          '--preview-w': `${previewOpen ? previewWidth : 0}px`,
+          '--plan-w': `${planPanelOpen ? planWidth : 0}px`
         } as CSSProperties
       }
     >
@@ -1431,7 +1505,12 @@ export default function App(): JSX.Element {
             )}
           </div>
         ) : (
-          <Transcript items={chat.items} onApprove={chat.approve} onAnswer={chat.answerQuestion} />
+          <Transcript
+            items={chat.items}
+            onApprove={chat.approve}
+            onAnswer={chat.answerQuestion}
+            onOpenPlan={onOpenPlan}
+          />
         )}
 
         {chat.errored && !chat.running && currentId && (
@@ -1569,6 +1648,16 @@ export default function App(): JSX.Element {
             onClose={togglePreview}
           />
         </Suspense>
+      )}
+
+      {planPanelOpen && pendingPlan && (
+        <PlanPanel
+          plan={pendingPlan.plan}
+          revising={pendingPlan.revising === true}
+          onResolve={(decision) => onResolvePlan(pendingPlan.callId, decision)}
+          onClose={() => setPlanClosed(true)}
+          onResizeMouseDown={onPlanResizeMouseDown}
+        />
       )}
 
       <Suspense fallback={null}>

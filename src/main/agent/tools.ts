@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   DocumentAttachment,
   JSONSchema,
+  PlanPayload,
   QuestionOption,
   ToolSchema
 } from '@shared/agent'
@@ -18,7 +19,7 @@ import {
   parseSweepMode
 } from '@shared/sweep'
 import { isSafeGitRef } from '@shared/git'
-import { ASK_USER_TOOL } from '@shared/constants'
+import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { getSearchProviderInfo } from '@shared/search'
 import {
   MAX_ATTACH_IMAGE_BYTES,
@@ -90,6 +91,12 @@ export interface ToolContext {
   ghExec?: GhExec
   /** Ask the user a structured question and resolve with their answer (injected by the loop). */
   askUser?: (q: AgentQuestion) => Promise<string>
+  /**
+   * Present a finished plan for review and block until the user decides (injected by
+   * the loop). Resolves with the tool-result text describing their decision — accept
+   * (Plan mode is switched off), request changes, or reject. Backs `present_plan`.
+   */
+  presentPlan?: (plan: PlanPayload) => Promise<string>
   /**
    * The full, un-compacted message log for this run (injected by the loop). Lets the
    * `recall_history` tool page back into earlier turns after compaction/eviction has
@@ -2048,6 +2055,77 @@ const askUser: ToolDef = {
   }
 }
 
+export const PRESENT_PLAN_NAME = PRESENT_PLAN_TOOL
+
+/** Parse the model's plan `steps`/`files` argument into a clean, trimmed string list. */
+function parseStringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item === 'string' && item.trim()) out.push(item.trim())
+  }
+  return out
+}
+
+const presentPlan: ToolDef = {
+  // Read-only: it presents a plan and waits for a decision — no workspace side
+  // effects — so it is NOT blocked in Plan mode (it is how the agent exits it).
+  kind: 'read',
+  summarize: (a) => `Present plan: ${str(a, 'title') || 'implementation plan'}`,
+  schema: {
+    name: PRESENT_PLAN_NAME,
+    description:
+      'Present a finished implementation plan to the user for review, then wait for their decision. Use ' +
+      'this ONLY in Plan mode, once your research is done and you are ready to propose the change: it opens ' +
+      'a dedicated review panel where the user can ACCEPT the plan (you then carry it out), request CHANGES ' +
+      '(you revise it and call present_plan again), or REJECT it. Returns the user’s decision as text — ' +
+      'follow it exactly. This is how you leave Plan mode: call it instead of only writing the plan as prose. ' +
+      'Do not edit files or run commands before it — that is what the plan is for.',
+    parameters: objectSchema(
+      {
+        title: {
+          type: 'string',
+          description: 'A short title for the plan (a few words), e.g. "Persist the composer draft".'
+        },
+        overview: {
+          type: 'string',
+          description: 'One or two sentences summarizing what the change does and why. Optional.'
+        },
+        steps: {
+          type: 'array',
+          description:
+            'The concrete, ordered steps to carry out the change. Each step is a short markdown string ' +
+            '(reference files as `path` and include brief code where it helps). Provide at least one.',
+          items: { type: 'string' }
+        },
+        files: {
+          type: 'array',
+          description:
+            'Repo-relative paths the plan will create or change. Optional but recommended — shown as chips.',
+          items: { type: 'string' }
+        }
+      },
+      ['title', 'steps']
+    )
+  },
+  async execute(args, ctx) {
+    if (!ctx.presentPlan) throw new Error('Presenting a plan is not available in this context.')
+    const title = str(args, 'title').trim()
+    if (!title) throw new Error('title is required.')
+    const steps = parseStringList(args.steps)
+    if (steps.length === 0) throw new Error('At least one plan step is required.')
+    const overview = str(args, 'overview').trim()
+    const files = parseStringList(args.files)
+    const plan: PlanPayload = {
+      title,
+      steps,
+      ...(overview ? { overview } : {}),
+      ...(files.length ? { files } : {})
+    }
+    return ctx.presentPlan(plan)
+  }
+}
+
 /**
  * Render one earlier message as a compact, labeled line for the recall result:
  * `#<index> <role>[/<tool>]: <text>`. Tool-call arguments and any body are folded
@@ -2181,6 +2259,7 @@ export const TOOLS: ToolDef[] = [
   skillTool,
   prSweep,
   askUser,
+  presentPlan,
   recallHistory,
   dispatchAgent,
   dispatchWritableAgent,

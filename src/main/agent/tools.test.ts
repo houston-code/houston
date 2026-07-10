@@ -67,6 +67,7 @@ describe('tool registry', () => {
       'list_dir',
       'multi_edit',
       'pr_sweep',
+      'present_plan',
       'read_file',
       'read_shell_output',
       'recall_history',
