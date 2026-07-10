@@ -1,7 +1,6 @@
 <!--
   MAINTAINER NOTE — replace the bracketed placeholders before distributing:
     [Licensor]                  → the legal name of the copyright holder / licensor
-    [Contact email]             → a real contact address for legal/abuse notices
     [Governing-law jurisdiction] → the country/state whose law governs (e.g. "the State of Delaware, USA")
   These same placeholders appear in docs/TERMS.md and docs/PRIVACY.md.
   This is a proprietary, all-rights-reserved license. It is NOT an open-source
@@ -97,4 +96,4 @@ do not install or use the Software.
    This License is governed by the laws of [Governing-law jurisdiction], without
    regard to its conflict-of-laws rules.
 
-Contact: [Contact email]
+Contact: legal@houstoncode.ai
