@@ -76,10 +76,12 @@ export function PlanPanel({
     }
   }
 
-  const stepCount = plan.steps.length
+  const stepCount = plan.steps?.length ?? 0
   const fileCount = plan.files?.length ?? 0
   const meta = [
-    `${stepCount} step${stepCount === 1 ? '' : 's'}`,
+    // The step count only applies to legacy structured plans; a freeform `body`
+    // plan just notes the files it touches.
+    stepCount > 0 ? `${stepCount} step${stepCount === 1 ? '' : 's'}` : null,
     fileCount > 0 ? `touches ${fileCount} file${fileCount === 1 ? '' : 's'}` : null
   ]
     .filter(Boolean)
@@ -123,23 +125,36 @@ export function PlanPanel({
         {meta && <p className="plan-panel__meta">{meta}</p>}
       </div>
 
-      {/* One scroll region for the whole plan: overview, then the detailed steps,
-          then the files as a collapsed disclosure at the end. Keeping files in here
-          (rather than as a sibling above) stops a long list from starving the steps. */}
+      {/* One scroll region for the whole plan: the model's freeform markdown (or, for
+          older plans, the structured overview + steps), then the files as a collapsed
+          disclosure at the end. Keeping files in here (rather than as a sibling above)
+          stops a long list from starving the plan. */}
       <div className="plan-panel__body">
-        {plan.overview && (
-          <div className="plan-panel__overview">
-            <Markdown text={plan.overview} />
+        {plan.body ? (
+          <div className="plan-panel__markdown">
+            <Markdown text={plan.body} />
           </div>
+        ) : (
+          <>
+            {plan.overview && (
+              <div className="plan-panel__overview">
+                <Markdown text={plan.overview} />
+              </div>
+            )}
+            {plan.steps && plan.steps.length > 0 && (
+              <>
+                <p className="plan-panel__section-label">Steps</p>
+                <ol className="plan-panel__steps">
+                  {plan.steps.map((step, i) => (
+                    <li key={i}>
+                      <Markdown text={step} />
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </>
         )}
-        <p className="plan-panel__section-label">Steps</p>
-        <ol className="plan-panel__steps">
-          {plan.steps.map((step, i) => (
-            <li key={i}>
-              <Markdown text={step} />
-            </li>
-          ))}
-        </ol>
         {plan.files && plan.files.length > 0 && (
           <details className="plan-panel__files">
             <summary>

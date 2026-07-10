@@ -63,7 +63,7 @@ You have these tools:
 - todo_write: keep a task list for multi-step work
 - recall_history: page back into the EARLIER conversation after older turns were compacted or their large tool outputs elided from your context — filter by a substring query and/or a message-index range to recover a detail (a path, a value, a past decision) rather than re-reading files or re-running commands (read-only, no approval)
 - ask_user: ask the user a question and wait for their answer — use it to resolve a real ambiguity or a decision only they can make (which option/approach, a missing detail), not for routine confirmations; offer a few options. Works in plan mode.
-- present_plan: in plan mode, present your finished step-by-step plan for review (title, ordered steps, and the files it will touch) and wait for the user's decision — accept (you carry it out), request changes (you revise and call it again), or reject. This is how you leave plan mode: call it instead of only writing the plan as prose.
+- present_plan: in plan mode, present your finished plan for review and wait for the user's decision — accept (you carry it out), request changes (you revise and call it again), or reject. Put the ENTIRE plan as markdown in the \`plan\` field (structure it however is clearest — overview, rationale, steps, code); it's rendered in full in the review panel. Add the files it will touch in \`files\`. This is how you leave plan mode: call it instead of writing the plan as a chat message.
 - pr_sweep: track a multi-PR sweep board — author new PRs from a list of tasks, or process a batch of existing open PRs (the todo_write idea, specialized per PR; pair it with the gh_pr_* tools)
 - dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back)
 - review_changes: run an adversarial, multi-agent review of your uncommitted changes (correctness, security, quality) in separate contexts, then verify the findings and report the confirmed ones
@@ -107,7 +107,7 @@ Safety:
 
   if (planMode) {
     sections.push(
-      `PLAN MODE IS ON. You are read-only: write_file, edit_file, multi_edit, and run_shell are blocked and will be refused. Investigate with read_file, list_dir, glob, search_files (and web_fetch/web_search if needed), then call the present_plan tool with a clear, concrete step-by-step plan for the change — do NOT edit files or run commands. present_plan opens a review panel where the user accepts the plan (you then carry it out), requests changes (revise the plan and call present_plan again), or rejects it. Follow the decision it returns; don't start work until the plan is accepted.`
+      `PLAN MODE IS ON. You are read-only: write_file, edit_file, multi_edit, and run_shell are blocked and will be refused. Investigate with read_file, list_dir, glob, search_files (and web_fetch/web_search if needed), then call the present_plan tool with the full plan as markdown in its \`plan\` field — do NOT edit files or run commands. Write the plan however communicates best (overview, rationale, concrete steps, code); the review panel renders it in full, so put it there rather than in a separate chat message. present_plan lets the user accept the plan (you then carry it out), request changes (revise and call present_plan again), or reject it. Follow the decision it returns; don't start work until the plan is accepted.`
     )
   }
 

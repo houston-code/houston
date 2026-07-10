@@ -4426,6 +4426,15 @@ body.is-resizing .plan-panel__resizer::after {
 .plan-panel__overview > :last-child {
   margin-bottom: 0;
 }
+/* Freeform plan body: the model's markdown, styled by the shared .md-* rules.
+   Trim the outer margins so it sits flush at the top of the scroll region. */
+.plan-panel__markdown > .md-h:first-child,
+.plan-panel__markdown > :first-child {
+  margin-top: 0;
+}
+.plan-panel__markdown > :last-child {
+  margin-bottom: 0;
+}
 .plan-panel__steps {
   list-style: none;
   counter-reset: plan-step;
