@@ -60,10 +60,11 @@ export function Titlebar({
             type="button"
             className={`titlebar__action${previewOpen ? ' titlebar__action--active' : ''}`}
             onClick={onTogglePreview}
-            title="Toggle the preview panel"
+            aria-label="Preview"
+            title="Preview: toggle the live preview panel"
             aria-pressed={previewOpen}
           >
-            <span aria-hidden="true">▣</span> Preview
+            <Icon name="eye" size={15} />
             {!!previewCount && previewCount > 0 && (
               <span className="titlebar__badge">{previewCount}</span>
             )}
@@ -74,9 +75,10 @@ export function Titlebar({
             type="button"
             className="titlebar__action"
             onClick={onShowFiles}
-            title="Browse the project's files"
+            aria-label="Files"
+            title="Files: browse the project's files"
           >
-            <Icon name="folder" /> Files
+            <Icon name="folder" size={15} />
           </button>
         )}
         {onShowChanges && (
@@ -84,19 +86,15 @@ export function Titlebar({
             type="button"
             className={`titlebar__action${hasChanges ? ' titlebar__action--changes' : ''}`}
             onClick={onShowChanges}
+            aria-label="Changes"
             title={
               hasChanges
-                ? `${changes.fileCount} changed file${changes.fileCount === 1 ? '' : 's'} — view uncommitted changes`
-                : 'View uncommitted working-tree changes'
+                ? `Changes: ${changes.fileCount} changed file${changes.fileCount === 1 ? '' : 's'} (+${changes.added} −${changes.removed}) — view uncommitted changes`
+                : 'Changes: view uncommitted working-tree changes'
             }
           >
-            ⤓ Changes
-            {hasChanges && (changes.added > 0 || changes.removed > 0) && (
-              <span className="diff-stat">
-                <span className="diff-stat__add">+{changes.added}</span>
-                <span className="diff-stat__del">−{changes.removed}</span>
-              </span>
-            )}
+            <Icon name="diff" size={15} />
+            {hasChanges && <span className="titlebar__badge">{changes.fileCount}</span>}
           </button>
         )}
         {onShowScorecard && (
@@ -104,9 +102,10 @@ export function Titlebar({
             type="button"
             className="titlebar__action"
             onClick={onShowScorecard}
-            title="Per-model loop scorecard (computed on-device from local data)"
+            aria-label="Scorecard"
+            title="Scorecard: per-model loop scorecard (computed on-device from local data)"
           >
-            <span aria-hidden="true">▤</span> Scorecard
+            <Icon name="scorecard" size={15} />
           </button>
         )}
         {onToggleTerminal && (
@@ -114,10 +113,11 @@ export function Titlebar({
             type="button"
             className={`titlebar__action${terminalOpen ? ' titlebar__action--active' : ''}`}
             onClick={onToggleTerminal}
-            title="Toggle the integrated terminal (⌃`)"
+            aria-label="Terminal"
+            title="Terminal: toggle the integrated terminal (⌃`)"
             aria-pressed={terminalOpen}
           >
-            <span aria-hidden="true">{'>_'}</span> Terminal
+            <Icon name="terminal" size={15} />
           </button>
         )}
       </div>
