@@ -30,6 +30,10 @@ export type IconName =
   | 'send'
   | 'stop'
   | 'close'
+  | 'eye'
+  | 'terminal'
+  | 'scorecard'
+  | 'tasks'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Funnel.
@@ -115,12 +119,12 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M10.2 8v1.1a1.6 1.6 0 0 0 3.1-.6A5.3 5.3 0 1 0 11 12.6" />
     </>
   ),
-  // Plus over minus — added/removed lines, i.e. a diff.
+  // Plus over minus — added/removed lines, i.e. a diff / uncommitted changes.
   diff: (
     <>
-      <path d="M4.5 4v3" />
-      <path d="M3 5.5h3" />
-      <path d="M10 10.5h3" />
+      <path d="M8 3.6v3" />
+      <path d="M6.5 5.1h3" />
+      <path d="M6.5 11h3" />
     </>
   ),
   // Clipboard with a clip — paste from clipboard.
@@ -151,6 +155,41 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M4.5 4.5 11.5 11.5" />
       <path d="M11.5 4.5 4.5 11.5" />
+    </>
+  ),
+  // Eye — preview / show the live preview panel.
+  eye: (
+    <>
+      <path d="M1.8 8S4.2 3.8 8 3.8 14.2 8 14.2 8 11.8 12.2 8 12.2 1.8 8 1.8 8z" />
+      <circle cx="8" cy="8" r="1.9" />
+    </>
+  ),
+  // Framed window with a chevron prompt and cursor line — a terminal.
+  terminal: (
+    <>
+      <path d="M2.3 3.6h11.4v8.8H2.3z" />
+      <path d="m4.7 6.7 1.9 1.6-1.9 1.6" />
+      <path d="M8 10h3.1" />
+    </>
+  ),
+  // Ascending bars over a baseline — a scorecard / stats chart.
+  scorecard: (
+    <>
+      <path d="M2.5 13.2h11" />
+      <path d="M4 13V9.2" />
+      <path d="M8 13V4.8" />
+      <path d="M12 13V7" />
+    </>
+  ),
+  // Checklist — a list of tasks with a leading check.
+  tasks: (
+    <>
+      <path d="m2.6 4.7 1 1 1.7-1.9" />
+      <path d="M7.5 4.8h6" />
+      <path d="M7.5 8h6" />
+      <path d="M7.5 11.2h6" />
+      <path d="M2.7 7.8h.01" />
+      <path d="M2.7 11h.01" />
     </>
   )
 }

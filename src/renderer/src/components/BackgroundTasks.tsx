@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { Popover } from './Popover'
+import { Icon } from './Icon'
 import type { BackgroundTask } from '../hooks/useBackgroundTasks'
 
 /** Coarse "x ago" label for a finished task; precision isn't important here. */
@@ -86,13 +87,12 @@ export function BackgroundTasks({
         }
         onClick={() => setOpen((v) => !v)}
       >
-        <span
-          className="bgtasks__dot"
-          data-running={runningCount > 0 ? '' : undefined}
-          aria-hidden="true"
-        />
-        Tasks
-        {runningCount > 0 && <span className="bgtasks__count">{runningCount}</span>}
+        <Icon name="tasks" size={15} />
+        {runningCount > 0 && (
+          <span className="titlebar__badge bgtasks__count" data-running="">
+            {runningCount}
+          </span>
+        )}
       </button>
 
       {open && (

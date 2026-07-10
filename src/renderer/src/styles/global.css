@@ -885,7 +885,10 @@ body.is-resizing {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 70%;
+  /* Reserve room on both sides for the absolutely-positioned action strip so a
+     long, centered title truncates with an ellipsis instead of sliding under
+     the buttons. ~230px each side clears the full six-icon row. */
+  max-width: calc(100% - 460px);
 }
 
 /* ---- Integrated terminal panel ---- */
@@ -2069,14 +2072,18 @@ pre.diff {
   align-items: center;
   gap: 6px;
 }
+/* Icon-only square buttons: labels moved to native tooltips (`title`) so the
+   action row stays compact and never overlaps the centered titlebar title. Each
+   is `position: relative` to anchor its corner count badge. */
 .titlebar__action {
   -webkit-app-region: no-drag;
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 9px;
-  font-size: 12px;
-  font-weight: 550;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
   color: var(--text-dim);
   background: var(--bg);
   border: 1px solid var(--border);
@@ -2098,21 +2105,26 @@ pre.diff {
   color: var(--text);
   border-color: var(--accent);
 }
-/* Small count pill on a titlebar action (e.g. running preview servers). */
+/* Small count pill floating on the top-right corner of an icon-only titlebar
+   action (running preview servers, changed files, running tasks). The ring in
+   the titlebar's own colour lifts it clear of the button edge. */
 .titlebar__badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  margin-left: 2px;
-  font-size: 10px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  font-size: 9.5px;
   font-weight: 700;
   line-height: 1;
   color: #fff;
   background: var(--accent);
-  border-radius: 8px;
+  border: 1.5px solid var(--bg-elevated);
+  border-radius: 999px;
 }
 
 /* ---- Preview dock (right-hand live preview of started dev servers) ---- */
@@ -2308,34 +2320,10 @@ body.is-resizing .preview-dock__resizer::after {
 }
 
 /* ---- Background tasks indicator (title-bar button + popover) ---- */
-.bgtasks__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.5;
-  flex-shrink: 0;
-}
-/* While runs are live the dot adopts the accent and pulses like the sidebar's
-   running dot, so "something is working" reads the same everywhere. */
-.bgtasks__dot[data-running] {
-  background: var(--accent);
-  opacity: 1;
+/* The corner count badge (a `.titlebar__badge`) pulses while runs are live, so
+   "something is working" reads the same as the sidebar's running dot. */
+.bgtasks__count[data-running] {
   animation: conv-pulse 1.2s ease-in-out infinite;
-}
-.bgtasks__count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  font-size: 10.5px;
-  font-weight: 650;
-  line-height: 1;
-  color: var(--bg);
-  background: var(--accent);
-  border-radius: 999px;
 }
 .bgtasks__menu {
   min-width: 280px;
