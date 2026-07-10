@@ -74,7 +74,7 @@ export function BackgroundTasks({
       <button
         ref={btnRef}
         type="button"
-        className={`titlebar__action bgtasks__btn${runningCount > 0 ? ' titlebar__action--active' : ''}`}
+        className="titlebar__action bgtasks__btn"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={

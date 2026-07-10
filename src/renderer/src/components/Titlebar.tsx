@@ -84,7 +84,7 @@ export function Titlebar({
         {onShowChanges && (
           <button
             type="button"
-            className={`titlebar__action${hasChanges ? ' titlebar__action--changes' : ''}`}
+            className="titlebar__action"
             onClick={onShowChanges}
             aria-label="Changes"
             title={

@@ -2094,16 +2094,13 @@ pre.diff {
   color: var(--text);
   border-color: var(--accent);
 }
+/* Accent outline = a docked panel this button toggles is currently open
+   (Preview, Terminal). Pending activity and counts are carried by the corner
+   badge, not the border, so Tasks and Changes deliberately don't use this. */
 .titlebar__action--active {
   color: var(--text);
   border-color: var(--accent);
   background: var(--bg-hover);
-}
-/* The Changes button when the working tree is dirty: lift it out of the dim
-   resting state and let the accent border draw the eye to the pending +/− badge. */
-.titlebar__action--changes {
-  color: var(--text);
-  border-color: var(--accent);
 }
 /* Small count pill floating on the top-right corner of an icon-only titlebar
    action (running preview servers, changed files, running tasks). The ring in
