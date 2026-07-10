@@ -41,7 +41,7 @@ import { isParallelizableRead, partitionCalls } from './scheduling'
 import { validateToolArgs, validationError } from './argValidation'
 import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
-import { missingToolResults } from './repair'
+import { repairDanglingToolResults } from './repair'
 import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
 import { grantConversationOverride, overrideForConversation } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun } from './checkpoints'
@@ -512,14 +512,16 @@ export async function startRun(
         .map((d) => d.schema)
     ]
     // A prior run interrupted while a tool call was pending (commonly parked on an
-    // approval prompt when the app quit/crashed) leaves an assistant `tool_use`
-    // with no matching `tool_result`. Providers reject that history, so backfill
-    // placeholder results before the first provider call — otherwise every
-    // continue/retry on this conversation fails. Persist the repair so the stored
-    // log and transcript are valid too, not just the in-flight request.
-    const orphanFill = missingToolResults(messages)
-    if (orphanFill.length > 0) {
-      messages.push(...orphanFill)
+    // approval prompt, or a long-blocking present_plan / ask_user, when the app
+    // quit/crashed) leaves an assistant `tool_use` with no matching `tool_result` —
+    // and if the user then re-sent a message, that user turn now sits between the
+    // `tool_use` and where a result should go. Providers reject such history, so
+    // normalize it (pair every call with its result, in position) before the first
+    // provider call. Persist the repair so the stored log and transcript are valid
+    // too, not just the in-flight request.
+    const intakeRepaired = repairDanglingToolResults(messages)
+    if (intakeRepaired !== messages) {
+      messages.splice(0, messages.length, ...intakeRepaired)
       onMessages?.(messages)
     }
 
@@ -1481,9 +1483,9 @@ export async function startRun(
     // dangling tool call that makes the conversation un-continuable. Pair any
     // unanswered call with a placeholder so the persisted log stays valid. (A hard
     // crash skips this; the intake repair in startRun is the backstop for that.)
-    const fill = missingToolResults(messages)
-    if (fill.length > 0) {
-      messages.push(...fill)
+    const repaired = repairDanglingToolResults(messages)
+    if (repaired !== messages) {
+      messages.splice(0, messages.length, ...repaired)
       onMessages?.(messages)
     }
     runs.delete(runId)
