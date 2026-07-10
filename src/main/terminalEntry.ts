@@ -21,6 +21,7 @@ import { runHeadless, type HeadlessOptions } from './headless'
 import { createTerminalIo, resolveColor } from './tui-io'
 import { makeCompleter } from './tui-complete'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
+import { highlightToHtml } from './syntax'
 import {
   createConversation,
   setMessages,
@@ -66,7 +67,8 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
   tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
   // Load highlight.js lazily (dynamic import) so it stays out of the module graph
   // that index.test.ts loads — only the real interactive path pulls it in.
-  const { highlightToHtml } = await import('./syntax')
+  // `./syntax` itself carries no heavy deps (highlight.js is injected below), so
+  // it's imported statically at the top; the dynamic wrapper bought no chunk split.
   const { default: hljs } = await import('highlight.js/lib/common')
 
   // Per-workspace composer history (Up/Down recall across restarts). Keyed by a
