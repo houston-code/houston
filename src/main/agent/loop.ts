@@ -523,6 +523,28 @@ export async function startRun(
       onMessages?.(messages)
     }
 
+    // Redact secrets from content that leaves the agent's control boundary — reused
+    // for the user's own input (below), tool results, and hook output. Built once from
+    // this install's stored secrets (see redact.ts); snapshotted at run start, so a key
+    // added mid-run applies next run.
+    const redact = createSecretRedactor(collectSecrets())
+
+    // Scrub secrets out of the just-submitted user turn before anything downstream —
+    // the model, plugins, hooks, and the persisted transcript — sees it, reusing the
+    // same engine as tool-result redaction. A pasted API key or a token-shaped string
+    // is stripped in place; then we re-persist so the copy the caller already wrote to
+    // disk (ipc.ts / the CLI) is overwritten with the redacted text. Ordinary prose —
+    // nothing secret-shaped, nothing matching a stored value — is left untouched. Done
+    // here in startRun so it covers every client (GUI, TUI, headless) at one seam.
+    const latestUser = [...messages].reverse().find((m) => m.role === 'user')
+    if (latestUser && typeof latestUser.content === 'string') {
+      const scrubbed = redact(latestUser.content)
+      if (scrubbed !== latestUser.content) {
+        latestUser.content = scrubbed
+        onMessages?.(messages)
+      }
+    }
+
     // Notify plugins of the user turn that started this run (the latest user
     // message). Observational; a plugin error degrades to a warning (see plugins.ts).
     if (plugins.has('onUserMessage')) {
@@ -562,13 +584,6 @@ export async function startRun(
     // resolution (and a guiding error) when it isn't installed.
     const ghPath = resolveGh()
     const ghExec = ghPath ? runGh(ghPath) : undefined
-
-    // Redact secrets from every tool result before it reaches the model, the renderer,
-    // or the on-disk transcript — so an agent that reads an env var or a config file
-    // can't exfiltrate a stored credential (or a token-shaped secret from the user's
-    // files) by echoing it back. Built once from this install's stored secrets; see
-    // redact.ts. Snapshotted at run start, so a key added mid-run applies next run.
-    const redact = createSecretRedactor(collectSecrets())
 
     // Shared tool-execution context. `run.policy` and `run.override` are read at
     // call time so a mid-run policy change or an "Allow for run" decision earlier

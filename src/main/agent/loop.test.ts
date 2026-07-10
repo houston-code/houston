@@ -255,6 +255,27 @@ describe('startRun', () => {
     expect(pluginResult.output).not.toContain('stored-opaque-credential-value-xyz')
   })
 
+  it('redacts secrets from the user turn before the model and transcript see it', async () => {
+    h.secrets = ['stored-opaque-credential-value-xyz']
+    const r = await run({
+      userText: 'my key is stored-opaque-credential-value-xyz and ghp_' + 'A'.repeat(36),
+      turns: [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    const userMsg = r.messages.find((m) => m.role === 'user')
+    expect(String(userMsg?.content)).not.toContain('stored-opaque-credential-value-xyz')
+    expect(String(userMsg?.content)).toContain('[redacted:secret]') // known-value layer
+    expect(String(userMsg?.content)).toContain('[redacted:github-token]') // pattern layer
+  })
+
+  it('leaves ordinary composer prose in the user turn untouched', async () => {
+    const r = await run({
+      userText: 'my password is blah',
+      turns: [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    const userMsg = r.messages.find((m) => m.role === 'user')
+    expect(String(userMsg?.content)).toBe('my password is blah')
+  })
+
   it('prompts for a write under "ask" and writes the file when allowed', async () => {
     const r = await run({
       policy: 'ask',

@@ -22,6 +22,7 @@ import type {
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import { clearConversationOverride } from './agent/overrides'
+import { redactSecrets } from './agent/redact'
 import { getUserDataDir } from './userData'
 
 /** Conversations persisted one-JSON-file-per-conversation under userData/conversations. */
@@ -302,12 +303,34 @@ export function searchConversations(query: string): ConversationMeta[] {
   return metas.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/**
+ * Injected source of this install's stored secret values for title redaction. Empty
+ * until the app wires it at startup (desktop: wireAgentHost; CLI: the CLI host), which
+ * keeps the electron-bound secret store out of the standalone CLI's module graph — this
+ * module is reachable from the CLI (via drain → setMessages), and importing `./secrets`
+ * would pull in `electron` and fail the CLI bundle's boundary check. Unwired (and in
+ * tests) it's `[]`, so pattern redaction still applies; only the exact-known-value layer
+ * needs it.
+ */
+let titleSecretValues: () => string[] = () => []
+
+/** Bind the known-secret source used to redact derived titles. Call once at startup. */
+export function configureTitleRedaction(collect: () => string[]): void {
+  titleSecretValues = collect
+}
+
 /** Derive a placeholder title from the first user message (shown until the model
  * writes a summarized one — see {@link needsGeneratedTitle}). */
-function deriveTitle(messages: ChatMessage[]): string | null {
+export function deriveTitle(messages: ChatMessage[]): string | null {
   const first = messages.find((m) => m.role === 'user')
   if (!first) return null
-  const text = first.content.trim().replace(/\s+/g, ' ')
+  // The title is persisted and shown in the sidebar, so a secret pasted into the first
+  // message would otherwise leak there even after the message body is redacted. Reuse
+  // the same redactor; ordinary prose is untouched. This is the one seam every client's
+  // title derivation passes through (setMessages), including runs the loop hasn't
+  // touched yet (ipc.ts derives the title from the raw message before the run starts).
+  const content = redactSecrets(first.content, titleSecretValues())
+  const text = content.trim().replace(/\s+/g, ' ')
   return text.length > 60 ? `${text.slice(0, 57)}…` : text || null
 }
 
