@@ -28,7 +28,7 @@ export interface GitDirsIo {
   realpath: (p: string) => string
 }
 
-const defaultIo: GitDirsIo = {
+export const defaultIo: GitDirsIo = {
   kindOf: (p) => {
     try {
       const st = lstatSync(p)
@@ -48,7 +48,7 @@ const defaultIo: GitDirsIo = {
 }
 
 /** Absolutize a git pointer path: absolute as-is, else resolved against `base`. */
-function absolutize(p: string, base: string): string {
+export function absolutize(p: string, base: string): string {
   const trimmed = p.trim()
   return isAbsolute(trimmed) ? trimmed : resolve(base, trimmed)
 }
