@@ -1,6 +1,12 @@
 /* Default (dark) palette — "Graphite": flat near-black surfaces, hairline borders,
    and a single electric-blue accent used sparingly. data-theme="dark" resolves here. */
 :root {
+  /* Render native UI (scrollbars, form controls, the drag-selection tint) in the
+     dark scheme, so a scrollbar's track+thumb sit on the near-black surfaces
+     instead of the engine's default light-gray track. Flips with the palette via
+     the data-theme='light' override below, keyed on the same selector as the
+     variables so scheme and colors always change together. */
+  color-scheme: dark;
   --bg: #0a0a0b;
   --bg-elevated: #131417;
   --bg-input: #17181c;
@@ -45,6 +51,7 @@
 /* Light palette — "Daylight": warm off-white surfaces, soft neutrals, indigo accent.
    Applied when document.documentElement[data-theme="light"]. */
 :root[data-theme='light'] {
+  color-scheme: light;
   --bg: #faf9f6;
   --bg-elevated: #f3f1ea;
   --bg-input: #ffffff;
