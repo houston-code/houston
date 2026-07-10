@@ -1618,6 +1618,8 @@ describe('dispatch_writable_agent', () => {
 })
 
 describe('present_plan (Plan mode review)', () => {
+  const planBody =
+    '## Overview\nKeep an unsent message per chat.\n\n1. Add a `draft` field\n2. Restore it on open'
   const planTurn = [
     {
       type: 'tool_call' as const,
@@ -1626,8 +1628,7 @@ describe('present_plan (Plan mode review)', () => {
         name: 'present_plan',
         arguments: {
           title: 'Persist the composer draft',
-          overview: 'Keep an unsent message per chat.',
-          steps: ['Add a `draft` field', 'Restore it on open'],
+          plan: planBody,
           files: ['src/main/conversations.ts', 'src/renderer/src/hooks/useChat.ts']
         }
       }
@@ -1635,7 +1636,7 @@ describe('present_plan (Plan mode review)', () => {
     { type: 'done' as const, stopReason: 'tool_use' as const }
   ]
 
-  it('emits plan_ready with the structured payload', async () => {
+  it('emits plan_ready with the freeform payload', async () => {
     const r = await run({
       policy: 'plan',
       turns: [planTurn, [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]],
@@ -1647,8 +1648,7 @@ describe('present_plan (Plan mode review)', () => {
     expect(ready?.callId).toBe('p1')
     expect(ready?.plan).toEqual({
       title: 'Persist the composer draft',
-      overview: 'Keep an unsent message per chat.',
-      steps: ['Add a `draft` field', 'Restore it on open'],
+      body: planBody,
       files: ['src/main/conversations.ts', 'src/renderer/src/hooks/useChat.ts']
     })
   })

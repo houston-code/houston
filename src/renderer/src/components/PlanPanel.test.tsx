@@ -5,9 +5,16 @@ import { PlanPanel } from './PlanPanel'
 
 const plan: PlanPayload = {
   title: 'Persist the composer draft',
-  overview: 'Keep an unsent message per chat.',
-  steps: ['Add a `draft` field', 'Restore it on open'],
+  body: '## Overview\n\nKeep an unsent message per chat.\n\n1. Add a `draft` field\n2. Restore it on open',
   files: ['src/main/conversations.ts', 'src/renderer/src/hooks/useChat.ts']
+}
+
+/** An older, pre-`body` plan that still uses the structured overview + steps. */
+const legacyPlan: PlanPayload = {
+  title: 'Legacy plan',
+  overview: 'A summary.',
+  steps: ['First step', 'Second step'],
+  files: ['a.ts']
 }
 
 function renderPanel(props: Partial<React.ComponentProps<typeof PlanPanel>> = {}) {
@@ -28,29 +35,43 @@ function renderPanel(props: Partial<React.ComponentProps<typeof PlanPanel>> = {}
 }
 
 describe('PlanPanel', () => {
-  it('renders the title, steps, and file chips', () => {
-    renderPanel()
+  it('renders the title, the full freeform body as markdown, and file chips', () => {
+    const { panel } = renderPanel()
     expect(screen.getByRole('heading', { name: 'Persist the composer draft' })).toBeTruthy()
+    // The whole `body` markdown is rendered — heading, paragraph, and list items.
+    expect(panel.querySelector('.plan-panel__markdown')).toBeTruthy()
+    expect(screen.getByText('Keep an unsent message per chat.')).toBeTruthy()
     expect(screen.getByText('Restore it on open')).toBeTruthy()
     expect(screen.getByText('src/main/conversations.ts')).toBeTruthy()
-    // "2 steps · touches 2 files"
-    expect(screen.getByText(/2 steps · touches 2 files/)).toBeTruthy()
+    // A freeform plan reports only the file count (no structured step count).
+    expect(screen.getByText(/touches 2 files/)).toBeTruthy()
+    expect(screen.queryByText(/step/)).toBeNull()
   })
 
-  it('keeps the whole plan in one scroll region, with steps before a collapsed files list', () => {
+  it('keeps the whole plan in one scroll region, with the body before a collapsed files list', () => {
     const { panel } = renderPanel()
     const body = panel.querySelector('.plan-panel__body') as HTMLElement
-    // The steps and the files both live inside the single scrolling body — so a long
-    // file list can't starve the steps (the bug this layout fixes).
-    const steps = body.querySelector('.plan-panel__steps')
+    // The plan body and the files both live inside the single scrolling body — so a
+    // long file list can't starve the plan (the bug this layout fixes).
+    const markdown = body.querySelector('.plan-panel__markdown')
     const files = body.querySelector('details.plan-panel__files')
-    expect(steps).toBeTruthy()
+    expect(markdown).toBeTruthy()
     expect(files).toBeTruthy()
-    // Files are collapsed by default (steps stay front-and-center) and ordered last.
+    // Files are collapsed by default (the plan stays front-and-center) and ordered last.
     expect((files as HTMLDetailsElement).open).toBe(false)
-    expect(steps!.compareDocumentPosition(files!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(markdown!.compareDocumentPosition(files!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     // The count is surfaced on the summary so the list reads as collapsible.
     expect(screen.getByText('2', { selector: '.plan-panel__files-count' })).toBeTruthy()
+  })
+
+  it('falls back to structured overview + steps for an older plan without a body', () => {
+    const { panel } = renderPanel({ plan: legacyPlan })
+    expect(panel.querySelector('.plan-panel__markdown')).toBeNull()
+    expect(panel.querySelector('.plan-panel__steps')).toBeTruthy()
+    expect(screen.getByText('First step')).toBeTruthy()
+    expect(screen.getByText('Second step')).toBeTruthy()
+    // Legacy plans still show the step count.
+    expect(screen.getByText(/2 steps · touches 1 file/)).toBeTruthy()
   })
 
   it('accepts with auto-edit by default', () => {

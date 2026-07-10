@@ -333,16 +333,22 @@ export function isToolApprovalDecision(v: unknown): v is ToolApprovalDecision {
 
 /**
  * A finished implementation plan the agent presents in Plan mode via the
- * `present_plan` tool. Rendered in the docked plan-review panel; steps are short
- * markdown strings so they can carry inline code and file references.
+ * `present_plan` tool. Rendered in full in the docked plan-review panel.
+ *
+ * `body` is the primary content: the whole plan as freeform markdown, authored
+ * however the model sees fit (overview, rationale, steps, code, tables). `overview`
+ * and `steps` are the older structured form, kept so plans persisted before the
+ * freeform field still render; the panel prefers `body` and falls back to them.
  */
 export interface PlanPayload {
   /** Short title for the plan (a few words). */
   title: string
-  /** One or two sentences summarizing the change, if given. */
+  /** The full plan as freeform markdown — the panel renders this as-is. */
+  body?: string
+  /** Legacy: one or two sentences summarizing the change (pre-`body` plans). */
   overview?: string
-  /** The concrete, ordered steps to carry out the change (at least one). */
-  steps: string[]
+  /** Legacy: the ordered steps to carry out the change (pre-`body` plans). */
+  steps?: string[]
   /** Repo-relative paths the plan will create or change, if given. */
   files?: string[]
 }

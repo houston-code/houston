@@ -127,7 +127,33 @@ describe('present_plan', () => {
     expect(items.find((i): i is PlanItem => i.kind === 'plan')?.status).toBe('rejected')
   })
 
-  it('rebuilds an accepted present_plan call as a plan marker on reload', () => {
+  it('carries the freeform `plan` markdown as the plan body on reload', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: 'p1',
+            name: 'present_plan',
+            arguments: { title: 'Ship it', plan: '## Plan\n\nDo **everything**.', files: ['x.ts'] }
+          }
+        ]
+      },
+      {
+        role: 'tool',
+        toolCallId: 'p1',
+        toolName: 'present_plan',
+        content: 'The user ACCEPTED the plan and switched off Plan mode.'
+      }
+    ]
+    const plan = itemsFromMessages(messages).find((i): i is PlanItem => i.kind === 'plan')
+    expect(plan).toMatchObject({ id: 'p1', status: 'accepted' })
+    expect(plan?.plan).toMatchObject({ title: 'Ship it', body: '## Plan\n\nDo **everything**.', files: ['x.ts'] })
+    expect(plan?.plan.steps).toBeUndefined()
+  })
+
+  it('rebuilds a legacy (steps-based) present_plan call as a plan marker on reload', () => {
     const messages: ChatMessage[] = [
       {
         role: 'assistant',

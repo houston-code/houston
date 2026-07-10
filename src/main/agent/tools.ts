@@ -2077,49 +2077,47 @@ const presentPlan: ToolDef = {
     description:
       'Present a finished implementation plan to the user for review, then wait for their decision. Use ' +
       'this ONLY in Plan mode, once your research is done and you are ready to propose the change: it opens ' +
-      'a dedicated review panel where the user can ACCEPT the plan (you then carry it out), request CHANGES ' +
-      '(you revise it and call present_plan again), or REJECT it. Returns the user’s decision as text — ' +
-      'follow it exactly. This is how you leave Plan mode: call it instead of only writing the plan as prose. ' +
-      'Do not edit files or run commands before it — that is what the plan is for.',
+      'a dedicated review panel that renders your `plan` markdown in full, where the user can ACCEPT the ' +
+      'plan (you then carry it out), request CHANGES (you revise it and call present_plan again), or REJECT ' +
+      'it. Returns the user’s decision as text — follow it exactly. This is how you leave Plan mode: put the ' +
+      'entire plan in the `plan` field and call this INSTEAD of also writing the plan as a chat message ' +
+      '(that would just duplicate it). Do not edit files or run commands before it — that is what the plan ' +
+      'is for.',
     parameters: objectSchema(
       {
         title: {
           type: 'string',
           description: 'A short title for the plan (a few words), e.g. "Persist the composer draft".'
         },
-        overview: {
+        plan: {
           type: 'string',
-          description: 'One or two sentences summarizing what the change does and why. Optional.'
-        },
-        steps: {
-          type: 'array',
           description:
-            'The concrete, ordered steps to carry out the change. Each step is a short markdown string ' +
-            '(reference files as `path` and include brief code where it helps). Provide at least one.',
-          items: { type: 'string' }
+            'The FULL plan as markdown — this is the primary content, shown in the review panel exactly as ' +
+            'written. Structure it however communicates best: an overview, the rationale / key decisions, ' +
+            'a step-by-step breakdown, code snippets, tables — whatever fits. Reference files as `path`. ' +
+            'Put everything here rather than in a separate chat message.'
         },
         files: {
           type: 'array',
           description:
-            'Repo-relative paths the plan will create or change. Optional but recommended — shown as chips.',
+            'Repo-relative paths the plan will create or change. Optional but recommended — shown as a ' +
+            'collapsible list of chips beneath the plan for quick scanning.',
           items: { type: 'string' }
         }
       },
-      ['title', 'steps']
+      ['title', 'plan']
     )
   },
   async execute(args, ctx) {
     if (!ctx.presentPlan) throw new Error('Presenting a plan is not available in this context.')
     const title = str(args, 'title').trim()
     if (!title) throw new Error('title is required.')
-    const steps = parseStringList(args.steps)
-    if (steps.length === 0) throw new Error('At least one plan step is required.')
-    const overview = str(args, 'overview').trim()
+    const body = str(args, 'plan').trim()
+    if (!body) throw new Error('plan is required — pass the full plan as markdown.')
     const files = parseStringList(args.files)
     const plan: PlanPayload = {
       title,
-      steps,
-      ...(overview ? { overview } : {}),
+      body,
       ...(files.length ? { files } : {})
     }
     return ctx.presentPlan(plan)

@@ -123,10 +123,18 @@ function planFromArgs(args: Record<string, unknown>): PlanPayload {
   const strList = (raw: unknown): string[] =>
     Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim() !== '') : []
   const title = typeof args.title === 'string' ? args.title : ''
+  const body = typeof args.plan === 'string' && args.plan.trim() ? args.plan : undefined
+  // Legacy structured fields, still rendered when an older call has no `plan` body.
   const overview = typeof args.overview === 'string' && args.overview.trim() ? args.overview : undefined
   const steps = strList(args.steps)
   const files = strList(args.files)
-  return { title, steps, ...(overview ? { overview } : {}), ...(files.length ? { files } : {}) }
+  return {
+    title,
+    ...(body ? { body } : {}),
+    ...(overview ? { overview } : {}),
+    ...(steps.length ? { steps } : {}),
+    ...(files.length ? { files } : {})
+  }
 }
 
 /** Derive a plan's outcome from the `present_plan` tool-result text. */
