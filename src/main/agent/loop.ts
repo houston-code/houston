@@ -834,11 +834,19 @@ export async function startRun(
     //   2. summaryMsgs stands in for the compacted head (turns before `cut`).
     //   3. Stale + large tool results in the kept tail are replaced by compact stubs
     //      (recoverable via recall_history) — surgical, unlike whole-turn compaction.
-    const buildWindow = (): ChatMessage[] => [
-      ...buildPinnedMessages(messages),
-      ...summaryMsgs,
-      ...evictStaleToolResults(messages.slice(cut))
-    ]
+    // The final invariant, enforced at the one boundary every request passes through:
+    // the provider must never receive a `tool_use` without its `tool_result`
+    // immediately after. The transforms above preserve pairing today, and the intake
+    // repair keeps the persisted log balanced — but any tool that blocks on the user
+    // (present_plan, ask_user) or an approval can be interrupted mid-call, and future
+    // transforms/hooks could slip. Normalizing here makes every request self-heal
+    // regardless of how its messages were assembled. It's a no-op on a balanced window.
+    const buildWindow = (): ChatMessage[] =>
+      repairDanglingToolResults([
+        ...buildPinnedMessages(messages),
+        ...summaryMsgs,
+        ...evictStaleToolResults(messages.slice(cut))
+      ])
 
     // SessionStart: once, before the first turn. A hook can inject extra context,
     // which we append to the system prompt for the whole run.
