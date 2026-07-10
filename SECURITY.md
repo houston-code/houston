@@ -13,6 +13,8 @@ pull request, or discussion for a suspected vulnerability.
   tab and choose **Report a vulnerability**
   (<https://github.com/piyushvijay/houston/security/advisories/new>). This creates a
   private advisory visible only to the maintainers and you.
+- If you can't use GitHub's flow — or prefer email — write to
+  **security@houstoncode.ai**, which is monitored privately by the maintainers.
 
 Please include, as far as you can:
 

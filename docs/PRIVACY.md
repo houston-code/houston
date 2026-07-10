@@ -1,7 +1,6 @@
 <!--
   MAINTAINER NOTE — replace the bracketed placeholders before distributing:
     [Licensor]      → the legal name of the data controller / publisher
-    [Contact email] → a real contact address for privacy requests
   Keep this in sync with the app's actual data behavior. If you ever add
   telemetry, crash reporting, or any server-side component, this document MUST be
   updated before that ships. Have a lawyer review before relying on it.
@@ -116,7 +115,7 @@ you choose, you exercise most data rights directly: you can view, export, or
 delete conversations and settings within the app or your filesystem, and you
 should direct requests about data held by a provider (access, deletion,
 retention) to that provider. If you have questions about this Policy, contact us
-at [Contact email].
+at privacy@houstoncode.ai.
 
 ## 8. Changes to this Policy
 
@@ -127,4 +126,4 @@ server-side component, we will update this Policy before that change ships.
 
 ## 9. Contact
 
-Questions or privacy requests: [Contact email].
+Questions or privacy requests: privacy@houstoncode.ai.

@@ -1,7 +1,6 @@
 <!--
   MAINTAINER NOTE — replace the bracketed placeholders before distributing:
     [Licensor]                  → the legal name of the copyright holder / licensor
-    [Contact email]             → a real contact address for legal/support notices
     [Governing-law jurisdiction] → the country/state whose law governs
     [Dispute venue]             → courts that have jurisdiction over disputes
   Have a lawyer review this before relying on it. This is a template, not legal advice.
@@ -214,4 +213,4 @@ acquisition, or sale of assets.
 
 ## 19. Contact
 
-Questions about these Terms: [Contact email].
+Questions about these Terms: legal@houstoncode.ai.

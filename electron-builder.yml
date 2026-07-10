@@ -1,6 +1,6 @@
 appId: com.houston.app
 productName: Houston
-copyright: Copyright © 2026 Houston contributors
+copyright: Copyright © 2026 Houston developers
 
 # Update feed for electron-updater. electron-builder generates the update
 # metadata (latest-mac.yml) alongside the DMG; publishing a GitHub Release with
@@ -112,8 +112,8 @@ linux:
   category: Development
   # The .deb (Debian) target requires a package maintainer. electron-builder derives it
   # from package.json `author` (now name + email), but set it explicitly too so the deb
-  # build never fails on a missing maintainer. Placeholder address — change if desired.
-  maintainer: Houston contributors <noreply@houston.app>
+  # build never fails on a missing maintainer. Uses the project's dev contact address.
+  maintainer: Houston developers <dev@houstoncode.ai>
   # AppImage = portable + the ONLY Linux target electron-updater can auto-update (reads
   # latest-linux.yml). deb = native Debian/Ubuntu install but does NOT auto-update. The
   # bundled ast-grep has no musl variant, so builds require a glibc runner (ubuntu is fine).
