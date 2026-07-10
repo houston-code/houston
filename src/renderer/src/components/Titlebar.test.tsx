@@ -64,9 +64,11 @@ describe('Titlebar icon-only actions', () => {
       />
     )
     const btn = screen.getByRole('button', { name: 'Changes' })
-    expect(btn).toHaveClass('titlebar__action--changes')
     expect(within(btn).getByText('3')).toBeInTheDocument()
     expect(btn).toHaveAttribute('title', expect.stringContaining('+12 −4'))
+    // Dirty state is signalled by the badge alone — no accent outline (that's
+    // reserved for open docked panels like Preview and Terminal).
+    expect(btn.className).toBe('titlebar__action')
   })
 
   it('omits the changes badge when the working tree is clean', () => {
@@ -78,7 +80,6 @@ describe('Titlebar icon-only actions', () => {
       />
     )
     const btn = screen.getByRole('button', { name: 'Changes' })
-    expect(btn).not.toHaveClass('titlebar__action--changes')
     expect(within(btn).queryByText(/^\d+$/)).not.toBeInTheDocument()
   })
 })

@@ -55,13 +55,14 @@ describe('BackgroundTasks', () => {
     setup([chatRunning, termRunning, shellRunning, chatDone])
     const btn = screen.getByRole('button', { name: /background tasks, 2 running/i })
     expect(within(btn).getByText('2')).toBeInTheDocument()
+    // Running work shows only the badge, not an accent outline.
+    expect(btn.className).toBe('titlebar__action bgtasks__btn')
   })
 
   it('does not light the badge for a terminal alone', () => {
     setup([termRunning])
     const btn = screen.getByRole('button', { name: /^background tasks$/i })
     expect(within(btn).queryByText(/^\d+$/)).not.toBeInTheDocument()
-    expect(btn).not.toHaveClass('titlebar__action--active')
   })
 
   it('omits the count when nothing is running', () => {
