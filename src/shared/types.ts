@@ -320,6 +320,8 @@ export interface AppSettings {
   previewWidth?: number
   /** Whether the preview panel is open. */
   previewOpen?: boolean
+  /** Width (px) of the docked plan-review panel (Plan mode). */
+  planWidth?: number
   /**
    * Highest legal-terms version (see LEGAL_VERSION in @shared/legal) the user has
    * accepted via the first-run gate. Absent/older than LEGAL_VERSION means the

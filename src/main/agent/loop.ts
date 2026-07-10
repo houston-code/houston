@@ -4,6 +4,8 @@ import type {
   AgentRunRequest,
   ChatMessage,
   DocumentAttachment,
+  PlanDecision,
+  PlanPayload,
   Provider,
   QuestionOption,
   ReasoningBlock,
@@ -24,6 +26,7 @@ import { loadProjectRules } from './rules'
 import { loadProjectConfig } from './projectConfig'
 import {
   ASK_USER_NAME,
+  PRESENT_PLAN_NAME,
   VIEW_LOCALHOST_NAME,
   getTool,
   toolSchemas,
@@ -115,6 +118,15 @@ interface RunState {
    */
   pendingApprovals: Map<string, { name: string; summary: string; kind: ToolKind; sandboxed?: boolean }>
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
+  /**
+   * Pending `present_plan` reviews, keyed by callId. `planDecisions` resolves the
+   * blocked tool call once the user decides; `pendingPlans` holds the plan payload so
+   * {@link pendingPromptsForConversation} can replay the `plan_ready` event (and thus
+   * re-open the review panel) if the conversation is re-adopted. Kept in lockstep with
+   * `approvals`/`questions`: set when the plan is emitted, deleted when resolved/cancelled.
+   */
+  planDecisions: Map<string, (d: PlanDecision) => void>
+  pendingPlans: Map<string, PlanPayload>
   /**
    * Tool KINDS the user granted "Allow for run" on. A call is auto-approved when its
    * kind is in this set — per-kind, so allowing a write never silently also allows
@@ -212,6 +224,10 @@ export function cancelRun(runId: string): void {
   for (const resolve of run.questions.values()) resolve('[The user stopped the agent without answering.]')
   run.questions.clear()
   run.pendingQuestions.clear()
+  // Unblock any pending plan review (treated as a reject) so present_plan returns.
+  for (const resolve of run.planDecisions.values()) resolve({ kind: 'reject' })
+  run.planDecisions.clear()
+  run.pendingPlans.clear()
   run.abort.abort()
 }
 
@@ -234,6 +250,42 @@ export function resolveQuestion(runId: string, callId: string, answer: string): 
     run.pendingQuestions.delete(callId)
     resolve(answer)
   }
+}
+
+/** Deliver the user's decision on a pending `present_plan` review. */
+export function resolvePlan(runId: string, callId: string, decision: PlanDecision): void {
+  const run = runs.get(runId)
+  const resolve = run?.planDecisions.get(callId)
+  if (run && resolve) {
+    run.planDecisions.delete(callId)
+    run.pendingPlans.delete(callId)
+    resolve(decision)
+  }
+}
+
+/**
+ * The tool-result text returned to the model for a plan decision, plus the side
+ * effect of accepting: switching the live run off Plan mode to the chosen edit mode
+ * so the very next tool call in this turn is no longer blocked as read-only.
+ */
+function planDecisionResult(run: RunState, decision: PlanDecision): string {
+  if (decision.kind === 'accept') {
+    run.policy = decision.mode
+    const how =
+      decision.mode === 'auto-edit'
+        ? 'Edits will be applied automatically as you make them.'
+        : 'You will be asked to approve each edit.'
+    return `The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. ${how}`
+  }
+  if (decision.kind === 'suggest') {
+    return (
+      'The user wants changes before you proceed:\n\n' +
+      `${decision.note}\n\n` +
+      'Revise the plan accordingly and call present_plan again with the updated plan. ' +
+      'Do not make any changes yet — you are still in Plan mode.'
+    )
+  }
+  return 'The user REJECTED this plan. Do not make any changes. Briefly acknowledge and wait for their next instruction.'
 }
 
 /**
@@ -268,6 +320,9 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       options: q.options,
       ...(q.multiSelect ? { multiSelect: true } : {})
     })
+  }
+  for (const [callId, plan] of run.pendingPlans) {
+    events.push({ runId, type: 'plan_ready', callId, plan })
   }
   return events
 }
@@ -336,6 +391,8 @@ export async function startRun(
     questions: new Map(),
     pendingApprovals: new Map(),
     pendingQuestions: new Map(),
+    planDecisions: new Map(),
+    pendingPlans: new Map(),
     override: seededOverride.kinds,
     shellUnsandboxedOverride: seededOverride.unsandboxedShell,
     policy: req.approvalPolicy,
@@ -443,7 +500,12 @@ export async function startRun(
     // MCP schema (small setups) or just find_tools + already-revealed MCP tools
     // (lazy). Recomputed each turn so tools revealed via find_tools then appear.
     const buildTools = (): ToolSchema[] => [
-      ...toolSchemas().filter((s) => localhostCaptureAvailable || s.name !== VIEW_LOCALHOST_NAME),
+      ...toolSchemas().filter(
+        (s) =>
+          (localhostCaptureAvailable || s.name !== VIEW_LOCALHOST_NAME) &&
+          // present_plan is the "exit Plan mode" tool; only offer it in Plan mode.
+          (planMode || s.name !== PRESENT_PLAN_NAME)
+      ),
       ...(findTools ? [findTools.schema] : []),
       ...mcpToolDefs
         .filter((d) => !lazyMcp || revealedMcp.has(d.schema.name))
@@ -546,6 +608,16 @@ export async function startRun(
             options: q.options,
             ...(q.multiSelect ? { multiSelect: true } : {})
           })
+        }),
+      // Present a finished plan and block until the user decides. Like askUser, the
+      // resolver is registered before the event is emitted so a fast decision can't
+      // race ahead of it; cancelRun resolves any still-pending plan as a reject.
+      // Accepting flips run.policy here so the next tool call this turn isn't blocked.
+      presentPlan: (plan) =>
+        new Promise<string>((resolve) => {
+          run.planDecisions.set(callId, (decision) => resolve(planDecisionResult(run, decision)))
+          run.pendingPlans.set(callId, plan)
+          emit({ type: 'plan_ready', callId, plan })
         }),
       dispatchSubAgent: (prompt, agentName) => {
         const agent = agentName ? agentsByName.get(agentName) : undefined

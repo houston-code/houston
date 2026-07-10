@@ -15,6 +15,7 @@ import type {
   Conversation,
   ConversationMeta,
   DeleteConversationResult,
+  PlanDecision,
   RepoInfo,
   ToolApprovalDecision
 } from '@shared/agent'
@@ -184,6 +185,9 @@ const api = {
   /** Answer a pending `ask_user` question. */
   answerQuestion: (runId: string, callId: string, answer: string): Promise<void> =>
     ipcRenderer.invoke(IPC.agentRespondQuestion, runId, callId, answer),
+  /** Resolve a pending `present_plan` review (accept / suggest changes / reject). */
+  resolvePlan: (runId: string, callId: string, decision: PlanDecision): Promise<void> =>
+    ipcRenderer.invoke(IPC.agentResolvePlan, runId, callId, decision),
   /** Change the approval policy of an in-flight run (live mode switch). */
   setAgentPolicy: (runId: string, policy: ApprovalPolicy): Promise<void> =>
     ipcRenderer.invoke(IPC.agentSetPolicy, runId, policy),

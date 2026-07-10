@@ -331,6 +331,47 @@ export function isToolApprovalDecision(v: unknown): v is ToolApprovalDecision {
   return typeof v === 'string' && (TOOL_APPROVAL_DECISIONS as readonly string[]).includes(v)
 }
 
+/**
+ * A finished implementation plan the agent presents in Plan mode via the
+ * `present_plan` tool. Rendered in the docked plan-review panel; steps are short
+ * markdown strings so they can carry inline code and file references.
+ */
+export interface PlanPayload {
+  /** Short title for the plan (a few words). */
+  title: string
+  /** One or two sentences summarizing the change, if given. */
+  overview?: string
+  /** The concrete, ordered steps to carry out the change (at least one). */
+  steps: string[]
+  /** Repo-relative paths the plan will create or change, if given. */
+  files?: string[]
+}
+
+/** How edits should run after the user accepts a plan (drives the policy switch). */
+export type PlanAcceptMode = 'auto-edit' | 'ask'
+
+/**
+ * The user's verdict on a presented plan:
+ * - `accept`  — carry it out; switch off Plan mode to `mode` (`auto-edit` applies
+ *               edits automatically, `ask` prompts on each one).
+ * - `suggest` — keep planning; send `note` back so the agent revises the plan.
+ * - `reject`  — discard this plan; stay in Plan mode and wait for direction.
+ */
+export type PlanDecision =
+  | { kind: 'accept'; mode: PlanAcceptMode }
+  | { kind: 'suggest'; note: string }
+  | { kind: 'reject' }
+
+/** Runtime guard for a plan decision arriving over IPC — reject anything malformed. */
+export function isPlanDecision(v: unknown): v is PlanDecision {
+  if (!v || typeof v !== 'object') return false
+  const d = v as Record<string, unknown>
+  if (d.kind === 'accept') return d.mode === 'auto-edit' || d.mode === 'ask'
+  if (d.kind === 'suggest') return typeof d.note === 'string'
+  if (d.kind === 'reject') return true
+  return false
+}
+
 /** One suggested answer to an `ask_user` question. */
 export interface QuestionOption {
   /** Short text the user selects. */
@@ -399,6 +440,15 @@ export type AgentEvent =
       question: string
       options: QuestionOption[]
       multiSelect?: boolean
+    }
+  | {
+      // The agent presented a finished plan via `present_plan` and is now blocked
+      // awaiting the user's decision (accept / suggest changes / reject). Opens the
+      // docked plan-review panel. Replayed on re-adopt like approvals/questions.
+      runId: string
+      type: 'plan_ready'
+      callId: string
+      plan: PlanPayload
     }
   | {
       // Emitted by the main process when it auto-starts a follow-up turn from the

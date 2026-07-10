@@ -5,12 +5,14 @@ import { IPC } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
+  isPlanDecision,
   isToolApprovalDecision,
   type AgentEvent,
   type AgentSendRequest,
   type ChatMessage,
   type ConversationMeta,
   type DeleteConversationResult,
+  type PlanDecision,
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
@@ -39,6 +41,7 @@ import {
   cancelRun,
   resolveApproval,
   resolveQuestion,
+  resolvePlan,
   setRunPolicy,
   runOwner,
   activeRunForConversation,
@@ -690,6 +693,24 @@ export function registerIpc(): void {
       // Only the window that started the run may answer its ask_user prompts.
       if (!callerOwnsRun(event, runId)) return
       resolveQuestion(runId, callId, answer.slice(0, MAX_QUESTION_ANSWER_LEN))
+    }
+  )
+
+  // Deliver the user's decision on a present_plan review (accept / suggest / reject).
+  ipcMain.handle(
+    IPC.agentResolvePlan,
+    (event, runId: string, callId: string, decision: PlanDecision) => {
+      // Validate at the boundary (mirrors agentApprove's decision guard): a malformed
+      // decision must not reach the loop, and a "suggest" note must not become an
+      // oversized tool result — cap its length before it does.
+      if (!isPlanDecision(decision)) return
+      // Only the window that started the run may resolve its plan reviews.
+      if (!callerOwnsRun(event, runId)) return
+      const safe: PlanDecision =
+        decision.kind === 'suggest'
+          ? { kind: 'suggest', note: decision.note.slice(0, MAX_QUESTION_ANSWER_LEN) }
+          : decision
+      resolvePlan(runId, callId, safe)
     }
   )
 

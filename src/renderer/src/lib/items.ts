@@ -2,9 +2,10 @@ import {
   COMPACTION_SUMMARY_PREFIX,
   type AgentEvent,
   type ChatMessage,
+  type PlanPayload,
   type QuestionOption
 } from '@shared/agent'
-import { ASK_USER_TOOL } from '@shared/constants'
+import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { ImageAttachment } from '@shared/images'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 
@@ -71,7 +72,20 @@ export interface QuestionItem {
   answer?: string
 }
 
-export type DisplayItem = UserItem | AssistantItem | ToolItem | NoticeItem | QuestionItem
+/**
+ * A plan presented via `present_plan`, shown as a compact "Plan ready" marker in the
+ * transcript and (while `pending`) mirrored in the docked review panel. `pending` is
+ * awaiting the user's decision; the others are its outcome.
+ */
+export type PlanStatus = 'pending' | 'accepted' | 'rejected' | 'superseded'
+export interface PlanItem {
+  kind: 'plan'
+  id: string // callId
+  plan: PlanPayload
+  status: PlanStatus
+}
+
+export type DisplayItem = UserItem | AssistantItem | ToolItem | NoticeItem | QuestionItem | PlanItem
 
 /**
  * The text of the most recent real user turn, or undefined if there is none.
@@ -102,6 +116,25 @@ function optionsFromArgs(raw: unknown): QuestionOption[] {
     }
   }
   return out
+}
+
+/** Build a PlanPayload from a present_plan tool call's arguments (renderer-side). */
+function planFromArgs(args: Record<string, unknown>): PlanPayload {
+  const strList = (raw: unknown): string[] =>
+    Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim() !== '') : []
+  const title = typeof args.title === 'string' ? args.title : ''
+  const overview = typeof args.overview === 'string' && args.overview.trim() ? args.overview : undefined
+  const steps = strList(args.steps)
+  const files = strList(args.files)
+  return { title, steps, ...(overview ? { overview } : {}), ...(files.length ? { files } : {}) }
+}
+
+/** Derive a plan's outcome from the `present_plan` tool-result text. */
+function planStatusFromResult(output: string | undefined): PlanStatus {
+  if (output?.startsWith('The user ACCEPTED')) return 'accepted'
+  if (output?.startsWith('The user REJECTED')) return 'rejected'
+  // No result, or a "wants changes" result — the plan is no longer actionable here.
+  return 'superseded'
 }
 
 let counter = 0
@@ -163,8 +196,9 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'tool_start': {
       const finalized = finalizeStreaming(items)
-      // ask_user surfaces as an interactive question card (below), not a tool row.
-      if (e.name === ASK_USER_TOOL) return finalized
+      // ask_user / present_plan surface as their own cards (a question card, a plan
+      // marker + docked panel), not as a generic tool row.
+      if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) return finalized
       const exists = finalized.some((it) => it.kind === 'tool' && it.id === e.callId)
       if (exists) return updateTool(finalized, e.callId, { status: 'running', args: e.args })
       return [
@@ -209,12 +243,37 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         }
       ]
     }
+    case 'plan_ready': {
+      const finalized = finalizeStreaming(items)
+      // Any still-pending plan is superseded by this one (e.g. a revision after the
+      // user requested changes). Upsert by callId so a replay on re-adopt updates in
+      // place rather than duplicating.
+      const superseded = finalized.map((it) =>
+        it.kind === 'plan' && it.status === 'pending' && it.id !== e.callId
+          ? { ...it, status: 'superseded' as const }
+          : it
+      )
+      if (superseded.some((it) => it.kind === 'plan' && it.id === e.callId)) {
+        return superseded.map((it) =>
+          it.kind === 'plan' && it.id === e.callId
+            ? { ...it, plan: e.plan, status: 'pending' as const }
+            : it
+        )
+      }
+      return [...superseded, { kind: 'plan', id: e.callId, plan: e.plan, status: 'pending' }]
+    }
     case 'tool_result': {
       // An ask_user result carries the answer — fold it into the question card.
       if (e.name === ASK_USER_TOOL) {
         return items.map((it) =>
           it.kind === 'question' && it.id === e.callId ? { ...it, answer: e.output } : it
         )
+      }
+      // A present_plan result records the user's decision — fold it into the plan
+      // marker's status (a backstop; the click handler updates it optimistically).
+      if (e.name === PRESENT_PLAN_TOOL) {
+        const status = planStatusFromResult(e.output)
+        return items.map((it) => (it.kind === 'plan' && it.id === e.callId ? { ...it, status } : it))
       }
       const status: ToolStatus = e.ok
         ? 'done'
@@ -330,6 +389,17 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
             options: optionsFromArgs(tc.arguments.options),
             ...(tc.arguments.multiSelect === true ? { multiSelect: true } : {}),
             ...(res?.output ? { answer: res.output } : {})
+          })
+          continue
+        }
+        // present_plan is shown as a plan marker (its outcome read from the result),
+        // not a tool row. A run reloaded mid-review has no result → not actionable.
+        if (tc.name === PRESENT_PLAN_TOOL) {
+          items.push({
+            kind: 'plan',
+            id: tc.id,
+            plan: planFromArgs(tc.arguments),
+            status: planStatusFromResult(res?.output)
           })
           continue
         }

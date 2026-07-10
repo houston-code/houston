@@ -11,6 +11,10 @@ export const WEB_SEARCH_KEY_ID = 'web-search'
  * process, the loop, and the renderer agree on the one string. */
 export const ASK_USER_TOOL = 'ask_user'
 
+/** Name of the tool that presents a finished plan for review in Plan mode. Shared
+ * so the main process, the loop, and the renderer agree on the one string. */
+export const PRESENT_PLAN_TOOL = 'present_plan'
+
 /** IPC channel names. Keep in one place so main + preload + renderer agree. */
 export const IPC = {
   // App / system
@@ -76,6 +80,8 @@ export const IPC = {
   agentCancel: 'agent:cancel',
   agentApprove: 'agent:approve',
   agentRespondQuestion: 'agent:respondQuestion',
+  /** Renderer → main: the user's decision on a present_plan review (accept / suggest / reject). */
+  agentResolvePlan: 'agent:resolvePlan',
   agentSetPolicy: 'agent:setPolicy',
   /** Query the runId of the live run for a conversation (or null) to re-adopt it. */
   agentActiveRun: 'agent:activeRun',

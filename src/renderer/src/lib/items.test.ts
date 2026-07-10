@@ -6,6 +6,7 @@ import {
   reduceEvent,
   type DisplayItem,
   type NoticeItem,
+  type PlanItem,
   type QuestionItem,
   type ToolItem,
   type UserItem
@@ -54,6 +55,103 @@ describe('itemsFromMessages', () => {
     })
     // It must NOT also appear as a generic tool row.
     expect(items.some((i) => i.kind === 'tool' && i.id === 'q1')).toBe(false)
+  })
+})
+
+describe('present_plan', () => {
+  const planReady: AgentEvent = {
+    runId: 'r',
+    type: 'plan_ready',
+    callId: 'p1',
+    plan: { title: 'Do the thing', steps: ['Step one', 'Step two'], files: ['a.ts'] }
+  }
+
+  it('turns plan_ready into a pending plan item', () => {
+    const items = reduceEvent([], planReady)
+    const plan = items.find((i): i is PlanItem => i.kind === 'plan')
+    expect(plan).toMatchObject({ id: 'p1', status: 'pending' })
+    expect(plan?.plan.title).toBe('Do the thing')
+    expect(plan?.plan.steps).toEqual(['Step one', 'Step two'])
+  })
+
+  it('supersedes a prior pending plan when a revised plan arrives', () => {
+    let items = reduceEvent([], planReady)
+    items = reduceEvent(items, {
+      runId: 'r',
+      type: 'plan_ready',
+      callId: 'p2',
+      plan: { title: 'Revised', steps: ['New step'] }
+    })
+    const plans = items.filter((i): i is PlanItem => i.kind === 'plan')
+    expect(plans).toHaveLength(2)
+    expect(plans.find((p) => p.id === 'p1')?.status).toBe('superseded')
+    expect(plans.find((p) => p.id === 'p2')?.status).toBe('pending')
+  })
+
+  it('does not render present_plan as a tool row on tool_start', () => {
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_start',
+      callId: 'p1',
+      name: 'present_plan',
+      args: {}
+    })
+    expect(items).toHaveLength(0)
+  })
+
+  it('folds an accept result into the plan marker status', () => {
+    let items = reduceEvent([], planReady)
+    items = reduceEvent(items, {
+      runId: 'r',
+      type: 'tool_result',
+      callId: 'p1',
+      name: 'present_plan',
+      ok: true,
+      output: 'The user ACCEPTED the plan and switched off Plan mode.'
+    })
+    expect(items.find((i): i is PlanItem => i.kind === 'plan')?.status).toBe('accepted')
+    // It must NOT also appear as a generic tool row.
+    expect(items.some((i) => i.kind === 'tool' && i.id === 'p1')).toBe(false)
+  })
+
+  it('folds a reject result into the plan marker status', () => {
+    let items = reduceEvent([], planReady)
+    items = reduceEvent(items, {
+      runId: 'r',
+      type: 'tool_result',
+      callId: 'p1',
+      name: 'present_plan',
+      ok: true,
+      output: 'The user REJECTED this plan.'
+    })
+    expect(items.find((i): i is PlanItem => i.kind === 'plan')?.status).toBe('rejected')
+  })
+
+  it('rebuilds an accepted present_plan call as a plan marker on reload', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: 'p1',
+            name: 'present_plan',
+            arguments: { title: 'Ship it', steps: ['One'], files: ['x.ts'] }
+          }
+        ]
+      },
+      {
+        role: 'tool',
+        toolCallId: 'p1',
+        toolName: 'present_plan',
+        content: 'The user ACCEPTED the plan and switched off Plan mode.'
+      }
+    ]
+    const items = itemsFromMessages(messages)
+    const plan = items.find((i): i is PlanItem => i.kind === 'plan')
+    expect(plan).toMatchObject({ id: 'p1', status: 'accepted' })
+    expect(plan?.plan).toMatchObject({ title: 'Ship it', steps: ['One'], files: ['x.ts'] })
+    expect(items.some((i) => i.kind === 'tool' && i.id === 'p1')).toBe(false)
   })
 })
 

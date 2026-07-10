@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import type {
   AgentEvent,
   ChatMessage,
+  PlanDecision,
+  PlanPayload,
   Provider,
   ProviderStreamEvent,
   ToolApprovalDecision
@@ -87,6 +89,7 @@ const {
   cancelRun,
   resolveApproval,
   resolveQuestion,
+  resolvePlan,
   setRunPolicy,
   activeRunForConversation,
   pendingPromptsForConversation,
@@ -135,6 +138,8 @@ async function run(
     userText?: string
     onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
     onQuestion?: (callId: string, answer: (a: string) => void) => void
+    onPlan?: (callId: string, plan: PlanPayload, decide: (d: PlanDecision) => void) => void
+    conversationId?: string
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -151,10 +156,14 @@ async function run(
     if (e.type === 'tool_question' && opts.onQuestion) {
       setTimeout(() => opts.onQuestion!(e.callId, (a) => resolveQuestion(runId, e.callId, a)), 0)
     }
+    if (e.type === 'plan_ready' && opts.onPlan) {
+      setTimeout(() => opts.onPlan!(e.callId, e.plan, (d) => resolvePlan(runId, e.callId, d)), 0)
+    }
   }
   await startRun(
     {
       runId,
+      ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
       workspace: ws,
       providerId: 'anthropic',
       model: 'claude-test',
@@ -1584,5 +1593,176 @@ describe('dispatch_writable_agent', () => {
     })
     const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_writable_agent')
     expect(typeof toolMsg?.content === 'string' && toolMsg.content).toContain('Unknown agent')
+  })
+})
+
+describe('present_plan (Plan mode review)', () => {
+  const planTurn = [
+    {
+      type: 'tool_call' as const,
+      call: {
+        id: 'p1',
+        name: 'present_plan',
+        arguments: {
+          title: 'Persist the composer draft',
+          overview: 'Keep an unsent message per chat.',
+          steps: ['Add a `draft` field', 'Restore it on open'],
+          files: ['src/main/conversations.ts', 'src/renderer/src/hooks/useChat.ts']
+        }
+      }
+    },
+    { type: 'done' as const, stopReason: 'tool_use' as const }
+  ]
+
+  it('emits plan_ready with the structured payload', async () => {
+    const r = await run({
+      policy: 'plan',
+      turns: [planTurn, [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'reject' })
+    })
+    const ready = r.events.find((e) => e.type === 'plan_ready') as
+      | { plan: PlanPayload; callId: string }
+      | undefined
+    expect(ready?.callId).toBe('p1')
+    expect(ready?.plan).toEqual({
+      title: 'Persist the composer draft',
+      overview: 'Keep an unsent message per chat.',
+      steps: ['Add a `draft` field', 'Restore it on open'],
+      files: ['src/main/conversations.ts', 'src/renderer/src/hooks/useChat.ts']
+    })
+  })
+
+  it('accepting switches off Plan mode so a following write is applied', async () => {
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        planTurn,
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'hi' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'accept', mode: 'auto-edit' })
+    })
+    // The plan's tool result records acceptance...
+    const planResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'present_plan') as
+      | { output: string }
+      | undefined
+    expect(planResult?.output).toMatch(/ACCEPTED/)
+    // ...and the subsequent write ran (auto-edit auto-approves it — no prompt).
+    expect(types(r)).not.toContain('tool_approval')
+    expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('hi')
+  })
+
+  it('accepting with "ask" mode approves each following edit rather than auto-applying', async () => {
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        planTurn,
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'ask.txt', content: 'hi' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'accept', mode: 'ask' }),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // 'ask' means the write now prompts (no longer read-only-blocked), then applies.
+    expect(types(r)).toContain('tool_approval')
+    expect(readFileSync(join(ws, 'ask.txt'), 'utf8')).toBe('hi')
+  })
+
+  it('rejecting keeps Plan mode so a following write stays blocked', async () => {
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        planTurn,
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'nope.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'reject' })
+    })
+    const planResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'present_plan') as
+      | { output: string }
+      | undefined
+    expect(planResult?.output).toMatch(/REJECTED/)
+    expect(existsSync(join(ws, 'nope.txt'))).toBe(false)
+    const writeResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'write_file') as
+      | { output: string }
+      | undefined
+    expect(writeResult?.output).toMatch(/Plan mode/)
+  })
+
+  it('suggesting feeds the note back and stays in Plan mode', async () => {
+    const r = await run({
+      policy: 'plan',
+      turns: [planTurn, [{ type: 'text', text: 'revised' }, { type: 'done', stopReason: 'end_turn' }]],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'suggest', note: 'Debounce at 250ms.' })
+    })
+    const planResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'present_plan') as
+      | { output: string }
+      | undefined
+    expect(planResult?.output).toContain('Debounce at 250ms.')
+    expect(planResult?.output).toMatch(/Plan mode/)
+  })
+
+  it('offers the present_plan tool only in Plan mode', async () => {
+    const toolsSeen: string[][] = []
+    const recorder: Provider = {
+      async *streamChat(req) {
+        toolsSeen.push((req.tools ?? []).map((t) => t.name))
+        yield { type: 'text', text: 'ok' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider: recorder, policy: 'plan' })
+    await run({ provider: recorder, policy: 'ask' })
+    expect(toolsSeen[0]).toContain('present_plan')
+    expect(toolsSeen[1]).not.toContain('present_plan')
+  })
+
+  it('replays a blocking plan for re-adopt, then clears it once resolved', async () => {
+    const conversationId = 'conv-pending-plan'
+    let promptsWhileBlocked: AgentEvent[] = []
+    await run({
+      conversationId,
+      policy: 'plan',
+      turns: [planTurn, [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]],
+      onPlan: (_id, _plan, decide) => {
+        promptsWhileBlocked = pendingPromptsForConversation(conversationId)
+        decide({ kind: 'reject' })
+      }
+    })
+    expect(promptsWhileBlocked).toHaveLength(1)
+    expect(promptsWhileBlocked[0]).toMatchObject({ type: 'plan_ready', callId: 'p1' })
+    expect(pendingPromptsForConversation(conversationId)).toEqual([])
+  })
+
+  it('unblocks a pending plan when the run is cancelled', async () => {
+    h.provider = scripted([planTurn])
+    const runId = 'run-cancel-plan'
+    const events: AgentEvent[] = []
+    const send = (e: AgentEvent): void => {
+      events.push(e)
+      if (e.type === 'plan_ready') setTimeout(() => cancelRun(runId), 0)
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'plan',
+        messages: [{ role: 'user', content: 'plan it' }]
+      },
+      send
+    )
+    // The run terminated (no hang), having surfaced the plan first.
+    expect(events.some((e) => e.type === 'plan_ready')).toBe(true)
+    expect(events.at(-1)?.type).toBe('done')
   })
 })
