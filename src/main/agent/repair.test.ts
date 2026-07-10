@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@shared/agent'
-import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
+import { INTERRUPTED_TOOL_RESULT, missingToolResults, repairDanglingToolResults } from './repair'
 
 const user = (content: string): ChatMessage => ({ role: 'user', content })
 const assistant = (content: string, toolCalls?: ChatMessage['toolCalls']): ChatMessage => ({
@@ -83,5 +83,69 @@ describe('missingToolResults', () => {
   it('carries the original tool name onto the placeholder', () => {
     const messages = [user('go'), assistant('', [toolCall('c', 'run_shell')])]
     expect(missingToolResults(messages)[0].toolName).toBe('run_shell')
+  })
+})
+
+describe('repairDanglingToolResults', () => {
+  const roles = (ms: ChatMessage[]): string[] =>
+    ms.map((m) => (m.role === 'tool' ? `tool(${m.toolCallId})` : m.role))
+
+  it('returns the same array reference when the log is already balanced', () => {
+    const messages = [
+      user('go'),
+      assistant('working', [toolCall('a')]),
+      toolResult('a'),
+      assistant('done')
+    ]
+    expect(repairDanglingToolResults(messages)).toBe(messages)
+  })
+
+  it('inserts a placeholder immediately after a trailing dangling call', () => {
+    const messages = [user('go'), assistant('', [toolCall('p1', 'present_plan')])]
+    const out = repairDanglingToolResults(messages)
+    expect(roles(out)).toEqual(['user', 'assistant', 'tool(p1)'])
+    expect(out[2].content).toBe(INTERRUPTED_TOOL_RESULT)
+  })
+
+  it('inserts the placeholder BEFORE a user turn that was sent after the dangling call', () => {
+    // The exact present_plan bug: the app quit while the plan was pending, the user
+    // re-sent a message, and a tail-append would drop the placeholder after it.
+    const messages = [
+      user('plan it'),
+      assistant('', [toolCall('p1', 'present_plan')]),
+      user('resurface the plan again please')
+    ]
+    const out = repairDanglingToolResults(messages)
+    expect(roles(out)).toEqual(['user', 'assistant', 'tool(p1)', 'user'])
+    expect(out[2].content).toBe(INTERRUPTED_TOOL_RESULT)
+    // No dangling calls remain in the trailing turn.
+    expect(missingToolResults(out)).toEqual([])
+  })
+
+  it('pulls a displaced result back up to follow its tool_use (heals a corrupted log)', () => {
+    // A log a prior tail-append already broke: result stranded after the user turn.
+    const messages = [
+      user('plan it'),
+      assistant('', [toolCall('p1', 'present_plan')]),
+      user('resurface the plan again please'),
+      toolResult('p1', 'present_plan') // displaced — not immediately after its use
+    ]
+    const out = repairDanglingToolResults(messages)
+    expect(roles(out)).toEqual(['user', 'assistant', 'tool(p1)', 'user'])
+    // The real (non-placeholder) result was moved, not duplicated.
+    expect(out.filter((m) => m.role === 'tool')).toHaveLength(1)
+    expect(out[2].content).toBe('ok')
+  })
+
+  it('repairs a dangling call in a NON-trailing turn (unlike missingToolResults)', () => {
+    const messages = [
+      user('first'),
+      assistant('', [toolCall('a', 'ask_user')]),
+      user('second'),
+      assistant('done')
+    ]
+    const out = repairDanglingToolResults(messages)
+    expect(roles(out)).toEqual(['user', 'assistant', 'tool(a)', 'user', 'assistant'])
+    expect(out[2].content).toBe(INTERRUPTED_TOOL_RESULT)
   })
 })
