@@ -180,6 +180,26 @@ async function run(
 
 const types = (r: RunResult): string[] => r.events.map((e) => e.type)
 
+/**
+ * Ids of any `tool_use` whose `tool_result` is not in the contiguous tool block
+ * immediately after its assistant turn — i.e. what the Anthropic API rejects.
+ */
+function orphanedToolUses(ms: ChatMessage[]): string[] {
+  const bad: string[] = []
+  for (let i = 0; i < ms.length; i++) {
+    const m = ms[i]
+    if (m.role !== 'assistant' || !(m.toolCalls?.length ?? 0)) continue
+    const answered = new Set<string>()
+    let j = i + 1
+    while (j < ms.length && ms[j].role === 'tool') {
+      if (ms[j].toolCallId) answered.add(ms[j].toolCallId as string)
+      j++
+    }
+    for (const c of m.toolCalls ?? []) if (!answered.has(c.id)) bad.push(c.id)
+  }
+  return bad
+}
+
 describe('startRun', () => {
   it('streams a plain answer and persists the assistant message', async () => {
     const r = await run({
@@ -1761,6 +1781,36 @@ describe('present_plan (Plan mode review)', () => {
     expect(promptsWhileBlocked).toHaveLength(1)
     expect(promptsWhileBlocked[0]).toMatchObject({ type: 'plan_ready', callId: 'p1' })
     expect(pendingPromptsForConversation(conversationId)).toEqual([])
+  })
+
+  it('recovers from an interrupted present_plan: never sends an orphaned tool_use', async () => {
+    // A prior run quit while the plan was pending (tool_use persisted, no result),
+    // then the user re-sent a message — so a user turn now sits after the dangling
+    // present_plan. This must not 400: the window sent to the provider, and the
+    // persisted log, are both normalized so the tool_use is paired.
+    let sent: ChatMessage[] | undefined
+    const recorder: Provider = {
+      async *streamChat(req) {
+        sent = req.messages
+        yield { type: 'text', text: 'here it is again' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const seeded: ChatMessage[] = [
+      { role: 'user', content: 'plan it' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'p1', name: 'present_plan', arguments: { title: 'X', plan: 'do it' } }]
+      },
+      { role: 'user', content: 'resurface the plan again please' }
+    ]
+    const r = await run({ provider: recorder, policy: 'plan', messages: seeded })
+    expect(orphanedToolUses(sent ?? [])).toEqual([]) // the request the provider saw
+    expect(orphanedToolUses(r.messages)).toEqual([]) // the healed, persisted log
+    // The dangling call was paired with the interruption placeholder.
+    const filled = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'p1')
+    expect(filled?.content).toBe(INTERRUPTED_TOOL_RESULT)
   })
 
   it('unblocks a pending plan when the run is cancelled', async () => {
