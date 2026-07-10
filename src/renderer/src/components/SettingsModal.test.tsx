@@ -101,6 +101,25 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(window.api.getVersion).toHaveBeenCalled())
   })
 
+  it('renders Legal as the last tab in the nav, revealing its links when selected', () => {
+    installApi()
+    renderModal()
+
+    // Legal is a standalone tab, ordered last after Appearance.
+    const labels = screen
+      .getAllByRole('button')
+      .map((b) => b.textContent?.trim())
+      .filter((t) => t && ['Legal', 'Models & Inference', 'Tools & Permissions', 'Workspace', 'Keyboard', 'Appearance'].includes(t))
+    expect(labels.at(-1)).toBe('Legal')
+
+    // Its content isn't rendered until selected; then the legal links appear.
+    expect(screen.queryByRole('link', { name: 'Terms of Use' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Legal' }))
+    expect(screen.getByRole('link', { name: 'Terms of Use' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Privacy Policy' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'License' })).toBeInTheDocument()
+  })
+
   it('maps over the passed providers array, rendering exactly one row per provider', () => {
     installApi()
     // A single provider in → exactly one provider row out. This fails if the

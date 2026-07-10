@@ -35,14 +35,15 @@ import {
 } from '@shared/provider-catalog'
 
 /** Settings groups shown as tabs in the left-hand nav. */
-type TabId = 'models' | 'tools' | 'workspace' | 'keyboard' | 'appearance'
+type TabId = 'models' | 'tools' | 'workspace' | 'keyboard' | 'appearance' | 'legal'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'models', label: 'Models & Inference' },
   { id: 'tools', label: 'Tools & Permissions' },
   { id: 'workspace', label: 'Workspace' },
   { id: 'keyboard', label: 'Keyboard' },
-  { id: 'appearance', label: 'Appearance' }
+  { id: 'appearance', label: 'Appearance' },
+  { id: 'legal', label: 'Legal' }
 ]
 
 /** Tool names offered as autocomplete in the permission-rule editor. */
@@ -104,6 +105,12 @@ function SettingsSection({
  * label). currentColor lets each icon track the idle/hover/active text colour.
  */
 const NAV_ICON: Record<TabId, JSX.Element> = {
+  legal: (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 1.5h4.5L12 5v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2.5a1 1 0 011-1z" />
+      <path d="M8.5 1.5V5H12M5.5 8h5M5.5 10.5h5M5.5 5.5h1.5" />
+    </svg>
+  ),
   models: (
     <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
       <rect x="4" y="4" width="8" height="8" rx="1" />
@@ -1336,7 +1343,10 @@ export function SettingsModal({
                     </p>
                   )}
                 </SettingsSection>
-
+              </>
+            )}
+            {tab === 'legal' && (
+              <>
                 <SettingsSection
                   title="Legal"
                   desc="The terms you accepted when you started using Houston."
