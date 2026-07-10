@@ -37,6 +37,22 @@ describe('PlanPanel', () => {
     expect(screen.getByText(/2 steps · touches 2 files/)).toBeTruthy()
   })
 
+  it('keeps the whole plan in one scroll region, with steps before a collapsed files list', () => {
+    const { panel } = renderPanel()
+    const body = panel.querySelector('.plan-panel__body') as HTMLElement
+    // The steps and the files both live inside the single scrolling body — so a long
+    // file list can't starve the steps (the bug this layout fixes).
+    const steps = body.querySelector('.plan-panel__steps')
+    const files = body.querySelector('details.plan-panel__files')
+    expect(steps).toBeTruthy()
+    expect(files).toBeTruthy()
+    // Files are collapsed by default (steps stay front-and-center) and ordered last.
+    expect((files as HTMLDetailsElement).open).toBe(false)
+    expect(steps!.compareDocumentPosition(files!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The count is surfaced on the summary so the list reads as collapsible.
+    expect(screen.getByText('2', { selector: '.plan-panel__files-count' })).toBeTruthy()
+  })
+
   it('accepts with auto-edit by default', () => {
     const { onResolve } = renderPanel()
     fireEvent.click(screen.getByRole('button', { name: /Accept & run/ }))

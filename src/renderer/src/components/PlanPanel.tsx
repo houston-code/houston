@@ -123,25 +123,16 @@ export function PlanPanel({
         {meta && <p className="plan-panel__meta">{meta}</p>}
       </div>
 
-      {plan.files && plan.files.length > 0 && (
-        <div className="plan-panel__files">
-          <p className="plan-panel__files-label">Files this plan will change</p>
-          <div className="plan-panel__chips">
-            {plan.files.map((f) => (
-              <span key={f} className="plan-panel__chip" title={f}>
-                {f}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
+      {/* One scroll region for the whole plan: overview, then the detailed steps,
+          then the files as a collapsed disclosure at the end. Keeping files in here
+          (rather than as a sibling above) stops a long list from starving the steps. */}
       <div className="plan-panel__body">
         {plan.overview && (
           <div className="plan-panel__overview">
             <Markdown text={plan.overview} />
           </div>
         )}
+        <p className="plan-panel__section-label">Steps</p>
         <ol className="plan-panel__steps">
           {plan.steps.map((step, i) => (
             <li key={i}>
@@ -149,6 +140,35 @@ export function PlanPanel({
             </li>
           ))}
         </ol>
+        {plan.files && plan.files.length > 0 && (
+          <details className="plan-panel__files">
+            <summary>
+              <svg
+                className="plan-panel__files-caret"
+                aria-hidden="true"
+                width="10"
+                height="10"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M6 4l4 4-4 4" />
+              </svg>
+              Files this plan will change ·{' '}
+              <span className="plan-panel__files-count">{plan.files.length}</span>
+            </summary>
+            <div className="plan-panel__chips">
+              {plan.files.map((f) => (
+                <span key={f} className="plan-panel__chip" title={f}>
+                  {f}
+                </span>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
 
       <footer className="plan-panel__foot">
