@@ -19,6 +19,12 @@ updates:
         versions: ['>=8']
       - dependency-name: '@vitejs/plugin-react'
         versions: ['>=6']
+      # typescript-eslint 8.x peers on `typescript >=4.8.4 <6.1.0`, so it cannot
+      # resolve the native TypeScript 7 compiler — grouping TS 7 in dev-deps makes
+      # `npm ci` fail on the peer conflict. Pin to TypeScript 6 until typescript-eslint
+      # ships TS 7 support, then remove.
+      - dependency-name: typescript
+        versions: ['>=7']
   # Keep GitHub Actions pinned-SHAs up to date.
   - package-ecosystem: github-actions
     directory: /
