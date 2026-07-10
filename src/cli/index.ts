@@ -11,6 +11,7 @@ import {
 } from '../main/store'
 import { setUserDataDir } from '../main/userData'
 import { configureLogRedactor, log } from '../main/logger'
+import { configureTitleRedaction } from '../main/conversations'
 import { redactSecrets } from '../main/agent/redact'
 import { resolveUserDataDir } from './paths'
 import { cliCollectSecrets, cliGetHeaders, cliGetKey, cliHasKey } from './credentials'
@@ -91,6 +92,8 @@ export function wireCliHost(): void {
   configureHasKey((id) => cliHasKey(id))
   // Scrub stored secrets (and token-shaped strings) from every log line.
   configureLogRedactor((message) => redactSecrets(message, cliCollectSecrets()))
+  // Known-value source for redacting derived conversation titles.
+  configureTitleRedaction(() => cliCollectSecrets())
   // Header secrets come from cli-headers.json (see cliGetHeaders); the CLI has no UI
   // that writes them, so set/remove are no-ops — settings saves just preserve the keys.
   configureHeaderSecrets({

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { conversationMatches, mergeRunningTotals, needsGeneratedTitle } from './conversations'
+import {
+  conversationMatches,
+  deriveTitle,
+  mergeRunningTotals,
+  needsGeneratedTitle
+} from './conversations'
 import type { AgentEvent, Conversation, ConversationUsage } from '@shared/agent'
 
 const conv = (over: Partial<Conversation>): Conversation => ({
@@ -52,6 +57,27 @@ describe('needsGeneratedTitle', () => {
 
   it('generates at most once (skips when a title was already generated)', () => {
     expect(needsGeneratedTitle(conv({ messages: [userMsg], titleGenerated: true }))).toBe(false)
+  })
+})
+
+describe('deriveTitle', () => {
+  it('derives from the first user message, truncating long text', () => {
+    expect(deriveTitle([{ role: 'user', content: 'Fix the auth bug' }])).toBe('Fix the auth bug')
+    const long = 'x'.repeat(80)
+    expect(deriveTitle([{ role: 'user', content: long }])).toBe(`${'x'.repeat(57)}…`)
+  })
+
+  it('redacts a token-shaped secret so it never lands in the (persisted) title', () => {
+    const title = deriveTitle([{ role: 'user', content: 'my key is ghp_' + 'A'.repeat(36) }])
+    expect(title).toBe('my key is [redacted:github-token]')
+  })
+
+  it('leaves ordinary prose untouched', () => {
+    expect(deriveTitle([{ role: 'user', content: 'my password is blah' }])).toBe('my password is blah')
+  })
+
+  it('returns null when there is no user message', () => {
+    expect(deriveTitle([{ role: 'assistant', content: 'hi' }])).toBeNull()
   })
 })
 

@@ -16,6 +16,7 @@ import {
   setSecretHeaders
 } from './secrets'
 import { configureLogRedactor } from './logger'
+import { configureTitleRedaction } from './conversations'
 import { redactSecrets } from './agent/redact'
 
 /**
@@ -34,6 +35,8 @@ export function wireAgentHost(): void {
   configureHeaderSecrets({ get: getSecretHeaders, set: setSecretHeaders, remove: deleteSecretHeaders })
   // Scrub stored secrets (and token-shaped strings) from every log line.
   configureLogRedactor((message) => redactSecrets(message, collectSecretValues()))
+  // Known-value source for redacting derived conversation titles.
+  configureTitleRedaction(collectSecretValues)
   configureAgentHost({
     getProvider,
     getSettings,
