@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import yaml from 'js-yaml'
+import { load } from 'js-yaml'
 import { mergeMacUpdateYml, isArm64File } from './merge-mac-update-yml.mjs'
 
 const ARM = `version: 1.4.0
@@ -38,7 +38,7 @@ function filterFilesForArch(files, isArm64Mac) {
 
 describe('mergeMacUpdateYml', () => {
   it('lists both arches in one feed and preserves the arm64 base fields', () => {
-    const merged = yaml.load(mergeMacUpdateYml(ARM, X64))
+    const merged = load(mergeMacUpdateYml(ARM, X64))
     expect(merged.version).toBe('1.4.0')
     expect(merged.path).toBe('Houston-1.4.0-arm64-mac.zip') // arm64 base wins
     expect(merged.releaseDate).toBe('2026-06-28T00:00:00.000Z') // arm64 base wins
@@ -51,7 +51,7 @@ describe('mergeMacUpdateYml', () => {
   })
 
   it('lets each arch self-select its zip the way electron-updater does', () => {
-    const merged = yaml.load(mergeMacUpdateYml(ARM, X64))
+    const merged = load(mergeMacUpdateYml(ARM, X64))
     const armPick = filterFilesForArch(merged.files, true).filter((f) => f.url.endsWith('.zip'))
     const x64Pick = filterFilesForArch(merged.files, false).filter((f) => f.url.endsWith('.zip'))
     expect(armPick).toHaveLength(1)
@@ -61,7 +61,7 @@ describe('mergeMacUpdateYml', () => {
   })
 
   it('keeps the per-file checksums and sizes intact', () => {
-    const merged = yaml.load(mergeMacUpdateYml(ARM, X64))
+    const merged = load(mergeMacUpdateYml(ARM, X64))
     const x64Zip = merged.files.find((f) => f.url === 'Houston-1.4.0-x64-mac.zip')
     expect(x64Zip.sha512).toBe('BBx64zipBB==')
     expect(x64Zip.size).toBe(200)
@@ -71,7 +71,7 @@ describe('mergeMacUpdateYml', () => {
   it('dedupes by url (idempotent if the same feed is merged twice)', () => {
     const merged1 = mergeMacUpdateYml(ARM, X64)
     const merged2 = mergeMacUpdateYml(merged1, X64)
-    expect(yaml.load(merged2).files.map((f) => f.url)).toEqual(yaml.load(merged1).files.map((f) => f.url))
+    expect(load(merged2).files.map((f) => f.url)).toEqual(load(merged1).files.map((f) => f.url))
   })
 
   it('throws on a version mismatch (different releases must not be merged)', () => {

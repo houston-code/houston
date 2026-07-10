@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import yaml from 'js-yaml'
+import { load, dump } from 'js-yaml'
 
 /** True when a file entry targets arm64, by the same rule MacUpdater uses (URL contains "arm64"). */
 export function isArm64File(file) {
@@ -28,8 +28,8 @@ export function isArm64File(file) {
  * files (a guard against silently shipping a feed that can't update one architecture).
  */
 export function mergeMacUpdateYml(armText, x64Text) {
-  const arm = yaml.load(armText)
-  const x64 = yaml.load(x64Text)
+  const arm = load(armText)
+  const x64 = load(x64Text)
 
   if (!arm || !Array.isArray(arm.files)) throw new Error('arm64 latest-mac.yml has no `files` array')
   if (!x64 || !Array.isArray(x64.files)) throw new Error('x64 latest-mac.yml has no `files` array')
@@ -53,7 +53,7 @@ export function mergeMacUpdateYml(armText, x64Text) {
 
   // Keep the arm64 base's top-level fields (version, path, sha512, releaseDate); only the
   // `files` array changes. lineWidth:-1 keeps long base64 sha512 scalars on one line.
-  return yaml.dump({ ...arm, files: merged }, { lineWidth: -1 })
+  return dump({ ...arm, files: merged }, { lineWidth: -1 })
 }
 
 function main(argv) {
