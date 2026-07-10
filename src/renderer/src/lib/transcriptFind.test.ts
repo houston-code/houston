@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { collectMatchRanges } from './transcriptFind'
+import { collectMatchRanges, collectMatchRangesAcross } from './transcriptFind'
 
 function root(html: string): HTMLElement {
   const el = document.createElement('div')
@@ -37,5 +37,32 @@ describe('collectMatchRanges', () => {
     const el = root('<p>content</p>')
     expect(collectMatchRanges(el, '')).toHaveLength(0)
     expect(collectMatchRanges(el, 'zzz')).toHaveLength(0)
+  })
+
+  it('skips text hidden inside a collapsed <details>, but not its summary', () => {
+    const el = root(
+      '<details><summary>needle summary</summary><p>needle body</p></details>' +
+        '<details open><summary>x</summary><p>needle open</p></details>'
+    )
+    const ranges = collectMatchRanges(el, 'needle')
+    // The collapsed body is skipped; its summary + the open details' body still match.
+    expect(ranges.map((r) => r.startContainer.parentElement?.textContent)).toEqual([
+      'needle summary',
+      'needle open'
+    ])
+  })
+})
+
+describe('collectMatchRangesAcross', () => {
+  it('concatenates matches from every root in root order', () => {
+    const a = root('<p>hit and hit</p>')
+    const b = root('<p>hit</p>')
+    expect(collectMatchRangesAcross([a, b], 'hit')).toHaveLength(3)
+  })
+
+  it('returns nothing for no roots or empty query', () => {
+    const a = root('<p>hit</p>')
+    expect(collectMatchRangesAcross([], 'hit')).toHaveLength(0)
+    expect(collectMatchRangesAcross([a], '')).toHaveLength(0)
   })
 })

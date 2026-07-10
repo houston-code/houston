@@ -197,7 +197,16 @@ export default function App(): JSX.Element {
   const creatingConvRef = useRef(false)
   // Stable so the find bar's match-collection effect doesn't re-run (and reset to
   // match #1) on every streaming delta that re-renders App.
-  const getTranscriptRoot = useCallback(() => document.querySelector<HTMLElement>('.transcript'), [])
+  // Find (⌘F) searches the transcript AND the open plan-review panel, so a query
+  // matches (and scrolls to) the plan's steps the same way it does the transcript.
+  const getFindRoots = useCallback((): HTMLElement[] => {
+    const roots: HTMLElement[] = []
+    const transcript = document.querySelector<HTMLElement>('.transcript')
+    if (transcript) roots.push(transcript)
+    const plan = document.querySelector<HTMLElement>('.plan-panel')
+    if (plan) roots.push(plan)
+    return roots
+  }, [])
   const chat = useChat(currentId)
 
   // Dev servers the agent started (auto-detected loopback URLs) — drives the Preview dock.
@@ -1491,7 +1500,7 @@ export default function App(): JSX.Element {
 
         {findOpen && (
           <Suspense fallback={null}>
-            <FindBar getRoot={getTranscriptRoot} onClose={() => setFindOpen(false)} />
+            <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} />
           </Suspense>
         )}
 

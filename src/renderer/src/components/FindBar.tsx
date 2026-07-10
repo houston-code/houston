@@ -1,22 +1,22 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
-  collectMatchRanges,
+  collectMatchRangesAcross,
   setFindHighlights,
   clearFindHighlights,
   scrollRangeIntoView
 } from '../lib/transcriptFind'
 
 /**
- * In-conversation find bar (⌘F). Highlights every match in the transcript and steps
- * through them with Enter / Shift+Enter (or the arrows); Esc closes. The transcript
- * root is resolved lazily via `getRoot` so the bar doesn't couple to the Transcript
- * component's internals.
+ * In-conversation find bar (⌘F). Highlights every match across the searchable
+ * regions and steps through them with Enter / Shift+Enter (or the arrows); Esc
+ * closes. The roots are resolved lazily via `getRoots` (e.g. the transcript plus the
+ * open plan-review panel) so the bar doesn't couple to those components' internals.
  */
 export function FindBar({
-  getRoot,
+  getRoots,
   onClose
 }: {
-  getRoot: () => HTMLElement | null
+  getRoots: () => HTMLElement[]
   onClose: () => void
 }): JSX.Element {
   const [query, setQuery] = useState('')
@@ -31,14 +31,13 @@ export function FindBar({
 
   // Recompute and repaint matches whenever the query changes.
   useEffect(() => {
-    const root = getRoot()
-    const ranges = root ? collectMatchRanges(root, query) : []
+    const ranges = collectMatchRangesAcross(getRoots(), query)
     rangesRef.current = ranges
     setCount(ranges.length)
     setActive(0)
     setFindHighlights(ranges, 0)
     scrollRangeIntoView(ranges[0])
-  }, [query, getRoot])
+  }, [query, getRoots])
 
   // Clear the highlights when the bar unmounts.
   useEffect(() => () => clearFindHighlights(), [])
