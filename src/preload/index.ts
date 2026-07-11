@@ -6,6 +6,7 @@ import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { GitInitResult } from '@shared/git'
 import type { ClipboardContent, PickedFile } from '@shared/composerContext'
 import type {
   AgentEvent,
@@ -55,6 +56,9 @@ const api = {
   /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
   getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
     ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
+  /** Initialize a git repo in the workspace so its files show up in the Changes panel. */
+  initGitRepo: (workspace: string): Promise<GitInitResult> =>
+    ipcRenderer.invoke(IPC.gitInit, workspace),
 
   // Settings
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),

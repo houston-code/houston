@@ -12,3 +12,13 @@
 export function isSafeGitRef(ref: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]*$/.test(ref)
 }
+
+/** Result of initializing a git repo in a workspace (main → renderer via IPC). */
+export interface GitInitResult {
+  /** True when the workspace is a git repo after the call (freshly init'd or already one). */
+  ok: boolean
+  /** True when the workspace was already a repo, so nothing was created. */
+  alreadyRepo?: boolean
+  /** A short human-readable reason when `ok` is false. */
+  error?: string
+}

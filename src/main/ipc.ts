@@ -64,6 +64,7 @@ import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { getRepoInfo, createWorktree, removeWorktree } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { initGitRepo } from './agent/gitInit'
 import { realpathSync } from 'node:fs'
 import {
   listConversations,
@@ -307,6 +308,12 @@ export function registerIpc(): void {
   // for the Changes panel. Read-only and hardened; a non-repo yields isRepo:false.
   ipcMain.handle(IPC.workingTreeChanges, async (_event, workspace: string) =>
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
+  )
+
+  // Initialize a git repo in the workspace so a non-git project's files become
+  // visible/reviewable in the Changes panel (the "Initialize git repository" action).
+  ipcMain.handle(IPC.gitInit, async (_event, workspace: string) =>
+    initGitRepo(typeof workspace === 'string' ? workspace : '')
   )
 
   // Custom slash commands from the workspace's .houston/commands directory.

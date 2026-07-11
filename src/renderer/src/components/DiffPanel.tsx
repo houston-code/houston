@@ -71,6 +71,8 @@ export function DiffPanel({
   const [data, setData] = useState<WorkingTreeChanges | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [initializing, setInitializing] = useState(false)
+  const [initError, setInitError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!workspace) {
@@ -87,6 +89,24 @@ export function DiffPanel({
       setLoading(false)
     }
   }, [workspace])
+
+  // "Initialize git repository": a bare `git init` makes a non-git project's files
+  // appear as (untracked) changes here, so they can be reviewed, committed, or turned
+  // into a PR. On success we reload the panel, which then lists everything.
+  const initRepo = useCallback(async () => {
+    if (!workspace) return
+    setInitializing(true)
+    setInitError(null)
+    try {
+      const res = await window.api.initGitRepo(workspace)
+      if (res.ok) await load()
+      else setInitError(res.error ?? 'Could not initialize the repository.')
+    } catch (e) {
+      setInitError((e as Error).message)
+    } finally {
+      setInitializing(false)
+    }
+  }, [workspace, load])
 
   useEffect(() => {
     void load()
@@ -139,7 +159,22 @@ export function DiffPanel({
           ) : !workspace ? (
             <p className="changes-panel__empty">Open a chat in a project to see its changes.</p>
           ) : data && !data.isRepo ? (
-            <p className="changes-panel__empty">This workspace isn’t a git repository.</p>
+            <div className="changes-panel__empty changes-panel__init">
+              <p>
+                This workspace isn’t a git repository, so its changes can’t be tracked or
+                reviewed here.
+              </p>
+              <button
+                type="button"
+                className="btn btn--sm btn--accent"
+                onClick={() => void initRepo()}
+                disabled={initializing}
+                title="Run git init in this workspace so its files show up as reviewable changes"
+              >
+                {initializing ? 'Initializing…' : 'Initialize git repository'}
+              </button>
+              {initError && <p className="changes-panel__init-error">{initError}</p>}
+            </div>
           ) : files.length === 0 ? (
             <p className="changes-panel__empty">No uncommitted changes.</p>
           ) : (

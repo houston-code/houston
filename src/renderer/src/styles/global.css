@@ -2535,6 +2535,21 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--text-dim);
   font-size: 13px;
 }
+.changes-panel__init {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 340px;
+}
+.changes-panel__init p {
+  margin: 0;
+  line-height: 1.5;
+}
+.changes-panel__init-error {
+  color: var(--danger);
+  font-size: 12px;
+}
 .changes-panel__foot {
   display: flex;
   align-items: center;
