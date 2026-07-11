@@ -100,6 +100,41 @@ export interface AstGrepRunOptions {
 }
 
 /**
+ * Strip ast-grep's benign postinstall notice from stderr. The `@ast-grep/cli`
+ * npm shim prints these two lines when its postinstall step didn't run (e.g. a
+ * sandboxed `npm ci` that skips install scripts): it falls back to resolving the
+ * native binary at runtime and still works. That notice would otherwise be
+ * mistaken for a failure on an empty search (which also exits non-zero), so drop
+ * it — while leaving any real diagnostic (`error: …`, `ERROR: …`) intact.
+ */
+export function stripAstGrepNoise(stderr: string): string {
+  return stderr
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim()
+      if (!t) return false
+      if (t.startsWith('[warn] postinstall script did not run')) return false
+      if (t.startsWith('Enable postinstall to avoid')) return false
+      return true
+    })
+    .join('\n')
+    .trim()
+}
+
+/**
+ * Decide whether an ast-grep run failed. It exits non-zero both for a clean "no
+ * matches" (exit 1) and for real failures (bad lang/pattern, missing path), so
+ * the exit code alone can't tell them apart — the discriminator is a real stderr
+ * diagnostic. Any benign postinstall notice ({@link stripAstGrepNoise}) is
+ * ignored. Returns the error message, or undefined when the run succeeded (with
+ * or without matches).
+ */
+export function astGrepError(matches: string[], code: number | null, stderr: string): string | undefined {
+  if (matches.length || code === 0) return undefined
+  return stripAstGrepNoise(stderr) || undefined
+}
+
+/**
  * Run ast-grep and collect formatted matches. Resolves with an `error` (rather
  * than rejecting) when the pattern/lang is invalid so the caller can surface it.
  */
@@ -132,15 +167,12 @@ export function runAstGrep(o: AstGrepRunOptions): Promise<{ matches: string[]; e
     child.on('error', (e) => resolve({ matches: [], error: e.message }))
     child.on('close', (code) => {
       const matches = parseAstGrepStream(out, o.max)
-      // ast-grep exits non-zero both for "no matches" (exit 1, empty stderr) and
-      // for real failures like a bad language or a missing path (non-zero + a
-      // stderr message). Only the latter is an error; a clean no-match returns []
-      // and is reported as "No matches found." by the caller.
-      if (!matches.length && code !== 0 && err.trim()) {
-        resolve({ matches: [], error: err.trim() })
-        return
-      }
-      resolve({ matches })
+      // ast-grep exits non-zero both for "no matches" (exit 1) and for real
+      // failures like a bad language or a missing path. astGrepError() tells them
+      // apart via stderr (ignoring the shim's benign postinstall notice); a clean
+      // no-match returns [] and is reported as "No matches found." by the caller.
+      const error = astGrepError(matches, code, err)
+      resolve(error ? { matches: [], error } : { matches })
     })
   })
 }

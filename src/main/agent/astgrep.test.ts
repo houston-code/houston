@@ -2,7 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { resolveAstGrep, parseAstGrepStream, runAstGrep, searchStructural } from './astgrep'
+import {
+  resolveAstGrep,
+  parseAstGrepStream,
+  runAstGrep,
+  searchStructural,
+  stripAstGrepNoise,
+  astGrepError
+} from './astgrep'
+
+/** The two-line benign notice the @ast-grep/cli npm shim prints when postinstall didn't run. */
+const POSTINSTALL_WARNING =
+  '[warn] postinstall script did not run; falling back to runtime binary resolution.\n' +
+  'Enable postinstall to avoid the per-invocation overhead.'
 
 /** Build `--json=stream` output: one JSON object per line. */
 const stream = (objs: object[]): string => objs.map((o) => JSON.stringify(o)).join('\n') + '\n'
@@ -82,6 +94,56 @@ describe('parseAstGrepStream', () => {
     expect(parseAstGrepStream('', 100)).toEqual([])
     expect(parseAstGrepStream('not json\n', 100)).toEqual([])
     expect(parseAstGrepStream('\n\n', 100)).toEqual([])
+  })
+})
+
+describe('stripAstGrepNoise', () => {
+  it('drops the benign postinstall notice entirely', () => {
+    expect(stripAstGrepNoise(POSTINSTALL_WARNING)).toBe('')
+  })
+
+  it('keeps a real diagnostic while dropping the postinstall notice', () => {
+    const stderr = POSTINSTALL_WARNING + "\nerror: invalid value 'not-a-language' for '--lang <LANG>'"
+    expect(stripAstGrepNoise(stderr)).toBe("error: invalid value 'not-a-language' for '--lang <LANG>'")
+  })
+
+  it('keeps an ERROR: line (missing path) while dropping the notice', () => {
+    const stderr = POSTINSTALL_WARNING + '\nERROR: does-not-exist: No such file or directory (os error 2)'
+    expect(stripAstGrepNoise(stderr)).toBe('ERROR: does-not-exist: No such file or directory (os error 2)')
+  })
+
+  it('leaves stderr with no benign lines unchanged', () => {
+    expect(stripAstGrepNoise('error: boom')).toBe('error: boom')
+    expect(stripAstGrepNoise('')).toBe('')
+  })
+})
+
+describe('astGrepError', () => {
+  // The regression: a successful-but-empty search (exit 1) whose only stderr is
+  // the shim's postinstall notice must NOT be treated as an error — otherwise
+  // searchStructural throws instead of returning "No matches found.".
+  it('does not flag a no-match run whose stderr is only the postinstall notice', () => {
+    expect(astGrepError([], 1, POSTINSTALL_WARNING)).toBeUndefined()
+  })
+
+  it('does not flag a run that produced matches, warning notwithstanding', () => {
+    expect(astGrepError(['a.ts:1:1: x'], 0, POSTINSTALL_WARNING)).toBeUndefined()
+    // Even on a (hypothetical) non-zero exit, matches present means success.
+    expect(astGrepError(['a.ts:1:1: x'], 1, POSTINSTALL_WARNING)).toBeUndefined()
+  })
+
+  it('does not flag a clean no-match run (exit 1, empty stderr)', () => {
+    expect(astGrepError([], 1, '')).toBeUndefined()
+  })
+
+  it('flags a real failure, surfacing only the diagnostic (notice stripped)', () => {
+    const stderr = POSTINSTALL_WARNING + "\nerror: invalid value 'not-a-language' for '--lang <LANG>'"
+    expect(astGrepError([], 2, stderr)).toBe("error: invalid value 'not-a-language' for '--lang <LANG>'")
+  })
+
+  it('flags a missing-path failure', () => {
+    const stderr = POSTINSTALL_WARNING + '\nERROR: does-not-exist: No such file or directory (os error 2)'
+    expect(astGrepError([], 1, stderr)).toBe('ERROR: does-not-exist: No such file or directory (os error 2)')
   })
 })
 
