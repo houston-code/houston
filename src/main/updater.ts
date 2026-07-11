@@ -32,8 +32,10 @@ import { openExternalSafely } from './safeExternal'
  */
 
 /** Releases page the banner + menu link to for a manual download (used everywhere,
- *  and the only update path on the not-yet-signed Windows/Linux builds). */
-const RELEASES_URL = 'https://github.com/piyushvijay/houston/releases'
+ *  and the only update path on the not-yet-signed Windows/Linux builds). Points at the
+ *  PUBLIC releases repo where artifacts are actually published — must match the
+ *  `publish` owner/repo in electron-builder.yml (the source repo is private). */
+const RELEASES_URL = 'https://github.com/piyushvijay/houston-releases/releases'
 
 /** Staged once at launch; handed to the renderer (one-shot) via IPC.updateWhatsNew. */
 let pendingWhatsNew: WhatsNew | null = null
