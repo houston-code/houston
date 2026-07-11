@@ -1,0 +1,34 @@
+# Houston
+
+> Houston is a free, cross-platform desktop coding agent that you point at your own AI model. Give it a project folder and it reads, edits, searches, and runs code — with every consequential action gated by an approval flow and, where the OS supports it, shell commands run in a sandbox. It runs locally and collects no analytics or telemetry.
+
+## What it is
+
+- Type: desktop application (macOS, Windows, Linux), built with Electron, React, and TypeScript.
+- Price: free. You bring your own model API keys, or run a local model; you pay only your provider's usage, never Houston.
+- Bring your own model: Claude (Anthropic), GPT (OpenAI), Gemini (Google), any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Switch models per conversation.
+- Privacy: runs on your device; no telemetry. Data leaves only to providers you configure, when you use a feature that reaches the network.
+- Safety: choose an approval mode from review-every-action to full autonomy; shell commands are sandboxed where the OS supports it.
+
+## Key capabilities
+
+- Agentic tools: read, write, edit, patch, search files, run shell, inspect git, fetch and search the web, and drive pull requests. Pure reads run concurrently; writes and commands stay sequential.
+- Structural code search with a bundled ripgrep and ast-grep (syntax-tree matching).
+- See its own localhost: start a dev server, screenshot the page, read the console, and iterate. A live preview panel docks beside the chat.
+- Subagents and adversarial multi-agent review of your diff for correctness, security, and quality.
+- Model Context Protocol (MCP) servers over stdio, HTTP, or SSE; custom read-only agents and on-demand skills defined in Markdown.
+
+## Links
+
+- Home: https://houstoncode.ai/
+- Download (all platforms): https://github.com/piyushvijay/houston-releases/releases/latest
+- Source and issues: https://github.com/piyushvijay/houston
+- Privacy Policy: https://houstoncode.ai/privacy.html
+- Terms of Use: https://houstoncode.ai/terms.html
+
+## Platforms
+
+- macOS 12 Monterey or newer (Apple Silicon and Intel)
+- Windows 10 or newer (x64)
+- Linux x64 (glibc 2.35+, e.g. Ubuntu 22.04+)
+- Standalone terminal CLI on any platform with Node 22+
