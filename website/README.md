@@ -9,6 +9,24 @@ hosted here: download buttons resolve to the public
 GitHub Releases feed, fetched live by `assets/app.js` (with a static fallback link
 if the API is unreachable).
 
+## Preview locally
+
+The site uses root-absolute paths (`/assets/…`), so serve it from a web root —
+opening `index.html` as a `file://` won't resolve assets.
+
+Faithful Cloudflare Pages preview (recommended — also applies `_redirects`,
+`_headers`, and `404.html`, exactly like production):
+
+```
+npx wrangler pages dev website          # → http://localhost:8788
+```
+
+Quick pages-only preview (zero install; does NOT apply `_redirects`/`_headers`):
+
+```
+python3 -m http.server 8000 -d website  # → http://localhost:8000
+```
+
 ## Layout
 
 ```
