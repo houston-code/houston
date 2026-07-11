@@ -16,10 +16,12 @@
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Houston — a coding agent that runs on your machine. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Houston — a cross-platform coding agent" />
   <meta name="twitter:description" content="A desktop coding agent that brings your own model. Every action gated by approval and, where supported, sandboxed." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
+  <meta name="twitter:image:alt" content="Houston — a coding agent that runs on your machine. Bring your own model." />
 
   <link rel="icon" type="image/png" href="/assets/icon.png" />
   <link rel="apple-touch-icon" href="/assets/icon.png" />
@@ -28,14 +30,79 @@
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "Houston",
-    "applicationCategory": "DeveloperApplication",
-    "operatingSystem": "macOS, Windows, Linux",
-    "description": "A cross-platform desktop coding agent. Bring your own model — Claude, GPT, Gemini, any OpenAI-compatible API, or a local model — and let it read, edit, search, and run code under an approval flow.",
-    "url": "https://houstoncode.ai/",
-    "downloadUrl": "https://github.com/piyushvijay/houston-releases/releases/latest",
-    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+    "@graph": [
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://houstoncode.ai/#app",
+        "name": "Houston",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS 12+, Windows 10+, Linux x64",
+        "description": "A cross-platform desktop coding agent. Bring your own model — Claude, GPT, Gemini, any OpenAI-compatible API, or a local model — and let it read, edit, search, and run code under an approval flow.",
+        "url": "https://houstoncode.ai/",
+        "downloadUrl": "https://github.com/piyushvijay/houston-releases/releases/latest",
+        "image": "https://houstoncode.ai/assets/og.png",
+        "screenshot": "https://houstoncode.ai/assets/screens/models.png",
+        "featureList": [
+          "Bring your own model — Claude, GPT, Gemini, OpenAI-compatible, or local",
+          "Agentic file editing, code search, and shell under an approval flow",
+          "Runs locally with no analytics or telemetry",
+          "Model Context Protocol servers, custom agents, and skills"
+        ],
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "publisher": { "@id": "https://houstoncode.ai/#org" }
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://houstoncode.ai/#org",
+        "name": "Houston",
+        "url": "https://houstoncode.ai/",
+        "logo": "https://houstoncode.ai/assets/icon.png",
+        "sameAs": ["https://github.com/piyushvijay/houston"]
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://houstoncode.ai/#website",
+        "name": "Houston",
+        "url": "https://houstoncode.ai/",
+        "publisher": { "@id": "https://houstoncode.ai/#org" }
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://houstoncode.ai/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is Houston?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Houston is a cross-platform desktop coding agent. You point it at an AI model and a project folder, and it can read, edit, search, and run code — with every consequential action gated by an approval flow, and shell commands sandboxed where the operating system supports it." }
+          },
+          {
+            "@type": "Question",
+            "name": "Is Houston free?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Yes. Houston is free to download and run. You bring your own model API keys, or run a local model, and pay only whatever your chosen provider charges for usage — Houston itself adds no fee." }
+          },
+          {
+            "@type": "Question",
+            "name": "Which AI models does Houston work with?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Claude, GPT, Gemini, any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. You can switch models per conversation, and the picker shows each model's context window and capabilities." }
+          },
+          {
+            "@type": "Question",
+            "name": "Does Houston send my code or data anywhere?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Houston runs on your device and collects no analytics or telemetry. Your data leaves your machine only when you use a feature that reaches a provider you configured — sending a prompt, searching the web, or checking for updates — and only to that destination." }
+          },
+          {
+            "@type": "Question",
+            "name": "Which operating systems does Houston support?",
+            "acceptedAnswer": { "@type": "Answer", "text": "macOS 12 Monterey or newer (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+). A standalone terminal CLI also runs anywhere with Node 22 or newer." }
+          },
+          {
+            "@type": "Question",
+            "name": "Is it safe to let an agent run code on my machine?",
+            "acceptedAnswer": { "@type": "Answer", "text": "You choose an approval mode — from reviewing every action, to auto-approving edits, to full autonomy — and where the OS supports it, shell commands run in a best-effort sandbox. You stay in control of what executes." }
+          }
+        ]
+      }
+    ]
   }
   </script>
 </head>
@@ -51,6 +118,7 @@
       <nav class="nav" aria-label="Primary">
         <a class="nav-link" href="#features">Features</a>
         <a class="nav-link" href="#download">Download</a>
+        <a class="nav-link" href="#faq">FAQ</a>
         <a class="nav-link" href="https://github.com/piyushvijay/houston" rel="noopener">GitHub</a>
         <a class="nav-link nav-cta btn btn-primary" href="#download">Get Houston</a>
       </nav>
@@ -227,6 +295,40 @@
       </div>
     </section>
 
+    <section id="faq" class="bg-subtle">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Frequently asked questions</h2>
+        </div>
+        <div class="faq">
+          <details class="faq-item">
+            <summary>What is Houston?</summary>
+            <p>Houston is a cross-platform desktop coding agent. You point it at an AI model and a project folder, and it can read, edit, search, and run code — with every consequential action gated by an approval flow, and shell commands sandboxed where the operating system supports it.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Is Houston free?</summary>
+            <p>Yes. Houston is free to download and run. You bring your own model API keys, or run a local model, and pay only whatever your chosen provider charges for usage — Houston itself adds no fee.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Which AI models does Houston work with?</summary>
+            <p>Claude, GPT, Gemini, any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. You can switch models per conversation, and the picker shows each model's context window and capabilities.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Does Houston send my code or data anywhere?</summary>
+            <p>Houston runs on your device and collects no analytics or telemetry. Your data leaves your machine only when you use a feature that reaches a provider you configured — sending a prompt, searching the web, or checking for updates — and only to that destination.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Which operating systems does Houston support?</summary>
+            <p>macOS 12 Monterey or newer (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+). A standalone terminal CLI also runs anywhere with Node 22 or newer.</p>
+          </details>
+          <details class="faq-item">
+            <summary>Is it safe to let an agent run code on my machine?</summary>
+            <p>You choose an approval mode — from reviewing every action, to auto-approving edits, to full autonomy — and where the OS supports it, shell commands run in a best-effort sandbox. You stay in control of what executes.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
     <section class="cta-band">
       <div class="wrap">
         <div class="inner">
@@ -252,6 +354,7 @@
           <h4>Product</h4>
           <a href="#features">Features</a>
           <a href="#download">Download</a>
+          <a href="#faq">FAQ</a>
           <a href="https://github.com/piyushvijay/houston-releases/releases/latest" rel="noopener">Releases</a>
         </div>
         <div class="footer-col">

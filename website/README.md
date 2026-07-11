@@ -26,7 +26,9 @@ website/
     screens/          Real product screenshots (see capture tool below)
   _headers            Cloudflare Pages security + cache headers
   _redirects          /download, /releases, /github short links
-  robots.txt, sitemap.xml
+  robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
+  sitemap.xml         homepage + legal pages, with lastmod
+  llms.txt            curated product summary for AI assistants (llmstxt.org)
   tools/
     build-legal.mjs       docs/*.md → privacy.html / terms.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
