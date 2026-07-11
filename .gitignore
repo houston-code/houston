@@ -16,6 +16,9 @@ playwright-report/
 blob-report/
 /playwright/.cache/
 
+# Wrangler local cache (from `npx wrangler pages dev website`)
+.wrangler/
+
 # Logs
 *.log
 npm-debug.log*
