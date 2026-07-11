@@ -395,6 +395,36 @@ describe('PR lifecycle notices', () => {
   })
 })
 
+describe('reduceEvent — loop-control notices', () => {
+  const RID = 'r1'
+
+  it('renders a distinct notice for the stalled limit reason', () => {
+    const items = reduceEvent([], { runId: RID, type: 'limit', reason: 'stalled' })
+    const notice = items.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(notice?.tone).toBe('error')
+    expect(notice?.text).toMatch(/repeating myself/i)
+  })
+
+  it('still renders the existing max-steps and max-output notices', () => {
+    const steps = reduceEvent([], { runId: RID, type: 'limit', reason: 'max-steps' })
+    expect(steps.find((i): i is NoticeItem => i.kind === 'notice')?.text).toMatch(/step limit/i)
+    const output = reduceEvent([], { runId: RID, type: 'limit', reason: 'max-output' })
+    expect(output.find((i): i is NoticeItem => i.kind === 'notice')?.text).toMatch(/output limit/i)
+  })
+
+  it('renders a passed/failed verification notice', () => {
+    const passed = reduceEvent([], { runId: RID, type: 'verification', passed: true })
+    const okNotice = passed.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(okNotice?.tone).toBe('info')
+    expect(okNotice?.text).toMatch(/verification passed/i)
+
+    const failed = reduceEvent([], { runId: RID, type: 'verification', passed: false })
+    const badNotice = failed.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(badNotice?.tone).toBe('error')
+    expect(badNotice?.text).toMatch(/verification failed/i)
+  })
+})
+
 describe('lastUserText', () => {
   const user = (id: string, text: string, isSummary = false): DisplayItem => ({
     kind: 'user',

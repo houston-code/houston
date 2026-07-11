@@ -22,7 +22,11 @@ import type {
   ProviderConfig
 } from '@shared/types'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
-import { DEFAULT_COMPACTION_THRESHOLD, DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
+import {
+  DEFAULT_COMPACTION_THRESHOLD,
+  DEFAULT_SHELL_OUTPUT_MAX_BYTES,
+  DEFAULT_MAX_ITERATIONS
+} from '@shared/defaults'
 import {
   SEARCH_PROVIDERS,
   DEFAULT_SEARCH_PROVIDER_ID,
@@ -891,6 +895,93 @@ export function SettingsModal({
                             Math.floor(Number(e.target.value) || 0)
                           )
                         }))
+                      }
+                    />
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Loop control"
+                  desc="Guardrails for long agent turns: cap the work, nudge the model to land cleanly before the cap, catch unproductive loops, and optionally verify changes before the turn ends."
+                >
+                  <label className="field">
+                    <span>
+                      Stop a single turn after this many steps (tool calls + replies). As the run
+                      nears this cap it&apos;s reminded to finish or summarize, so it lands cleanly
+                      instead of being cut off mid-edit.
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={settings.maxIterations ?? DEFAULT_MAX_ITERATIONS}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          maxIterations: Math.max(1, Math.floor(Number(e.target.value) || 0))
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>
+                      Also remind the model to wrap up once a turn&apos;s cumulative cost crosses this
+                      many US dollars (0 to disable the cost-based reminder).
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={settings.costCeilingUsd ?? 0}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          costCeilingUsd: Math.max(0, Number(e.target.value) || 0)
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={settings.stallDetection !== false}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, stallDetection: e.target.checked }))
+                      }
+                    />
+                    <span>
+                      Detect unproductive loops — repeating the same tool call, hitting the same error
+                      over and over, or going several turns without changing any file. On detection
+                      the model gets one corrective reminder; if it keeps looping, the turn stops. On
+                      by default.
+                    </span>
+                  </label>
+                  <label className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={settings.verifyOnStop ?? false}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, verifyOnStop: e.target.checked }))
+                      }
+                    />
+                    <span>
+                      When the model finishes after changing files, run the verification command below.
+                      If it fails, the output is fed back so the model can self-correct for a bounded
+                      number of passes. Off by default, and inert unless you set a command.
+                    </span>
+                  </label>
+                  <label className="field">
+                    <span>
+                      Verification command (e.g. <code>npm run typecheck</code> or <code>npm test</code>
+                      ). Runs in the project folder through the same sandbox as shell commands. Leave
+                      empty to disable — nothing runs unless you set this.
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="npm run typecheck"
+                      value={settings.verifyCommand ?? ''}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, verifyCommand: e.target.value }))
                       }
                     />
                   </label>

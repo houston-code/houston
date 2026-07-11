@@ -20,6 +20,12 @@ export const DEFAULT_COMPACTION_THRESHOLD = 100_000
 export const DEFAULT_SHELL_OUTPUT_MAX_BYTES = 64_000
 
 /**
+ * Default hard cap on loop iterations for a single agent turn. Shared between the
+ * agent loop's budget resolver and the Settings UI so they show the same figure.
+ */
+export const DEFAULT_MAX_ITERATIONS = 40
+
+/**
  * Resolve the effective shell-output budget: a positive user override, otherwise
  * the default. Guards against 0 / negatives, which would truncate everything.
  */
@@ -150,6 +156,7 @@ export function defaultSettings(): AppSettings {
     compactionThreshold: DEFAULT_COMPACTION_THRESHOLD,
     shellOutputMaxBytes: DEFAULT_SHELL_OUTPUT_MAX_BYTES,
     reasoningEffort: 'off',
+    stallDetection: true,
     permissionRules: [],
     hooks: [],
     mcpServers: [],

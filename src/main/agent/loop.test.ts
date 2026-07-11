@@ -14,6 +14,7 @@ import type {
 import type { ApprovalPolicy } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
+import { toAnthropicMessages } from '../providers/anthropic'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -25,6 +26,13 @@ const h = vi.hoisted(() => ({
   // Rules captured from the addPermissionRule mock, so tests can assert what an
   // "Always allow/deny" decision persisted.
   addedRules: [] as unknown[],
+  // A stub verification runner the verify-gate mock delegates to, so tests can
+  // script pass/fail/abort per pass without spawning a real shell. Null means the
+  // real runner (unused in these tests). `verifyRuns` records each invocation.
+  verifyRunner: null as
+    | ((input: unknown) => Promise<{ passed: boolean; output: string; aborted: boolean }>)
+    | null,
+  verifyRuns: [] as unknown[],
   settings: {
     compactionThreshold: 0,
     reasoningEffort: 'off',
@@ -98,6 +106,21 @@ vi.mock('./plugins', () => {
   }
 })
 
+// Keep the verify-gate decision helpers (shouldVerify/resolveVerifyMaxPasses/
+// verifyFailureMessage) real, but replace the shell-spawning runVerification with a
+// scriptable stub so the loop's verify wiring is exercised without a real command.
+vi.mock('./verify-gate', async (importActual) => {
+  const actual = await importActual<typeof import('./verify-gate')>()
+  return {
+    ...actual,
+    runVerification: async (input: unknown) => {
+      h.verifyRuns.push(input)
+      if (h.verifyRunner) return h.verifyRunner(input)
+      return { passed: true, output: '', aborted: false }
+    }
+  }
+})
+
 // Imported after the mocks are registered.
 const {
   startRun,
@@ -131,6 +154,8 @@ beforeEach(() => {
   h.pluginEvents = []
   h.addedRules = []
   h.secrets = []
+  h.verifyRunner = null
+  h.verifyRuns = []
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -2154,4 +2179,426 @@ describe('present_plan (Plan mode review)', () => {
     expect(events.some((e) => e.type === 'plan_ready')).toBe(true)
     expect(events.at(-1)?.type).toBe('done')
   })
+})
+
+describe('loop control — adaptive budget', () => {
+  /** Temporarily set extra settings on the holder for one test, then restore. */
+  async function withSettings<T>(extra: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+    const saved = { ...h.settings }
+    Object.assign(h.settings, extra)
+    try {
+      return await fn()
+    } finally {
+      for (const k of Object.keys(extra)) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+  }
+
+  it('honors a configurable iteration cap and emits max-steps when exhausted', async () => {
+    // A provider that never stops asking for a (parallelizable) read, so the loop
+    // runs until the cap. With maxIterations:2 it should exhaust after 2 turns.
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    const looping: Provider = {
+      async *streamChat() {
+        yield {
+          type: 'tool_call',
+          call: { id: `c${Math.random()}`, name: 'read_file', arguments: { path: 'a.txt' } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings({ maxIterations: 2, stallDetection: false }, () =>
+      run({ provider: looping, policy: 'full-auto' })
+    )
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('max-steps')
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('injects a one-time landing reminder as the run nears the cap', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    const looping: Provider = {
+      async *streamChat() {
+        yield {
+          type: 'tool_call',
+          call: { id: `c${Math.random()}`, name: 'read_file', arguments: { path: 'a.txt' } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    // margin 3 with cap 3 → lands on the very first iteration.
+    const r = await withSettings(
+      { maxIterations: 3, stallDetection: false },
+      () => run({ provider: looping, policy: 'full-auto' })
+    )
+    const landing = r.messages.filter(
+      (m) => m.role === 'user' && typeof m.content === 'string' && /wrap up/i.test(m.content)
+    )
+    // Exactly one landing reminder despite multiple iterations (it's one-time).
+    expect(landing).toHaveLength(1)
+  })
+})
+
+describe('loop control — stall detection', () => {
+  async function withSettings<T>(extra: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+    const saved = { ...h.settings }
+    Object.assign(h.settings, extra)
+    try {
+      return await fn()
+    } finally {
+      for (const k of Object.keys(extra)) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+  }
+
+  it('nudges once then stops when the model repeats the same read', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    // Always re-issue the identical read call — the classic unproductive loop.
+    const looping: Provider = {
+      async *streamChat() {
+        yield {
+          type: 'tool_call',
+          call: { id: 'same', name: 'read_file', arguments: { path: 'a.txt' } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings(
+      {
+        stallDetection: true,
+        stallRepeatCallLimit: 2,
+        // Keep the cap high so the STALL stop (not max-steps) is what ends the run.
+        maxIterations: 40
+      },
+      () => run({ provider: looping, policy: 'full-auto' })
+    )
+    // A corrective reminder was injected as a user message.
+    const nudge = r.messages.find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && /repeating the same tool call/i.test(m.content)
+    )
+    expect(nudge).toBeTruthy()
+    // And the run ended with the dedicated 'stalled' limit, not 'max-steps'.
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('stalled')
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('does not fire on a healthy varied run', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    writeFileSync(join(ws, 'b.txt'), 'y')
+    const r = await withSettings({ stallDetection: true }, () =>
+      run({
+        policy: 'full-auto',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [
+            { type: 'tool_call', call: { id: 'c2', name: 'read_file', arguments: { path: 'b.txt' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+    )
+    expect(r.events.some((e) => e.type === 'limit')).toBe(false)
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('fires the repeated-error nudge on RAW verbose errors that only differ past the signature cap', async () => {
+    // Regression for the dead-detector bug: the loop pushes RAW tool output (with
+    // the "Error: " prefix and unbounded length) into the detector. If that output
+    // isn't normalized, a verbose error whose tail varies every turn never collapses
+    // and the repeated-error rule never fires. The detector must normalize
+    // internally (strip prefix, collapse whitespace, cap at 200 chars) so these
+    // count as the SAME error and the nudge fires.
+    let iteration = 0
+    // 200+ identical leading chars so the signature cap keeps only the shared head;
+    // the trailing token varies each turn (and would defeat naive matching).
+    const head = 'ENOENT: no such file or directory, open ' + 'x'.repeat(220)
+    const failing: ToolDef = {
+      kind: 'read',
+      summarize: () => 'always fails',
+      schema: { name: 'flaky_read', description: 'always fails', parameters: { type: 'object', properties: {} } },
+      execute: async () => {
+        // Thrown → the loop wraps it as `Error: <message>` (the RAW output). The
+        // message carries its own leading "Error:" too, and lots of whitespace, to
+        // prove normalization is doing the collapsing — not the loop.
+        throw new Error(`Error:   ${head}\n\n    at frame ${iteration++} (varies every turn)`)
+      }
+    }
+    h.mcpDefs = [failing]
+    const looping: Provider = {
+      async *streamChat() {
+        yield { type: 'tool_call', call: { id: 'e', name: 'flaky_read', arguments: {} } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings(
+      { stallDetection: true, stallRepeatErrorLimit: 2, maxIterations: 40 },
+      () => run({ provider: looping, policy: 'full-auto' })
+    )
+    const nudge = r.messages.find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && /keep hitting the same error/i.test(m.content)
+    )
+    expect(nudge).toBeTruthy()
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('stalled')
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('the window sent after a stall nudge maps to no consecutive same-role turns', async () => {
+    // The nudge is pushed as `{role:'user'}` right after a tool result, so the turn
+    // that follows sends `[…, assistant(tool_use), tool(result), user(nudge)]`. Mapped
+    // to Anthropic that used to become two consecutive `user` messages → a 400 that
+    // killed the run. Capture the post-nudge window and map it through the real
+    // Anthropic mapper: the tail must be a single valid user turn.
+    const sentWindows: ChatMessage[][] = []
+    const looping: Provider = {
+      async *streamChat(req) {
+        sentWindows.push(req.messages)
+        // Re-issue the identical read every turn — trips the repeated-call stall.
+        yield { type: 'tool_call', call: { id: 'same', name: 'list_dir', arguments: { path: '.' } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    await withSettings(
+      { stallDetection: true, stallRepeatCallLimit: 2, maxIterations: 40 },
+      () => run({ provider: looping, policy: 'full-auto' })
+    )
+
+    // Find the first window that actually carries the injected nudge — that's the
+    // request that would have 400'd before the fix.
+    const nudged = sentWindows.find((w) =>
+      w.some(
+        (m) => m.role === 'user' && typeof m.content === 'string' && /repeating the same tool call/i.test(m.content)
+      )
+    )
+    expect(nudged, 'no window carried the stall nudge').toBeTruthy()
+    // The tail really is result-then-nudge (the adjacency the bug hinges on).
+    const tail = nudged!.slice(-2)
+    expect(tail[0].role).toBe('tool')
+    expect(tail[1].role).toBe('user')
+
+    // Real mapper: no two adjacent messages share a role, and both the tool_result
+    // and the nudge text survive on the coalesced user turn.
+    const out = toAnthropicMessages(nudged!, false)
+    for (let i = 1; i < out.length; i++) {
+      expect(out[i].role, `mapped messages ${i - 1} and ${i} share role '${out[i].role}'`).not.toBe(
+        out[i - 1].role
+      )
+    }
+    const lastBlocks = out[out.length - 1].content as unknown as Array<Record<string, unknown>>
+    expect(Array.isArray(lastBlocks)).toBe(true)
+    expect(lastBlocks.some((b) => b.type === 'tool_result')).toBe(true)
+    expect(
+      lastBlocks.some((b) => b.type === 'text' && /repeating the same tool call/i.test(String(b.text)))
+    ).toBe(true)
+  })
+})
+
+describe('loop control — verification gate', () => {
+  async function withSettings<T>(extra: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+    const saved = { ...h.settings }
+    Object.assign(h.settings, extra)
+    try {
+      return await fn()
+    } finally {
+      for (const k of Object.keys(extra)) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+  }
+
+  /** A provider that writes a file (arming the gate) then finishes with end_turn. */
+  function writeThenStop(): Provider {
+    return scripted([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'v1' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'all done' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+  }
+
+  it('fails then passes: feeds the failure back and self-corrects within maxPasses', async () => {
+    // First natural stop → verify FAILS: the failure is fed back as a user message
+    // and the loop continues. The model edits again and stops → verify PASSES → done.
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'v1' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'first attempt' }, { type: 'done', stopReason: 'end_turn' }],
+      [
+        { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'out.txt', content: 'v2' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'fixed it' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    let pass = 0
+    h.verifyRunner = async () =>
+      pass++ === 0
+        ? { passed: false, output: 'TS2322: type error', aborted: false }
+        : { passed: true, output: '', aborted: false }
+
+    const r = await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 2 },
+      () => run({ provider: h.provider!, policy: 'full-auto' })
+    )
+
+    // Two verification runs (fail, then pass), and the failure was fed back.
+    expect(h.verifyRuns).toHaveLength(2)
+    const verifications = r.events.filter((e) => e.type === 'verification') as Array<{ passed: boolean }>
+    expect(verifications.map((v) => v.passed)).toEqual([false, true])
+    const feedback = r.messages.find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && /verification failed/i.test(m.content)
+    )
+    expect(feedback).toBeTruthy()
+    expect((feedback!.content as string)).toContain('TS2322: type error')
+    // Ended cleanly, and the self-correcting second edit landed.
+    expect(types(r).at(-1)).toBe('done')
+    expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('v2')
+  })
+
+  it('persistently fails but stays bounded by maxPasses, then accepts done (no infinite loop)', async () => {
+    // The model keeps "finishing" and verify keeps failing. With maxPasses:1 exactly
+    // one verify runs; after the budget is spent the loop accepts done regardless.
+    let stops = 0
+    const provider: Provider = {
+      async *streamChat() {
+        // Alternate: a write turn, then an end_turn — so every natural stop follows
+        // a fresh edit, keeping the gate armed. It never converges.
+        if (stops++ % 2 === 0) {
+          yield {
+            type: 'tool_call',
+            call: { id: `w${stops}`, name: 'write_file', arguments: { path: 'out.txt', content: `v${stops}` } }
+          }
+          yield { type: 'done', stopReason: 'tool_use' }
+        } else {
+          yield { type: 'text', text: 'done (but not really)' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+    }
+    h.verifyRunner = async () => ({ passed: false, output: 'still failing', aborted: false })
+
+    const r = await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1, maxIterations: 40, stallDetection: false },
+      () => run({ provider, policy: 'full-auto' })
+    )
+
+    // Bounded: exactly maxPasses verification runs despite the persistent failure.
+    expect(h.verifyRuns).toHaveLength(1)
+    // And the run terminates rather than looping forever.
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('passes first time: emits a passed verification then done', async () => {
+    h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+    const r = await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 1 },
+      () => run({ provider: writeThenStop(), policy: 'full-auto' })
+    )
+    expect(h.verifyRuns).toHaveLength(1)
+    const verification = r.events.find((e) => e.type === 'verification') as { passed: boolean } | undefined
+    expect(verification?.passed).toBe(true)
+    expect(types(r).at(-1)).toBe('done')
+    // No failure feedback was injected.
+    expect(
+      r.messages.some((m) => m.role === 'user' && typeof m.content === 'string' && /verification failed/i.test(m.content))
+    ).toBe(false)
+  })
+
+  it('aborts during verification: yields stopReason "aborted"', async () => {
+    const runId = 'run-verify-abort'
+    h.provider = writeThenStop()
+    // The verify runner reports an aborted verification (as the real runner does when
+    // the signal fires mid-command); the loop must stop with stopReason 'aborted'.
+    h.verifyRunner = async () => {
+      cancelRun(runId)
+      return { passed: false, output: '', aborted: true }
+    }
+    const events: AgentEvent[] = []
+    await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 1 },
+      () =>
+        startRun(
+          {
+            runId,
+            workspace: ws,
+            providerId: 'anthropic',
+            model: 'claude-test',
+            approvalPolicy: 'full-auto',
+            messages: [{ role: 'user', content: 'do it' }]
+          },
+          (e) => events.push(e),
+          () => {}
+        )
+    )
+    const done = events.filter((e) => e.type === 'done') as Array<{ stopReason: string }>
+    expect(done.at(-1)?.stopReason).toBe('aborted')
+    // No 'verification' event was emitted for an aborted run.
+    expect(events.some((e) => e.type === 'verification')).toBe(false)
+  })
+
+  it('does not verify a read-only run (no files modified arms nothing)', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+    const r = await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 1 },
+      () =>
+        run({
+          policy: 'full-auto',
+          turns: [
+            [
+              { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } } },
+              { type: 'done', stopReason: 'tool_use' }
+            ],
+            [{ type: 'text', text: 'just looked' }, { type: 'done', stopReason: 'end_turn' }]
+          ]
+        })
+    )
+    // Reads don't arm the gate — verification never runs.
+    expect(h.verifyRuns).toHaveLength(0)
+    expect(r.events.some((e) => e.type === 'verification')).toBe(false)
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('a read-only shell command does not arm the gate (only real writes do)', async () => {
+    // A successful shell call (e.g. `git log`, `ls`) counts as progress for the
+    // stall detector but is NOT a file write, so it must not arm the verify gate:
+    // verifying after a read-only command wastes a pass on nothing changed.
+    h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+    const r = await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 1 },
+      () =>
+        run({
+          policy: 'full-auto',
+          // full-auto auto-approves shell only on a confining host (macOS); an
+          // unsandboxed host (Linux CI) prompts for an unconfined shell even under
+          // full-auto, so resolve the approval or the run hangs. See decideApproval.
+          onApproval: (_id, decide) => decide('allow'),
+          turns: [
+            [
+              { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo hi' } } },
+              { type: 'done', stopReason: 'tool_use' }
+            ],
+            [{ type: 'text', text: 'ran a command' }, { type: 'done', stopReason: 'end_turn' }]
+          ]
+        })
+    )
+    // The shell ran and succeeded, but the gate keys on kind==='write' — so nothing
+    // was queued for verification.
+    const shellResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'run_shell') as
+      | { ok: boolean }
+      | undefined
+    expect(shellResult?.ok).toBe(true)
+    expect(h.verifyRuns).toHaveLength(0)
+    expect(r.events.some((e) => e.type === 'verification')).toBe(false)
+    expect(types(r).at(-1)).toBe('done')
+    // This is the only loop test that actually executes run_shell, so it spawns a
+    // real PTY. That startup can brush past the 5s default under CI load — give it
+    // generous headroom rather than let it flake.
+  }, 20_000)
 })

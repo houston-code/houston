@@ -221,7 +221,8 @@ const tui = parseTuiArgs(process.argv, process.cwd())
 
 // One-shot headless mode: `Houston -p "<prompt>" [--cwd dir] [--full-auto] [--json]`.
 // Runs the agent without a window and exits with a status code; everything else
-// (GUI, IPC, auto-update) is skipped.
+// (GUI, IPC, auto-update) is skipped. The `verifyOnStop` gate only runs after an
+// edit, so it needs `--full-auto` (or `--approval auto-edit`) headless.
 const headless = tui ? null : parseHeadlessArgs(process.argv, process.cwd())
 
 if (tui) {

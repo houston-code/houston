@@ -81,8 +81,15 @@ import {
   summarizationSystemPrompt
 } from './compaction'
 import { buildPinnedMessages } from './workingMemory'
+import { StallDetector, resolveStallThresholds, isMutatingKind } from './stall'
+import { resolveBudgetLimits, shouldLand, landingReminder } from './budget'
+import {
+  shouldVerify,
+  runVerification,
+  verifyFailureMessage,
+  resolveVerifyMaxPasses
+} from './verify-gate'
 
-const MAX_ITERATIONS = 40
 /** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
 const MAX_STOP_CONTINUATIONS = 3
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
@@ -841,6 +848,41 @@ export async function startRun(
       }
     }
 
+    // Adaptive turn budget. The hard iteration cap is still enforced, but as the
+    // run nears it (or crosses a cumulative-cost ceiling) we inject a one-time
+    // "landing" reminder so the model wraps up cleanly rather than being cut off
+    // mid-edit. Cost accumulates from each turn's `turnCostUsd` (the same figure
+    // the 'usage' emit reports).
+    const budget = resolveBudgetLimits({
+      maxIterations: settings.maxIterations,
+      costCeilingUsd: settings.costCeilingUsd
+    })
+    let cumulativeCostUsd = 0
+    let landed = false
+
+    // Stall / loop detection. Watches the per-iteration tool pattern for
+    // unproductive cycling (same call repeated, same error repeated, or several
+    // turns with no file change) and asks us to nudge once, then stop if it
+    // persists. Disabled when the setting is off (an inert detector is simplest,
+    // but we just skip observing so no work is done).
+    const stallEnabled = settings.stallDetection !== false
+    const stallDetector = new StallDetector(
+      resolveStallThresholds({
+        repeatCallLimit: settings.stallRepeatCallLimit,
+        repeatErrorLimit: settings.stallRepeatErrorLimit,
+        noProgressLimit: settings.stallNoProgressLimit
+      })
+    )
+
+    // End-of-run verification gate (opt-in). Tracks whether this run modified any
+    // files (so we don't verify a read-only turn) and how many verification passes
+    // have already run (bounded self-correction). A run_shell edit can also change
+    // files, but keying off write-kind tool calls is the reliable, cheap signal and
+    // matches the checkpoint snapshot logic already in the loop.
+    let filesModified = false
+    let verifyPassesRun = 0
+    const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
+
     // Summarize messages[cut..newCut), fold the result into the synthetic summary,
     // and advance `cut`. Shared by the proactive (pre-send, threshold-driven) path
     // and the reactive (post-overflow) recovery path.
@@ -944,10 +986,28 @@ export async function startRun(
     // misbehaving hook can't loop forever.
     let stopContinuations = 0
 
-    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+    for (let iter = 0; iter < budget.maxIterations; iter++) {
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
         return
+      }
+
+      // Landing reminder: once the run is within a small margin of the iteration
+      // cap, or has crossed the cumulative-cost ceiling, push a single guidance
+      // message so the model wraps up cleanly instead of being cut off. It's a
+      // real user-role message so it renders sanely in the transcript and folds
+      // into future compaction like any other turn (per the loop's persistence
+      // discipline). One-time, guarded by `landed`.
+      {
+        const decision = shouldLand({ iteration: iter, costUsd: cumulativeCostUsd, alreadyLanded: landed }, budget)
+        if (decision.land) {
+          landed = true
+          messages.push({
+            role: 'user',
+            content: landingReminder(decision.iterationsLeft, decision.trigger)
+          })
+          onMessages?.(messages)
+        }
       }
 
       // The tool schemas for this turn. Recomputed each iteration because lazy MCP
@@ -1109,11 +1169,14 @@ export async function startRun(
       }
 
       if (turnInput || turnOutput) {
+        const turnCost = turnCostUsd(req.model, turnInput, turnOutput)
+        // Accumulate for the adaptive-budget cost ceiling (the landing trigger).
+        cumulativeCostUsd += turnCost
         emit({
           type: 'usage',
           inputTokens: turnInput,
           outputTokens: turnOutput,
-          cost: turnCostUsd(req.model, turnInput, turnOutput)
+          cost: turnCost
         })
       }
 
@@ -1127,14 +1190,19 @@ export async function startRun(
 
       if (toolCalls.length === 0) {
         // The model's reply was cut off at its output limit — say so rather than
-        // presenting a truncated answer as complete.
-        if (stopReason === 'max_tokens') emit({ type: 'limit', reason: 'max-output' })
+        // presenting a truncated answer as complete. A truncated reply isn't a
+        // clean stop, so neither the Stop hooks nor the verification gate run for it.
+        if (stopReason === 'max_tokens') {
+          emit({ type: 'limit', reason: 'max-output' })
+          emit({ type: 'done', stopReason })
+          return
+        }
 
         // Stop hooks run when the agent would naturally end its turn. A blocking
         // hook forces another turn — its reason is fed back as a user message —
-        // bounded by MAX_STOP_CONTINUATIONS so a hook can't spin forever. Skipped
-        // when the turn ended abnormally (max_tokens/aborted), where continuing
-        // would just repeat the failure.
+        // bounded by MAX_STOP_CONTINUATIONS so a hook can't spin forever. Runs
+        // before the verification gate: if a hook keeps the turn alive, the turn
+        // isn't really ending yet, so there's nothing to verify.
         if (stopReason === 'end_turn' && stopContinuations < MAX_STOP_CONTINUATIONS) {
           const stop = await runHooks(
             settings.hooks,
@@ -1158,8 +1226,80 @@ export async function startRun(
           }
         }
 
+        // End-of-run verification gate (opt-in): if the model stopped naturally
+        // after modifying files and the user configured a verification command,
+        // run it. On failure, feed the output back and continue the loop for a
+        // BOUNDED number of extra passes so the model can self-correct; once the
+        // pass budget is spent we accept done regardless (never an infinite loop).
+        if (
+          stopReason === 'end_turn' &&
+          shouldVerify({
+            enabled: settings.verifyOnStop === true,
+            command: settings.verifyCommand,
+            filesModified,
+            passesRun: verifyPassesRun,
+            maxPasses: verifyMaxPasses,
+            // Live policy: Plan mode must run nothing, so a mid-run toggle into
+            // Plan suppresses the verify shell command even after a prior edit.
+            policy: run.policy
+          })
+        ) {
+          verifyPassesRun += 1
+          const result = await runVerification({
+            command: settings.verifyCommand!,
+            workspace,
+            roots,
+            allowNetwork: run.policy === 'full-auto' || run.override.has('shell'),
+            signal: abort.signal,
+            maxBytes: resolveShellOutputBudget(settings)
+          })
+          if (result.aborted || abort.signal.aborted) {
+            emit({ type: 'done', stopReason: 'aborted' })
+            return
+          }
+          emit({ type: 'verification', passed: result.passed })
+          if (!result.passed) {
+            // Push the failure feedback as a real user-role message so the model
+            // sees it next turn and the transcript renders it sanely; then loop.
+            messages.push({
+              role: 'user',
+              content: verifyFailureMessage(settings.verifyCommand!, result.output)
+            })
+            onMessages?.(messages)
+            continue
+          }
+        }
+
         emit({ type: 'done', stopReason })
         return
+      }
+
+      // Stall-detection accumulators for this iteration: error signatures from
+      // failed tool results and whether any workspace-mutating (write/shell) call
+      // ran. Both the parallel and sequential result paths populate these; we feed
+      // them to the detector once the iteration's tool calls have all resolved.
+      // `observeStall` reacts to the detector's decision (nudge once, then stop if
+      // it persists) and returns true when the run was ended so the caller returns.
+      const iterErrors: string[] = []
+      let iterMutated = false
+      const observeStall = (): boolean => {
+        if (!stallEnabled) return false
+        const action = stallDetector.observe({
+          calls: toolCalls,
+          errors: iterErrors,
+          mutated: iterMutated
+        })
+        if (action.kind === 'nudge') {
+          messages.push({ role: 'user', content: action.message })
+          onMessages?.(messages)
+        } else if (action.kind === 'stop') {
+          // Persisted past the corrective nudge — end the run cleanly with a
+          // dedicated limit reason rather than looping until the budget is spent.
+          emit({ type: 'limit', reason: 'stalled' })
+          emit({ type: 'done', stopReason: 'end_turn' })
+          return true
+        }
+        return false
       }
 
       // ---------------------------------------------------------------------
@@ -1220,6 +1360,20 @@ export async function startRun(
           ...(r.images.length ? { images: r.images } : {}),
           ...(r.documents.length ? { documents: r.documents } : {})
         })
+        // Feed the stall/verify accumulators as each call finalizes — inline flush
+        // runs in ORIGINAL call order (parallel group in order, then each
+        // sequential call), so this is the same call-order collection the detector
+        // expects. Record failures (raw output — errorSignature normalization
+        // happens inside the detector) for repeated-error tracking, and note any
+        // successful workspace-mutating (write/shell) call so a run that's actually
+        // editing/running things doesn't count as "no progress". The verification
+        // gate is armed more narrowly — only an actual file write (kind 'write')
+        // should trigger it, so a read-only shell command (ls/git log) never queues
+        // a verify pass.
+        const kind = lookupTool(r.call.name)?.kind
+        if (!r.ok) iterErrors.push(r.output)
+        if (r.ok && isMutatingKind(kind)) iterMutated = true
+        if (r.ok && kind === 'write') filesModified = true
         // Persist after each append so a mid-turn abort return (which skips the
         // trailing onMessages) still leaves completed results in the saved log.
         onMessages?.(messages)
@@ -1607,6 +1761,7 @@ export async function startRun(
         emit({ type: 'done', stopReason: 'aborted' })
         return
       }
+      if (observeStall()) return
     }
 
     // Fell off the end of the iteration budget — the agent stopped mid-task rather

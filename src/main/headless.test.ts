@@ -376,14 +376,14 @@ describe('runHeadless', () => {
     expect(JSON.parse(first)).toEqual({ type: 'session', conversationId: 'conv-1' })
   })
 
-  it('surfaces a step/output limit in text mode so a capped run is not silent', async () => {
+  it('surfaces a max-steps limit in plain mode without failing the exit code', async () => {
     const { d, err } = deps([
       { runId: 'run-1', type: 'limit', reason: 'max-steps' },
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
     ])
     const code = await runHeadless(baseOpts, d)
-    expect(code).toBe(0) // a limit is not an error
-    expect(err.join('')).toMatch(/stopped early.*step limit/)
+    expect(code).toBe(0)
+    expect(err.join('')).toContain('reached the maximum number of steps')
   })
 
   it('surfaces a failed tool result in text mode, but not a successful one', async () => {
@@ -406,5 +406,60 @@ describe('runHeadless', () => {
     ])
     await runHeadless(baseOpts, d)
     expect(err.join('')).toContain('· 150+25 tok · $0.0150')
+  })
+
+  it('surfaces a stalled limit in plain mode and returns a non-zero exit code', async () => {
+    const { d, err } = deps([
+      { runId: 'run-1', type: 'limit', reason: 'stalled' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    const code = await runHeadless(baseOpts, d)
+    expect(code).toBe(1)
+    expect(err.join('')).toContain('stalled')
+  })
+
+  it('prints a verification event without altering the exit code', async () => {
+    const passed = deps([
+      { runId: 'run-1', type: 'verification', passed: true },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    expect(await runHeadless(baseOpts, passed.d)).toBe(0)
+    expect(passed.err.join('')).toContain('verification passed')
+
+    const failedPass = deps([
+      { runId: 'run-1', type: 'verification', passed: false },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    // A failing pass is fed back inside the loop for self-correction, so a clean
+    // 'done' after it still exits 0 — the event is informational here.
+    expect(await runHeadless(baseOpts, failedPass.d)).toBe(0)
+    expect(failedPass.err.join('')).toContain('verification failed')
+  })
+
+  it('warns when verifyOnStop is enabled under a read-only plan run', async () => {
+    const { d, err } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
+      getSettings: () =>
+        settings({
+          selected: { providerId: 'anthropic', model: 'claude' },
+          legalAcceptedVersion: LEGAL_VERSION,
+          verifyOnStop: true
+        })
+    })
+    await runHeadless(baseOpts, d) // baseOpts is plan mode
+    expect(err.join('')).toContain('verifyOnStop is enabled')
+    expect(err.join('')).toContain('--full-auto')
+  })
+
+  it('does not warn about verifyOnStop under --full-auto', async () => {
+    const { d, err } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
+      getSettings: () =>
+        settings({
+          selected: { providerId: 'anthropic', model: 'claude' },
+          legalAcceptedVersion: LEGAL_VERSION,
+          verifyOnStop: true
+        })
+    })
+    await runHeadless({ ...baseOpts, approvalPolicy: 'full-auto' }, d)
+    expect(err.join('')).not.toContain('verifyOnStop is enabled')
   })
 })

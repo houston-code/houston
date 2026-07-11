@@ -38,7 +38,7 @@ function thinkingBlocks(m: ChatMessage, thinkingEnabled: boolean): unknown[] {
   return blocks
 }
 
-function toAnthropicMessages(
+export function toAnthropicMessages(
   messages: ChatMessage[],
   thinkingEnabled: boolean
 ): Anthropic.MessageParam[] {
@@ -82,23 +82,35 @@ function toAnthropicMessages(
       continue
     }
 
-    mergingToolResults = false
-
     if (m.role === 'user') {
+      const blocks: unknown[] = []
+      if (m.content) blocks.push({ type: 'text', text: m.content })
+      for (const img of m.images ?? []) {
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mediaType, data: img.data }
+        })
+      }
+      // A plain user turn that immediately follows tool result(s) — e.g. a
+      // mid-loop stall/landing nudge pushed after a tool-using turn, or an
+      // interrupt/reconnect that lands a user message right after a result — must
+      // fold onto that same user turn: a tool_result and a following text/image
+      // block are one valid user turn, but two consecutive `user` messages are a
+      // 400. Merge as extra blocks, mirroring the consecutive-tool-result merge.
+      const last = out[out.length - 1]
+      if (mergingToolResults && last && Array.isArray(last.content)) {
+        ;(last.content as unknown[]).push(...blocks)
+        continue
+      }
+      mergingToolResults = false
+      // No images ⇒ keep the compact string form the model (and cache) expects.
       if (m.images?.length) {
-        const blocks: unknown[] = []
-        if (m.content) blocks.push({ type: 'text', text: m.content })
-        for (const img of m.images) {
-          blocks.push({
-            type: 'image',
-            source: { type: 'base64', media_type: img.mediaType, data: img.data }
-          })
-        }
         out.push({ role: 'user', content: blocks as Anthropic.MessageParam['content'] })
       } else {
         out.push({ role: 'user', content: m.content })
       }
     } else if (m.role === 'assistant') {
+      mergingToolResults = false
       // Thinking blocks must come first, before text and tool_use.
       const content: unknown[] = [...thinkingBlocks(m, thinkingEnabled)]
       if (m.content) content.push({ type: 'text', text: m.content })
