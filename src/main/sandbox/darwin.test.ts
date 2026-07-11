@@ -94,8 +94,8 @@ describe('runWithBackend(SeatbeltBackend) lifecycle', () => {
 
   it('captures stdout/stderr/exit code and settles on stdio close, sandboxed=true', async () => {
     const child = makeFakeChild()
-    const killTree = vi.fn()
-    const p = run(baseOpts(), { spawn: fakeSpawn(child), killTree, drainMs: 50 })
+    const signalTree = vi.fn()
+    const p = run(baseOpts(), { spawn: fakeSpawn(child), signalTree, drainMs: 50 })
 
     child.stdout.emit('data', Buffer.from('hello '))
     child.stderr.emit('data', Buffer.from('warn'))
@@ -111,13 +111,13 @@ describe('runWithBackend(SeatbeltBackend) lifecycle', () => {
       timedOut: false,
       sandboxed: true
     })
-    expect(killTree).not.toHaveBeenCalled()
+    expect(signalTree).not.toHaveBeenCalled()
   })
 
   it('spawns sandbox-exec detached so the whole tree is killable', () => {
     const child = makeFakeChild()
     const spawn = fakeSpawn(child)
-    run(baseOpts(), { spawn, killTree: vi.fn(), drainMs: 50 })
+    run(baseOpts(), { spawn, signalTree: vi.fn(), drainMs: 50 })
     expect(spawn.calls[0].cmd).toBe('sandbox-exec')
     expect(spawn.calls[0].options.detached).toBe(true)
     expect(spawn.calls[0].options.signal).toBeUndefined()
@@ -125,10 +125,11 @@ describe('runWithBackend(SeatbeltBackend) lifecycle', () => {
 
   it('settles on timeout even when stdio never closes (orphaned pipe)', async () => {
     const child = makeFakeChild()
-    const killTree = vi.fn()
+    const signalTree = vi.fn()
     const p = run(baseOpts({ timeoutMs: 10 }), {
       spawn: fakeSpawn(child),
-      killTree,
+      signalTree,
+      killGraceMs: 10,
       drainMs: 10
     })
 
@@ -138,13 +139,15 @@ describe('runWithBackend(SeatbeltBackend) lifecycle', () => {
     const res = await p
     expect(res.timedOut).toBe(true)
     expect(res.stdout).toContain('npm install starting')
-    expect(killTree).toHaveBeenCalledWith(child)
+    // SIGTERM first (let a package manager roll back), then SIGKILL for the straggler.
+    expect(signalTree).toHaveBeenCalledWith(child, 'SIGTERM')
+    expect(signalTree).toHaveBeenCalledWith(child, 'SIGKILL')
   })
 
   it('settles shortly after exit when an orphan holds the pipe open (no close)', async () => {
     const child = makeFakeChild()
-    const killTree = vi.fn()
-    const p = run(baseOpts(), { spawn: fakeSpawn(child), killTree, drainMs: 10 })
+    const signalTree = vi.fn()
+    const p = run(baseOpts(), { spawn: fakeSpawn(child), signalTree, drainMs: 10 })
 
     child.stdout.emit('data', Buffer.from('done'))
     child.exitCode = 0
@@ -154,41 +157,43 @@ describe('runWithBackend(SeatbeltBackend) lifecycle', () => {
     expect(res.exitCode).toBe(0)
     expect(res.timedOut).toBe(false)
     expect(res.stdout).toBe('done')
-    expect(killTree).not.toHaveBeenCalled()
+    expect(signalTree).not.toHaveBeenCalled()
   })
 
-  it('kills the whole process tree when the run is aborted', async () => {
+  it('terminates the whole process tree when the run is aborted', async () => {
     const child = makeFakeChild()
-    const killTree = vi.fn()
+    const signalTree = vi.fn()
     const ac = new AbortController()
     const p = run(baseOpts({ signal: ac.signal }), {
       spawn: fakeSpawn(child),
-      killTree,
+      signalTree,
+      killGraceMs: 10,
       drainMs: 10
     })
 
     ac.abort()
-    expect(killTree).toHaveBeenCalledWith(child)
+    expect(signalTree).toHaveBeenCalledWith(child, 'SIGTERM')
 
     child.emit('exit', null)
     const res = await p
     expect(res.sandboxed).toBe(true)
   })
 
-  it('kills the tree immediately when the signal is already aborted', () => {
+  it('terminates the tree immediately when the signal is already aborted', () => {
     const child = makeFakeChild()
-    const killTree = vi.fn()
+    const signalTree = vi.fn()
     run(baseOpts({ signal: AbortSignal.abort() }), {
       spawn: fakeSpawn(child),
-      killTree,
+      signalTree,
+      killGraceMs: 10,
       drainMs: 10
     })
-    expect(killTree).toHaveBeenCalledWith(child)
+    expect(signalTree).toHaveBeenCalledWith(child, 'SIGTERM')
   })
 
   it('resolves with an error message when the process fails to launch', async () => {
     const child = makeFakeChild()
-    const p = run(baseOpts(), { spawn: fakeSpawn(child), killTree: vi.fn(), drainMs: 10 })
+    const p = run(baseOpts(), { spawn: fakeSpawn(child), signalTree: vi.fn(), drainMs: 10 })
 
     child.emit('error', new Error('spawn sandbox-exec ENOENT'))
 

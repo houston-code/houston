@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest'
 // Drive sandbox availability and the run result so the "ran unconfined" signal can
 // be exercised on any platform (a real `sandbox-exec` only exists on macOS). The
 // rest of the sandbox module (e.g. clampToolResult) stays real.
-const h = vi.hoisted(() => ({ available: true, sandboxed: true }))
+const h = vi.hoisted(() => ({
+  available: true,
+  sandboxed: true,
+  timedOut: false,
+  lastOpts: undefined as { timeoutMs?: number } | undefined
+}))
 
 vi.mock('../sandbox', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../sandbox')>()
@@ -11,13 +16,16 @@ vi.mock('../sandbox', async (importOriginal) => {
   return {
     ...actual,
     sandboxAvailable: () => h.available,
-    runSandboxed: async () => ({
-      stdout: 'out',
-      stderr: '',
-      exitCode: 0,
-      timedOut: false,
-      sandboxed: h.sandboxed
-    }),
+    runSandboxed: async (opts: { timeoutMs?: number }) => {
+      h.lastOpts = opts
+      return {
+        stdout: 'out',
+        stderr: '',
+        exitCode: h.timedOut ? null : 0,
+        timedOut: h.timedOut,
+        sandboxed: h.sandboxed
+      }
+    },
     spawnSandboxed: () => {
       const child: any = new EventEmitter()
       child.pid = 1234
@@ -65,5 +73,29 @@ describe('run_shell surfaces the honest sandbox signal', () => {
     const out = await runShell({ command: 'sleep 1', background: true })
     expect(out).toMatch(/Started background shell \w+/)
     expect(out).toContain(UNSANDBOXED_SHELL_NOTE)
+  })
+})
+
+describe('run_shell foreground timeout', () => {
+  it('threads timeout_seconds through to the sandbox runner as timeoutMs', async () => {
+    h.available = true
+    h.sandboxed = true
+    h.timedOut = false
+    await runShell({ command: 'npm install', timeout_seconds: 480 })
+    expect(h.lastOpts?.timeoutMs).toBe(480_000)
+  })
+
+  it('leaves timeoutMs unset (sandbox default) when timeout_seconds is omitted', async () => {
+    await runShell({ command: 'echo hi' })
+    expect(h.lastOpts?.timeoutMs).toBeUndefined()
+  })
+
+  it('surfaces an actionable hint when a command times out', async () => {
+    h.timedOut = true
+    const out = await runShell({ command: 'npm install' })
+    expect(out).toContain('timed out after 300s')
+    expect(out).toContain('timeout_seconds')
+    expect(out).toContain('background:true')
+    h.timedOut = false
   })
 })

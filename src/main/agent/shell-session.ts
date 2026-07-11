@@ -95,6 +95,7 @@ export async function runInSession(opts: {
   workspace: string
   roots?: string[]
   allowNetwork: boolean
+  timeoutMs?: number
   signal?: AbortSignal
   run: SandboxRunner
   fileOps?: Pick<typeof fs, 'readFile' | 'writeFile' | 'rm'>
@@ -122,6 +123,7 @@ export async function runInSession(opts: {
     workspace: opts.workspace,
     roots: opts.roots,
     allowNetwork: opts.allowNetwork,
+    timeoutMs: opts.timeoutMs,
     signal: opts.signal
   })
 

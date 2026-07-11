@@ -57,7 +57,15 @@ export interface SandboxSpawnOptions {
 /** Injectable seams for the shared runner (real implementations in production). */
 export interface RunSandboxedDeps {
   spawn?: typeof spawn
-  killTree?: (child: ChildProcess) => void
+  /**
+   * Signal the whole process tree. On timeout/abort the runner sends SIGTERM first
+   * (a package manager or dev server can then flush and roll back a partial write —
+   * a hard SIGKILL mid-`npm install` leaves node_modules corrupt), then escalates to
+   * SIGKILL for anything that ignores it.
+   */
+  signalTree?: (child: ChildProcess, signal: NodeJS.Signals) => void
+  /** Grace period after SIGTERM before escalating to SIGKILL (ms). */
+  killGraceMs?: number
   drainMs?: number
 }
 

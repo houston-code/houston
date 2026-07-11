@@ -31,6 +31,7 @@ import {
 import {
   backendSupportsSession,
   clampToolResult,
+  DEFAULT_TIMEOUT_MS,
   runSandboxed,
   sandboxAvailable,
   spawnSandboxed
@@ -788,19 +789,81 @@ export function sandboxWriteBlockHint(
   return SANDBOX_WRITE_ERROR_RE.test(output) ? SANDBOX_WRITE_BLOCKED_HINT : ''
 }
 
+/**
+ * A bare "operation not permitted" the sandbox raised for something that is neither a
+ * network nor a filesystem-write denial — most often a privileged/process syscall like
+ * `ps`, `kill`, or `sudo`, which the deny-by-default profile blocks. Kept separate from
+ * the socket-flavored "operation not permitted" (that reads as a network failure).
+ */
+const SANDBOX_OP_DENIED_RE = /operation not permitted/i
+
+/** The hint appended to a bare sandbox-denied operation (e.g. `ps`, `kill`, `sudo`). */
+export const SANDBOX_OP_DENIED_HINT =
+  '[note: the sandbox denied this operation. Inspecting or signaling processes outside the sandbox (e.g. `ps`, ' +
+  '`kill`, `sudo`) and similar privileged syscalls are blocked. To check whether a local server is up, use ' +
+  '`lsof -i :<port>` or `curl` its URL instead of `ps`.]'
+
+/**
+ * Return {@link SANDBOX_OP_DENIED_HINT} when a *failed* command hit a bare
+ * "operation not permitted" that is not a network or write denial — so the agent
+ * stops retrying a blocked syscall (like `ps`) and reaches for an allowed alternative.
+ * Ordered after the network and write hints, which claim their own flavors first.
+ */
+export function sandboxOpDeniedHint(
+  result: { exitCode: number | null; timedOut?: boolean },
+  output: string
+): string {
+  const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
+  if (!failed) return ''
+  if (NETWORK_ERROR_RE.test(output)) return ''
+  if (SANDBOX_WRITE_ERROR_RE.test(output)) return ''
+  return SANDBOX_OP_DENIED_RE.test(output) ? SANDBOX_OP_DENIED_HINT : ''
+}
+
+/** Hard ceiling on a foreground command's wall-clock limit (matches run_shell's docs). */
+const MAX_SHELL_TIMEOUT_MS = 600_000
+
+/**
+ * Normalize run_shell's `timeout_seconds` argument to a millisecond limit for the
+ * sandbox runner, or `undefined` to fall back to the default. Non-positive or
+ * non-finite values are ignored; anything above the ceiling is clamped to it.
+ */
+export function clampShellTimeout(seconds: number | undefined): number | undefined {
+  if (seconds === undefined) return undefined
+  const ms = Math.round(seconds * 1000)
+  if (!Number.isFinite(ms) || ms <= 0) return undefined
+  return Math.min(ms, MAX_SHELL_TIMEOUT_MS)
+}
+
+/** The marker appended when a foreground command is stopped for exceeding its limit. */
+export function shellTimeoutHint(timeoutMs: number): string {
+  const seconds = Math.round(timeoutMs / 1000)
+  return (
+    `[command timed out after ${seconds}s and was stopped (SIGTERM, then SIGKILL). ` +
+    'For a slow one-shot (e.g. a cold dependency install) retry with a larger timeout_seconds (max 600). ' +
+    'For a long-running or open-ended process (dev server, watcher) rerun with background:true and poll it ' +
+    'with read_shell_output — do not wrap it in `timeout` (unavailable) or a trailing `&`.]'
+  )
+}
+
 const runShell: ToolDef = {
   kind: 'shell',
   summarize: (a) => (a.background === true ? `${str(a, 'command')} (background)` : str(a, 'command')),
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command inside a macOS Seatbelt sandbox confined to the project directory. Writes are limited to the project and temp dirs. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). Set background:true for long-running commands (e.g. a dev server or watcher): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell.',
+      'Run a shell command inside a macOS Seatbelt sandbox confined to the project directory. Writes are limited to the project and temp dirs. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.',
     parameters: objectSchema(
       {
         command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' },
         background: {
           type: 'boolean',
           description: 'Run without waiting and return a shell id (default false). Use for long-running processes.'
+        },
+        timeout_seconds: {
+          type: 'number',
+          description:
+            'Wall-clock limit for a foreground command, in seconds (default 300, max 600). Raise it for a slow one-shot such as a cold dependency install; ignored when background:true.'
         }
       },
       ['command']
@@ -824,6 +887,8 @@ const runShell: ToolDef = {
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
 
+    const timeoutMs = clampShellTimeout(num(args, 'timeout_seconds'))
+
     // Route through the persistent session only when the backend's shell can run the
     // bash prelude (`cd`/env threading). On a cmd.exe fallback it can't, so run directly.
     const result = ctx.shellSession && backendSupportsSession()
@@ -833,6 +898,7 @@ const runShell: ToolDef = {
           workspace: ctx.workspace,
           roots: rootsOf(ctx),
           allowNetwork: ctx.allowNetwork,
+          timeoutMs,
           signal: ctx.signal,
           run: runSandboxed
         })
@@ -842,6 +908,7 @@ const runShell: ToolDef = {
           workspace: ctx.workspace,
           roots: rootsOf(ctx),
           allowNetwork: ctx.allowNetwork,
+          timeoutMs,
           signal: ctx.signal
         })
     const segments: string[] = []
@@ -855,7 +922,7 @@ const runShell: ToolDef = {
     // surface in stderr, which the both-ends clamp keeps), not a multi-MB blob.
     const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
-    if (result.timedOut) parts.push('[command timed out]')
+    if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
     // At most one diagnostic hint: a network-blocked failure, else a sandbox
     // write-denied failure (e.g. a package manager's cache write to ~/.npm).
@@ -864,6 +931,10 @@ const runShell: ToolDef = {
     else {
       const writeHint = sandboxWriteBlockHint(result, body)
       if (writeHint) parts.push(writeHint)
+      else {
+        const opHint = sandboxOpDeniedHint(result, body)
+        if (opHint) parts.push(opHint)
+      }
     }
     // Honest signal: if the command ran unconfined, say so — run_shell's contract
     // promises a sandbox, and approval auto-approves shell on that premise.

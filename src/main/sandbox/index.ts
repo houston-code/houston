@@ -31,9 +31,11 @@ export {
   pkgCacheDir,
   sandboxEnv,
   killProcessTree,
+  signalProcessTree,
   planKill,
   runWithBackend,
-  spawnWithBackend
+  spawnWithBackend,
+  DEFAULT_TIMEOUT_MS
 } from './shared'
 export { buildSeatbeltProfile, SeatbeltBackend } from './darwin'
 export { UnsandboxedBackend, unsandboxedLaunch } from './unsandboxed'
