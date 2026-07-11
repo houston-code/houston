@@ -76,11 +76,20 @@
   }
 
   if (window.fetch) {
-    fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json" } })
-      .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)); })
+    // Abort after 6s so a slow or unreachable GitHub API falls back fast.
+    var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 6000) : null;
+    function clear() { if (timer) { clearTimeout(timer); timer = null; } }
+    fetch(RELEASES_API, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: ctrl ? ctrl.signal : undefined,
+    })
+      .then(function (r) { clear(); return r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)); })
       .then(applyRelease)
       .catch(function () {
-        // Offline or rate-limited: keep the pre-rendered links to the releases page.
+        // Offline, rate-limited, no releases yet, or timed out: keep the
+        // pre-rendered links to the releases page.
+        clear();
         var meta = $("#hero-version");
         if (meta) meta.innerHTML =
           'Free and open — bring your own API keys. <a href="' + RELEASES_PAGE + '" rel="noopener">See all releases</a>.';
