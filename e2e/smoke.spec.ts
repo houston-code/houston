@@ -129,6 +129,49 @@ test('⌘W is bound to a custom terminal-aware Close, not the default window clo
   }
 })
 
+test('forces slim auto-hiding overlay scrollbars regardless of the OS setting', async () => {
+  const { executablePath, args, mode } = resolveLaunch()
+  test.info().annotations.push({ type: 'launch-mode', description: mode })
+
+  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
+  const app: ElectronApplication = await electron.launch({
+    executablePath,
+    args: [...args, `--user-data-dir=${userDataDir}`]
+  })
+
+  try {
+    const window = await app.firstWindow()
+    await acceptLegalGate(window)
+    await expect(window.locator('.app')).toBeVisible()
+
+    // Main process pins the scroller style to overlay via the app's own
+    // AppleShowScrollBars default, so a machine set to "Always" (which draws the
+    // chunky, non-hiding ~15px legacy bar) still gets the slim auto-hiding one.
+    const scrollBars = await app.evaluate(({ systemPreferences }) =>
+      systemPreferences.getUserDefault('AppleShowScrollBars', 'string')
+    )
+    expect(scrollBars).toBe('WhenScrolling')
+
+    // And it takes effect in the renderer: an overflow:auto box gets an overlay
+    // scrollbar that reserves no layout width — never the chunky legacy bar.
+    const barWidth = await window.evaluate(() => {
+      const probe = document.createElement('div')
+      probe.style.cssText = 'position:absolute;top:-9999px;width:120px;height:120px;overflow-y:scroll'
+      const inner = document.createElement('div')
+      inner.style.height = '400px'
+      probe.appendChild(inner)
+      document.body.appendChild(probe)
+      const w = probe.offsetWidth - probe.clientWidth
+      probe.remove()
+      return w
+    })
+    expect(barWidth).toBeLessThan(15)
+  } finally {
+    await app.close()
+    rmSync(userDataDir, { recursive: true, force: true })
+  }
+})
+
 test('sidebar collapses to a rail and expands again', async () => {
   const { executablePath, args, mode } = resolveLaunch()
   test.info().annotations.push({ type: 'launch-mode', description: mode })

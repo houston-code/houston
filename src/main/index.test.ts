@@ -13,10 +13,14 @@ const setName = vi.fn()
 const whenReady = vi.fn(() => new Promise<void>(() => {}))
 const on = vi.fn()
 const getPath = vi.fn(() => '/tmp/houston-test-userdata')
+// Return undefined so the scrollbar-default guard falls through to setUserDefault.
+const getUserDefault = vi.fn(() => undefined)
+const setUserDefault = vi.fn()
 
 vi.mock('electron', () => ({
   app: { setName, whenReady, on, getName: vi.fn(), getPath },
   shell: { openExternal: vi.fn() },
+  systemPreferences: { getUserDefault, setUserDefault },
   BrowserWindow: vi.fn()
 }))
 
@@ -47,5 +51,22 @@ describe('main entry app identity', () => {
     expect(getPath.mock.invocationCallOrder[0]).toBeLessThan(
       whenReady.mock.invocationCallOrder[0]
     )
+  })
+
+  it('pins scrollbars to the slim auto-hiding overlay style before whenReady (macOS only)', async () => {
+    await import('./index')
+
+    if (process.platform === 'darwin') {
+      // Overrides the app's own AppleShowScrollBars default so an OS "Always"
+      // setting can't force the chunky, never-hiding legacy bar. Must land before
+      // ready, since Chromium reads the scroller style when a render process boots.
+      expect(setUserDefault).toHaveBeenCalledWith('AppleShowScrollBars', 'string', 'WhenScrolling')
+      expect(setUserDefault.mock.invocationCallOrder[0]).toBeLessThan(
+        whenReady.mock.invocationCallOrder[0]
+      )
+    } else {
+      // The key is macOS-only; other platforms leave scrollbars untouched.
+      expect(setUserDefault).not.toHaveBeenCalled()
+    }
   })
 })
