@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Houston — a cross-platform coding agent, bring your own model</title>
+  <meta name="description" content="Houston is a cross-platform desktop coding agent. Point it at Claude, GPT, Gemini, any OpenAI-compatible API, or a local model, give it a project folder, and let it read, edit, search, and run code — every action gated by approval and, where supported, sandboxed." />
+  <link rel="canonical" href="https://houstoncode.ai/" />
+  <meta name="theme-color" content="#0d162b" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Houston" />
+  <meta property="og:title" content="Houston — a cross-platform coding agent" />
+  <meta property="og:description" content="A desktop coding agent that brings your own model. Read, edit, search, and run code — every action gated by approval and, where supported, sandboxed." />
+  <meta property="og:url" content="https://houstoncode.ai/" />
+  <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Houston — a cross-platform coding agent" />
+  <meta name="twitter:description" content="A desktop coding agent that brings your own model. Every action gated by approval and, where supported, sandboxed." />
+  <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
+
+  <link rel="icon" type="image/png" href="/assets/icon.png" />
+  <link rel="apple-touch-icon" href="/assets/icon.png" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Houston",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Windows, Linux",
+    "description": "A cross-platform desktop coding agent. Bring your own model — Claude, GPT, Gemini, any OpenAI-compatible API, or a local model — and let it read, edit, search, and run code under an approval flow.",
+    "url": "https://houstoncode.ai/",
+    "downloadUrl": "https://github.com/piyushvijay/houston-releases/releases/latest",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/" aria-label="Houston home">
+        <img src="/assets/icon.png" alt="" width="30" height="30" />
+        <span>Houston</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a class="nav-link" href="#features">Features</a>
+        <a class="nav-link" href="#download">Download</a>
+        <a class="nav-link" href="https://github.com/piyushvijay/houston" rel="noopener">GitHub</a>
+        <a class="nav-link nav-cta btn btn-primary" href="#download">Get Houston</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <svg class="starfield" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+        <g fill="#ffffff">
+          <circle cx="6%" cy="22%" r="1" opacity="0.5"/><circle cx="14%" cy="64%" r="1.3" opacity="0.35"/>
+          <circle cx="22%" cy="38%" r="1" opacity="0.6"/><circle cx="31%" cy="78%" r="1" opacity="0.3"/>
+          <circle cx="43%" cy="18%" r="1.2" opacity="0.45"/><circle cx="52%" cy="70%" r="1" opacity="0.4"/>
+          <circle cx="63%" cy="30%" r="1" opacity="0.55"/><circle cx="71%" cy="60%" r="1.3" opacity="0.3"/>
+          <circle cx="80%" cy="24%" r="1" opacity="0.5"/><circle cx="88%" cy="52%" r="1" opacity="0.4"/>
+          <circle cx="94%" cy="34%" r="1.2" opacity="0.45"/><circle cx="37%" cy="48%" r="1" opacity="0.3"/>
+        </g>
+      </svg>
+      <div class="wrap">
+        <span class="eyebrow">Bring your own model</span>
+        <h1>A coding agent that runs <span class="accent">on your machine</span></h1>
+        <p class="lede">Point Houston at Claude, GPT, Gemini, any OpenAI-compatible API, or a local model. Give it a project folder and let it read, edit, search, and run code — every action gated by an approval flow.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-lg" id="hero-download" href="#download">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+            <span id="hero-download-label">Download for your platform</span>
+          </a>
+          <a class="btn btn-secondary btn-lg" href="https://github.com/piyushvijay/houston" rel="noopener">View on GitHub</a>
+        </div>
+        <p class="hero-meta" id="hero-version">Free and open — bring your own API keys.</p>
+        <div class="pillrow">
+          <span class="pill">Runs locally</span>
+          <span class="pill">No telemetry</span>
+          <span class="pill">Approval-gated actions</span>
+          <span class="pill">Sandboxed shell</span>
+          <span class="pill">macOS · Windows · Linux</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Everything an agent needs to actually do the work</h2>
+          <p>Not just chat — Houston reads, edits, searches, and runs your code, with you in the loop on every consequential step.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg></div>
+            <h3>Any model, your keys</h3>
+            <p>Claude, GPT, Gemini, any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. The picker shows each model's context window and capability badges, read live from the host.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="m9 15 3-3 8-8a2 2 0 0 0-3-3l-8 8-3 3z"/></svg></div>
+            <h3>Agentic tool use</h3>
+            <p>Read, write, edit, patch, search, run shell, inspect git, fetch and search the web, and drive pull requests. Pure reads run concurrently; anything that writes or runs stays sequential.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+            <h3>Approval-gated and sandboxed</h3>
+            <p>Choose plan, ask, auto, or full-auto. Every consequential action is reviewable, and where the OS supports it, shell commands run confined to a best-effort sandbox.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9M12 3v9l6-3"/></svg></div>
+            <h3>Structural code search</h3>
+            <p>Bundled ripgrep for fast content search and ast-grep for syntax-tree matching — find calls, declarations, and JSX by shape, not by fragile regex, out of the box.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 21h8"/></svg></div>
+            <h3>See its own localhost</h3>
+            <p>After starting a dev server, the agent can load the page in a sandboxed view, screenshot it, and read the console — closing the build → look → fix loop. A live preview panel docks beside the chat.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg></div>
+            <h3>Subagents &amp; adversarial review</h3>
+            <p>Hand focused, read-only questions to subagents with fresh context, and run a multi-agent review that checks your diff for correctness, security, and quality — then verifies its own findings.</p>
+          </article>
+          <article class="feature">
+            <div class="feature-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/></svg></div>
+            <h3>MCP, agents &amp; skills</h3>
+            <p>Connect Model Context Protocol servers over stdio, HTTP, or SSE. Define custom read-only agents and on-demand skills with a Markdown file — Houston picks up your project's own conventions too.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="bg-subtle">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Download Houston</h2>
+          <p>Grab the build for your platform. The latest version is fetched live from GitHub Releases.</p>
+        </div>
+        <div class="download-grid" id="download-grid">
+          <article class="dl-card" data-os="mac-arm">
+            <div class="os-icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.365 1.43c0 1.14-.417 2.2-1.11 2.98-.83.94-2.19 1.66-3.28 1.57-.14-1.1.43-2.27 1.09-3 .74-.82 2.08-1.44 3.3-1.55zM20.7 17.02c-.6 1.38-.89 1.99-1.66 3.21-1.08 1.71-2.6 3.84-4.49 3.85-1.68.02-2.11-1.09-4.39-1.08-2.28.01-2.76 1.1-4.44 1.08-1.89-.02-3.33-1.94-4.41-3.65C-.87 17.02-.32 11.6 2.6 9.6c1.18-.82 2.5-1.06 3.5-1.06 1.02 0 2.34.44 3.29.44.9 0 2.16-.55 3.66-.47.63.02 2.4.25 3.54 1.92-3.11 1.7-2.62 6.13.61 6.59z"/></svg></div>
+            <h3>macOS · Apple Silicon</h3>
+            <p class="os-req">macOS 12 Monterey or newer (M1–M4)</p>
+            <div class="dl-links">
+              <a class="btn btn-primary dl-primary" data-asset-suffix="-arm64.dmg" href="https://github.com/piyushvijay/houston-releases/releases/latest">Download .dmg</a>
+              <span class="dl-sub">Auto-updates via the built-in feed.</span>
+            </div>
+          </article>
+          <article class="dl-card" data-os="mac-x64">
+            <div class="os-icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.365 1.43c0 1.14-.417 2.2-1.11 2.98-.83.94-2.19 1.66-3.28 1.57-.14-1.1.43-2.27 1.09-3 .74-.82 2.08-1.44 3.3-1.55zM20.7 17.02c-.6 1.38-.89 1.99-1.66 3.21-1.08 1.71-2.6 3.84-4.49 3.85-1.68.02-2.11-1.09-4.39-1.08-2.28.01-2.76 1.1-4.44 1.08-1.89-.02-3.33-1.94-4.41-3.65C-.87 17.02-.32 11.6 2.6 9.6c1.18-.82 2.5-1.06 3.5-1.06 1.02 0 2.34.44 3.29.44.9 0 2.16-.55 3.66-.47.63.02 2.4.25 3.54 1.92-3.11 1.7-2.62 6.13.61 6.59z"/></svg></div>
+            <h3>macOS · Intel</h3>
+            <p class="os-req">macOS 12 Monterey or newer (x64)</p>
+            <div class="dl-links">
+              <a class="btn btn-secondary dl-primary" data-asset-suffix="-x64.dmg" href="https://github.com/piyushvijay/houston-releases/releases/latest">Download .dmg</a>
+              <span class="dl-sub">Auto-updates via the built-in feed.</span>
+            </div>
+          </article>
+          <article class="dl-card" data-os="win">
+            <div class="os-icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.1 10.5 4v7.5H3V5.1zM10.5 12.5V20L3 18.9v-6.4h7.5zM11.6 3.85 21 2.5v9H11.6V3.85zM21 12.5V21.5l-9.4-1.35V12.5H21z"/></svg></div>
+            <h3>Windows</h3>
+            <p class="os-req">Windows 10 or newer (x64)</p>
+            <div class="dl-links">
+              <a class="btn btn-secondary dl-primary" data-asset-suffix="-x64-setup.exe" href="https://github.com/piyushvijay/houston-releases/releases/latest">Download installer</a>
+              <span class="dl-sub">Per-user install, no admin needed.</span>
+            </div>
+          </article>
+          <article class="dl-card" data-os="linux">
+            <div class="os-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a5 5 0 0 0-5 5c0 2 .5 3 .5 5s-2 3-2 5h13c0-2-2-3-2-5s.5-3 .5-5a5 5 0 0 0-5-5z"/><path d="M9 9h.01M15 9h.01"/></svg></div>
+            <h3>Linux</h3>
+            <p class="os-req">glibc 2.35+ (Ubuntu 22.04+, x64)</p>
+            <div class="dl-links">
+              <a class="btn btn-secondary dl-primary" data-asset-suffix="-x64.AppImage" href="https://github.com/piyushvijay/houston-releases/releases/latest">Download AppImage</a>
+              <span class="dl-sub"><a data-asset-suffix="-x64.deb" href="https://github.com/piyushvijay/houston-releases/releases/latest">.deb package</a> also available.</span>
+            </div>
+          </article>
+        </div>
+
+        <p class="download-note">Prefer the terminal? A standalone CLI runs anywhere with Node 22+ — no desktop app required. Or browse <a href="https://github.com/piyushvijay/houston-releases/releases/latest" rel="noopener">every asset on the releases page</a>.</p>
+
+        <div class="callout">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+          <p>The builds are currently unsigned. On macOS, right-click the app and choose <strong>Open</strong> the first time; on Windows, click <strong>More info → Run anyway</strong> past SmartScreen. See the release notes for details.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Up and running in three steps</h2>
+        </div>
+        <div class="steps">
+          <div class="step">
+            <div class="num">1</div>
+            <h3>Install &amp; accept</h3>
+            <p>Download for your platform, open Houston, and accept the Terms, Privacy Policy, and License on first launch.</p>
+          </div>
+          <div class="step">
+            <div class="num">2</div>
+            <h3>Add a key</h3>
+            <p>Open Settings and set an API key for at least one provider — or point at a local model running on your machine.</p>
+          </div>
+          <div class="step">
+            <div class="num">3</div>
+            <h3>Open a folder</h3>
+            <p>Point Houston at a project, pick an approval mode, and start giving it work. You review the actions that matter.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta-band">
+      <div class="wrap">
+        <div class="inner">
+          <h2>Ready when you are</h2>
+          <p>Your model, your keys, your machine. Download Houston and put a coding agent to work.</p>
+          <a class="btn btn-primary btn-lg" href="#download">Get Houston</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="/" aria-label="Houston home">
+            <img src="/assets/icon.png" alt="" width="30" height="30" />
+            <span>Houston</span>
+          </a>
+          <p>A cross-platform coding agent — bring your own model. Built with Electron, React, and TypeScript.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#download">Download</a>
+          <a href="https://github.com/piyushvijay/houston-releases/releases/latest" rel="noopener">Releases</a>
+        </div>
+        <div class="footer-col">
+          <h4>Project</h4>
+          <a href="https://github.com/piyushvijay/houston" rel="noopener">GitHub</a>
+          <a href="https://github.com/piyushvijay/houston/blob/main/ROADMAP.md" rel="noopener">Roadmap</a>
+          <a href="https://github.com/piyushvijay/houston/issues" rel="noopener">Report an issue</a>
+        </div>
+        <div class="footer-col">
+          <h4>Legal</h4>
+          <a href="/privacy.html">Privacy Policy</a>
+          <a href="/terms.html">Terms of Use</a>
+          <a href="https://github.com/piyushvijay/houston/blob/main/LICENSE" rel="noopener">License</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© <span id="year">2026</span> Houston. Not affiliated with NASA.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
