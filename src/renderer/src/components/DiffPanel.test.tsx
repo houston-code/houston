@@ -6,8 +6,9 @@ import { DiffPanel } from './DiffPanel'
 /** Install a fake `window.api` whose getWorkingTreeChanges resolves to `data`. */
 function installApi(data: WorkingTreeChanges) {
   const getWorkingTreeChanges = vi.fn().mockResolvedValue(data)
-  window.api = { getWorkingTreeChanges } as unknown as typeof window.api
-  return { getWorkingTreeChanges }
+  const initGitRepo = vi.fn().mockResolvedValue({ ok: true })
+  window.api = { getWorkingTreeChanges, initGitRepo } as unknown as typeof window.api
+  return { getWorkingTreeChanges, initGitRepo }
 }
 
 const sampleChanges: WorkingTreeChanges = {
@@ -73,6 +74,53 @@ describe('DiffPanel', () => {
     installApi({ isRepo: false, branch: null, files: [], added: 0, removed: 0 })
     render(<DiffPanel workspace="/tmp" onClose={vi.fn()} />)
     expect(await screen.findByText(/isn’t a git repository/)).toBeInTheDocument()
+  })
+
+  it('initializes a repo from the empty state, then reloads to show the files', async () => {
+    const untracked: WorkingTreeChanges = {
+      isRepo: true,
+      branch: 'main',
+      added: 1,
+      removed: 0,
+      files: [
+        {
+          path: 'app.ts',
+          status: 'untracked',
+          added: 1,
+          removed: 0,
+          binary: false,
+          hunks: [{ header: '@@ -0,0 +1 @@', lines: [{ type: 'add', text: 'export const x = 1' }] }]
+        }
+      ]
+    }
+    // First load: not a repo. After init succeeds, the reload shows the untracked file.
+    const getWorkingTreeChanges = vi
+      .fn()
+      .mockResolvedValueOnce({ isRepo: false, branch: null, files: [], added: 0, removed: 0 })
+      .mockResolvedValue(untracked)
+    const initGitRepo = vi.fn().mockResolvedValue({ ok: true })
+    window.api = { getWorkingTreeChanges, initGitRepo } as unknown as typeof window.api
+
+    render(<DiffPanel workspace="/tmp/app" onClose={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Initialize git repository/ }))
+
+    await waitFor(() => expect(initGitRepo).toHaveBeenCalledWith('/tmp/app'))
+    expect(await screen.findByText('app.ts')).toBeInTheDocument()
+  })
+
+  it('surfaces an error when initializing the repo fails', async () => {
+    const { initGitRepo } = installApi({
+      isRepo: false,
+      branch: null,
+      files: [],
+      added: 0,
+      removed: 0
+    })
+    initGitRepo.mockResolvedValue({ ok: false, error: 'git init failed.' })
+
+    render(<DiffPanel workspace="/tmp/app" onClose={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Initialize git repository/ }))
+    expect(await screen.findByText('git init failed.')).toBeInTheDocument()
   })
 
   it('closes when the backdrop is clicked', async () => {

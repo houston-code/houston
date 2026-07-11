@@ -41,6 +41,7 @@ export const IPC = {
   clipboardRead: 'clipboard:read',
   commandsList: 'commands:list',
   gitRepoInfo: 'git:repoInfo',
+  gitInit: 'git:init',
   workingTreeChanges: 'workingTree:changes',
   // Settings
   settingsGet: 'settings:get',
