@@ -18,7 +18,11 @@ export interface HeadlessOptions {
   cwd: string
   providerId?: string
   model?: string
-  /** Defaults to 'plan' (read-only) so a headless run can't edit/run unless asked. */
+  /**
+   * Defaults to 'plan' (read-only) so a headless run can't edit/run unless asked.
+   * Note: the `verifyOnStop` verification gate only runs after an edit, so it needs
+   * `--full-auto` (or `--approval auto-edit`) headless — under plan mode it never fires.
+   */
   approvalPolicy: ApprovalPolicy
   json: boolean
   /** `--continue`: resume the most recent session in this folder (script → take over). */
@@ -249,6 +253,18 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     else deps.err(`· session ${conversationId}\n`)
   }
 
+  // Verify-gate warning: the end-of-run verification command only runs after the
+  // model modifies files, which a read-only ('plan') run never does — so a
+  // verifyOnStop-enabled profile silently gets no verification headless. Surface
+  // that once up front rather than letting it look like a broken setting. Only a
+  // policy that can actually edit ('auto-edit'/'full-auto') will exercise the gate.
+  if (settings.verifyOnStop === true && opts.approvalPolicy === 'plan') {
+    deps.err(
+      'warning: verifyOnStop is enabled but this headless run is read-only (plan mode); ' +
+        'pass --full-auto to run end-of-run verification.\n'
+    )
+  }
+
   const runId = (deps.newId ?? randomUUID)()
   const req: AgentRunRequest = {
     runId,
@@ -285,15 +301,6 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
       case 'retry':
         if (!opts.json) deps.err(`· retrying (${e.attempt}/${e.max})… ${e.message}\n`)
         break
-      case 'limit':
-        // A capped run (step/output limit) completes with a non-error stop reason,
-        // so without this a truncated run is indistinguishable from success in text
-        // mode. Surface it (JSON mode already carries the `limit` event).
-        if (!opts.json)
-          deps.err(
-            `· stopped early — reached the ${e.reason === 'max-steps' ? 'step' : 'output'} limit; the result may be incomplete\n`
-          )
-        break
       case 'usage':
         inTok += e.inputTokens
         outTok += e.outputTokens
@@ -313,6 +320,30 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
           e.callId,
           '[No interactive user is available in headless mode. Proceed using your best judgment.]'
         )
+        break
+      case 'limit':
+        // The loop ended by hitting a budget/guard rather than a natural stop.
+        // Surface every reason so a script can see WHY the run stopped short; a
+        // 'stalled' termination is a soft failure (the agent gave up looping), so
+        // it flips the exit code, while max-steps/max-output stay code 0 (the run
+        // did as much as its budget allowed — not an error).
+        if (!opts.json) {
+          const why =
+            e.reason === 'stalled'
+              ? 'stopped: the agent stalled (no forward progress)'
+              : e.reason === 'max-output'
+                ? 'stopped: the model hit its output limit'
+                : 'stopped: reached the maximum number of steps'
+          deps.err(`· ${why}\n`)
+        }
+        if (e.reason === 'stalled') failed = true
+        break
+      case 'verification':
+        // The end-of-run verification command ran; report pass/fail. A failing
+        // pass is fed back for self-correction inside the loop (it doesn't end the
+        // run here), so this is informational — the final exit code follows 'done'.
+        if (!opts.json)
+          deps.err(`· verification ${e.passed ? 'passed' : 'failed'}\n`)
         break
       case 'error':
         failed = true

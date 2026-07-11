@@ -37,4 +37,44 @@ describe('toGeminiContents', () => {
       { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: 'SHOT' } }] }
     ])
   })
+
+  it('folds a plain user message following a tool result onto the same user turn', () => {
+    // Gemini enforces user/model alternation, so the nudge that a stall/landing
+    // check pushes after a tool-using turn must not become a second `user` turn.
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'exit 0', toolCallId: 'c1', toolName: 'run' },
+      { role: 'user', content: 'Wrap up.' }
+    ]
+    const out = toGeminiContents(msgs)
+
+    // No two adjacent turns share a role.
+    for (let i = 1; i < out.length; i++) {
+      expect(out[i].role).not.toBe(out[i - 1].role)
+    }
+    // model turn, then one user turn carrying both the functionResponse and the nudge.
+    expect(out).toEqual([
+      { role: 'model', parts: [{ functionCall: { name: 'run', args: {} } }] },
+      {
+        role: 'user',
+        parts: [{ functionResponse: { name: 'run', response: { result: 'exit 0' } } }, { text: 'Wrap up.' }]
+      }
+    ])
+  })
+
+  it('merges parallel tool results into a single user turn', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'tool', content: 'r1', toolCallId: 'c1', toolName: 'run' },
+      { role: 'tool', content: 'r2', toolCallId: 'c2', toolName: 'run' }
+    ]
+    expect(toGeminiContents(msgs)).toEqual([
+      {
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'run', response: { result: 'r1' } } },
+          { functionResponse: { name: 'run', response: { result: 'r2' } } }
+        ]
+      }
+    ])
+  })
 })

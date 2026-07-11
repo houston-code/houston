@@ -1,7 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type Anthropic from '@anthropic-ai/sdk'
-import type { ChatRequest } from '@shared/agent'
-import { markMessagesCacheBreakpoint, createAnthropicProvider } from './anthropic'
+import type { ChatMessage, ChatRequest } from '@shared/agent'
+import { markMessagesCacheBreakpoint, createAnthropicProvider, toAnthropicMessages } from './anthropic'
+
+/** Fails if any two adjacent messages share a role — the API 400s on that. */
+function assertNoConsecutiveSameRole(out: Anthropic.MessageParam[]): void {
+  for (let i = 1; i < out.length; i++) {
+    expect(out[i].role, `messages ${i - 1} and ${i} are both '${out[i].role}'`).not.toBe(out[i - 1].role)
+  }
+}
+
+/** Flatten a mapped message's content into an array of blocks for assertions. */
+function blocksOf(m: Anthropic.MessageParam): Array<Record<string, unknown>> {
+  return (Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }]) as Array<
+    Record<string, unknown>
+  >
+}
 
 // Mock the lazily-imported SDK so we can capture the exact request body the
 // provider builds — the wire shape is what drifted out from under the unit tests.
@@ -136,5 +150,61 @@ describe('markMessagesCacheBreakpoint', () => {
 
   it('is a no-op on an empty list', () => {
     expect(() => markMessagesCacheBreakpoint([])).not.toThrow()
+  })
+})
+
+describe('toAnthropicMessages role alternation', () => {
+  it('folds a plain user message following a tool result onto the same user turn', () => {
+    // The exact tail a stall/landing nudge produces: an assistant tool_use, its
+    // result, then a user-role nudge. Two consecutive `user` messages are a 400.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'do the thing' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'exit 0', toolCallId: 't1', toolName: 'run' },
+      { role: 'user', content: 'You are close to the iteration cap. Wrap up.' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+
+    assertNoConsecutiveSameRole(out)
+
+    // The tool_result and the nudge text ride on one user turn (the last message).
+    const merged = out[out.length - 1]
+    expect(merged.role).toBe('user')
+    const blocks = blocksOf(merged)
+    expect(blocks.some((b) => b.type === 'tool_result' && b.tool_use_id === 't1')).toBe(true)
+    expect(
+      blocks.some((b) => b.type === 'text' && b.text === 'You are close to the iteration cap. Wrap up.')
+    ).toBe(true)
+  })
+
+  it('folds the nudge onto the last of several parallel tool results', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: '', toolCalls: [
+        { id: 't1', name: 'run', arguments: {} },
+        { id: 't2', name: 'run', arguments: {} }
+      ] },
+      { role: 'tool', content: 'r1', toolCallId: 't1', toolName: 'run' },
+      { role: 'tool', content: 'r2', toolCallId: 't2', toolName: 'run' },
+      { role: 'user', content: 'nudge' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+
+    assertNoConsecutiveSameRole(out)
+    // assistant, then a single user turn carrying both results + the nudge.
+    expect(out).toHaveLength(2)
+    const blocks = blocksOf(out[1])
+    expect(blocks.filter((b) => b.type === 'tool_result')).toHaveLength(2)
+    expect(blocks.some((b) => b.type === 'text' && b.text === 'nudge')).toBe(true)
+  })
+
+  it('still emits a separate user turn when no tool result precedes it', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'reply' },
+      { role: 'user', content: 'second' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+    expect(out).toHaveLength(3)
+    expect(out[2]).toEqual({ role: 'user', content: 'second' })
   })
 })

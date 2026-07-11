@@ -5,6 +5,12 @@ import { geminiThinkingBudget } from './reasoning'
 
 export function toGeminiContents(messages: ChatMessage[]): Content[] {
   const out: Content[] = []
+  // Tracks whether the last emitted turn is a `user` turn built from tool
+  // result(s), so a plain user turn that immediately follows (e.g. a mid-loop
+  // stall/landing nudge pushed after a tool-using turn, or an interrupt/reconnect
+  // that lands a user message right after a result) folds onto it. Gemini enforces
+  // user/model alternation, so two consecutive `user` turns are a 400.
+  let mergingToolResults = false
   for (const m of messages) {
     if (m.role === 'user') {
       const parts: Content['parts'] = []
@@ -12,9 +18,18 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
       for (const img of m.images ?? []) {
         parts!.push({ inlineData: { mimeType: img.mediaType, data: img.data } })
       }
+      const last = out[out.length - 1]
+      if (mergingToolResults && last?.parts) {
+        // Fold onto the tool-result user turn (empty content ⇒ nothing to add, but
+        // still drop it so it can't become a second consecutive `user` turn).
+        if (parts!.length) last.parts.push(...parts!)
+        continue
+      }
+      mergingToolResults = false
       if (!parts!.length) parts!.push({ text: '' }) // Gemini rejects an empty parts array
       out.push({ role: 'user', parts })
     } else if (m.role === 'assistant') {
+      mergingToolResults = false
       const parts: Content['parts'] = []
       if (m.content) parts!.push({ text: m.content })
       for (const tc of m.toolCalls ?? []) {
@@ -22,20 +37,23 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
       }
       out.push({ role: 'model', parts })
     } else if (m.role === 'tool') {
-      out.push({
-        role: 'user',
-        parts: [
-          {
-            functionResponse: {
-              name: m.toolName ?? '',
-              response: { result: m.content }
-            }
-          }
-        ]
-      })
-      // A functionResponse part is text/JSON, and mixing it with other part types
-      // in one turn is rejected — so images a tool produced (e.g. a view_localhost
-      // screenshot) follow as their own user turn for vision-capable models.
+      const fnPart = {
+        functionResponse: {
+          name: m.toolName ?? '',
+          response: { result: m.content }
+        }
+      }
+      const last = out[out.length - 1]
+      if (mergingToolResults && last?.parts) {
+        last.parts.push(fnPart)
+      } else {
+        out.push({ role: 'user', parts: [fnPart] })
+        mergingToolResults = true
+      }
+      // A functionResponse part can't share a turn with media (inlineData) parts,
+      // so images a tool produced (e.g. a view_localhost screenshot) follow as
+      // their own user turn for vision-capable models. (Text parts are fine to mix,
+      // which is how a following nudge folds in above.)
       if (m.images?.length) {
         out.push({
           role: 'user',
@@ -43,6 +61,10 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
             inlineData: { mimeType: img.mediaType, data: img.data }
           }))
         })
+        // The image turn is its own `user` turn; a following nudge must not fold
+        // into it (functionResponse + inlineData can't share a turn), so a fresh
+        // user turn is correct there — stop merging.
+        mergingToolResults = false
       }
     }
   }

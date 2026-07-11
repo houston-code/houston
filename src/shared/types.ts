@@ -277,6 +277,47 @@ export interface AppSettings {
    * when the checker's binary is installed; off by default.
    */
   diagnosticsOnSave?: boolean
+  /**
+   * Hard cap on loop iterations for a single agent turn. When the run gets within
+   * a small margin of this cap it's nudged to "land" (finish or summarize) rather
+   * than being cut off mid-edit. Falls back to DEFAULT_BUDGET_LIMITS.maxIterations
+   * when unset; clamped to at least 1.
+   */
+  maxIterations?: number
+  /**
+   * Cumulative USD cost ceiling for a single run. Once the run's accumulated
+   * per-turn cost crosses this, it gets the same one-time "land" nudge as the
+   * iteration margin. 0/unset disables the cost-based trigger.
+   */
+  costCeilingUsd?: number
+  /**
+   * Enable stall / loop detection. When the model cycles unproductively (repeats
+   * the same tool call, keeps hitting the same error, or makes no file change for
+   * several turns), inject one corrective reminder; if it persists, stop the run.
+   * On by default.
+   */
+  stallDetection?: boolean
+  /**
+   * End-of-run verification gate (opt-in). When the model stops naturally after
+   * modifying files, run {@link verifyCommand} and, if it fails, feed the output
+   * back for a bounded number of self-correction passes before accepting done.
+   * Off by default and inert unless a command is configured.
+   */
+  verifyOnStop?: boolean
+  /** Stall detection: same (tool,args) repeated this many times → stall (min 2). */
+  stallRepeatCallLimit?: number
+  /** Stall detection: same error signature this many times → stall (min 2). */
+  stallRepeatErrorLimit?: number
+  /** Stall detection: this many consecutive turns with no file change → stall (min 2). */
+  stallNoProgressLimit?: number
+  /**
+   * The verification command run by the end-of-run gate (e.g. `npm run typecheck`
+   * or `npm test`). Runs through the same sandbox as `run_shell`. Never inferred:
+   * the gate does nothing unless the user sets this explicitly.
+   */
+  verifyCommand?: string
+  /** Max extra self-correction passes the verification gate allows (bounded). */
+  verifyMaxPasses?: number
   /** MCP servers to connect to (stdio). Their tools are offered to the agent. */
   mcpServers?: McpServerConfig[]
   /**

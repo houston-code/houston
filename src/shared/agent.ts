@@ -488,7 +488,16 @@ export type AgentEvent =
     }
   | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
-  | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' }
+  | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' | 'stalled' }
+  | {
+      // The run's end-of-turn verification gate (opt-in) ran the user's configured
+      // verification command. `passed` reflects whether it succeeded; a failing
+      // pass feeds the output back so the model can self-correct within a bounded
+      // number of extra passes. Surfaced as a transcript notice.
+      runId: string
+      type: 'verification'
+      passed: boolean
+    }
   | { runId: string; type: 'usage'; inputTokens: number; outputTokens: number; cost: number }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | { runId: string; type: 'error'; message: string }
