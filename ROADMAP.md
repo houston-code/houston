@@ -84,8 +84,8 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   shipped (macOS Seatbelt, Linux bubblewrap, Windows — see the README). The remaining
   gap is *more arches/installers*, each of which just needs its own CI runner: x64
   (Intel) macOS, arm64 Windows (`windows-11-arm`), arm64 Linux, and an `.rpm` target.
-  Code-signing (Windows Authenticode, macOS Developer ID + notarization) is the other
-  follow-up so first-run SmartScreen/Gatekeeper warnings go away.
+  macOS is now code-signed (Developer ID) and notarized; **Windows Authenticode signing**
+  is the remaining code-signing follow-up so the first-run SmartScreen warning goes away.
 
 - **Write-capable / multi-agent delegation.** Today `dispatch_agent` (and custom
   `.houston/agents`) are deliberately **read-only** — a subagent can read/search

@@ -29,6 +29,11 @@ concurrency:
 
 env:
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+  # Nightly validates PACKAGING, not distribution: never sign or notarize here. No signing
+  # secrets are in scope, and this forces electron-builder to skip macOS signing outright
+  # rather than probing the keychain — so a runner that happens to carry a signing identity
+  # can't change the output. Real signing happens only in release-publish.yml.
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
 jobs:
   build:

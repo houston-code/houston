@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
+import { shouldAutoInstallUpdates, shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
 
 describe('shouldAutoUpdate', () => {
   it('runs only for packaged builds', () => {
@@ -9,6 +9,17 @@ describe('shouldAutoUpdate', () => {
 
   it('honors the HOUSTON_DISABLE_UPDATER opt-out even when packaged', () => {
     expect(shouldAutoUpdate(true, { HOUSTON_DISABLE_UPDATER: '1' })).toBe(false)
+  })
+})
+
+describe('shouldAutoInstallUpdates', () => {
+  it('auto-installs on macOS, where the build is signed + notarized', () => {
+    expect(shouldAutoInstallUpdates('darwin')).toBe(true)
+  })
+
+  it('stays on manual download for Windows and Linux (still unsigned)', () => {
+    expect(shouldAutoInstallUpdates('win32')).toBe(false)
+    expect(shouldAutoInstallUpdates('linux')).toBe(false)
   })
 })
 
