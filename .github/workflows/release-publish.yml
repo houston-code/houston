@@ -99,14 +99,19 @@ jobs:
           APPLE_TEAM_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
-            npm run ${{ matrix.dist }}
+            # Dry run: build only, never publish. The explicit `--publish never` also silences
+            # electron-builder's deprecated implicit-publish-on-CI detection (removed in v27).
+            npm run ${{ matrix.dist }} -- --publish never
           elif [ "${{ matrix.mac_x64_manual }}" = "true" ]; then
             # Intel mac: build WITHOUT electron-builder's publisher (its latest-mac.yml lists
             # only x64 — publishing it as-is would clobber the arm64 feed: electron-builder#5592).
             # Instead, MERGE this build's x64 files INTO the arm64 feed the macos-14 leg already
             # published, so one latest-mac.yml auto-updates BOTH arches — MacUpdater self-selects
             # per arch from the `files` list. max-parallel:1 guarantees the arm64 leg ran first.
-            npm run ${{ matrix.dist }}
+            # `--publish never` is REQUIRED here: without it, electron-builder's implicit
+            # publish-on-CI detection uploads this x64 latest-mac.yml and clobbers the arm64
+            # feed — the exact failure this manual-merge path exists to avoid.
+            npm run ${{ matrix.dist }} -- --publish never
             tag="v$(node -p "require('./package.json').version")"
             mkdir -p arm64-feed merged-feed
             # Pull the arm64-only feed the arm64 leg uploaded to the draft, then merge x64 into it.
