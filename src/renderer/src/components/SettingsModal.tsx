@@ -74,6 +74,111 @@ function textToModels(text: string, prev: ModelOption[]): ModelOption[] {
 }
 
 /**
+ * "One model id per line" editor. Holds raw text in local state while the field
+ * is focused so Enter, spaces, and blank lines behave normally, and only
+ * normalizes (trim + drop empty lines) on blur. A controlled textarea that
+ * re-parsed on every keystroke would strip the trailing newline as it was typed,
+ * making it impossible to open a new line for the next id.
+ */
+function ModelsField({
+  models,
+  busy,
+  onFetch,
+  onChange
+}: {
+  models: ModelOption[]
+  busy: boolean
+  onFetch: () => void
+  onChange: (models: ModelOption[]) => void
+}): JSX.Element {
+  const [text, setText] = useState(() => modelsToText(models))
+  // Re-sync from props when the list changes externally (e.g. "fetch from
+  // provider"), but never while focused — that would clobber an in-progress edit.
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setText(modelsToText(models))
+  }, [models])
+
+  return (
+    <label className="field">
+      <span>
+        Models{' '}
+        <button className="link" onClick={onFetch} disabled={busy}>
+          fetch from provider
+        </button>
+      </span>
+      <textarea
+        rows={3}
+        value={text}
+        placeholder="one model id per line"
+        onFocus={() => {
+          focused.current = true
+        }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          focused.current = false
+          const normalized = textToModels(text, models)
+          onChange(normalized)
+          setText(modelsToText(normalized))
+        }}
+      />
+    </label>
+  )
+}
+
+function headersToText(headers: Record<string, string> | undefined): string {
+  return Object.entries(headers ?? {})
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n')
+}
+
+/**
+ * "One `Key: Value` per line" header editor. Like ModelsField, it holds raw text
+ * in local state while focused and only parses on blur. Parsing every keystroke
+ * would drop a line the instant you typed its key (before the colon) and strip
+ * trailing newlines — making it impossible to start a new header line.
+ */
+function HeadersField({
+  headers,
+  onChange,
+  className,
+  rows = 2,
+  placeholder
+}: {
+  headers: Record<string, string> | undefined
+  onChange: (headers: Record<string, string>) => void
+  className?: string
+  rows?: number
+  placeholder?: string
+}): JSX.Element {
+  const [text, setText] = useState(() => headersToText(headers))
+  // Re-sync when the value changes from outside, but never while focused.
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setText(headersToText(headers))
+  }, [headers])
+
+  return (
+    <textarea
+      className={className}
+      rows={rows}
+      placeholder={placeholder}
+      value={text}
+      onFocus={() => {
+        focused.current = true
+      }}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        focused.current = false
+        const parsed = parseHeaderLines(text)
+        onChange(parsed)
+        setText(headersToText(parsed))
+      }}
+    />
+  )
+}
+
+/**
  * One settings subsection: a restyled <h3> title (kept as a real heading with
  * its exact text — tests query it), an optional one-line description, and a
  * body. Flat by design — separation comes from a top hairline + rhythm, not a
@@ -607,15 +712,10 @@ export function SettingsModal({
 
                           <label className="field">
                             <span>Custom headers</span>
-                            <textarea
-                              rows={2}
+                            <HeadersField
+                              headers={p.headers}
                               placeholder="one per line (e.g. HTTP-Referer: https://myapp)"
-                              value={Object.entries(p.headers ?? {})
-                                .map(([k, v]) => `${k}: ${v}`)
-                                .join('\n')}
-                              onChange={(e) =>
-                                patchProvider(p.id, { headers: parseHeaderLines(e.target.value) })
-                              }
+                              onChange={(headers) => patchProvider(p.id, { headers })}
                             />
                           </label>
                         </>
@@ -657,26 +757,12 @@ export function SettingsModal({
                         </div>
                       </label>
 
-                      <label className="field">
-                        <span>
-                          Models{' '}
-                          <button
-                            className="link"
-                            onClick={() => fetchModels(p.id)}
-                            disabled={busy === p.id}
-                          >
-                            fetch from provider
-                          </button>
-                        </span>
-                        <textarea
-                          rows={3}
-                          value={modelsToText(p.models)}
-                          placeholder="one model id per line"
-                          onChange={(e) =>
-                            patchProvider(p.id, { models: textToModels(e.target.value, p.models) })
-                          }
-                        />
-                      </label>
+                      <ModelsField
+                        models={p.models}
+                        busy={busy === p.id}
+                        onFetch={() => fetchModels(p.id)}
+                        onChange={(models) => patchProvider(p.id, { models })}
+                      />
                     </div>
                   ))}
                 </SettingsSection>
@@ -1195,16 +1281,11 @@ export function SettingsModal({
                               value={sv.url ?? ''}
                               onChange={(e) => patchServer(i, { url: e.target.value })}
                             />
-                            <textarea
+                            <HeadersField
                               className="mcp-server__args"
                               placeholder="headers, one per line (e.g. Authorization: Bearer TOKEN)"
-                              rows={2}
-                              value={Object.entries(sv.headers ?? {})
-                                .map(([k, v]) => `${k}: ${v}`)
-                                .join('\n')}
-                              onChange={(e) =>
-                                patchServer(i, { headers: parseHeaderLines(e.target.value) })
-                              }
+                              headers={sv.headers}
+                              onChange={(headers) => patchServer(i, { headers })}
                             />
                           </>
                         ) : (

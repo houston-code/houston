@@ -232,6 +232,75 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(customArea).toHaveValue('model-a\nmodel-b'))
   })
 
+  it('keeps a trailing newline while typing so a new model line can be started', () => {
+    installApi()
+    renderModal()
+
+    const modelsArea = screen.getAllByPlaceholderText('one model id per line')[0] // anthropic
+    expect(modelsArea).toHaveValue('claude-sonnet')
+
+    // Pressing Enter at the end of the list must open a blank line for the next
+    // id. A textarea that re-normalized on every keystroke would strip the
+    // trailing newline immediately, so the caret could never leave the last id.
+    fireEvent.focus(modelsArea)
+    fireEvent.change(modelsArea, { target: { value: 'claude-sonnet\n' } })
+    expect(modelsArea).toHaveValue('claude-sonnet\n')
+
+    // The fresh line accepts a manually typed id.
+    fireEvent.change(modelsArea, { target: { value: 'claude-sonnet\nclaude-opus' } })
+    expect(modelsArea).toHaveValue('claude-sonnet\nclaude-opus')
+  })
+
+  it('normalizes the models list on blur and persists manually added ids', async () => {
+    const api = installApi()
+    const { container } = renderModal()
+
+    const modelsArea = screen.getAllByPlaceholderText('one model id per line')[0] // anthropic
+    fireEvent.focus(modelsArea)
+    // A second id typed with surrounding whitespace and a trailing blank line.
+    fireEvent.change(modelsArea, { target: { value: 'claude-sonnet\n  claude-opus  \n' } })
+    fireEvent.blur(modelsArea)
+
+    // Blur trims each line and drops the empty one — without fighting the typing.
+    expect(modelsArea).toHaveValue('claude-sonnet\nclaude-opus')
+
+    // Saving persists both ids for the anthropic provider.
+    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
+    const provider = saved.providers.find((p) => p.id === 'anthropic')!
+    expect(provider.models.map((m) => m.id)).toEqual(['claude-sonnet', 'claude-opus'])
+  })
+
+  it('keeps an incomplete header line while typing and parses it on blur', async () => {
+    const api = installApi()
+    const { container } = renderModal()
+
+    // Custom headers is shown for the openai-compatible custom endpoint.
+    const headersArea = screen.getByPlaceholderText('one per line (e.g. HTTP-Referer: https://myapp)')
+    expect(headersArea).toHaveValue('')
+
+    fireEvent.focus(headersArea)
+    // Typing the key before the colon must not make the line vanish — parsing on
+    // every keystroke would drop it (no colon yet) and reset the field.
+    fireEvent.change(headersArea, { target: { value: 'Authorization' } })
+    expect(headersArea).toHaveValue('Authorization')
+    // Finish the header and open a blank line for the next one.
+    fireEvent.change(headersArea, { target: { value: 'Authorization: Bearer TOKEN\n' } })
+    expect(headersArea).toHaveValue('Authorization: Bearer TOKEN\n')
+
+    // Blur parses into a headers record and drops the incomplete/blank line.
+    fireEvent.blur(headersArea)
+    expect(headersArea).toHaveValue('Authorization: Bearer TOKEN')
+
+    // Saving persists the parsed header for the custom endpoint.
+    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
+    const provider = saved.providers.find((p) => p.id === 'custom-1234')!
+    expect(provider.headers).toEqual({ Authorization: 'Bearer TOKEN' })
+  })
+
   it('saves all settings and closes when the footer Save is clicked', async () => {
     const api = installApi()
     const { onClose, onSaved, container } = renderModal()
