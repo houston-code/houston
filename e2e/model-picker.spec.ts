@@ -24,14 +24,16 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
     await acceptLegalGate(page)
     await expect(page.locator('.app')).toBeVisible()
 
-    const trigger = page.locator('[title="Model"]')
+    // The trigger's title is a dynamic tooltip (the selected model name), so match on
+    // its stable listbox-combobox role instead.
+    const trigger = page.locator('[role="combobox"][aria-haspopup="listbox"]')
     await expect(trigger).toBeVisible()
     await trigger.click()
     await expect(page.locator('[role="listbox"]')).toBeVisible()
 
     const info = await page.evaluate(() => {
       const menu = document.querySelector('[role="listbox"]') as HTMLElement
-      const trig = document.querySelector('[title="Model"]') as HTMLElement
+      const trig = document.querySelector('[role="combobox"][aria-haspopup="listbox"]') as HTMLElement
       const opts = Array.from(menu.querySelectorAll('[role="option"]')) as HTMLElement[]
       return {
         innerHeight: window.innerHeight,
@@ -51,18 +53,20 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
     // The default model set fits without an internal scrollbar.
     expect(info.fitsWithoutScroll).toBe(true)
 
-    // Advanced-first ordering: GPT-5 ahead of GPT-4o, regardless of stored order.
-    const gpt5 = info.options.findIndex((o) => o.startsWith('GPT-5'))
-    const gpt4o = info.options.findIndex((o) => o.startsWith('GPT-4o'))
+    // Advanced-first ordering: gpt-5 ahead of gpt-4o, regardless of stored order.
+    // Seeded labels are the lowercase model id (so a curated model reads the same as
+    // one added via the provider's Fetch), e.g. "gpt-5", "claude-opus-4.8".
+    const gpt5 = info.options.findIndex((o) => o.startsWith('gpt-5'))
+    const gpt4o = info.options.findIndex((o) => o.startsWith('gpt-4o'))
     expect(gpt5).toBeGreaterThanOrEqual(0)
     expect(gpt5).toBeLessThan(gpt4o)
-    // Same family grouped, newest version first: Opus 4.8 immediately before 4.7.
-    const opus48 = info.options.findIndex((o) => o.startsWith('Claude Opus 4.8'))
-    const opus47 = info.options.findIndex((o) => o.startsWith('Claude Opus 4.7'))
+    // Same family grouped, newest version first: opus 4.8 immediately before 4.7.
+    const opus48 = info.options.findIndex((o) => o.startsWith('claude-opus-4.8'))
+    const opus47 = info.options.findIndex((o) => o.startsWith('claude-opus-4.7'))
     expect(opus48).toBeGreaterThanOrEqual(0)
     expect(opus47).toBe(opus48 + 1)
     // Every model is annotated with its context window.
-    expect(info.options.find((o) => o.startsWith('GPT-5'))).toContain('400k')
+    expect(info.options.find((o) => o.startsWith('gpt-5'))).toContain('400k')
   } finally {
     await app.close()
     rmSync(userDataDir, { recursive: true, force: true })
