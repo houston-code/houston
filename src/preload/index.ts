@@ -40,9 +40,9 @@ const api = {
   /** Read a workspace file for the Files panel's in-app preview (text / image / note). */
   readWorkspaceFile: (workspace: string, relPath: string): Promise<FilePreview> =>
     ipcRenderer.invoke(IPC.workspaceReadFile, workspace, relPath),
-  /** Reveal a workspace file/folder in the OS file manager (Files panel row click). */
-  revealWorkspacePath: (workspace: string, relPath: string): Promise<OpenResult> =>
-    ipcRenderer.invoke(IPC.workspaceRevealPath, workspace, relPath),
+  /** Open a workspace file in its OS default app (Files panel preview "Open" button). */
+  openWorkspacePath: (workspace: string, relPath: string): Promise<OpenResult> =>
+    ipcRenderer.invoke(IPC.workspaceOpenPath, workspace, relPath),
   /** Composer "+" menu: pick files via a native dialog; resolves with their capped text contents. */
   pickAttachmentFiles: (): Promise<PickedFile[]> => ipcRenderer.invoke(IPC.attachmentPickFiles),
   /** Composer "+" menu: read the system clipboard (text + optional image). */

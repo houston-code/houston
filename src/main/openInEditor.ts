@@ -131,13 +131,16 @@ export function revealInFileManager(target: string): OpenResult {
 }
 
 /**
- * Reveal a workspace-relative path in the OS file manager (Finder / Explorer).
- * Backs the Files panel's reveal action — a user gesture, but the target is
- * confined to the workspace via {@link resolveInWorkspace}, whose realpath check
- * also blocks a committed symlink from revealing anything outside the project.
+ * Open a workspace-relative file in its OS default application (the editor for
+ * source, Preview for an image, and so on). Backs the Files panel's Open action
+ * — a user gesture, but the target is confined to the workspace via
+ * {@link resolveInWorkspace}, whose realpath check also blocks a committed
+ * symlink from opening anything outside the project. `shell.openPath` resolves
+ * with a non-empty string on failure (e.g. no handler for the type), which we
+ * only log — the click already succeeded from the renderer's point of view.
  */
-export function revealWorkspacePath(workspace: string, relPath: string): OpenResult {
-  if (!workspace || !relPath) return { ok: false, error: 'No file to reveal.' }
+export function openWorkspacePath(workspace: string, relPath: string): OpenResult {
+  if (!workspace || !relPath) return { ok: false, error: 'No file to open.' }
   let abs: string
   try {
     abs = resolveInWorkspace(realpathSync(workspace), relPath)
@@ -145,6 +148,8 @@ export function revealWorkspacePath(workspace: string, relPath: string): OpenRes
     return { ok: false, error: 'Path is outside the workspace.' }
   }
   if (!existsSync(abs)) return { ok: false, error: 'That file no longer exists.' }
-  shell.showItemInFolder(abs)
+  void shell.openPath(abs).then((err) => {
+    if (err) log.warn(`Open file failed: ${err}`)
+  })
   return { ok: true }
 }

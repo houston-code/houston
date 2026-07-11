@@ -33,8 +33,8 @@ export const IPC = {
   workspaceListDir: 'workspace:listDir',
   /** Read a workspace file for the Files panel's in-app preview (text / image / note). */
   workspaceReadFile: 'workspace:readFile',
-  /** Reveal a workspace file/folder in the OS file manager (from the Files panel). */
-  workspaceRevealPath: 'workspace:revealPath',
+  /** Open a workspace file in its OS default app (from the Files panel). */
+  workspaceOpenPath: 'workspace:openPath',
   /** Pick files in a native dialog and read their (capped) text contents — composer "+" menu. */
   attachmentPickFiles: 'attachment:pickFiles',
   /** Read the system clipboard (text + image) for the composer "+" menu. */

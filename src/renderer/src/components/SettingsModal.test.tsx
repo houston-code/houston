@@ -120,6 +120,22 @@ describe('SettingsModal', () => {
     expect(screen.getByRole('link', { name: 'License' })).toBeInTheDocument()
   })
 
+  it('offers a Loop scorecard button on the Models tab that calls onShowScorecard', () => {
+    installApi()
+    const onShowScorecard = vi.fn()
+    renderModal({}, { onShowScorecard })
+    // The section lives in the default Models tab; heading + button render there.
+    expect(screen.getByRole('heading', { name: 'Loop scorecard' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /open loop scorecard/i }))
+    expect(onShowScorecard).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits the Loop scorecard section when no handler is given', () => {
+    installApi()
+    renderModal()
+    expect(screen.queryByRole('heading', { name: 'Loop scorecard' })).not.toBeInTheDocument()
+  })
+
   it('maps over the passed providers array, rendering exactly one row per provider', () => {
     installApi()
     // A single provider in → exactly one provider row out. This fails if the

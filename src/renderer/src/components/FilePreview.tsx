@@ -28,17 +28,17 @@ function svgDataUrl(svg: string): string {
  * The Files panel's preview pane: renders the selected workspace file in-app.
  * Markdown and SVG render visually (with a Source toggle); other text shows in a
  * line-numbered code pane; supported images render directly; and binary / over-cap
- * / unreadable files fall back to a note pointing at the header's "Reveal" button.
+ * / unreadable files fall back to a note pointing at the header's "Open" button.
  * Content is fetched (and confined) in the main process.
  */
 export function FilePreview({
   workspace,
   path,
-  onReveal
+  onOpen
 }: {
   workspace: string
   path: string | null
-  onReveal: (path: string) => void
+  onOpen: (path: string) => void
 }): JSX.Element {
   const [data, setData] = useState<FilePreviewData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -113,10 +113,10 @@ export function FilePreview({
         <button
           type="button"
           className="btn btn--sm"
-          onClick={() => onReveal(path)}
-          title="Reveal in the OS file manager"
+          onClick={() => onOpen(path)}
+          title="Open in the default app"
         >
-          Reveal
+          Open
         </button>
       </div>
       <div className="file-preview__body">
@@ -151,7 +151,7 @@ export function FilePreview({
               {data.truncated && (
                 <p className="file-preview__note">
                   Showing the first {humanSize(MAX_PREVIEW_TEXT_BYTES)} of a {humanSize(data.bytes)}{' '}
-                  file. Reveal it to open the whole file.
+                  file. Open it to view the whole file.
                 </p>
               )}
             </>
@@ -163,11 +163,11 @@ export function FilePreview({
         ) : data.kind === 'too-large' ? (
           <p className="file-preview__note">
             This file is {humanSize(data.bytes)} — too large to preview (limit{' '}
-            {humanSize(data.limit)}). Reveal it to open in another app.
+            {humanSize(data.limit)}). Open it to view in another app.
           </p>
         ) : data.kind === 'binary' ? (
           <p className="file-preview__note">
-            Binary file ({humanSize(data.bytes)}) — no text preview. Reveal it to open in another
+            Binary file ({humanSize(data.bytes)}) — no text preview. Open it to view in another
             app.
           </p>
         ) : (

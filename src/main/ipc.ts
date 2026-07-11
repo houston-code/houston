@@ -31,8 +31,8 @@ import { getIntegrations } from './integrations'
 import {
   detectEditors,
   openProjectInEditor,
-  revealInFileManager,
-  revealWorkspacePath
+  openWorkspacePath,
+  revealInFileManager
 } from './openInEditor'
 import { setKey, deleteKey } from './secrets'
 import { listModels } from './providers'
@@ -252,10 +252,10 @@ export function registerIpc(): void {
     )
   )
 
-  // Reveal a file/folder picked in the Files panel in the OS file manager. A user
-  // gesture; the target is confined to the workspace before showItemInFolder.
-  ipcMain.handle(IPC.workspaceRevealPath, (_event, workspace: string, relPath: string) =>
-    revealWorkspacePath(
+  // Open a file selected in the Files panel in its OS default app. A user
+  // gesture; the target is confined to the workspace before shell.openPath.
+  ipcMain.handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string) =>
+    openWorkspacePath(
       typeof workspace === 'string' ? workspace : '',
       typeof relPath === 'string' ? relPath : ''
     )

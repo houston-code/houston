@@ -169,9 +169,9 @@ export function FilesPanel({
 
   const onSelect = useCallback((entry: FileEntry) => setSelected(entry.path), [])
 
-  const onReveal = useCallback(
+  const onOpen = useCallback(
     (path: string) => {
-      if (workspace) void window.api.revealWorkspacePath(workspace, path)
+      if (workspace) void window.api.openWorkspacePath(workspace, path)
     },
     [workspace]
   )
@@ -305,7 +305,7 @@ export function FilesPanel({
           </div>
 
           <div className="files-panel__preview">
-            <FilePreview workspace={workspace ?? ''} path={selected} onReveal={onReveal} />
+            <FilePreview workspace={workspace ?? ''} path={selected} onOpen={onOpen} />
           </div>
         </div>
       </aside>

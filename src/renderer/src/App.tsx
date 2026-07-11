@@ -334,12 +334,12 @@ export default function App(): JSX.Element {
   // tracked by the main process.
   const backgroundShells = useBackgroundShells()
 
-  // The unified background-tasks list shown in the title bar: in-progress agent
-  // runs + terminals + background shells, plus the ones that finished recently —
-  // so a backgrounded completion is noticeable from anywhere in the app.
+  // The background-tasks list shown in the title bar: running/recently-finished
+  // integrated terminals + agent-backgrounded shells, so a backgrounded completion
+  // is noticeable from anywhere. Chat runs are intentionally excluded — each is
+  // already represented by its own Stop button and its sidebar dot (see
+  // useBackgroundTasks).
   const { tasks: backgroundTasks, clearFinished: clearFinishedTasks } = useBackgroundTasks(
-    conversations,
-    runningIds,
     terminals.tabs,
     backgroundShells
   )
@@ -828,8 +828,8 @@ export default function App(): JSX.Element {
         terminals.setActive(task.id)
         return
       }
-      const convId = task.kind === 'shell' ? task.conversationId : task.id
-      if (convId) void selectConversation(convId)
+      // A backgrounded shell: reopen the conversation that spawned it.
+      if (task.conversationId) void selectConversation(task.conversationId)
     },
     [terminals, persistTerminal, selectConversation]
   )
@@ -1488,7 +1488,6 @@ export default function App(): JSX.Element {
           changes={workspace ? workingTreeStats : undefined}
           onShowFiles={workspace ? () => setFilesOpen(true) : undefined}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
-          onShowScorecard={() => setScorecardOpen(true)}
           onTogglePreview={togglePreview}
           previewOpen={previewOpen}
           previewCount={previewableCount}
@@ -1675,6 +1674,10 @@ export default function App(): JSX.Element {
             initial={settings}
             onClose={() => setSettingsOpen(false)}
             onSaved={(s) => setSettings(s)}
+            onShowScorecard={() => {
+              setSettingsOpen(false)
+              setScorecardOpen(true)
+            }}
           />
         )}
 

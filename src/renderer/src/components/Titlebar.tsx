@@ -1,6 +1,7 @@
 import { BackgroundTasks } from './BackgroundTasks'
 import type { BackgroundTask } from '../hooks/useBackgroundTasks'
 import { Icon } from './Icon'
+import { Tooltip, TooltipProvider } from './Tooltip'
 
 /**
  * A slim, draggable strip at the top of the main pane. With the window's
@@ -8,7 +9,9 @@ import { Icon } from './Icon'
  * sidebar covers the left), and shows the current chat's title for context now
  * that the model/mode controls live in the bottom bar. Top-right actions show
  * background tasks, open the Files browser and working-tree diff panel, toggle
- * the preview panel, and toggle the integrated terminal.
+ * the preview panel, and toggle the integrated terminal. Each action carries a
+ * shared custom tooltip (see {@link TooltipProvider}) — instant on hover and
+ * smooth as the pointer moves along the row, unlike the slow native `title`.
  */
 export function Titlebar({
   title,
@@ -18,7 +21,6 @@ export function Titlebar({
   changes,
   onShowFiles,
   onShowChanges,
-  onShowScorecard,
   onTogglePreview,
   previewOpen,
   previewCount,
@@ -34,8 +36,6 @@ export function Titlebar({
   changes?: { fileCount: number; added: number; removed: number }
   onShowFiles?: () => void
   onShowChanges?: () => void
-  /** Open the local-only per-model loop scorecard. */
-  onShowScorecard?: () => void
   onTogglePreview?: () => void
   previewOpen?: boolean
   /** Number of running dev servers with a detected URL — shown as a badge when > 0. */
@@ -48,78 +48,75 @@ export function Titlebar({
     <header className="titlebar">
       <span className="titlebar__title">{title}</span>
       <div className="titlebar__actions">
-        {tasks && onSelectTask && (
-          <BackgroundTasks
-            tasks={tasks}
-            onSelect={onSelectTask}
-            onClearFinished={onClearFinishedTasks ?? (() => {})}
-          />
-        )}
-        {onTogglePreview && (
-          <button
-            type="button"
-            className={`titlebar__action${previewOpen ? ' titlebar__action--active' : ''}`}
-            onClick={onTogglePreview}
-            aria-label="Preview"
-            title="Preview: toggle the live preview panel"
-            aria-pressed={previewOpen}
-          >
-            <Icon name="eye" size={15} />
-            {!!previewCount && previewCount > 0 && (
-              <span className="titlebar__badge">{previewCount}</span>
-            )}
-          </button>
-        )}
-        {onShowFiles && (
-          <button
-            type="button"
-            className="titlebar__action"
-            onClick={onShowFiles}
-            aria-label="Files"
-            title="Files: browse the project's files"
-          >
-            <Icon name="folder" size={15} />
-          </button>
-        )}
-        {onShowChanges && (
-          <button
-            type="button"
-            className="titlebar__action"
-            onClick={onShowChanges}
-            aria-label="Changes"
-            title={
-              hasChanges
-                ? `Changes: ${changes.fileCount} changed file${changes.fileCount === 1 ? '' : 's'} (+${changes.added} −${changes.removed}) — view uncommitted changes`
-                : 'Changes: view uncommitted working-tree changes'
-            }
-          >
-            <Icon name="diff" size={15} />
-            {hasChanges && <span className="titlebar__badge">{changes.fileCount}</span>}
-          </button>
-        )}
-        {onShowScorecard && (
-          <button
-            type="button"
-            className="titlebar__action"
-            onClick={onShowScorecard}
-            aria-label="Scorecard"
-            title="Scorecard: per-model loop scorecard (computed on-device from local data)"
-          >
-            <Icon name="scorecard" size={15} />
-          </button>
-        )}
-        {onToggleTerminal && (
-          <button
-            type="button"
-            className={`titlebar__action${terminalOpen ? ' titlebar__action--active' : ''}`}
-            onClick={onToggleTerminal}
-            aria-label="Terminal"
-            title="Terminal: toggle the integrated terminal (⌃`)"
-            aria-pressed={terminalOpen}
-          >
-            <Icon name="terminal" size={15} />
-          </button>
-        )}
+        <TooltipProvider>
+          {tasks && onSelectTask && (
+            <BackgroundTasks
+              tasks={tasks}
+              onSelect={onSelectTask}
+              onClearFinished={onClearFinishedTasks ?? (() => {})}
+            />
+          )}
+          {onTogglePreview && (
+            <Tooltip label="Preview: toggle the live preview panel">
+              <button
+                type="button"
+                className={`titlebar__action${previewOpen ? ' titlebar__action--active' : ''}`}
+                onClick={onTogglePreview}
+                aria-label="Preview"
+                aria-pressed={previewOpen}
+              >
+                <Icon name="eye" size={15} />
+                {!!previewCount && previewCount > 0 && (
+                  <span className="titlebar__badge">{previewCount}</span>
+                )}
+              </button>
+            </Tooltip>
+          )}
+          {onShowFiles && (
+            <Tooltip label="Files: browse the project's files">
+              <button
+                type="button"
+                className="titlebar__action"
+                onClick={onShowFiles}
+                aria-label="Files"
+              >
+                <Icon name="folder" size={15} />
+              </button>
+            </Tooltip>
+          )}
+          {onShowChanges && (
+            <Tooltip
+              label={
+                hasChanges
+                  ? `Changes: ${changes.fileCount} changed file${changes.fileCount === 1 ? '' : 's'} (+${changes.added} −${changes.removed}) — view uncommitted changes`
+                  : 'Changes: view uncommitted working-tree changes'
+              }
+            >
+              <button
+                type="button"
+                className="titlebar__action"
+                onClick={onShowChanges}
+                aria-label="Changes"
+              >
+                <Icon name="diff" size={15} />
+                {hasChanges && <span className="titlebar__badge">{changes.fileCount}</span>}
+              </button>
+            </Tooltip>
+          )}
+          {onToggleTerminal && (
+            <Tooltip label="Terminal: toggle the integrated terminal (⌃`)">
+              <button
+                type="button"
+                className={`titlebar__action${terminalOpen ? ' titlebar__action--active' : ''}`}
+                onClick={onToggleTerminal}
+                aria-label="Terminal"
+                aria-pressed={terminalOpen}
+              >
+                <Icon name="terminal" size={15} />
+              </button>
+            </Tooltip>
+          )}
+        </TooltipProvider>
       </div>
     </header>
   )

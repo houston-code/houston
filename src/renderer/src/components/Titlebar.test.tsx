@@ -28,30 +28,32 @@ describe('Titlebar preview button', () => {
 })
 
 describe('Titlebar icon-only actions', () => {
-  it('labels each action for screen readers and carries a descriptive tooltip', () => {
+  it('labels each action for screen readers and shows a descriptive tooltip on hover', () => {
     render(
       <Titlebar
         title="Houston"
         onTogglePreview={vi.fn()}
         onShowFiles={vi.fn()}
         onShowChanges={vi.fn()}
-        onShowScorecard={vi.fn()}
         onToggleTerminal={vi.fn()}
       />
     )
-    // Buttons render icon-only: the accessible name comes from aria-label, and
-    // the hover tooltip (title) explains what each does.
+    // Buttons render icon-only: the accessible name comes from aria-label, while a
+    // shared custom tooltip (role="tooltip") appears on hover — no native `title`,
+    // which is slow and can't be styled or made instant between buttons.
     for (const [name, tip] of [
       ['Preview', /toggle the live preview panel/i],
       ['Files', /browse the project's files/i],
       ['Changes', /uncommitted/i],
-      ['Scorecard', /per-model loop scorecard/i],
       ['Terminal', /integrated terminal/i]
     ] as const) {
       const btn = screen.getByRole('button', { name })
-      expect(btn).toHaveAttribute('title', expect.stringMatching(tip))
       // No visible text label — the button holds only its inline SVG icon.
       expect(btn.textContent).toBe('')
+      expect(btn).not.toHaveAttribute('title')
+      fireEvent.mouseEnter(btn)
+      expect(screen.getByRole('tooltip')).toHaveTextContent(tip)
+      fireEvent.mouseLeave(btn)
     }
   })
 
@@ -65,7 +67,8 @@ describe('Titlebar icon-only actions', () => {
     )
     const btn = screen.getByRole('button', { name: 'Changes' })
     expect(within(btn).getByText('3')).toBeInTheDocument()
-    expect(btn).toHaveAttribute('title', expect.stringContaining('+12 −4'))
+    fireEvent.mouseEnter(btn)
+    expect(screen.getByRole('tooltip')).toHaveTextContent('+12 −4')
     // Dirty state is signalled by the badge alone — no accent outline (that's
     // reserved for open docked panels like Preview and Terminal).
     expect(btn.className).toBe('titlebar__action')
