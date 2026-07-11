@@ -150,4 +150,58 @@ describe('PlanPanel', () => {
     expect(screen.getByText(/Revising the plan/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Accept & run/ })).toBeNull()
   })
+
+  describe('manual editing', () => {
+    it('opens the markdown editor from the Edit button (and via the E key)', () => {
+      const { panel } = renderPanel()
+      expect(screen.queryByLabelText('Edit the plan (markdown)')).toBeNull()
+      fireEvent.keyDown(panel, { key: 'e' })
+      expect(screen.getByLabelText('Edit the plan (markdown)')).toBeTruthy()
+    })
+
+    it('accepts the hand-edited plan verbatim (editedBody) after Done', () => {
+      const { onResolve } = renderPanel()
+      fireEvent.click(screen.getByRole('button', { name: 'Edit the plan' }))
+      fireEvent.change(screen.getByLabelText('Edit the plan (markdown)'), {
+        target: { value: '## New plan\n\nDo it differently.' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+      // The edit is reflected: badge + relabelled accept button.
+      expect(screen.getByText('Edited')).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: /Accept edited plan/ }))
+      expect(onResolve).toHaveBeenCalledWith({
+        kind: 'accept',
+        mode: 'auto-edit',
+        editedBody: '## New plan\n\nDo it differently.'
+      })
+    })
+
+    it('discards the edit on Cancel and accepts without editedBody', () => {
+      const { onResolve } = renderPanel()
+      fireEvent.click(screen.getByRole('button', { name: 'Edit the plan' }))
+      fireEvent.change(screen.getByLabelText('Edit the plan (markdown)'), { target: { value: 'throwaway' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(screen.queryByText('Edited')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: /Accept & run/ }))
+      expect(onResolve).toHaveBeenCalledWith({ kind: 'accept', mode: 'auto-edit' })
+    })
+
+    it('treats an edit back to the original as not edited', () => {
+      const { onResolve } = renderPanel()
+      fireEvent.click(screen.getByRole('button', { name: 'Edit the plan' }))
+      // Change then restore the exact original body.
+      const editor = screen.getByLabelText('Edit the plan (markdown)')
+      fireEvent.change(editor, { target: { value: 'temp' } })
+      fireEvent.change(editor, { target: { value: plan.body } })
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+      expect(screen.queryByText('Edited')).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: /Accept & run/ }))
+      expect(onResolve).toHaveBeenCalledWith({ kind: 'accept', mode: 'auto-edit' })
+    })
+
+    it('does not offer editing for a legacy (steps-based) plan', () => {
+      renderPanel({ plan: legacyPlan })
+      expect(screen.queryByRole('button', { name: 'Edit the plan' })).toBeNull()
+    })
+  })
 })

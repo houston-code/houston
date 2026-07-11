@@ -359,12 +359,14 @@ export type PlanAcceptMode = 'auto-edit' | 'ask'
 /**
  * The user's verdict on a presented plan:
  * - `accept`  — carry it out; switch off Plan mode to `mode` (`auto-edit` applies
- *               edits automatically, `ask` prompts on each one).
+ *               edits automatically, `ask` prompts on each one). `editedBody`, when
+ *               present, is the user's manually-edited plan markdown — the agent is
+ *               told to carry out exactly that instead of the plan it presented.
  * - `suggest` — keep planning; send `note` back so the agent revises the plan.
  * - `reject`  — discard this plan; stay in Plan mode and wait for direction.
  */
 export type PlanDecision =
-  | { kind: 'accept'; mode: PlanAcceptMode }
+  | { kind: 'accept'; mode: PlanAcceptMode; editedBody?: string }
   | { kind: 'suggest'; note: string }
   | { kind: 'reject' }
 
@@ -372,7 +374,12 @@ export type PlanDecision =
 export function isPlanDecision(v: unknown): v is PlanDecision {
   if (!v || typeof v !== 'object') return false
   const d = v as Record<string, unknown>
-  if (d.kind === 'accept') return d.mode === 'auto-edit' || d.mode === 'ask'
+  if (d.kind === 'accept') {
+    return (
+      (d.mode === 'auto-edit' || d.mode === 'ask') &&
+      (d.editedBody === undefined || typeof d.editedBody === 'string')
+    )
+  }
   if (d.kind === 'suggest') return typeof d.note === 'string'
   if (d.kind === 'reject') return true
   return false

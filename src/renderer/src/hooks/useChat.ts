@@ -234,8 +234,13 @@ export function useChat(conversationId: string | null = null): ChatController {
     // the agent sends the revised plan (suggest).
     const status: PlanStatus =
       decision.kind === 'accept' ? 'accepted' : decision.kind === 'reject' ? 'rejected' : 'superseded'
+    const editedBody = decision.kind === 'accept' ? decision.editedBody : undefined
     setItems((prev) =>
-      prev.map((it) => (it.kind === 'plan' && it.id === callId ? { ...it, status } : it))
+      prev.map((it) => {
+        if (it.kind !== 'plan' || it.id !== callId) return it
+        // Record a hand-edited plan on the marker so reopening it shows what was approved.
+        return editedBody ? { ...it, status, plan: { ...it.plan, body: editedBody } } : { ...it, status }
+      })
     )
     setPendingPlan((prev) => {
       if (!prev || prev.callId !== callId) return prev

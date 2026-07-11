@@ -275,6 +275,15 @@ function planDecisionResult(run: RunState, decision: PlanDecision): string {
       decision.mode === 'auto-edit'
         ? 'Edits will be applied automatically as you make them.'
         : 'You will be asked to approve each edit.'
+    const edited = decision.editedBody?.trim()
+    if (edited) {
+      // The user edited the plan by hand; it supersedes what the agent presented.
+      return (
+        'The user ACCEPTED the plan but EDITED it first, and switched off Plan mode. Carry out ' +
+        'EXACTLY the following edited plan — it replaces the plan you presented, so follow it precisely ' +
+        `even where it differs from yours:\n\n${edited}\n\n${how}`
+      )
+    }
     return `The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. ${how}`
   }
   if (decision.kind === 'suggest') {

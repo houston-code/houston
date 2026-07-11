@@ -7,6 +7,14 @@ describe('isPlanDecision', () => {
     expect(isPlanDecision({ kind: 'accept', mode: 'ask' })).toBe(true)
   })
 
+  it('accepts an accept decision carrying a hand-edited plan body', () => {
+    expect(isPlanDecision({ kind: 'accept', mode: 'auto-edit', editedBody: '## Edited' })).toBe(true)
+  })
+
+  it('rejects an accept whose editedBody is not a string', () => {
+    expect(isPlanDecision({ kind: 'accept', mode: 'auto-edit', editedBody: 42 })).toBe(false)
+  })
+
   it('accepts a suggest decision with a string note, and a bare reject', () => {
     expect(isPlanDecision({ kind: 'suggest', note: 'change this' })).toBe(true)
     expect(isPlanDecision({ kind: 'reject' })).toBe(true)

@@ -1696,6 +1696,29 @@ describe('present_plan (Plan mode review)', () => {
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('hi')
   })
 
+  it('carries a hand-edited plan verbatim into the proceed instruction on accept', async () => {
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        planTurn,
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'edited.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onPlan: (_id, _plan, decide) =>
+        decide({ kind: 'accept', mode: 'auto-edit', editedBody: '## Edited\n\nDo the edited thing instead.' })
+    })
+    const planResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'present_plan') as
+      | { output: string }
+      | undefined
+    expect(planResult?.output).toMatch(/EDITED/)
+    expect(planResult?.output).toContain('Do the edited thing instead.')
+    // It still proceeds (auto-edit applies the write without a prompt).
+    expect(readFileSync(join(ws, 'edited.txt'), 'utf8')).toBe('x')
+  })
+
   it('accepting with "ask" mode approves each following edit rather than auto-applying', async () => {
     const r = await run({
       policy: 'plan',

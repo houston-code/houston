@@ -4344,11 +4344,14 @@ body.is-resizing .plan-panel__resizer::after {
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
-.plan-panel__close {
+/* Header icon buttons (edit, dismiss), pushed to the right by the spacer. */
+.plan-panel__head-spacer {
   margin-left: auto;
-  width: 26px;
-  height: 26px;
-  border: none;
+}
+.plan-panel__iconbtn {
+  width: 27px;
+  height: 27px;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
@@ -4357,13 +4360,17 @@ body.is-resizing .plan-panel__resizer::after {
   align-items: center;
   justify-content: center;
 }
-.plan-panel__close:hover {
+.plan-panel__iconbtn:hover {
   color: var(--text);
   background: var(--bg-hover);
 }
-.plan-panel__close:focus-visible {
+.plan-panel__iconbtn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+.plan-panel__iconbtn--active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 /* Pinned title block: stays put above the scrolling body. */
 .plan-panel__title {
@@ -4379,11 +4386,28 @@ body.is-resizing .plan-panel__resizer::after {
   letter-spacing: -0.01em;
   text-wrap: balance;
 }
+.plan-panel__metarow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
 .plan-panel__meta {
-  margin: 6px 0 0;
+  margin: 0;
   font-size: 11.5px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+}
+.plan-panel__edited {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 650;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  padding: 2px 7px;
+  border-radius: 999px;
 }
 .plan-panel__section-label {
   margin: 0 0 10px;
@@ -4527,6 +4551,46 @@ body.is-resizing .plan-panel__resizer::after {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* Manual-edit mode: the plan body becomes a markdown editor filling the scroll body. */
+.plan-panel__editor {
+  width: 100%;
+  min-height: 100%;
+  resize: none;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 11px 12px;
+}
+.plan-panel__editor:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.plan-panel__editfoot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.plan-panel__edit-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.plan-panel__edit-hint .icon {
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.plan-panel__editfoot-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 .plan-panel__mode {
   display: flex;
