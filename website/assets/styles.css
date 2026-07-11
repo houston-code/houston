@@ -87,6 +87,7 @@ h1, h2, h3 { line-height: 1.2; font-weight: 600; letter-spacing: -0.02em; margin
 .site-header {
   position: sticky; top: 0; z-index: 50;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
   backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid var(--border);
 }
