@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#223357"/>
+      <stop offset="1" stop-color="#0d162b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="0%" r="70%">
+      <stop offset="0" stop-color="#6ea8fe" stop-opacity="0.28"/>
+      <stop offset="0.6" stop-color="#6ea8fe" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8fbcff"/>
+      <stop offset="1" stop-color="#2f6fed"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <g fill="#ffffff">
+    <circle cx="120" cy="90" r="2" opacity="0.5"/><circle cx="300" cy="150" r="1.6" opacity="0.35"/>
+    <circle cx="520" cy="70" r="2" opacity="0.4"/><circle cx="900" cy="120" r="1.8" opacity="0.45"/>
+    <circle cx="1080" cy="80" r="2" opacity="0.4"/><circle cx="1010" cy="220" r="1.6" opacity="0.3"/>
+    <circle cx="180" cy="520" r="1.8" opacity="0.35"/><circle cx="980" cy="540" r="2" opacity="0.4"/>
+    <circle cx="1120" cy="470" r="1.6" opacity="0.3"/><circle cx="80" cy="360" r="1.6" opacity="0.3"/>
+  </g>
+
+  <g transform="translate(96, 150)">
+    <rect x="0" y="0" width="96" height="96" rx="22" fill="url(#mark)"/>
+    <circle cx="48" cy="48" r="30" fill="none" stroke="#0d162b" stroke-width="6" opacity="0.85"/>
+    <circle cx="48" cy="18" r="7" fill="#0d162b"/>
+    <text x="128" y="66" font-size="40" font-weight="600" fill="#c9d8f5" letter-spacing="1">HOUSTON</text>
+  </g>
+
+  <text x="96" y="360" font-size="72" font-weight="700" fill="#f4f8ff" letter-spacing="-2">A coding agent that runs</text>
+  <text x="96" y="446" font-size="72" font-weight="700" letter-spacing="-2" fill="#8fbcff">on your machine.</text>
+
+  <text x="96" y="516" font-size="30" fill="#c4d3ef">Bring your own model — Claude, GPT, Gemini, or a local LLM.</text>
+
+  <g font-size="22" fill="#cdd9f2">
+    <rect x="96" y="548" width="196" height="44" rx="22" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
+    <text x="122" y="576">Runs locally</text>
+    <rect x="308" y="548" width="230" height="44" rx="22" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
+    <text x="334" y="576">Approval-gated</text>
+    <rect x="554" y="548" width="270" height="44" rx="22" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
+    <text x="580" y="576">macOS · Windows · Linux</text>
+  </g>
+</svg>
