@@ -86,6 +86,17 @@ jobs:
         # GITHUB_TOKEN is intentionally NOT in scope here — it can't write that repo.
         env:
           GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          # macOS code-signing + notarization. SCOPED to the macOS legs via startsWith():
+          # CSC_LINK/CSC_KEY_PASSWORD are ALSO electron-builder's Windows Authenticode vars,
+          # so leaking the mac .p12 to the Windows leg would make it try to sign the installer
+          # with an Apple cert and fail. An empty value on non-mac legs = signing skipped there
+          # (Windows/Linux stay unsigned until they get their own certs). electron-builder v26
+          # auto-notarizes when APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID are set.
+          CSC_LINK: ${{ startsWith(matrix.os, 'macos') && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ startsWith(matrix.os, 'macos') && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             npm run ${{ matrix.dist }}

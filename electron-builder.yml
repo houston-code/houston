@@ -80,11 +80,21 @@ mac:
   target:
     - dmg
     - zip
-  # No Apple Developer ID on this machine — build an ad-hoc (unsigned) app.
-  # To notarize later, set identity to your Developer ID Application cert, set
-  # hardenedRuntime: true, add a notarize block, and flip updater.ts to auto-install.
-  identity: null
-  hardenedRuntime: false
+  # Release builds are code-signed with a Developer ID Application cert and notarized,
+  # so the DMG/zip open with no Gatekeeper warning and electron-updater can verify an
+  # update's signature before installing it. Both are driven by CI env vars (see
+  # .github/workflows/release-publish.yml), never hardcoded here:
+  #   signing:      CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD. `identity` is deliberately
+  #                 left UNSET so electron-builder auto-selects the Developer ID Application
+  #                 cert imported from CSC_LINK — setting `identity: null` would DISABLE signing.
+  #   notarization: APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID. electron-builder
+  #                 v26 runs @electron/notarize automatically when those are present (the
+  #                 `notarize` option only exists to force-DISABLE it); with no creds it logs
+  #                 "skipped" and produces an unsigned build.
+  # The unsigned CI legs (nightly-build, release-prepare) set CSC_IDENTITY_AUTO_DISCOVERY=false
+  # so they never sign with a stray keychain identity. hardenedRuntime is required for
+  # notarization; gatekeeperAssess stays off (the local spctl assess step is flaky on runners).
+  hardenedRuntime: true
   gatekeeperAssess: false
   # NOTE on auto-update: arm64 and x64 build on separate runners, and electron-builder writes
   # a single `latest-mac.yml` per build — naively publishing both clobbers one another's feed

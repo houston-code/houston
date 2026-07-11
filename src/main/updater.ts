@@ -4,7 +4,7 @@ import electronUpdater from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
 import { IPC } from '@shared/constants'
 import { highlightsFor, type UpdateCheckResult, type WhatsNew } from '@shared/update'
-import { shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
+import { shouldAutoInstallUpdates, shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
 import { readLastSeenVersion, writeLastSeenVersion } from './update-state'
 import { openExternalSafely } from './safeExternal'
 
@@ -20,19 +20,22 @@ import { openExternalSafely } from './safeExternal'
  *     recorded last time; if it changed, the app was updated, so we stage a
  *     one-shot popup with that version's bundled highlights.
  *
- * It deliberately does NOT auto-download or auto-install. This build is currently
- * unsigned (electron-builder.yml: `identity: null`), so electron-updater has no
- * Apple Developer ID signature to verify a downloaded package against — silently
- * installing whatever the feed serves would make the release pipeline a remote-
- * code-execution boundary. The banner therefore links to Releases to download
- * manually. Once the app is code-signed + notarized, flip `autoDownload` /
- * `autoInstallOnAppQuit` on and the banner can offer in-app install.
+ * Auto-download/install is gated on the build being code-signed + notarized, so
+ * electron-updater can verify a downloaded package against the running app before
+ * replacing it (`shouldAutoInstallUpdates`). Only macOS is signed today, so there we
+ * `autoDownload` and `autoInstallOnAppQuit`; Windows and Linux stay unsigned and keep
+ * the manual path (the banner links to Releases) until they are signed too. Auto-
+ * installing an unverifiable package would make the release pipeline a remote-code-
+ * execution boundary, which is why the gate is per-platform rather than global.
  *
  * Failures are logged, never thrown — a missing/unreachable feed must not crash.
  */
 
-/** Releases page the banner links to (manual download until the build is signed). */
-const RELEASES_URL = 'https://github.com/piyushvijay/houston/releases'
+/** Releases page the banner + menu link to for a manual download (used everywhere,
+ *  and the only update path on the not-yet-signed Windows/Linux builds). Points at the
+ *  PUBLIC releases repo where artifacts are actually published — must match the
+ *  `publish` owner/repo in electron-builder.yml (the source repo is private). */
+const RELEASES_URL = 'https://github.com/piyushvijay/houston-releases/releases'
 
 /** Staged once at launch; handed to the renderer (one-shot) via IPC.updateWhatsNew. */
 let pendingWhatsNew: WhatsNew | null = null
@@ -43,9 +46,17 @@ let configured = false
 function configureUpdater(): typeof electronUpdater.autoUpdater {
   const { autoUpdater } = electronUpdater
   if (!configured) {
-    autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = false
+    // Only signed + notarized platforms (macOS today) auto-download and install in
+    // place; unsigned ones (Windows/Linux) fall back to the manual-download banner.
+    const autoInstall = shouldAutoInstallUpdates()
+    autoUpdater.autoDownload = autoInstall
+    autoUpdater.autoInstallOnAppQuit = autoInstall
     autoUpdater.on('error', (err) => console.error('[updater] error:', err?.message ?? err))
+    if (autoInstall) {
+      autoUpdater.on('update-downloaded', (info) =>
+        console.log('[updater] downloaded', info?.version, '(installs on next quit)')
+      )
+    }
     configured = true
   }
   return autoUpdater
@@ -178,8 +189,8 @@ export function menuUpdateDialog(result: UpdateCheckResult): {
  * but reports every outcome through a native dialog, the way a desktop app's menu
  * item is expected to. The available case still broadcasts the in-app banner (via
  * checkForUpdates), so both entry points stay consistent; here we additionally
- * offer a Download button that opens the Releases page (the build is unsigned, so
- * updates are downloaded manually).
+ * offer a Download button that opens the Releases page — a manual alternative to
+ * the auto-download/install-on-quit path, and the only route on unsigned platforms.
  */
 export async function checkForUpdatesFromMenu(): Promise<void> {
   const result = await checkForUpdates()
@@ -224,7 +235,7 @@ export function initUpdates(): void {
   if (!shouldAutoUpdate(app.isPackaged)) return
   void checkForUpdates().then((r) => {
     if (r.status === 'available') {
-      console.log('[updater] update available:', r.latestVersion, '(download manually until signed)')
+      console.log('[updater] update available:', r.latestVersion)
     }
   })
 }

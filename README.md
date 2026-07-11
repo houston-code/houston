@@ -333,16 +333,16 @@ Grab the artifact for your platform:
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
 | Any (terminal only) | Node ≥ 22 | `houston-cli.cjs` — the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i` | **No** — re-download to update |
 
-> **The builds are unsigned.** First-run warnings to expect:
-> - **macOS** — Gatekeeper warns. Right-click the app → **Open** → **Open**, or remove
->   quarantine: `xattr -dr com.apple.quarantine "/Applications/Houston.app"`.
-> - **Windows** — SmartScreen warns until the installer is signed with an Authenticode
+> **macOS builds are signed and notarized**, so they open with no Gatekeeper warning
+> and update in place. **Windows and Linux builds are unsigned** for now:
+> - **Windows**: SmartScreen warns until the installer is signed with an Authenticode
 >   cert. Click **More info** → **Run anyway**.
-> - **Linux** — AppImage/deb are unsigned (conventional).
+> - **Linux**: AppImage/deb are unsigned (conventional).
 >
-> **No platform auto-downloads or auto-installs updates while the builds are unsigned.**
-> "Yes" above means the app checks the update feed and shows a banner linking to
-> **Releases** for a manual download — see [Updates](#updates).
+> **Only macOS auto-downloads and installs updates** (its signature is verifiable). On
+> Windows and Linux, "Yes" above means the app checks the update feed and shows a banner
+> linking to **Releases** for a manual download, until those platforms are signed too.
+> See [Updates](#updates).
 >
 > **Linux needs glibc 2.35 or newer** (Ubuntu 22.04+, Debian 12+, Fedora 36+) — **for the
 > desktop app.** The floor is set by the build toolchain: the native `node-pty` addon is
@@ -359,7 +359,7 @@ Grab the artifact for your platform:
 > ([`scripts/merge-mac-update-yml.mjs`](scripts/merge-mac-update-yml.mjs)) and publishes a
 > single `latest-mac.yml`; the updater picks the entry matching each Mac's architecture.
 >
-> To ship a signed + notarized macOS build, see [Signing & notarization](#signing--notarization).
+> For how the macOS signing + notarization pipeline works, see [Signing & notarization](#signing--notarization).
 
 ## First run
 
@@ -601,13 +601,17 @@ After you install a newer build and relaunch, a small **What's new** popup shows
 [`RELEASE_HIGHLIGHTS`](src/shared/update.ts) map, so add an entry there whenever
 you bump the version in `package.json`.
 
-It does **not** auto-download or silently install: this build is unsigned, so
-there's no Developer ID signature for `electron-updater` to verify against, and
-silently installing remote packages would make the release pipeline an RCE
-boundary. The banner therefore links to **Releases** to download manually. Once
-the app is [signed + notarized](#signing--notarization), enable `autoDownload` /
-`autoInstallOnAppQuit` in [`src/main/updater.ts`](src/main/updater.ts) so the
-signature check is meaningful and the banner can install in place.
+**macOS** builds are [signed + notarized](#signing--notarization), so
+`electron-updater` can verify a downloaded package's signature against the running
+app. There the updater auto-downloads an update and installs it the next time you
+quit (`autoDownload` / `autoInstallOnAppQuit` in
+[`src/main/updater.ts`](src/main/updater.ts), gated per-platform by
+`shouldAutoInstallUpdates`).
+
+**Windows and Linux** builds are still unsigned, so there's no signature to verify
+and auto-installing a remote package would make the release pipeline an RCE
+boundary. On those platforms the banner links to **Releases** for a manual download,
+until they are signed too.
 
 Update metadata is published by running `npm run dist` with a `GH_TOKEN` and
 `--publish`, or by attaching the artifacts to a release manually. On macOS the
@@ -666,10 +670,30 @@ same caution you'd treat running untrusted code, and prefer the default
 
 ## Signing & notarization
 
-The build is ad-hoc signed because there's no Developer ID configured. To sign
-and notarize, set `mac.identity` in [`electron-builder.yml`](electron-builder.yml)
-to your Developer ID and add a notarization step (e.g. `@electron/notarize` via
-an `afterSign` hook), then `npm run dist`.
+macOS release builds are code-signed with a **Developer ID Application** certificate
+and notarized by Apple. Windows and Linux are not signed yet. Signing and
+notarization are driven entirely by CI environment variables (see
+[`release-publish.yml`](.github/workflows/release-publish.yml)), so no certificate or
+credential is committed to the repo.
+
+The macOS build reads five repo secrets, set under **Settings → Secrets and
+variables → Actions** on the source repo:
+
+| Secret | Purpose |
+|--------|---------|
+| `CSC_LINK` | base64 of the Developer ID Application `.p12` (certificate + private key) |
+| `CSC_KEY_PASSWORD` | password for that `.p12` |
+| `APPLE_ID` | Apple ID used for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | app-specific password for that Apple ID |
+| `APPLE_TEAM_ID` | Apple Developer Team ID |
+
+With those present, [`electron-builder.yml`](electron-builder.yml) signs with the
+imported identity (it leaves `mac.identity` unset so the cert is auto-selected) and
+electron-builder v26 notarizes automatically. Builds without the secrets
+(nightly-build, release-prepare, and a local `npm run dist`) skip signing and
+produce an unsigned app. To sign a build locally, import the Developer ID cert into
+your login keychain and export the same variables in your shell before
+`npm run dist:mac`.
 
 ## Roadmap
 
