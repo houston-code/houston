@@ -1254,6 +1254,68 @@ body.is-resizing {
   color: var(--text);
 }
 
+/* ---- First-write git-init prompt (offers `git init` on the first write into a
+   non-repo workspace) — an accent-tinted card that never gates the run. Tints are
+   color-mixed from --accent so both Graphite and the light theme stay on-brand. ---- */
+.git-init-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 var(--chat-gap) 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 10px;
+}
+.git-init-banner__icon {
+  display: flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+.git-init-banner__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.git-init-banner__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.git-init-banner__text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.git-init-banner__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.git-init-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.git-init-banner__dontask {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.git-init-banner__dontask input {
+  cursor: pointer;
+}
+
 /* ---- Update-available banner (persistent until dismissed / updated) ---- */
 .update-banner {
   display: flex;

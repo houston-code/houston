@@ -42,6 +42,10 @@ export const IPC = {
   commandsList: 'commands:list',
   gitRepoInfo: 'git:repoInfo',
   gitInit: 'git:init',
+  /** Whether the user opted out of the first-write git-init prompt for a folder. */
+  gitInitDismissed: 'git:initDismissed',
+  /** Persist "don't ask again" for the first-write git-init prompt (per folder). */
+  gitInitDismiss: 'git:initDismiss',
   workingTreeChanges: 'workingTree:changes',
   // Settings
   settingsGet: 'settings:get',

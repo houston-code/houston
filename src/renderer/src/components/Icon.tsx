@@ -33,6 +33,7 @@ export type IconName =
   | 'eye'
   | 'terminal'
   | 'tasks'
+  | 'gitBranch'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Funnel.
@@ -180,6 +181,15 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M7.5 11.2h6" />
       <path d="M2.7 7.8h.01" />
       <path d="M2.7 11h.01" />
+    </>
+  ),
+  // Two nodes joined by a branching line — a git branch / repository.
+  gitBranch: (
+    <>
+      <path d="M4.3 2.2v7.3" />
+      <circle cx="4.3" cy="11.6" r="1.9" />
+      <circle cx="11.7" cy="4.4" r="1.9" />
+      <path d="M11.7 6.3a5.4 5.4 0 0 1-5.4 5.3" />
     </>
   )
 }

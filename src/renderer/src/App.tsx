@@ -57,6 +57,7 @@ import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { PlanPanel } from './components/PlanPanel'
 import { Composer } from './components/Composer'
+import { GitInitBanner } from './components/GitInitBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { LegalGate } from './components/LegalGate'
 import { isAnyPopoverOpen } from './components/Popover'
@@ -170,6 +171,9 @@ export default function App(): JSX.Element {
   const [branchName, setBranchName] = useState('')
   const [baseBranch, setBaseBranch] = useState('')
   const [commands, setCommands] = useState<Command[]>(BUILTIN_COMMANDS)
+  // Workspaces the user chose "Not now" for on the first-write git-init banner — an
+  // in-memory, per-session dismissal (persisted "don't ask again" lives in settings).
+  const [gitInitNotNow, setGitInitNotNow] = useState<ReadonlySet<string>>(() => new Set())
   const [search, setSearch] = useState('')
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
   // Sidebar status filter: "active" hides archived chats; "archived" shows only them.
@@ -324,6 +328,30 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+
+  // Has this chat produced at least one file write that actually landed? A boolean
+  // (any write), not a count, so rapid multi-file writes don't stack. `status: 'done'`
+  // excludes a write that was proposed-then-denied or errored (nothing hit disk) and
+  // one still in flight. Drives the first-write git-init banner.
+  const writeHappened = useMemo(
+    () =>
+      chat.items.some(
+        (it) => it.kind === 'tool' && it.toolKind === 'write' && it.status === 'done'
+      ),
+    [chat.items]
+  )
+  const onGitInitNotNow = useCallback(() => {
+    if (workspace) setGitInitNotNow((s) => new Set(s).add(workspace))
+  }, [workspace])
+  // Nudge the git-init banner to re-check repo state when the Changes panel closes —
+  // the user may have initialized the repo from there, which no window-focus event
+  // would signal.
+  const [gitInitRecheck, setGitInitRecheck] = useState(0)
+  const prevChangesOpen = useRef(changesOpen)
+  useEffect(() => {
+    if (prevChangesOpen.current && !changesOpen) setGitInitRecheck((n) => n + 1)
+    prevChangesOpen.current = changesOpen
+  }, [changesOpen])
 
   // Integrated-terminal tab state, lifted here (out of the lazy TerminalDock) so
   // the background-tasks indicator can list terminals even while the panel is
@@ -1520,6 +1548,18 @@ export default function App(): JSX.Element {
             onOpenPlan={onOpenPlan}
           />
         )}
+
+        <GitInitBanner
+          // Re-evaluate cleanly per workspace: a new folder gets its own banner state.
+          key={workspace ?? 'none'}
+          workspace={workspace}
+          writeHappened={writeHappened}
+          running={chat.running}
+          sessionDismissed={workspace ? gitInitNotNow.has(workspace) : false}
+          onNotNow={onGitInitNotNow}
+          onDismissed={setSettings}
+          recheckSignal={gitInitRecheck}
+        />
 
         {chat.errored && !chat.running && currentId && (
           <div className="checkpoint-bar">

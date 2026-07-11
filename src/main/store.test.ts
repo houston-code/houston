@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServerConfig, PermissionRule } from '@shared/types'
@@ -225,6 +233,51 @@ describe('recent workspaces — existence pruning', () => {
     } finally {
       rmSync(a, { recursive: true, force: true })
       rmSync(b, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('git-init dismissal — "don\'t ask again for this folder"', () => {
+  it('round-trips an opt-out: dismiss persists it and isGitInitDismissed reads it back', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'ws-gi-'))
+    try {
+      const { dismissGitInit, isGitInitDismissed, getSettings } = await loadStore()
+      expect(isGitInitDismissed(ws)).toBe(false)
+      dismissGitInit(ws)
+      expect(isGitInitDismissed(ws)).toBe(true)
+      // Persisted under gitInitDismissed (realpath-normalized), so it survives reloads.
+      expect(getSettings().gitInitDismissed).toContain(realpathSync(ws))
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('normalizes symlinked paths so the same folder matches however it is spelled', async () => {
+    const real = mkdtempSync(join(tmpdir(), 'ws-real-'))
+    const link = join(mkdtempSync(join(tmpdir(), 'ws-link-')), 'alias')
+    try {
+      symlinkSync(real, link)
+      const { dismissGitInit, isGitInitDismissed } = await loadStore()
+      // Opt out via the symlink; the real path (and vice versa) is still recognized.
+      dismissGitInit(link)
+      expect(isGitInitDismissed(real)).toBe(true)
+      expect(isGitInitDismissed(link)).toBe(true)
+    } finally {
+      rmSync(real, { recursive: true, force: true })
+      rmSync(link, { force: true })
+    }
+  })
+
+  it('dedupes repeated opt-outs and ignores an empty path', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'ws-gi-'))
+    try {
+      const { dismissGitInit, isGitInitDismissed } = await loadStore()
+      dismissGitInit(ws)
+      dismissGitInit(ws)
+      expect(dismissGitInit(ws).gitInitDismissed).toEqual([realpathSync(ws)])
+      expect(isGitInitDismissed('')).toBe(false)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
     }
   })
 })

@@ -59,6 +59,12 @@ const api = {
   /** Initialize a git repo in the workspace so its files show up in the Changes panel. */
   initGitRepo: (workspace: string): Promise<GitInitResult> =>
     ipcRenderer.invoke(IPC.gitInit, workspace),
+  /** Whether the user opted out of the first-write git-init prompt for this folder. */
+  isGitInitDismissed: (workspace: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.gitInitDismissed, workspace),
+  /** Persist "don't ask again" for the first-write git-init prompt (per folder). */
+  dismissGitInit: (workspace: string): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.gitInitDismiss, workspace),
 
   // Settings
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),

@@ -228,6 +228,12 @@ export interface AppSettings {
   selected: SelectedModel | null
   approvalPolicy: ApprovalPolicy
   recentWorkspaces: string[]
+  /**
+   * Realpath-normalized workspace paths the user has opted out of the first-write
+   * "Initialize git repository" prompt for ("Don't ask again for this folder").
+   * Checked before showing the banner; appended to on opt-out.
+   */
+  gitInitDismissed?: string[]
   /** Optional extra instructions appended to the system prompt. */
   systemPromptExtra?: string
   /**

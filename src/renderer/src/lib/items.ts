@@ -211,7 +211,17 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       if (exists) return updateTool(finalized, e.callId, { status: 'running', args: e.args })
       return [
         ...finalized,
-        { kind: 'tool', id: e.callId, name: e.name, args: e.args, status: 'running' }
+        {
+          kind: 'tool',
+          id: e.callId,
+          name: e.name,
+          args: e.args,
+          // `kind` is present on live tool_start events (absent on older logs); tagging
+          // the row here means auto-approved tools get a toolKind too, not just the ones
+          // that hit an approval prompt (which set it via tool_approval above).
+          ...(e.kind ? { toolKind: e.kind } : {}),
+          status: 'running'
+        }
       ]
     }
     case 'tool_progress': {

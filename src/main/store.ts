@@ -1,4 +1,12 @@
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  existsSync,
+  mkdirSync,
+  statSync,
+  realpathSync
+} from 'node:fs'
 import { join, dirname } from 'node:path'
 import { getUserDataDir } from './userData'
 import type { AppSettings, McpServerConfig, PermissionRule, ProviderConfig } from '@shared/types'
@@ -316,6 +324,44 @@ export function rememberWorkspace(path: string): AppSettings {
     ...current.recentWorkspaces.filter((p) => p !== path && workspaceExists(p))
   ].slice(0, 10)
   return updateSettings({ recentWorkspaces: recents })
+}
+
+/**
+ * Realpath-normalize a workspace path so the "don't ask again" list matches the
+ * same folder regardless of how it's spelled (e.g. macOS's `/tmp` → `/private/tmp`
+ * symlink, or a symlinked project dir). Falls back to the raw path when it can't be
+ * resolved (a since-deleted folder), which still round-trips consistently.
+ */
+function normalizeWorkspacePath(workspace: string): string {
+  try {
+    return realpathSync(workspace)
+  } catch {
+    return workspace
+  }
+}
+
+/**
+ * Whether the user opted out of the first-write "Initialize git repository" prompt
+ * for this workspace ("Don't ask again for this folder"). Compared realpath-normalized
+ * so it matches the path however it's spelled.
+ */
+export function isGitInitDismissed(workspace: string): boolean {
+  if (!workspace) return false
+  const target = normalizeWorkspacePath(workspace)
+  return (getSettings().gitInitDismissed ?? []).includes(target)
+}
+
+/**
+ * Record that the user opted out of the first-write git-init prompt for this
+ * workspace. Realpath-normalized and deduped; a no-op (returns current settings)
+ * when already present or given no path.
+ */
+export function dismissGitInit(workspace: string): AppSettings {
+  if (!workspace) return getSettings()
+  const target = normalizeWorkspacePath(workspace)
+  const current = getSettings().gitInitDismissed ?? []
+  if (current.includes(target)) return getSettings()
+  return updateSettings({ gitInitDismissed: [...current, target] })
 }
 
 /**

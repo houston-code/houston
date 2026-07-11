@@ -405,7 +405,19 @@ export interface AgentQuestion {
 export type AgentEvent =
   | { runId: string; type: 'text'; delta: string }
   | { runId: string; type: 'reasoning'; delta: string }
-  | { runId: string; type: 'tool_start'; callId: string; name: string; args: Record<string, unknown> }
+  | {
+      runId: string
+      type: 'tool_start'
+      callId: string
+      name: string
+      args: Record<string, unknown>
+      /**
+       * The tool's kind, so the transcript can tag every tool row (e.g. to notice a
+       * write landed) — not just the ones that went through an approval prompt. Optional
+       * for back-compat with events constructed without it (older logs / tests).
+       */
+      kind?: 'read' | 'write' | 'shell' | 'network' | 'mcp'
+    }
   | { runId: string; type: 'tool_progress'; callId: string; message: string }
   | {
       // A nested subagent spawned by a tool (e.g. one of review_changes' per-dimension
