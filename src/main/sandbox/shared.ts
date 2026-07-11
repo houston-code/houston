@@ -13,7 +13,12 @@ import type {
   RunSandboxedDeps
 } from './contract'
 
-const DEFAULT_TIMEOUT_MS = 120_000
+// A foreground command's wall-clock ceiling. Sized so a cold monorepo `npm install`
+// (which can run several minutes) completes rather than being guillotined mid-write;
+// the model can override per call (run_shell's `timeout_seconds`) and should use a
+// background shell for anything genuinely long-running. Kept below the provider/turn
+// budget so a wedged command can't stall a whole turn.
+export const DEFAULT_TIMEOUT_MS = 300_000
 const MAX_OUTPUT_BYTES = 1_000_000 // 1 MB cap per stream
 // Split the budget across both ends so the command echo / early errors AND the
 // trailing summary (e.g. `5 failed, 120 passed`) both survive truncation.
@@ -275,8 +280,13 @@ export function windowsKillCommands(
   return cmds
 }
 
-/** SIGKILL a child and its descendants (see {@link planKill}). */
-export function killProcessTree(child: ChildProcess): void {
+/**
+ * Send `signal` to a child and its descendants (see {@link planKill}). SIGTERM asks
+ * the tree to shut down cleanly; SIGKILL forces it. On Windows there is no graceful
+ * group signal — `taskkill /T /F` is always forceful — so every signal maps to the
+ * same tree kill there, and a well-behaved process simply dies on the first call.
+ */
+export function signalProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
   const pid = child.pid
   if (pid === undefined) return
   const plan = planKill(process.platform, pid)
@@ -299,15 +309,25 @@ export function killProcessTree(child: ChildProcess): void {
     return
   }
   try {
-    process.kill(plan.target, 'SIGKILL')
+    process.kill(plan.target, signal)
   } catch {
     try {
-      child.kill('SIGKILL')
+      child.kill(signal)
     } catch {
       // already gone
     }
   }
 }
+
+/** SIGKILL a child and its descendants (see {@link planKill}). */
+export function killProcessTree(child: ChildProcess): void {
+  signalProcessTree(child, 'SIGKILL')
+}
+
+/** Grace period after SIGTERM before escalating to SIGKILL on timeout/abort. Long
+ *  enough for a package manager or dev server to flush and exit cleanly, short enough
+ *  that a wedged process is reaped promptly. */
+const KILL_GRACE_MS = 3_000
 
 /** Grace period after the process exits (or is killed) for final stdio to flush
  *  before the call settles. Bounds how long a wedged/orphaned pipe can stall us. */
@@ -355,7 +375,8 @@ export function runWithBackend(
   deps: RunSandboxedDeps = {}
 ): Promise<SandboxRunResult> {
   const spawnFn = deps.spawn ?? spawn
-  const killTree = deps.killTree ?? killProcessTree
+  const signalTree = deps.signalTree ?? signalProcessTree
+  const killGraceMs = deps.killGraceMs ?? KILL_GRACE_MS
   const drainMs = deps.drainMs ?? STDIO_DRAIN_MS
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const launch = backend.buildLaunch({
@@ -382,7 +403,9 @@ export function runWithBackend(
     const err = new CappedOutput()
     let timedOut = false
     let settled = false
+    let terminating = false
     let drainTimer: ReturnType<typeof setTimeout> | undefined
+    let hardKillTimer: ReturnType<typeof setTimeout> | undefined
 
     let onAbort: (() => void) | undefined
     const cleanupAbort = (): void => {
@@ -394,6 +417,7 @@ export function runWithBackend(
       settled = true
       clearTimeout(timer)
       if (drainTimer) clearTimeout(drainTimer)
+      if (hardKillTimer) clearTimeout(hardKillTimer)
       cleanupAbort()
       resolve({
         stdout: out.toString(),
@@ -412,17 +436,30 @@ export function runWithBackend(
       drainTimer = setTimeout(() => settle(exitCode), drainMs)
     }
 
+    // Graceful whole-tree termination on timeout/abort: SIGTERM first so a package
+    // manager or dev server can flush and roll back a partial write, then SIGKILL
+    // any stragglers that ignore it after a grace period. A well-behaved process
+    // exits during the grace window and settles via 'close' before the SIGKILL fires.
+    const terminate = (): void => {
+      if (terminating || settled) return
+      terminating = true
+      signalTree(child, 'SIGTERM')
+      hardKillTimer = setTimeout(() => {
+        signalTree(child, 'SIGKILL')
+        armDrain(child.exitCode ?? null)
+      }, killGraceMs)
+    }
+
     const timer = setTimeout(() => {
       timedOut = true
-      killTree(child)
-      armDrain(child.exitCode ?? null)
+      terminate()
     }, timeoutMs)
 
-    // Aborting the run (user cancel) kills the whole tree, same as a timeout.
+    // Aborting the run (user cancel) terminates the whole tree, same as a timeout.
     if (opts.signal) {
-      if (opts.signal.aborted) killTree(child)
+      if (opts.signal.aborted) terminate()
       else {
-        onAbort = () => killTree(child)
+        onAbort = () => terminate()
         opts.signal.addEventListener('abort', onAbort, { once: true })
       }
     }

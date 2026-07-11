@@ -10,6 +10,7 @@ import {
   resolvePosixShell,
   runWithBackend,
   sandboxEnv,
+  signalProcessTree,
   windowsKillCommands
 } from './shared'
 import { win32 } from 'node:path'
@@ -337,7 +338,7 @@ describe('runWithBackend — honest sandboxed flag', () => {
     const child = makeFakeChild()
     const p = runWithBackend(fakeBackend(true), baseOpts(), {
       spawn: fakeSpawn(child),
-      killTree: vi.fn(),
+      signalTree: vi.fn(),
       drainMs: 20
     })
     child.emit('close', 0)
@@ -348,7 +349,7 @@ describe('runWithBackend — honest sandboxed flag', () => {
     const child = makeFakeChild()
     const p = runWithBackend(fakeBackend(false), baseOpts(), {
       spawn: fakeSpawn(child),
-      killTree: vi.fn(),
+      signalTree: vi.fn(),
       drainMs: 20
     })
     child.emit('close', 0)
@@ -360,13 +361,119 @@ describe('runWithBackend — honest sandboxed flag', () => {
     const spawn = fakeSpawn(child)
     runWithBackend(fakeBackend(false, 'my-wrapper'), baseOpts(), {
       spawn,
-      killTree: vi.fn(),
+      signalTree: vi.fn(),
       drainMs: 20
     })
     expect(spawn.calls[0].cmd).toBe('my-wrapper')
     expect(spawn.calls[0].options.detached).toBe(true)
-    // Abort is handled by killTree, never delegated to spawn's own signal option
-    // (which would kill only the wrapper, not the tree).
+    // Abort is handled by our own tree-signal path, never delegated to spawn's own
+    // signal option (which would kill only the wrapper, not the tree).
     expect(spawn.calls[0].options.signal).toBeUndefined()
+  })
+
+  it('honors a custom timeoutMs and reports timedOut, terminating gracefully', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = makeFakeChild()
+      const signalTree = vi.fn()
+      const p = runWithBackend(fakeBackend(true), baseOpts({ timeoutMs: 1_000 }), {
+        spawn: fakeSpawn(child),
+        signalTree,
+        killGraceMs: 500,
+        drainMs: 20
+      })
+      // Before the deadline: no signal yet.
+      await vi.advanceTimersByTimeAsync(999)
+      expect(signalTree).not.toHaveBeenCalled()
+      // Deadline: SIGTERM first (let the tree flush/roll back), NOT an immediate SIGKILL.
+      await vi.advanceTimersByTimeAsync(1)
+      expect(signalTree).toHaveBeenCalledWith(child, 'SIGTERM')
+      expect(signalTree).not.toHaveBeenCalledWith(child, 'SIGKILL')
+      // Grace elapses without the process exiting → escalate to SIGKILL, then settle.
+      await vi.advanceTimersByTimeAsync(500)
+      expect(signalTree).toHaveBeenCalledWith(child, 'SIGKILL')
+      await vi.advanceTimersByTimeAsync(20)
+      const r = await p
+      expect(r.timedOut).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('settles without SIGKILL when the process exits during the SIGTERM grace window', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = makeFakeChild()
+      const signalTree = vi.fn()
+      const p = runWithBackend(fakeBackend(true), baseOpts({ timeoutMs: 1_000 }), {
+        spawn: fakeSpawn(child),
+        signalTree,
+        killGraceMs: 500,
+        drainMs: 20
+      })
+      await vi.advanceTimersByTimeAsync(1_000) // timeout → SIGTERM
+      child.exitCode = 143
+      child.emit('close', 143) // the process obeyed SIGTERM
+      const r = await p
+      expect(signalTree).toHaveBeenCalledWith(child, 'SIGTERM')
+      expect(signalTree).not.toHaveBeenCalledWith(child, 'SIGKILL')
+      expect(r.timedOut).toBe(true)
+      expect(r.exitCode).toBe(143)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('terminates the tree gracefully on abort (SIGTERM, not delegated to spawn)', async () => {
+    vi.useFakeTimers()
+    try {
+      const child = makeFakeChild()
+      const signalTree = vi.fn()
+      const ac = new AbortController()
+      const p = runWithBackend(fakeBackend(true), baseOpts({ signal: ac.signal }), {
+        spawn: fakeSpawn(child),
+        signalTree,
+        killGraceMs: 500,
+        drainMs: 20
+      })
+      ac.abort()
+      expect(signalTree).toHaveBeenCalledWith(child, 'SIGTERM')
+      await vi.advanceTimersByTimeAsync(500)
+      expect(signalTree).toHaveBeenCalledWith(child, 'SIGKILL')
+      await vi.advanceTimersByTimeAsync(20)
+      await p
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('signalProcessTree', () => {
+  it.skipIf(process.platform === 'win32')(
+    'sends the given signal to the whole process group on POSIX',
+    () => {
+      const child: any = { pid: 4242, kill: vi.fn() }
+      const spy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+      try {
+        signalProcessTree(child, 'SIGTERM')
+        expect(spy).toHaveBeenCalledWith(-4242, 'SIGTERM')
+        signalProcessTree(child, 'SIGKILL')
+        expect(spy).toHaveBeenCalledWith(-4242, 'SIGKILL')
+      } finally {
+        spy.mockRestore()
+      }
+    }
+  )
+
+  it('is a no-op when the child has no pid', () => {
+    const child: any = { pid: undefined, kill: vi.fn() }
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+    try {
+      signalProcessTree(child, 'SIGTERM')
+      expect(spy).not.toHaveBeenCalled()
+      expect(child.kill).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

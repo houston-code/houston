@@ -16,6 +16,10 @@ import {
   NETWORK_BLOCKED_HINT,
   sandboxWriteBlockHint,
   SANDBOX_WRITE_BLOCKED_HINT,
+  sandboxOpDeniedHint,
+  SANDBOX_OP_DENIED_HINT,
+  clampShellTimeout,
+  shellTimeoutHint,
   type ToolContext
 } from './tools'
 import type { GhResult } from './github'
@@ -1173,6 +1177,61 @@ describe('sandboxWriteBlockHint', () => {
 
   it('stays silent for an unrelated failure', () => {
     expect(sandboxWriteBlockHint(failed, 'error: test "foo" failed: expected 1 got 2')).toBe('')
+  })
+})
+
+describe('sandboxOpDeniedHint', () => {
+  const failed = { exitCode: 1 as number | null }
+
+  it('hints on a bare sandbox-denied operation (e.g. ps)', () => {
+    expect(sandboxOpDeniedHint(failed, '/bin/ps: Operation not permitted')).toBe(SANDBOX_OP_DENIED_HINT)
+  })
+
+  it('hints for a blocked sudo', () => {
+    expect(sandboxOpDeniedHint(failed, '/usr/bin/sudo: Operation not permitted')).toBe(SANDBOX_OP_DENIED_HINT)
+  })
+
+  it('defers to the network hint for a socket "operation not permitted"', () => {
+    expect(sandboxOpDeniedHint(failed, 'connect: Operation not permitted (socket)')).toBe('')
+  })
+
+  it('defers to the write hint for a write-shaped denial', () => {
+    expect(sandboxOpDeniedHint(failed, 'EPERM: operation not permitted, open ~/.npm/x')).toBe('')
+  })
+
+  it('stays silent on success and on unrelated failures', () => {
+    expect(sandboxOpDeniedHint({ exitCode: 0 }, '/bin/ps: Operation not permitted')).toBe('')
+    expect(sandboxOpDeniedHint(failed, 'error: test "foo" failed')).toBe('')
+  })
+})
+
+describe('clampShellTimeout', () => {
+  it('returns undefined (sandbox default) when unset', () => {
+    expect(clampShellTimeout(undefined)).toBeUndefined()
+  })
+
+  it('converts seconds to milliseconds', () => {
+    expect(clampShellTimeout(45)).toBe(45_000)
+  })
+
+  it('clamps above the 600s ceiling', () => {
+    expect(clampShellTimeout(5_000)).toBe(600_000)
+  })
+
+  it('ignores non-positive or non-finite values', () => {
+    expect(clampShellTimeout(0)).toBeUndefined()
+    expect(clampShellTimeout(-10)).toBeUndefined()
+    expect(clampShellTimeout(Number.NaN)).toBeUndefined()
+    expect(clampShellTimeout(Number.POSITIVE_INFINITY)).toBeUndefined()
+  })
+})
+
+describe('shellTimeoutHint', () => {
+  it('reports the elapsed limit and steers toward timeout_seconds / background', () => {
+    const hint = shellTimeoutHint(300_000)
+    expect(hint).toContain('timed out after 300s')
+    expect(hint).toContain('timeout_seconds')
+    expect(hint).toContain('background:true')
   })
 })
 
