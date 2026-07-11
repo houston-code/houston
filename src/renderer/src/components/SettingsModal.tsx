@@ -368,11 +368,14 @@ export function KeyboardTab({
 export function SettingsModal({
   initial,
   onClose,
-  onSaved
+  onSaved,
+  onShowScorecard
 }: {
   initial: AppSettings
   onClose: () => void
   onSaved: (s: AppSettings) => void
+  /** Open the local-only per-model loop scorecard (from the Models tab). */
+  onShowScorecard?: () => void
 }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(initial)
   const [tab, setTab] = useState<TabId>('models')
@@ -1012,6 +1015,17 @@ export function SettingsModal({
                     )
                   })()}
                 </SettingsSection>
+
+                {onShowScorecard && (
+                  <SettingsSection
+                    title="Loop scorecard"
+                    desc="See how each model has actually behaved across your chats — average steps, tool use, clean-finish rate, and cost. Aggregated on-device from your local data only, never sent anywhere."
+                  >
+                    <button type="button" className="btn" onClick={onShowScorecard}>
+                      Open loop scorecard
+                    </button>
+                  </SettingsSection>
+                )}
               </>
             )}
 

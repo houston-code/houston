@@ -14,15 +14,15 @@ function installApi(
 ) {
   const listWorkspaceDir = vi.fn((_ws: string, rel: string) => Promise.resolve(tree[rel] ?? []))
   const readWorkspaceFile = vi.fn().mockResolvedValue(preview)
-  const revealWorkspacePath = vi.fn().mockResolvedValue({ ok: true })
+  const openWorkspacePath = vi.fn().mockResolvedValue({ ok: true })
   const listWorkspaceFiles = vi.fn().mockResolvedValue([])
   window.api = {
     listWorkspaceDir,
     readWorkspaceFile,
-    revealWorkspacePath,
+    openWorkspacePath,
     listWorkspaceFiles
   } as unknown as typeof window.api
-  return { listWorkspaceDir, readWorkspaceFile, revealWorkspacePath, listWorkspaceFiles }
+  return { listWorkspaceDir, readWorkspaceFile, openWorkspacePath, listWorkspaceFiles }
 }
 
 const dir = (name: string, path: string): FileEntry => ({ name, path, isDirectory: true })
@@ -67,12 +67,12 @@ describe('FilesPanel', () => {
     expect(await screen.findByText('hello from the file')).toBeInTheDocument()
   })
 
-  it('reveals the selected file via the preview header button', async () => {
+  it('opens the selected file via the preview header button', async () => {
     const api = installApi({ '': [file('README.md', 'README.md')] })
     render(<FilesPanel workspace="/repo" onClose={vi.fn()} />)
     fireEvent.click(await screen.findByText('README.md'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Reveal' }))
-    expect(api.revealWorkspacePath).toHaveBeenCalledWith('/repo', 'README.md')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open' }))
+    expect(api.openWorkspacePath).toHaveBeenCalledWith('/repo', 'README.md')
   })
 
   it('renders an image preview for an image file', async () => {

@@ -8,10 +8,13 @@ import { EDITORS } from '@shared/editors'
 // (detectEditors with injected deps, planEditorLaunch) needs none of these, but
 // importing the module evaluates them.
 const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }))
-const { showItemInFolder } = vi.hoisted(() => ({ showItemInFolder: vi.fn() }))
+const { showItemInFolder, openPath } = vi.hoisted(() => ({
+  showItemInFolder: vi.fn(),
+  openPath: vi.fn<(p: string) => Promise<string>>().mockResolvedValue('')
+}))
 const { resolveBinaryPath } = vi.hoisted(() => ({ resolveBinaryPath: vi.fn<(b: string) => string | null>() }))
 vi.mock('node:child_process', () => ({ spawn }))
-vi.mock('electron', () => ({ shell: { showItemInFolder } }))
+vi.mock('electron', () => ({ shell: { showItemInFolder, openPath } }))
 vi.mock('./logger', () => ({ log: { warn: vi.fn() } }))
 vi.mock('./agent/format', () => ({ resolveBinaryPath }))
 
@@ -20,7 +23,7 @@ import {
   planEditorLaunch,
   openProjectInEditor,
   revealInFileManager,
-  revealWorkspacePath
+  openWorkspacePath
 } from './openInEditor'
 
 const code = EDITORS.find((e) => e.id === 'vscode')!
@@ -160,36 +163,36 @@ describe('revealInFileManager', () => {
   })
 })
 
-describe('revealWorkspacePath', () => {
+describe('openWorkspacePath', () => {
   let root: string
 
   beforeEach(() => {
     // realpath so macOS's /var -> /private/var symlink doesn't trip containment.
-    root = realpathSync(mkdtempSync(join(tmpdir(), 'houston-reveal-')))
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'houston-open-')))
     writeFileSync(join(root, 'a.txt'), 'hi')
   })
 
   afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-  it('reveals a file inside the workspace', () => {
-    expect(revealWorkspacePath(root, 'a.txt').ok).toBe(true)
-    expect(showItemInFolder).toHaveBeenCalledWith(join(root, 'a.txt'))
+  it('opens a file inside the workspace', () => {
+    expect(openWorkspacePath(root, 'a.txt').ok).toBe(true)
+    expect(openPath).toHaveBeenCalledWith(join(root, 'a.txt'))
   })
 
   it('refuses a path that escapes the workspace', () => {
-    const res = revealWorkspacePath(root, '../outside.txt')
+    const res = openWorkspacePath(root, '../outside.txt')
     expect(res.ok).toBe(false)
-    expect(showItemInFolder).not.toHaveBeenCalled()
+    expect(openPath).not.toHaveBeenCalled()
   })
 
   it('refuses a file that no longer exists', () => {
-    expect(revealWorkspacePath(root, 'gone.txt').ok).toBe(false)
-    expect(showItemInFolder).not.toHaveBeenCalled()
+    expect(openWorkspacePath(root, 'gone.txt').ok).toBe(false)
+    expect(openPath).not.toHaveBeenCalled()
   })
 
   it('refuses empty workspace or path', () => {
-    expect(revealWorkspacePath('', 'a.txt').ok).toBe(false)
-    expect(revealWorkspacePath(root, '').ok).toBe(false)
-    expect(showItemInFolder).not.toHaveBeenCalled()
+    expect(openWorkspacePath('', 'a.txt').ok).toBe(false)
+    expect(openWorkspacePath(root, '').ok).toBe(false)
+    expect(openPath).not.toHaveBeenCalled()
   })
 })

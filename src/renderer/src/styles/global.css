@@ -2131,6 +2131,41 @@ pre.diff {
   border-radius: 999px;
 }
 
+/* Custom titlebar tooltip: a single shared, portaled bubble (see Tooltip.tsx)
+   that appears almost instantly, fades, and — because it is shared across the
+   action row — re-anchors between neighbouring buttons instead of blinking off
+   then on. Replaces the slow, unstyled native `title`. pointer-events:none so it
+   never eats a hover; z-index clears the titlebar and its badges. */
+.tt {
+  position: fixed;
+  z-index: 200;
+  max-width: 260px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+.tt--shown {
+  opacity: 1;
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .tt {
+    transition: none;
+  }
+}
+
 /* ---- Preview dock (right-hand live preview of started dev servers) ---- */
 .preview-dock {
   position: relative;
@@ -2446,6 +2481,13 @@ body.is-resizing .preview-dock__resizer::after {
   display: flex;
   justify-content: flex-end;
   z-index: 100;
+  /* The drawer covers the top-of-window titlebar strip, which is a macOS drag
+     region (`-webkit-app-region: drag`). A neutral element does NOT carve a hole
+     in that region, so the OS would swallow real clicks on the drawer's header
+     controls (e.g. the ✕) as window drags — the panel looked un-closable even
+     though the handler was wired. Marking the overlay `no-drag` subtracts it from
+     the drag region so every control inside is clickable. */
+  -webkit-app-region: no-drag;
 }
 .drawer {
   width: 560px;

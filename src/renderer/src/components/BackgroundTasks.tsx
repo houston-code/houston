@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { Popover } from './Popover'
 import { Icon } from './Icon'
+import { Tooltip } from './Tooltip'
 import type { BackgroundTask } from '../hooks/useBackgroundTasks'
 
 /** Coarse "x ago" label for a finished task; precision isn't important here. */
@@ -21,7 +22,6 @@ const STATUS_LABEL: Record<BackgroundTask['status'], string> = {
 }
 
 const KIND_LABEL: Record<BackgroundTask['kind'], string> = {
-  chat: 'Chat',
   terminal: 'Terminal',
   shell: 'Shell'
 }
@@ -39,10 +39,11 @@ function metaLine(task: BackgroundTask, now: number): string {
 }
 
 /**
- * Top-right indicator for background tasks — agent runs across conversations and
- * integrated terminal sessions, plus the most recently finished of each. The
- * button shows a live count while anything is in progress; clicking a task in the
- * popover opens that conversation or terminal.
+ * Top-right indicator for background tasks — integrated terminal sessions and the
+ * agent's backgrounded shells, plus the most recently finished of each. The button
+ * shows a live count while a backgrounded command is in progress; clicking a task
+ * in the popover opens that terminal or the conversation that spawned it. (Chat
+ * runs live in the sidebar as per-chat dots, not here.)
  */
 export function BackgroundTasks({
   tasks,
@@ -56,10 +57,10 @@ export function BackgroundTasks({
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
 
-  // The attention badge counts agent work (chats + background shells) only — an
-  // integrated terminal is user-opened and stays "running" the whole time it's
-  // open, so counting it would keep the badge permanently lit. Terminals still
-  // appear in the list below; they just don't nag from the titlebar.
+  // The attention badge counts backgrounded shells only — an integrated terminal
+  // is user-opened and stays "running" the whole time it's open, so counting it
+  // would keep the badge permanently lit. Terminals still appear in the list
+  // below; they just don't nag from the titlebar.
   const runningCount = tasks.filter((t) => t.status === 'running' && t.kind !== 'terminal').length
   const hasFinished = tasks.some((t) => t.status !== 'running')
   const now = Date.now()
@@ -71,29 +72,33 @@ export function BackgroundTasks({
 
   return (
     <>
-      <button
-        ref={btnRef}
-        type="button"
-        className="titlebar__action bgtasks__btn"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={
-          runningCount > 0 ? `Background tasks, ${runningCount} running` : 'Background tasks'
-        }
-        title={
+      <Tooltip
+        label={
           runningCount > 0
-            ? `${runningCount} background task${runningCount === 1 ? '' : 's'} running`
+            ? `Background tasks — ${runningCount} running`
             : 'Background tasks'
         }
-        onClick={() => setOpen((v) => !v)}
+        disabled={open}
       >
-        <Icon name="tasks" size={15} />
-        {runningCount > 0 && (
-          <span className="titlebar__badge bgtasks__count" data-running="">
-            {runningCount}
-          </span>
-        )}
-      </button>
+        <button
+          ref={btnRef}
+          type="button"
+          className="titlebar__action bgtasks__btn"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={
+            runningCount > 0 ? `Background tasks, ${runningCount} running` : 'Background tasks'
+          }
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Icon name="tasks" size={15} />
+          {runningCount > 0 && (
+            <span className="titlebar__badge bgtasks__count" data-running="">
+              {runningCount}
+            </span>
+          )}
+        </button>
+      </Tooltip>
 
       {open && (
         <Popover
@@ -115,8 +120,8 @@ export function BackgroundTasks({
 
           {tasks.length === 0 ? (
             <div className="bgtasks__empty">
-              No background tasks. Agent runs and terminals you start keep going here
-              while you work elsewhere.
+              No background tasks. Terminals and commands the agent runs in the
+              background keep going here while you work elsewhere.
             </div>
           ) : (
             <ul className="bgtasks__list">

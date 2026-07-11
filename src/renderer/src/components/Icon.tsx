@@ -32,7 +32,6 @@ export type IconName =
   | 'close'
   | 'eye'
   | 'terminal'
-  | 'scorecard'
   | 'tasks'
 
 const PATHS: Record<IconName, ReactNode> = {
@@ -170,15 +169,6 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M2.3 3.6h11.4v8.8H2.3z" />
       <path d="m4.7 6.7 1.9 1.6-1.9 1.6" />
       <path d="M8 10h3.1" />
-    </>
-  ),
-  // Ascending bars over a baseline — a scorecard / stats chart.
-  scorecard: (
-    <>
-      <path d="M2.5 13.2h11" />
-      <path d="M4 13V9.2" />
-      <path d="M8 13V4.8" />
-      <path d="M12 13V7" />
     </>
   ),
   // Checklist — a list of tasks with a leading check.
