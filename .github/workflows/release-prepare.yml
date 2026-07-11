@@ -75,7 +75,10 @@ jobs:
         run: npm test
       - if: runner.os == 'Windows'
         run: npx vitest run src/main/sandbox
-      - run: npm run ${{ matrix.dist }}
+      # `--publish never` (like nightly-build) — this is a pre-release GATE, not a publish.
+      # Without it, electron-builder tries to resolve the `github` publisher from
+      # electron-builder.yml and fails demanding GH_TOKEN, which is intentionally absent here.
+      - run: npm run ${{ matrix.dist }} -- --publish never
       # The packaged-app e2e (built .app via Playwright) runs at release time — it moved
       # off the per-merge path to save macOS minutes, so this is where it gates a release.
       - if: matrix.os == 'macos-14'
