@@ -1,4 +1,4 @@
-import { app, screen, BrowserWindow, dialog } from 'electron'
+import { app, screen, BrowserWindow, dialog, systemPreferences } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -38,6 +38,21 @@ process.on('unhandledRejection', (reason) => log.error('unhandledRejection', rea
 // resolved userData/Keychain, so stored keys would land in / be read from an
 // inconsistent location and silently fail to persist.
 app.setName(APP_NAME)
+
+// Keep scrollbars slim and auto-hiding, even for users whose macOS "Show scroll
+// bars" setting is "Always" — which forces the chunky ~15px legacy bar that never
+// hides and can't be thinned from CSS (styling ::-webkit-scrollbar would opt into
+// a non-overlay bar that permanently reserves layout width). The scroller style
+// derives from the AppleShowScrollBars default; writing it in our OWN domain wins
+// over the user's global setting (app domain outranks the global domain) and only
+// affects this app. Chromium reads it when the render process spins up, so set it
+// before any window is created. macOS-only — the key is a no-op elsewhere. Guarded
+// so we don't rewrite (and re-post the change notification) once it already holds.
+if (process.platform === 'darwin') {
+  if (systemPreferences.getUserDefault('AppleShowScrollBars', 'string') !== 'WhenScrolling') {
+    systemPreferences.setUserDefault('AppleShowScrollBars', 'string', 'WhenScrolling')
+  }
+}
 
 // Bind the shared shell modules (store/secrets/conversations/logger/…) to
 // Electron's per-user profile dir. They read it via the userData seam instead of
