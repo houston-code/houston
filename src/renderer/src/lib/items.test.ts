@@ -285,6 +285,57 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
   })
 })
 
+describe('tool_start kind tagging', () => {
+  it('tags an auto-approved tool row with its kind (no approval prompt needed)', () => {
+    // An auto-approved write emits only tool_start (no tool_approval), so the kind has
+    // to ride on tool_start for the row to be recognizable as a write.
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_start',
+      callId: 'w1',
+      name: 'write_file',
+      args: { path: 'a.ts' },
+      kind: 'write'
+    })
+    const tool = items.find((i): i is ToolItem => i.kind === 'tool' && i.id === 'w1')
+    expect(tool?.toolKind).toBe('write')
+  })
+
+  it('preserves a kind already set by an approval prompt when tool_start follows', () => {
+    let items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_approval',
+      callId: 'w1',
+      name: 'write_file',
+      summary: 'write a.ts',
+      kind: 'write'
+    })
+    items = reduceEvent(items, {
+      runId: 'r',
+      type: 'tool_start',
+      callId: 'w1',
+      name: 'write_file',
+      args: { path: 'a.ts' },
+      kind: 'write'
+    })
+    const tool = items.find((i): i is ToolItem => i.kind === 'tool' && i.id === 'w1')
+    expect(tool?.toolKind).toBe('write')
+    expect(tool?.status).toBe('running')
+  })
+
+  it('leaves toolKind unset for a legacy tool_start with no kind', () => {
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_start',
+      callId: 'x1',
+      name: 'read_file',
+      args: {}
+    })
+    const tool = items.find((i): i is ToolItem => i.kind === 'tool' && i.id === 'x1')
+    expect(tool?.toolKind).toBeUndefined()
+  })
+})
+
 describe('PR lifecycle notices', () => {
   it('appends a created-PR notice after a gh_pr_create result (live)', () => {
     let items = reduceEvent([], {

@@ -26,7 +26,14 @@ import { sanitizeAttachments, exceedsImageSizeLimit } from '@shared/images'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
 import { checkForUpdates, takePendingWhatsNew } from './updater'
-import { getSettings, saveSettings, rememberWorkspace, getProvider } from './store'
+import {
+  getSettings,
+  saveSettings,
+  rememberWorkspace,
+  getProvider,
+  isGitInitDismissed,
+  dismissGitInit
+} from './store'
 import { getIntegrations } from './integrations'
 import {
   detectEditors,
@@ -314,6 +321,16 @@ export function registerIpc(): void {
   // visible/reviewable in the Changes panel (the "Initialize git repository" action).
   ipcMain.handle(IPC.gitInit, async (_event, workspace: string) =>
     initGitRepo(typeof workspace === 'string' ? workspace : '')
+  )
+
+  // First-write git-init prompt: whether the user opted out for this folder, and
+  // persisting that opt-out ("Don't ask again for this folder"). Realpath-normalized
+  // in the store so the same folder matches however its path is spelled.
+  ipcMain.handle(IPC.gitInitDismissed, (_event, workspace: string) =>
+    isGitInitDismissed(typeof workspace === 'string' ? workspace : '')
+  )
+  ipcMain.handle(IPC.gitInitDismiss, (_event, workspace: string) =>
+    dismissGitInit(typeof workspace === 'string' ? workspace : '')
   )
 
   // Custom slash commands from the workspace's .houston/commands directory.

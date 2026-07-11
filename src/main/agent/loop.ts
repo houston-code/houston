@@ -1225,7 +1225,13 @@ export async function startRun(
       for (let p = 0; p < parallel.length; p++) {
         if (parallelValidation[p]) continue // tool_start intentionally not emitted for a refused call
         const { call } = parallel[p]
-        emit({ type: 'tool_start', callId: call.id, name: call.name, args: call.arguments })
+        emit({
+          type: 'tool_start',
+          callId: call.id,
+          name: call.name,
+          args: call.arguments,
+          kind: lookupTool(call.name)?.kind
+        })
         await plugins.emit('onToolStart', { tool: call.name, input: call.arguments })
       }
       const parallelResults = await Promise.all(
@@ -1403,7 +1409,7 @@ export async function startRun(
               if (tool.kind === 'write' && typeof execArgs.path === 'string') {
                 await recordOriginal(runId, roots, execArgs.path)
               }
-              emit({ type: 'tool_start', callId: call.id, name: call.name, args: execArgs })
+              emit({ type: 'tool_start', callId: call.id, name: call.name, args: execArgs, kind: tool.kind })
               await plugins.emit('onToolStart', { tool: call.name, input: execArgs })
               try {
                 output = await tool.execute(

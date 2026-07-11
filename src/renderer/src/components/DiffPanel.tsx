@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FileDiff, WorkingTreeChanges } from '@shared/workingTree'
+import { useInitGitRepo } from '../hooks/useInitGitRepo'
 import { DiffView } from './DiffView'
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
@@ -71,10 +72,9 @@ export function DiffPanel({
   const [data, setData] = useState<WorkingTreeChanges | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [initializing, setInitializing] = useState(false)
-  const [initError, setInitError] = useState<string | null>(null)
+  const { initializing, initError, initRepo } = useInitGitRepo(workspace)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<void> => {
     if (!workspace) {
       setData({ isRepo: false, branch: null, files: [], added: 0, removed: 0 })
       return
@@ -89,24 +89,6 @@ export function DiffPanel({
       setLoading(false)
     }
   }, [workspace])
-
-  // "Initialize git repository": a bare `git init` makes a non-git project's files
-  // appear as (untracked) changes here, so they can be reviewed, committed, or turned
-  // into a PR. On success we reload the panel, which then lists everything.
-  const initRepo = useCallback(async () => {
-    if (!workspace) return
-    setInitializing(true)
-    setInitError(null)
-    try {
-      const res = await window.api.initGitRepo(workspace)
-      if (res.ok) await load()
-      else setInitError(res.error ?? 'Could not initialize the repository.')
-    } catch (e) {
-      setInitError((e as Error).message)
-    } finally {
-      setInitializing(false)
-    }
-  }, [workspace, load])
 
   useEffect(() => {
     void load()
@@ -167,7 +149,7 @@ export function DiffPanel({
               <button
                 type="button"
                 className="btn btn--sm btn--accent"
-                onClick={() => void initRepo()}
+                onClick={() => void initRepo(load)}
                 disabled={initializing}
                 title="Run git init in this workspace so its files show up as reviewable changes"
               >
