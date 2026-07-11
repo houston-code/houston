@@ -150,6 +150,91 @@ export function validateToolArgs(
 }
 
 /**
+ * Turn a string the model passed where an ARRAY was declared into an array. Models
+ * frequently emit a JSON-stringified array (`"[\"a\",\"b\"]"`), a newline-delimited
+ * list, or a single bare value for an array parameter. Always returns an array (an
+ * empty string → `[]`), never undefined, so an array field is always coerced.
+ */
+function coerceStringToArray(value: string): unknown[] {
+  const trimmed = value.trim()
+  if (trimmed === '') return []
+  // A JSON-stringified array — what a model "passing a JSON array" usually emits.
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) return parsed
+    } catch {
+      // Not valid JSON — fall through to the delimited/single-value handling.
+    }
+  }
+  // A newline-delimited list (commas are left intact — they occur inside legitimate
+  // string values, whereas a newline almost never does).
+  if (trimmed.includes('\n')) {
+    return trimmed
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  // A single value passed bare.
+  return [trimmed]
+}
+
+/** Parse a JSON-stringified object the model passed where an OBJECT was declared, or undefined. */
+function coerceStringToObject(value: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{')) return undefined
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // Not valid JSON — leave it for validation to report.
+  }
+  return undefined
+}
+
+/**
+ * Best-effort coercion of a tool call's arguments toward its declared schema, run
+ * BEFORE {@link validateToolArgs}, so a common model formatting slip — most often a
+ * stringified array/object, or a single value where an array is declared — is fixed
+ * rather than bounced back as a validation error the model then can't recover from
+ * (it was the reason `present_plan` refused a `files: "…"` string and fell back to
+ * prose). Only ever WIDENS a string into the declared array/object; it never narrows,
+ * drops, or reshapes a value that already matches, and returns the same object when
+ * nothing changed. Deliberately narrow: number/boolean strings are left to the tools'
+ * own lenient extractors and to validation.
+ */
+export function coerceToolArgs(
+  args: Record<string, unknown>,
+  schema: JSONSchema | undefined
+): Record<string, unknown> {
+  if (!schema || typeof schema !== 'object') return args
+  const s = schema as Record<string, unknown>
+  if (s.type !== undefined && s.type !== 'object') return args
+  const properties =
+    s.properties && typeof s.properties === 'object'
+      ? (s.properties as Record<string, unknown>)
+      : {}
+
+  let out: Record<string, unknown> | null = null
+  for (const [key, propSchema] of Object.entries(properties)) {
+    if (!(key in args)) continue
+    const v = args[key]
+    if (typeof v !== 'string') continue
+    const type = declaredType(propSchema)
+    let coerced: unknown
+    if (type === 'array') coerced = coerceStringToArray(v)
+    else if (type === 'object') coerced = coerceStringToObject(v)
+    else continue
+    if (coerced === undefined) continue // couldn't coerce — let validation report it
+    if (!out) out = { ...args }
+    out[key] = coerced
+  }
+  return out ?? args
+}
+
+/**
  * Render a compact, model-friendly repair message from validation issues plus the
  * expected shape, so the model can fix its arguments on the next turn. Returned as
  * the tool_result output (with ok:false) instead of executing the tool. Includes

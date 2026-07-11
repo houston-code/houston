@@ -38,7 +38,7 @@ import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead, partitionCalls } from './scheduling'
-import { validateToolArgs, validationError } from './argValidation'
+import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
 import { repairDanglingToolResults } from './repair'
@@ -1187,6 +1187,16 @@ export async function startRun(
           images: [],
           documents: []
         }
+      }
+
+      // Coerce obvious argument-shape slips toward each tool's declared schema BEFORE
+      // validating or dispatching — most commonly a stringified array/object, or a
+      // single value where an array is declared (e.g. present_plan's `files` passed as
+      // a string). Mutating `call.arguments` in place makes validation, the tool_start
+      // event, execution, and the persisted log all agree on the fixed shape.
+      for (const call of toolCalls) {
+        const tool = lookupTool(call.name)
+        if (tool) call.arguments = coerceToolArgs(call.arguments, tool.schema.parameters)
       }
 
       // Partition this turn's calls into the CONTIGUOUS LEADING run of unencumbered

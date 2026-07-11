@@ -1783,6 +1783,38 @@ describe('present_plan (Plan mode review)', () => {
     expect(pendingPromptsForConversation(conversationId)).toEqual([])
   })
 
+  it('accepts present_plan when the model passes files as a stringified array', async () => {
+    // The reported failure: a model emits files as a JSON string, not an array. The
+    // arg-coercion pass fixes it so present_plan runs instead of being refused.
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'p1',
+              name: 'present_plan',
+              arguments: { title: 'X', plan: 'do it', files: '["a.ts", "b.ts"]' }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'reject' })
+    })
+    const ready = r.events.find((e) => e.type === 'plan_ready') as
+      | { plan: PlanPayload }
+      | undefined
+    expect(ready?.plan.files).toEqual(['a.ts', 'b.ts'])
+    // It ran (a real result), rather than being bounced with a validation error.
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'present_plan') as
+      | { output: string; ok: boolean }
+      | undefined
+    expect(result?.output).not.toMatch(/Invalid arguments/)
+  })
+
   it('recovers from an interrupted present_plan: never sends an orphaned tool_use', async () => {
     // A prior run quit while the plan was pending (tool_use persisted, no result),
     // then the user re-sent a message — so a user turn now sits after the dangling

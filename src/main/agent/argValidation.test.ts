@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validateToolArgs, validationError } from './argValidation'
+import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import { getTool, toolSchemas } from './tools'
 
 // Pull real tool schemas so the validator is tested against the shapes it will
@@ -8,6 +8,7 @@ const readFileSchema = getTool('read_file')!.schema.parameters
 const writeFileSchema = getTool('write_file')!.schema.parameters
 const todoWriteSchema = getTool('todo_write')!.schema.parameters
 const askUserSchema = getTool('ask_user')!.schema.parameters
+const presentPlanSchema = getTool('present_plan')!.schema.parameters
 
 describe('validateToolArgs', () => {
   it('accepts a valid call with only the required field', () => {
@@ -142,5 +143,60 @@ describe('validationError', () => {
       { key: 'k', message: 'oops' }
     ])
     expect(msg).toContain('Invalid arguments for tool "x": oops.')
+  })
+})
+
+describe('coerceToolArgs', () => {
+  it('leaves a correctly-typed array untouched (same object reference)', () => {
+    const args = { title: 'X', plan: 'do it', files: ['a.ts', 'b.ts'] }
+    expect(coerceToolArgs(args, presentPlanSchema)).toBe(args)
+  })
+
+  it('parses a JSON-stringified array into a real array (the reported present_plan bug)', () => {
+    const out = coerceToolArgs(
+      { title: 'X', plan: 'do it', files: '["a.ts", "b.ts"]' },
+      presentPlanSchema
+    )
+    expect(out.files).toEqual(['a.ts', 'b.ts'])
+    // The coerced call now passes validation, so the tool runs instead of being refused.
+    expect(validateToolArgs(out, presentPlanSchema)).toEqual([])
+  })
+
+  it('splits a newline-delimited string into an array', () => {
+    const out = coerceToolArgs({ title: 'X', plan: 'p', files: 'a.ts\nb.ts\n' }, presentPlanSchema)
+    expect(out.files).toEqual(['a.ts', 'b.ts'])
+  })
+
+  it('wraps a single bare value in a one-element array', () => {
+    const out = coerceToolArgs({ title: 'X', plan: 'p', files: 'a.ts' }, presentPlanSchema)
+    expect(out.files).toEqual(['a.ts'])
+  })
+
+  it('coerces an empty string to an empty array', () => {
+    const out = coerceToolArgs({ title: 'X', plan: 'p', files: '' }, presentPlanSchema)
+    expect(out.files).toEqual([])
+  })
+
+  it('does not touch a string where the schema expects a string', () => {
+    const args = { path: 'a.txt', content: 'hello' }
+    expect(coerceToolArgs(args, writeFileSchema)).toBe(args)
+  })
+
+  it('leaves an array declared but passed as unparseable non-array string for validation to report', () => {
+    // '{...}' is neither a JSON array nor empty; it becomes a single-element array
+    // rather than a hard error — coercion only ever widens, never rejects.
+    const out = coerceToolArgs({ title: 'X', plan: 'p', files: 'not-json' }, presentPlanSchema)
+    expect(out.files).toEqual(['not-json'])
+  })
+
+  it('parses a JSON-stringified object where an object is declared', () => {
+    // A synthetic object-typed schema (mirrors what an MCP tool might declare).
+    const schema = {
+      type: 'object',
+      properties: { cfg: { type: 'object' } },
+      required: ['cfg']
+    }
+    const out = coerceToolArgs({ cfg: '{"a":1}' }, schema)
+    expect(out.cfg).toEqual({ a: 1 })
   })
 })
