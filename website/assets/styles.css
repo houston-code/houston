@@ -155,6 +155,28 @@ h1, h2, h3 { line-height: 1.2; font-weight: 600; letter-spacing: -0.02em; margin
   border: 1px solid rgba(255, 255, 255, 0.12); padding: 6px 13px; border-radius: 999px;
 }
 
+/* ---- Showcase (product screenshots) ---- */
+.showcase { padding-top: 0; margin-top: -40px; }
+.shot {
+  margin: 0; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--border-strong); background: #0b1120;
+  box-shadow: 0 24px 60px -24px rgba(8, 15, 30, 0.55);
+}
+.shot__bar {
+  display: flex; align-items: center; gap: 7px; padding: 11px 14px;
+  background: #0f1830; border-bottom: 1px solid #24314f;
+}
+.shot__bar span { width: 11px; height: 11px; border-radius: 50%; background: #33456b; }
+.shot__bar span:nth-child(1) { background: #e05a54; }
+.shot__bar span:nth-child(2) { background: #e0a83f; }
+.shot__bar span:nth-child(3) { background: #4bb36b; }
+.shot__bar strong { margin-left: 8px; font-size: 12px; font-weight: 500; color: #8592ac; }
+.shot img { display: block; width: 100%; height: auto; }
+.shot figcaption {
+  padding: 12px 16px; font-size: 0.88rem; color: var(--text-muted);
+  background: var(--surface); border-top: 1px solid var(--border); text-align: center;
+}
+
 /* ---- Sections ---- */
 section { padding: 80px 0; }
 .section-head { text-align: center; max-width: 60ch; margin: 0 auto 52px; }
