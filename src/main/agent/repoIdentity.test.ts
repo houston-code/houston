@@ -178,6 +178,13 @@ describe('resolveRepo (injected io)', () => {
   })
 })
 
+// These integration tests each spawn ~5 real git subprocesses (init, config x2,
+// commit, worktree add). Under the full parallel suite on a busy machine those
+// synchronous spawns starve and blow past Vitest's 5s default (observed ~6-8s),
+// even though each passes comfortably in isolation and in CI. Give them generous
+// headroom so subprocess scheduling jitter can't flake the run.
+const REAL_GIT_TIMEOUT = 30_000
+
 describe('resolveRepo (real git)', () => {
   const hasGit = (() => {
     try {
@@ -213,7 +220,7 @@ describe('resolveRepo (real git)', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
-  })
+  }, REAL_GIT_TIMEOUT)
 
   it.runIf(hasGit)('gives a subdirectory the same key as the repo root', () => {
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'houston-repoid-')))
@@ -225,5 +232,5 @@ describe('resolveRepo (real git)', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
-  })
+  }, REAL_GIT_TIMEOUT)
 })

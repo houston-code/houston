@@ -96,6 +96,13 @@ describe('gitWritableRoots (injected io)', () => {
   })
 })
 
+// These integration tests each spawn ~5 real git subprocesses (init, config x2,
+// commit, worktree add). Under the full parallel suite on a busy machine those
+// synchronous spawns starve and blow past Vitest's 5s default (observed ~6-8s),
+// even though each passes comfortably in isolation and in CI. Give them generous
+// headroom so subprocess scheduling jitter can't flake the run.
+const REAL_GIT_TIMEOUT = 30_000
+
 describe('gitWritableRoots (real git worktree)', () => {
   const hasGit = (() => {
     try {
@@ -128,7 +135,7 @@ describe('gitWritableRoots (real git worktree)', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
-  })
+  }, REAL_GIT_TIMEOUT)
 
   it.runIf(hasGit)('returns [] for a plain (non-worktree) checkout', () => {
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitdirs-')))
@@ -138,5 +145,5 @@ describe('gitWritableRoots (real git worktree)', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true })
     }
-  })
+  }, REAL_GIT_TIMEOUT)
 })
