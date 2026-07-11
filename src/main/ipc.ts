@@ -706,10 +706,18 @@ export function registerIpc(): void {
       if (!isPlanDecision(decision)) return
       // Only the window that started the run may resolve its plan reviews.
       if (!callerOwnsRun(event, runId)) return
-      const safe: PlanDecision =
-        decision.kind === 'suggest'
-          ? { kind: 'suggest', note: decision.note.slice(0, MAX_QUESTION_ANSWER_LEN) }
-          : decision
+      // Cap the model-facing free text (a suggestion note, or a hand-edited plan) so
+      // an unbounded value can't become an oversized tool result.
+      let safe: PlanDecision = decision
+      if (decision.kind === 'suggest') {
+        safe = { kind: 'suggest', note: decision.note.slice(0, MAX_QUESTION_ANSWER_LEN) }
+      } else if (decision.kind === 'accept' && decision.editedBody !== undefined) {
+        safe = {
+          kind: 'accept',
+          mode: decision.mode,
+          editedBody: decision.editedBody.slice(0, MAX_QUESTION_ANSWER_LEN)
+        }
+      }
       resolvePlan(runId, callId, safe)
     }
   )

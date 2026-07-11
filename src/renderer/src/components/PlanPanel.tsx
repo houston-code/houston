@@ -9,6 +9,11 @@ import { Icon } from './Icon'
  * Plan-mode workflow: accept and carry it out (choosing how edits run), request
  * changes (the agent revises and re-presents), or reject and keep planning.
  *
+ * The freeform plan body can also be edited by hand (the Edit toggle): edits are
+ * rendered locally and, on accept, handed to the agent verbatim so what runs is what
+ * you approved. That's distinct from "suggest changes", which delegates the revision
+ * back to the model.
+ *
  * While `revising` (the user asked for changes) the panel stays up in a working
  * state until the agent sends the revised plan.
  */
@@ -29,19 +34,32 @@ export function PlanPanel({
   const [editMode, setEditMode] = useState<PlanAcceptMode>('auto-edit')
   const [suggestOpen, setSuggestOpen] = useState(false)
   const [note, setNote] = useState('')
+  // Manual editing of the freeform plan body. `editedBody` is the saved edit (null =
+  // unchanged from what the agent presented); `editing` toggles the editor; `draft`
+  // is the in-progress textarea value.
+  const [editing, setEditing] = useState(false)
+  const [editedBody, setEditedBody] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
   const rootRef = useRef<HTMLElement>(null)
   const suggestRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<HTMLTextAreaElement>(null)
+
+  // Only freeform plans (a markdown `body`) are hand-editable; older structured
+  // (overview + steps) plans are not.
+  const canEdit = typeof plan.body === 'string' && plan.body.length > 0
+  const effectiveBody = editedBody ?? plan.body ?? ''
+  const isEdited = editedBody !== null
 
   // Focus the panel when it opens so the A / S / R shortcuts work without a click.
   useEffect(() => {
     rootRef.current?.focus()
   }, [])
 
-  const accept = (): void => onResolve({ kind: 'accept', mode: editMode })
+  const accept = (): void =>
+    onResolve({ kind: 'accept', mode: editMode, ...(editedBody !== null ? { editedBody } : {}) })
   const reject = (): void => onResolve({ kind: 'reject' })
   const openSuggest = (): void => {
     setSuggestOpen(true)
-    // Focus the textarea after it renders.
     setTimeout(() => suggestRef.current?.focus(), 0)
   }
   const sendSuggestion = (): void => {
@@ -55,11 +73,29 @@ export function PlanPanel({
     setSuggestOpen(false)
   }
 
-  // A / S / R shortcuts, scoped to the focused panel. Ignored while a field is
-  // focused (so typing a suggestion isn't hijacked), with a modifier held (leaves
-  // Cmd+A etc. alone), or while the plan is being revised.
+  const enterEdit = (): void => {
+    if (!canEdit) return
+    setDraft(effectiveBody)
+    setSuggestOpen(false)
+    setEditing(true)
+    setTimeout(() => editorRef.current?.focus(), 0)
+  }
+  const doneEdit = (): void => {
+    // Treat an edit that ends up identical to the original as "not edited".
+    setEditedBody(draft.trim() === (plan.body ?? '').trim() ? null : draft)
+    setEditing(false)
+    rootRef.current?.focus()
+  }
+  const cancelEdit = (): void => {
+    setEditing(false)
+    rootRef.current?.focus()
+  }
+
+  // A / S / R / E shortcuts, scoped to the focused panel. Ignored while a field is
+  // focused (so typing isn't hijacked), with a modifier held (leaves Cmd+A etc.
+  // alone), or while the plan is being revised.
   const onKeyDown = (e: ReactKeyboardEvent<HTMLElement>): void => {
-    if (revising) return
+    if (revising || editing) return
     if (e.metaKey || e.ctrlKey || e.altKey) return
     const el = e.target as HTMLElement
     if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return
@@ -73,6 +109,9 @@ export function PlanPanel({
     } else if (k === 'r') {
       e.preventDefault()
       reject()
+    } else if (k === 'e' && canEdit) {
+      e.preventDefault()
+      enterEdit()
     }
   }
 
@@ -109,9 +148,35 @@ export function PlanPanel({
         </span>
         <span className="plan-panel__heading">Plan review</span>
         <span className="plan-panel__pill">Read-only</span>
+        <span className="plan-panel__head-spacer" />
+        {canEdit && !revising && (
+          <button
+            type="button"
+            className={`plan-panel__iconbtn${editing ? ' plan-panel__iconbtn--active' : ''}`}
+            title="Edit the plan (E)"
+            aria-label="Edit the plan"
+            aria-pressed={editing}
+            onClick={() => (editing ? doneEdit() : enterEdit())}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
-          className="plan-panel__close"
+          className="plan-panel__iconbtn plan-panel__close"
           title="Dismiss (reopen from the transcript)"
           aria-label="Dismiss plan panel"
           onClick={onClose}
@@ -122,7 +187,10 @@ export function PlanPanel({
 
       <div className="plan-panel__title">
         <h2>{plan.title}</h2>
-        {meta && <p className="plan-panel__meta">{meta}</p>}
+        <div className="plan-panel__metarow">
+          {meta && <p className="plan-panel__meta">{meta}</p>}
+          {isEdited && <span className="plan-panel__edited">Edited</span>}
+        </div>
       </div>
 
       {/* One scroll region for the whole plan: the model's freeform markdown (or, for
@@ -130,59 +198,80 @@ export function PlanPanel({
           disclosure at the end. Keeping files in here (rather than as a sibling above)
           stops a long list from starving the plan. */}
       <div className="plan-panel__body">
-        {plan.body ? (
-          <div className="plan-panel__markdown">
-            <Markdown text={plan.body} />
-          </div>
+        {editing ? (
+          <textarea
+            ref={editorRef}
+            className="plan-panel__editor"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                doneEdit()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                cancelEdit()
+              }
+            }}
+            aria-label="Edit the plan (markdown)"
+          />
         ) : (
           <>
-            {plan.overview && (
-              <div className="plan-panel__overview">
-                <Markdown text={plan.overview} />
+            {plan.body ? (
+              <div className="plan-panel__markdown">
+                <Markdown text={effectiveBody} />
               </div>
-            )}
-            {plan.steps && plan.steps.length > 0 && (
+            ) : (
               <>
-                <p className="plan-panel__section-label">Steps</p>
-                <ol className="plan-panel__steps">
-                  {plan.steps.map((step, i) => (
-                    <li key={i}>
-                      <Markdown text={step} />
-                    </li>
-                  ))}
-                </ol>
+                {plan.overview && (
+                  <div className="plan-panel__overview">
+                    <Markdown text={plan.overview} />
+                  </div>
+                )}
+                {plan.steps && plan.steps.length > 0 && (
+                  <>
+                    <p className="plan-panel__section-label">Steps</p>
+                    <ol className="plan-panel__steps">
+                      {plan.steps.map((step, i) => (
+                        <li key={i}>
+                          <Markdown text={step} />
+                        </li>
+                      ))}
+                    </ol>
+                  </>
+                )}
               </>
             )}
+            {plan.files && plan.files.length > 0 && (
+              <details className="plan-panel__files">
+                <summary>
+                  <svg
+                    className="plan-panel__files-caret"
+                    aria-hidden="true"
+                    width="10"
+                    height="10"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M6 4l4 4-4 4" />
+                  </svg>
+                  Files this plan will change ·{' '}
+                  <span className="plan-panel__files-count">{plan.files.length}</span>
+                </summary>
+                <div className="plan-panel__chips">
+                  {plan.files.map((f) => (
+                    <span key={f} className="plan-panel__chip" title={f}>
+                      {f}
+                    </span>
+                  ))}
+                </div>
+              </details>
+            )}
           </>
-        )}
-        {plan.files && plan.files.length > 0 && (
-          <details className="plan-panel__files">
-            <summary>
-              <svg
-                className="plan-panel__files-caret"
-                aria-hidden="true"
-                width="10"
-                height="10"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M6 4l4 4-4 4" />
-              </svg>
-              Files this plan will change ·{' '}
-              <span className="plan-panel__files-count">{plan.files.length}</span>
-            </summary>
-            <div className="plan-panel__chips">
-              {plan.files.map((f) => (
-                <span key={f} className="plan-panel__chip" title={f}>
-                  {f}
-                </span>
-              ))}
-            </div>
-          </details>
         )}
       </div>
 
@@ -191,6 +280,20 @@ export function PlanPanel({
           <div className="plan-panel__revising" role="status">
             <span className="plan-panel__spinner" aria-hidden="true" />
             Revising the plan with your changes…
+          </div>
+        ) : editing ? (
+          <div className="plan-panel__editfoot">
+            <span className="plan-panel__edit-hint">
+              <Icon name="check" /> Edits run verbatim when you accept.
+            </span>
+            <div className="plan-panel__editfoot-actions">
+              <button className="btn btn--sm plan-panel__ghost" onClick={cancelEdit}>
+                Cancel
+              </button>
+              <button className="btn btn--sm btn--accent" onClick={doneEdit}>
+                Done
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -246,7 +349,7 @@ export function PlanPanel({
 
             <div className="plan-panel__actions">
               <button className="btn btn--accent plan-panel__accept" onClick={accept}>
-                Accept &amp; run <kbd>A</kbd>
+                {isEdited ? 'Accept edited plan' : 'Accept & run'} <kbd>A</kbd>
               </button>
               <button className="btn plan-panel__suggest-btn" onClick={openSuggest}>
                 Suggest changes <kbd>S</kbd>
