@@ -505,8 +505,8 @@ needed, and a full run peaks around **60 MB of RAM**, so it works on headless
 Linux servers and small VPSes where the desktop app cannot even start.
 
 ```bash
-# grab houston-cli.cjs from the latest release (optionally verify it:
-# sha256sum -c houston-cli.cjs.sha256), then:
+# grab houston-cli.cjs from the latest release (optionally verify it first;
+# see "Verifying downloads", e.g. sha256sum -c houston-cli.cjs.sha256), then:
 node houston-cli.cjs --help          # or: chmod +x houston-cli.cjs && ./houston-cli.cjs
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --cwd ~/code/myproj --accept-terms
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -i
@@ -628,10 +628,11 @@ on the next quit if you don't (`autoDownload` / `autoInstallOnAppQuit` in
 [`src/main/updater.ts`](src/main/updater.ts), gated per-platform by
 `shouldAutoInstallUpdates`).
 
-**Windows and Linux** builds are still unsigned, so there's no signature to verify
-and auto-installing a remote package would make the release pipeline an RCE
-boundary. On those platforms the banner links to **Releases** for a manual download,
-until they are signed too.
+**Windows and Linux** builds are not OS-code-signed, so `electron-updater` has no
+package signature it can verify and auto-installing a remote package would make the
+release pipeline an RCE boundary. On those platforms the banner links to **Releases**
+for a manual download, until they are signed too. (Linux downloads can still be verified
+by hand, they're GPG-signed: see [Verifying downloads](#verifying-downloads).)
 
 Update metadata is published by running `npm run dist` with a `GH_TOKEN` and
 `--publish`, or by attaching the artifacts to a release manually. On macOS the
@@ -691,7 +692,9 @@ same caution you'd treat running untrusted code, and prefer the default
 ## Signing & notarization
 
 macOS release builds are code-signed with a **Developer ID Application** certificate
-and notarized by Apple. Windows and Linux are not signed yet. Signing and
+and notarized by Apple. Windows and Linux installers are not OS-code-signed yet, though
+Linux downloads are GPG-signed for verification (see
+[Verifying downloads](#verifying-downloads)). Signing and
 notarization are driven entirely by CI environment variables (see
 [`release-publish.yml`](.github/workflows/release-publish.yml)), so no certificate or
 credential is committed to the repo.
@@ -715,14 +718,39 @@ produce an unsigned app. To sign a build locally, import the Developer ID cert i
 your login keychain and export the same variables in your shell before
 `npm run dist:mac`.
 
-### Verifying release artifacts (cosign)
+### Verifying downloads
 
-Every published artifact (the desktop installers, the standalone `houston-cli.cjs`, and
-the CycloneDX + SPDX SBOMs) ships with a `<file>.cosign.bundle` beside it. Each is
-keyless-signed in CI with [cosign](https://docs.sigstore.dev/): the signature, its
-short-lived certificate, and a [Rekor](https://docs.sigstore.dev/logging/overview/)
-transparency-log proof all live inside the bundle, so anyone can verify a download with no
-account, key, or repo access:
+Every published artifact can be verified before you run it. Three independent methods
+are provided, and any one is enough.
+
+**1. GPG (offline, no extra tooling).** The Linux artifacts (`*.AppImage`, `*.deb`)
+ship with a detached `<file>.asc` signature, and every release carries a `SHA256SUMS`
+manifest signed as `SHA256SUMS.asc`. Both are made with the project signing key,
+published as `houston-signing-key.asc` on each release. Import the key once (pin the
+fingerprint below), then verify:
+
+```bash
+gpg --import houston-signing-key.asc
+# fingerprint: A11D D282 4C1E F838 D441  452F 5DD4 F607 9F8B A5DB
+
+# verify the whole release in one step:
+gpg --verify SHA256SUMS.asc SHA256SUMS   # trust the manifest,
+sha256sum -c SHA256SUMS                   # then check your downloads against it
+
+# or verify a single Linux artifact directly:
+gpg --verify Houston-<version>-x64.AppImage.asc Houston-<version>-x64.AppImage
+```
+
+A `Good signature` line carrying the fingerprint above confirms authenticity. This is
+for verifying a download by hand: the in-app updater does not use GPG (it verifies the
+update feed over HTTPS), so a bad signature here means re-download, not a blocked update.
+
+**2. cosign (keyless, transparency-logged).** Every artifact (the desktop installers,
+the standalone `houston-cli.cjs`, and the CycloneDX + SPDX SBOMs) also ships with a
+`<file>.cosign.bundle` beside it. Each is keyless-signed in CI with
+[cosign](https://docs.sigstore.dev/): the signature, its short-lived certificate, and a
+[Rekor](https://docs.sigstore.dev/logging/overview/) transparency-log proof all live
+inside the bundle, so anyone can verify with no account, key, or repo access:
 
 ```bash
 cosign verify-blob houston-cli.cjs \
@@ -734,6 +762,10 @@ cosign verify-blob houston-cli.cjs \
 `Verified OK` confirms the file came from this project's release workflow and has not been
 altered. The same command verifies any released file: substitute its name and matching
 `.cosign.bundle`.
+
+**3. Checksums only.** For a plain integrity check without verifying who signed it,
+`sha256sum -c SHA256SUMS` (or the standalone `houston-cli.cjs.sha256`) confirms a
+download matches what was published.
 
 ## Roadmap
 
