@@ -45,6 +45,11 @@ jobs:
   build:
     needs: guard
     timeout-minutes: 40
+    permissions:
+      contents: read
+      # cosign keyless signing (below) needs an OIDC token for Fulcio; Rekor is public, so
+      # this works on this private repo and the signatures verify with no repo access.
+      id-token: write
     strategy:
       fail-fast: false
       # Serialize so the three platforms don't race to CREATE the same draft release on the
@@ -206,6 +211,44 @@ jobs:
             sbom.cyclonedx.json \
             sbom.spdx.json \
             -R piyushvijay/houston-releases --clobber
+      # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
+      # Fulcio cert + Rekor proof) beside each. This is the private-repo-compatible,
+      # customer-verifiable alternative to GitHub attestation (which can't run here). Each leg
+      # signs its own release/* binaries; the Linux leg also signs the CLI + SBOMs. Skipped on
+      # dry_run (nothing published) and placed AFTER publish so a signing hiccup can't strand a
+      # half-published release. Verify a download with:
+      #   cosign verify-blob <file> --bundle <file>.cosign.bundle \
+      #     --certificate-identity 'https://github.com/piyushvijay/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+      #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+      - name: Install cosign
+        if: ${{ !inputs.dry_run }}
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v3.1.1'
+      - name: Sign release binaries + attach bundles
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        shell: bash
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          shopt -s nullglob
+          # Sign the downloadable installers/packages this leg produced (skip .yml feeds and
+          # .blockmaps — not artifacts a user downloads and verifies).
+          for f in release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb; do
+            cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
+            gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
+          done
+      - name: Sign standalone CLI + SBOMs + attach bundles
+        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json; do
+            cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
+            gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
+          done
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
       # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
