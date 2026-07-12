@@ -31,6 +31,18 @@ env:
 
 jobs:
   test:
+    # Dedupe the near-simultaneous opened + labeled runs: a PR created with
+    # `--label auto-merge` fires both events, spawning two full validation runs of
+    # this job. Keyed per-PR with cancel-in-progress, the labeled run cancels the
+    # opened run's still-running job (and any superseded synchronize run) instead
+    # of both billing in parallel. This is per-JOB, NOT workflow-level, ON PURPOSE:
+    # a workflow-level cancel would also tear down a mid-merge `auto-merge` job,
+    # which deliberately opts OUT of cancellation (see its own concurrency block).
+    # Non-PR runs (push:[main]) fall back to run_id — a unique group per run — so
+    # they never cancel one another.
+    concurrency:
+      group: ci-test-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     timeout-minutes: 15
     # Per-PR unit gate — Linux only (×1). lint + typecheck + the full vitest suite. The
     # conformance suite (src/main/sandbox/conformance.test.ts) runs here against the
@@ -85,6 +97,12 @@ jobs:
   # hard-probes that confinement actually works before running the conformance suite —
   # a failed probe reds the job instead of letting the suite silently skip (false green).
   linux-sandbox:
+    # Dedupe opened+labeled / superseded synchronize runs per-PR (see `test`).
+    # Distinct group prefix so it cancels only its own stale runs, never
+    # `test`/`build`; run_id fallback keeps push:[main] runs unique.
+    concurrency:
+      group: ci-linux-sandbox-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -124,6 +142,13 @@ jobs:
   # node-pty + per-(os,arch) rg/ast-grep binaries), which is why a single runner can only
   # validate its own platform. Trade-off: the macOS packaged-app e2e moved to release time.
   build:
+    # Dedupe opened+labeled / superseded synchronize runs per-PR (see `test`).
+    # Distinct group prefix so it cancels only its own stale runs; run_id fallback
+    # keeps push:[main] runs unique. (build is pull_request-only, so run_id is just
+    # a safety net — no push run ever reaches this job.)
+    concurrency:
+      group: ci-build-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     timeout-minutes: 25
     needs: test
     # Runs on EVERY PR, independent of the `auto-merge` label — packaging is a real check, so
