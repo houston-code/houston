@@ -23,6 +23,13 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
+// Supplier + author of the ROOT product itself (Houston), as opposed to its dependencies.
+// syft can't know this, so it leaves the primary component's supplier and the SBOM author
+// empty — which the NTIA minimum-elements check flags. Until Houston is incorporated the
+// supplier/author is the individual who publishes it; on incorporation, switch to
+// { name: '<Company>', isOrg: true } (and the SPDX/CDX formatting below follows).
+export const SBOM_AUTHOR = { name: 'Piyush Kumar Vijay', email: 'piyushvijay@houstoncode.ai', isOrg: false }
+
 /** Decode an npm `sha512-<base64>` integrity string to lowercase hex, or null. */
 export function integrityToHex(integrity) {
   const m = /^sha512-(.+)$/.exec(integrity || '')
@@ -179,6 +186,49 @@ export function enrichSpdx(doc, index, manifestLookup) {
   return { hashes, authors, suppliers }
 }
 
+/** Format SBOM_AUTHOR as an SPDX actor ("Person: Name (email)" or "Organization: Name"). */
+export function authorAsSpdxActor(a = SBOM_AUTHOR) {
+  if (a.isOrg) return `Organization: ${a.name}`
+  return a.email ? `Person: ${a.name} (${a.email})` : `Person: ${a.name}`
+}
+
+/**
+ * Fill in the ROOT product's supplier and the SBOM author on a CycloneDX doc — the fields
+ * that describe who produced the software and the SBOM, which syft leaves empty. Targets the
+ * primary component plus any `file` component (syft's scanned-file node); dependency
+ * suppliers are handled by enrichCycloneDx. Returns how many component suppliers were set.
+ */
+export function enrichCycloneDxSelf(doc, rootName, author = SBOM_AUTHOR) {
+  const md = (doc.metadata = doc.metadata || {})
+  if (!md.authors || !md.authors.length) md.authors = [{ name: author.name, email: author.email }]
+  if (md.component && !md.component.supplier) md.component.supplier = { name: author.name }
+  let suppliers = 0
+  for (const c of doc.components || []) {
+    if ((c.name === rootName || c.type === 'file') && !c.supplier) {
+      c.supplier = { name: author.name }
+      suppliers++
+    }
+  }
+  return suppliers
+}
+
+/** Same for SPDX: add a Person/Organization creator and set the root + file-node supplier. */
+export function enrichSpdxSelf(doc, rootName, author = SBOM_AUTHOR) {
+  const ci = (doc.creationInfo = doc.creationInfo || {})
+  const actor = authorAsSpdxActor(author)
+  ci.creators = ci.creators || []
+  if (!ci.creators.includes(actor)) ci.creators = [actor, ...ci.creators]
+  let suppliers = 0
+  for (const p of doc.packages || []) {
+    const isSelf = p.name === rootName || (typeof p.SPDXID === 'string' && p.SPDXID.includes('DocumentRoot-File'))
+    if (isSelf && (!p.supplier || p.supplier === 'NOASSERTION')) {
+      p.supplier = actor
+      suppliers++
+    }
+  }
+  return suppliers
+}
+
 function main() {
   const files = process.argv.slice(2)
   if (!files.length) {
@@ -186,14 +236,14 @@ function main() {
     process.exit(2)
   }
   const index = buildLockIndex(JSON.parse(readFileSync(join(ROOT, 'package-lock.json'), 'utf8')))
+  const rootName = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).name
   for (const f of files) {
     const doc = JSON.parse(readFileSync(f, 'utf8'))
-    const res =
-      doc.bomFormat === 'CycloneDX'
-        ? enrichCycloneDx(doc, index, manifestForPath)
-        : enrichSpdx(doc, index, manifestForPath)
+    const isCdx = doc.bomFormat === 'CycloneDX'
+    const res = isCdx ? enrichCycloneDx(doc, index, manifestForPath) : enrichSpdx(doc, index, manifestForPath)
+    const self = isCdx ? enrichCycloneDxSelf(doc, rootName) : enrichSpdxSelf(doc, rootName)
     writeFileSync(f, `${JSON.stringify(doc, null, 2)}\n`)
-    console.log(`enriched ${f}: +${res.hashes} hashes, +${res.authors} authors, +${res.suppliers} suppliers`)
+    console.log(`enriched ${f}: +${res.hashes} hashes, +${res.authors} authors, +${res.suppliers + self} suppliers (incl. ${self} self/root)`)
   }
 }
 
