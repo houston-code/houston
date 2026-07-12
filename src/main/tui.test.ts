@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { AppSettings } from '@shared/types'
 import type { AgentEvent, ChatMessage } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
+import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import {
   parseTuiArgs,
   makePainter,
@@ -267,8 +268,39 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/model nope', s)).toEqual({ kind: 'handled' })
   })
 
+  it('maps /plan to plan mode and /compact to compact', () => {
+    expect(parseSlashCommand('/plan', s)).toEqual({ kind: 'set-approval', policy: 'plan' })
+    expect(parseSlashCommand('/compact', s)).toEqual({ kind: 'compact' })
+  })
+
+  it('resolves first-party template commands (/review) to a prompt turn', () => {
+    expect(parseSlashCommand('/review', s, BUILTIN_TEMPLATE_COMMANDS)).toEqual({
+      kind: 'prompt',
+      text: REVIEW_TEMPLATE
+    })
+  })
+
+  it('resolves a custom command to its expanded prompt, appending args', () => {
+    const custom: Command[] = [{ name: 'ship', description: 'Ship it', template: 'Do the release' }]
+    expect(parseSlashCommand('/ship', s, custom)).toEqual({ kind: 'prompt', text: 'Do the release' })
+    expect(parseSlashCommand('/ship v2 now', s, custom)).toEqual({
+      kind: 'prompt',
+      text: 'Do the release\n\nv2 now'
+    })
+  })
+
+  it('substitutes $ARGUMENTS in a custom template', () => {
+    const custom: Command[] = [{ name: 'fix', description: 'Fix', template: 'Fix the $ARGUMENTS bug' }]
+    expect(parseSlashCommand('/fix login', s, custom)).toEqual({ kind: 'prompt', text: 'Fix the login bug' })
+  })
+
   it('marks unknown commands', () => {
     expect(parseSlashCommand('/frobnicate', s)).toEqual({ kind: 'unknown', name: 'frobnicate' })
+    // A name not among the passed commands is still unknown, not a prompt.
+    expect(parseSlashCommand('/frobnicate', s, BUILTIN_TEMPLATE_COMMANDS)).toEqual({
+      kind: 'unknown',
+      name: 'frobnicate'
+    })
   })
 })
 
@@ -1127,5 +1159,98 @@ describe('runTui', () => {
     }
     await runTui(opts, d)
     expect(t.spinner).toContain('stop')
+  })
+
+  it('/plan switches to plan mode for the next run', async () => {
+    // No assistant text ⇒ no plan-ready handoff prompt to answer.
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/plan', 'look around', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].policy).toBe('plan')
+  })
+
+  it('/review runs the first-party review template as a turn', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/review', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages).toEqual([{ role: 'user', content: REVIEW_TEMPLATE }])
+  })
+
+  it('runs a custom .houston/commands command, expanding $ARGUMENTS', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.commands = async () => [{ name: 'ship', description: 'Ship', template: 'Release the $ARGUMENTS build' }]
+    const t = fakeIo(['/ship canary', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].messages).toEqual([{ role: 'user', content: 'Release the canary build' }])
+  })
+
+  it('lists custom commands under /help', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.commands = async () => [{ name: 'ship', description: 'Ship the release', template: 'go' }]
+    const t = fakeIo(['/help', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Custom commands (.houston/commands)')
+    expect(t.text()).toContain('/ship')
+  })
+
+  it('/compact summarizes earlier messages and adopts the compacted log', async () => {
+    const compacted: ChatMessage[] = [
+      { role: 'user', content: '[summary]' },
+      { role: 'assistant', content: 'ok' }
+    ]
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    let compactCalls = 0
+    d.compact = async (id) => {
+      compactCalls++
+      expect(id).toBe('conv-1') // the conversation opened on the first turn
+      return { ok: true, summarized: 2, messages: compacted }
+    }
+    // turn 1 opens the conversation; /compact folds it; turn 2 must carry the compacted log.
+    const t = fakeIo(['first', '/compact', 'again', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(compactCalls).toBe(1)
+    expect(t.text()).toContain('compacted 2 earlier message(s)')
+    // The post-compaction turn carries the summarized log plus the new message.
+    // (Assert against literals: the driver appends to the adopted array in place,
+    // mirroring the /resume path, so `compacted` itself is mutated by the push.)
+    expect(rec.runs[1].messages).toEqual([
+      { role: 'user', content: '[summary]' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'again' }
+    ])
+  })
+
+  it('/compact before any turn reports there is nothing to compact yet', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    let called = false
+    d.compact = async () => {
+      called = true
+      return { ok: true, summarized: 0 }
+    }
+    const t = fakeIo(['/compact', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(called).toBe(false) // no conversation to compact
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toContain('nothing to compact yet')
+  })
+
+  it('/compact explains when a single big turn cannot be split', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    d.compact = async () => ({ ok: true, summarized: 0, reason: 'single-turn' })
+    const t = fakeIo(['one huge message', '/compact', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('/new starts a fresh chat')
   })
 })

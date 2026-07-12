@@ -13,6 +13,8 @@ import { disconnectAllMcp } from './mcp/manager'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
+import { loadCommands } from './agent/commands'
+import { compactConversationNow } from './agent/compact'
 import { getSettings, updateSettings } from './store'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
@@ -124,6 +126,10 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
           hooks: (s.hooks ?? []).map((h) => ({ name: h.event, detail: `${h.matcher} → ${h.command}` }))
         }
       },
+      // Custom slash commands from the workspace's .houston/commands (for /<name>).
+      commands: () => loadCommands(tui.cwd),
+      // On-demand context compaction for the /compact command.
+      compact: (id, providerId, model) => compactConversationNow(id, providerId, model),
       io: createTerminalIo({
         paint: makePainter(tui.color),
         history,
