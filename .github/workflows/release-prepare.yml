@@ -123,6 +123,13 @@ jobs:
       # unconditionally keeps the step simple and the npm cache makes it cheap.
       - name: Install deps
         run: npm ci --ignore-scripts
+      # Fail the prepare (so the release PR is never opened) if THIRD-PARTY-NOTICES.md drifted
+      # from the current closure — catches staleness before the release rather than shipping it.
+      - name: Check THIRD-PARTY-NOTICES.md is current
+        run: |
+          npm run notices
+          git diff --exit-code THIRD-PARTY-NOTICES.md \
+            || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
       - name: Generate release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
