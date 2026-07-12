@@ -85,6 +85,8 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Search web', target: str(a.query) ?? '', mono: false }
     case 'dispatch_agent':
       return { verb: 'Subagent', target: str(a.description) ?? 'research task', mono: false }
+    case 'spawn_session':
+      return { verb: 'Spawn session', target: str(a.title) ?? str(a.prompt) ?? '', mono: false }
     case 'review_changes': {
       const base = str(a.base)
       return { verb: 'Review', target: base ? `changes vs ${base}` : 'uncommitted changes', mono: false }

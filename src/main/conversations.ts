@@ -153,6 +153,8 @@ export function createConversation(input: {
   model: string
   /** When set, the chat runs in this Houston-created git worktree. */
   worktree?: ConversationWorktree
+  /** When set, the chat was spawned by another chat (see `spawn_session`). */
+  spawnedFrom?: { conversationId: string; title: string }
 }): Conversation {
   const now = Date.now()
   const conv: Conversation = {
@@ -165,7 +167,8 @@ export function createConversation(input: {
     createdAt: now,
     updatedAt: now,
     messages: [],
-    ...(input.worktree ? { worktree: input.worktree } : {})
+    ...(input.worktree ? { worktree: input.worktree } : {}),
+    ...(input.spawnedFrom ? { spawnedFrom: input.spawnedFrom } : {})
   }
   write(conv)
   return conv

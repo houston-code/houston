@@ -79,6 +79,7 @@ describe('tool registry', () => {
       'run_shell',
       'search_files',
       'skill',
+      'spawn_session',
       'todo_write',
       'view_localhost',
       'web_fetch',
@@ -89,6 +90,100 @@ describe('tool registry', () => {
 
   it('review_changes errors without a review dispatcher in context', async () => {
     await expect(run('review_changes', {})).rejects.toThrow(/not available/)
+  })
+})
+
+describe('spawn_session', () => {
+  it('is a write tool (gated by approval, blocked in plan mode)', () => {
+    const tool = getTool('spawn_session')!
+    expect(tool.kind).toBe('write')
+  })
+
+  it('errors without a spawnSession handler in context', async () => {
+    await expect(run('spawn_session', { prompt: 'do the thing' })).rejects.toThrow(/not available/)
+  })
+
+  it('requires a non-empty prompt', async () => {
+    const withSpawn: ToolContext = {
+      ...ctx,
+      spawnSession: async () => ({ conversationId: 'c1', title: 't', workspace })
+    }
+    await expect(getTool('spawn_session')!.execute({ prompt: '   ' }, withSpawn)).rejects.toThrow(
+      /prompt is required/
+    )
+  })
+
+  it('passes prompt + title to the handler and summarizes the result', async () => {
+    let received: unknown
+    const withSpawn: ToolContext = {
+      ...ctx,
+      spawnSession: async (input) => {
+        received = input
+        return { conversationId: 'c1', title: 'Add OAuth login', workspace: '/repo' }
+      }
+    }
+    const out = await getTool('spawn_session')!.execute(
+      { prompt: 'add oauth', title: 'Add OAuth login' },
+      withSpawn
+    )
+    expect(received).toEqual({ prompt: 'add oauth', title: 'Add OAuth login' })
+    expect(out).toContain('Started session "Add OAuth login"')
+    expect(out).toContain('Workspace: /repo')
+    expect(out).toContain('runs independently')
+  })
+
+  it('forwards a validated worktree and reports the branch', async () => {
+    let received: unknown
+    const withSpawn: ToolContext = {
+      ...ctx,
+      spawnSession: async (input) => {
+        received = input
+        return {
+          conversationId: 'c1',
+          title: 'OAuth',
+          workspace: '/repo/.houston/worktrees/feat-oauth',
+          worktree: {
+            path: '/repo/.houston/worktrees/feat-oauth',
+            branch: 'feat/oauth',
+            repoRoot: '/repo'
+          }
+        }
+      }
+    }
+    const out = await getTool('spawn_session')!.execute(
+      { prompt: 'add oauth', worktree: { branch: 'feat/oauth' } },
+      withSpawn
+    )
+    expect(received).toEqual({ prompt: 'add oauth', worktree: { branch: 'feat/oauth' } })
+    expect(out).toContain('Worktree: branch feat/oauth')
+  })
+
+  it('rejects an unsafe worktree branch name before spawning', async () => {
+    let called = false
+    const withSpawn: ToolContext = {
+      ...ctx,
+      spawnSession: async () => {
+        called = true
+        return { conversationId: 'c1', title: 't', workspace }
+      }
+    }
+    await expect(
+      getTool('spawn_session')!.execute(
+        { prompt: 'x', worktree: { branch: 'bad;rm -rf' } },
+        withSpawn
+      )
+    ).rejects.toThrow(/Invalid branch name/)
+    expect(called).toBe(false)
+  })
+
+  it('requires a branch when a worktree object is given', async () => {
+    const withSpawn: ToolContext = {
+      ...ctx,
+      spawnSession: async () => ({ conversationId: 'c1', title: 't', workspace })
+    }
+    await expect(
+      getTool('spawn_session')!.execute({ prompt: 'x', worktree: { base: 'main' } }, withSpawn)
+    ).rejects.toThrow(/branch is required/)
   })
 })
 

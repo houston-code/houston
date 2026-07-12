@@ -64,6 +64,25 @@ describe('buildSystemPrompt', () => {
     expect(noCapture).toContain('- web_search:')
   })
 
+  it('lists spawn_session by default but omits it when no spawn backend is wired', () => {
+    expect(buildSystemPrompt('/tmp/x')).toContain('spawn_session')
+    const noSpawn = buildSystemPrompt(
+      '/tmp/x',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    )
+    expect(noSpawn).not.toContain('spawn_session')
+    // The neighbouring tool bullet must survive the removal.
+    expect(noSpawn).toContain('- dispatch_agent:')
+  })
+
   describe('per-model addendum', () => {
     const base = buildSystemPrompt('/tmp/x')
 

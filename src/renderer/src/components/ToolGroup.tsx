@@ -29,6 +29,7 @@ const TOOL_ICON: Record<string, string> = {
   view_localhost: '▣',
   web_search: '⌕',
   todo_write: '☰',
+  spawn_session: '⧉',
   pr_sweep: '⇄',
   gh_pr_create: '⌥',
   gh_pr_list: '@',

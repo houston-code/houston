@@ -87,6 +87,14 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   reads, globs, and searches the project and reports back — keeping the main
   agent's context clean. Subagents can't edit, run commands, or use the network,
   and the tokens they spend roll into the conversation's usage meter.
+- **Spawn separate sessions.** Where a subagent reports back into the current turn,
+  `spawn_session` spins off a *separate* chat: the agent hands it a task, optionally
+  on its own git branch and worktree, and sets it running autonomously in the
+  background. It appears in the sidebar with a live running indicator, seeded with
+  the handed-off context as its first message — open it to watch, answer an
+  approval, or take over. The spawned session inherits your current approval policy,
+  so it is never more permissive than the chat that spawned it. Use it to run
+  independent work in parallel without leaving your current chat.
 - **Adversarial review.** `review_changes` (or `/review`) reviews your uncommitted
   changes for correctness, security, and quality. It runs an independent read-only
   reviewer per dimension — each in its own fresh context, so they don't inherit the

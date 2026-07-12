@@ -3201,6 +3201,17 @@ body.is-resizing .preview-dock__resizer::after {
 .notice--info {
   color: var(--text-dim);
 }
+/* Handoff banner atop a chat spawned by another chat's spawn_session tool. */
+.notice--handoff {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 550;
+}
+.notice--handoff::before {
+  content: '↳ ';
+}
 
 /* ---- Composer (sits in the bottom dock, below the control bar) ---- */
 .composer {
