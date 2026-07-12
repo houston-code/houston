@@ -8,7 +8,7 @@ Houston 0.2.0 takes the app fully cross-platform, adding Windows and Linux execu
 _None._
 
 ### Required steps
-_None._ <!-- Edit if this release needs a migration or manual step. -->
+_None._
 
 ### Added
 - Sign + notarize macOS builds and enable in-app auto-update (#420)
