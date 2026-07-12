@@ -28,6 +28,13 @@ permissions:
   id-token: write
 
 jobs:
+  # Run the same conformance suite (NTIA / CISA FSCT3 / CycloneDX / Google-EO) the release
+  # builds gate on, so a dispatch of this on-demand generator also reports whether the SBOMs
+  # are conformant. A sibling (not a gate): the `sbom` job still produces the signed artifact
+  # for inspection even if conformance fails, and a failure turns the run red.
+  sbom-conformance:
+    uses: ./.github/workflows/sbom-conformance.yml
+
   sbom:
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -53,7 +60,7 @@ jobs:
           # SPDX 3.0 is emitted too: it's the format that can carry the CISA SBOM type and
           # per-package supplier that CISA FSCT3 minimum conformance requires (SPDX 2.3 can't).
           syft scan file:./package-lock.json \
-            -o cyclonedx-json=sbom.cyclonedx.json \
+            -o cyclonedx-json@1.6=sbom.cyclonedx.json \
             -o spdx-json=sbom.spdx.json \
             -o spdx-json@3.0=sbom.spdx3.json
           # The lockfile carries no per-component hashes/author/supplier, so enrich each
@@ -82,6 +89,8 @@ jobs:
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           sbom: sbom.cyclonedx.json
+          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
+          grype-version: v0.115.0
           vex: .github/vex/houston.openvex.json
           severity-cutoff: high
           only-fixed: true
