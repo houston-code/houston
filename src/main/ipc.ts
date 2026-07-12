@@ -26,7 +26,7 @@ import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit } from '@shared/images'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
-import { checkForUpdates, takePendingWhatsNew } from './updater'
+import { checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
 import {
   getSettings,
   saveSettings,
@@ -202,6 +202,8 @@ export function registerIpc(): void {
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   ipcMain.handle(IPC.updateCheck, () => checkForUpdates())
   ipcMain.handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
+  // "Restart to install" — apply a downloaded update now instead of on next quit.
+  ipcMain.handle(IPC.updateInstall, () => installUpdate())
 
   ipcMain.handle(IPC.workspacePick, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined

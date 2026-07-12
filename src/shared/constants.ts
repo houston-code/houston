@@ -23,6 +23,12 @@ export const IPC = {
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',
   updateAvailable: 'update:available',
+  /** Main → renderer: in-place update download progress (signed macOS auto-update). */
+  updateDownloadProgress: 'update:downloadProgress',
+  /** Main → renderer: an update finished downloading and is ready to install. */
+  updateDownloaded: 'update:downloaded',
+  /** Renderer → main: install the downloaded update now (quit, apply, relaunch). */
+  updateInstall: 'update:install',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
   menuOpenSettings: 'menu:openSettings',
   // Workspace

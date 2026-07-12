@@ -603,8 +603,9 @@ you bump the version in `package.json`.
 
 **macOS** builds are [signed + notarized](#signing--notarization), so
 `electron-updater` can verify a downloaded package's signature against the running
-app. There the updater auto-downloads an update and installs it the next time you
-quit (`autoDownload` / `autoInstallOnAppQuit` in
+app. There the updater auto-downloads an update in the background — a banner shows
+download progress and, once ready, a **Restart to install** button — and it installs
+on the next quit if you don't (`autoDownload` / `autoInstallOnAppQuit` in
 [`src/main/updater.ts`](src/main/updater.ts), gated per-platform by
 `shouldAutoInstallUpdates`).
 

@@ -20,11 +20,34 @@ export type UpdateCheckResult =
       releaseUrl: string
       /** Short notes from the update feed, when present. */
       notes?: string
+      /**
+       * True where this build auto-downloads + installs in place (signed macOS). The
+       * banner then shows a progress bar + a "Restart to install" button instead of the
+       * manual-download link used on unsigned Windows/Linux.
+       */
+      autoInstall?: boolean
     }
   | { status: 'up-to-date'; currentVersion: string }
   /** Checking is off: dev/unpackaged build, or HOUSTON_DISABLE_UPDATER=1. */
   | { status: 'disabled'; currentVersion: string }
   | { status: 'error'; currentVersion: string; message: string }
+
+/** Progress of an in-place update download (signed macOS auto-update). */
+export interface UpdateDownloadProgress {
+  /** 0–100, rounded. */
+  percent: number
+  /** Current download speed in bytes/second. */
+  bytesPerSecond: number
+  /** Bytes downloaded so far. */
+  transferred: number
+  /** Total bytes to download. */
+  total: number
+}
+
+/** An update finished downloading and is ready to install on restart. */
+export interface UpdateDownloaded {
+  version: string
+}
 
 /** The one-shot payload for the post-restart "What's new" popup. */
 export interface WhatsNew {

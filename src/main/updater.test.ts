@@ -9,15 +9,48 @@ import { RELEASE_HIGHLIGHTS } from '@shared/update'
  * recorded. The module keeps top-level state (the staged "What's new", the
  * configured-once flag), so every test imports it fresh via `vi.resetModules()`.
  */
-const h = vi.hoisted(() => ({
-  isPackaged: true,
-  version: '0.2.0',
-  sent: [] as Array<{ channel: string; payload: unknown }>,
-  checkResult: null as unknown,
-  checkError: null as Error | null,
-  lastSeen: null as string | null,
-  written: [] as string[]
-}))
+const h = vi.hoisted(() => {
+  const self = {
+    isPackaged: true,
+    version: '0.2.0',
+    sent: [] as Array<{ channel: string; payload: unknown }>,
+    checkResult: null as unknown,
+    checkError: null as Error | null,
+    lastSeen: null as string | null,
+    written: [] as string[],
+    autoInstall: true,
+    quitAndInstallCalls: 0,
+    listeners: {} as Record<string, Array<(arg: unknown) => void>>,
+    // Assigned below so the methods can close over `self`.
+    autoUpdater: undefined as unknown as {
+      autoDownload: boolean
+      autoInstallOnAppQuit: boolean
+      on: (event: string, cb: (arg: unknown) => void) => void
+      checkForUpdates: () => Promise<unknown>
+      quitAndInstall: () => void
+    }
+  }
+  self.autoUpdater = {
+    autoDownload: false,
+    autoInstallOnAppQuit: false,
+    on: (event, cb) => {
+      ;(self.listeners[event] ??= []).push(cb)
+    },
+    checkForUpdates: async () => {
+      if (self.checkError) throw self.checkError
+      return self.checkResult
+    },
+    quitAndInstall: () => {
+      self.quitAndInstallCalls++
+    }
+  }
+  return self
+})
+
+/** Invoke every listener the updater registered for an electron-updater event. */
+function fire(event: string, arg: unknown): void {
+  for (const cb of h.listeners[event] ?? []) cb(arg)
+}
 
 vi.mock('electron', () => ({
   app: {
@@ -39,18 +72,16 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('electron-updater', () => ({
-  default: {
-    autoUpdater: {
-      autoDownload: true,
-      autoInstallOnAppQuit: true,
-      on: () => {},
-      checkForUpdates: async () => {
-        if (h.checkError) throw h.checkError
-        return h.checkResult
-      }
-    }
-  }
+  default: { autoUpdater: h.autoUpdater }
 }))
+
+// Keep the real update-policy behaviour but make the "may auto-install?" gate
+// controllable, so the signed-macOS path can be exercised on Linux CI too (where the
+// real `shouldAutoInstallUpdates` returns false because process.platform !== 'darwin').
+vi.mock('./update-policy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./update-policy')>()
+  return { ...actual, shouldAutoInstallUpdates: () => h.autoInstall }
+})
 
 vi.mock('./update-state', () => ({
   readLastSeenVersion: () => h.lastSeen,
@@ -70,6 +101,11 @@ beforeEach(() => {
   h.checkError = null
   h.lastSeen = null
   h.written = []
+  h.autoInstall = true
+  h.quitAndInstallCalls = 0
+  h.listeners = {}
+  h.autoUpdater.autoDownload = false
+  h.autoUpdater.autoInstallOnAppQuit = false
 })
 
 describe('checkForUpdates', () => {
@@ -185,6 +221,88 @@ describe('menuUpdateDialog', () => {
     expect(downloadUrl).toBeNull()
     expect(options.type).toBe('warning')
     expect(options.detail).toBe('feed unreachable')
+  })
+})
+
+describe('auto-install (signed macOS)', () => {
+  it('flags the available result + broadcast as auto-install', async () => {
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    const result = await checkForUpdates()
+    expect(result).toMatchObject({ status: 'available', autoInstall: true })
+    const broadcast = h.sent.find((s) => s.channel === IPC.updateAvailable)
+    expect(broadcast?.payload).toMatchObject({ autoInstall: true })
+  })
+
+  it('enables autoDownload + autoInstallOnAppQuit', async () => {
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    expect(h.autoUpdater.autoDownload).toBe(true)
+    expect(h.autoUpdater.autoInstallOnAppQuit).toBe(true)
+  })
+
+  it('broadcasts rounded download progress', async () => {
+    const { checkForUpdates } = await load()
+    await checkForUpdates() // configures the updater + attaches the event listeners
+    fire('download-progress', { percent: 42.7, bytesPerSecond: 1000.6, transferred: 5, total: 10 })
+    const progress = h.sent.filter((s) => s.channel === IPC.updateDownloadProgress)
+    expect(progress).toHaveLength(1)
+    expect(progress[0].payload).toEqual({
+      percent: 43,
+      bytesPerSecond: 1001,
+      transferred: 5,
+      total: 10
+    })
+  })
+
+  it('broadcasts update-downloaded with the version', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    const done = h.sent.filter((s) => s.channel === IPC.updateDownloaded)
+    expect(done).toHaveLength(1)
+    expect(done[0].payload).toEqual({ version: '0.3.0' })
+  })
+
+  it('installUpdate quits and installs', async () => {
+    const { installUpdate } = await load()
+    installUpdate()
+    expect(h.quitAndInstallCalls).toBe(1)
+  })
+})
+
+describe('without auto-install (unsigned Windows/Linux)', () => {
+  beforeEach(() => {
+    h.autoInstall = false
+  })
+
+  it('marks the available result as not auto-install', async () => {
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    expect(await checkForUpdates()).toMatchObject({ status: 'available', autoInstall: false })
+  })
+
+  it('leaves autoDownload + autoInstallOnAppQuit off', async () => {
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    expect(h.autoUpdater.autoDownload).toBe(false)
+    expect(h.autoUpdater.autoInstallOnAppQuit).toBe(false)
+  })
+
+  it('never wires or broadcasts progress/downloaded events', async () => {
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('download-progress', { percent: 50, bytesPerSecond: 1, transferred: 1, total: 2 })
+    fire('update-downloaded', { version: '0.3.0' })
+    expect(h.sent.some((s) => s.channel === IPC.updateDownloadProgress)).toBe(false)
+    expect(h.sent.some((s) => s.channel === IPC.updateDownloaded)).toBe(false)
+  })
+
+  it('installUpdate is a no-op', async () => {
+    const { installUpdate } = await load()
+    installUpdate()
+    expect(h.quitAndInstallCalls).toBe(0)
   })
 })
 
