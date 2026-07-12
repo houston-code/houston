@@ -1,3 +1,5 @@
+import { homedir } from 'node:os'
+import { resolve, relative, isAbsolute } from 'node:path'
 import type { PermissionRule } from '@shared/types'
 
 /**
@@ -47,25 +49,52 @@ function tokenizeShellCommand(command: string): string[] {
 }
 
 /**
- * Whether a single path-like segment escapes the workspace: an absolute path
- * (`/etc/...`), a home path (`~`, `~/...`, `$HOME/...`, `${HOME}/...`), a Windows
- * drive-absolute (`C:\...`, `C:/...`) or UNC (`\\server\share`) path, or a relative
- * path that climbs above the workspace root via `..` (`../x`, `a/../../b`, `..\x`).
- * A relative path that climbs then returns (`a/../b`) stays inside and does not escape.
+ * The absolute filesystem location a path-like segment points at, or `null` when the
+ * segment is not an absolute/home/Windows path (i.e. it is relative). `~`, `$HOME`,
+ * and `${HOME}` expand to the home directory; the checks are boundary-anchored so
+ * `$HOMEWORK` is not mistaken for `$HOME`.
  */
-function segmentEscapesWorkspace(seg: string): boolean {
-  if (!seg) return false
-  // POSIX absolute / home, and the unexpanded $HOME env var (a common stand-in for
-  // `~`). The `$HOME`/`${HOME}` checks are boundary-anchored so `$HOMEWORK` doesn't trip.
-  if (seg.startsWith('/') || seg === '~' || seg.startsWith('~/')) return true
-  if (seg === '$HOME' || seg.startsWith('$HOME/')) return true
-  if (seg === '${HOME}' || seg.startsWith('${HOME}/')) return true
+function absoluteTarget(seg: string): string | null {
+  if (seg.startsWith('/')) return seg
+  if (seg === '~' || seg.startsWith('~/')) return homedir() + seg.slice(1)
+  if (seg === '$HOME' || seg.startsWith('$HOME/')) return homedir() + seg.slice('$HOME'.length)
+  if (seg === '${HOME}' || seg.startsWith('${HOME}/')) return homedir() + seg.slice('${HOME}'.length)
   // Windows drive-absolute (`C:\` or `C:/`) and UNC (`\\host\share`) paths.
-  if (/^[A-Za-z]:[\\/]/.test(seg)) return true
-  if (seg.startsWith('\\\\')) return true
-  // Treat backslashes as separators too, so Windows-style relative climbs (`..\x`)
-  // are analysed the same as POSIX ones. Only paths can climb out; a token with no
-  // separator and no ".." can't.
+  if (/^[A-Za-z]:[\\/]/.test(seg) || seg.startsWith('\\\\')) return seg
+  return null
+}
+
+/**
+ * Whether `target` resolves inside one of the workspace `roots`. Lexical only — `.`
+ * and `..` are normalized, but symlinks are not walked (that is the sandbox's job).
+ */
+function isWithinRoots(target: string, roots: string[]): boolean {
+  const t = resolve(target)
+  for (const root of roots) {
+    const rel = relative(resolve(root), t)
+    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return true
+  }
+  return false
+}
+
+/**
+ * Whether a single path-like segment escapes the workspace `roots`.
+ *
+ * - An absolute / home / Windows path escapes only when it resolves OUTSIDE every
+ *   root. An absolute path INTO the workspace (e.g. `cd /abs/workspace && …`, which
+ *   agents emit constantly) is NOT an escape — a purely syntactic "any absolute path
+ *   escapes" check flagged all of them and forced needless approvals in full-auto.
+ * - A relative path escapes iff it climbs above the run's cwd (the workspace root)
+ *   via `..` (`../x`, `a/../../b`, `..\x`). This is a lexical property, independent of
+ *   the roots. A relative path that climbs then returns (`a/../b`) stays inside.
+ */
+function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
+  if (!seg) return false
+  const abs = absoluteTarget(seg)
+  if (abs !== null) return !isWithinRoots(abs, roots)
+  // Relative. Treat backslashes as separators too, so Windows-style relative climbs
+  // (`..\x`) are analysed the same as POSIX ones. A token with no separator and no
+  // ".." can't climb out.
   const norm = seg.replace(/\\/g, '/')
   if (!norm.includes('/') && norm !== '..') return false
   let depth = 0
@@ -82,22 +111,22 @@ function segmentEscapesWorkspace(seg: string): boolean {
 }
 
 /**
- * Whether a `run_shell` command references a filesystem path outside the
- * workspace — an absolute path, a home (`~`) path, or a relative path that climbs
- * above the workspace root. Also inspects the value side of an `=` (so env
- * prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught).
+ * Whether a `run_shell` command references a filesystem path outside the workspace
+ * `roots` — an absolute/home path that resolves outside every root, or a relative
+ * path that climbs above the workspace root. Also inspects the value side of an `=`
+ * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught).
  *
  * Best-effort and deliberately conservative: a command that escapes is escalated
  * for approval, never silently auto-run. It can't catch paths hidden behind
  * variable or command substitution — those defeat any static scan — so it's a
  * tripwire, not a sandbox. The sandbox remains the real confinement boundary.
  */
-export function shellReferencesExternalPath(command: string): boolean {
+export function shellReferencesExternalPath(command: string, roots: string[]): boolean {
   for (const token of tokenizeShellCommand(command)) {
-    if (segmentEscapesWorkspace(token)) return true
+    if (segmentEscapesWorkspace(token, roots)) return true
     // `KEY=value` / `--flag=value`: the path may sit after the first `=`.
     const eq = token.indexOf('=')
-    if (eq >= 0 && segmentEscapesWorkspace(token.slice(eq + 1))) return true
+    if (eq >= 0 && segmentEscapesWorkspace(token.slice(eq + 1), roots)) return true
   }
   return false
 }

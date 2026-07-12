@@ -1569,7 +1569,7 @@ export async function startRun(
               tool.kind === 'shell' &&
               call.name === 'run_shell' &&
               typeof execArgs.command === 'string' &&
-              shellReferencesExternalPath(execArgs.command)
+              shellReferencesExternalPath(execArgs.command, roots)
             const { mustApprove, unsandboxedShell } = decideApproval({
               ruleAction,
               policy: run.policy,

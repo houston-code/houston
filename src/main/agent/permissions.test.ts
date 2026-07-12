@@ -19,60 +19,92 @@ describe('permissionSubject', () => {
 })
 
 describe('shellReferencesExternalPath', () => {
-  it('flags absolute and home-relative paths', () => {
-    expect(shellReferencesExternalPath('cat /etc/passwd')).toBe(true)
-    expect(shellReferencesExternalPath('ls /')).toBe(true)
-    expect(shellReferencesExternalPath('cat ~/.ssh/id_rsa')).toBe(true)
-    expect(shellReferencesExternalPath('ls ~')).toBe(true)
+  // A concrete workspace root the commands live in, so absolute paths INTO it are
+  // recognised as in-workspace rather than escapes.
+  const ROOTS = ['/work/project']
+  const ext = (cmd: string): boolean => shellReferencesExternalPath(cmd, ROOTS)
+
+  it('flags absolute and home-relative paths outside the roots', () => {
+    expect(ext('cat /etc/passwd')).toBe(true)
+    expect(ext('ls /')).toBe(true)
+    expect(ext('cat ~/.ssh/id_rsa')).toBe(true)
+    expect(ext('ls ~')).toBe(true)
+  })
+
+  it('does NOT flag an absolute path that resolves inside a workspace root', () => {
+    // The `cd /abs/workspace && …` false positive that forced needless full-auto prompts.
+    expect(ext('cd /work/project && npm install')).toBe(false)
+    expect(ext('cd /work/project/server && npx tsc')).toBe(false)
+    expect(ext('sleep 5 && cd /work/project && ls -la')).toBe(false)
+    // A nested absolute path and the bare root itself are both inside.
+    expect(ext('cat /work/project/src/index.ts')).toBe(false)
+    expect(ext('ls /work/project')).toBe(false)
+  })
+
+  it('flags an absolute path that resolves outside every root', () => {
+    expect(ext('cat /work/other/secret')).toBe(true)
+    // A sibling that merely shares a name prefix is NOT inside (no false negative).
+    expect(ext('cat /work/project-secrets/creds')).toBe(true)
+    // An absolute path whose `..` climbs back out of the root escapes.
+    expect(ext('cat /work/project/../secret')).toBe(true)
+  })
+
+  it('honours additional roots', () => {
+    const roots = ['/work/a', '/work/b']
+    expect(shellReferencesExternalPath('cd /work/b/pkg && npm i', roots)).toBe(false)
+    expect(shellReferencesExternalPath('cat /work/a/src/x.ts', roots)).toBe(false)
+    expect(shellReferencesExternalPath('cat /work/c/x', roots)).toBe(true)
   })
 
   it('flags relative paths that climb above the workspace', () => {
-    expect(shellReferencesExternalPath('cat ../outside.txt')).toBe(true)
-    expect(shellReferencesExternalPath('cat a/../../b')).toBe(true)
-    expect(shellReferencesExternalPath('cat ..')).toBe(true)
+    expect(ext('cat ../outside.txt')).toBe(true)
+    expect(ext('cat a/../../b')).toBe(true)
+    expect(ext('cat ..')).toBe(true)
   })
 
   it('does not flag in-workspace paths or non-path tokens', () => {
-    expect(shellReferencesExternalPath('cat src/index.ts')).toBe(false)
-    expect(shellReferencesExternalPath('cat ./README.md')).toBe(false)
+    expect(ext('cat src/index.ts')).toBe(false)
+    expect(ext('cat ./README.md')).toBe(false)
     // Climbs then returns — stays within the workspace.
-    expect(shellReferencesExternalPath('cat a/../b')).toBe(false)
-    expect(shellReferencesExternalPath('git status')).toBe(false)
-    expect(shellReferencesExternalPath('npm run build')).toBe(false)
+    expect(ext('cat a/../b')).toBe(false)
+    expect(ext('git status')).toBe(false)
+    expect(ext('npm run build')).toBe(false)
     // A URL contains "//" but is not an absolute filesystem path.
-    expect(shellReferencesExternalPath('curl https://example.com')).toBe(false)
+    expect(ext('curl https://example.com')).toBe(false)
   })
 
   it('looks past an = for env prefixes and flag values', () => {
-    expect(shellReferencesExternalPath('FOO=/etc/secret cat $FOO')).toBe(true)
-    expect(shellReferencesExternalPath('grep x --file=/etc/hosts')).toBe(true)
-    expect(shellReferencesExternalPath('FOO=bar cat src/a.ts')).toBe(false)
+    expect(ext('FOO=/etc/secret cat $FOO')).toBe(true)
+    expect(ext('grep x --file=/etc/hosts')).toBe(true)
+    expect(ext('FOO=bar cat src/a.ts')).toBe(false)
+    // An `=` value pointing into the workspace is not an escape.
+    expect(ext('--project=/work/project/tsconfig.json tsc')).toBe(false)
   })
 
   it('honours quotes when tokenizing', () => {
-    expect(shellReferencesExternalPath('cat "/etc/passwd"')).toBe(true)
-    expect(shellReferencesExternalPath("cat '../escape'")).toBe(true)
-    expect(shellReferencesExternalPath('echo "hello world"')).toBe(false)
+    expect(ext('cat "/etc/passwd"')).toBe(true)
+    expect(ext("cat '../escape'")).toBe(true)
+    expect(ext('echo "hello world"')).toBe(false)
   })
 
   it('flags the unexpanded $HOME / ${HOME} env var', () => {
-    expect(shellReferencesExternalPath('cat $HOME/.ssh/id_rsa')).toBe(true)
-    expect(shellReferencesExternalPath('cat ${HOME}/.netrc')).toBe(true)
-    expect(shellReferencesExternalPath('grep x --file=$HOME/.aws/credentials')).toBe(true)
+    expect(ext('cat $HOME/.ssh/id_rsa')).toBe(true)
+    expect(ext('cat ${HOME}/.netrc')).toBe(true)
+    expect(ext('grep x --file=$HOME/.aws/credentials')).toBe(true)
     // Boundary-anchored: a different var that merely starts with HOME is not flagged.
-    expect(shellReferencesExternalPath('echo $HOMEWORK')).toBe(false)
+    expect(ext('echo $HOMEWORK')).toBe(false)
   })
 
   it('flags Windows drive-absolute and UNC paths', () => {
-    expect(shellReferencesExternalPath('type C:\\Users\\me\\secret.txt')).toBe(true)
-    expect(shellReferencesExternalPath('type C:/Windows/System32/config')).toBe(true)
-    expect(shellReferencesExternalPath('dir \\\\server\\share')).toBe(true)
+    expect(ext('type C:\\Users\\me\\secret.txt')).toBe(true)
+    expect(ext('type C:/Windows/System32/config')).toBe(true)
+    expect(ext('dir \\\\server\\share')).toBe(true)
   })
 
   it('flags backslash relative climbs', () => {
-    expect(shellReferencesExternalPath('type ..\\..\\outside')).toBe(true)
+    expect(ext('type ..\\..\\outside')).toBe(true)
     // A backslash path that stays inside does not escape.
-    expect(shellReferencesExternalPath('type sub\\file.txt')).toBe(false)
+    expect(ext('type sub\\file.txt')).toBe(false)
   })
 })
 
