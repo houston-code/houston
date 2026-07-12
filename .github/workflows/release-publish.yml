@@ -166,7 +166,34 @@ jobs:
             # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
             npm run ${{ matrix.dist }} -- --publish always
           fi
-      - if: matrix.os == 'macos-14'
+      # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
+      # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
+      # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
+      # flaky on CI runners — the reason electron-builder's gatekeeperAssess is off — so it
+      # runs last, INFORMATIONAL only, and never fails the job.
+      - name: Verify code signature + notarization
+        if: startsWith(matrix.os, 'macos')
+        shell: bash
+        run: |
+          app=$(find release -maxdepth 2 -name 'Houston.app' -type d | head -1)
+          if [ -z "$app" ]; then echo "::error::no packaged Houston.app found in release/"; exit 1; fi
+          echo "Verifying $app"
+          # Signature integrity across the whole bundle (helpers, frameworks, binaries).
+          codesign --verify --deep --strict --verbose=2 "$app"
+          # Assert a Developer ID Application cert, not ad-hoc/unsigned — codesign --verify
+          # passes on an ad-hoc signature, so this catches a build where signing secrets were
+          # absent.
+          codesign -dvv "$app" 2>&1 | grep -q 'Authority=Developer ID Application' \
+            || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
+          # The notarization ticket must be stapled to the bundle (offline Gatekeeper proof).
+          xcrun stapler validate "$app"
+          # Informational only — never fail the release on spctl's flakiness.
+          spctl --assess --type exec --verbose=4 "$app" \
+            || echo "::warning::spctl assessment did not pass (informational only — codesign + stapler are the gates)"
+      # Packaged-app smoke on BOTH macOS legs — arm64 (macos-14) and Intel (macos-15-intel) —
+      # so the x64 artifact's packaged .app (its own node-pty + rg/ast-grep) is launch-tested,
+      # not just arm64. resolveLaunch() picks release/mac-arm64 or release/mac accordingly.
+      - if: startsWith(matrix.os, 'macos')
         run: npm run test:e2e
       # Standalone CLI (README "Standalone CLI" section): one platform-independent
       # houston-cli.cjs per release. Built on the Linux leg only — the bundle is
