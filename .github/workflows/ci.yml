@@ -210,7 +210,139 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Classify the PR by whether it edits .github/workflows/**. The default GITHUB_TOKEN is a
+      # GitHub App token: GitHub BLOCKS it from *pushing* commits that touch workflow files, but
+      # NOT from merging them via the API. So workflow-editing PRs must merge server-side with
+      # `gh pr merge` (then bump in a separate commit — the classic two-commit flow), while every
+      # other PR can merge LOCALLY and fold the patch bump into the merge commit (one commit).
+      # Adding an AUTOMERGE_PAT (repo + workflow scopes) would let the folded path cover workflow
+      # PRs too; it isn't set, so those stay on the safe server-side path.
+      - name: Classify PR (edits workflow files?)
+        id: classify
+        run: |
+          set -eo pipefail
+          files=$(gh pr diff "$PR" --name-only)
+          if printf '%s\n' "$files" | grep -q '^\.github/workflows/'; then
+            echo "workflow=true" >> "$GITHUB_OUTPUT"
+            echo "PR #$PR edits workflow files -> server-side merge + separate bump."
+          else
+            echo "workflow=false" >> "$GITHUB_OUTPUT"
+            echo "PR #$PR does not edit workflow files -> local merge with folded bump."
+          fi
+
+      # --- Folded path (non-workflow PRs): ONE commit per merge -------------------------------
+      # Build the merge commit locally, fold the PATCH bump into it, then push — so main gets a
+      # single commit per PR instead of a "Merge pull request" commit trailed by a floating
+      # "chore(release)" commit. The push to main IS the compare-and-swap: it fast-forwards only
+      # if main is still where we validated, so a concurrent merge can't slip an untested tree in.
+      - name: Land with folded version bump
+        if: steps.classify.outputs.workflow == 'false'
+        run: |
+          set -eo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          meta=$(gh pr view "$PR" --json headRefName,isCrossRepository,title,headRepositoryOwner)
+          head_ref=$(jq -r .headRefName <<<"$meta")
+          title=$(jq -r .title <<<"$meta")
+          cross=$(jq -r .isCrossRepository <<<"$meta")
+          owner=$(jq -r '.headRepositoryOwner.login // ""' <<<"$meta")
+          [ -n "$owner" ] || owner='${{ github.repository_owner }}'
+          # release-prep PRs already carry their MINOR bump in a `release: vX.Y.Z` commit, so they
+          # must NOT get an extra PATCH folded on top. (They're normally merged by hand — defensive.)
+          is_release=${{ contains(github.event.pull_request.labels.*.name, 'release') && 'true' || 'false' }}
+
+          # Up to 3 attempts, each validating against the current main. --no-ff makes the merge's
+          # second parent the PR head — that reachability is what flips the PR to "Merged" once
+          # this lands (a squash/rebase would not).
+          for attempt in 1 2 3; do
+            state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
+            if [ "$state" = "MERGED" ]; then echo "PR #$PR already merged."; exit 0; fi
+            if [ "$state" != "OPEN" ]; then
+              echo "::error::PR #$PR is $state, not OPEN; refusing to merge."; exit 1
+            fi
+
+            # Fetch the PR head fresh and pin its SHA: if the author pushes mid-run, landing a
+            # stale SHA would ship code they didn't last push AND leave the PR "open" (its new
+            # head wouldn't be reachable from main). We re-check this right before pushing.
+            git fetch --no-tags --force origin "pull/$PR/head:pr-head"
+            head_sha=$(git rev-parse pr-head)
+
+            git fetch --no-tags origin main
+            base=$(git rev-parse FETCH_HEAD)
+            echo "Attempt $attempt: landing PR #$PR (head ${head_sha:0:8}) onto main@${base:0:8}"
+            git checkout --quiet -B ci-land "$base"
+
+            # Merge but DON'T commit yet, so the bump lands in the SAME commit.
+            if ! git merge --no-ff --no-commit pr-head; then
+              git merge --abort || true
+              echo "::error::PR #$PR does not merge cleanly into current main — rebase the branch onto main and resolve conflicts."
+              exit 1
+            fi
+
+            # Exactly the required `test` job's checks, against the tree that will actually land.
+            # Any failure exits non-zero (set -e) without committing or pushing, so main stays green.
+            npm ci
+            npm run lint
+            npm run typecheck
+            npm test
+
+            subject="Merge pull request #$PR from $owner/$head_ref"
+            if [ "$is_release" = "true" ]; then
+              git commit -m "$subject" -m "$title"
+            else
+              # --no-git-tag-version: edit package.json + package-lock only (no git ops, no
+              # clean-tree requirement); then fold exactly those two files into the merge commit.
+              new=$(npm version patch --no-git-tag-version)
+              git add package.json package-lock.json
+              git commit -m "$subject" -m "$title" -m "chore(release): $new"
+              echo "Folded $new into the merge commit."
+            fi
+
+            # Stale-head guard: if the PR head advanced during validation, discard and retry.
+            cur=$(gh pr view "$PR" --json headRefOid --jq .headRefOid) || cur=""
+            if [ -n "$cur" ] && [ "$cur" != "$head_sha" ]; then
+              echo "PR #$PR head advanced (${head_sha:0:8} -> ${cur:0:8}); re-validating."
+              continue
+            fi
+
+            # Land it. Fast-forwards only if main is still at $base (compare-and-swap); a
+            # non-fast-forward rejection means a concurrent PR merged, so re-validate.
+            if git push origin HEAD:main; then
+              echo "Landed PR #$PR on main."
+            else
+              echo "push to main rejected on attempt $attempt (main advanced); re-validating."
+              continue
+            fi
+
+            # GitHub marks the PR "Merged" asynchronously once its head is reachable from main.
+            # Confirm BEFORE deleting the branch, so branch removal can't pre-empt that detection.
+            merged=false
+            for check in 1 2 3 4 5; do
+              state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
+              if [ "$state" = "MERGED" ]; then merged=true; break; fi
+              echo "Post-land check $check: PR #$PR state=$state (awaiting Merged)."
+              sleep 3
+            done
+            if [ "$merged" = "true" ]; then
+              if [ "$cross" != "true" ]; then
+                git push origin --delete "$head_ref" || echo "::warning::could not delete branch $head_ref (already gone?)."
+              fi
+              echo "PR #$PR is Merged."
+              exit 0
+            fi
+            echo "::warning::PR #$PR code is on main but GitHub hasn't marked it Merged yet; leaving branch $head_ref for inspection. It should flip shortly."
+            exit 0
+          done
+          echo "::error::main kept advancing; could not land PR #$PR against a stable base in 3 attempts. Re-run this job, or update the branch."
+          exit 1
+
+      # --- Server-side path (workflow-editing PRs): the classic two-commit flow ----------------
+      # Behavior is unchanged from before folding existed; see the Classify step for why these
+      # PRs can't take the folded local-push path.
       - name: Validate the real merge result, then merge
+        if: steps.classify.outputs.workflow == 'true'
         run: |
           set -eo pipefail
           git config user.name 'github-actions[bot]'
@@ -284,21 +416,21 @@ jobs:
           echo "::error::main kept advancing; could not validate PR #$PR against a stable base in 3 attempts. Re-run this job, or update the branch."
           exit 1
 
-      # Auto-advance the version after a successful merge so package.json always reflects
-      # the merge count. Feature PRs bump the PATCH here; the release-prep PR (label
-      # `release`) already carries the MINOR bump from release-prepare.yml, so it's skipped.
-      # The bump commit is pushed with GITHUB_TOKEN, which by design does NOT trigger a new
-      # workflow run, so this never loops. Feature PRs never edit the version line, so the
-      # 3-way merge of an in-flight PR can't conflict with these bumps.
+      # Auto-advance the version after a successful SERVER-SIDE merge (the workflow-editing path
+      # above only — non-workflow PRs already folded their PATCH bump into the merge commit). The
+      # release-prep PR (label `release`) already carries the MINOR bump from release-prepare.yml,
+      # so it's skipped. The bump commit is pushed with GITHUB_TOKEN, which by design does NOT
+      # trigger a new workflow run, so this never loops. Feature PRs never edit the version line,
+      # so the 3-way merge of an in-flight PR can't conflict with these bumps.
       - name: Check out main for version bump
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'release') }}
+        if: ${{ steps.classify.outputs.workflow == 'true' && !contains(github.event.pull_request.labels.*.name, 'release') }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Bump patch version
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'release') }}
+        if: ${{ steps.classify.outputs.workflow == 'true' && !contains(github.event.pull_request.labels.*.name, 'release') }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
