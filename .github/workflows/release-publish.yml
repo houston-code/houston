@@ -295,7 +295,10 @@ jobs:
       # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
       # Fulcio cert + Rekor proof) beside each. This is the private-repo-compatible,
       # customer-verifiable alternative to GitHub attestation (which can't run here). Each leg
-      # signs its own release/* binaries; the Linux leg also signs the CLI + SBOMs. Skipped on
+      # signs its own release/* binaries; the Linux leg also signs the CLI, SBOMs, and the
+      # third-party notices (so the notices carry the same verifiable provenance as the code
+      # they attribute — closing the gap where the loose .md was the only unsigned sibling
+      # and could look like an untrusted stray download). Skipped on
       # dry_run (nothing published) and placed AFTER publish so a signing hiccup can't strand a
       # half-published release. Verify a download with:
       #   cosign verify-blob <file> --bundle <file>.cosign.bundle \
@@ -320,13 +323,13 @@ jobs:
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
             gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
           done
-      - name: Sign standalone CLI + SBOMs + attach bundles
+      - name: Sign standalone CLI + SBOMs + notices + attach bundles
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
-          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json .github/vex/houston.openvex.json; do
+          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json .github/vex/houston.openvex.json THIRD-PARTY-NOTICES.md; do
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
             gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
           done

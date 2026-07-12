@@ -54,6 +54,16 @@ asar: true
 asarUnpack:
   - node_modules/node-pty/**
 
+# Ship the attribution notices INSIDE the packaged app (→ Contents/Resources/THIRD-PARTY-NOTICES.md
+# on macOS, resources/ on Windows/Linux) rather than only as a loose release asset. Two reasons:
+#   1. Compliance: the app bundles the same MIT/Apache deps (in the asar), whose licenses require
+#      the notices to travel with the redistributed binary — so they belong in the app itself.
+#   2. Trust: as bundle content it is covered by the app's code signature and macOS notarization,
+#      so it is delivered under the notarized umbrella instead of as a bare, quarantined file a
+#      scanner can flag on its own. Same file the release also attaches standalone (repo root).
+extraResources:
+  - THIRD-PARTY-NOTICES.md
+
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns
