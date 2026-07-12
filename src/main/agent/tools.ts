@@ -48,6 +48,7 @@ import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
 import { runReadGit } from './gitRead'
+import { SPAWN_SESSION_NAME, type SpawnSessionResult } from './spawn'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -111,6 +112,17 @@ export interface ToolContext {
    * the `skill` tool; returns the SKILL.md body, or an "unknown skill" note.
    */
   useSkill?: (name: string) => Promise<string>
+  /**
+   * Spawn a separate chat seeded with `prompt` and start it running in the
+   * background (injected by the loop, which fills in the run's provider, model,
+   * approval policy, and workspace). Backs `spawn_session`; present only when the
+   * shell wired a spawn backend (desktop) — undefined on the standalone CLI.
+   */
+  spawnSession?: (input: {
+    title?: string
+    prompt: string
+    worktree?: { branch: string; base?: string }
+  }) => Promise<SpawnSessionResult>
 }
 
 export interface ToolDef {
@@ -1301,6 +1313,106 @@ const dispatchWritableAgent: ToolDef = {
   }
 }
 
+/** First non-empty line of a block of text, trimmed and capped for a compact label. */
+function firstLine(s: string): string {
+  const line =
+    s
+      .split('\n')
+      .map((l) => l.trim())
+      .find((l) => l.length > 0) ?? ''
+  return line.length > 60 ? `${line.slice(0, 57)}…` : line
+}
+
+/** The tool-result text for a completed spawn — shown in the card and read by the model. */
+function formatSpawnResult(r: SpawnSessionResult): string {
+  const lines = [`Started session "${r.title}" — now running in the background.`]
+  lines.push(
+    r.worktree
+      ? `Worktree: branch ${r.worktree.branch} at ${r.worktree.path}`
+      : `Workspace: ${r.workspace}`
+  )
+  lines.push(
+    'It appears in the sidebar with a running indicator; the user can open it to watch, answer an approval, or take over. It runs independently and will not report back into this chat.'
+  )
+  return lines.join('\n')
+}
+
+const spawnSessionTool: ToolDef = {
+  // Creates a git branch/worktree + a new conversation and starts an autonomous
+  // background run — a state-changing action, so it's gated by the normal write
+  // approval and (as a write kind) refused in plan mode, which is read-only.
+  kind: 'write',
+  summarize: (a) => {
+    const label = str(a, 'title').trim() || firstLine(str(a, 'prompt')) || 'new session'
+    return `Spawn session: ${label}`
+  },
+  schema: {
+    name: SPAWN_SESSION_NAME,
+    description:
+      'Spawn a SEPARATE chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into THIS turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it to run work in parallel — e.g. hand off an independent feature onto its own git branch/worktree while you continue here. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. It starts fresh with no view of this conversation, so put everything it needs in `prompt`.',
+    parameters: objectSchema(
+      {
+        prompt: {
+          type: 'string',
+          description:
+            "The full task and context for the new session — it becomes the first message and is all the session sees, so include every detail it needs to work on its own."
+        },
+        title: {
+          type: 'string',
+          description:
+            'Optional short title for the chat as it appears in the sidebar (a few words). Omit to derive one from the prompt.'
+        },
+        worktree: {
+          type: 'object',
+          description:
+            'Optional: run the session on a FRESH git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.',
+          properties: {
+            branch: {
+              type: 'string',
+              description: 'New branch name to create and check out for the session.'
+            },
+            base: {
+              type: 'string',
+              description: 'Optional base ref to branch from (defaults to the current HEAD).'
+            }
+          },
+          required: ['branch'],
+          additionalProperties: false
+        }
+      },
+      ['prompt']
+    )
+  },
+  async execute(args, ctx) {
+    const prompt = str(args, 'prompt').trim()
+    if (!prompt) throw new Error("prompt is required — it becomes the new session's first message.")
+    if (!ctx.spawnSession) throw new Error('Spawning sessions is not available in this context.')
+    const title = str(args, 'title').trim()
+
+    let worktree: { branch: string; base?: string } | undefined
+    const wt = args.worktree
+    if (wt !== undefined && wt !== null) {
+      if (typeof wt !== 'object' || Array.isArray(wt)) {
+        throw new Error('worktree must be an object with a "branch" (and optional "base").')
+      }
+      const wtRec = wt as Record<string, unknown>
+      const branch = str(wtRec, 'branch').trim()
+      if (!branch) throw new Error('worktree.branch is required when spawning onto a worktree.')
+      if (!isSafeGitRef(branch)) throw new Error(`Invalid branch name: "${branch}"`)
+      const base = str(wtRec, 'base').trim()
+      if (base && !isSafeGitRef(base)) throw new Error(`Invalid base ref: "${base}"`)
+      worktree = { branch, ...(base ? { base } : {}) }
+    }
+
+    const result = await ctx.spawnSession({
+      prompt,
+      ...(title ? { title } : {}),
+      ...(worktree ? { worktree } : {})
+    })
+    return formatSpawnResult(result)
+  }
+}
+
 const reviewChanges: ToolDef = {
   kind: 'read', // spawns read-only reviewer subagents + read-only git — no side effects, no approval
   summarize: (a) => `Review changes${str(a, 'base') ? ` vs ${str(a, 'base')}` : ''}`,
@@ -2332,6 +2444,7 @@ export const TOOLS: ToolDef[] = [
   recallHistory,
   dispatchAgent,
   dispatchWritableAgent,
+  spawnSessionTool,
   reviewChanges,
   gitStatus,
   gitDiff,

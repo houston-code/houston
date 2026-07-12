@@ -218,6 +218,12 @@ export interface ConversationMeta {
   /** Present when this chat runs in a git worktree Houston created for it. */
   worktree?: ConversationWorktree
   /**
+   * Present when this chat was created by another chat's `spawn_session` tool —
+   * carries the spawning chat's id and its title at spawn time, so the spawned
+   * chat can show a "handoff from …" label above its seeded first message.
+   */
+  spawnedFrom?: { conversationId: string; title: string }
+  /**
    * True when the most recent run ended in an error (mirrors {@link Conversation.lastError}
    * without carrying the message). Surfaced in the lightweight list so the background-tasks
    * indicator can mark a finished run as failed without loading the full conversation.

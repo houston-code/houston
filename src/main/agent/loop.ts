@@ -67,6 +67,11 @@ import { formatFile } from './format'
 import { runSubAgent } from './subagent'
 import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
+import {
+  isSpawnBackendConfigured,
+  spawnSession as engineSpawnSession,
+  SPAWN_SESSION_NAME
+} from './spawn'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills, resolveSkillInstructions } from './skills'
@@ -516,6 +521,10 @@ export async function startRun(
     // at startup. The standalone CLI wires none, so drop the tool from the schema
     // set and the prompt rather than offering one that fails after an approval.
     const localhostCaptureAvailable = isCaptureBackendConfigured()
+    // Only the desktop shell wires a spawn backend (it needs the app's windows +
+    // sidebar); the CLI has none, so spawn_session is dropped from the toolset and
+    // the prompt there, mirroring view_localhost.
+    const spawnAvailable = isSpawnBackendConfigured()
     let system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
@@ -525,7 +534,8 @@ export async function startRun(
       gitStatus,
       req.providerId,
       req.model,
-      localhostCaptureAvailable
+      localhostCaptureAvailable,
+      spawnAvailable
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // When a lot of MCP tools are connected, sending every schema on every turn
@@ -553,6 +563,7 @@ export async function startRun(
       ...toolSchemas().filter(
         (s) =>
           (localhostCaptureAvailable || s.name !== VIEW_LOCALHOST_NAME) &&
+          (spawnAvailable || s.name !== SPAWN_SESSION_NAME) &&
           // present_plan is the "exit Plan mode" tool; only offer it in Plan mode.
           (planMode || s.name !== PRESENT_PLAN_NAME)
       ),
@@ -806,7 +817,28 @@ export async function startRun(
       getHistory: () => [...messages],
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
-      useSkill: (name) => resolveSkillInstructions(workspace, skills, name)
+      useSkill: (name) => resolveSkillInstructions(workspace, skills, name),
+      // Back `spawn_session` when a backend is wired (desktop only). Fills in the
+      // run-scoped fields the tool doesn't take: provider/model, the workspace, and
+      // `run.policy` (read live) so the spawned session inherits the parent's CURRENT
+      // approval policy — never more permissive.
+      ...(spawnAvailable
+        ? {
+            spawnSession: (input: {
+              title?: string
+              prompt: string
+              worktree?: { branch: string; base?: string }
+            }) =>
+              engineSpawnSession({
+                ...input,
+                providerId: req.providerId,
+                model: req.model,
+                approvalPolicy: run.policy,
+                workspace,
+                ...(conversationId ? { parentConversationId: conversationId } : {})
+              })
+          }
+        : {})
     })
 
     /** True if a call is a read-only tool with no gating — safe to run concurrently. */

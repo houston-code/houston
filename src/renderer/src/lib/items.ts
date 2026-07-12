@@ -60,7 +60,8 @@ export interface NoticeItem {
   kind: 'notice'
   id: string
   text: string
-  tone: 'error' | 'info'
+  /** `handoff` marks the "spawned from …" banner atop a spawned chat's transcript. */
+  tone: 'error' | 'info' | 'handoff'
 }
 export interface QuestionItem {
   kind: 'question'

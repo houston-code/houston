@@ -521,6 +521,16 @@ export default function App(): JSX.Element {
       // Restore a persisted failure: re-show the error notice in the transcript and
       // flag `errored` so the "last turn failed / Retry" banner returns after reload.
       const items = itemsFromMessages(conv.messages)
+      // A spawned chat opens with a "handoff from …" banner above its seeded first
+      // message, so it reads as handed off rather than typed by the user.
+      if (conv.spawnedFrom) {
+        items.unshift({
+          kind: 'notice',
+          id: `handoff-${id}`,
+          text: `Handoff from “${conv.spawnedFrom.title}”`,
+          tone: 'handoff'
+        })
+      }
       if (conv.lastError) {
         items.push({ kind: 'notice', id: `lasterror-${id}`, text: conv.lastError.message, tone: 'error' })
       }

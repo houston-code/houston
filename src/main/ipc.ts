@@ -88,8 +88,11 @@ import {
   addUsage,
   mergeRunningTotals,
   setMessages,
+  setGeneratedTitle,
   updateConversationMeta
 } from './conversations'
+import { createSpawnBackend } from './spawnSession'
+import { setSpawnBackend } from './agent/spawn'
 
 /**
  * Translate a delete-confirmation dialog button index into what should happen.
@@ -170,6 +173,70 @@ function makeIo(sender: WebContents): DrainIO {
 }
 
 /**
+ * A DrainIO for a spawned background run (see `spawn_session`). Its conversation
+ * isn't tied to any one window — the user may open it in any of them — so its
+ * events broadcast to every renderer, each of which routes by conversationId and
+ * ignores runs it isn't currently showing. Usage is folded into the store exactly
+ * once per event (not once per window), and a single native notification fires
+ * (a background run's finished turn / needed approval is worth surfacing).
+ */
+function makeBroadcastIo(): DrainIO {
+  const toEach = (send: (wc: WebContents) => void): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) send(win.webContents)
+    }
+  }
+  return {
+    emit: (conversationId, e) => {
+      const ev = applyRunningUsage(conversationId, e)
+      toEach((wc) => wc.send(IPC.agentEvent, ev))
+      const primary = BrowserWindow.getAllWindows()[0]?.webContents
+      if (primary) maybeNotify(primary, conversationId, ev)
+    },
+    emitQueueChanged: (conversationId, items) =>
+      toEach((wc) => wc.send(IPC.agentQueueChanged, { conversationId, items })),
+    emitTitleChanged: (conversationId, title) =>
+      toEach((wc) => wc.send(IPC.conversationTitleChanged, { id: conversationId, title }))
+  }
+}
+
+/**
+ * Wire the agent's `spawn_session` tool to the real shell capabilities: create the
+ * conversation (+ optional worktree), seed its first message, and start a background
+ * run whose events broadcast to every window. Called once from {@link registerIpc}.
+ *
+ * The conversation ids of spawned sessions whose background run is still live are
+ * tracked so the backend can cap the concurrent fan-out (see
+ * {@link createSpawnBackend}); each id is dropped when its run settles.
+ */
+function wireSpawnSession(): void {
+  const liveSpawnedRuns = new Set<string>()
+  setSpawnBackend(
+    createSpawnBackend({
+      createWorktree,
+      createConversation,
+      seedMessages: setMessages,
+      setTitle: (id, title) => {
+        setGeneratedTitle(id, title)
+      },
+      getTitle: (id) => getConversation(id)?.title,
+      rememberWorkspace,
+      liveSpawnCount: () => liveSpawnedRuns.size,
+      removeWorktree: (wt) => removeWorktree(wt),
+      startBackgroundRun: (conversationId, req) => {
+        // Fire-and-forget: the spawning turn shouldn't block on the child's run.
+        // Owner is undefined — a background run any window can adopt and approve.
+        // Track it as live for the concurrency cap; drop it when the run settles.
+        liveSpawnedRuns.add(conversationId)
+        void runAndDrain(makeBroadcastIo(), conversationId, req, undefined).finally(() =>
+          liveSpawnedRuns.delete(conversationId)
+        )
+      }
+    })
+  )
+}
+
+/**
  * Upper bound on an `ask_user` answer accepted over IPC. Real answers are a short
  * option label or a line or two of free text; anything past this is a
  * malformed/hostile renderer, so we cap it before it becomes a tool result the
@@ -195,6 +262,9 @@ function callerOwnsRun(event: { sender: WebContents }, runId: string): boolean {
 
 /** Register every IPC handler the renderer can call. */
 export function registerIpc(): void {
+  // Bind the agent's spawn_session tool to the real shell capabilities (once).
+  wireSpawnSession()
+
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
   ipcMain.handle(IPC.appGetVersion, () => APP_VERSION)
