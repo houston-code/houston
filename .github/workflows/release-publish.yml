@@ -151,8 +151,11 @@ jobs:
       # Built on the Linux leg only — the dependency tree is platform-independent, so any
       # leg produces the same bytes, and Linux runs LAST in the serialized matrix so the
       # draft release is guaranteed to exist before the upload. This is THE per-release
-      # SBOM path: a push-triggered workflow can't fill this role because main only ever
-      # advances via GITHUB_TOKEN pushes, which never start a workflow run.
+      # SBOM path: it attaches the SBOM to the published Release deterministically,
+      # regardless of how the release commit landed. The push-triggered sbom.yml can't be
+      # relied on for this — a GITHUB_TOKEN auto-merge never starts a workflow run (so most
+      # main commits get no SBOM), and even a hand-merged release PR (which does fire it)
+      # only yields a transient 90-day Actions artifact, not a durable asset on the Release.
       - name: Generate SBOMs (production dependency closure)
         if: matrix.os == 'ubuntu-22.04'
         run: |
