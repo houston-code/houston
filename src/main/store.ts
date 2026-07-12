@@ -16,7 +16,12 @@ import {
   mcpHeaderScope,
   providerHeaderScope
 } from '@shared/types'
-import { backfillDefaultModels, defaultSettings, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
+import {
+  backfillDefaultModels,
+  defaultSettings,
+  SETTINGS_SCHEMA_VERSION,
+  stripBuiltInModelLabels
+} from '@shared/defaults'
 import { SEARCH_PROVIDERS } from '@shared/search'
 
 /**
@@ -98,6 +103,15 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   // v2. Scoped to just that id — a full backfill here would re-add other defaults the
   // user has since deleted, breaking the "stays deleted" guarantee above.
   if (fromVersion < 3) providers = backfillDefaultModels(providers, ['claude-fable-5'])
+  // v4: model display names are now derived from the id (one convention per provider),
+  // so drop the stale hardcoded labels older versions seeded — they no longer matched
+  // what a live Fetch returns and made a provider's list read inconsistently. Also seed
+  // the current OpenAI GPT-5.x line (scoped to the new ids, per the "stays deleted" rule
+  // above — older gpt-5/gpt-4o defaults the user kept are left untouched).
+  if (fromVersion < 4) {
+    const newOpenAiModels = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4']
+    providers = stripBuiltInModelLabels(backfillDefaultModels(providers, newOpenAiModels))
+  }
   const merged: AppSettings = {
     ...base,
     ...raw,

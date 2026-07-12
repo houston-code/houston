@@ -1,7 +1,7 @@
 import type { AppSettings, ProviderConfig } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 
-export const SETTINGS_SCHEMA_VERSION = 3
+export const SETTINGS_SCHEMA_VERSION = 4
 
 /**
  * Default context-compaction threshold in tokens. Comfortable for large-context
@@ -46,14 +46,15 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'anthropic',
       kind: 'anthropic',
       label: 'Anthropic (Claude)',
-      // Labels are the lowercase model ids the provider's own model API returns, so a
-      // seeded model reads the same as one added via Fetch.
+      // Model ids only — the display name is derived from the id (see
+      // `modelDisplayName` in models.ts), so a seeded model reads identically to one
+      // added via Fetch. No hardcoded labels to drift out of sync with fetched ids.
       models: [
-        { id: 'claude-fable-5', label: 'claude-fable-5' },
-        { id: 'claude-opus-4-8', label: 'claude-opus-4.8' },
-        { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4.6' },
-        { id: 'claude-haiku-4-5', label: 'claude-haiku-4.5' },
-        { id: 'claude-opus-4-7', label: 'claude-opus-4.7' }
+        { id: 'claude-fable-5' },
+        { id: 'claude-opus-4-8' },
+        { id: 'claude-sonnet-4-6' },
+        { id: 'claude-haiku-4-5' },
+        { id: 'claude-opus-4-7' }
       ],
       defaultModel: 'claude-opus-4-8',
       requiresKey: true,
@@ -64,16 +65,18 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'openai',
       kind: 'openai',
       label: 'OpenAI (GPT)',
+      // Current GPT-5.x line: the gpt-5.6 flagship family (sol/terra/luna tiers) plus a
+      // couple of recent still-available versions, and o3 for reasoning. Starting points
+      // only — the live list is a Fetch away, and the display name derives from the id.
       models: [
-        { id: 'gpt-5', label: 'gpt-5' },
-        { id: 'gpt-5-mini', label: 'gpt-5-mini' },
-        { id: 'gpt-5-nano', label: 'gpt-5-nano' },
-        { id: 'gpt-4o', label: 'gpt-4o' },
-        { id: 'gpt-4o-mini', label: 'gpt-4o-mini' },
-        { id: 'o3', label: 'o3' },
-        { id: 'o4-mini', label: 'o4-mini' }
+        { id: 'gpt-5.6-sol' },
+        { id: 'gpt-5.6-terra' },
+        { id: 'gpt-5.6-luna' },
+        { id: 'gpt-5.5' },
+        { id: 'gpt-5.4' },
+        { id: 'o3' }
       ],
-      defaultModel: 'gpt-5',
+      defaultModel: 'gpt-5.6-sol',
       requiresKey: true,
       hasKey: false,
       builtIn: true
@@ -82,11 +85,7 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'gemini',
       kind: 'gemini',
       label: 'Google (Gemini)',
-      models: [
-        { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
-        { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
-        { id: 'gemini-2.0-flash', label: 'gemini-2.0-flash' }
-      ],
+      models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-2.5-flash' }, { id: 'gemini-2.0-flash' }],
       defaultModel: 'gemini-2.5-pro',
       requiresKey: true,
       hasKey: false,
@@ -143,6 +142,22 @@ export function backfillDefaultModels(
     const have = new Set(p.models.map((m) => m.id))
     const additions = def.models.filter((m) => !have.has(m.id) && (!only || only.has(m.id)))
     return additions.length ? { ...p, models: [...p.models, ...additions] } : p
+  })
+}
+
+/**
+ * Drop stored per-model `label` overrides from built-in providers so their display
+ * names come from `modelDisplayName` (derived from the id) instead of a stale
+ * hardcoded string a past version seeded. Built-in labels used to be a mix of
+ * title-case ("Claude Opus 4.8") and dotted-id ("claude-opus-4.8") forms that never
+ * matched what a live Fetch returns (raw ids, no label) — so the same provider's
+ * list read inconsistently. This normalizes existing installs to one convention per
+ * provider. Custom endpoints (`builtIn: false`) keep any label the user set.
+ */
+export function stripBuiltInModelLabels(saved: ProviderConfig[]): ProviderConfig[] {
+  return saved.map((p) => {
+    if (!p.builtIn || !p.models.some((m) => m.label !== undefined)) return p
+    return { ...p, models: p.models.map(({ label: _label, ...m }) => m) }
   })
 }
 

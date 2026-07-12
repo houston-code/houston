@@ -5,7 +5,8 @@ import {
   backfillDefaultModels,
   defaultProviders,
   defaultSettings,
-  resolveShellOutputBudget
+  resolveShellOutputBudget,
+  stripBuiltInModelLabels
 } from './defaults'
 
 function provider(over: Partial<ProviderConfig> & Pick<ProviderConfig, 'id'>): ProviderConfig {
@@ -44,12 +45,14 @@ describe('defaultSettings', () => {
     expect(defaultSettings().shellOutputMaxBytes).toBe(DEFAULT_SHELL_OUTPUT_MAX_BYTES)
   })
 
-  it('seeds the GPT-5 family on the OpenAI provider and defaults to gpt-5', () => {
+  it('seeds the current GPT-5.x line on the OpenAI provider and defaults to gpt-5.6-sol', () => {
     const openai = defaultSettings().providers.find((p) => p.id === 'openai')!
     expect(openai.models.map((m) => m.id)).toEqual(
-      expect.arrayContaining(['gpt-5', 'gpt-5-mini', 'gpt-5-nano'])
+      expect.arrayContaining(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
     )
-    expect(openai.defaultModel).toBe('gpt-5')
+    // Deprecated ids are not seeded on a fresh install.
+    expect(openai.models.map((m) => m.id)).not.toContain('gpt-5')
+    expect(openai.defaultModel).toBe('gpt-5.6-sol')
   })
 
   it('seeds claude-fable-5 on the Anthropic provider', () => {
@@ -57,21 +60,45 @@ describe('defaultSettings', () => {
     expect(anthropic.models.map((m) => m.id)).toContain('claude-fable-5')
   })
 
-  it('labels built-in models with their lowercase id form', () => {
-    // Seeded labels match what each provider's model API returns, so a curated model
-    // reads the same as a fetched one.
-    const anthropic = defaultSettings().providers.find((p) => p.id === 'anthropic')!
-    expect(anthropic.models).toEqual(
-      expect.arrayContaining([
-        { id: 'claude-fable-5', label: 'claude-fable-5' },
-        { id: 'claude-opus-4-8', label: 'claude-opus-4.8' }
-      ])
-    )
+  it('seeds built-in models as ids only, with no hardcoded display label', () => {
+    // Display names are derived from the id (see modelDisplayName), so no seeded label
+    // can drift out of sync with what a live Fetch returns.
     for (const p of defaultSettings().providers) {
       for (const model of p.models) {
-        expect(model.label ?? '').toBe((model.label ?? '').toLowerCase())
+        expect(model.label).toBeUndefined()
       }
     }
+  })
+})
+
+describe('stripBuiltInModelLabels', () => {
+  it('removes labels from built-in providers but keeps custom-endpoint labels', () => {
+    const stripped = stripBuiltInModelLabels([
+      provider({
+        id: 'anthropic',
+        kind: 'anthropic',
+        builtIn: true,
+        models: [
+          { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+          { id: 'claude-haiku-4-5', label: 'claude-haiku-4.5' }
+        ]
+      }),
+      provider({
+        id: 'my-proxy',
+        kind: 'openai-compatible',
+        builtIn: false,
+        models: [{ id: 'house-model', label: 'House Model' }]
+      })
+    ])
+    expect(stripped[0].models).toEqual([{ id: 'claude-opus-4-8' }, { id: 'claude-haiku-4-5' }])
+    // A user's custom endpoint keeps whatever label they configured.
+    expect(stripped[1].models).toEqual([{ id: 'house-model', label: 'House Model' }])
+  })
+
+  it('is referentially stable for a provider that has no labels to strip', () => {
+    const p = provider({ id: 'openai', builtIn: true, models: [{ id: 'gpt-5.1' }] })
+    const out = stripBuiltInModelLabels([p])
+    expect(out[0]).toBe(p)
   })
 })
 
@@ -79,9 +106,9 @@ describe('backfillDefaultModels', () => {
   it('appends new built-in default models a saved provider is missing', () => {
     const saved = [provider({ id: 'openai', models: [{ id: 'gpt-4o', label: 'GPT-4o' }] })]
     const ids = backfillDefaultModels(saved)[0].models.map((m) => m.id)
-    // The pre-existing model stays first; new defaults (incl. GPT-5) are appended.
+    // The pre-existing model stays first; new defaults (incl. gpt-5.6-sol) are appended.
     expect(ids[0]).toBe('gpt-4o')
-    expect(ids).toContain('gpt-5')
+    expect(ids).toContain('gpt-5.6-sol')
     // No duplicate of the model the user already had.
     expect(ids.filter((id) => id === 'gpt-4o')).toHaveLength(1)
   })
@@ -93,9 +120,9 @@ describe('backfillDefaultModels', () => {
   })
 
   it('does not duplicate a default model the user already has', () => {
-    const saved = [provider({ id: 'openai', models: [{ id: 'gpt-5' }] })]
+    const saved = [provider({ id: 'openai', models: [{ id: 'gpt-5.6-sol' }] })]
     const ids = backfillDefaultModels(saved)[0].models.map((m) => m.id)
-    expect(ids.filter((id) => id === 'gpt-5')).toHaveLength(1)
+    expect(ids.filter((id) => id === 'gpt-5.6-sol')).toHaveLength(1)
   })
 
   it('with onlyIds, appends just those ids and leaves other missing defaults out', () => {
@@ -106,8 +133,8 @@ describe('backfillDefaultModels', () => {
     ]
     const models = backfillDefaultModels(saved, ['claude-fable-5'])[0].models
     expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5'])
-    // The appended model carries its curated (lowercase) label.
-    expect(models.find((m) => m.id === 'claude-fable-5')?.label).toBe('claude-fable-5')
+    // The appended model is id-only; its display name is derived, not seeded.
+    expect(models.find((m) => m.id === 'claude-fable-5')).toEqual({ id: 'claude-fable-5' })
   })
 
   it('with onlyIds, does not re-add an already-present scoped id', () => {

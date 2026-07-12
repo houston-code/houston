@@ -68,6 +68,46 @@ export function naturalCompare(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
 }
 
+/**
+ * Anthropic display name from a model id: `claude-<tier>-<x>.<y>`. The provider's
+ * own model API returns dash-separated ids (`claude-opus-4-8`, sometimes with a
+ * trailing release-date suffix like `-20260101`); this normalizes them to the
+ * `claude-model-x.y` form so a seeded model reads identically to one added via
+ * Fetch. Adjacent numeric segments are joined with a dot (the major/minor version)
+ * and a trailing all-digit date token is dropped:
+ *
+ *   claude-opus-4-8            → claude-opus-4.8
+ *   claude-opus-4-1-20260101   → claude-opus-4.1
+ *   claude-sonnet-5            → claude-sonnet-5   (no minor version)
+ *   claude-3-5-sonnet          → claude-3.5-sonnet (legacy version-first ids too)
+ */
+function anthropicDisplayName(id: string): string {
+  const tokens = id.split('-')
+  // Drop a trailing release-date suffix (6+ digit run, e.g. 20260101) — it's noise.
+  if (tokens.length > 1 && /^\d{6,}$/.test(tokens[tokens.length - 1])) tokens.pop()
+  const out: string[] = []
+  for (const t of tokens) {
+    const prev = out[out.length - 1]
+    // Join a run of two single/short numeric tokens into a dotted version (4 + 8 → 4.8).
+    if (prev !== undefined && /^\d+$/.test(prev) && /^\d+$/.test(t)) out[out.length - 1] = `${prev}.${t}`
+    else out.push(t)
+  }
+  return out.join('-')
+}
+
+/**
+ * The display name for a model id, in a single convention per provider so a seeded
+ * model and a live-fetched one read the same (the fetch listing rarely carries a
+ * display label — see providers/index.ts). Anthropic normalizes to the dotted
+ * `claude-model-x.y` form; every other provider already returns clean lowercase ids
+ * (`gpt-5.1`, `gpt-5-mini`, `gemini-2.5-pro`, `llama3.1:latest`), so the id IS the
+ * name. Pure + dependency-free so the renderer, the settings migration, and the
+ * fetch path can all share it.
+ */
+export function modelDisplayName(kind: ProviderKind, id: string): string {
+  return kind === 'anthropic' ? anthropicDisplayName(id) : id
+}
+
 /** The model's version as a number (`claude-opus-4-8` → 4.8, `gemini-2.5-pro` → 2.5). 0 if none. */
 function versionScore(id: string): number {
   const m = id.match(/(\d+)(?:[.-](\d+))?/)
@@ -75,11 +115,17 @@ function versionScore(id: string): number {
   return parseFloat(`${m[1]}.${m[2] ?? 0}`)
 }
 
-/** Size tier within a family: base < mini < lite < nano. `\b` avoids the "mini" in "gemini". */
+/**
+ * Size/capability tier within a family, smaller = more capable (sorts first):
+ * base < mini < lite < nano. Also maps OpenAI's gpt-5.6 codename tiers onto the same
+ * scale — sol (flagship) < terra (mid) < luna (efficient) — so the flagship sorts
+ * first instead of alphabetically (luna, sol, terra). `\b` avoids the "mini" in
+ * "gemini". Codenames are volatile; a live Fetch is the source of truth for the list.
+ */
 function sizeRank(id: string): number {
-  if (/\bnano\b/.test(id)) return 3
+  if (/\bnano\b|\bluna\b/.test(id)) return 3
   if (/\blite\b/.test(id)) return 2
-  if (/\bmini\b/.test(id)) return 1
+  if (/\bmini\b|\bterra\b/.test(id)) return 1
   return 0
 }
 

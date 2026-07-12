@@ -6,7 +6,7 @@ import {
   resolveContextWindow,
   resolveToolSupport
 } from '@shared/usage'
-import { sortedModels } from '@shared/models'
+import { modelDisplayName, sortedModels } from '@shared/models'
 import { Popover } from './Popover'
 
 /** Shown when the selected model doesn't advertise tool-calling support. */
@@ -17,6 +17,15 @@ const TOOL_WARNING =
 /** "Anthropic (Claude)" or "OpenAI (GPT) (no key)" when a required key is missing. */
 function groupLabel(p: ProviderConfig): string {
   return `${p.label}${p.requiresKey && !p.hasKey ? ' (no key)' : ''}`
+}
+
+/**
+ * A model's display name: an explicit per-model `label` override if one is set (only
+ * a custom endpoint would), otherwise derived from the id in the provider's naming
+ * convention so seeded and live-fetched models read identically.
+ */
+function modelName(kind: ProviderConfig['kind'], m: ModelOption): string {
+  return m.label ?? modelDisplayName(kind, m.id)
 }
 
 /** The context-window suffix shown after a model name, e.g. "400k" — empty when unknown. */
@@ -84,7 +93,7 @@ export function ModelPicker({
   const flat = useMemo<FlatOption[]>(
     () =>
       groups.flatMap(({ provider, models }) =>
-        models.map((m) => ({ providerId: provider.id, modelId: m.id, label: m.label ?? m.id }))
+        models.map((m) => ({ providerId: provider.id, modelId: m.id, label: modelName(provider.kind, m) }))
       ),
     [groups]
   )
@@ -125,7 +134,7 @@ export function ModelPicker({
     }
   }, [providerId, model, providerKind, listedTools])
   const triggerLabel = selected
-    ? `${selectedModel?.label ?? selected.model}${
+    ? `${selectedProvider && selectedModel ? modelName(selectedProvider.kind, selectedModel) : selected.model}${
         selectedModel && windowLabel(selectedModel) ? ` · ${windowLabel(selectedModel)}` : ''
       }`
     : 'Select a model…'
@@ -259,6 +268,7 @@ export function ModelPicker({
                   const isSelected = key === selectedKey
                   const win = windowLabel(m)
                   const chips = capChips(m)
+                  const name = modelName(provider.kind, m)
                   return (
                     <button
                       key={key}
@@ -266,17 +276,17 @@ export function ModelPicker({
                       type="button"
                       role="option"
                       aria-selected={isSelected}
-                      aria-label={win ? `${m.label ?? m.id} ${win}` : (m.label ?? m.id)}
+                      aria-label={win ? `${name} ${win}` : name}
                       className={`model-menu__opt${idx === active ? ' model-menu__opt--active' : ''}${
                         isSelected ? ' model-menu__opt--selected' : ''
                       }`}
                       onMouseMove={() => setActive(idx)}
-                      onClick={() => choose({ providerId: provider.id, modelId: m.id, label: m.label ?? m.id })}
+                      onClick={() => choose({ providerId: provider.id, modelId: m.id, label: name })}
                     >
                       <span className="model-menu__check" aria-hidden="true">
                         {isSelected ? '✓' : ''}
                       </span>
-                      <span className="model-menu__name">{m.label ?? m.id}</span>
+                      <span className="model-menu__name">{name}</span>
                       <span className="model-menu__meta">
                         {chips.length > 0 && (
                           <span className="model-menu__caps" aria-hidden="true">

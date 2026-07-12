@@ -106,19 +106,22 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const ids = await loadOpenAIModelIds()
     expect(ids[0]).toBe('gpt-4o') // user's model kept, in place
-    expect(ids).toContain('gpt-5') // new default appended
+    expect(ids).toContain('gpt-5.6-sol') // new default appended
   })
 
   it('treats a settings file with no schemaVersion as pre-v2 and backfills', async () => {
     writeSettings({ providers: [openaiProvider(['gpt-4o'])] })
-    expect(await loadOpenAIModelIds()).toContain('gpt-5')
+    expect(await loadOpenAIModelIds()).toContain('gpt-5.6-sol')
   })
 
   it('does not re-add a default model a v2 install has already deleted', async () => {
-    // Migration already ran (v2); the user has since removed gpt-5 — it must stay gone.
-    // The v3 bump only backfills Fable (a Claude model), so the OpenAI list is untouched.
+    // Migration already ran (v2); the user has since removed the old gpt-5 flagship — a
+    // full backfill must not resurrect it. The v4 bump scopes its OpenAI add to the new
+    // gpt-5.x ids (which the user never deleted), leaving gpt-5 gone.
     writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])] })
-    expect(await loadOpenAIModelIds()).not.toContain('gpt-5')
+    const ids = await loadOpenAIModelIds()
+    expect(ids).not.toContain('gpt-5')
+    expect(ids).toContain('gpt-5.6-sol') // the v4 scoped flagship add still runs
   })
 
   it('seeds claude-fable-5 into a v2 Anthropic provider on the v3 bump', async () => {
@@ -152,7 +155,29 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(3)
+    expect(getSettings().schemaVersion).toBe(4)
+  })
+
+  it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
+    // A pre-v4 install seeded title-case labels ("Claude Opus 4.8") that never matched
+    // fetched ids; the v4 migration drops them so the display name derives from the id.
+    writeSettings({
+      schemaVersion: 3,
+      providers: [
+        {
+          id: 'anthropic',
+          kind: 'anthropic',
+          label: 'Anthropic (Claude)',
+          models: [{ id: 'claude-opus-4-8', label: 'Claude Opus 4.8' }],
+          requiresKey: true,
+          hasKey: false,
+          builtIn: true
+        }
+      ]
+    })
+    const { getSettings } = await loadStore()
+    const anthropic = getSettings().providers.find((p) => p.id === 'anthropic')!
+    expect(anthropic.models.find((m) => m.id === 'claude-opus-4-8')).toEqual({ id: 'claude-opus-4-8' })
   })
 })
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelOption } from './types'
-import { naturalCompare, sortedModels } from './models'
+import { modelDisplayName, naturalCompare, sortedModels } from './models'
 
 const ids = (ms: ModelOption[]): string[] => ms.map((m) => m.id)
 const m = (...xs: string[]): ModelOption[] => xs.map((id) => ({ id }))
@@ -8,6 +8,41 @@ const m = (...xs: string[]): ModelOption[] => xs.map((id) => ({ id }))
 describe('naturalCompare', () => {
   it('orders numeric segments by value, not lexically', () => {
     expect(['v10', 'v2'].sort(naturalCompare)).toEqual(['v2', 'v10'])
+  })
+})
+
+describe('modelDisplayName', () => {
+  it('dotifies the trailing version of an Anthropic id (claude-model-x.y)', () => {
+    expect(modelDisplayName('anthropic', 'claude-opus-4-8')).toBe('claude-opus-4.8')
+    expect(modelDisplayName('anthropic', 'claude-sonnet-4-6')).toBe('claude-sonnet-4.6')
+    expect(modelDisplayName('anthropic', 'claude-haiku-4-5')).toBe('claude-haiku-4.5')
+  })
+
+  it('leaves an Anthropic id with no minor version unchanged', () => {
+    expect(modelDisplayName('anthropic', 'claude-fable-5')).toBe('claude-fable-5')
+    expect(modelDisplayName('anthropic', 'claude-sonnet-5')).toBe('claude-sonnet-5')
+  })
+
+  it('drops a trailing release-date suffix from an Anthropic id', () => {
+    expect(modelDisplayName('anthropic', 'claude-opus-4-1-20260101')).toBe('claude-opus-4.1')
+    expect(modelDisplayName('anthropic', 'claude-opus-4-8-20260514')).toBe('claude-opus-4.8')
+  })
+
+  it('handles legacy version-first Anthropic ids too', () => {
+    expect(modelDisplayName('anthropic', 'claude-3-5-sonnet')).toBe('claude-3.5-sonnet')
+  })
+
+  it('produces the same name whether the id was seeded or fetched (no mismatch)', () => {
+    // The crux: a curated id and the raw id a live Fetch returns normalize identically.
+    expect(modelDisplayName('anthropic', 'claude-opus-4-6')).toBe('claude-opus-4.6')
+  })
+
+  it('returns other providers ids unchanged (already the fetched form)', () => {
+    expect(modelDisplayName('openai', 'gpt-5.1')).toBe('gpt-5.1')
+    expect(modelDisplayName('openai', 'gpt-5-mini')).toBe('gpt-5-mini')
+    expect(modelDisplayName('openai', 'o4-mini')).toBe('o4-mini')
+    expect(modelDisplayName('gemini', 'gemini-2.5-pro')).toBe('gemini-2.5-pro')
+    expect(modelDisplayName('openai-compatible', 'llama3.1:latest')).toBe('llama3.1:latest')
   })
 })
 
@@ -56,6 +91,19 @@ describe('sortedModels', () => {
       'gpt-5.4',
       'gpt-5',
       'gpt-5-mini'
+    ])
+  })
+
+  it('orders the gpt-5.6 codename tiers flagship-first (sol < terra < luna)', () => {
+    // The codenames replace mini/nano; without tier ranking they would sort
+    // alphabetically (luna, sol, terra) and bury the flagship.
+    const stored = m('gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4')
+    expect(ids(sortedModels('openai', stored))).toEqual([
+      'gpt-5.6-sol', // flagship of the newest family
+      'gpt-5.6-terra', // mid tier
+      'gpt-5.6-luna', // efficient tier
+      'gpt-5.5',
+      'gpt-5.4'
     ])
   })
 
