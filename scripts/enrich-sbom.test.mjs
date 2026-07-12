@@ -3,6 +3,9 @@ import {
   integrityToHex,
   normalizeAuthor,
   spdxOriginator,
+  repoOwner,
+  deriveSupplier,
+  spdxSupplier,
   buildLockIndex,
   enrichCycloneDx,
   enrichSpdx
@@ -51,6 +54,53 @@ describe('spdxOriginator', () => {
   })
 })
 
+describe('repoOwner', () => {
+  it('extracts the owner from a github url in various shapes', () => {
+    expect(repoOwner('git+https://github.com/nodeca/argparse.git')).toBe('nodeca')
+    expect(repoOwner({ url: 'git+https://github.com/vercel/ms.git' })).toBe('vercel')
+    expect(repoOwner('https://github.com/isaacs/node-graceful-fs')).toBe('isaacs')
+    expect(repoOwner('github:juliangruber/balanced-match')).toBe('juliangruber')
+  })
+
+  it('returns null when there is no resolvable owner', () => {
+    expect(repoOwner('')).toBeNull()
+    expect(repoOwner(null)).toBeNull()
+    expect(repoOwner('https://example.com/x')).toBeNull()
+  })
+})
+
+describe('deriveSupplier', () => {
+  it('prefers a declared author (person)', () => {
+    expect(deriveSupplier({ author: 'Jane <j@x.com>' }, 'foo')).toEqual({ name: 'Jane', email: 'j@x.com', isOrg: false })
+  })
+
+  it('falls back to the first contributor when no author', () => {
+    expect(deriveSupplier({ contributors: [{ name: 'Con Tributor' }] }, 'foo')).toEqual({ name: 'Con Tributor', email: undefined, isOrg: false })
+  })
+
+  it('uses the npm scope as an org when no person is declared', () => {
+    expect(deriveSupplier({}, '@google/genai')).toEqual({ name: 'google', isOrg: true })
+  })
+
+  it('falls back to the repository owner as an org', () => {
+    expect(deriveSupplier({ repository: 'git+https://github.com/isaacs/graceful-fs.git' }, 'graceful-fs')).toEqual({ name: 'isaacs', isOrg: true })
+  })
+
+  it('returns null only when nothing is derivable', () => {
+    expect(deriveSupplier({}, 'argparse')).toBeNull()
+    expect(deriveSupplier(null, 'x')).toBeNull()
+  })
+})
+
+describe('spdxSupplier', () => {
+  it('formats org and person suppliers, and NOASSERTION for null', () => {
+    expect(spdxSupplier({ name: 'google', isOrg: true })).toBe('Organization: google')
+    expect(spdxSupplier({ name: 'Jane', email: 'j@x.com', isOrg: false })).toBe('Person: Jane (j@x.com)')
+    expect(spdxSupplier({ name: 'Jane', isOrg: false })).toBe('Person: Jane')
+    expect(spdxSupplier(null)).toBe('NOASSERTION')
+  })
+})
+
 describe('buildLockIndex', () => {
   it('indexes name@version -> integrity + path, deriving scoped names from the path', () => {
     const idx = buildLockIndex({
@@ -69,9 +119,10 @@ describe('buildLockIndex', () => {
 })
 
 describe('enrichCycloneDx', () => {
-  it('adds a SHA-512 hash and author only for indexed components', () => {
+  it('adds hash, author and supplier only for indexed components', () => {
     const hex = 'ab'.repeat(64)
     const idx = new Map([['foo@1.0.0', { integrity: sha512(hex), path: 'node_modules/foo' }]])
+    const manifests = { 'node_modules/foo': { author: 'Jane <j@x.com>' } }
     const doc = {
       bomFormat: 'CycloneDX',
       components: [
@@ -79,33 +130,52 @@ describe('enrichCycloneDx', () => {
         { name: 'bar', version: '9.9.9' } // not in the index
       ]
     }
-    const res = enrichCycloneDx(doc, idx, (p) => (p === 'node_modules/foo' ? 'Jane <j@x.com>' : null))
-    expect(res).toEqual({ hashes: 1, authors: 1 })
+    const res = enrichCycloneDx(doc, idx, (p) => manifests[p] || null)
+    expect(res).toEqual({ hashes: 1, authors: 1, suppliers: 1 })
     expect(doc.components[0].hashes).toEqual([{ alg: 'SHA-512', content: hex }])
     expect(doc.components[0].author).toBe('Jane <j@x.com>')
+    expect(doc.components[0].supplier).toEqual({ name: 'Jane' })
     expect(doc.components[1].hashes).toBeUndefined()
   })
 
-  it('never clobbers an existing hash or author', () => {
+  it('supplies a scope-derived org when the manifest has no author', () => {
+    const idx = new Map([['@google/genai@1.0.0', { integrity: null, path: 'node_modules/@google/genai' }]])
+    const doc = { components: [{ name: '@google/genai', version: '1.0.0' }] }
+    const res = enrichCycloneDx(doc, idx, () => ({}))
+    expect(res.suppliers).toBe(1)
+    expect(doc.components[0].supplier).toEqual({ name: 'google' })
+    expect(doc.components[0].author).toBeUndefined()
+  })
+
+  it('never clobbers an existing hash, author or supplier', () => {
     const idx = new Map([['foo@1.0.0', { integrity: sha512('cd'.repeat(64)), path: 'node_modules/foo' }]])
-    const doc = { components: [{ name: 'foo', version: '1.0.0', hashes: [{ alg: 'MD5', content: 'x' }], author: 'Existing' }] }
-    const res = enrichCycloneDx(doc, idx, () => 'Jane')
-    expect(res).toEqual({ hashes: 0, authors: 0 })
+    const doc = { components: [{ name: 'foo', version: '1.0.0', hashes: [{ alg: 'MD5', content: 'x' }], author: 'Existing', supplier: { name: 'Existing' } }] }
+    const res = enrichCycloneDx(doc, idx, () => ({ author: 'Jane' }))
+    expect(res).toEqual({ hashes: 0, authors: 0, suppliers: 0 })
     expect(doc.components[0].author).toBe('Existing')
   })
 })
 
 describe('enrichSpdx', () => {
-  it('adds a SHA512 checksum and Person originator', () => {
+  it('adds checksum, originator and supplier', () => {
     const hex = 'cd'.repeat(64)
     const idx = new Map([['foo@1.0.0', { integrity: sha512(hex), path: 'node_modules/foo' }]])
     const doc = {
       spdxVersion: 'SPDX-2.3',
-      packages: [{ name: 'foo', versionInfo: '1.0.0', originator: 'NOASSERTION' }]
+      packages: [{ name: 'foo', versionInfo: '1.0.0', originator: 'NOASSERTION', supplier: 'NOASSERTION' }]
     }
-    const res = enrichSpdx(doc, idx, () => 'Jane <j@x.com>')
-    expect(res).toEqual({ hashes: 1, authors: 1 })
+    const res = enrichSpdx(doc, idx, () => ({ author: 'Jane <j@x.com>' }))
+    expect(res).toEqual({ hashes: 1, authors: 1, suppliers: 1 })
     expect(doc.packages[0].checksums).toEqual([{ algorithm: 'SHA512', checksumValue: hex }])
     expect(doc.packages[0].originator).toBe('Person: Jane (j@x.com)')
+    expect(doc.packages[0].supplier).toBe('Person: Jane (j@x.com)')
+  })
+
+  it('leaves supplier as NOASSERTION when nothing is derivable', () => {
+    const idx = new Map([['argparse@2.0.1', { integrity: null, path: 'node_modules/argparse' }]])
+    const doc = { spdxVersion: 'SPDX-2.3', packages: [{ name: 'argparse', versionInfo: '2.0.1', supplier: 'NOASSERTION' }] }
+    const res = enrichSpdx(doc, idx, () => ({}))
+    expect(res.suppliers).toBe(0)
+    expect(doc.packages[0].supplier).toBe('NOASSERTION')
   })
 })
