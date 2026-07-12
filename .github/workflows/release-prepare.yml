@@ -89,7 +89,8 @@ jobs:
       - run: npm run ${{ matrix.dist }} -- --publish never
       # The packaged-app e2e (built .app via Playwright) runs at release time — it moved
       # off the per-merge path to save macOS minutes, so this is where it gates a release.
-      - if: matrix.os == 'macos-14'
+      # Runs on BOTH macOS legs (arm64 + Intel) so the x64 packaged app is gated too.
+      - if: startsWith(matrix.os, 'macos')
         run: npm run test:e2e
 
   prepare:
