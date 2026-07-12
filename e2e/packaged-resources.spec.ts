@@ -5,25 +5,26 @@ import { expect, test } from '@playwright/test'
 const ROOT = join(__dirname, '..')
 
 /**
- * The vendored CLI binaries bundled into the app via electron-builder
- * `extraResources` (see electron-builder.yml). The packaged app must carry each
- * one under Contents/Resources/bin so search (rg) and structural search
- * (ast-grep) work without anything on the user's PATH. This guards against the
+ * The vendored CLI binaries bundled into the app via the afterPack hook
+ * (scripts/copy-bundled-binaries.mjs, see electron-builder.yml). The packaged app
+ * must carry each one under Contents/Resources/bin so search (rg) and structural
+ * search (ast-grep) work without anything on the user's PATH. This guards against the
  * silent-warning failure mode where electron-builder ships an app missing a
  * binary because its source wasn't installed (see scripts/verify-bundled-binaries.mjs).
  */
 const BUNDLED_BINARIES = ['rg', 'ast-grep']
 
-/** Locate the packaged app's Resources/bin dir, or null if no packaged app exists. */
-function packagedResourcesBin(): string | null {
+/** Locate the packaged app's Contents/Resources dir, or null if no packaged app exists. */
+function packagedResourcesDir(): string | null {
   for (const dir of ['mac-arm64', 'mac', 'mac-universal']) {
     const app = join(ROOT, 'release', dir, 'Houston.app')
-    if (existsSync(app)) return join(app, 'Contents', 'Resources', 'bin')
+    if (existsSync(app)) return join(app, 'Contents', 'Resources')
   }
   return null
 }
 
-const binDir = packagedResourcesBin()
+const resourcesDir = packagedResourcesDir()
+const binDir = resourcesDir ? join(resourcesDir, 'bin') : null
 
 test('packaged app bundles rg and ast-grep as non-empty executables', () => {
   // Only `npm run dist` produces a Resources/bin. For fast local runs against the
@@ -42,4 +43,18 @@ test('packaged app bundles rg and ast-grep as non-empty executables', () => {
     // Owner-executable bit — a non-executable binary won't spawn at runtime.
     expect(s.mode & 0o100, `${name} is not marked executable`).toBeGreaterThan(0)
   }
+})
+
+test('packaged app bundles THIRD-PARTY-NOTICES.md under Resources', () => {
+  // Shipped via electron-builder `extraResources` so the attribution notices travel
+  // INSIDE the code-signed, notarized bundle (see electron-builder.yml) — required by the
+  // bundled deps' licenses, and delivered under the notarized umbrella rather than as a
+  // loose, separately-scanned file. Same skip logic as the binaries test above.
+  test.skip(!resourcesDir && !process.env.CI, 'no packaged app in release/ (unpackaged local run)')
+
+  expect(resourcesDir, 'packaged Houston.app not found in release/ — did `npm run dist` run first?').toBeTruthy()
+
+  const p = join(resourcesDir as string, 'THIRD-PARTY-NOTICES.md')
+  expect(existsSync(p), 'THIRD-PARTY-NOTICES.md is missing from the packaged Resources').toBe(true)
+  expect(statSync(p).size, 'THIRD-PARTY-NOTICES.md is present but empty').toBeGreaterThan(0)
 })
