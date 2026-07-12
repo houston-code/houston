@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- V8 compiles JavaScript to native code at runtime; the hardened runtime blocks
+       that without these two exceptions. Required by every Electron/Chromium app. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- Electron reads a few DYLD_* / ELECTRON_* environment variables during startup. -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <!-- Houston loads the node-pty native addon and spawns the vendored CLI binaries
+       (ripgrep, ast-grep) from Resources/bin. They are signed with the same Developer
+       ID during packaging, but disabling library validation keeps loading/spawning
+       robust under the hardened runtime. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

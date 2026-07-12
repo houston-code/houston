@@ -3,7 +3,13 @@ import type { MessageBoxOptions } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
 import { IPC } from '@shared/constants'
-import { highlightsFor, type UpdateCheckResult, type WhatsNew } from '@shared/update'
+import {
+  highlightsFor,
+  type UpdateCheckResult,
+  type UpdateDownloaded,
+  type UpdateDownloadProgress,
+  type WhatsNew
+} from '@shared/update'
 import { shouldAutoInstallUpdates, shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
 import { readLastSeenVersion, writeLastSeenVersion } from './update-state'
 import { openExternalSafely } from './safeExternal'
@@ -53,13 +59,37 @@ function configureUpdater(): typeof electronUpdater.autoUpdater {
     autoUpdater.autoInstallOnAppQuit = autoInstall
     autoUpdater.on('error', (err) => console.error('[updater] error:', err?.message ?? err))
     if (autoInstall) {
-      autoUpdater.on('update-downloaded', (info) =>
-        console.log('[updater] downloaded', info?.version, '(installs on next quit)')
-      )
+      // The download runs in the background; surface its progress and the "ready to
+      // install" transition so the banner can show a bar + a Restart-to-install button
+      // (in addition to the silent install-on-next-quit).
+      autoUpdater.on('download-progress', (p) => {
+        const payload: UpdateDownloadProgress = {
+          percent: Math.round(p?.percent ?? 0),
+          bytesPerSecond: Math.round(p?.bytesPerSecond ?? 0),
+          transferred: p?.transferred ?? 0,
+          total: p?.total ?? 0
+        }
+        broadcast(IPC.updateDownloadProgress, payload)
+      })
+      autoUpdater.on('update-downloaded', (info) => {
+        console.log('[updater] downloaded', info?.version, '(ready to install)')
+        const payload: UpdateDownloaded = { version: info?.version ?? '' }
+        broadcast(IPC.updateDownloaded, payload)
+      })
     }
     configured = true
   }
   return autoUpdater
+}
+
+/**
+ * Install a downloaded update now: quit, apply, and relaunch. Wired to the banner's
+ * "Restart to install" button. A no-op where auto-install isn't supported (unsigned
+ * Windows/Linux), which is also where nothing is ever downloaded to install.
+ */
+export function installUpdate(): void {
+  if (!shouldAutoInstallUpdates()) return
+  electronUpdater.autoUpdater.quitAndInstall()
 }
 
 /** electron-updater's releaseNotes can be a string, a list, or null — flatten to text. */
@@ -77,10 +107,10 @@ function notesText(info: UpdateInfo): string | undefined {
   return undefined
 }
 
-/** Push an "update available" payload to every open window (drives the banner). */
-function broadcastAvailable(payload: Extract<UpdateCheckResult, { status: 'available' }>): void {
+/** Send a payload to every open window (drives the update banner + progress states). */
+function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(IPC.updateAvailable, payload)
+    if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
 }
 
@@ -108,9 +138,10 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
         currentVersion,
         latestVersion: result.updateInfo.version,
         releaseUrl: RELEASES_URL,
-        notes: notesText(result.updateInfo)
+        notes: notesText(result.updateInfo),
+        autoInstall: shouldAutoInstallUpdates()
       }
-      broadcastAvailable(payload)
+      broadcast(IPC.updateAvailable, payload)
       return payload
     }
     return { status: 'up-to-date', currentVersion }

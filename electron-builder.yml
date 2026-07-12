@@ -96,6 +96,14 @@ mac:
   # notarization; gatekeeperAssess stays off (the local spctl assess step is flaky on runners).
   hardenedRuntime: true
   gatekeeperAssess: false
+  # Hardened-runtime entitlements applied during the sign step. Electron needs the
+  # JIT / unsigned-executable-memory exceptions for V8; disable-library-validation lets
+  # the signed app load the node-pty native addon and spawn the vendored rg/ast-grep
+  # binaries. entitlementsInherit applies the same set to the helper (renderer/GPU/util)
+  # processes. Without an explicit file electron-builder falls back to its defaults; we
+  # pin our own so the set is reviewable and stable.
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   # NOTE on auto-update: arm64 and x64 build on separate runners, and electron-builder writes
   # a single `latest-mac.yml` per build — naively publishing both clobbers one another's feed
   # (electron-builder#5592). So both arches auto-update from ONE merged feed: the arm64 leg

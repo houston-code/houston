@@ -62,7 +62,12 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { LegalGate } from './components/LegalGate'
 import { isAnyPopoverOpen } from './components/Popover'
 import { LEGAL_VERSION, needsLegalAcceptance } from '@shared/legal'
-import type { UpdateCheckResult, WhatsNew } from '@shared/update'
+import type {
+  UpdateCheckResult,
+  UpdateDownloaded,
+  UpdateDownloadProgress,
+  WhatsNew
+} from '@shared/update'
 
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
@@ -181,6 +186,8 @@ export default function App(): JSX.Element {
   const [update, setUpdate] = useState<Extract<UpdateCheckResult, { status: 'available' }> | null>(
     null
   )
+  const [updateProgress, setUpdateProgress] = useState<UpdateDownloadProgress | null>(null)
+  const [updateDownloaded, setUpdateDownloaded] = useState<UpdateDownloaded | null>(null)
   const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -263,11 +270,20 @@ export default function App(): JSX.Element {
   // Updates: subscribe to the on-launch auto-check, and pull any one-shot
   // "What's new" staged after an upgrade-and-relaunch.
   useEffect(() => {
-    const unsubscribe = window.api.onUpdateAvailable(setUpdate)
+    const unsubAvailable = window.api.onUpdateAvailable(setUpdate)
+    const unsubProgress = window.api.onUpdateDownloadProgress(setUpdateProgress)
+    const unsubDownloaded = window.api.onUpdateDownloaded((d) => {
+      setUpdateDownloaded(d)
+      setUpdateProgress(null)
+    })
     void window.api.getWhatsNew().then((wn) => {
       if (wn) setWhatsNew(wn)
     })
-    return unsubscribe
+    return () => {
+      unsubAvailable()
+      unsubProgress()
+      unsubDownloaded()
+    }
   }, [])
 
   // Open the Settings modal when chosen from the native app menu (macOS ⌘,).
@@ -1523,7 +1539,17 @@ export default function App(): JSX.Element {
           terminalOpen={terminalOpen}
         />
 
-        <UpdateBanner update={update} onDismiss={() => setUpdate(null)} />
+        <UpdateBanner
+          update={update}
+          progress={updateProgress}
+          downloaded={updateDownloaded}
+          onInstall={() => void window.api.installUpdate()}
+          onDismiss={() => {
+            setUpdate(null)
+            setUpdateProgress(null)
+            setUpdateDownloaded(null)
+          }}
+        />
 
         {findOpen && (
           <Suspense fallback={null}>

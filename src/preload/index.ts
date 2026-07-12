@@ -28,7 +28,12 @@ import type {
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
-import type { UpdateCheckResult, WhatsNew } from '@shared/update'
+import type {
+  UpdateCheckResult,
+  UpdateDownloaded,
+  UpdateDownloadProgress,
+  WhatsNew
+} from '@shared/update'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
 /**
@@ -339,7 +344,21 @@ const api = {
     ): void => cb(payload)
     ipcRenderer.on(IPC.updateAvailable, listener)
     return () => ipcRenderer.removeListener(IPC.updateAvailable, listener)
-  }
+  },
+  /** Subscribe to in-place update download progress (signed macOS). Returns an unsubscribe fn. */
+  onUpdateDownloadProgress: (cb: (payload: UpdateDownloadProgress) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: UpdateDownloadProgress): void => cb(payload)
+    ipcRenderer.on(IPC.updateDownloadProgress, listener)
+    return () => ipcRenderer.removeListener(IPC.updateDownloadProgress, listener)
+  },
+  /** Subscribe to an update finishing download (ready to install). Returns an unsubscribe fn. */
+  onUpdateDownloaded: (cb: (payload: UpdateDownloaded) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: UpdateDownloaded): void => cb(payload)
+    ipcRenderer.on(IPC.updateDownloaded, listener)
+    return () => ipcRenderer.removeListener(IPC.updateDownloaded, listener)
+  },
+  /** Install a downloaded update now (quit, apply, relaunch). */
+  installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall)
 }
 
 export type CoderApi = typeof api
