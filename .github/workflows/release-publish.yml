@@ -42,8 +42,30 @@ jobs:
             exit 1
           fi
 
+  # Vulnerability gate. Runs BEFORE build (build `needs` it), so a known-vulnerable
+  # production closure aborts the release before anything is built or published, rather than
+  # failing mid-matrix after some legs already uploaded. Scans the same production SBOM the
+  # release ships (syft's lockfile scan), failing on a High/Critical with a fix available.
+  # only-fixed avoids dead-ending on an unpatchable finding — the case a VEX would consciously
+  # accept (ENTERPRISE-3, not built yet); until then those warn but don't block.
+  scan:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - name: Generate production SBOM for scanning
+        run: syft scan file:./package-lock.json -o cyclonedx-json=sbom.cyclonedx.json
+      - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: sbom.cyclonedx.json
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
+
   build:
-    needs: guard
+    needs: [guard, scan]
     timeout-minutes: 40
     permissions:
       contents: read
