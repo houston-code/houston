@@ -45,6 +45,13 @@ jobs:
   build:
     needs: guard
     timeout-minutes: 40
+    permissions:
+      contents: read
+      # For the attestation steps below: id-token mints the OIDC token that proves the build
+      # identity, and attestations:write records the signed provenance/SBOM attestations on
+      # THIS (source) repo's attestation store, verifiable with `gh attestation verify`.
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       # Serialize so the three platforms don't race to CREATE the same draft release on the
@@ -206,6 +213,31 @@ jobs:
             sbom.cyclonedx.json \
             sbom.spdx.json \
             -R piyushvijay/houston-releases --clobber
+      # Supply-chain attestations, verifiable with `gh attestation verify <file> -R
+      # piyushvijay/houston`: SLSA build provenance proves each shipped artifact was produced
+      # by THIS workflow from this commit, and the SBOM attestation binds the dependency SBOM
+      # to the release. Each matrix leg attests what it built (release/* is that leg's own
+      # output). Skipped on dry_run (nothing is published to attest), and placed AFTER publish
+      # so an attestation hiccup can't leave a half-published release.
+      - name: Attest release binaries (SLSA build provenance)
+        if: ${{ !inputs.dry_run }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: 'release/*'
+      - name: Attest standalone CLI + SBOMs (SLSA build provenance)
+        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            out/cli/houston-cli.cjs
+            sbom.cyclonedx.json
+            sbom.spdx.json
+      - name: Attest the SBOM against the standalone CLI
+        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: out/cli/houston-cli.cjs
+          sbom-path: sbom.cyclonedx.json
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
       # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
