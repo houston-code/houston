@@ -46,14 +46,17 @@ jobs:
       - name: Generate SBOMs (production dependency closure)
         run: |
           # Scan the lockfile, not node_modules: syft honors its dev flags and needs no
-          # install to enumerate. One scan emits both formats, so CycloneDX and SPDX match.
+          # install to enumerate. One scan emits all three formats over the same closure.
+          # SPDX 3.0 is emitted too: it's the format that can carry the CISA SBOM type and
+          # per-package supplier that CISA FSCT3 minimum conformance requires (SPDX 2.3 can't).
           syft scan file:./package-lock.json \
             -o cyclonedx-json=sbom.cyclonedx.json \
-            -o spdx-json=sbom.spdx.json
-          # The lockfile carries no per-component hashes or author, so enrich both documents
-          # in place from its own integrity (sha512) and each package's installed manifest.
-          # This only ADDS fields — the complete closure syft produced is preserved exactly.
-          node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json
+            -o spdx-json=sbom.spdx.json \
+            -o spdx-json@3.0=sbom.spdx3.json
+          # The lockfile carries no per-component hashes/author/supplier, so enrich each
+          # document in place from its own integrity (sha512) and each package's installed
+          # manifest. Only ADDS fields — the complete closure syft produced is preserved.
+          node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json
       # Fail loudly if a format emitted a truncated document, or one enrichment left without
       # hashes, rather than uploading a hollow SBOM — the same fail-closed stance as
       # scripts/verify-bundled-binaries.mjs. The entry floor guards against a silent
@@ -64,6 +67,9 @@ jobs:
           for f in sbom.cyclonedx.json sbom.spdx.json; do
             node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const items=j.components||j.packages||[]; const n=items.length; const h=items.filter(x=>(x.hashes||x.checksums||[]).length).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} if(h<60){console.error('::error::'+process.argv[1]+' has only '+h+' hashed entries (<60) — enrichment did not run'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries, '+h+' hashed)')" "$f"
           done
+          # SPDX 3.0 is a JSON-LD graph: verify the package count and that enrichment gave
+          # every package a supplier (the FSCT3-critical field syft omits).
+          node -e "const g=(JSON.parse(require('node:fs').readFileSync('sbom.spdx3.json','utf8'))['@graph']||[]); const pk=g.filter(e=>e.type==='software_Package'); const sup=pk.filter(p=>p.suppliedBy).length; if(pk.length<60){console.error('::error::sbom.spdx3.json has only '+pk.length+' packages (<60)');process.exit(1)} if(sup<pk.length){console.error('::error::sbom.spdx3.json: '+(pk.length-sup)+' packages missing suppliedBy');process.exit(1)} console.log('sbom.spdx3.json OK ('+pk.length+' packages, all supplied)')"
       # Vulnerability gate: scan the production SBOM with grype and fail on a High/Critical
       # with a fix available. only-fixed avoids dead-ending on an unpatchable finding; a
       # finding you have assessed as not-exploitable is suppressed via the VEX document
@@ -88,7 +94,7 @@ jobs:
           cosign-release: 'v2.6.3'
       - name: Sign the SBOMs (cosign keyless)
         run: |
-          for f in sbom.cyclonedx.json sbom.spdx.json; do
+          for f in sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json; do
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -97,6 +103,8 @@ jobs:
           path: |
             sbom.cyclonedx.json
             sbom.spdx.json
+            sbom.spdx3.json
             sbom.cyclonedx.json.cosign.bundle
             sbom.spdx.json.cosign.bundle
+            sbom.spdx3.json.cosign.bundle
           if-no-files-found: error

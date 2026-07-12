@@ -15,7 +15,8 @@ import {
   stripCycloneDxFileNode,
   stripSpdxFileNode,
   isCopyableSpdxLicense,
-  concludeSpdxLicenses
+  concludeSpdxLicenses,
+  enrichSpdx3
 } from './enrich-sbom.mjs'
 
 const ME = { name: 'Ada Lovelace', email: 'ada@x.com', isOrg: false }
@@ -187,6 +188,35 @@ describe('enrichSpdx', () => {
     const res = enrichSpdx(doc, idx, () => ({}))
     expect(res.suppliers).toBe(0)
     expect(doc.packages[0].supplier).toBe('NOASSERTION')
+  })
+})
+
+describe('enrichSpdx3', () => {
+  it('sets sbomType, gives every package a supplier via Agents, and dedupes shared suppliers', () => {
+    const doc = {
+      '@graph': [
+        { type: 'software_Sbom', element: [], software_sbomType: [] },
+        { type: 'software_Package', name: 'houston', software_packageVersion: '1.0.0', creationInfo: '_:C' },
+        { type: 'software_Package', name: 'dep-a', software_packageVersion: '2.0.0', creationInfo: '_:C' },
+        { type: 'software_Package', name: 'dep-b', software_packageVersion: '3.0.0', creationInfo: '_:C' }
+      ]
+    }
+    const index = new Map([
+      ['dep-a@2.0.0', { path: 'node_modules/dep-a' }],
+      ['dep-b@3.0.0', { path: 'node_modules/dep-b' }]
+    ])
+    // Both deps resolve to the same org owner "acme" → one shared Agent.
+    const manifests = { 'node_modules/dep-a': { repository: 'github:acme/a' }, 'node_modules/dep-b': { repository: 'github:acme/b' } }
+    const r = enrichSpdx3(doc, index, (p) => manifests[p] || null, 'houston', { name: 'Me', isOrg: false })
+    const g = doc['@graph']
+    expect(g.find((e) => e.type === 'software_Sbom').software_sbomType).toEqual(['source'])
+    expect(g.filter((e) => e.type === 'software_Package').every((p) => p.suppliedBy)).toBe(true)
+    // root → Person "Me"; both deps → one shared Organization "acme"
+    const agents = g.filter((e) => e.type === 'Person' || e.type === 'Organization')
+    expect(agents.map((a) => a.name).sort()).toEqual(['Me', 'acme'])
+    expect(r).toMatchObject({ suppliers: 3, agents: 2 })
+    // agents are registered on the Sbom element
+    expect(g.find((e) => e.type === 'software_Sbom').element.length).toBe(2)
   })
 })
 

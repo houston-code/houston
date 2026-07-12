@@ -314,6 +314,87 @@ export function concludeSpdxLicenses(doc) {
   return n
 }
 
+const LICENSE_FILE_NAMES = [
+  'LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENCE', 'LICENCE.md',
+  'License', 'License.md', 'license', 'license.md', 'COPYING', 'NOTICE'
+]
+
+/** Best-effort: pull copyright line(s) from an installed package's LICENSE file, or null. */
+export function extractCopyright(pkgPath) {
+  for (const f of LICENSE_FILE_NAMES) {
+    const p = join(ROOT, pkgPath, f)
+    if (!existsSync(p)) continue
+    try {
+      const lines = readFileSync(p, 'utf8')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => /copyright/i.test(l) && /\d{4}|\(c\)|©/i.test(l))
+      if (lines.length) return [...new Set(lines)].slice(0, 5).join('\n')
+    } catch {
+      // unreadable; try the next candidate
+    }
+  }
+  return null
+}
+
+/**
+ * Enrich a Syft SPDX 3.0 (JSON-LD) document to full FSCT3 minimum conformance. Syft emits the
+ * closure with concluded licenses and PURLs but no per-package supplier and no SBOM type, so:
+ *   - declare the CISA SBOM type on the software_Sbom element (Source: SCA of the lockfile),
+ *   - set each software_Package's `suppliedBy` to an Agent (Person/Organization) derived the
+ *     same way as the SPDX 2.3 supplier (root product -> the SBOM author),
+ *   - best-effort populate real copyright text from each package's installed LICENSE file.
+ * Agents are de-duplicated by name so identical suppliers share one element.
+ */
+export function enrichSpdx3(doc, index, manifestLookup, rootName, author = SBOM_AUTHOR) {
+  const graph = doc['@graph'] || []
+  const sbom = graph.find((e) => e.type === 'software_Sbom')
+  const creationInfo = graph.find((e) => e.creationInfo)?.creationInfo || '_:CreationInfo-1'
+  if (sbom && !(sbom.software_sbomType || []).length) sbom.software_sbomType = ['source']
+
+  const agents = new Map()
+  const agentIdFor = (supplier) => {
+    const key = `${supplier.isOrg ? 'org' : 'person'}:${supplier.name}`
+    if (!agents.has(key)) {
+      const slug = supplier.name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
+      agents.set(key, {
+        spdxId: `SPDXRef:Agent-${agents.size + 1}-${slug}`,
+        type: supplier.isOrg ? 'Organization' : 'Person',
+        name: supplier.name,
+        creationInfo
+      })
+    }
+    return agents.get(key).spdxId
+  }
+
+  let suppliers = 0
+  let copyrights = 0
+  for (const p of graph) {
+    if (p.type !== 'software_Package') continue
+    const entry = p.software_packageVersion ? index.get(`${p.name}@${p.software_packageVersion}`) : null
+    const supplier =
+      p.name === rootName
+        ? { name: author.name, isOrg: author.isOrg }
+        : deriveSupplier(entry ? manifestLookup(entry.path) : null, p.name) || { name: author.name, isOrg: author.isOrg }
+    if (!p.suppliedBy) {
+      p.suppliedBy = agentIdFor(supplier)
+      suppliers++
+    }
+    if ((!p.software_copyrightText || p.software_copyrightText === 'NOASSERTION') && entry) {
+      const cc = extractCopyright(entry.path)
+      if (cc) {
+        p.software_copyrightText = cc
+        copyrights++
+      }
+    }
+  }
+  for (const el of agents.values()) {
+    graph.push(el)
+    if (sbom && Array.isArray(sbom.element)) sbom.element.push(el.spdxId)
+  }
+  return { suppliers, copyrights, agents: agents.size }
+}
+
 function main() {
   const files = process.argv.slice(2)
   if (!files.length) {
@@ -324,6 +405,13 @@ function main() {
   const rootName = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).name
   for (const f of files) {
     const doc = JSON.parse(readFileSync(f, 'utf8'))
+    // SPDX 3.0 is a JSON-LD graph, structurally unlike CycloneDX / SPDX 2.3 — enrich separately.
+    if (Array.isArray(doc['@graph'])) {
+      const r = enrichSpdx3(doc, index, manifestForPath, rootName)
+      writeFileSync(f, `${JSON.stringify(doc, null, 2)}\n`)
+      console.log(`enriched ${f}: SPDX3 +${r.suppliers} suppliers (${r.agents} agents), +${r.copyrights} copyright`)
+      continue
+    }
     const isCdx = doc.bomFormat === 'CycloneDX'
     if (isCdx) stripCycloneDxFileNode(doc, rootName)
     else stripSpdxFileNode(doc, rootName)
