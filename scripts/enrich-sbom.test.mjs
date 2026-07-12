@@ -11,7 +11,9 @@ import {
   enrichSpdx,
   authorAsSpdxActor,
   enrichCycloneDxSelf,
-  enrichSpdxSelf
+  enrichSpdxSelf,
+  stripCycloneDxFileNode,
+  stripSpdxFileNode
 } from './enrich-sbom.mjs'
 
 const ME = { name: 'Ada Lovelace', email: 'ada@x.com', isOrg: false }
@@ -183,6 +185,53 @@ describe('enrichSpdx', () => {
     const res = enrichSpdx(doc, idx, () => ({}))
     expect(res.suppliers).toBe(0)
     expect(doc.packages[0].supplier).toBe('NOASSERTION')
+  })
+})
+
+describe('stripCycloneDxFileNode', () => {
+  it('drops the file node + product-as-component and promotes the product to primary', () => {
+    const doc = {
+      bomFormat: 'CycloneDX',
+      metadata: { component: { name: 'package-lock.json', type: 'file', 'bom-ref': 'FILE' } },
+      components: [
+        { name: 'houston', type: 'library', 'bom-ref': 'H' },
+        { name: 'package-lock.json', type: 'file', 'bom-ref': 'FILE' },
+        { name: 'dep', type: 'library', 'bom-ref': 'D' }
+      ],
+      dependencies: [
+        { ref: 'H', dependsOn: ['D'] },
+        { ref: 'FILE', dependsOn: ['H'] },
+        { ref: 'D', dependsOn: [] }
+      ]
+    }
+    stripCycloneDxFileNode(doc, 'houston')
+    expect(doc.metadata.component.name).toBe('houston')
+    expect(doc.components.map((c) => c.name)).toEqual(['dep']) // file + product removed
+    expect(doc.dependencies.map((d) => d.ref)).toEqual(['H', 'D']) // FILE node dropped
+    expect(doc.dependencies.find((d) => d.ref === 'H').dependsOn).toEqual(['D'])
+  })
+})
+
+describe('stripSpdxFileNode', () => {
+  it('removes the file package + its CONTAINS edges and redirects DESCRIBES to the product', () => {
+    const doc = {
+      spdxVersion: 'SPDX-2.3',
+      packages: [
+        { name: 'houston', SPDXID: 'SPDXRef-Package-npm-houston-x' },
+        { name: 'package-lock.json', SPDXID: 'SPDXRef-DocumentRoot-File-package-lock.json' },
+        { name: 'dep', SPDXID: 'SPDXRef-Package-npm-dep' }
+      ],
+      relationships: [
+        { spdxElementId: 'SPDXRef-DOCUMENT', relatedSpdxElement: 'SPDXRef-DocumentRoot-File-package-lock.json', relationshipType: 'DESCRIBES' },
+        { spdxElementId: 'SPDXRef-DocumentRoot-File-package-lock.json', relatedSpdxElement: 'SPDXRef-Package-npm-dep', relationshipType: 'CONTAINS' },
+        { spdxElementId: 'SPDXRef-Package-npm-dep', relatedSpdxElement: 'SPDXRef-Package-npm-houston-x', relationshipType: 'DEPENDENCY_OF' }
+      ]
+    }
+    stripSpdxFileNode(doc, 'houston')
+    expect(doc.packages.map((p) => p.name)).toEqual(['houston', 'dep'])
+    expect(doc.relationships.find((r) => r.relationshipType === 'DESCRIBES').relatedSpdxElement).toBe('SPDXRef-Package-npm-houston-x')
+    expect(doc.relationships.some((r) => r.relationshipType === 'CONTAINS')).toBe(false)
+    expect(doc.relationships.some((r) => r.relationshipType === 'DEPENDENCY_OF')).toBe(true)
   })
 })
 
