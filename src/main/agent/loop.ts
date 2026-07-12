@@ -179,6 +179,18 @@ interface RunState {
    */
   policy: ApprovalPolicy
   /**
+   * The events emitted since the message log was last persisted — the in-flight
+   * turn's streamed output (assistant text, running tools, prompts) that isn't on
+   * disk yet. A renderer re-opening the conversation rebuilds its transcript from
+   * disk, which for a still-streaming turn holds only the user message, so the
+   * live output would vanish; {@link liveTranscriptForConversation} hands this
+   * buffer back so the renderer can replay it on re-adopt. Cleared at every persist
+   * (see the `persist` wrapper in {@link startRun}) so it never double-counts a
+   * round already written to disk. reduceEvent upserts by id/callId, so replaying
+   * onto the disk-rebuilt transcript is idempotent.
+   */
+  transcript: AgentEvent[]
+  /**
    * The id of the WebContents (renderer window) that started this run, when it was
    * started from the GUI. Recorded so the IPC layer can reject run-control calls
    * (approve / answer / set-policy / cancel) that arrive from any *other* window:
@@ -365,6 +377,22 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
 }
 
 /**
+ * The events streamed on a conversation's live run since its message log was last
+ * persisted — the in-flight turn's output that isn't on disk yet (assistant text
+ * still streaming, tools mid-execution, etc.). A renderer re-opening the
+ * conversation replays these onto its disk-rebuilt transcript so the visible output
+ * doesn't vanish while the turn is still running (most visible on a freshly spawned
+ * session, which the user opens precisely to watch its first turn stream). Empty
+ * when the conversation has no live run. See {@link RunState.transcript}.
+ */
+export function liveTranscriptForConversation(conversationId: string): AgentEvent[] {
+  const runId = runsByConversation.get(conversationId)
+  if (!runId) return []
+  const run = runs.get(runId)
+  return run ? [...run.transcript] : []
+}
+
+/**
  * The id of the WebContents that started a run, or undefined for a TUI/headless
  * run (no owner) or an unknown/finished run. The IPC layer reads this to authorize
  * run-control calls at the boundary — only the owning window may approve/answer/
@@ -433,6 +461,7 @@ export async function startRun(
     override: seededOverride.kinds,
     shellUnsandboxedOverride: seededOverride.unsandboxedShell,
     policy: req.approvalPolicy,
+    transcript: [],
     ...(owner !== undefined ? { owner } : {})
   }
   runs.set(runId, run)
@@ -445,8 +474,23 @@ export async function startRun(
   }
 
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
-  const emit = (e: DistributiveOmitRunId<AgentEvent>): void =>
-    send({ ...(e as object), runId } as AgentEvent)
+  const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
+    const full = { ...(e as object), runId } as AgentEvent
+    // Buffer what streams this round so a renderer that re-opens the conversation
+    // mid-turn can replay it (the disk log lags a streaming round). Cleared at each
+    // `persist` below, so the buffer only ever holds events not yet on disk.
+    run.transcript.push(full)
+    send(full)
+  }
+
+  // Persist the message log AND reset the live-transcript buffer: everything up to
+  // this point is now on disk, so only what streams *after* it needs replaying on a
+  // mid-turn re-open. Wraps the caller's onMessages so every persist site stays in
+  // lockstep with the buffer (see {@link RunState.transcript}).
+  const persist = (msgs: ChatMessage[]): void => {
+    run.transcript = []
+    onMessages?.(msgs)
+  }
 
   // Hoisted above the try so the `finally` can backfill results for any tool call
   // left dangling by an interruption (see the repair calls below).
@@ -583,7 +627,7 @@ export async function startRun(
     const intakeRepaired = repairDanglingToolResults(messages)
     if (intakeRepaired !== messages) {
       messages.splice(0, messages.length, ...intakeRepaired)
-      onMessages?.(messages)
+      persist(messages)
     }
 
     // Redact secrets from content that leaves the agent's control boundary — reused
@@ -604,7 +648,7 @@ export async function startRun(
       const scrubbed = redact(latestUser.content)
       if (scrubbed !== latestUser.content) {
         latestUser.content = scrubbed
-        onMessages?.(messages)
+        persist(messages)
       }
     }
 
@@ -1032,7 +1076,7 @@ export async function startRun(
     }
     if (promptSubmit.additionalContext && lastUser && typeof lastUser.content === 'string') {
       lastUser.content += `\n\n${redact(promptSubmit.additionalContext)}`
-      onMessages?.(messages)
+      persist(messages)
     }
 
     // How many times a Stop hook has forced the turn to continue, bounded so a
@@ -1059,7 +1103,7 @@ export async function startRun(
             role: 'user',
             content: landingReminder(decision.iterationsLeft, decision.trigger)
           })
-          onMessages?.(messages)
+          persist(messages)
         }
       }
 
@@ -1239,7 +1283,7 @@ export async function startRun(
         ...(toolCalls.length ? { toolCalls } : {}),
         ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
       })
-      onMessages?.(messages)
+      persist(messages)
 
       if (toolCalls.length === 0) {
         // The model's reply was cut off at its output limit — say so rather than
@@ -1274,7 +1318,7 @@ export async function startRun(
               role: 'user',
               content: redact(stop.message) || 'A Stop hook requested that you keep working.'
             })
-            onMessages?.(messages)
+            persist(messages)
             continue
           }
         }
@@ -1318,7 +1362,7 @@ export async function startRun(
               role: 'user',
               content: verifyFailureMessage(settings.verifyCommand!, result.output)
             })
-            onMessages?.(messages)
+            persist(messages)
             continue
           }
         }
@@ -1344,7 +1388,7 @@ export async function startRun(
         })
         if (action.kind === 'nudge') {
           messages.push({ role: 'user', content: action.message })
-          onMessages?.(messages)
+          persist(messages)
         } else if (action.kind === 'stop') {
           // Persisted past the corrective nudge — end the run cleanly with a
           // dedicated limit reason rather than looping until the budget is spent.
@@ -1429,7 +1473,7 @@ export async function startRun(
         if (r.ok && kind === 'write') filesModified = true
         // Persist after each append so a mid-turn abort return (which skips the
         // trailing onMessages) still leaves completed results in the saved log.
-        onMessages?.(messages)
+        persist(messages)
       }
 
       // Validate a call's arguments against its declared schema BEFORE any
@@ -1835,7 +1879,7 @@ export async function startRun(
         })
       }
 
-      onMessages?.(messages)
+      persist(messages)
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
         return
@@ -1856,7 +1900,7 @@ export async function startRun(
     const repaired = repairDanglingToolResults(messages)
     if (repaired !== messages) {
       messages.splice(0, messages.length, ...repaired)
-      onMessages?.(messages)
+      persist(messages)
     }
     runs.delete(runId)
     // Only clear the conversation's slot if it still points at this run, so a

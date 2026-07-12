@@ -79,11 +79,16 @@ export interface ChatController {
    * Restores the running UI (Stop button) and routes subsequent events,
    * approvals, and cancel back to that run. Call after {@link reset}.
    *
-   * `pendingPrompts` are the approval/question events still blocking that run;
-   * they're folded into the transcript so a prompt that was awaiting the user
-   * re-renders its UI (the live events are one-shot and already fired).
+   * `liveTranscript` is the in-flight turn's streamed output not yet persisted to
+   * disk (assistant text still streaming, tools mid-execution); replaying it
+   * restores output that would otherwise vanish on switch-back, most visibly on a
+   * freshly spawned session. `pendingPrompts` are the approval/question events still
+   * blocking that run; they're folded in so a prompt that was awaiting the user
+   * re-renders its UI (the live events are one-shot and already fired). Both replay
+   * through reduceEvent, which upserts by id/callId, so it's idempotent against the
+   * transcript just rebuilt from the log.
    */
-  adopt: (runId: string, pendingPrompts?: AgentEvent[]) => void
+  adopt: (runId: string, pendingPrompts?: AgentEvent[], liveTranscript?: AgentEvent[]) => void
   /** Append a transient notice to the transcript (e.g. slash-command feedback). */
   notify: (text: string, tone?: 'info' | 'error') => void
 }
@@ -282,20 +287,26 @@ export function useChat(conversationId: string | null = null): ChatController {
     []
   )
 
-  const adopt = useCallback((runId: string, pendingPrompts: AgentEvent[] = []) => {
-    runIdRef.current = runId
-    setRunning(true)
-    setErrored(false)
-    // Re-render any approval/question/plan still awaiting the user. reduceEvent
-    // upserts by callId, so replaying onto a transcript rebuilt from the log updates
-    // the matching row rather than duplicating it.
-    if (pendingPrompts.length > 0) {
-      setItems((prev) => pendingPrompts.reduce((acc, ev) => reduceEvent(acc, ev), prev))
+  const adopt = useCallback(
+    (runId: string, pendingPrompts: AgentEvent[] = [], liveTranscript: AgentEvent[] = []) => {
+      runIdRef.current = runId
+      setRunning(true)
+      setErrored(false)
+      // Replay, in order, the in-flight turn's streamed-but-unpersisted output
+      // (liveTranscript) then the prompts still blocking the run (pendingPrompts, a
+      // subset re-applied so it also drives the plan panel below). reduceEvent upserts
+      // by id/callId, so replaying onto a transcript rebuilt from the log updates the
+      // matching rows and rebuilds the streamed assistant text rather than duplicating.
+      const replay = [...liveTranscript, ...pendingPrompts]
+      if (replay.length > 0) {
+        setItems((prev) => replay.reduce((acc, ev) => reduceEvent(acc, ev), prev))
+      }
       // Re-open the review panel for a plan that was still awaiting a decision.
       const plan = [...pendingPrompts].reverse().find((ev) => ev.type === 'plan_ready')
       if (plan?.type === 'plan_ready') setPendingPlan({ callId: plan.callId, plan: plan.plan })
-    }
-  }, [])
+    },
+    []
+  )
 
   const seedCheckpoint = useCallback((next: Checkpoint | null) => {
     setCheckpoint(next)

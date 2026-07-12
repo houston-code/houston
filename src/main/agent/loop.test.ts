@@ -140,6 +140,7 @@ const {
   setRunPolicy,
   activeRunForConversation,
   pendingPromptsForConversation,
+  liveTranscriptForConversation,
   activeRunCount,
   runningConversationIds,
   onActiveRunsChanged
@@ -1717,6 +1718,106 @@ describe('ask_user', () => {
 
     it('returns nothing for a conversation with no live run', () => {
       expect(pendingPromptsForConversation('no-such-conversation')).toEqual([])
+    })
+  })
+
+  describe('live-transcript replay', () => {
+    it('buffers the in-flight turn output for re-adopt, then clears it once persisted', async () => {
+      // Pause the turn mid-stream (before the round is written to disk) so we can
+      // snapshot exactly what a renderer re-opening the conversation would replay.
+      let release = (): void => {}
+      const gate = new Promise<void>((r) => (release = r))
+      let midStream: AgentEvent[] = []
+      const conversationId = 'conv-live-transcript'
+      const provider: Provider = {
+        async *streamChat() {
+          yield { type: 'text', text: 'Half a thought' }
+          await gate
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      h.provider = provider
+      const send = (e: AgentEvent): void => {
+        if (e.type === 'text') {
+          midStream = liveTranscriptForConversation(conversationId)
+          release()
+        }
+      }
+      await startRun(
+        {
+          runId: 'run-live',
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'think' }]
+        },
+        send
+      )
+
+      // Mid-stream, the streamed text is buffered (not yet on disk) so it can be
+      // replayed — this is the output that used to vanish on switch-back.
+      expect(midStream.some((e) => e.type === 'text' && e.delta === 'Half a thought')).toBe(true)
+      // The turn finished and persisted, so the (now-ended) run's buffer is empty.
+      expect(liveTranscriptForConversation(conversationId)).toEqual([])
+    })
+
+    it('drops already-persisted rounds from the buffer so a replay cannot double-count', async () => {
+      // Round 1 makes a tool call (persisted); round 2 streams fresh text. A snapshot
+      // during round 2 must hold ONLY round 2's output — round 1 is already on disk,
+      // so replaying it on top of the disk-rebuilt transcript would duplicate it.
+      let release = (): void => {}
+      const gate = new Promise<void>((r) => (release = r))
+      let snapshot: AgentEvent[] = []
+      const conversationId = 'conv-live-2round'
+      const runId = 'run-live-2round'
+      let round = 0
+      const provider: Provider = {
+        async *streamChat() {
+          round++
+          if (round === 1) {
+            yield { type: 'text', text: 'first round text' }
+            yield { type: 'tool_call', call: { id: 't1', name: 'read_file', arguments: { path: 'x' } } }
+            yield { type: 'done', stopReason: 'tool_use' }
+            return
+          }
+          yield { type: 'text', text: 'second round text' }
+          await gate
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      h.provider = provider
+      const send = (e: AgentEvent): void => {
+        // Auto-allow any prompt so the run reaches round 2 without wedging.
+        if (e.type === 'tool_approval') setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+        if (e.type === 'text' && e.delta === 'second round text') {
+          snapshot = liveTranscriptForConversation(conversationId)
+          release()
+        }
+      }
+      await startRun(
+        {
+          runId,
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        send
+      )
+
+      const texts = snapshot
+        .filter((e): e is Extract<AgentEvent, { type: 'text' }> => e.type === 'text')
+        .map((e) => e.delta)
+      expect(texts).toContain('second round text')
+      expect(texts).not.toContain('first round text')
+    })
+
+    it('returns nothing for a conversation with no live run', () => {
+      expect(liveTranscriptForConversation('no-such-conversation')).toEqual([])
     })
   })
 

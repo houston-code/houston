@@ -362,6 +362,78 @@ describe('useChat', () => {
     expect(api.approveTool).toHaveBeenCalledWith('live-run', 'w1', 'allow')
   })
 
+  it('replays the live transcript on adopt so mid-turn streamed output is restored', async () => {
+    const { emit } = installApi()
+    const { result } = renderHook(() => useChat('c1'))
+
+    // Re-opening a freshly spawned session mid-first-turn: the disk log holds only
+    // the seeded user message (the streamed assistant text isn't persisted yet).
+    act(() => result.current.reset([{ kind: 'user', id: 'u1', text: 'do the thing' }]))
+    expect(result.current.items.some((i) => i.kind === 'assistant')).toBe(false)
+
+    // adopt replays the in-flight transcript that main had buffered since the last
+    // persist — streamed deltas (reconstructing the bubble) plus a running tool.
+    act(() =>
+      result.current.adopt(
+        'live-run',
+        [],
+        [
+          { runId: 'live-run', type: 'text', delta: 'Working on ' },
+          { runId: 'live-run', type: 'text', delta: 'it now.' },
+          { runId: 'live-run', type: 'tool_start', callId: 't1', name: 'read_file', args: {} }
+        ]
+      )
+    )
+
+    expect(result.current.running).toBe(true)
+    // The streamed assistant text is rebuilt from the replayed deltas (finalized, as a
+    // real tool_start would), so no output is lost on switch-back...
+    const assistants = result.current.items.filter((i) => i.kind === 'assistant')
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]).toMatchObject({ text: 'Working on it now.' })
+    // ...and the running tool row is present.
+    expect(result.current.items.some((i) => i.kind === 'tool' && i.id === 't1')).toBe(true)
+
+    // Live events resume seamlessly after the replay: the tool completes and a fresh
+    // assistant bubble streams in, all keyed to the adopted run.
+    emit({ runId: 'live-run', type: 'tool_result', callId: 't1', name: 'read_file', ok: true, output: 'data' })
+    emit({ runId: 'live-run', type: 'text', delta: 'All done.' })
+    const tool = result.current.items.find((i) => i.kind === 'tool' && i.id === 't1')
+    expect((tool as { status: string }).status).toBe('done')
+    const after = result.current.items.filter((i) => i.kind === 'assistant')
+    expect(after).toHaveLength(2)
+    expect(after[1]).toMatchObject({ text: 'All done.' })
+  })
+
+  it('does not duplicate a prompt already in the live transcript replayed on adopt', async () => {
+    const { emit } = installApi()
+    const { result } = renderHook(() => useChat('c1'))
+    act(() => result.current.reset([{ kind: 'user', id: 'u1', text: 'go' }]))
+
+    // The buffered transcript already carries the pending approval, and pendingPrompts
+    // repeats it — reduceEvent upserts by callId, so the row must appear exactly once.
+    const approval: AgentEvent = {
+      runId: 'live-run',
+      type: 'tool_approval',
+      callId: 'w1',
+      name: 'write_file',
+      summary: 'write out.txt',
+      kind: 'write'
+    }
+    act(() =>
+      result.current.adopt(
+        'live-run',
+        [approval],
+        [{ runId: 'live-run', type: 'text', delta: 'let me write a file' }, approval]
+      )
+    )
+
+    const tools = result.current.items.filter((i) => i.kind === 'tool' && i.id === 'w1')
+    expect(tools).toHaveLength(1)
+    expect((tools[0] as { status: string }).status).toBe('awaiting-approval')
+    emit({ runId: 'live-run', type: 'done', stopReason: 'end_turn' })
+  })
+
   it('seedCheckpoint restores the revert/redo affordance on re-open', async () => {
     const { api } = installApi()
     const { result } = renderHook(() => useChat())

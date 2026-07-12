@@ -54,6 +54,7 @@ import {
   runOwner,
   activeRunForConversation,
   pendingPromptsForConversation,
+  liveTranscriptForConversation,
   runningConversationIds,
   onActiveRunsChanged
 } from './agent/loop'
@@ -849,6 +850,14 @@ export function registerIpc(): void {
   // instead of leaving the run wedged behind a spinner with no way to answer it.
   ipcMain.handle(IPC.agentPendingPrompts, (_event, conversationId: string): AgentEvent[] =>
     pendingPromptsForConversation(conversationId)
+  )
+
+  // The in-flight turn's streamed output not yet written to disk (assistant text
+  // mid-stream, running tools). The renderer replays this right after re-adopting so
+  // a mid-turn re-open doesn't show an empty transcript — most visibly on a freshly
+  // spawned session opened to watch its first turn stream. Empty if no live run.
+  ipcMain.handle(IPC.agentLiveTranscript, (_event, conversationId: string): AgentEvent[] =>
+    liveTranscriptForConversation(conversationId)
   )
 
   // The ids of every conversation with a live run, for the sidebar "running" dot.

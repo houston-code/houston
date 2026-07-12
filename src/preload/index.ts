@@ -229,6 +229,14 @@ const api = {
    */
   getPendingPrompts: (conversationId: string): Promise<AgentEvent[]> =>
     ipcRenderer.invoke(IPC.agentPendingPrompts, conversationId),
+  /**
+   * The in-flight turn's streamed output not yet persisted (assistant text still
+   * streaming, tools mid-execution). Replayed after {@link getActiveRun}/adopt so
+   * re-opening a conversation mid-turn doesn't show an empty transcript — the disk
+   * log for a still-streaming turn holds only the user message.
+   */
+  getLiveTranscript: (conversationId: string): Promise<AgentEvent[]> =>
+    ipcRenderer.invoke(IPC.agentLiveTranscript, conversationId),
   /** The ids of every conversation with a live run (for the sidebar "running" dot). */
   getRunningConversations: (): Promise<string[]> => ipcRenderer.invoke(IPC.agentRunningList),
   /** Subscribe to changes in the running-conversation set. Returns an unsubscribe fn. */
