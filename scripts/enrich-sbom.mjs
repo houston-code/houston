@@ -232,6 +232,49 @@ export function enrichSpdxSelf(doc, rootName, author = SBOM_AUTHOR) {
   return suppliers
 }
 
+/**
+ * Remove syft's scanned-file wrapper so the SBOM lists only real software. A
+ * `file:package-lock.json` scan makes the lockfile itself the primary component and adds a
+ * `file` node that "contains" every package but has no PURL, which trips SBOM-quality checks
+ * (e.g. Google's EO external-references check). Drop that node and promote the actual product
+ * to the primary component; the dependency graph (which never references the file node) is
+ * left intact.
+ */
+export function stripCycloneDxFileNode(doc, rootName) {
+  const comps = doc.components || []
+  const fileRefs = new Set(comps.filter((c) => c.type === 'file').map((c) => c['bom-ref']))
+  const root = comps.find((c) => c.name === rootName && c.type !== 'file')
+  if (root) doc.metadata = { ...(doc.metadata || {}), component: root }
+  doc.components = comps.filter((c) => c.type !== 'file' && c !== root)
+  if (Array.isArray(doc.dependencies)) {
+    doc.dependencies = doc.dependencies
+      .filter((d) => !fileRefs.has(d.ref))
+      .map((d) => ({ ...d, dependsOn: (d.dependsOn || []).filter((r) => !fileRefs.has(r)) }))
+  }
+}
+
+/** Same for SPDX: drop the file package + its CONTAINS edges, redirect DESCRIBES to the product. */
+export function stripSpdxFileNode(doc, rootName) {
+  const fileIds = new Set(
+    (doc.packages || [])
+      .filter((p) => typeof p.SPDXID === 'string' && p.SPDXID.includes('DocumentRoot-File'))
+      .map((p) => p.SPDXID)
+  )
+  if (!fileIds.size) return
+  const rootId = (doc.packages || []).find((p) => p.name === rootName)?.SPDXID
+  doc.packages = (doc.packages || []).filter((p) => !fileIds.has(p.SPDXID))
+  doc.relationships = (doc.relationships || [])
+    .map((r) =>
+      r.relationshipType === 'DESCRIBES' && fileIds.has(r.relatedSpdxElement) && rootId
+        ? { ...r, relatedSpdxElement: rootId }
+        : r
+    )
+    .filter((r) => !fileIds.has(r.spdxElementId) && !fileIds.has(r.relatedSpdxElement))
+  if (Array.isArray(doc.documentDescribes) && rootId) {
+    doc.documentDescribes = doc.documentDescribes.map((id) => (fileIds.has(id) ? rootId : id))
+  }
+}
+
 function main() {
   const files = process.argv.slice(2)
   if (!files.length) {
@@ -243,6 +286,8 @@ function main() {
   for (const f of files) {
     const doc = JSON.parse(readFileSync(f, 'utf8'))
     const isCdx = doc.bomFormat === 'CycloneDX'
+    if (isCdx) stripCycloneDxFileNode(doc, rootName)
+    else stripSpdxFileNode(doc, rootName)
     const res = isCdx ? enrichCycloneDx(doc, index, manifestForPath) : enrichSpdx(doc, index, manifestForPath)
     const self = isCdx ? enrichCycloneDxSelf(doc, rootName) : enrichSpdxSelf(doc, rootName)
     writeFileSync(f, `${JSON.stringify(doc, null, 2)}\n`)
