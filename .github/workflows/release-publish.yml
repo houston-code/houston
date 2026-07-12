@@ -203,14 +203,17 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           # Scan the lockfile, not node_modules: syft honors its dev flags and needs no
-          # install. One scan emits both formats, so CycloneDX and SPDX list the same closure.
+          # install. One scan emits all three formats over the same closure. SPDX 3.0 is the
+          # format that can carry the CISA SBOM type + per-package supplier for FSCT3 minimum
+          # conformance (SPDX 2.3 has no field for either).
           syft scan file:./package-lock.json \
             -o cyclonedx-json=sbom.cyclonedx.json \
-            -o spdx-json=sbom.spdx.json
-          # The lockfile carries no per-component hashes or author, so enrich both documents
-          # in place from its own integrity (sha512) and each package's installed manifest.
-          # This only ADDS fields — the complete closure syft produced is preserved exactly.
-          node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json
+            -o spdx-json=sbom.spdx.json \
+            -o spdx-json@3.0=sbom.spdx3.json
+          # The lockfile carries no per-component hashes/author/supplier, so enrich each
+          # document in place from its own integrity (sha512) and each package's installed
+          # manifest. Only ADDS fields — the complete closure syft produced is preserved.
+          node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json
           # Fail closed on a truncated document, or one enrichment left without hashes, rather
           # than attaching a hollow SBOM (same stance as scripts/verify-bundled-binaries.mjs).
           # The entry floor guards against a silent regression to a partial closure like npm
@@ -218,6 +221,8 @@ jobs:
           for f in sbom.cyclonedx.json sbom.spdx.json; do
             node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const items=j.components||j.packages||[]; const n=items.length; const h=items.filter(x=>(x.hashes||x.checksums||[]).length).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} if(h<60){console.error('::error::'+process.argv[1]+' has only '+h+' hashed entries (<60) — enrichment did not run'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries, '+h+' hashed)')" "$f"
           done
+          # SPDX 3.0 (JSON-LD graph): verify package count + that every package got a supplier.
+          node -e "const g=(JSON.parse(require('node:fs').readFileSync('sbom.spdx3.json','utf8'))['@graph']||[]); const pk=g.filter(e=>e.type==='software_Package'); const sup=pk.filter(p=>p.suppliedBy).length; if(pk.length<60){console.error('::error::sbom.spdx3.json has only '+pk.length+' packages (<60)');process.exit(1)} if(sup<pk.length){console.error('::error::sbom.spdx3.json: '+(pk.length-sup)+' packages missing suppliedBy');process.exit(1)} console.log('sbom.spdx3.json OK ('+pk.length+' packages, all supplied)')"
       - name: Attach standalone CLI + SBOMs to the release
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
@@ -236,6 +241,7 @@ jobs:
             THIRD-PARTY-NOTICES.md \
             sbom.cyclonedx.json \
             sbom.spdx.json \
+            sbom.spdx3.json \
             .github/vex/houston.openvex.json \
             -R piyushvijay/houston-releases --clobber
       # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
@@ -272,7 +278,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
-          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json .github/vex/houston.openvex.json; do
+          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json .github/vex/houston.openvex.json; do
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
             gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
           done
@@ -298,6 +304,7 @@ jobs:
             THIRD-PARTY-NOTICES.md
             sbom.cyclonedx.json
             sbom.spdx.json
+            sbom.spdx3.json
           if-no-files-found: error
 
   finalize:
