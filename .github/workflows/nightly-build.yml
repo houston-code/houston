@@ -81,6 +81,15 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
+      # Fail if THIRD-PARTY-NOTICES.md drifted from the current dependency closure. Kept off
+      # per-PR CI on purpose (deps change infrequently); nightly + the release workflows are
+      # where a stale attribution doc would otherwise ship next to a freshly-generated SBOM.
+      - name: Check THIRD-PARTY-NOTICES.md is current
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          npm run notices
+          git diff --exit-code THIRD-PARTY-NOTICES.md \
+            || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
       # Platform-specific unit coverage that moved off per-PR CI (bills macOS ×10 / Windows
       # ×2). macOS runs the full suite (exercises the real Seatbelt sandbox backend); Windows
       # runs the execution-backend suite (scoped to src/main/sandbox — the broader suite has

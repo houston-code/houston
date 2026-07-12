@@ -113,6 +113,14 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
+      # Fail the release if THIRD-PARTY-NOTICES.md drifted from the shipped closure — it's
+      # attached to the release, so it must not ship stale versions next to a fresh SBOM.
+      - name: Check THIRD-PARTY-NOTICES.md is current
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          npm run notices
+          git diff --exit-code THIRD-PARTY-NOTICES.md \
+            || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
       - name: Package and publish
         # electron-builder's github publisher reads GH_TOKEN; pointing it at the PAT makes
         # it write to the public houston-releases repo (per electron-builder.yml `publish`).

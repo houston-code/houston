@@ -33,7 +33,7 @@ The `ast-grep` binary shipped in Resources/bin, provided by the @ast-grep/cli np
 ---
 ## Bundled npm dependencies (73)
 
-### @anthropic-ai/sdk — 0.105.0
+### @anthropic-ai/sdk — 0.110.0
 
 - License: MIT
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -78,7 +78,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### @google/genai — 2.9.0
+### @google/genai — 2.11.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/googleapis/js-genai#readme
@@ -622,7 +622,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### @types/node — 26.0.0
+### @types/node — 26.1.1
 
 - License: MIT
 - Homepage: https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node
@@ -2567,7 +2567,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### js-yaml — 4.2.0
+### js-yaml — 4.3.0
 
 - License: MIT
 - Homepage: nodeca/js-yaml
@@ -3294,7 +3294,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### openai — 6.44.0
+### openai — 6.46.0
 
 - License: Apache-2.0
 - Homepage: github:openai/openai-node
