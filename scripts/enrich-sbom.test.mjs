@@ -13,7 +13,9 @@ import {
   enrichCycloneDxSelf,
   enrichSpdxSelf,
   stripCycloneDxFileNode,
-  stripSpdxFileNode
+  stripSpdxFileNode,
+  isCopyableSpdxLicense,
+  concludeSpdxLicenses
 } from './enrich-sbom.mjs'
 
 const ME = { name: 'Ada Lovelace', email: 'ada@x.com', isOrg: false }
@@ -212,6 +214,41 @@ describe('stripCycloneDxFileNode', () => {
   })
 })
 
+describe('isCopyableSpdxLicense', () => {
+  it('accepts SPDX ids, LicenseRefs, and OR/AND/WITH expressions', () => {
+    expect(isCopyableSpdxLicense('MIT')).toBe(true)
+    expect(isCopyableSpdxLicense('BSD-3-Clause')).toBe(true)
+    expect(isCopyableSpdxLicense('LicenseRef-SEE-LICENSE-IN-LICENSE')).toBe(true)
+    expect(isCopyableSpdxLicense('(MIT OR Apache-2.0)')).toBe(true)
+    expect(isCopyableSpdxLicense('GPL-2.0-only WITH Classpath-exception-2.0')).toBe(true)
+  })
+
+  it('rejects NOASSERTION/NONE/empty and free text without operators', () => {
+    expect(isCopyableSpdxLicense('NOASSERTION')).toBe(false)
+    expect(isCopyableSpdxLicense('NONE')).toBe(false)
+    expect(isCopyableSpdxLicense('')).toBe(false)
+    expect(isCopyableSpdxLicense(null)).toBe(false)
+    expect(isCopyableSpdxLicense('SEE LICENSE IN LICENSE')).toBe(false) // free text, no operator
+  })
+})
+
+describe('concludeSpdxLicenses', () => {
+  it('copies a valid declared license to concluded, skips free text and existing values', () => {
+    const doc = {
+      packages: [
+        { name: 'a', licenseDeclared: 'MIT', licenseConcluded: 'NOASSERTION' },
+        { name: 'b', licenseDeclared: 'SEE LICENSE IN LICENSE', licenseConcluded: 'NOASSERTION' },
+        { name: 'c', licenseDeclared: 'ISC', licenseConcluded: 'MIT' } // already concluded — untouched
+      ]
+    }
+    const n = concludeSpdxLicenses(doc)
+    expect(n).toBe(1)
+    expect(doc.packages[0].licenseConcluded).toBe('MIT')
+    expect(doc.packages[1].licenseConcluded).toBe('NOASSERTION') // free text not asserted
+    expect(doc.packages[2].licenseConcluded).toBe('MIT') // not clobbered
+  })
+})
+
 describe('stripSpdxFileNode', () => {
   it('removes the file package + its CONTAINS edges and redirects DESCRIBES to the product', () => {
     const doc = {
@@ -256,7 +293,7 @@ describe('enrichCycloneDxSelf', () => {
     const n = enrichCycloneDxSelf(doc, 'houston', ME)
     expect(n).toBe(2)
     expect(doc.metadata.authors).toEqual([{ name: 'Ada Lovelace', email: 'ada@x.com' }])
-    expect(doc.metadata.lifecycles).toEqual([{ phase: 'build' }])
+    expect(doc.metadata.lifecycles[0].name).toBe('source')
     expect(doc.metadata.component.supplier).toEqual({ name: 'Ada Lovelace' })
     expect(doc.components[0].supplier).toEqual({ name: 'Ada Lovelace' })
     expect(doc.components[1].supplier).toEqual({ name: 'Ada Lovelace' })

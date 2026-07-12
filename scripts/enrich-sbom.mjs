@@ -201,9 +201,13 @@ export function authorAsSpdxActor(a = SBOM_AUTHOR) {
 export function enrichCycloneDxSelf(doc, rootName, author = SBOM_AUTHOR) {
   const md = (doc.metadata = doc.metadata || {})
   if (!md.authors || !md.authors.length) md.authors = [{ name: author.name, email: author.email }]
-  // Declare when in the SDLC this SBOM was captured: it's generated during the release
-  // build (in CI, from the lockfile), so the CycloneDX "build" lifecycle phase applies.
-  if (!md.lifecycles || !md.lifecycles.length) md.lifecycles = [{ phase: 'build' }]
+  // Declare the CISA SBOM type. This SBOM is software-composition analysis of the dependency
+  // lockfile, which is a "Source" SBOM (from source manifests), not a "Build" one (which would
+  // capture build-process/built-component data). CycloneDX has no CISA type enum, so express it
+  // as a named lifecycle rather than a phase enum (none of which map cleanly to CISA Source).
+  if (!md.lifecycles || !md.lifecycles.length) {
+    md.lifecycles = [{ name: 'source', description: 'CISA Source SBOM: SCA of the dependency lockfile.' }]
+  }
   if (md.component && !md.component.supplier) md.component.supplier = { name: author.name }
   let suppliers = 0
   for (const c of doc.components || []) {
@@ -221,6 +225,11 @@ export function enrichSpdxSelf(doc, rootName, author = SBOM_AUTHOR) {
   const actor = authorAsSpdxActor(author)
   ci.creators = ci.creators || []
   if (!ci.creators.includes(actor)) ci.creators = [actor, ...ci.creators]
+  // Declare the CISA SBOM type (Source: SCA of the dependency lockfile). SPDX 2.3 has no field
+  // for it — the FSCT3 checker only reads it from SPDX 3's /Software/Sbom.sbomType — so record
+  // it in the document comment for human/other-tool consumption. (SPDX 3 output would be needed
+  // to satisfy that specific FSCT3 check.)
+  if (!ci.comment) ci.comment = 'SBOM type (CISA): Source — software-composition analysis of the dependency lockfile.'
   let suppliers = 0
   for (const p of doc.packages || []) {
     const isSelf = p.name === rootName || (typeof p.SPDXID === 'string' && p.SPDXID.includes('DocumentRoot-File'))
@@ -275,6 +284,36 @@ export function stripSpdxFileNode(doc, rootName) {
   }
 }
 
+/**
+ * Whether an SPDX `licenseDeclared` value is safe to also assert as `licenseConcluded`. The
+ * guardrail: a single token (an SPDX id or `LicenseRef-*`) is fine; a multi-token value is a
+ * valid SPDX license *expression* only if it joins licenses with OR/AND/WITH — otherwise it's
+ * free text (e.g. "SEE LICENSE IN LICENSE") that must not be asserted as a conclusion.
+ */
+export function isCopyableSpdxLicense(l) {
+  if (!l || l === 'NOASSERTION' || l === 'NONE') return false
+  if (/\s/.test(l)) return /\b(OR|AND|WITH)\b/.test(l)
+  return true
+}
+
+/**
+ * Set `licenseConcluded = licenseDeclared` for each package where the declared value is a
+ * valid SPDX expression (see isCopyableSpdxLicense). syft populates only `licenseDeclared`,
+ * leaving `licenseConcluded = NOASSERTION`, which FSCT3 flags. These licenses were audited as
+ * permissive, so declared is a justified conclusion; the guardrail keeps a future oddball
+ * (free-text or NOASSERTION) declaration from being asserted. Returns how many were set.
+ */
+export function concludeSpdxLicenses(doc) {
+  let n = 0
+  for (const p of doc.packages || []) {
+    if ((!p.licenseConcluded || p.licenseConcluded === 'NOASSERTION') && isCopyableSpdxLicense(p.licenseDeclared)) {
+      p.licenseConcluded = p.licenseDeclared
+      n++
+    }
+  }
+  return n
+}
+
 function main() {
   const files = process.argv.slice(2)
   if (!files.length) {
@@ -290,6 +329,7 @@ function main() {
     else stripSpdxFileNode(doc, rootName)
     const res = isCdx ? enrichCycloneDx(doc, index, manifestForPath) : enrichSpdx(doc, index, manifestForPath)
     const self = isCdx ? enrichCycloneDxSelf(doc, rootName) : enrichSpdxSelf(doc, rootName)
+    if (!isCdx) concludeSpdxLicenses(doc)
     writeFileSync(f, `${JSON.stringify(doc, null, 2)}\n`)
     console.log(`enriched ${f}: +${res.hashes} hashes, +${res.authors} authors, +${res.suppliers + self} suppliers (incl. ${self} self/root)`)
   }
