@@ -24,6 +24,7 @@ import { createProvider } from '../providers'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig } from './projectConfig'
+import { loadManagedPolicy } from './managedPolicy'
 import {
   ASK_USER_NAME,
   PRESENT_PLAN_NAME,
@@ -475,11 +476,24 @@ export async function startRun(
 
     const settings = getSettings()
     const rules = await loadProjectRules(workspace)
-    // Project-scoped guardrails (.houston/settings.json) are checked before the
-    // user's global rules. The project file can only tighten (deny/ask) — see
-    // projectConfig.ts for why.
+    // Permission-rule precedence, highest first (first match wins):
+    //   1. Admin managed policy — org-distributed, root-owned; deny/ask only.
+    //   2. Project guardrails    — .houston/settings.json; deny/ask only.
+    //   3. The user's own rules  — global Settings; allow/deny/ask.
+    // Tiers 1 and 2 can only *tighten*: neither can add an `allow`, so a managed
+    // policy or an untrusted repo can restrict the user but never auto-approve on
+    // their behalf. See managedPolicy.ts / projectConfig.ts.
+    const managedPolicy = await loadManagedPolicy()
     const projectConfig = await loadProjectConfig(workspace)
-    const permissionRules = [...projectConfig.permissionRules, ...(settings.permissionRules ?? [])]
+    // The two guardrail tiers that outrank the user. A mid-run "Always allow/deny"
+    // is spliced in just BELOW this count so live consent can never shadow an admin
+    // or project rule (see the splice near the approval handler).
+    const guardrailRuleCount = managedPolicy.permissionRules.length + projectConfig.permissionRules.length
+    const permissionRules = [
+      ...managedPolicy.permissionRules,
+      ...projectConfig.permissionRules,
+      ...(settings.permissionRules ?? [])
+    ]
     // The system prompt is built once and can't change mid-run, so plan-mode
     // *guidance* is a snapshot of the starting policy. The runtime plan-mode
     // *block* below reads `run.policy`, so toggling plan on/off mid-run still
@@ -1527,7 +1541,21 @@ export async function startRun(
           output = invalid.output
           ok = false
         } else if (ruleAction === 'deny') {
-          output = 'Denied by a permission rule.'
+          // Attribute a deny to the managed tier when it originates there — the admin
+          // block is checked first, so if it matches at all it IS the winning rule.
+          // Gives the user an honest reason (their org, not a stray local rule) and
+          // signals the deny is not one they can lift from Settings.
+          const byManaged =
+            managedPolicy.permissionRules.length > 0 &&
+            matchRule(
+              managedPolicy.permissionRules,
+              call.name,
+              permissionSubject(call.name, call.arguments),
+              roots
+            ) === 'deny'
+          output = byManaged
+            ? "Denied by your organization's managed policy."
+            : 'Denied by a permission rule.'
           ok = false
         } else if (
           isBlockedByPlan(run.policy, tool.kind) ||
@@ -1620,7 +1648,8 @@ export async function startRun(
               } else if (decision === 'rule-allow' || decision === 'rule-deny') {
                 // "Always allow/deny" — persist a permission rule for this tool + subject
                 // so the choice survives restarts, and splice it into this run's rules
-                // (after the project rules, which only tighten) so it takes effect now.
+                // (after the managed + project guardrail rules, which only tighten, so a
+                // user's live consent can never shadow an admin or project rule) now.
                 // For an ALLOW on run_shell we store generalized, per-sub-command prefixes
                 // (dropping the `cd` prelude) instead of the exact command, and skip any
                 // pattern an existing rule already allows — so repeated commands don't pile
@@ -1637,7 +1666,7 @@ export async function startRun(
                   }
                   const rule: PermissionRule = { action, tool: call.name, match }
                   addPermissionRule(rule)
-                  permissionRules.splice(projectConfig.permissionRules.length, 0, rule)
+                  permissionRules.splice(guardrailRuleCount, 0, rule)
                 }
               }
               approved = decision !== 'deny' && decision !== 'rule-deny'

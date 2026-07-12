@@ -173,6 +173,17 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   ask before touching `infra/**`. For safety a project file can only *tighten*:
   `allow` rules, hooks, and MCP servers stay in your own global Settings, so
   cloning an untrusted repo can't auto-approve actions or run commands.
+- **Managed policy (admin-locked).** On a managed device an administrator can ship a
+  machine-wide `managed-settings.json` (macOS `/Library/Application Support/Houston/`,
+  Windows `%PROGRAMDATA%\Houston\`, Linux `/etc/houston/`) with *deny* / *ask*
+  permission rules that outrank both project guardrails and every user's own rules.
+  Like a project file it can only *tighten*, so a policy can enforce (for example)
+  denying every `run_shell` that matches `*rm -rf*` for everyone on the machine,
+  never auto-approve anything. It lives in a root-owned location a normal user cannot
+  edit, and Houston reads that fixed path with no override, so the lock holds.
+  Distribute it however you manage devices (MDM, a provisioning script, config
+  management). A blocked call tells the user the reason was their organization's
+  policy.
 - **Permission rules.** Beyond the coarse policy, add fine-grained
   *allow* / *deny* / *ask* rules in Settings, matched on the tool and a glob over
   its target (e.g. allow `run_shell` matching `git *`, deny anything matching

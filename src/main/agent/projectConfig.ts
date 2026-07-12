@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { PermissionRule } from '@shared/types'
+import { parseTightenOnlyRules } from './permissions'
 
 /**
  * Per-project config from `.houston/settings.json` in the workspace.
@@ -11,6 +12,9 @@ import type { PermissionRule } from '@shared/types'
  * servers, which would let a cloned repo auto-approve dangerous actions or spawn
  * processes. Loosening stays in the user's own global Settings. (A "trusted
  * folders" prompt to opt into project hooks/MCP/allow-rules is on the roadmap.)
+ *
+ * The same tighten-only shape is reused, one tier up, by the admin-locked managed
+ * policy (see managedPolicy.ts), which outranks both this file and the user.
  */
 
 export const PROJECT_CONFIG = '.houston/settings.json'
@@ -22,18 +26,7 @@ const MAX_PROJECT_RULES = 100
  * Pure + exported for testing.
  */
 export function parseProjectRules(raw: unknown): PermissionRule[] {
-  const rules = (raw as { permissionRules?: unknown })?.permissionRules
-  if (!Array.isArray(rules)) return []
-  const out: PermissionRule[] = []
-  for (const r of rules) {
-    if (out.length >= MAX_PROJECT_RULES) break
-    if (typeof r !== 'object' || r === null) continue
-    const { action, tool, match } = r as Record<string, unknown>
-    if (action !== 'deny' && action !== 'ask') continue // never honor project `allow`
-    if (typeof tool !== 'string' || typeof match !== 'string') continue
-    out.push({ action, tool, match })
-  }
-  return out
+  return parseTightenOnlyRules(raw, MAX_PROJECT_RULES)
 }
 
 export interface ProjectConfig {

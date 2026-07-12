@@ -3,6 +3,7 @@ import {
   alreadyAllowedAsRule,
   cleanupPermissionRules,
   matchRule,
+  parseTightenOnlyRules,
   permissionSubject,
   shellReferencesExternalPath,
   shellRulePatterns,
@@ -406,5 +407,39 @@ describe('cleanupPermissionRules', () => {
     const clean: PermissionRule[] = [allow('run_shell', 'npm install'), allow('run_shell', 'git status')]
     expect(cleanupPermissionRules(clean)).toEqual(clean)
     expect(cleanupPermissionRules(cleanupPermissionRules(clean))).toEqual(clean)
+  })
+})
+
+describe('parseTightenOnlyRules', () => {
+  it('keeps deny/ask and drops allow / malformed / non-array', () => {
+    expect(
+      parseTightenOnlyRules(
+        {
+          permissionRules: [
+            { action: 'deny', tool: 'run_shell', match: 'rm *' },
+            { action: 'ask', tool: 'write_file', match: 'prod/**' },
+            { action: 'allow', tool: '*', match: '*' }, // dropped — would loosen
+            { action: 'deny' }, // dropped — missing tool/match
+            { action: 'ask', tool: 1, match: 'x' }, // dropped — non-string tool
+            42 // dropped — not an object
+          ]
+        },
+        100
+      )
+    ).toEqual([
+      { action: 'deny', tool: 'run_shell', match: 'rm *' },
+      { action: 'ask', tool: 'write_file', match: 'prod/**' }
+    ])
+    expect(parseTightenOnlyRules({ permissionRules: 'nope' }, 100)).toEqual([])
+    expect(parseTightenOnlyRules(null, 100)).toEqual([])
+  })
+
+  it('caps the number of rules at maxRules (DoS backstop)', () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({
+      action: 'deny' as const,
+      tool: 'run_shell',
+      match: `cmd${i}`
+    }))
+    expect(parseTightenOnlyRules({ permissionRules: many }, 3)).toHaveLength(3)
   })
 })

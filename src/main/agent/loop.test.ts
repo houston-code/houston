@@ -11,7 +11,7 @@ import type {
   ProviderStreamEvent,
   ToolApprovalDecision
 } from '@shared/agent'
-import type { ApprovalPolicy } from '@shared/types'
+import type { ApprovalPolicy, PermissionRule } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { toAnthropicMessages } from '../providers/anthropic'
@@ -47,7 +47,11 @@ const h = vi.hoisted(() => ({
   // Records every plugin lifecycle event the loop fires, for assertions.
   pluginEvents: [] as Array<{ event: string; payload: unknown }>,
   // Known secret values the tool-result redactor should strip; set per test.
-  secrets: [] as string[]
+  secrets: [] as string[],
+  // Admin managed-policy rules the loop should treat as the highest-precedence,
+  // tighten-only tier (above the project + user). Swapped per test via the
+  // `./managedPolicy` mock below; default none so most tests are unaffected.
+  managedRules: [] as PermissionRule[]
 }))
 
 vi.mock('../agentHost', () => ({
@@ -66,6 +70,11 @@ vi.mock('../agentHost', () => ({
   }),
   getKey: () => null,
   collectSecrets: () => h.secrets
+}))
+// The admin managed policy normally reads a fixed root-owned system path; in tests
+// we inject its rules through the hoisted holder instead of touching the real path.
+vi.mock('./managedPolicy', () => ({
+  loadManagedPolicy: async () => ({ permissionRules: h.managedRules })
 }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
@@ -156,6 +165,7 @@ beforeEach(() => {
   h.secrets = []
   h.verifyRunner = null
   h.verifyRuns = []
+  h.managedRules = []
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -930,6 +940,84 @@ describe('startRun', () => {
       'a1'
     ])
     expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('two')
+  })
+
+  it('an admin managed `deny` overrides a user `allow` and reports an org-policy reason', async () => {
+    // Admin forbids `rm -rf …`; the user has a blanket allow for every shell command.
+    // The managed tier outranks the user, so the call is denied outright.
+    h.managedRules = [{ action: 'deny', tool: 'run_shell', match: 'rm -rf*' }]
+    h.settings.permissionRules = [{ action: 'allow', tool: 'run_shell', match: '*' }]
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'rm -rf /tmp/x' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // A managed deny short-circuits before the approval gate — no prompt at all.
+      expect(r.events.filter((e) => e.type === 'tool_approval')).toHaveLength(0)
+      const res = r.events.find((e) => e.type === 'tool_result' && e.name === 'run_shell') as
+        | { ok: boolean; output: string }
+        | undefined
+      expect(res?.ok).toBe(false)
+      // The message names the org so the user knows it isn't a rule they can lift.
+      expect(res?.output).toBe("Denied by your organization's managed policy.")
+    } finally {
+      h.settings.permissionRules = []
+    }
+  })
+
+  it('an admin managed `ask` forces an approval prompt even in full-auto', async () => {
+    // full-auto would auto-run a write; a managed `ask` on the path must still gate it.
+    h.managedRules = [{ action: 'ask', tool: 'write_file', match: 'guarded.txt' }]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'guarded.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => decide('deny')
+    })
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'w1'
+    ])
+    // Denying the forced prompt means the write never lands.
+    expect(existsSync(join(ws, 'guarded.txt'))).toBe(false)
+  })
+
+  it('a user\'s mid-run "Always allow" cannot shadow a managed `ask` (stays gated)', async () => {
+    // The user picks "Always allow" on the first write. Because the persisted allow is
+    // spliced BELOW the managed guardrail, first-match-wins keeps hitting the admin
+    // `ask`, so the second identical write still prompts rather than fading open.
+    h.managedRules = [{ action: 'ask', tool: 'write_file', match: 'notes.txt' }]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'notes.txt', content: 'one' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'notes.txt', content: 'two' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => decide('rule-allow')
+    })
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'w1',
+      'w2'
+    ])
+    // The allow was still recorded to the user's own rules — just permanently shadowed.
+    expect(h.addedRules).toContainEqual({ action: 'allow', tool: 'write_file', match: 'notes.txt' })
   })
 
   it('rejects an unknown mid-run policy (fails closed, keeps prompting)', async () => {
