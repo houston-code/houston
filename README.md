@@ -695,6 +695,26 @@ produce an unsigned app. To sign a build locally, import the Developer ID cert i
 your login keychain and export the same variables in your shell before
 `npm run dist:mac`.
 
+### Verifying release artifacts (cosign)
+
+Every published artifact (the desktop installers, the standalone `houston-cli.cjs`, and
+the CycloneDX + SPDX SBOMs) ships with a `<file>.cosign.bundle` beside it. Each is
+keyless-signed in CI with [cosign](https://docs.sigstore.dev/): the signature, its
+short-lived certificate, and a [Rekor](https://docs.sigstore.dev/logging/overview/)
+transparency-log proof all live inside the bundle, so anyone can verify a download with no
+account, key, or repo access:
+
+```bash
+cosign verify-blob houston-cli.cjs \
+  --bundle houston-cli.cjs.cosign.bundle \
+  --certificate-identity 'https://github.com/piyushvijay/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+`Verified OK` confirms the file came from this project's release workflow and has not been
+altered. The same command verifies any released file: substitute its name and matching
+`.cosign.bundle`.
+
 ## Roadmap
 
 What's intentionally not done yet — out of scope for a macOS desktop app, or a
