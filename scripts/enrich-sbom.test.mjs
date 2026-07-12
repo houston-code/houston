@@ -207,6 +207,7 @@ describe('enrichCycloneDxSelf', () => {
     const n = enrichCycloneDxSelf(doc, 'houston', ME)
     expect(n).toBe(2)
     expect(doc.metadata.authors).toEqual([{ name: 'Ada Lovelace', email: 'ada@x.com' }])
+    expect(doc.metadata.lifecycles).toEqual([{ phase: 'build' }])
     expect(doc.metadata.component.supplier).toEqual({ name: 'Ada Lovelace' })
     expect(doc.components[0].supplier).toEqual({ name: 'Ada Lovelace' })
     expect(doc.components[1].supplier).toEqual({ name: 'Ada Lovelace' })

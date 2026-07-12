@@ -201,6 +201,9 @@ export function authorAsSpdxActor(a = SBOM_AUTHOR) {
 export function enrichCycloneDxSelf(doc, rootName, author = SBOM_AUTHOR) {
   const md = (doc.metadata = doc.metadata || {})
   if (!md.authors || !md.authors.length) md.authors = [{ name: author.name, email: author.email }]
+  // Declare when in the SDLC this SBOM was captured: it's generated during the release
+  // build (in CI, from the lockfile), so the CycloneDX "build" lifecycle phase applies.
+  if (!md.lifecycles || !md.lifecycles.length) md.lifecycles = [{ phase: 'build' }]
   if (md.component && !md.component.supplier) md.component.supplier = { name: author.name }
   let suppliers = 0
   for (const c of doc.components || []) {
