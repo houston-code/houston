@@ -100,6 +100,11 @@ jobs:
           APPLE_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
+        # This step is a bash script (if/elif/else/fi). On windows-latest the default `run:`
+        # shell is PowerShell, which can't parse it ("Missing '(' after 'if'"); force bash so
+        # the one script runs identically on every matrix leg. Git Bash ships on the Windows
+        # runner, and macOS/Linux already default to bash, so their behavior is unchanged.
+        shell: bash
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             # Dry run: build only, never publish. The explicit `--publish never` also silences
