@@ -32,6 +32,12 @@ jobs:
   # green and buildable everywhere.
   verify:
     timeout-minutes: 30
+    # windows-latest defaults `run:` steps to PowerShell; force bash for the whole matrix so a
+    # bash step (e.g. a future multi-line if/else) can't silently fail only on the Windows leg.
+    # Git Bash ships on the Windows runner, and macOS/Linux already default to bash.
+    defaults:
+      run:
+        shell: bash
     # This is a pre-release GATE, not a publish: the mac legs package but must stay unsigned
     # (no signing secrets are in scope). Force electron-builder to skip signing rather than
     # probing the keychain, so the gate can't behave differently from a fresh runner. Real
