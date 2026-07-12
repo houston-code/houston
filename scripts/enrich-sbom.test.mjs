@@ -8,8 +8,14 @@ import {
   spdxSupplier,
   buildLockIndex,
   enrichCycloneDx,
-  enrichSpdx
+  enrichSpdx,
+  authorAsSpdxActor,
+  enrichCycloneDxSelf,
+  enrichSpdxSelf
 } from './enrich-sbom.mjs'
+
+const ME = { name: 'Ada Lovelace', email: 'ada@x.com', isOrg: false }
+const ORG = { name: 'Acme Inc', isOrg: true }
 
 const sha512 = (hex) => 'sha512-' + Buffer.from(hex, 'hex').toString('base64')
 
@@ -177,5 +183,52 @@ describe('enrichSpdx', () => {
     const res = enrichSpdx(doc, idx, () => ({}))
     expect(res.suppliers).toBe(0)
     expect(doc.packages[0].supplier).toBe('NOASSERTION')
+  })
+})
+
+describe('authorAsSpdxActor', () => {
+  it('formats a person and an organization', () => {
+    expect(authorAsSpdxActor(ME)).toBe('Person: Ada Lovelace (ada@x.com)')
+    expect(authorAsSpdxActor(ORG)).toBe('Organization: Acme Inc')
+    expect(authorAsSpdxActor({ name: 'Nobody', isOrg: false })).toBe('Person: Nobody')
+  })
+})
+
+describe('enrichCycloneDxSelf', () => {
+  it('sets metadata authors, the primary component supplier, and root/file suppliers', () => {
+    const doc = {
+      metadata: { component: { name: 'package-lock.json', type: 'file' } },
+      components: [
+        { name: 'houston', type: 'library' }, // the root product
+        { name: 'package-lock.json', type: 'file' }, // syft's scanned-file node
+        { name: 'dep', type: 'library', supplier: { name: 'someone' } } // untouched
+      ]
+    }
+    const n = enrichCycloneDxSelf(doc, 'houston', ME)
+    expect(n).toBe(2)
+    expect(doc.metadata.authors).toEqual([{ name: 'Ada Lovelace', email: 'ada@x.com' }])
+    expect(doc.metadata.component.supplier).toEqual({ name: 'Ada Lovelace' })
+    expect(doc.components[0].supplier).toEqual({ name: 'Ada Lovelace' })
+    expect(doc.components[1].supplier).toEqual({ name: 'Ada Lovelace' })
+    expect(doc.components[2].supplier).toEqual({ name: 'someone' }) // not clobbered
+  })
+})
+
+describe('enrichSpdxSelf', () => {
+  it('prepends a creator and sets the root + file-node supplier', () => {
+    const doc = {
+      creationInfo: { creators: ['Tool: syft-1.0'] },
+      packages: [
+        { name: 'houston', SPDXID: 'SPDXRef-Package-npm-houston-abc', supplier: 'NOASSERTION' },
+        { name: 'package-lock.json', SPDXID: 'SPDXRef-DocumentRoot-File-package-lock.json' },
+        { name: 'dep', SPDXID: 'SPDXRef-Package-npm-dep', supplier: 'Organization: x' }
+      ]
+    }
+    const n = enrichSpdxSelf(doc, 'houston', ME)
+    expect(n).toBe(2)
+    expect(doc.creationInfo.creators).toEqual(['Person: Ada Lovelace (ada@x.com)', 'Tool: syft-1.0'])
+    expect(doc.packages[0].supplier).toBe('Person: Ada Lovelace (ada@x.com)')
+    expect(doc.packages[1].supplier).toBe('Person: Ada Lovelace (ada@x.com)')
+    expect(doc.packages[2].supplier).toBe('Organization: x') // not clobbered
   })
 })
