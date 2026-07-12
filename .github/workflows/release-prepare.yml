@@ -93,8 +93,13 @@ jobs:
       - if: startsWith(matrix.os, 'macos')
         run: npm run test:e2e
 
+  # SBOM conformance gate: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass, or the
+  # release PR is never opened (prepare `needs` it).
+  sbom-conformance:
+    uses: ./.github/workflows/sbom-conformance.yml
+
   prepare:
-    needs: verify
+    needs: [verify, sbom-conformance]
     timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:

@@ -70,8 +70,13 @@ jobs:
           only-fixed: true
           output-format: table
 
+  # SBOM conformance gate: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass before we
+  # build or publish anything (build `needs` it), so a release can't ship a regressed SBOM.
+  sbom-conformance:
+    uses: ./.github/workflows/sbom-conformance.yml
+
   build:
-    needs: [guard, scan]
+    needs: [guard, scan, sbom-conformance]
     timeout-minutes: 40
     permissions:
       contents: read
