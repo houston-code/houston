@@ -7,6 +7,13 @@ name: SBOM
 # dev-flags during hoisting. Syft reads the lockfile's own dev flags, excludes dev by
 # default, and emits both formats from one scan so they describe an identical closure.
 #
+# SCOPE: this is the JavaScript DEPENDENCY closure only. The native/runtime layer — the
+# Electron runtime and the Chromium + Node it embeds, node-pty, and the vendored rg/ast-grep
+# CLIs — ships as binaries, not lockfile entries, so Syft can't see it here (a scan of the
+# packaged app finds ~none of it). That layer gets its own deep binary SBOM, generated
+# per-platform from each build leg's real packaged artifact by scripts/binary-sbom.mjs in
+# release-publish.yml (one sbom.binary.<os-arch>.* per leg, so the hashes match that platform).
+#
 # This is the AD-HOC generator (manual dispatch only). The per-release SBOM — the one
 # that ships attached to each published GitHub Release — is produced by the Linux leg
 # of release-publish.yml, NOT here. A `push: branches: [main]` trigger was tried and

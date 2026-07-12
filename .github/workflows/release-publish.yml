@@ -101,18 +101,30 @@ jobs:
           # macos-15-intel replaces the retired macos-13 image (shut down 2025-12-04); GitHub
           # sunsets x64 macOS after macos-15 (~Fall 2027). Keep the Intel label in lockstep
           # with nightly-build / release-prepare.
+          # sbom_app / sbom_label: the packaged-app dir this leg produces + the platform tag for
+          # its deep binary SBOM (scripts/binary-sbom.mjs). Each leg emits its OWN
+          # sbom.binary.<label>.* so the hashes match the binaries a user of THAT platform actually
+          # downloads (the mac legs also enumerate the macOS-only Squirrel.Mac framework stack).
           - os: macos-14
             dist: dist:mac
+            sbom_app: release/mac-arm64/Houston.app
+            sbom_label: darwin-arm64
           - os: macos-15-intel
             dist: dist:mac:x64
             mac_x64_manual: true
+            sbom_app: release/mac/Houston.app
+            sbom_label: darwin-x64
           - os: windows-latest
             dist: dist:win
+            sbom_app: release/win-unpacked
+            sbom_label: win32-x64
           # Pinned to ubuntu-22.04 (glibc 2.35 = our documented Linux floor), not
           # ubuntu-latest: node-pty compiles here, so the runner's glibc sets the SHIPPED
           # app's minimum glibc. This is the binding one for users. See ci.yml's `build`.
           - os: ubuntu-22.04
             dist: dist:linux
+            sbom_app: release/linux-unpacked
+            sbom_label: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -271,6 +283,51 @@ jobs:
           done
           # SPDX 3.0 (JSON-LD graph): verify package count + that every package got a supplier.
           node -e "const g=(JSON.parse(require('node:fs').readFileSync('sbom.spdx3.json','utf8'))['@graph']||[]); const pk=g.filter(e=>e.type==='software_Package'); const sup=pk.filter(p=>p.suppliedBy).length; if(pk.length<60){console.error('::error::sbom.spdx3.json has only '+pk.length+' packages (<60)');process.exit(1)} if(sup<pk.length){console.error('::error::sbom.spdx3.json: '+(pk.length-sup)+' packages missing suppliedBy');process.exit(1)} console.log('sbom.spdx3.json OK ('+pk.length+' packages, all supplied)')"
+      # Deep binary SBOM (native/runtime layer), generated PER LEG from that platform's real
+      # packaged app. The lockfile SBOMs above enumerate the JavaScript closure; they
+      # structurally CANNOT see the components that ship as real binaries rather than npm
+      # tarballs: the Electron runtime and the Chromium + Node it embeds, the node-pty native
+      # addon, the vendored rg/ast-grep CLIs, and (macOS only) the Squirrel.Mac updater
+      # frameworks. A calibration run of Syft against a packaged app found ~none of these (Syft
+      # has no Electron/Chromium classifier, and the Rust CLIs carry no metadata it reads), so
+      # scripts/binary-sbom.mjs CONSTRUCTS the set and reads each version from the ACTUAL shipped
+      # binary (Electron's compiled-in user-agent + node banner, `rg`/`ast-grep --version`,
+      # node-pty's manifest, each mac framework's Info.plist) — versions a manifest never
+      # reveals: the shipped Node differs from the build Node, and ripgrep 15.x hides behind the
+      # @vscode/ripgrep@1.18.0 wrapper. It fail-closes if any expected native component or its
+      # version is missing, the same stance as the lockfile floor above. Each leg execs its OWN
+      # native binaries (so the rg/ast-grep versions come from that platform's build) and hashes
+      # the exact files it ships, so a user of any platform can verify the SBOM's hashes against
+      # the binaries inside their own download. bash on every leg (the Windows runner defaults to
+      # PowerShell, which can't parse the line-continuations). This step runs after e2e, which
+      # only rebuilds out/ — it never repackages release/, so the app dir persists.
+      - name: Generate deep binary SBOM (native/runtime layer)
+        shell: bash
+        run: |
+          node scripts/binary-sbom.mjs --app "${{ matrix.sbom_app }}" --platform "${{ matrix.sbom_label }}" \
+            -o cyclonedx-json="sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json" \
+            -o spdx-json="sbom.binary.${{ matrix.sbom_label }}.spdx.json"
+      # Vulnerability gate for the NATIVE layer — the coverage the lockfile scan can't provide.
+      # Without it a Chromium/Node/ripgrep CVE is invisible to the release (the calibration run
+      # flagged fixable High + a Critical in the shipped Chromium, matched via its CPE). Same
+      # policy as the lockfile gate: fail on a fixable High/Critical, suppress a finding assessed
+      # not-exploitable via the shared VEX doc. Runs ONCE, on the Linux leg: the six vuln-relevant
+      # components are identical across platforms (the mac-only Squirrel frameworks carry no NVD
+      # coordinates), so one scan covers the matrix without four redundant failure points. Runs
+      # post-build (the packaged app only exists after build) — consistent with the lockfile
+      # SBOM's post-build floor checks above; a failure here fails the build job, so finalize
+      # never un-drafts.
+      - name: Scan binary SBOM for vulnerabilities (fail on fixable High/Critical)
+        if: matrix.os == 'ubuntu-22.04'
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: sbom.binary.linux-x64.cyclonedx.json
+          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
+          grype-version: v0.115.0
+          vex: .github/vex/houston.openvex.json
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
       - name: Attach standalone CLI + SBOMs to the release
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
@@ -280,9 +337,11 @@ jobs:
           # Upload the bundle, its checksum, and the attribution notices together:
           # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
           # travel with the redistributed code (the .cjs ships no node_modules). The
-          # SBOMs ship alongside so each released version carries a verifiable
-          # production dependency manifest in both CycloneDX and SPDX. The VEX travels
-          # with them so consumers get the exploitability assessment, not just the list.
+          # lockfile SBOMs ship alongside so each released version carries a verifiable
+          # production dependency manifest in CycloneDX + SPDX. (The per-platform deep
+          # binary SBOMs are attached + signed separately, per leg — see "Attach + sign
+          # the binary SBOM".) The VEX travels with them so consumers get the
+          # exploitability assessment, not just the list.
           gh release upload "$tag" \
             out/cli/houston-cli.cjs \
             out/cli/houston-cli.cjs.sha256 \
@@ -320,6 +379,22 @@ jobs:
           # Sign the downloadable installers/packages this leg produced (skip .yml feeds and
           # .blockmaps — not artifacts a user downloads and verifies).
           for f in release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb; do
+            cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
+            gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
+          done
+      # This leg's own deep binary SBOM (generated above from its packaged app): attach it and its
+      # cosign bundle. Runs on EVERY leg — the platform-tagged filename means the four legs never
+      # collide, and each ships the SBOM whose hashes match that platform's binaries. The Linux
+      # leg's pair is additionally folded into the signed SHA256SUMS manifest below.
+      - name: Attach + sign the binary SBOM
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        shell: bash
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          for f in sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json sbom.binary.${{ matrix.sbom_label }}.spdx.json; do
+            gh release upload "$tag" "$f" -R piyushvijay/houston-releases --clobber
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
             gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
           done
@@ -386,7 +461,8 @@ jobs:
           {
             ( cd release && sha256sum *.AppImage *.deb )
             ( cd out/cli && sha256sum houston-cli.cjs )
-            sha256sum sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json THIRD-PARTY-NOTICES.md
+            sha256sum sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json \
+              sbom.binary.linux-x64.cyclonedx.json sbom.binary.linux-x64.spdx.json THIRD-PARTY-NOTICES.md
             ( cd .github/vex && sha256sum houston.openvex.json )
           } > SHA256SUMS
           sign SHA256SUMS
@@ -431,6 +507,20 @@ jobs:
               --bundle "$f.slsa.bundle" "$f"
             gh release upload "$tag" "$f.slsa.bundle" -R piyushvijay/houston-releases --clobber
           done
+      # This leg's per-platform binary SBOM gets the same SLSA provenance as every other asset
+      # (the predicate step above runs on every leg, so slsa-predicate.json is present here too).
+      - name: Attest binary SBOM (SLSA provenance)
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        shell: bash
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          for f in sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json sbom.binary.${{ matrix.sbom_label }}.spdx.json; do
+            cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
+              --bundle "$f.slsa.bundle" "$f"
+            gh release upload "$tag" "$f.slsa.bundle" -R piyushvijay/houston-releases --clobber
+          done
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
       # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
@@ -454,6 +544,8 @@ jobs:
             sbom.cyclonedx.json
             sbom.spdx.json
             sbom.spdx3.json
+            sbom.binary.*.cyclonedx.json
+            sbom.binary.*.spdx.json
           if-no-files-found: error
 
   finalize:
