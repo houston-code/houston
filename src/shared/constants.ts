@@ -100,6 +100,8 @@ export const IPC = {
   agentActiveRun: 'agent:activeRun',
   /** Query the prompts (approvals/questions) blocking a conversation's live run, to replay on re-adopt. */
   agentPendingPrompts: 'agent:pendingPrompts',
+  /** Query the live run's streamed-but-unpersisted transcript, to replay on re-adopt (mid-turn re-open). */
+  agentLiveTranscript: 'agent:liveTranscript',
   /** Query the ids of every conversation with a live run (drives the sidebar "running" dot). */
   agentRunningList: 'agent:runningList',
   /** Main → renderer: the set of conversations with a live run changed (started/ended). */

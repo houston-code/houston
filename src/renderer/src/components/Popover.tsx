@@ -137,10 +137,19 @@ export function Popover({
         items[next]?.focus()
       }
     }
-    // Scrolling the page moves the trigger out from under a fixed-position menu,
-    // leaving it floating detached; close on any scroll (capture, to catch nested
-    // scroll containers) — matching how it already closes on resize.
-    const onScroll = (): void => onCloseRef.current()
+    // Scrolling a container that actually holds the trigger (or the page itself)
+    // slides a fixed-position menu off its anchor, leaving it floating detached —
+    // close in that case. But a scroll in an *unrelated* pane must NOT dismiss the
+    // menu: the transcript auto-scrolls on every streaming delta, so closing on any
+    // scroll (capture) made the model picker collapse the instant it opened mid-turn.
+    // `contains` is true for document/documentElement (page scroll) and for any
+    // ancestor scroll container of the trigger; false for a sibling pane like the
+    // transcript, whose auto-scroll we now ignore.
+    const onScroll = (e: Event): void => {
+      const anchor = anchorRef.current
+      const target = e.target as Node | null
+      if (anchor && target?.contains?.(anchor)) onCloseRef.current()
+    }
     const onResize = (): void => onCloseRef.current()
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey, true)

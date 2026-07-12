@@ -46,4 +46,34 @@ describe('Popover', () => {
     fireEvent.scroll(document, {})
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('closes when a scroll container holding the anchor scrolls', () => {
+    const onClose = vi.fn()
+    const scroller = document.createElement('div')
+    const anchor = document.createElement('button')
+    scroller.appendChild(anchor)
+    document.body.appendChild(scroller)
+    const ref: RefObject<HTMLButtonElement> = { current: anchor }
+    render(
+      <Popover anchorRef={ref} onClose={onClose}>
+        <button className="menu__item">One</button>
+      </Popover>
+    )
+    fireEvent.scroll(scroller, {})
+    expect(onClose).toHaveBeenCalled()
+    scroller.remove()
+  })
+
+  it('ignores a scroll in an unrelated pane (e.g. the transcript auto-scrolling mid-turn)', () => {
+    // Regression: the transcript auto-scrolls on every streaming delta, which used to
+    // close the model picker the instant it opened during a running turn. A scroll in a
+    // pane that does NOT contain the anchor must leave the menu open.
+    const onClose = vi.fn()
+    const pane = document.createElement('div')
+    document.body.appendChild(pane)
+    renderPopover(onClose)
+    fireEvent.scroll(pane, {})
+    expect(onClose).not.toHaveBeenCalled()
+    pane.remove()
+  })
 })
