@@ -395,6 +395,42 @@ jobs:
           #    out at `ref: main`, so what users get is exactly what's committed to source.
           gh release upload "$tag" SHA256SUMS SHA256SUMS.asc houston-signing-key.asc \
             -R piyushvijay/houston-releases --clobber
+      # SLSA v1.0 build provenance. Complements the cosign SIGNATURES above (integrity +
+      # signer identity) with a structured attestation of HOW each artifact was built —
+      # builder = this workflow, plus the source repo + commit. cosign attest-blob sets each
+      # artifact's digest as the subject and signs keyless (Fulcio + Rekor), the same trust
+      # path as the signatures. Like the signatures, these are !dry_run, so they are first
+      # exercised on a real publish. Verify with:
+      #   cosign verify-blob-attestation <file> --bundle <file>.slsa.bundle --type slsaprovenance1 \
+      #     --certificate-identity 'https://github.com/piyushvijay/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+      #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+      - name: Generate SLSA provenance predicate
+        if: ${{ !inputs.dry_run }}
+        run: node scripts/slsa-provenance.mjs > slsa-predicate.json
+      - name: Attest release binaries (SLSA provenance)
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        shell: bash
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          shopt -s nullglob
+          for f in release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb; do
+            cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
+              --bundle "$f.slsa.bundle" "$f"
+            gh release upload "$tag" "$f.slsa.bundle" -R piyushvijay/houston-releases --clobber
+          done
+      - name: Attest standalone CLI + SBOMs (SLSA provenance)
+        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json; do
+            cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
+              --bundle "$f.slsa.bundle" "$f"
+            gh release upload "$tag" "$f.slsa.bundle" -R piyushvijay/houston-releases --clobber
+          done
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
       # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
