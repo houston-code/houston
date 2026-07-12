@@ -65,13 +65,15 @@ jobs:
             node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const items=j.components||j.packages||[]; const n=items.length; const h=items.filter(x=>(x.hashes||x.checksums||[]).length).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} if(h<60){console.error('::error::'+process.argv[1]+' has only '+h+' hashed entries (<60) — enrichment did not run'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries, '+h+' hashed)')" "$f"
           done
       # Vulnerability gate: scan the production SBOM with grype and fail on a High/Critical
-      # with a fix available. only-fixed avoids dead-ending on an unpatchable finding (that's
-      # the case a VEX would consciously accept — ENTERPRISE-3, not built yet); until then,
-      # unfixable findings warn but don't block. Scans the same closure that ships.
+      # with a fix available. only-fixed avoids dead-ending on an unpatchable finding; a
+      # finding you have assessed as not-exploitable is suppressed via the VEX document
+      # (.github/vex/houston.openvex.json — see .github/vex/README.md). Scans the closure that
+      # ships.
       - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           sbom: sbom.cyclonedx.json
+          vex: .github/vex/houston.openvex.json
           severity-cutoff: high
           only-fixed: true
           output-format: table

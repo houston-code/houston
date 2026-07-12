@@ -46,8 +46,8 @@ jobs:
   # production closure aborts the release before anything is built or published, rather than
   # failing mid-matrix after some legs already uploaded. Scans the same production SBOM the
   # release ships (syft's lockfile scan), failing on a High/Critical with a fix available.
-  # only-fixed avoids dead-ending on an unpatchable finding — the case a VEX would consciously
-  # accept (ENTERPRISE-3, not built yet); until then those warn but don't block.
+  # only-fixed avoids dead-ending on an unpatchable finding; a finding assessed as
+  # not-exploitable is suppressed via the VEX document (.github/vex/houston.openvex.json).
   scan:
     timeout-minutes: 10
     runs-on: ubuntu-latest
@@ -60,6 +60,9 @@ jobs:
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           sbom: sbom.cyclonedx.json
+          # Findings assessed as not-exploitable are suppressed via the VEX document
+          # (.github/vex/houston.openvex.json — see .github/vex/README.md).
+          vex: .github/vex/houston.openvex.json
           severity-cutoff: high
           only-fixed: true
           output-format: table
@@ -225,13 +228,15 @@ jobs:
           # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
           # travel with the redistributed code (the .cjs ships no node_modules). The
           # SBOMs ship alongside so each released version carries a verifiable
-          # production dependency manifest in both CycloneDX and SPDX.
+          # production dependency manifest in both CycloneDX and SPDX. The VEX travels
+          # with them so consumers get the exploitability assessment, not just the list.
           gh release upload "$tag" \
             out/cli/houston-cli.cjs \
             out/cli/houston-cli.cjs.sha256 \
             THIRD-PARTY-NOTICES.md \
             sbom.cyclonedx.json \
             sbom.spdx.json \
+            .github/vex/houston.openvex.json \
             -R piyushvijay/houston-releases --clobber
       # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
       # Fulcio cert + Rekor proof) beside each. This is the private-repo-compatible,
@@ -267,7 +272,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
-          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json; do
+          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json .github/vex/houston.openvex.json; do
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
             gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
           done

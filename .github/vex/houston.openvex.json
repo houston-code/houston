@@ -1,0 +1,8 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://houstoncode.ai/vex/houston",
+  "author": "Piyush Kumar Vijay <piyushvijay@houstoncode.ai>",
+  "timestamp": "2026-07-12T00:00:00Z",
+  "version": 1,
+  "statements": []
+}
