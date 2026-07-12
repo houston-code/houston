@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
+import {
+  BUILTIN_TEMPLATE_COMMANDS,
+  expandTemplate,
+  mergeCommands,
+  resolveCommand,
+  type Command
+} from '@shared/commands'
+import type { CompactResult } from './agent/compact'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import type { AgentEvent, AgentRunRequest, ChatMessage, QuestionOption } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
@@ -455,6 +463,9 @@ export type SlashResult =
   | { kind: 'image'; path: string }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
+  | { kind: 'compact' }
+  /** A template command (custom `.houston/commands` or first-party `/review`): run the expanded prompt as a turn. */
+  | { kind: 'prompt'; text: string }
   | { kind: 'unknown'; name: string }
   | { kind: 'not-a-command' }
 
@@ -463,7 +474,11 @@ export type SlashResult =
  * applies side effects (printing, state changes) so this stays testable. Only
  * lines that start with '/' are commands; everything else is prompt text.
  */
-export function parseSlashCommand(line: string, settings: AppSettings): SlashResult {
+export function parseSlashCommand(
+  line: string,
+  settings: AppSettings,
+  commands: Command[] = []
+): SlashResult {
   if (!line.startsWith('/')) return { kind: 'not-a-command' }
   const [name, ...rest] = line.slice(1).trim().split(/\s+/)
   const arg = rest.join(' ')
@@ -495,6 +510,11 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
       if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
     }
+    case 'plan':
+      // Shortcut for the read-only research-and-propose policy (parity with the GUI's /plan).
+      return { kind: 'set-approval', policy: 'plan' }
+    case 'compact':
+      return { kind: 'compact' }
     case 'model': {
       if (!arg) return { kind: 'handled' } // driver lists providers/models
       const resolved = resolveModelArg(arg, settings)
@@ -506,8 +526,13 @@ export function parseSlashCommand(line: string, settings: AppSettings): SlashRes
     case 'cost':
     case 'model?':
       return { kind: 'handled' }
-    default:
+    default: {
+      // Not a built-in: try the template commands (first-party like /review, plus
+      // custom `.houston/commands`). A match runs its expanded prompt as a turn.
+      const cmd = resolveCommand(commands, name)
+      if (cmd?.template) return { kind: 'prompt', text: expandTemplate(cmd.template, arg) }
       return { kind: 'unknown', name }
+    }
   }
 }
 
@@ -543,7 +568,10 @@ export const HELP_TEXT = [
   '  /help                 show this help',
   '  /model [id]           list models, or switch (providerId, providerId/model, or model)',
   '  /approval [policy]    show or set policy (plan | ask | auto-edit | full-auto)',
+  '  /plan                 shortcut: switch to plan mode (read-only research & propose)',
   '  /clear, /new          start a fresh conversation',
+  '  /compact              summarize older turns to free up context now',
+  '  /review               adversarial review of your uncommitted changes',
   '  /resume [query]       list (or search) and reopen a saved session',
   '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
@@ -552,6 +580,7 @@ export const HELP_TEXT = [
   '  /theme [name]         list or switch color theme (default | bright | mono)',
   '  /image <path>         attach an image to your next message',
   '  /cwd                  show the working directory',
+  '  /<name>               run a custom command from .houston/commands',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
   'While a turn runs: Ctrl-C interrupts it. Answer approvals with y / n / a.'
@@ -631,6 +660,10 @@ export interface TuiDeps {
   persistHistory?: (line: string) => void
   /** Snapshot of the workspace's skills / agents / MCP servers / hooks, for /mcp etc. */
   capabilities?: () => Promise<CapabilitySnapshot>
+  /** Load the workspace's custom `.houston/commands`, so `/<name>` runs one as a turn. */
+  commands?: () => Promise<Command[]>
+  /** Compact the given conversation on demand (the `/compact` command). */
+  compact?: (id: string, providerId: string, model: string) => Promise<CompactResult>
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
   loadImage?: (path: string) => { image: ImageAttachment } | { error: string }
   /**
@@ -704,6 +737,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
+  // Custom slash commands from the workspace's `.houston/commands`, loaded once for
+  // the session. Merged with the first-party template commands (e.g. /review), which
+  // win on a name collision. Typing `/<name>` runs the expanded template as a turn.
+  let customCommands: Command[] = []
+  if (deps.commands) {
+    try {
+      customCommands = await deps.commands()
+    } catch {
+      /* no custom commands — fine, carry on with the built-ins */
+    }
+  }
+  const templateCommands = mergeCommands(BUILTIN_TEMPLATE_COMMANDS, customCommands)
+
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
@@ -762,7 +808,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
 
     if (text.startsWith('/')) {
-      const result = parseSlashCommand(text, deps.getSettings())
+      const result = parseSlashCommand(text, deps.getSettings(), templateCommands)
       if (result.kind === 'exit') break
       if (result.kind === 'clear') {
         messages = []
@@ -853,13 +899,49 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(paint(`· theme → ${result.theme}\n`, 'dim'))
         continue
       }
+      if (result.kind === 'compact') {
+        if (!deps.compact || !conversationId) {
+          deps.io.out(paint('· nothing to compact yet; start a conversation first\n', 'dim'))
+          continue
+        }
+        deps.io.out(paint('· compacting…\n', 'dim'))
+        const res = await deps.compact(conversationId, providerId, model)
+        if (res.ok && res.messages) {
+          messages = res.messages
+          deps.io.out(paint(`· compacted ${res.summarized} earlier message(s)\n`, 'dim'))
+        } else if (res.ok) {
+          deps.io.out(
+            paint(
+              res.reason === 'single-turn'
+                ? '· single turn: /new starts a fresh chat to free up context\n'
+                : '· nothing to compact yet\n',
+              'dim'
+            )
+          )
+        } else {
+          deps.io.out(paint(`· couldn't compact: ${res.error ?? 'unknown error'}\n`, 'yellow'))
+        }
+        continue
+      }
       if (result.kind === 'unknown') {
         deps.io.out(paint(`Unknown command: /${result.name}. Try /help.\n`, 'yellow'))
         continue
       }
-      // 'handled' — informational commands print here where the state lives.
-      handleInfoCommand(text, { providerId, model, policy, cwd: opts.cwd, sessionCost }, deps, paint)
-      continue
+      if (result.kind === 'prompt') {
+        // A template command (custom `.houston/commands` or first-party /review):
+        // run its expanded prompt as a normal turn. Fall through — don't `continue`.
+        text = result.text
+      } else {
+        // 'handled' — informational commands print here where the state lives.
+        handleInfoCommand(
+          text,
+          { providerId, model, policy, cwd: opts.cwd, sessionCost },
+          deps,
+          paint,
+          customCommands
+        )
+        continue
+      }
     }
 
     messages.push({
@@ -1069,11 +1151,16 @@ function handleInfoCommand(
     sessionCost: SessionCost
   },
   deps: TuiDeps,
-  paint: Painter
+  paint: Painter,
+  customCommands: Command[] = []
 ): void {
   const name = nameOf(line.slice(1).trim().split(/\s+/)[0])
   if (name === 'help') {
     deps.io.out(`${HELP_TEXT}\n`)
+    if (customCommands.length) {
+      const rows = customCommands.map((c) => `  ${`/${c.name}`.padEnd(20)}${c.description}`).join('\n')
+      deps.io.out(paint(`\nCustom commands (.houston/commands):\n${rows}\n`, 'dim'))
+    }
     return
   }
   if (name === 'cwd') {

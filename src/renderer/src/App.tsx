@@ -11,7 +11,7 @@ import {
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, PlanDecision, ReasoningEffort, RepoInfo } from '@shared/agent'
-import { mergeCommands, type Command } from '@shared/commands'
+import { mergeCommands, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { resolveCapabilities } from '@shared/usage'
 import { branchNameError, planNewChatWorkspace, suggestBranch } from './lib/worktree'
@@ -113,8 +113,7 @@ const BUILTIN_COMMANDS: Command[] = [
     description: 'Adversarial review of your uncommitted changes',
     // Runs immediately on submit (autoRun) rather than expanding into the composer.
     autoRun: true,
-    template:
-      'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
+    template: REVIEW_TEMPLATE
   }
 ]
 

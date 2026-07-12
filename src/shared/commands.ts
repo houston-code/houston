@@ -55,3 +55,26 @@ export function mergeCommands(builtin: Command[], custom: Command[]): Command[] 
   const names = new Set(builtin.map((c) => c.name.toLowerCase()))
   return [...builtin, ...custom.filter((c) => !names.has(c.name.toLowerCase()))]
 }
+
+/**
+ * The first-party `/review` command's prompt. Shared so every client (GUI + TUI)
+ * runs the exact same adversarial-review turn from one definition.
+ */
+export const REVIEW_TEMPLATE =
+  'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
+
+/**
+ * First-party template commands available in every client. Unlike custom commands
+ * (loaded per workspace from `.houston/commands`), these ship with the app. They
+ * behave like custom commands — a `/name` expands to a prompt turn — but are always
+ * present and win over a same-named custom command via `mergeCommands`.
+ */
+export const BUILTIN_TEMPLATE_COMMANDS: Command[] = [
+  {
+    name: 'review',
+    description: 'Adversarial review of your uncommitted changes',
+    // Runs immediately on submit rather than expanding into the composer.
+    autoRun: true,
+    template: REVIEW_TEMPLATE
+  }
+]
