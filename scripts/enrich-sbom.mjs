@@ -106,27 +106,42 @@ export function spdxSupplier(supplier) {
   return supplier.email ? `Person: ${supplier.name} (${supplier.email})` : `Person: ${supplier.name}`
 }
 
-/** Index name@version -> { integrity, path } from an npm v3 lockfile's `packages` map. */
+/** Index name@version -> { integrity, paths[] } from an npm v3 lockfile's `packages` map. */
 export function buildLockIndex(lock) {
   const byNV = new Map()
   for (const [p, meta] of Object.entries((lock && lock.packages) || {})) {
     const i = p.lastIndexOf('node_modules/')
     if (i === -1 || !meta.version) continue
     const name = p.slice(i + 'node_modules/'.length)
-    byNV.set(`${name}@${meta.version}`, { integrity: meta.integrity || null, path: p })
+    const nv = `${name}@${meta.version}`
+    // A package can appear at many lockfile paths (npm nests deduped copies). Keep ALL of
+    // them: only some are installed for a given `--omit` mode, so the manifest reader must
+    // try each until it finds the one that's actually on disk. Keeping only one path meant a
+    // dev-tooling copy (not installed in production) shadowed the real prod copy, losing the
+    // supplier — which silently broke NTIA conformance for e.g. fs-extra/jsonfile/universalify.
+    const existing = byNV.get(nv)
+    if (existing) {
+      existing.paths.push(p)
+      if (!existing.integrity && meta.integrity) existing.integrity = meta.integrity
+    } else {
+      byNV.set(nv, { integrity: meta.integrity || null, paths: [p] })
+    }
   }
   return byNV
 }
 
 /** Read a package's installed manifest, or null. */
-function manifestForPath(pkgPath) {
-  const pj = join(ROOT, pkgPath, 'package.json')
-  if (!existsSync(pj)) return null
-  try {
-    return JSON.parse(readFileSync(pj, 'utf8'))
-  } catch {
-    return null
+function manifestForEntry(entry) {
+  for (const pkgPath of (entry && entry.paths) || []) {
+    const pj = join(ROOT, pkgPath, 'package.json')
+    if (!existsSync(pj)) continue
+    try {
+      return JSON.parse(readFileSync(pj, 'utf8'))
+    } catch {
+      // unreadable; try the next candidate path
+    }
   }
+  return null
 }
 
 /** Add hashes + author + supplier to each CycloneDX component in place. Returns coverage. */
@@ -142,7 +157,7 @@ export function enrichCycloneDx(doc, index, manifestLookup) {
       c.hashes = [{ alg: 'SHA-512', content: hex }]
       hashes++
     }
-    const pkg = manifestLookup(entry.path)
+    const pkg = manifestLookup(entry)
     const author = normalizeAuthor(pkg && pkg.author)
     if (author && !c.author) {
       c.author = author
@@ -171,7 +186,7 @@ export function enrichSpdx(doc, index, manifestLookup) {
       p.checksums = [...(p.checksums || []), { algorithm: 'SHA512', checksumValue: hex }]
       hashes++
     }
-    const pkg = manifestLookup(entry.path)
+    const pkg = manifestLookup(entry)
     const orig = spdxOriginator(normalizeAuthor(pkg && pkg.author))
     if (orig && (!p.originator || p.originator === 'NOASSERTION')) {
       p.originator = orig
@@ -320,18 +335,20 @@ const LICENSE_FILE_NAMES = [
 ]
 
 /** Best-effort: pull copyright line(s) from an installed package's LICENSE file, or null. */
-export function extractCopyright(pkgPath) {
-  for (const f of LICENSE_FILE_NAMES) {
-    const p = join(ROOT, pkgPath, f)
-    if (!existsSync(p)) continue
-    try {
-      const lines = readFileSync(p, 'utf8')
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => /copyright/i.test(l) && /\d{4}|\(c\)|©/i.test(l))
-      if (lines.length) return [...new Set(lines)].slice(0, 5).join('\n')
-    } catch {
-      // unreadable; try the next candidate
+export function extractCopyright(entry) {
+  for (const pkgPath of (entry && entry.paths) || []) {
+    for (const f of LICENSE_FILE_NAMES) {
+      const p = join(ROOT, pkgPath, f)
+      if (!existsSync(p)) continue
+      try {
+        const lines = readFileSync(p, 'utf8')
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => /copyright/i.test(l) && /\d{4}|\(c\)|©/i.test(l))
+        if (lines.length) return [...new Set(lines)].slice(0, 5).join('\n')
+      } catch {
+        // unreadable; try the next candidate
+      }
     }
   }
   return null
@@ -372,16 +389,18 @@ export function enrichSpdx3(doc, index, manifestLookup, rootName, author = SBOM_
   for (const p of graph) {
     if (p.type !== 'software_Package') continue
     const entry = p.software_packageVersion ? index.get(`${p.name}@${p.software_packageVersion}`) : null
-    const supplier =
-      p.name === rootName
-        ? { name: author.name, isOrg: author.isOrg }
-        : deriveSupplier(entry ? manifestLookup(entry.path) : null, p.name) || { name: author.name, isOrg: author.isOrg }
-    if (!p.suppliedBy) {
+    // The root product and syft's scanned-file node (package-lock.json) are ours -> the SBOM
+    // author supplies them. Dependencies -> their derived supplier; if genuinely underivable,
+    // leave suppliedBy unset (never attribute a dependency to us) — the workflow's "all
+    // packages supplied" check then fails loudly rather than shipping a false attribution.
+    const isSelf = p.name === rootName || (typeof p.spdxId === 'string' && p.spdxId.includes('DocumentRoot-File'))
+    const supplier = isSelf ? { name: author.name, isOrg: author.isOrg } : deriveSupplier(manifestLookup(entry), p.name)
+    if (supplier && !p.suppliedBy) {
       p.suppliedBy = agentIdFor(supplier)
       suppliers++
     }
     if ((!p.software_copyrightText || p.software_copyrightText === 'NOASSERTION') && entry) {
-      const cc = extractCopyright(entry.path)
+      const cc = extractCopyright(entry)
       if (cc) {
         p.software_copyrightText = cc
         copyrights++
@@ -407,7 +426,7 @@ function main() {
     const doc = JSON.parse(readFileSync(f, 'utf8'))
     // SPDX 3.0 is a JSON-LD graph, structurally unlike CycloneDX / SPDX 2.3 — enrich separately.
     if (Array.isArray(doc['@graph'])) {
-      const r = enrichSpdx3(doc, index, manifestForPath, rootName)
+      const r = enrichSpdx3(doc, index, manifestForEntry, rootName)
       writeFileSync(f, `${JSON.stringify(doc, null, 2)}\n`)
       console.log(`enriched ${f}: SPDX3 +${r.suppliers} suppliers (${r.agents} agents), +${r.copyrights} copyright`)
       continue
@@ -415,7 +434,7 @@ function main() {
     const isCdx = doc.bomFormat === 'CycloneDX'
     if (isCdx) stripCycloneDxFileNode(doc, rootName)
     else stripSpdxFileNode(doc, rootName)
-    const res = isCdx ? enrichCycloneDx(doc, index, manifestForPath) : enrichSpdx(doc, index, manifestForPath)
+    const res = isCdx ? enrichCycloneDx(doc, index, manifestForEntry) : enrichSpdx(doc, index, manifestForEntry)
     const self = isCdx ? enrichCycloneDxSelf(doc, rootName) : enrichSpdxSelf(doc, rootName)
     if (!isCdx) concludeSpdxLicenses(doc)
     writeFileSync(f, `${JSON.stringify(doc, null, 2)}\n`)

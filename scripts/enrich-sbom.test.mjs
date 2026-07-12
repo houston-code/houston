@@ -122,17 +122,33 @@ describe('buildLockIndex', () => {
         'node_modules/foo/node_modules/baz': { version: '3.0.0' }
       }
     })
-    expect(idx.get('foo@1.0.0')).toEqual({ integrity: 'sha512-AAA', path: 'node_modules/foo' })
+    expect(idx.get('foo@1.0.0')).toEqual({ integrity: 'sha512-AAA', paths: ['node_modules/foo'] })
     expect(idx.get('@s/bar@2.0.0').integrity).toBe('sha512-BBB')
     expect(idx.get('baz@3.0.0').integrity).toBeNull() // nested, no integrity in this fixture
     expect(idx.size).toBe(3) // the root ('') entry is skipped
+  })
+
+  it('collects EVERY path when a name@version appears more than once (npm nesting)', () => {
+    // Regression: keeping one path let an uninstalled dev-tooling copy shadow the real prod
+    // copy, losing the supplier (fs-extra/jsonfile/universalify) and breaking NTIA.
+    const idx = buildLockIndex({
+      packages: {
+        'node_modules/dev-tool/node_modules/dup': { version: '1.0.0' }, // no integrity here
+        'node_modules/prod-dep/node_modules/dup': { version: '1.0.0', integrity: 'sha512-X' }
+      }
+    })
+    expect(idx.get('dup@1.0.0').paths).toEqual([
+      'node_modules/dev-tool/node_modules/dup',
+      'node_modules/prod-dep/node_modules/dup'
+    ])
+    expect(idx.get('dup@1.0.0').integrity).toBe('sha512-X') // picked up from whichever entry has it
   })
 })
 
 describe('enrichCycloneDx', () => {
   it('adds hash, author and supplier only for indexed components', () => {
     const hex = 'ab'.repeat(64)
-    const idx = new Map([['foo@1.0.0', { integrity: sha512(hex), path: 'node_modules/foo' }]])
+    const idx = new Map([['foo@1.0.0', { integrity: sha512(hex), paths: ['node_modules/foo'] }]])
     const manifests = { 'node_modules/foo': { author: 'Jane <j@x.com>' } }
     const doc = {
       bomFormat: 'CycloneDX',
@@ -141,7 +157,7 @@ describe('enrichCycloneDx', () => {
         { name: 'bar', version: '9.9.9' } // not in the index
       ]
     }
-    const res = enrichCycloneDx(doc, idx, (p) => manifests[p] || null)
+    const res = enrichCycloneDx(doc, idx, (entry) => manifests[entry.paths[0]] || null)
     expect(res).toEqual({ hashes: 1, authors: 1, suppliers: 1 })
     expect(doc.components[0].hashes).toEqual([{ alg: 'SHA-512', content: hex }])
     expect(doc.components[0].author).toBe('Jane <j@x.com>')
@@ -150,7 +166,7 @@ describe('enrichCycloneDx', () => {
   })
 
   it('supplies a scope-derived org when the manifest has no author', () => {
-    const idx = new Map([['@google/genai@1.0.0', { integrity: null, path: 'node_modules/@google/genai' }]])
+    const idx = new Map([['@google/genai@1.0.0', { integrity: null, paths: ['node_modules/@google/genai'] }]])
     const doc = { components: [{ name: '@google/genai', version: '1.0.0' }] }
     const res = enrichCycloneDx(doc, idx, () => ({}))
     expect(res.suppliers).toBe(1)
@@ -159,7 +175,7 @@ describe('enrichCycloneDx', () => {
   })
 
   it('never clobbers an existing hash, author or supplier', () => {
-    const idx = new Map([['foo@1.0.0', { integrity: sha512('cd'.repeat(64)), path: 'node_modules/foo' }]])
+    const idx = new Map([['foo@1.0.0', { integrity: sha512('cd'.repeat(64)), paths: ['node_modules/foo'] }]])
     const doc = { components: [{ name: 'foo', version: '1.0.0', hashes: [{ alg: 'MD5', content: 'x' }], author: 'Existing', supplier: { name: 'Existing' } }] }
     const res = enrichCycloneDx(doc, idx, () => ({ author: 'Jane' }))
     expect(res).toEqual({ hashes: 0, authors: 0, suppliers: 0 })
@@ -170,7 +186,7 @@ describe('enrichCycloneDx', () => {
 describe('enrichSpdx', () => {
   it('adds checksum, originator and supplier', () => {
     const hex = 'cd'.repeat(64)
-    const idx = new Map([['foo@1.0.0', { integrity: sha512(hex), path: 'node_modules/foo' }]])
+    const idx = new Map([['foo@1.0.0', { integrity: sha512(hex), paths: ['node_modules/foo'] }]])
     const doc = {
       spdxVersion: 'SPDX-2.3',
       packages: [{ name: 'foo', versionInfo: '1.0.0', originator: 'NOASSERTION', supplier: 'NOASSERTION' }]
@@ -183,7 +199,7 @@ describe('enrichSpdx', () => {
   })
 
   it('leaves supplier as NOASSERTION when nothing is derivable', () => {
-    const idx = new Map([['argparse@2.0.1', { integrity: null, path: 'node_modules/argparse' }]])
+    const idx = new Map([['argparse@2.0.1', { integrity: null, paths: ['node_modules/argparse'] }]])
     const doc = { spdxVersion: 'SPDX-2.3', packages: [{ name: 'argparse', versionInfo: '2.0.1', supplier: 'NOASSERTION' }] }
     const res = enrichSpdx(doc, idx, () => ({}))
     expect(res.suppliers).toBe(0)
@@ -202,12 +218,12 @@ describe('enrichSpdx3', () => {
       ]
     }
     const index = new Map([
-      ['dep-a@2.0.0', { path: 'node_modules/dep-a' }],
-      ['dep-b@3.0.0', { path: 'node_modules/dep-b' }]
+      ['dep-a@2.0.0', { paths: ['node_modules/dep-a'] }],
+      ['dep-b@3.0.0', { paths: ['node_modules/dep-b'] }]
     ])
     // Both deps resolve to the same org owner "acme" → one shared Agent.
     const manifests = { 'node_modules/dep-a': { repository: 'github:acme/a' }, 'node_modules/dep-b': { repository: 'github:acme/b' } }
-    const r = enrichSpdx3(doc, index, (p) => manifests[p] || null, 'houston', { name: 'Me', isOrg: false })
+    const r = enrichSpdx3(doc, index, (entry) => manifests[entry.paths[0]] || null, 'houston', { name: 'Me', isOrg: false })
     const g = doc['@graph']
     expect(g.find((e) => e.type === 'software_Sbom').software_sbomType).toEqual(['source'])
     expect(g.filter((e) => e.type === 'software_Package').every((p) => p.suppliedBy)).toBe(true)
