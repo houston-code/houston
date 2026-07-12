@@ -36,6 +36,11 @@ env:
   CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 
 jobs:
+  # Daily conformance check: fails the nightly if the generated SBOMs drop below NTIA / CISA
+  # FSCT3 / CycloneDX / Google-EO conformance, surfacing a dependency-driven regression early.
+  sbom-conformance:
+    uses: ./.github/workflows/sbom-conformance.yml
+
   build:
     # Cross-compilation is impossible (native node-pty + per-(os,arch) rg/ast-grep binaries),
     # so each OS packages its own artifacts on its own runner — same matrix as the release
