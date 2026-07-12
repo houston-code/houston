@@ -142,6 +142,10 @@ function collectEntries() {
 }
 
 function render(deps) {
+  // Distinct licenses across the bundled npm closure, surfaced up front so a compliance
+  // reviewer sees the whole set at a glance without scanning every entry below. Computed
+  // from the actual closure, so it can never drift out of sync with the components.
+  const licenses = [...new Set(deps.map((d) => d.license).filter(Boolean))].sort((a, b) => a.localeCompare(b))
   const header = [
     '# Third-party notices',
     '',
@@ -151,8 +155,12 @@ function render(deps) {
     'closure plus the CLI binaries vendored into the packaged app, and reproduces each',
     "component's license or notice text where the package ships one.",
     '',
-    '> Electron — and the Chromium and Node.js components it bundles — ships its own',
-    '> license notices inside the Electron framework included in each packaged build.',
+    `> Licenses present in this closure: ${licenses.join(', ')}. Public-domain dedications`,
+    '> such as the Unlicense (e.g. `fast-sha256`) carry no attribution requirement and are',
+    '> treated here as permissive.',
+    '',
+    '> Electron, and the Chromium and Node.js components it bundles, ships its own license',
+    '> notices inside the Electron framework included in each packaged build.',
     '',
     '---',
     ''
