@@ -58,11 +58,13 @@ jobs:
           # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
           syft-version: v1.46.0
       - name: Generate production SBOM for scanning
-        run: syft scan file:./package-lock.json -o cyclonedx-json=sbom.cyclonedx.json
+        run: syft scan file:./package-lock.json -o cyclonedx-json@1.6=sbom.cyclonedx.json
       - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           sbom: sbom.cyclonedx.json
+          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
+          grype-version: v0.115.0
           # Findings assessed as not-exploitable are suppressed via the VEX document
           # (.github/vex/houston.openvex.json — see .github/vex/README.md).
           vex: .github/vex/houston.openvex.json
@@ -253,7 +255,7 @@ jobs:
           # format that can carry the CISA SBOM type + per-package supplier for FSCT3 minimum
           # conformance (SPDX 2.3 has no field for either).
           syft scan file:./package-lock.json \
-            -o cyclonedx-json=sbom.cyclonedx.json \
+            -o cyclonedx-json@1.6=sbom.cyclonedx.json \
             -o spdx-json=sbom.spdx.json \
             -o spdx-json@3.0=sbom.spdx3.json
           # The lockfile carries no per-component hashes/author/supplier, so enrich each
