@@ -177,12 +177,16 @@ jobs:
           syft scan file:./package-lock.json \
             -o cyclonedx-json=sbom.cyclonedx.json \
             -o spdx-json=sbom.spdx.json
-          # Fail closed on an empty/truncated document rather than attaching a hollow SBOM
-          # (same stance as scripts/verify-bundled-binaries.mjs). The floor guards against a
-          # silent regression to a partial closure like npm sbom's 56: the full production
-          # set is ~73, so anything under 60 means the scan captured the wrong tree.
+          # The lockfile carries no per-component hashes or author, so enrich both documents
+          # in place from its own integrity (sha512) and each package's installed manifest.
+          # This only ADDS fields — the complete closure syft produced is preserved exactly.
+          node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json
+          # Fail closed on a truncated document, or one enrichment left without hashes, rather
+          # than attaching a hollow SBOM (same stance as scripts/verify-bundled-binaries.mjs).
+          # The entry floor guards against a silent regression to a partial closure like npm
+          # sbom's 56 (full production set is ~73); the hash floor catches enrichment no-op'ing.
           for f in sbom.cyclonedx.json sbom.spdx.json; do
-            node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const n=(j.components||j.packages||[]).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries)')" "$f"
+            node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const items=j.components||j.packages||[]; const n=items.length; const h=items.filter(x=>(x.hashes||x.checksums||[]).length).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} if(h<60){console.error('::error::'+process.argv[1]+' has only '+h+' hashed entries (<60) — enrichment did not run'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries, '+h+' hashed)')" "$f"
           done
       - name: Attach standalone CLI + SBOMs to the release
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
