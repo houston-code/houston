@@ -2,7 +2,8 @@ import { ipcMain, dialog, BrowserWindow, clipboard, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
-import type { AppSettings } from '@shared/types'
+import type { AppSettings, PermissionRule } from '@shared/types'
+import { cleanupPermissionRules } from './agent/permissions'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
   isPlanDecision,
@@ -346,6 +347,11 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.settingsGet, () => getSettings())
 
   ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => saveSettings(next))
+
+  // Pure transform for the Settings "Clean up rules" button — no state read/write.
+  ipcMain.handle(IPC.permissionsCleanup, (_event, rules: PermissionRule[]) =>
+    cleanupPermissionRules(Array.isArray(rules) ? rules : [])
+  )
 
   ipcMain.handle(IPC.settingsSetKey, (_event, providerId: string, key: string) => {
     setKey(providerId, key)

@@ -50,6 +50,8 @@ export const IPC = {
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',
+  // Tidy a permission-rule list (re-generalize + dedupe) for the "Clean up rules" action.
+  permissionsCleanup: 'permissions:cleanup',
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
   settingsListModels: 'settings:listModels',
