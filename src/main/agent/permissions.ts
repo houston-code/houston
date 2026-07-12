@@ -131,6 +131,30 @@ export function shellReferencesExternalPath(command: string, roots: string[]): b
   return false
 }
 
+/**
+ * Validate untrusted JSON from a *tighten-only* settings source — the per-project
+ * `.houston/settings.json` and the admin managed policy — into safe permission rules:
+ * well-formed entries whose action is `deny` or `ask` only. `allow` rules (and any
+ * other keys such as hooks/mcpServers) are dropped, so such a source can only ever
+ * make the agent MORE cautious — it can never auto-approve an action or spawn a
+ * process. Capped at `maxRules` as a DoS guard against a pathologically large file.
+ * Pure + exported for testing.
+ */
+export function parseTightenOnlyRules(raw: unknown, maxRules: number): PermissionRule[] {
+  const rules = (raw as { permissionRules?: unknown })?.permissionRules
+  if (!Array.isArray(rules)) return []
+  const out: PermissionRule[] = []
+  for (const r of rules) {
+    if (out.length >= maxRules) break
+    if (typeof r !== 'object' || r === null) continue
+    const { action, tool, match } = r as Record<string, unknown>
+    if (action !== 'deny' && action !== 'ask') continue // never honor `allow` (would loosen)
+    if (typeof tool !== 'string' || typeof match !== 'string') continue
+    out.push({ action, tool, match })
+  }
+  return out
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
