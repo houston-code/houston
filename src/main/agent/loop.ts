@@ -51,7 +51,13 @@ import { coerceToolArgs, validateToolArgs, validationError } from './argValidati
 import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedError } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
 import { repairDanglingToolResults } from './repair'
-import { matchRule, permissionSubject, shellReferencesExternalPath } from './permissions'
+import {
+  alreadyAllowedAsRule,
+  matchRule,
+  permissionSubject,
+  shellReferencesExternalPath,
+  shellRulePatterns
+} from './permissions'
 import { grantConversationOverride, overrideForConversation } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun } from './checkpoints'
 import { runPostEditDiagnostics } from './diagnostics'
@@ -799,7 +805,8 @@ export async function startRun(
       const ruleAction = matchRule(
         permissionRules,
         call.name,
-        permissionSubject(call.name, call.arguments)
+        permissionSubject(call.name, call.arguments),
+        roots
       )
       return isParallelizableRead(tool.kind, ruleAction, hasMatchingHook(call.name))
     }
@@ -1506,7 +1513,7 @@ export async function startRun(
         const toolDocs: DocumentAttachment[] = []
 
         const ruleAction = tool
-          ? matchRule(permissionRules, call.name, permissionSubject(call.name, call.arguments))
+          ? matchRule(permissionRules, call.name, permissionSubject(call.name, call.arguments), roots)
           : null
 
         // Validate arguments before any gating so a malformed call is repaired
@@ -1614,13 +1621,24 @@ export async function startRun(
                 // "Always allow/deny" — persist a permission rule for this tool + subject
                 // so the choice survives restarts, and splice it into this run's rules
                 // (after the project rules, which only tighten) so it takes effect now.
-                const rule: PermissionRule = {
-                  action: decision === 'rule-allow' ? 'allow' : 'deny',
-                  tool: call.name,
-                  match: permissionSubject(call.name, execArgs) || '*'
+                // For an ALLOW on run_shell we store generalized, per-sub-command prefixes
+                // (dropping the `cd` prelude) instead of the exact command, and skip any
+                // pattern an existing rule already allows — so repeated commands don't pile
+                // up one near-identical rule each. Deny stays exact (a broad deny is risky).
+                const action = decision === 'rule-allow' ? 'allow' : 'deny'
+                const subject = permissionSubject(call.name, execArgs)
+                const matches =
+                  action === 'allow' && call.name === 'run_shell' && subject
+                    ? shellRulePatterns(subject)
+                    : [subject || '*']
+                for (const match of matches) {
+                  if (action === 'allow' && alreadyAllowedAsRule(permissionRules, call.name, match)) {
+                    continue
+                  }
+                  const rule: PermissionRule = { action, tool: call.name, match }
+                  addPermissionRule(rule)
+                  permissionRules.splice(projectConfig.permissionRules.length, 0, rule)
                 }
-                addPermissionRule(rule)
-                permissionRules.splice(projectConfig.permissionRules.length, 0, rule)
               }
               approved = decision !== 'deny' && decision !== 'rule-deny'
             }

