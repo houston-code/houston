@@ -333,6 +333,68 @@ jobs:
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
             gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
           done
+      # GPG signing (Linux leg only) — the offline, sigstore-independent verification path Linux
+      # users and distro packagers expect: `gpg --verify` against a pinned key fingerprint, no
+      # cosign install and no Fulcio/Rekor round-trip. Complements (does not replace) the cosign
+      # bundles above. NOTE: this does NOT gate electron-updater — the AppImage auto-update path
+      # verifies sha512 over HTTPS from latest-linux.yml; these signatures are for a human (or
+      # packaging pipeline) verifying a download. Two things are produced:
+      #   • a detached ASCII-armored signature (.asc) beside each Linux artifact (AppImage, deb), and
+      #   • a single SHA256SUMS manifest covering the Linux + platform-independent assets, signed
+      #     once (SHA256SUMS.asc) so one `gpg --verify` + `sha256sum -c` verifies the whole set.
+      # The public key is published beside them so a verifier needs no keyserver. Runs AFTER
+      # publish so a signing hiccup can't strand a half-published release; skipped on dry_run. If
+      # GPG_PRIVATE_KEY is unset it SOFT-skips (release still publishes unsigned) rather than
+      # failing — GPG is additive, mirroring how the macOS signing gate degrades without certs.
+      # The key is imported into an ephemeral GNUPGHOME (mktemp) so nothing persists on the runner,
+      # with loopback pinentry so the passphrase is supplied non-interactively.
+      - name: GPG-sign Linux artifacts + whole-release checksums
+        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        shell: bash
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::warning::GPG_PRIVATE_KEY not set — skipping GPG signing (release still publishes; add the GPG_PRIVATE_KEY + GPG_PASSPHRASE secrets to enable it)."
+            exit 0
+          fi
+          tag="v$(node -p "require('./package.json').version")"
+          # Ephemeral, throwaway keyring — imported key never touches the runner's default home.
+          GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          # Allow the passphrase to be supplied via --pinentry-mode loopback (no TTY on CI).
+          echo 'allow-loopback-pinentry' > "$GNUPGHOME/gpg-agent.conf"
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # The primary key id; gpg auto-selects its signing-capable subkey for --detach-sign.
+          key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          sign() {
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+                --local-user "$key_id" --armor --detach-sign --output "$1.asc" "$1"
+          }
+          shopt -s nullglob
+          # 1) Detached signature beside each Linux artifact built on this leg.
+          for f in release/*.AppImage release/*.deb; do
+            sign "$f"
+            gh release upload "$tag" "$f.asc" -R piyushvijay/houston-releases --clobber
+          done
+          # 2) One SHA256SUMS over the Linux + platform-independent assets (basenames, so the
+          #    listed names match what a user downloads), signed once. cd into each file's dir so
+          #    the manifest carries bare filenames rather than build paths. The mac/win installers
+          #    keep their per-file cosign bundles; extending this manifest to them is a follow-up.
+          {
+            ( cd release && sha256sum *.AppImage *.deb )
+            ( cd out/cli && sha256sum houston-cli.cjs )
+            sha256sum sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json THIRD-PARTY-NOTICES.md
+            ( cd .github/vex && sha256sum houston.openvex.json )
+          } > SHA256SUMS
+          sign SHA256SUMS
+          # 3) Publish the manifest, its signature, and the committed public key so a downloader
+          #    can verify with no keyserver. houston-signing-key.asc is the repo-root file checked
+          #    out at `ref: main`, so what users get is exactly what's committed to source.
+          gh release upload "$tag" SHA256SUMS SHA256SUMS.asc houston-signing-key.asc \
+            -R piyushvijay/houston-releases --clobber
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
       # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
