@@ -42,3 +42,33 @@ statement to the `statements` array and bump the top-level `version`. Example:
 `under_investigation` document it without suppressing (so it still blocks until resolved).
 
 Keep the assessment honest: a `not_affected` claim is a security statement you are signing.
+
+## Known security hold: bundled Chromium (Electron 43.1.0)
+
+As of 2026-07-12 the binary SBOM vuln gate flags **19 fixable High/Critical CVEs**
+(including Critical **CVE-2026-15113**, a use-after-free in Chromium's Autofill) in the
+Chromium **150.0.7871.47** that Electron 43.1.0 embeds. All 19 are fixed upstream in
+Chromium **150.0.7871.115**. They are recorded here with status `under_investigation`,
+which documents the assessment **without** suppressing the gate, so a release stays blocked
+until the runtime is upgraded.
+
+**Why they are not suppressed.** These are Chromium renderer memory-safety bugs, reachable
+in principle by any app that renders web content. There is no honest `not_affected`
+justification for them, so blanket-suppressing them to go green would be dishonest (and is
+exactly what this file exists to prevent).
+
+**Why the runtime is not bumped yet.** No stable Electron release bundles a Chromium at or
+above 150.0.7871.115. The 43 line tops out at 43.1.0 (Chromium 150.0.7871.47), and the only
+published build carrying the fix is a 44.x **alpha** (Chromium 151), which is not shipped to
+production. So the release is held rather than shipping either a known-vulnerable or a
+pre-release runtime.
+
+**How this clears.** When Electron publishes a **stable** 43.x or 44.x whose bundled Chromium
+is at or above 150.0.7871.115:
+
+1. bump the `electron` devDependency in `package.json` to that release;
+2. `npm run rebuild:native` to rebuild node-pty against the new Electron ABI;
+3. `npm run dist:unpacked`, then regenerate the binary SBOM and confirm
+   `grype sbom:... --only-fixed` reports no fixable High/Critical;
+4. run `npm run test:e2e`;
+5. **delete these `under_investigation` statements** and bump the top-level `version`.

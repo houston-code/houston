@@ -3,6 +3,254 @@
   "@id": "https://houstoncode.ai/vex/houston",
   "author": "Piyush Kumar Vijay <piyushvijay@houstoncode.ai>",
   "timestamp": "2026-07-12T00:00:00Z",
-  "version": 1,
-  "statements": []
+  "version": 2,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15107"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15110"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15111"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15112"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15113"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15114"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15116"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15117"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15118"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15119"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15120"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15121"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15122"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15123"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15125"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15126"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15129"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15132"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-15133"
+      },
+      "products": [
+        {
+          "@id": "pkg:generic/chromium@150.0.7871.47"
+        }
+      ],
+      "status": "under_investigation",
+      "status_notes": "Chromium renderer memory-safety issue, fixed upstream in 150.0.7871.115. No stable Electron release yet bundles a Chromium at or above that patch (43.1.0 ships 150.0.7871.47), so releases are held for a stable Electron bump rather than shipping a pre-release runtime. Status under_investigation documents the finding without suppressing it, so the release gate stays red. See .github/vex/README.md, section \"Known security hold\".",
+      "timestamp": "2026-07-12T00:00:00Z"
+    }
+  ]
 }
