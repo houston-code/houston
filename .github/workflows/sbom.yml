@@ -20,11 +20,6 @@ on:
 
 permissions:
   contents: read
-  # For the SBOM attestation step: OIDC identity + write access to this repo's attestation
-  # store. This also makes the release-publish attestation path testable cheaply — dispatch
-  # this workflow and confirm the attest step succeeds without a full release build.
-  id-token: write
-  attestations: write
 
 jobs:
   sbom:
@@ -63,16 +58,6 @@ jobs:
           for f in sbom.cyclonedx.json sbom.spdx.json; do
             node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const items=j.components||j.packages||[]; const n=items.length; const h=items.filter(x=>(x.hashes||x.checksums||[]).length).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} if(h<60){console.error('::error::'+process.argv[1]+' has only '+h+' hashed entries (<60) — enrichment did not run'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries, '+h+' hashed)')" "$f"
           done
-      # Sign the generated SBOMs as build-provenance attestations on this repo's attestation
-      # store (verify with `gh attestation verify <file> -R piyushvijay/houston`). Same action
-      # and permissions the release pipeline uses, so a dispatch of this cheap workflow doubles
-      # as an end-to-end test of that attestation path.
-      - name: Attest the SBOMs (SLSA build provenance)
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-path: |
-            sbom.cyclonedx.json
-            sbom.spdx.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: houston-sbom
