@@ -151,7 +151,28 @@ jobs:
           # checksum beside it: users can run `sha256sum -c houston-cli.cjs.sha256`.
           # Built here (not in the attach step) so dry_run's artifact carries it too.
           ( cd out/cli && sha256sum houston-cli.cjs > houston-cli.cjs.sha256 )
-      - name: Attach standalone CLI to the release
+      # Software Bill of Materials (CycloneDX + SPDX) for the production dependency
+      # closure, generated with npm's built-in `npm sbom` (npm 10+, no extra tooling).
+      # Built on the Linux leg only — the dependency tree is platform-independent, so any
+      # leg produces the same bytes, and Linux runs LAST in the serialized matrix so the
+      # draft release is guaranteed to exist before the upload. This is THE per-release
+      # SBOM path: it attaches the SBOM to the published Release deterministically,
+      # regardless of how the release commit landed. The push-triggered sbom.yml can't be
+      # relied on for this — a GITHUB_TOKEN auto-merge never starts a workflow run (so most
+      # main commits get no SBOM), and even a hand-merged release PR (which does fire it)
+      # only yields a transient 90-day Actions artifact, not a durable asset on the Release.
+      - name: Generate SBOMs (production dependency closure)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          npm sbom --sbom-format cyclonedx --omit dev > sbom.cyclonedx.json
+          npm sbom --sbom-format spdx --omit dev > sbom.spdx.json
+          # Fail loudly if a format emitted an empty or malformed document rather than
+          # attaching a hollow SBOM that reads as "we have one" — the same fail-closed
+          # stance as scripts/verify-bundled-binaries.mjs.
+          for f in sbom.cyclonedx.json sbom.spdx.json; do
+            node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const n=(j.components||j.packages||[]).length; if(!n){console.error('::error::'+process.argv[1]+' has no components'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries)')" "$f"
+          done
+      - name: Attach standalone CLI + SBOMs to the release
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
@@ -159,11 +180,15 @@ jobs:
           tag="v$(node -p "require('./package.json').version")"
           # Upload the bundle, its checksum, and the attribution notices together:
           # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
-          # travel with the redistributed code (the .cjs ships no node_modules).
+          # travel with the redistributed code (the .cjs ships no node_modules). The
+          # SBOMs ship alongside so each released version carries a verifiable
+          # production dependency manifest in both CycloneDX and SPDX.
           gh release upload "$tag" \
             out/cli/houston-cli.cjs \
             out/cli/houston-cli.cjs.sha256 \
             THIRD-PARTY-NOTICES.md \
+            sbom.cyclonedx.json \
+            sbom.spdx.json \
             -R piyushvijay/houston-releases --clobber
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
@@ -185,6 +210,8 @@ jobs:
             out/cli/houston-cli.cjs
             out/cli/houston-cli.cjs.sha256
             THIRD-PARTY-NOTICES.md
+            sbom.cyclonedx.json
+            sbom.spdx.json
           if-no-files-found: error
 
   finalize:

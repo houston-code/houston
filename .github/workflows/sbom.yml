@@ -1,14 +1,18 @@
 name: SBOM
 
-# Publish a Software Bill of Materials (CycloneDX + SPDX) for the production
+# On-demand Software Bill of Materials (CycloneDX + SPDX) for the production
 # dependency closure. Generated with npm's built-in `npm sbom` (npm 10+, no extra
-# tooling to vendor). Kept OFF the per-PR path on purpose: the dependency set only
-# changes when the lockfile does, and per-PR CI already bills three ubuntu jobs — so
-# this runs on pushes to main (each release-bound commit gets a fresh SBOM) and on
-# demand, at the cheapest ubuntu x1 multiplier.
+# tooling to vendor).
+#
+# This is the AD-HOC generator (manual dispatch only). The per-release SBOM — the one
+# that ships attached to each published GitHub Release — is produced by the Linux leg
+# of release-publish.yml, NOT here. A `push: branches: [main]` trigger was tried and
+# removed: it fired only sporadically and never produced a durable release asset. A
+# GITHUB_TOKEN auto-merge (routine feature PRs) does not start a workflow run at all, so
+# most commits to main got no SBOM; a release PR merged by hand DID fire it, but only as
+# a transient 90-day Actions artifact. See ci.yml's push-trigger note for the same
+# GITHUB_TOKEN limitation.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
