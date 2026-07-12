@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
-import type { AppSettings, ApprovalPolicy, IntegrationsInfo, ModelOption } from '@shared/types'
+import type {
+  AppSettings,
+  ApprovalPolicy,
+  IntegrationsInfo,
+  ModelOption,
+  PermissionRule
+} from '@shared/types'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
@@ -70,6 +76,9 @@ const api = {
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),
   saveSettings: (next: AppSettings): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsSave, next),
+  /** Tidy a permission-rule list (re-generalize run_shell allows + dedupe) for the panel. */
+  cleanupPermissionRules: (rules: PermissionRule[]): Promise<PermissionRule[]> =>
+    ipcRenderer.invoke(IPC.permissionsCleanup, rules),
   setKey: (providerId: string, key: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsSetKey, providerId, key),
   deleteKey: (providerId: string): Promise<AppSettings> =>

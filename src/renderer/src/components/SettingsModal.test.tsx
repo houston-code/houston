@@ -20,6 +20,8 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   const getIntegrations = vi.fn(() =>
     Promise.resolve({ gh: { installed: false, authenticated: false }, formatters: [] })
   )
+  // Default cleanup echoes its input; individual tests override to assert the tidy-up.
+  const cleanupPermissionRules = vi.fn((rules: unknown) => Promise.resolve(rules))
   const api = {
     saveSettings,
     setKey,
@@ -29,6 +31,7 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
     getVersion,
     checkForUpdates,
     getIntegrations,
+    cleanupPermissionRules,
     ...overrides
   }
   window.api = api as unknown as typeof window.api
@@ -203,15 +206,57 @@ describe('SettingsModal', () => {
     renderModal()
     fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
 
-    // The rule-row count proves the click mutated state: 0 rows before, exactly 1
-    // after. (Hooks share the same placeholder, but there are no hooks here.)
-    expect(screen.queryAllByPlaceholderText('tool (or *)')).toHaveLength(0)
+    // The rule-row count proves the click mutated state: 0 rows before, exactly 1 after.
+    expect(document.querySelectorAll('.rule')).toHaveLength(0)
     fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }))
-    expect(screen.queryAllByPlaceholderText('tool (or *)')).toHaveLength(1)
+    expect(document.querySelectorAll('.rule')).toHaveLength(1)
 
-    // The single new editable rule row defaults to the safe 'ask' action.
-    expect(screen.getByPlaceholderText('tool (or *)')).toHaveValue('run_shell')
+    // The new rule lands in a run_shell group (per-tool grouping) and defaults to the
+    // safe 'ask' action; the tool is shown by the group header, not a per-row field.
+    expect(document.querySelector('.rule-group__tool')?.textContent).toBe('run_shell')
     expect(screen.getByDisplayValue('Ask')).toBeInTheDocument()
+  })
+
+  it('groups rules by tool and filters them', () => {
+    installApi()
+    renderModal({
+      permissionRules: [
+        { action: 'allow', tool: 'run_shell', match: 'npm install' },
+        { action: 'allow', tool: 'run_shell', match: 'git status' },
+        { action: 'deny', tool: 'web_fetch', match: 'https://evil.example.com' }
+      ]
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+
+    // Two tool groups (run_shell with 2, web_fetch with 1); three rows total.
+    const groups = [...document.querySelectorAll('.rule-group__tool')].map((n) => n.textContent)
+    expect(groups).toEqual(['run_shell', 'web_fetch'])
+    expect(document.querySelectorAll('.rule')).toHaveLength(3)
+
+    // Filtering by "git" narrows to the single matching rule.
+    fireEvent.change(screen.getByPlaceholderText('Filter rules…'), { target: { value: 'git' } })
+    expect(document.querySelectorAll('.rule')).toHaveLength(1)
+    expect(screen.getByDisplayValue('git status')).toBeInTheDocument()
+  })
+
+  it('tidies rules via the "Clean up rules" button (main-process helper)', async () => {
+    const cleaned = [{ action: 'allow', tool: 'run_shell', match: 'npm install' }]
+    const cleanupPermissionRules = vi.fn(() => Promise.resolve(cleaned))
+    installApi({ cleanupPermissionRules })
+    renderModal({
+      permissionRules: [
+        { action: 'allow', tool: 'run_shell', match: 'cd /repo && npm install foo' },
+        { action: 'allow', tool: 'run_shell', match: 'cd /repo && npm install bar' }
+      ]
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    expect(document.querySelectorAll('.rule')).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clean up rules' }))
+    await waitFor(() => expect(cleanupPermissionRules).toHaveBeenCalledOnce())
+    // The two exact commands collapse to the single generalized rule the helper returns.
+    await waitFor(() => expect(document.querySelectorAll('.rule')).toHaveLength(1))
+    expect(screen.getByDisplayValue('npm install')).toBeInTheDocument()
   })
 
   it('saves an API key via setKey without persisting the modal’s other edits', async () => {
@@ -436,12 +481,12 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
 
     // Exactly one rule row to start.
-    expect(screen.queryAllByPlaceholderText('tool (or *)')).toHaveLength(1)
+    expect(document.querySelectorAll('.rule')).toHaveLength(1)
     const ruleRow = document.querySelector('.rule') as HTMLElement
     // The ✕ inside the rule row removes it.
     fireEvent.click(within(ruleRow).getByRole('button', { name: '✕' }))
 
-    expect(screen.queryAllByPlaceholderText('tool (or *)')).toHaveLength(0)
+    expect(document.querySelectorAll('.rule')).toHaveLength(0)
   })
 
   it('removes a stored API key: calls deleteKey with the provider id and hides Remove', async () => {
