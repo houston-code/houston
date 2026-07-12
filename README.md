@@ -746,7 +746,8 @@ for verifying a download by hand: the in-app updater does not use GPG (it verifi
 update feed over HTTPS), so a bad signature here means re-download, not a blocked update.
 
 **2. cosign (keyless, transparency-logged).** Every artifact (the desktop installers,
-the standalone `houston-cli.cjs`, and the CycloneDX + SPDX SBOMs) also ships with a
+the standalone `houston-cli.cjs`, and the CycloneDX + SPDX SBOMs, covering both the
+JavaScript dependency closure and the native/runtime layer) also ships with a
 `<file>.cosign.bundle` beside it. Each is keyless-signed in CI with
 [cosign](https://docs.sigstore.dev/): the signature, its short-lived certificate, and a
 [Rekor](https://docs.sigstore.dev/logging/overview/) transparency-log proof all live
