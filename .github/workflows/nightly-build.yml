@@ -54,10 +54,14 @@ jobs:
           - os: macos-14
             dist: dist:mac
             artifact: nightly-mac-arm64
-          # macos-13 is GitHub's Intel (x64) runner — the only place the x64 mac app builds
-          # natively (node-pty + per-arch rg/ast-grep don't cross-compile). Validates Intel
-          # packaging nightly, same as the release workflows' macos-13 leg. No publish here.
-          - os: macos-13
+          # macos-15-intel is GitHub's Intel (x64) runner — the only place the x64 mac app
+          # builds natively (node-pty + per-arch rg/ast-grep don't cross-compile). Validates
+          # Intel packaging nightly, same as the release workflows' Intel leg. No publish here.
+          # It replaces the retired macos-13 image (shut down 2025-12-04); GitHub sunsets x64
+          # macOS runners entirely after macos-15 (~Fall 2027), at which point Intel needs a
+          # universal-on-arm64 build or gets dropped. Keep this label in lockstep across the
+          # nightly / release-prepare / release-publish Intel legs.
+          - os: macos-15-intel
             dist: dist:mac:x64
             artifact: nightly-mac-x64
           - os: windows-latest

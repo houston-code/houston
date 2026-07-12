@@ -54,13 +54,16 @@ jobs:
       matrix:
         include:
           # macos-14 (arm64) MUST be first: its `--publish always` creates the draft release
-          # AND owns the single `latest-mac.yml` update feed. The macos-13 (Intel) leg then
-          # uploads only its .dmg/.zip INTO that existing draft — never its own latest-mac.yml,
-          # which would clobber arm64's and break the updater (electron-builder#5592).
-          # max-parallel:1 (above) keeps this order deterministic.
+          # AND owns the single `latest-mac.yml` update feed. The macos-15-intel (Intel) leg
+          # then uploads only its .dmg/.zip INTO that existing draft — never its own
+          # latest-mac.yml, which would clobber arm64's and break the updater
+          # (electron-builder#5592). max-parallel:1 (above) keeps this order deterministic.
+          # macos-15-intel replaces the retired macos-13 image (shut down 2025-12-04); GitHub
+          # sunsets x64 macOS after macos-15 (~Fall 2027). Keep the Intel label in lockstep
+          # with nightly-build / release-prepare.
           - os: macos-14
             dist: dist:mac
-          - os: macos-13
+          - os: macos-15-intel
             dist: dist:mac:x64
             mac_x64_manual: true
           - os: windows-latest

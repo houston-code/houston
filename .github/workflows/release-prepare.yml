@@ -49,11 +49,13 @@ jobs:
             dist: dist:linux
           - os: macos-14
             dist: dist:mac
-          # macos-13 is GitHub's Intel (x64) runner — the only place the x64 mac app can be
-          # built natively (node-pty + per-arch rg/ast-grep don't cross-compile). Gating the
-          # release on it proves x64 packaging works. x64 mac runs only here and in the
-          # publish workflow, never on per-PR CI, to keep macOS minutes off the merge path.
-          - os: macos-13
+          # macos-15-intel is GitHub's Intel (x64) runner — the only place the x64 mac app can
+          # be built natively (node-pty + per-arch rg/ast-grep don't cross-compile). Gating the
+          # release on it proves x64 packaging works. x64 mac runs only here and in the publish
+          # workflow, never on per-PR CI, to keep macOS minutes off the merge path. Replaces the
+          # retired macos-13 image (shut down 2025-12-04); GitHub sunsets x64 macOS after
+          # macos-15 (~Fall 2027). Keep in lockstep with nightly-build / release-publish.
+          - os: macos-15-intel
             dist: dist:mac:x64
           - os: windows-latest
             dist: dist:win
