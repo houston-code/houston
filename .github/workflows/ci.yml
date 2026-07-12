@@ -7,14 +7,16 @@ on:
   # synchronize, reopened are the defaults, restated here since `types` replaces them.)
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-  # NOTE: this push trigger is effectively inert for normal merges. The auto-merge
-  # job below merges (and pushes version bumps) with GITHUB_TOKEN, and GitHub does
-  # not start a workflow run from a GITHUB_TOKEN push — so main is never tested
-  # *after* a merge. That gap is exactly what let an untested PR+PR combination
-  # land and then redden every later PR's merge ref. The real safety net is
-  # therefore the pre-merge validation gate in `auto-merge`, which tests the
-  # actual landing commit *before* merging. This trigger is kept only so a
-  # human/PAT push to main (rare) still gets checked.
+  # NOTE: this push trigger is inert for the COMMON merge. The auto-merge job below
+  # lands most PRs by pushing their folded commit with GITHUB_TOKEN, and GitHub does
+  # not start a workflow run from a GITHUB_TOKEN push — so main is not re-tested
+  # *after* those merges. That gap is exactly what let an untested PR+PR combination
+  # land and then redden every later PR's merge ref. The real safety net is therefore
+  # the pre-merge validation gate in `auto-merge`, which tests the actual landing
+  # commit *before* merging. The one case that DOES fire this trigger: a PR that edits
+  # .github/workflows/** is pushed with AUTOMERGE_PAT (the default App token can't push
+  # workflow files), and PAT pushes — unlike GITHUB_TOKEN pushes — do start a run. A
+  # rare human push to main gets checked here too.
   push:
     branches: [main]
 
@@ -152,8 +154,8 @@ jobs:
   #
   # The `test` job above runs against the PR's merge ref, which GitHub computes as
   # `main + PR` *at the moment the PR event fired*. When several PRs are open at
-  # once, each is green against a main that has since moved on, and `gh pr merge`
-  # will happily land a PR against the *current* main even though that exact
+  # once, each is green against a main that has since moved on, and a naive merge
+  # would happily land a PR against the *current* main even though that exact
   # combination was never tested (there's no branch protection / GitHub merge
   # queue on this plan to require an up-to-date branch). A broken A+B combination
   # then lands on main and poisons every later PR's merge ref — green per-PR, red
@@ -181,7 +183,7 @@ jobs:
     runs-on: ubuntu-latest
     # A PR opened *and* labeled at once can spawn two CI runs for the same PR (see
     # the `on:` comment). Serialize auto-merge per-PR so the second job waits for
-    # the first instead of both racing `gh pr merge`. cancel-in-progress is false
+    # the first instead of both racing to land the merge. cancel-in-progress is false
     # on purpose: cancelling could tear down a mid-merge job, and we never want to
     # lose the run carrying the label. (Per-PR, not global: a global group would
     # cancel intermediate *pending* runs during a burst and strand those PRs.)
@@ -192,12 +194,13 @@ jobs:
       contents: write
       pull-requests: write
     env:
-      # Prefer an optional PAT (repo + workflow scopes) when present, else the
-      # default token. The default GITHUB_TOKEN cannot merge a PR that edits
-      # .github/workflows/** (GitHub blocks GitHub-App tokens from touching
-      # workflow files), so PRs that change CI need either AUTOMERGE_PAT or a
-      # manual merge. A PAT also revives the post-merge `push: [main]` run, since
-      # PAT pushes — unlike GITHUB_TOKEN pushes — do trigger workflows.
+      # `gh` auth for read/PR operations: prefer the PAT when present, else the default
+      # token (either can read PRs and delete branches). The PAT does the load-bearing work
+      # elsewhere: the Land step pushes a workflow-editing PR's folded commit over an explicit
+      # AUTOMERGE_PAT remote, because the default GITHUB_TOKEN is a GitHub App token that
+      # GitHub blocks from *pushing* commits that touch .github/workflows/**. That PAT push
+      # re-triggers the `push: [main]` run (a GITHUB_TOKEN push would not), so we use it ONLY
+      # for workflow PRs — every other PR still pushes with GITHUB_TOKEN. See the Land step.
       GH_TOKEN: ${{ secrets.AUTOMERGE_PAT || secrets.GITHUB_TOKEN }}
       PR: ${{ github.event.pull_request.number }}
       GH_REPO: ${{ github.repository }}
@@ -211,13 +214,14 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      # Classify the PR by whether it edits .github/workflows/**. The default GITHUB_TOKEN is a
-      # GitHub App token: GitHub BLOCKS it from *pushing* commits that touch workflow files, but
-      # NOT from merging them via the API. So workflow-editing PRs must merge server-side with
-      # `gh pr merge` (then bump in a separate commit — the classic two-commit flow), while every
-      # other PR can merge LOCALLY and fold the patch bump into the merge commit (one commit).
-      # Adding an AUTOMERGE_PAT (repo + workflow scopes) would let the folded path cover workflow
-      # PRs too; it isn't set, so those stay on the safe server-side path.
+      # Classify the PR by whether it edits .github/workflows/**. This no longer selects the merge
+      # STRATEGY — every PR now lands the same way: a local merge commit with the PATCH bump folded
+      # in (one commit per PR). It selects only the PUSH CREDENTIAL. The default GITHUB_TOKEN is a
+      # GitHub App token that GitHub BLOCKS from *pushing* commits that touch workflow files, so a
+      # PR that edits them must push its folded commit over an explicit AUTOMERGE_PAT remote; every
+      # other PR pushes over origin with the default GITHUB_TOKEN. That split matters for cost: a
+      # GITHUB_TOKEN push does NOT start a workflow run, but a PAT push DOES re-trigger the
+      # push:[main] run — so we PAT-push only the (rare) workflow PRs, never all of them.
       - name: Classify PR (edits workflow files?)
         id: classify
         run: |
@@ -225,23 +229,47 @@ jobs:
           files=$(gh pr diff "$PR" --name-only)
           if printf '%s\n' "$files" | grep -q '^\.github/workflows/'; then
             echo "workflow=true" >> "$GITHUB_OUTPUT"
-            echo "PR #$PR edits workflow files -> server-side merge + separate bump."
+            echo "PR #$PR edits workflow files -> fold the bump, push with AUTOMERGE_PAT (re-triggers main CI)."
           else
             echo "workflow=false" >> "$GITHUB_OUTPUT"
-            echo "PR #$PR does not edit workflow files -> local merge with folded bump."
+            echo "PR #$PR does not edit workflow files -> fold the bump, push with GITHUB_TOKEN."
           fi
 
-      # --- Folded path (non-workflow PRs): ONE commit per merge -------------------------------
+      # --- Folded path (ALL PRs): ONE commit per merge ----------------------------------------
       # Build the merge commit locally, fold the PATCH bump into it, then push — so main gets a
       # single commit per PR instead of a "Merge pull request" commit trailed by a floating
       # "chore(release)" commit. The push to main IS the compare-and-swap: it fast-forwards only
       # if main is still where we validated, so a concurrent merge can't slip an untested tree in.
-      - name: Land with folded version bump
-        if: steps.classify.outputs.workflow == 'false'
+      # Both PR types take this path; only the git credential differs (see the Classify step):
+      # normal PRs keep the checkout's default GITHUB_TOKEN, workflow-editing PRs re-point origin
+      # at an AUTOMERGE_PAT remote (their folded commit the default App token is blocked from pushing).
+      - name: Land the PR with a folded version bump
         run: |
           set -eo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # Pick the git credential for this whole job. A workflow-editing PR can't push its folded
+          # commit with the default token (a GitHub App token, which GitHub blocks from pushing
+          # commits that touch .github/workflows/**), so route every git op — fetch, push, branch
+          # delete — through AUTOMERGE_PAT. Non-workflow PRs keep the checkout's GITHUB_TOKEN auth,
+          # whose push does NOT re-trigger the push:[main] run (a PAT push does — hence PAT only here).
+          use_pat='${{ steps.classify.outputs.workflow }}'
+          if [ "$use_pat" = "true" ]; then
+            if [ -z "${AUTOMERGE_PAT:-}" ]; then
+              echo "::error::PR #$PR edits .github/workflows/** and needs AUTOMERGE_PAT to push (the default token is blocked from pushing workflow files), but the secret is empty/unset. Add a fine-grained PAT (Contents + Pull requests + Workflows: write) as the AUTOMERGE_PAT repo secret."
+              exit 1
+            fi
+            # Point origin at a PAT-authenticated remote AND drop the App-token Authorization that
+            # actions/checkout injects as an http.<host>.extraheader. Removing the header is REQUIRED:
+            # git/curl prefer that extra header over URL credentials, so with it in place the push
+            # would still auth as the blocked App token (a plain PAT-in-URL push is not enough). With
+            # the header gone, origin's PAT credential drives fetch, push, and branch delete. Token
+            # hygiene: no `set -x`, and the URL is never echoed; git anonymizes credentials in its own
+            # progress/error output and Actions masks the secret value, so the raw PAT never prints.
+            git config --local --unset-all 'http.https://github.com/.extraheader' || true
+            git remote set-url origin "https://x-access-token:${AUTOMERGE_PAT}@github.com/${GH_REPO}"
+          fi
 
           meta=$(gh pr view "$PR" --json headRefName,isCrossRepository,title,headRepositoryOwner)
           head_ref=$(jq -r .headRefName <<<"$meta")
@@ -308,7 +336,9 @@ jobs:
             fi
 
             # Land it. Fast-forwards only if main is still at $base (compare-and-swap); a
-            # non-fast-forward rejection means a concurrent PR merged, so re-validate.
+            # non-fast-forward rejection means a concurrent PR merged, so re-validate. origin was
+            # re-pointed at the PAT remote above for a workflow-editing PR (that push re-triggers
+            # push:[main]); for every other PR it carries the default GITHUB_TOKEN (no re-trigger).
             if git push origin HEAD:main; then
               echo "Landed PR #$PR on main."
             else
@@ -337,116 +367,9 @@ jobs:
           done
           echo "::error::main kept advancing; could not land PR #$PR against a stable base in 3 attempts. Re-run this job, or update the branch."
           exit 1
-
-      # --- Server-side path (workflow-editing PRs): the classic two-commit flow ----------------
-      # Behavior is unchanged from before folding existed; see the Classify step for why these
-      # PRs can't take the folded local-push path.
-      - name: Validate the real merge result, then merge
-        if: steps.classify.outputs.workflow == 'true'
-        run: |
-          set -eo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          # Fetch the PR head once; we re-merge it onto a fresh main each attempt.
-          git fetch --no-tags origin "pull/$PR/head:pr-head"
-
-          # Up to 3 attempts: each validates against the current main, then merges
-          # only if main hasn't moved since (compare-and-swap). If it moved, a
-          # concurrent PR landed and we re-validate against the new main.
-          for attempt in 1 2 3; do
-            state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
-            if [ "$state" = "MERGED" ]; then
-              echo "PR #$PR already merged."; exit 0
-            fi
-            if [ "$state" != "OPEN" ]; then
-              echo "::error::PR #$PR is $state, not OPEN; refusing to merge."; exit 1
-            fi
-
-            git fetch --no-tags origin main
-            base=$(git rev-parse FETCH_HEAD)
-            echo "Attempt $attempt: validating PR #$PR against main@${base:0:8}"
-            git checkout --quiet -B ci-merge-validate "$base"
-            if ! git merge --no-ff --no-edit pr-head; then
-              echo "::error::PR #$PR does not merge cleanly into current main — rebase the branch onto main and resolve conflicts."
-              exit 1
-            fi
-
-            # Exactly the checks the required `test` job runs, but against the tree
-            # that will actually land. Any failure exits non-zero (set -e) WITHOUT
-            # merging, so main stays green.
-            npm ci
-            npm run lint
-            npm run typecheck
-            npm test
-
-            # Compare-and-swap: only merge if main is still where we validated.
-            git fetch --no-tags origin main
-            if [ "$(git rev-parse FETCH_HEAD)" != "$base" ]; then
-              echo "main advanced during validation (a concurrent PR merged); re-validating."
-              continue
-            fi
-
-            # Validated state == landing state. Merge it. `gh pr merge` can exit
-            # non-zero even when the merge happened (concurrent run, --delete-branch
-            # hiccup), so confirm the PR's terminal state before deciding.
-            if out=$(gh pr merge "$PR" --merge --delete-branch 2>&1); then
-              echo "$out"; exit 0
-            fi
-            echo "$out"
-            # The default GITHUB_TOKEN can't merge a PR that edits workflow files.
-            # Surface the fix instead of a generic error — the PR is fully
-            # validated above, so a manual merge here is safe.
-            if printf '%s' "$out" | grep -qi 'workflow.*permission'; then
-              echo "::error::PR #$PR edits .github/workflows/** and the current token lacks workflow scope, so it can't be auto-merged. CI has already validated the merge — merge it manually, or add an AUTOMERGE_PAT secret (repo + workflow scopes) to enable auto-merge for workflow PRs."
-              exit 1
-            fi
-            for check in 1 2 3 4 5; do
-              state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
-              if [ "$state" = "MERGED" ]; then
-                echo "::warning::PR #$PR is MERGED but 'gh pr merge' exited non-zero (concurrent run, or --delete-branch failed). Verify the head branch was removed."
-                exit 0
-              fi
-              echo "Post-merge check $check: PR #$PR state=$state (not yet MERGED); waiting."
-              sleep 3
-            done
-            echo "::error::Merge call failed and PR #$PR is not merged (state=$state)."
-            exit 1
-          done
-
-          echo "::error::main kept advancing; could not validate PR #$PR against a stable base in 3 attempts. Re-run this job, or update the branch."
-          exit 1
-
-      # Auto-advance the version after a successful SERVER-SIDE merge (the workflow-editing path
-      # above only — non-workflow PRs already folded their PATCH bump into the merge commit). The
-      # release-prep PR (label `release`) already carries the MINOR bump from release-prepare.yml,
-      # so it's skipped. The bump commit is pushed with GITHUB_TOKEN, which by design does NOT
-      # trigger a new workflow run, so this never loops. Feature PRs never edit the version line,
-      # so the 3-way merge of an in-flight PR can't conflict with these bumps.
-      - name: Check out main for version bump
-        if: ${{ steps.classify.outputs.workflow == 'true' && !contains(github.event.pull_request.labels.*.name, 'release') }}
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: main
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Bump patch version
-        if: ${{ steps.classify.outputs.workflow == 'true' && !contains(github.event.pull_request.labels.*.name, 'release') }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Retry to absorb a concurrent auto-merge that advanced main between fetch and push.
-          for attempt in 1 2 3 4 5; do
-            git fetch --quiet origin main
-            git reset --hard --quiet origin/main
-            # --no-git-tag-version: edit package.json/package-lock only, no commit, no tag,
-            # and no clean-tree requirement. We commit + tag-at-release ourselves.
-            new=$(npm version patch --no-git-tag-version)
-            git commit -aqm "chore(release): $new"
-            if git push origin HEAD:main; then
-              echo "Bumped version to $new"
-              exit 0
-            fi
-            echo "push rejected on attempt $attempt (main advanced); retrying"
-          done
-          echo "::error::Failed to push version bump after 5 attempts."
-          exit 1
+        env:
+          # Raw PAT, consumed only when this PR edits workflow files: it re-points origin at a
+          # PAT-authenticated remote (see the credential block above). Kept in env, never inlined
+          # into the script or echoed; git anonymizes credentials in its own output and Actions
+          # masks the secret value, so the raw PAT never reaches a log line.
+          AUTOMERGE_PAT: ${{ secrets.AUTOMERGE_PAT }}
