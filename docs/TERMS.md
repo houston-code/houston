@@ -125,7 +125,7 @@ Protocol servers, and content the agent fetches from the web.
 
 How Houston handles data is described in the [Privacy Policy](PRIVACY.md). In
 short, Houston stores your data locally on your device and does not collect
-analytics or telemetry; data leaves your device only to the providers and
+analytics or telemetry from the app; data leaves your device only to the providers and
 services you choose to use. **You — not we — determine where your data goes when
 you select a provider, and you are solely responsible for meeting any
 data-residency, data-protection, sectoral, or cross-border transfer obligations
