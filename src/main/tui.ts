@@ -857,26 +857,49 @@ export function keyableProviders(settings: AppSettings): ProviderConfig[] {
   return settings.providers.filter((p) => p.requiresKey)
 }
 
+/** How many model ids to preview per provider row before collapsing to "+N more". */
+const MENU_MODEL_PREVIEW = 4
+
+/**
+ * A compact model summary for one menu row: the first few ids, then a dim `+N more`
+ * so a provider with hundreds of models (e.g. an aggregator) doesn't wrap into a wall
+ * of text. Empty list renders "no models yet".
+ */
+export function summarizeModels(ids: string[], paint: Painter, max = MENU_MODEL_PREVIEW): string {
+  if (!ids.length) return paint('no models yet', 'dim')
+  if (ids.length <= max) return ids.join(', ')
+  return `${ids.slice(0, max).join(', ')}${paint(`, +${ids.length - max} more`, 'dim')}`
+}
+
 /** Render the provider menu: each keyable provider with its key status, then "Other host…". */
 export function renderProviderMenu(
   providers: ProviderConfig[],
   paint: Painter,
-  opts: { firstRun: boolean }
+  opts: { firstRun: boolean; otherHostExamples?: string }
 ): string {
   const lines: string[] = [
     opts.firstRun
       ? paint('No model is ready yet. None of your providers has an API key.', 'yellow')
       : paint('Providers (key status on this profile):', 'bold')
   ]
+  const otherLabel = 'Other host…'
+  // Align the status column to the widest label (built-in names like "Anthropic
+  // (Claude)" and custom-endpoint labels vary in length), so the rows don't stagger.
+  const labelWidth = Math.max(otherLabel.length, ...providers.map((p) => (p.label ?? p.id).length))
   providers.forEach((p, i) => {
     const status = p.hasKey ? paint('✓ key set', 'green') : paint('✗ no key ', 'dim')
-    const models = p.models.map((m) => m.id).join(', ') || paint('no models yet', 'dim')
-    lines.push(`  ${paint(`${i + 1})`, 'cyan')} ${(p.label ?? p.id).padEnd(12)} ${status}   ${models}`)
+    const models = summarizeModels(
+      p.models.map((m) => m.id),
+      paint
+    )
+    lines.push(`  ${paint(`${i + 1})`, 'cyan')} ${(p.label ?? p.id).padEnd(labelWidth)}  ${status}  ${models}`)
   })
   const other = providers.length + 1
-  lines.push(
-    `  ${paint(`${other})`, 'cyan')} ${'Other host…'.padEnd(12)} ${paint('OpenRouter, Groq, a local server, and more', 'dim')}`
-  )
+  // Examples come from the caller (only hosts not already configured), so the hint
+  // can't advertise a provider that's already listed above. Falls back to the
+  // always-available custom-endpoint option.
+  const examples = opts.otherHostExamples?.trim() || 'add a custom endpoint'
+  lines.push(`  ${paint(`${other})`, 'cyan')} ${otherLabel.padEnd(labelWidth)}  ${paint(examples, 'dim')}`)
   lines.push(
     paint(
       opts.firstRun
@@ -886,6 +909,16 @@ export function renderProviderMenu(
     )
   )
   return lines.join('\n')
+}
+
+/**
+ * The "e.g. …" hint for the Other-host row, built from catalog hosts NOT already
+ * configured (so it never names a provider shown above) plus the custom-endpoint
+ * escape hatch. Given the already-filtered addable list.
+ */
+export function otherHostExamples(addable: CatalogEntry[]): string {
+  const names = addable.slice(0, 3).map((e) => e.label)
+  return [...names, 'a custom endpoint'].join(', ')
 }
 
 /**
@@ -1068,8 +1101,16 @@ async function runProviderSetup(
   newId: () => string,
   o: { firstRun: boolean }
 ): Promise<{ providerId: string; model: string } | null> {
-  const providers = keyableProviders(deps.getSettings())
-  deps.io.out(`${renderProviderMenu(providers, paint, o)}\n`)
+  const settings = deps.getSettings()
+  const providers = keyableProviders(settings)
+  // Only suggest hosts that aren't already configured, so the Other-host hint can't
+  // name a provider already shown in the list above.
+  const isMac = deps.isMac ?? process.platform === 'darwin'
+  const configured = new Set(settings.providers.map((p) => p.id))
+  const addable = catalogForPlatform(isMac).filter((e) => !configured.has(e.id))
+  deps.io.out(
+    `${renderProviderMenu(providers, paint, { firstRun: o.firstRun, otherHostExamples: otherHostExamples(addable) })}\n`
+  )
   const ans = await deps.io.readLine(paint(o.firstRun ? 'setup › ' : 'login › ', 'green'))
   if (ans === null) return null
   const choice = parseProviderMenuChoice(ans, providers.length)
