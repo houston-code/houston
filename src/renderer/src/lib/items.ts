@@ -187,6 +187,10 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         return updateTool(finalized, e.callId, {
           name: e.name,
           summary: e.summary,
+          // Carry args so the approval card shows the real command/target (describeTool
+          // derives it from args); without this it renders the verb with a blank target.
+          // Guarded so a payload without args never wipes args already on the row.
+          ...(e.args ? { args: e.args } : {}),
           toolKind: e.kind,
           status: 'awaiting-approval'
         })
@@ -198,6 +202,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           id: e.callId,
           name: e.name,
           summary: e.summary,
+          args: e.args,
           toolKind: e.kind,
           status: 'awaiting-approval'
         }

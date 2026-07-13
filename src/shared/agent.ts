@@ -465,6 +465,14 @@ export type AgentEvent =
       callId: string
       name: string
       summary: string
+      /**
+       * The tool's arguments, so the approval card can render the same command/target
+       * it shows once the call runs. Without this the renderer has no args until
+       * `tool_start` (emitted only AFTER approval), so the prompt would show its verb
+       * with a blank command and the user couldn't see what they were approving. The
+       * live run always sets it; optional only so events built without it (tests) type.
+       */
+      args?: Record<string, unknown>
       kind: 'read' | 'write' | 'shell' | 'network' | 'mcp'
       /**
        * Present and `false` only when this is a shell command about to run WITHOUT an

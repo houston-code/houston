@@ -11,6 +11,7 @@ import {
   type ToolItem,
   type UserItem
 } from './items'
+import { describeTool } from './toolDisplay'
 
 describe('itemsFromMessages', () => {
   it('flags the compaction summary turn so it renders as markdown', () => {
@@ -247,6 +248,8 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
     expect(tools).toHaveLength(1)
     expect(tools[0].status).toBe('awaiting-approval')
     expect(tools[0].summary).toBe('write a.txt')
+    // An approval payload without args must not wipe the args already on the row.
+    expect(tools[0].args).toEqual({ path: 'a.txt' })
   })
 
   it('appends an approval row when no row exists yet (the normal live first emit)', () => {
@@ -261,6 +264,24 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
     const tools = items.filter((i): i is ToolItem => i.kind === 'tool')
     expect(tools).toHaveLength(1)
     expect(tools[0].status).toBe('awaiting-approval')
+  })
+
+  it('carries args on the approval row so the card shows the command being approved', () => {
+    // Regression: the approval prompt used to render its verb with a blank target
+    // because args only arrived on tool_start (emitted after approval). The event now
+    // carries args, so describeTool can show the real command at approval time.
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_approval',
+      callId: 'c1',
+      name: 'run_shell',
+      summary: 'npm test',
+      args: { command: 'npm test' },
+      kind: 'shell'
+    })
+    const tool = items.find((i): i is ToolItem => i.kind === 'tool')!
+    expect(tool.args).toEqual({ command: 'npm test' })
+    expect(describeTool(tool)).toEqual({ verb: 'Run', target: 'npm test', mono: true })
   })
 
   it('updates an existing question card instead of duplicating it', () => {
