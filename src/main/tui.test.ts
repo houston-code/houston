@@ -1074,6 +1074,22 @@ describe('runTui', () => {
     expect(t.text()).toContain('Bye')
   })
 
+  it('Ctrl-C at a sub-prompt (/resume) cancels it without leaking the composer reset flag', async () => {
+    const { persist } = fakePersist([{ id: 'c1', title: 'Old chat', updatedAt: 0, messages: [] }])
+    const { d, rec } = deps([])
+    d.persist = persist
+    // /resume lists sessions → Ctrl-C at the selection prompt cancels resume; the
+    // following Ctrl-D at the composer must then EXIT, not be swallowed as a leaked
+    // 'reset' (the pre-fix bug). The composer hint must never fire for a sub-prompt.
+    const t = fakeIo(['/resume', CTRLC, null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).not.toContain('Ctrl-C again or Ctrl-D to exit') // no composer-reset semantics
+    expect(t.text()).toContain('Bye') // the later Ctrl-D exited cleanly
+  })
+
   it('blocks and exits 2 when terms are declined interactively', async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
       legalAcceptedVersion: 0

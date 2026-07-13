@@ -1365,6 +1365,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // composer read loop reads this to tell a reset from a real EOF.
   let composerInterrupt: 'reset' | 'exit' | null = null
   let lastComposerCtrlCAt = -Infinity
+  // True only while reading the composer, so a Ctrl-C at a between-turn sub-prompt
+  // (/resume, /login, plan handoff) is handled as a plain cancel, not a composer
+  // reset/exit whose flag would leak into the next composer read.
+  let atComposer = false
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
@@ -1376,7 +1380,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.cancelRead?.()
       return
     }
-    // No run → at the composer. Discard whatever's typed and re-prompt; a second
+    // A between-turn sub-prompt (the /resume picker, /login, plan handoff, …) also
+    // reads with no active run. Ctrl-C there should just cancel that read, NOT set
+    // the composer reset/exit flag (which the sub-prompt never consumes — it would
+    // leak into the next composer read and swallow a later Ctrl-D) or advance the
+    // double-tap timer.
+    if (!atComposer) {
+      deps.io.cancelRead?.()
+      return
+    }
+    // No run, at the composer → discard whatever's typed and re-prompt; a second
     // Ctrl-C in quick succession exits (the composer read loop acts on the flag).
     const t = nowFn()
     if (t - lastComposerCtrlCAt < 1500) {
@@ -1429,6 +1442,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const composer = new ComposerBuffer()
       let raw: string | null = null
       let resetComposer = false
+      atComposer = true // Ctrl-C now means "clear/exit the composer" (see onInterrupt)
       for (;;) {
         // In an open code fence, hint how to send so a stray ``` can't trap the
         // composer with no visible way out (typing the closing ``` submits).
@@ -1457,6 +1471,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
       }
+      atComposer = false // sub-prompts below are not the composer
       if (resetComposer) continue // Ctrl-C discarded the input — draw a fresh prompt
       if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
       text = raw.trim()
