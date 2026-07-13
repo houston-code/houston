@@ -5,8 +5,13 @@
  * is the primary control: the user sees and approves the exact URL on each call.
  * On top of that we apply best-effort SSRF guards — an http(s)-only scheme
  * allowlist and a private/loopback/link-local host block re-checked on every
- * redirect hop. (DNS-rebinding via IP pinning is deferred — see ROADMAP.md.)
+ * redirect hop. The block covers both a private *literal* IP in the URL and a
+ * hostname that *resolves* to one (so a public-looking DNS name pointing at
+ * metadata — e.g. `169.254.169.254.nip.io` — is refused). Pinning the connection
+ * to the resolved IP (full DNS-rebinding defense) is deferred — see ROADMAP.md.
  */
+
+import { lookup } from 'node:dns/promises'
 
 const MAX_REDIRECTS = 5
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -52,12 +57,13 @@ export function isPrivateHost(hostname: string): boolean {
 
   const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
   if (m) {
-    const [a, b] = [Number(m[1]), Number(m[2])]
+    const [a, b, c] = [Number(m[1]), Number(m[2]), Number(m[3])]
     if (a > 255 || b > 255) return false
     if (a === 0 || a === 127) return true // this-host / loopback
     if (a === 10) return true // private
     if (a === 172 && b >= 16 && b <= 31) return true // private
     if (a === 192 && b === 168) return true // private
+    if (a === 192 && b === 0 && c === 0) return true // IETF protocol block (192.0.0.0/24) incl. Oracle legacy metadata 192.0.0.192
     if (a === 169 && b === 254) return true // link-local incl. 169.254.169.254 metadata
     if (a === 100 && b >= 64 && b <= 127) return true // CGNAT (100.64.0.0/10)
   }
@@ -79,6 +85,37 @@ export function validateFetchUrl(raw: string): URL {
     throw new Error(`Refusing to fetch a private or loopback address: ${url.hostname}`)
   }
   return url
+}
+
+/** Resolve a hostname to its IP addresses. Injectable so the SSRF check is testable. */
+export type HostResolver = (hostname: string) => Promise<string[]>
+
+const defaultResolveHost: HostResolver = async (hostname) => {
+  const records = await lookup(hostname, { all: true })
+  return records.map((r) => r.address)
+}
+
+/**
+ * Throw when `hostname` resolves to a private/loopback/metadata address. The literal
+ * checks in {@link isPrivateHost} only catch a private *literal* IP written into the
+ * URL; this closes the DNS-name variant, where a public-looking name (e.g. a
+ * wildcard-DNS host like `169.254.169.254.nip.io`) resolves to a private/metadata IP.
+ * A resolution failure is left for the real fetch to surface with its own error.
+ */
+async function assertHostResolvesPublic(hostname: string, resolveHost: HostResolver): Promise<void> {
+  let addresses: string[]
+  try {
+    addresses = await resolveHost(hostname)
+  } catch {
+    return
+  }
+  for (const address of addresses) {
+    if (isPrivateHost(address)) {
+      throw new Error(
+        `Refusing to fetch ${hostname}: it resolves to a private or loopback address (${address}).`
+      )
+    }
+  }
 }
 
 /** Collapse an HTML document into readable plain text. */
@@ -107,6 +144,8 @@ export interface FetchOptions {
   maxBytes?: number
   /** Injectable for tests. Defaults to the global `fetch`. */
   fetchImpl?: typeof fetch
+  /** Injectable for tests. Defaults to a real DNS lookup. */
+  resolveHost?: HostResolver
 }
 
 /**
@@ -116,6 +155,7 @@ export interface FetchOptions {
  */
 export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Promise<string> {
   const doFetch = opts.fetchImpl ?? fetch
+  const resolveHost = opts.resolveHost ?? defaultResolveHost
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
 
@@ -129,6 +169,7 @@ export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Prom
 
   try {
     let current = validateFetchUrl(raw)
+    await assertHostResolvesPublic(current.hostname, resolveHost)
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const res = await doFetch(current, {
         signal: ac.signal,
@@ -143,6 +184,7 @@ export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Prom
       if (res.status >= 300 && res.status < 400 && location) {
         if (hop === MAX_REDIRECTS) throw new Error('Too many redirects.')
         current = validateFetchUrl(new URL(location, current).toString())
+        await assertHostResolvesPublic(current.hostname, resolveHost)
         continue
       }
 

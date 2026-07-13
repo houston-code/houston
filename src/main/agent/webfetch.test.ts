@@ -18,6 +18,12 @@ describe('isPrivateHost', () => {
     expect(isPrivateHost('100.64.0.1')).toBe(true) // CGNAT
   })
 
+  it('blocks the IETF protocol block (192.0.0.0/24) incl. Oracle legacy metadata', () => {
+    expect(isPrivateHost('192.0.0.192')).toBe(true) // Oracle legacy metadata
+    expect(isPrivateHost('192.0.0.1')).toBe(true)
+    expect(isPrivateHost('192.0.2.1')).toBe(false) // TEST-NET-1, a different /24
+  })
+
   it('allows public hosts', () => {
     expect(isPrivateHost('example.com')).toBe(false)
     expect(isPrivateHost('8.8.8.8')).toBe(false)
@@ -137,5 +143,39 @@ describe('fetchUrlAsText', () => {
     })
     const out = await fetchUrlAsText('https://big.example/', { fetchImpl, maxBytes: 10 })
     expect(out).toContain('[truncated at 10 bytes]')
+  })
+
+  it('refuses a host that resolves to a private/metadata address (DNS-name SSRF)', async () => {
+    // A public-looking wildcard-DNS host that resolves to the AWS metadata IP.
+    const url = 'http://169.254.169.254.nip.io/latest/meta-data/'
+    const fetchImpl = fakeFetch({ [url]: { status: 200, headers: {}, body: 'creds' } })
+    const resolveHost = async (): Promise<string[]> => ['169.254.169.254']
+    await expect(fetchUrlAsText(url, { fetchImpl, resolveHost })).rejects.toThrow(
+      /resolves to a private/
+    )
+  })
+
+  it('allows a host that resolves to a public address', async () => {
+    const fetchImpl = fakeFetch({
+      'https://example.com/': { status: 200, headers: { 'content-type': 'text/plain' }, body: 'ok' }
+    })
+    const resolveHost = async (): Promise<string[]> => ['93.184.216.34']
+    const out = await fetchUrlAsText('https://example.com/', { fetchImpl, resolveHost })
+    expect(out).toContain('ok')
+  })
+
+  it('refuses a redirect whose host resolves to a private address', async () => {
+    const fetchImpl = fakeFetch({
+      'https://a.example/': {
+        status: 302,
+        headers: { location: 'http://metadata.evil.example/' },
+        body: ''
+      }
+    })
+    const resolveHost = async (host: string): Promise<string[]> =>
+      host === 'metadata.evil.example' ? ['169.254.169.254'] : ['93.184.216.34']
+    await expect(fetchUrlAsText('https://a.example/', { fetchImpl, resolveHost })).rejects.toThrow(
+      /resolves to a private/
+    )
   })
 })
