@@ -775,8 +775,8 @@ const SANDBOX_WRITE_ERROR_RE = /\beperm\b|\beacces\b|permission denied|read-only
  * silence would let it (and the user) assume confinement that isn't there.
  */
 export const UNSANDBOXED_SHELL_NOTE =
-  '[warning: this command did NOT run inside the macOS sandbox — it executed with your full user ' +
-  'privileges, not confined to the project directory. The Seatbelt sandbox was unavailable.]'
+  '[warning: this command did NOT run inside a sandbox — it executed with your full user ' +
+  'privileges, not confined to the project directory. No OS-enforced sandbox was available on this host.]'
 
 /** The hint appended to a failure that looks like the sandbox denied a write. */
 export const SANDBOX_WRITE_BLOCKED_HINT =
@@ -864,7 +864,7 @@ const runShell: ToolDef = {
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command inside a macOS Seatbelt sandbox confined to the project directory. Writes are limited to the project and temp dirs. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.',
+      'Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; on a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.',
     parameters: objectSchema(
       {
         command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' },
