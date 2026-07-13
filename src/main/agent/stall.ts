@@ -133,6 +133,21 @@ export type StallAction =
   /** The stall persisted past the nudge — end the run with a 'stalled' limit. */
   | { kind: 'stop'; reason: string }
 
+/** Options controlling how aggressively the detector may end a run. */
+export interface StallOptions {
+  /**
+   * True when a human is watching the run (the TUI or GUI). The no-progress
+   * stall — several turns of read-only work with no file change — is a weak
+   * signal that legitimately fires on investigation, planning, code review, and
+   * plain Q&A. When a user is present to react, we nudge once but never hard-stop
+   * on it, so a long read-only investigation isn't killed out from under them.
+   * The stronger repeated-call / repeated-error stalls (a genuinely stuck model)
+   * still stop, and headless/autonomous runs keep the no-progress stop as a
+   * budget guard. Defaults to false (headless behavior) so callers opt in.
+   */
+  interactive?: boolean
+}
+
 /**
  * Stateful, per-run stall detector. Construct one per `startRun`, call
  * {@link StallDetector.observe} once per iteration with that iteration's calls +
@@ -141,6 +156,7 @@ export type StallAction =
  */
 export class StallDetector {
   private readonly thresholds: StallThresholds
+  private readonly interactive: boolean
   /** Count of consecutive iterations ending with a given repeated call signature. */
   private repeatCall: { sig: string; count: number } | null = null
   /** Count of consecutive iterations ending with a given repeated error signature. */
@@ -155,8 +171,9 @@ export class StallDetector {
    */
   private nudged = false
 
-  constructor(thresholds: StallThresholds = DEFAULT_STALL_THRESHOLDS) {
+  constructor(thresholds: StallThresholds = DEFAULT_STALL_THRESHOLDS, opts: StallOptions = {}) {
     this.thresholds = thresholds
+    this.interactive = opts.interactive === true
   }
 
   observe(obs: IterationObservation): StallAction {
@@ -168,8 +185,14 @@ export class StallDetector {
     if (!trigger) return { kind: 'ok' }
 
     if (this.nudged) {
-      // Already gave a nudge and the model kept stalling — stop the run.
-      return { kind: 'stop', reason: trigger.reason }
+      // Already gave a nudge and the model kept stalling. Escalate to stop only
+      // for stalls that may end the run; a no-progress stall in an interactive
+      // session can't (see `canStop`) — a human is watching, so we stay quiet
+      // rather than kill their read-only investigation. Reset so we don't
+      // re-evaluate the same tally every iteration and re-enter this branch.
+      if (trigger.canStop) return { kind: 'stop', reason: trigger.reason }
+      this.reset()
+      return { kind: 'ok' }
     }
     // First offense: inject one corrective reminder and reset the counters so we
     // don't immediately re-trip on the same tally next iteration; give the model
@@ -238,15 +261,19 @@ export class StallDetector {
   /**
    * Choose which stall (if any) tripped, and build the matching human message.
    * Repeated-call and repeated-error stalls are more specific (they name the
-   * offending call/error), so they win over the generic no-progress stall.
+   * offending call/error), so they win over the generic no-progress stall. Each
+   * trigger reports whether it may end the run (`canStop`): the two specific
+   * stalls always can, while the weak no-progress stall may only stop a
+   * non-interactive run (see {@link StallOptions.interactive}).
    */
   private pickTrigger(
     repeatedCallSig: string | null,
     repeatedErrorSig: string | null
-  ): { message: string; reason: string } | null {
+  ): { message: string; reason: string; canStop: boolean } | null {
     if (repeatedCallSig) {
       return {
         reason: 'repeated the same tool call',
+        canStop: true,
         message:
           'You appear to be repeating the same tool call with the same arguments, and you ' +
           'already have that result. Do not run it again — use the result you already have and ' +
@@ -257,6 +284,7 @@ export class StallDetector {
     if (repeatedErrorSig) {
       return {
         reason: 'repeated the same failing action',
+        canStop: true,
         message:
           `You keep hitting the same error ("${repeatedErrorSig}") from the same action. ` +
           'Retrying it unchanged will not help. Change your approach and fix the underlying ' +
@@ -267,6 +295,9 @@ export class StallDetector {
     if (this.noProgress >= this.thresholds.noProgressLimit) {
       return {
         reason: 'made no progress for several turns',
+        // A weak signal — read-only investigation/planning legitimately trips it.
+        // Interactively it nudges only; headless it may stop as a budget guard.
+        canStop: !this.interactive,
         message:
           'You have gone several turns without making any change to the project (no edits or ' +
           'commands that alter files). If you have enough information, make the change now. If ' +

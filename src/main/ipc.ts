@@ -759,7 +759,8 @@ export function registerIpc(): void {
           providerId: req.providerId,
           model: req.model,
           approvalPolicy: req.approvalPolicy,
-          messages: conv.messages
+          messages: conv.messages,
+          interactive: true
         },
         // Record the starting window so only it can approve/answer/cancel this run.
         event.sender.id
