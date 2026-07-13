@@ -1,4 +1,5 @@
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /**
@@ -54,6 +55,31 @@ export function absolutize(p: string, base: string): string {
 }
 
 /**
+ * Whether `dir` actually looks like a git directory. A real one carries a `HEAD`
+ * file plus either an `objects` store (a main/common dir) or a `commondir` pointer
+ * (a linked worktree's per-worktree dir). This is the check that stops a hostile
+ * `.git` *file* — attacker-controlled when an untrusted project is opened, e.g. a
+ * top-level `.git` file `gitdir: /` delivered inside an archive — from designating
+ * an arbitrary directory (`/`, `$HOME`, another project) as a writable root: those
+ * are not git dirs, so they are refused and the sandbox keeps denying writes there.
+ */
+function looksLikeGitDir(dir: string, io: GitDirsIo): boolean {
+  if (io.kindOf(join(dir, 'HEAD')) !== 'file') return false
+  return io.kindOf(join(dir, 'objects')) === 'dir' || io.kindOf(join(dir, 'commondir')) === 'file'
+}
+
+/**
+ * Roots that must never be handed to the sandbox as writable, however a pointer
+ * spells them — belt-and-suspenders over {@link looksLikeGitDir} so the filesystem
+ * root and the home dir can never become a writable root even if they somehow
+ * satisfied the git-dir shape.
+ */
+function isSensitiveRoot(dir: string): boolean {
+  const norm = resolve(dir)
+  return norm === resolve('/') || norm === resolve(homedir())
+}
+
+/**
  * Extra writable roots a git workspace needs beyond its own working tree, so a
  * sandboxed `git fetch`/`commit`/`checkout` doesn't hit a write-denial.
  *
@@ -87,17 +113,30 @@ export function gitWritableRoots(workspace: string, io: GitDirsIo = defaultIo): 
   if (!match) return []
   const gitDir = io.realpath(absolutize(match[1], workspace))
 
+  // SECURITY: the `.git` file is attacker-controlled when the workspace is an
+  // untrusted project. Only widen the writable roots to a target that is genuinely
+  // a git dir — refusing e.g. `gitdir: /`, which would otherwise turn the whole
+  // filesystem into a writable root and defeat containment. A non-git target yields
+  // no widening; the sandbox then simply denies the (nonexistent-anyway) git writes.
+  if (!looksLikeGitDir(gitDir, io)) return []
+
   const out: string[] = []
   const add = (dir: string): void => {
+    if (isSensitiveRoot(dir)) return
     if (!isWithin(workspace, dir) && !out.includes(dir)) out.push(dir)
   }
   add(gitDir)
 
   // The shared object store / refs live in the common dir, named (relative to the
   // git dir, usually `../..`) in `<gitDir>/commondir`. Absent for a plain submodule.
+  // It, too, must look like a real git dir, so a crafted `commondir` (e.g. `/`)
+  // can't smuggle an arbitrary directory in behind an otherwise-valid git dir.
   try {
     const common = io.readText(join(gitDir, 'commondir')).trim()
-    if (common) add(io.realpath(absolutize(common, gitDir)))
+    if (common) {
+      const commonDir = io.realpath(absolutize(common, gitDir))
+      if (looksLikeGitDir(commonDir, io)) add(commonDir)
+    }
   } catch {
     // no commondir — the git dir alone is enough (e.g. a submodule)
   }
