@@ -606,17 +606,29 @@ describe('resume picker', () => {
 // --- runTui integration (fully dependency-injected, no real terminal) --------
 
 /** A scripted terminal: readLine drains `inputs` in order, null when exhausted. */
+/** A fakeIo input marker meaning "the user pressed Ctrl-C at this read". */
+const CTRLC = '\u0003'
+
 function fakeIo(inputs: Array<string | null>) {
   const out: string[] = []
   const interrupts: Array<() => void> = []
   const reads: Array<{ prompt: string; discardPending: boolean }> = []
   const spinner: string[] = [] // 'start:label' | 'label:x' | 'stop'
+  let clears = 0
   let idx = 0
   const io: TuiIo = {
     out: (s) => out.push(s),
+    clearLine: () => clears++,
     readLine: async (prompt, opts) => {
       reads.push({ prompt, discardPending: Boolean(opts?.discardPending) })
-      return idx < inputs.length ? inputs[idx++] : null
+      const next = idx < inputs.length ? inputs[idx++] : null
+      // A Ctrl-C at this read fires the interrupt handler(s) and ends the read with
+      // null, exactly as cancelRead would settle a pending prompt on a real Ctrl-C.
+      if (next === CTRLC) {
+        interrupts.forEach((h) => h())
+        return null
+      }
+      return next
     },
     onInterrupt: (h) => interrupts.push(h),
     cancelRead: () => {},
@@ -629,6 +641,7 @@ function fakeIo(inputs: Array<string | null>) {
     out,
     reads,
     spinner,
+    clears: () => clears,
     text: () => out.join(''),
     fireInterrupt: () => interrupts.forEach((h) => h())
   }
@@ -938,6 +951,29 @@ describe('runTui', () => {
     // The interrupt is acknowledged visibly rather than stopping silently.
     expect(t.text()).toContain('^C interrupted')
     void runs
+  })
+
+  it('Ctrl-C at the composer discards the input, hints, and keeps the session', async () => {
+    const { d, rec } = deps([])
+    // Ctrl-C at the composer, then a real message, then Ctrl-D.
+    const t = fakeIo([CTRLC, 'a real message', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Ctrl-C again or Ctrl-D to exit') // hint on first Ctrl-C
+    expect(t.clears()).toBeGreaterThanOrEqual(1) // abandoned input line was erased
+    // The session survived the Ctrl-C — the later message still ran, nothing extra.
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages).toEqual([{ role: 'user', content: 'a real message' }])
+  })
+
+  it('a second Ctrl-C at the composer exits the session', async () => {
+    const { d, rec } = deps([])
+    const t = fakeIo([CTRLC, CTRLC])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(rec.runs).toHaveLength(0) // nothing was ever submitted
+    expect(t.text()).toContain('Bye')
   })
 
   it('blocks and exits 2 when terms are declined interactively', async () => {

@@ -816,6 +816,8 @@ export function renderSettingsFooter(path: string, paint: Painter): string {
 export interface TuiIo {
   /** Print to the main output stream (stdout). */
   out: (s: string) => void
+  /** Erase the current terminal line (the abandoned composer input on Ctrl-C). */
+  clearLine?: () => void
   /**
    * Read one line, showing `prompt`. Resolves null on end-of-input (Ctrl-D),
    * which ends the session. Used for the composer, approvals, and questions
@@ -986,6 +988,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
   const templateCommands = mergeCommands(BUILTIN_TEMPLATE_COMMANDS, customCommands)
 
+  // Ctrl-C at the composer (no run in flight): first press discards the in-progress
+  // input and re-prompts; a second press within the window exits, like a shell. The
+  // composer read loop reads this to tell a reset from a real EOF.
+  let composerInterrupt: 'reset' | 'exit' | null = null
+  let lastComposerCtrlCAt = -Infinity
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
@@ -995,7 +1002,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // input so the aborted run doesn't leave the loop waiting on a dead read.
       deps.io.out(paint('\n^C interrupted\n', 'dim'))
       deps.io.cancelRead?.()
+      return
     }
+    // No run → at the composer. Discard whatever's typed and re-prompt; a second
+    // Ctrl-C in quick succession exits (the composer read loop acts on the flag).
+    const t = nowFn()
+    if (t - lastComposerCtrlCAt < 1500) {
+      composerInterrupt = 'exit'
+    } else {
+      composerInterrupt = 'reset'
+      deps.io.clearLine?.() // erase the abandoned input line
+      deps.io.out(paint('(Ctrl-C again or Ctrl-D to exit)\n', 'dim'))
+    }
+    lastComposerCtrlCAt = t
+    deps.io.cancelRead?.() // settle the outstanding composer read so the loop reacts
   })
 
   deps.io.out(
@@ -1022,10 +1042,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // fence keeps reading, so a fenced snippet isn't split at the first newline.
       const composer = new ComposerBuffer()
       let raw: string | null = null
+      let resetComposer = false
       for (;;) {
         const p = composer.pending ? paint('… ', 'dim') : composerPrompt(policy, paint)
         const line = await deps.io.readLine(p)
         if (line === null) {
+          // Ctrl-C settles the read too: 'reset' discards this entry and re-prompts,
+          // 'exit' (a second Ctrl-C) leaves like Ctrl-D; otherwise it's a real EOF.
+          if (composerInterrupt === 'reset') {
+            composerInterrupt = null
+            resetComposer = true
+            break
+          }
+          if (composerInterrupt === 'exit') {
+            composerInterrupt = null
+            break // raw stays null → exit below
+          }
           if (composer.pending) raw = composer.flush() // EOF mid-entry → submit what we have
           break
         }
@@ -1035,7 +1067,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
       }
-      if (raw === null) break // clean Ctrl-D at an empty composer → exit
+      if (resetComposer) continue // Ctrl-C discarded the input — draw a fresh prompt
+      if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
       text = raw.trim()
       if (!text) continue
       // Persist composer submissions (commands included) for cross-restart recall;
