@@ -1285,7 +1285,7 @@ const dispatchWritableAgent: ToolDef = {
   schema: {
     name: 'dispatch_writable_agent',
     description:
-      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Everything it does is confined to the project sandbox with no network access. Approving this call grants the subagent write access for the whole delegated task (it will not prompt again per action), so scope the task clearly. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
+      'Delegate a self-contained task to a subagent that can EDIT files (and, where the host has an OS sandbox, RUN shell commands) in its own fresh context, then returns a written report. Everything it does is confined to the project with no network access; on a host without an OS sandbox (e.g. Windows) the subagent is edits-only — run any needed commands through the main agent instead. Approving this call grants the subagent write access for the whole delegated task (it will not prompt again per action), so scope the task clearly. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },

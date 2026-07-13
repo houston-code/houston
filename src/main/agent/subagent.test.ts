@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
 
 let ws: string
@@ -30,6 +30,22 @@ function capturingProvider(seen: { tools: string[] }): Provider {
       seen.tools = (req.tools ?? []).map((t) => t.name)
       yield { type: 'text', text: 'done' }
       yield { type: 'done', stopReason: 'end_turn' }
+    }
+  }
+}
+
+/** Scripts turns AND records the system prompt + messages seen on each call. */
+function recordingProvider(
+  turns: ProviderStreamEvent[][],
+  sink: { system: string; messages: ChatMessage[][] }
+): Provider {
+  let i = 0
+  return {
+    async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+      sink.system = req.system ?? ''
+      sink.messages.push((req.messages ?? []) as ChatMessage[])
+      const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+      for (const ev of turn) yield ev
     }
   }
 }
@@ -251,6 +267,54 @@ describe('runSubAgent', () => {
         tools: ['read_file', 'edit_file', 'bogus']
       })
       expect(seen.tools).toEqual(['read_file', 'edit_file'])
+    })
+
+    it('fails closed: refuses run_shell on a host with no OS sandbox', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo hi' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'Reported.' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        sink
+      )
+      const report = await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'run echo',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws],
+        shellSandboxed: false
+      })
+      expect(report).toContain('Reported.')
+      // The subagent is told shell is unavailable on this host…
+      expect(sink.system).toContain('run_shell is NOT available')
+      // …and the run_shell call was answered with the refusal note, never executed.
+      const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 's1')
+      expect(toolMsg?.content).toContain('run_shell is unavailable')
+    })
+
+    it('offers run_shell to a writable subagent when the host IS sandboxed', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]],
+        sink
+      )
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal,
+        writable: true,
+        shellSandboxed: true
+      })
+      expect(sink.system).toContain('run shell commands')
     })
   })
 })
