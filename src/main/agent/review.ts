@@ -417,7 +417,10 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   // A size-bounded diff for the single verifier's context (it also reads the files).
   const diffContext = inputs.join('\n\n').slice(0, MAX_DIFF_CHARS)
   const footer =
-    'Once you have addressed the confirmed findings, run review_changes again to confirm the fixes and surface anything the changes introduced.'
+    'Address the confirmed findings, then verify them directly (run the tests, recheck the ' +
+    'changed lines). A single review plus targeted fixes is usually enough: re-run review_changes ' +
+    'only if you then make further substantial changes, and scope it to the changed paths. ' +
+    'Repeatedly re-reviewing the whole diff is expensive and rarely surfaces more.'
 
   // High effort: verify each finding independently by majority vote of skeptics.
   // Falls back to the single-verifier path if the reports don't parse into findings.

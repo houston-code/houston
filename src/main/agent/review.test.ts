@@ -124,14 +124,16 @@ describe('runReview', () => {
     expect(verifierCalls[0].prompt).toContain('off-by-one')
     expect(out).toContain('confirmed bug')
     expect(out).toContain('separate context')
-    // Findings present → nudge the agent to re-review after fixing them.
-    expect(out).toContain('run review_changes again')
+    // Findings present → guide the agent to fix, verify directly, and re-review
+    // sparingly (only on further substantial changes) rather than looping.
+    expect(out).toContain('re-run review_changes')
+    expect(out).toContain('usually enough')
   })
 
   it('does not add the re-review nudge to a clean review', async () => {
     const { fn } = fakeAgent(() => 'No issues found.')
     const out = await runReview(base({ runAgent: fn }))
-    expect(out).not.toContain('run review_changes again')
+    expect(out).not.toContain('re-run review_changes')
   })
 
   it('short-circuits without a verifier when every reviewer is clean', async () => {
@@ -315,7 +317,7 @@ describe('runReview high effort', () => {
     expect(out).toContain('bug one')
     expect(out).not.toContain('nit two')
     expect(out).toContain('Confirmed 1 of 2 candidate findings')
-    expect(out).toContain('run review_changes again')
+    expect(out).toContain('re-run review_changes')
   })
 
   it('falls back to the single verifier when nothing parses into findings', async () => {
