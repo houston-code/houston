@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  builtinCommands,
   expandTemplate,
   matchCommands,
   mergeCommands,
@@ -7,6 +8,25 @@ import {
   resolveCommand,
   type Command
 } from './commands'
+
+describe('BUILTIN_COMMAND_CATALOG ↔ TUI parity', () => {
+  // Every first-class command the interactive TUI (src/main/tui.ts parseSlashCommand)
+  // handles and HELP_TEXT documents must be a catalog 'tui' entry, or it won't be
+  // tab-completable and Houston's self-knowledge (the guide) will be wrong about it.
+  // Adding a command to the TUI without cataloging it should fail here.
+  const TUI_COMMANDS = [
+    'new', 'clear', 'compact', 'plan', 'model', 'login', 'settings', 'approval',
+    'resume', 'fork', 'cost', 'skills', 'agents', 'mcp', 'hooks', 'theme', 'image',
+    'cwd', 'help', 'review', 'exit', 'quit'
+  ]
+
+  it('lists every TUI command in the catalog for the tui client', () => {
+    const tui = new Set(builtinCommands('tui').map((c) => c.name))
+    for (const name of TUI_COMMANDS) {
+      expect(tui.has(name), `/${name} must be a catalog 'tui' entry (tab-completion + guide)`).toBe(true)
+    }
+  })
+})
 
 describe('parseSlashCommand', () => {
   it('parses a bare command', () => {

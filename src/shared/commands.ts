@@ -92,16 +92,18 @@ export interface BuiltinCommand extends Command {
 export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'new', description: 'Start a new chat', clients: ['gui', 'tui'] },
   { name: 'clear', description: 'Start a new chat (alias for /new)', clients: ['gui', 'tui'] },
-  { name: 'compact', description: 'Summarize older turns to free up context now', clients: ['gui'] },
+  { name: 'compact', description: 'Summarize older turns to free up context now', clients: ['gui', 'tui'] },
   {
     name: 'plan',
     description: 'Plan mode: read-only (research & propose, no edits/commands)',
-    clients: ['gui']
+    clients: ['gui', 'tui']
   },
   { name: 'ask', description: 'Approval: ask before every edit and command', clients: ['gui'] },
   { name: 'auto', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui'] },
   { name: 'full', description: 'Approval: full auto (sandboxed)', clients: ['gui'] },
   { name: 'model', description: 'List or switch the active model', clients: ['tui'] },
+  { name: 'login', description: 'Set or update an API key (also: /providers)', clients: ['tui'] },
+  { name: 'settings', description: 'Show a summary of your current settings', clients: ['tui'] },
   { name: 'approval', description: 'Show or set the approval policy', clients: ['tui'] },
   { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['tui'] },
   { name: 'fork', description: 'Branch the current session into a copy', clients: ['tui'] },
