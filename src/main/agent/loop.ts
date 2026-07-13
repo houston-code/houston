@@ -144,7 +144,10 @@ interface RunState {
    * replay them on re-adopt so the approve/answer UI re-renders. Kept in lockstep
    * with `approvals`/`questions` (set when emitted, deleted when resolved/cancelled).
    */
-  pendingApprovals: Map<string, { name: string; summary: string; kind: ToolKind; sandboxed?: boolean }>
+  pendingApprovals: Map<
+    string,
+    { name: string; summary: string; args: Record<string, unknown>; kind: ToolKind; sandboxed?: boolean }
+  >
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
   /**
    * Pending `present_plan` reviews, keyed by callId. `planDecisions` resolves the
@@ -356,6 +359,7 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       callId,
       name: a.name,
       summary: a.summary,
+      args: a.args,
       kind: a.kind,
       ...(a.sandboxed === false ? { sandboxed: false } : {})
     })
@@ -1736,6 +1740,7 @@ export async function startRun(
               run.pendingApprovals.set(call.id, {
                 name: call.name,
                 summary: tool.summarize(execArgs),
+                args: execArgs,
                 kind: tool.kind,
                 ...(unsandboxedShell ? { sandboxed: false } : {})
               })
@@ -1744,6 +1749,7 @@ export async function startRun(
                 callId: call.id,
                 name: call.name,
                 summary: tool.summarize(execArgs),
+                args: execArgs,
                 kind: tool.kind,
                 ...(unsandboxedShell ? { sandboxed: false } : {})
               })
