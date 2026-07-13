@@ -9,9 +9,18 @@ import {
 } from '@shared/commands'
 import type { CompactResult } from './agent/compact'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
-import type { AgentEvent, AgentRunRequest, ChatMessage, QuestionOption } from '@shared/agent'
+import type {
+  AgentEvent,
+  AgentRunRequest,
+  ChatMessage,
+  PlanAcceptMode,
+  PlanDecision,
+  PlanPayload,
+  QuestionOption
+} from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import { contextWindowFor, contextPercent } from '@shared/usage'
+import { assertNever } from '@shared/assert'
 import { truncateVisible } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
 import { htmlToAnsi } from './syntax'
@@ -428,6 +437,90 @@ export function resolveQuestionAnswer(
   return picked.length ? picked.join(', ') : trimmed
 }
 
+// --- Plan review (present_plan) -----------------------------------------------
+// The terminal counterpart to the GUI's docked plan-review panel: render the plan
+// the agent presented, collect the same PlanDecision (accept / suggest / reject,
+// with an "edit in your editor" variant of accept), and hand it back so the
+// blocking present_plan tool call unblocks. Without this the TUI would drop the
+// plan_ready event and the run would hang on the pending decision.
+
+/** A decision action offered on a presented plan. */
+export type PlanAction = 'accept' | 'accept-ask' | 'edit' | 'suggest' | 'reject'
+
+/** The plan-review actions, in display order, with their single-key shortcuts. */
+export const PLAN_ACTIONS: { key: string; action: PlanAction; label: string; description: string }[] = [
+  { key: 'a', action: 'accept', label: 'Accept & run', description: 'apply edits automatically' },
+  { key: 'k', action: 'accept-ask', label: 'Accept, ask per edit', description: 'approve each change' },
+  { key: 'e', action: 'edit', label: 'Edit the plan, then run', description: 'open it in your editor' },
+  { key: 's', action: 'suggest', label: 'Suggest changes', description: 'send a note; keep planning' },
+  { key: 'r', action: 'reject', label: 'Reject', description: 'discard; keep planning' }
+]
+
+/** Render a presented plan (title, body, affected files) plus the decision menu. */
+export function renderPlan(plan: PlanPayload, paint: Painter): string {
+  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(plan.title, 'bold')}`]
+  const body = plan.body?.trim()
+  if (body) {
+    lines.push('', body)
+  } else {
+    if (plan.overview) lines.push('', plan.overview)
+    for (const step of plan.steps ?? []) lines.push(`  • ${step}`)
+  }
+  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.join(', ')}`, 'dim'))
+  lines.push('')
+  for (const a of PLAN_ACTIONS) {
+    lines.push(`  ${paint(`[${a.key}]`, 'cyan')} ${a.label}  ${paint(`(${a.description})`, 'dim')}`)
+  }
+  return lines.join('\n')
+}
+
+/** Map a typed answer to a plan action; defaults to reject (the safe verdict). */
+export function parsePlanAction(answer: string): PlanAction {
+  const a = answer.trim().toLowerCase()
+  const match = PLAN_ACTIONS.find((x) => x.key === a || x.action === a)
+  if (match) return match.action
+  if (a === 'y' || a === 'yes') return 'accept'
+  return 'reject'
+}
+
+/** The legacy structured plan as markdown, for the editor when there's no `body`. */
+function planToMarkdown(plan: PlanPayload): string {
+  if (plan.body) return plan.body
+  const parts = [`# ${plan.title}`]
+  if (plan.overview) parts.push(plan.overview)
+  if (plan.steps?.length) parts.push(plan.steps.map((s) => `- ${s}`).join('\n'))
+  return parts.join('\n\n')
+}
+
+/** Turn a chosen action into a PlanDecision, collecting an editor edit / note as needed. */
+export async function planDecisionFor(
+  action: PlanAction,
+  plan: PlanPayload,
+  deps: TuiDeps,
+  paint: Painter
+): Promise<PlanDecision> {
+  const accept = (mode: PlanAcceptMode): PlanDecision => ({ kind: 'accept', mode })
+  switch (action) {
+    case 'accept':
+      return accept('auto-edit')
+    case 'accept-ask':
+      return accept('ask')
+    case 'edit': {
+      const edited = deps.editText ? await deps.editText(planToMarkdown(plan)) : null
+      if (edited && edited.trim()) return { kind: 'accept', mode: 'auto-edit', editedBody: edited }
+      deps.io.out(paint('· no editor available (set $EDITOR) — accepting the plan as presented\n', 'dim'))
+      return accept('auto-edit')
+    }
+    case 'suggest': {
+      const note = (await deps.io.readLine('Suggest changes: ', { discardPending: true })) ?? ''
+      // An empty note is a non-decision; treat it as reject rather than an empty suggest.
+      return note.trim() ? { kind: 'suggest', note: note.trim() } : { kind: 'reject' }
+    }
+    case 'reject':
+      return { kind: 'reject' }
+  }
+}
+
 function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s
 }
@@ -643,6 +736,8 @@ export interface TuiDeps {
   ) => Promise<void>
   resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
   resolveQuestion: (runId: string, callId: string, answer: string) => void
+  /** Deliver the user's verdict on a `present_plan` review (accept / suggest / reject). */
+  resolvePlan: (runId: string, callId: string, decision: PlanDecision) => void
   cancelRun: (runId: string) => void
   io: TuiIo
   /**
@@ -666,6 +761,12 @@ export interface TuiDeps {
   compact?: (id: string, providerId: string, model: string) => Promise<CompactResult>
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
   loadImage?: (path: string) => { image: ImageAttachment } | { error: string }
+  /**
+   * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
+   * result (null if no editor is configured or the edit was aborted). Used by the
+   * plan-review "edit" action so the user can revise a plan in a real editor.
+   */
+  editText?: (initial: string) => Promise<string | null>
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
    * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
@@ -1001,9 +1102,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.startSpinner?.('Working')
 
     // Track whether this turn produced a plan (assistant text) and how it ended,
-    // to offer a plan→execute handoff when running under plan mode.
+    // to offer a plan→execute handoff when running under plan mode. `sawPlanReady`
+    // suppresses that heuristic when the model used the real present_plan flow (which
+    // already collected a decision), leaving the handoff only for text-only plans.
     let sawText = false
     let endedCleanly = false
+    let sawPlanReady = false
     const send = (e: AgentEvent): void => {
       if (e.type === 'text') {
         sawText = true
@@ -1130,6 +1234,45 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             deps.io.out('\n')
           }
           break
+        case 'plan_ready':
+          // The agent presented a finished plan and is blocked awaiting a verdict.
+          // Render it and collect the same accept / suggest / reject decision the
+          // GUI's plan panel does, then unblock present_plan via resolvePlan.
+          sawPlanReady = true
+          enqueue(async () => {
+            deps.io.out(`${renderPlan(e.plan, paint)}\n`)
+            let action: PlanAction | null = null
+            if (deps.io.select) {
+              const r = await deps.io.select({
+                title: 'Your decision:',
+                options: PLAN_ACTIONS.map((a) => ({ label: a.label, value: a.action, description: a.description }))
+              })
+              if (r.kind === 'commit') action = r.value as PlanAction
+              // cancel/type → fall through to the typed prompt
+            }
+            if (action === null) {
+              const ans = await deps.io.readLine('> ', { discardPending: true })
+              action = parsePlanAction(ans ?? '')
+            }
+            const decision = await planDecisionFor(action, e.plan, deps, paint)
+            // Accepting flips the local policy so the composer + status line reflect
+            // that Plan mode is off for the rest of the session (the loop flips the
+            // run's own policy independently when the tool result is applied).
+            if (decision.kind === 'accept') policy = decision.mode
+            deps.resolvePlan(e.runId, e.callId, decision)
+          })
+          break
+        case 'verification':
+          deps.io.out(
+            paint(`\n· verification ${e.passed ? 'passed' : 'failed'}\n`, e.passed ? 'dim' : 'yellow')
+          )
+          break
+        case 'turn_start':
+          // Emitted only when the main process auto-starts a queued follow-up turn;
+          // the TUI drives its own composer and never uses that buffer, so ignore it.
+          break
+        default:
+          assertNever(e, 'tui:unhandled agent event')
       }
     }
 
@@ -1147,7 +1290,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Plan-mode handoff: when a plan-mode turn presents a plan and stops, offer to
     // switch to auto-edit and carry it out — the decision point plan mode is for,
     // instead of manually /approval-ing and re-asking.
-    if (policy === 'plan' && sawText && endedCleanly) {
+    if (policy === 'plan' && sawText && endedCleanly && !sawPlanReady) {
       deps.io.out(
         paint('\nPlan ready. Run it? [y] switch to auto-edit and proceed · anything else keeps planning\n', 'magenta')
       )

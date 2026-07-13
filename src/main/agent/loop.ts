@@ -991,8 +991,10 @@ export async function startRun(
         noProgressLimit: settings.stallNoProgressLimit
       }),
       // A user is watching TUI/GUI runs, so the weak no-progress stall nudges but
-      // never hard-stops there; headless runs keep it as a budget guard.
-      { interactive: req.interactive === true }
+      // never hard-stops there; headless runs keep it as a budget guard. In Plan
+      // mode nothing may mutate, so "no progress" is the defined behavior, not a
+      // stall — disable that rule entirely there (repeated-call/error still apply).
+      { interactive: req.interactive === true, mutationsAllowed: req.approvalPolicy !== 'plan' }
     )
 
     // End-of-run verification gate (opt-in). Tracks whether this run modified any

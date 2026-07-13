@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { spawnSync } from 'node:child_process'
 import { LEGAL_VERSION } from '@shared/legal'
 import {
   isSupportedImageType,
   exceedsImageSizeLimit,
   SUPPORTED_IMAGE_TYPES
 } from '@shared/images'
-import { startRun, resolveApproval, resolveQuestion, cancelRun } from './agent/loop'
+import { startRun, resolveApproval, resolveQuestion, resolvePlan, cancelRun } from './agent/loop'
 import { killAllShells } from './agent/shells'
 import { disconnectAllMcp } from './mcp/manager'
 import { findFiles } from './agent/mentions'
@@ -56,6 +58,31 @@ function safeRead(path: string): string | null {
   }
 }
 
+/**
+ * Open `initial` in the user's `$VISUAL`/`$EDITOR` and return the saved text — the
+ * "edit the plan" action of plan review. Returns null when no editor is configured
+ * or it exits non-zero (aborted), so the caller falls back. Blocking (spawnSync) on
+ * purpose: the TUI is idle waiting for the plan decision, and a terminal editor owns
+ * the screen while open. Best-effort — a user without $EDITOR can use "suggest".
+ */
+async function editInEditor(initial: string): Promise<string | null> {
+  const editor = process.env.VISUAL || process.env.EDITOR
+  if (!editor) return null
+  const dir = mkdtempSync(join(tmpdir(), 'houston-plan-'))
+  const file = join(dir, 'PLAN.md')
+  try {
+    writeFileSync(file, initial, 'utf8')
+    const [cmd, ...args] = editor.split(/\s+/)
+    const res = spawnSync(cmd, [...args, file], { stdio: 'inherit' })
+    if (res.error || res.status !== 0) return null
+    return readFileSync(file, 'utf8')
+  } catch {
+    return null
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 /** Run the interactive terminal client to completion. Returns the exit code. */
 export async function runTuiEntry(tui: TuiOptions): Promise<number> {
   // Interactive mode needs a real terminal for the composer and inline
@@ -101,7 +128,9 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
       startRun,
       resolveApproval,
       resolveQuestion,
+      resolvePlan,
       cancelRun,
+      editText: (initial) => editInEditor(initial),
       persistHistory,
       loadImage: (p) => {
         const mediaType = mediaTypeForImagePath(p)
@@ -184,6 +213,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions): Promise<numbe
       startRun,
       resolveApproval,
       resolveQuestion,
+      resolvePlan,
       out: (s) => process.stdout.write(s),
       err: (s) => process.stderr.write(s),
       // Persist headless runs as conversations (shared with the TUI/GUI) so

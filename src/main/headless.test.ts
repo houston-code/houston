@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent, ChatMessage } from '@shared/agent'
+import type { AgentEvent, ChatMessage, PlanDecision } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
 import {
   legalAcceptanceMessage,
@@ -163,6 +163,7 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
   const err: string[] = []
   const approvals: Array<[string, string, string]> = []
   const questions: Array<[string, string, string]> = []
+  const plans: Array<[string, string, PlanDecision]> = []
   // Default profile has already accepted the current terms, so existing-behavior
   // tests aren't about the gate. Gate tests override getSettings.
   let accepted = 0
@@ -180,12 +181,13 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
     },
     resolveApproval: (r, c, dec) => approvals.push([r, c, dec]),
     resolveQuestion: (r, c, ans) => questions.push([r, c, ans]),
+    resolvePlan: (r, c, dec) => plans.push([r, c, dec]),
     out: (s) => out.push(s),
     err: (s) => err.push(s),
     newId: () => 'run-1',
     ...extra
   }
-  return { d, out, err, approvals, questions, accepted: () => accepted }
+  return { d, out, err, approvals, questions, plans, accepted: () => accepted }
 }
 
 const baseOpts = {
@@ -244,6 +246,17 @@ describe('runHeadless', () => {
     ])
     await runHeadless({ ...baseOpts, approvalPolicy: 'auto-edit' }, d)
     expect(approvals).toEqual([['run-1', 'c1', 'allow']])
+  })
+
+  it('resolves a plan_ready (reject) and prints the plan so present_plan cannot hang', async () => {
+    const { d, out, plans } = deps([
+      { runId: 'run-1', type: 'plan_ready', callId: 'p1', plan: { title: 'My Plan', body: 'Do it.' } },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    // Non-interactive: the plan is printed as the deliverable and rejected (no edits).
+    expect(out.join('')).toContain('My Plan')
+    expect(plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
   })
 
   it('emits one JSON line per event in --json mode', async () => {

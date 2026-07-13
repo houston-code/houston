@@ -240,6 +240,33 @@ describe('StallDetector — interactive no-progress', () => {
   })
 })
 
+describe('StallDetector — plan mode (mutations disallowed)', () => {
+  const read = (p: string): { calls: ToolCall[]; errors: string[]; mutated: boolean } => ({
+    calls: [call('read_file', { path: p })],
+    errors: [],
+    mutated: false
+  })
+
+  it('never fires the no-progress rule when the policy forbids mutations', () => {
+    // Plan mode: writes are blocked, so no iteration can ever mutate. The no-progress
+    // rule must not fire at all — not even a nudge — for doing exactly what Plan mode asks.
+    const d = new StallDetector(thresholds({ noProgressLimit: 3, repeatCallLimit: 99 }), {
+      mutationsAllowed: false
+    })
+    for (let i = 0; i < 20; i++) {
+      expect(d.observe(read(`f${i}`)).kind).toBe('ok')
+    }
+  })
+
+  it('still catches a genuinely stuck loop (repeated call) in plan mode', () => {
+    const d = new StallDetector(thresholds({ repeatCallLimit: 3 }), { mutationsAllowed: false })
+    const same = { calls: [call('read_file', { path: 'a' })], errors: [], mutated: false }
+    expect(d.observe(same).kind).toBe('ok')
+    expect(d.observe(same).kind).toBe('ok')
+    expect(d.observe(same).kind).toBe('nudge') // repeated-call rule is unaffected
+  })
+})
+
 describe('StallDetector — healthy runs', () => {
   it('never fires when the model makes varied, mutating progress', () => {
     const d = new StallDetector()
