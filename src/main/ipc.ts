@@ -71,6 +71,8 @@ import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
+import { loadSkills } from './agent/skills'
+import { loadAgents } from './agent/agents'
 import { getRepoInfo, createWorktree, removeWorktree } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { initGitRepo } from './agent/gitInit'
@@ -412,6 +414,28 @@ export function registerIpc(): void {
     if (!workspace) return []
     try {
       return await loadCommands(realpathSync(workspace))
+    } catch {
+      return []
+    }
+  })
+
+  // Read-only listing of the workspace's skills / custom agents for /skills and
+  // /agents. Project to {name, description} only — the agent's full systemPrompt
+  // (and a skill's path) never needs to cross into the renderer for a listing.
+  ipcMain.handle(IPC.skillsList, async (_event, workspace: string) => {
+    if (!workspace) return []
+    try {
+      const skills = await loadSkills(realpathSync(workspace))
+      return skills.map((s) => ({ name: s.name, description: s.description }))
+    } catch {
+      return []
+    }
+  })
+  ipcMain.handle(IPC.agentsList, async (_event, workspace: string) => {
+    if (!workspace) return []
+    try {
+      const agents = await loadAgents(realpathSync(workspace))
+      return agents.map((a) => ({ name: a.name, description: a.description }))
     } catch {
       return []
     }

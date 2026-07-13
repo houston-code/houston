@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { IPC } from '@shared/constants'
 
 // Hoisted holders the mocks close over, so each test can steer run ownership and
@@ -181,5 +184,49 @@ describe('run-control IPC ownership', () => {
     h.runOwner.mockReturnValue(undefined)
     handler(IPC.agentCancel)(from(OTHER), RUN)
     expect(h.cancelRun).toHaveBeenCalledWith(RUN)
+  })
+})
+
+/**
+ * /skills and /agents list the workspace's capabilities. The IPC must project to
+ * {name, description} only — an agent's full system prompt (its file body) must
+ * never cross into the renderer just to render a name list.
+ */
+describe('capability listing IPC (skills / agents)', () => {
+  registerIpc()
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+  const event = {} // these handlers ignore the IpcMainInvokeEvent
+
+  let ws: string
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), 'houston-ipc-cap-'))
+  })
+  afterEach(() => rmSync(ws, { recursive: true, force: true }))
+
+  it('lists skills as {name, description}', async () => {
+    mkdirSync(join(ws, '.houston/skills/foo'), { recursive: true })
+    writeFileSync(join(ws, '.houston/skills/foo/SKILL.md'), '---\nname: foo\ndescription: Does foo\n---\nbody')
+    expect(await handler(IPC.skillsList)(event, ws)).toEqual([{ name: 'foo', description: 'Does foo' }])
+  })
+
+  it('lists agents without leaking the system prompt', async () => {
+    mkdirSync(join(ws, '.houston/agents'), { recursive: true })
+    writeFileSync(
+      join(ws, '.houston/agents/security.md'),
+      '---\ndescription: Reviews for vulns\n---\nYou are a SECRET reviewer prompt.'
+    )
+    const res = await handler(IPC.agentsList)(event, ws)
+    expect(res).toEqual([{ name: 'security', description: 'Reviews for vulns' }])
+    // The body (system prompt) must not cross the IPC boundary.
+    expect(JSON.stringify(res)).not.toContain('SECRET')
+  })
+
+  it('returns [] for a blank workspace', async () => {
+    expect(await handler(IPC.skillsList)(event, '')).toEqual([])
+    expect(await handler(IPC.agentsList)(event, '')).toEqual([])
   })
 })

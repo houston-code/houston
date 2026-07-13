@@ -46,6 +46,10 @@ export const IPC = {
   /** Read the system clipboard (text + image) for the composer "+" menu. */
   clipboardRead: 'clipboard:read',
   commandsList: 'commands:list',
+  /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
+  skillsList: 'skills:list',
+  /** List the workspace's custom agents (.houston/agents) as {name, description}, for /agents. */
+  agentsList: 'agents:list',
   gitRepoInfo: 'git:repoInfo',
   gitInit: 'git:init',
   /** Whether the user opted out of the first-write git-init prompt for a folder. */
