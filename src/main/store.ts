@@ -19,6 +19,7 @@ import {
 import {
   backfillDefaultModels,
   defaultSettings,
+  reconcileSelectedModel,
   SETTINGS_SCHEMA_VERSION,
   stripBuiltInModelLabels
 } from '@shared/defaults'
@@ -118,6 +119,9 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     providers
   }
+  // Drop a selection that no longer matches any configured model — e.g. a settings.json
+  // edited by hand, or one written before a model/provider was removed.
+  merged.selected = reconcileSelectedModel(providers, merged.selected)
   return merged
 }
 
@@ -285,7 +289,14 @@ export function getSettings(): AppSettings {
 }
 
 export function saveSettings(next: AppSettings): AppSettings {
-  const { settings } = extractHeaderSecrets({ ...next, schemaVersion: SETTINGS_SCHEMA_VERSION })
+  // Removing the selected model in Settings only rewrites `providers`; reconcile so the
+  // now-dangling `selected` is re-pointed to a valid model (or cleared) as part of the
+  // same save, instead of persisting a stale reference the picker can't resolve.
+  const reconciled: AppSettings = {
+    ...next,
+    selected: reconcileSelectedModel(next.providers, next.selected)
+  }
+  const { settings } = extractHeaderSecrets({ ...reconciled, schemaVersion: SETTINGS_SCHEMA_VERSION })
   cache = settings
   persist(cache)
   return withKeyFlags(cache)

@@ -136,6 +136,18 @@ describe('ModelPicker', () => {
     expect(screen.queryByRole('option')).not.toBeInTheDocument()
   })
 
+  it('shows the placeholder when the selection points at a model no longer in the list', () => {
+    // The store reconciles these away, but the picker must never render a removed id as
+    // if it were the live selection. gpt-5 was deleted from the provider's models.
+    renderPicker({
+      settings: settingsWith(OPENAI_STORED.filter((m) => m.id !== 'gpt-5')),
+      selected: { providerId: 'openai', model: 'gpt-5' }
+    })
+    const trigger = screen.getByRole('combobox')
+    expect(trigger).toHaveTextContent('Select a model…')
+    expect(trigger).not.toHaveTextContent('gpt-5')
+  })
+
   it('flags a provider that is missing its required key', () => {
     const settings = {
       providers: [provider({ id: 'openai', hasKey: false, models: OPENAI_STORED })]

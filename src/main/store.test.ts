@@ -181,6 +181,62 @@ describe('settings migration — model backfill', () => {
   })
 })
 
+describe('selected-model reconciliation', () => {
+  it('re-points a selection to the provider default when the model was removed on save', async () => {
+    // Simulate the Settings flow: the user deletes the selected model from the provider
+    // list and saves. `selected` still points at the removed id until we reconcile.
+    const { getSettings, saveSettings } = await loadStore()
+    const next = {
+      ...getSettings(),
+      providers: [
+        {
+          id: 'anthropic',
+          kind: 'anthropic' as const,
+          label: 'Anthropic (Claude)',
+          models: [{ id: 'claude-opus-4-8' }],
+          defaultModel: 'claude-opus-4-8',
+          requiresKey: true,
+          hasKey: false,
+          builtIn: true
+        }
+      ],
+      selected: { providerId: 'anthropic', model: 'claude-haiku-4-5' }
+    }
+    const saved = saveSettings(next)
+    expect(saved.selected).toEqual({ providerId: 'anthropic', model: 'claude-opus-4-8' })
+  })
+
+  it('clears a selection whose provider no longer exists on save', async () => {
+    const { getSettings, saveSettings } = await loadStore()
+    const saved = saveSettings({
+      ...getSettings(),
+      selected: { providerId: 'ghost-provider', model: 'ghost-model' }
+    })
+    expect(saved.selected).toBeNull()
+  })
+
+  it('drops a dangling selection read from a hand-edited settings.json on load', async () => {
+    writeSettings({
+      schemaVersion: 4,
+      providers: [anthropicProvider(['claude-opus-4-8'])],
+      selected: { providerId: 'anthropic', model: 'a-model-that-was-deleted' }
+    })
+    const { getSettings } = await loadStore()
+    // Same provider survives with another model → re-pointed rather than nulled.
+    expect(getSettings().selected).toEqual({ providerId: 'anthropic', model: 'claude-opus-4-8' })
+  })
+
+  it('keeps a still-valid selection untouched on load', async () => {
+    writeSettings({
+      schemaVersion: 4,
+      providers: [anthropicProvider(['claude-opus-4-8', 'claude-haiku-4-5'])],
+      selected: { providerId: 'anthropic', model: 'claude-haiku-4-5' }
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().selected).toEqual({ providerId: 'anthropic', model: 'claude-haiku-4-5' })
+  })
+})
+
 describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
   const seed = (permissionRules: PermissionRule[]): void =>
     writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])], permissionRules })
