@@ -62,8 +62,11 @@ export function buildSessionCommand(
   lines.push(`cd ${singleQuote(session.cwd)} 2>/dev/null || true`)
   lines.push(command)
   lines.push('__houston_ec=$?')
-  lines.push(`pwd > ${singleQuote(paths.cwdOut)} 2>/dev/null`)
-  lines.push(`export -p > ${singleQuote(paths.envOut)} 2>/dev/null`)
+  // Capture in a `umask 077` subshell so the cwd/env snapshot files (the env one
+  // can carry secrets the command exported) are created 0600 — private to the user
+  // — on a shared temp dir, without changing the umask of the command itself.
+  lines.push(`(umask 077; pwd > ${singleQuote(paths.cwdOut)}) 2>/dev/null`)
+  lines.push(`(umask 077; export -p > ${singleQuote(paths.envOut)}) 2>/dev/null`)
   lines.push('exit $__houston_ec')
   return lines.join('\n')
 }
@@ -110,7 +113,9 @@ export async function runInSession(opts: {
 
   if (opts.session.env) {
     try {
-      await io.writeFile(paths.envIn, opts.session.env, 'utf8')
+      // 0600: the staged env snapshot can carry secrets a prior command exported,
+      // and tmpdir is world-traversable on a shared host.
+      await io.writeFile(paths.envIn, opts.session.env, { encoding: 'utf8', mode: 0o600 })
     } catch {
       // If we can't stage the env, fall through with the cwd-only prelude.
     }
