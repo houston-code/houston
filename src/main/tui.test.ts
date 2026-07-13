@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { AppSettings } from '@shared/types'
+import type { AppSettings, Hook, McpServerConfig } from '@shared/types'
 import type { AgentEvent, ChatMessage, PlanDecision } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
@@ -30,6 +30,13 @@ import {
   renderCapabilityList,
   mediaTypeForImagePath,
   runTui,
+  HOOK_EVENTS,
+  parseSettingsAction,
+  resolveHookEventInput,
+  buildHook,
+  buildStdioMcpServer,
+  renderHookList,
+  renderMcpList,
   type TuiDeps,
   type TuiIo,
   type TuiPersist,
@@ -233,11 +240,19 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/fork', s)).toEqual({ kind: 'fork' })
   })
 
-  it('recognizes capability commands', () => {
+  it('recognizes the file-backed capability commands (skills / agents)', () => {
     expect(parseSlashCommand('/skills', s)).toEqual({ kind: 'capability', which: 'skills' })
     expect(parseSlashCommand('/agents', s)).toEqual({ kind: 'capability', which: 'agents' })
-    expect(parseSlashCommand('/mcp', s)).toEqual({ kind: 'capability', which: 'mcp' })
-    expect(parseSlashCommand('/hooks', s)).toEqual({ kind: 'capability', which: 'hooks' })
+  })
+
+  it('routes /settings, /hooks and /mcp to the settings surface', () => {
+    expect(parseSlashCommand('/settings', s)).toEqual({ kind: 'settings' })
+    expect(parseSlashCommand('/hooks', s)).toEqual({ kind: 'hooks', action: { op: 'list' } })
+    expect(parseSlashCommand('/hooks add', s)).toEqual({ kind: 'hooks', action: { op: 'add' } })
+    expect(parseSlashCommand('/hooks remove 2', s)).toEqual({ kind: 'hooks', action: { op: 'remove', index: 2 } })
+    expect(parseSlashCommand('/mcp', s)).toEqual({ kind: 'mcp', action: { op: 'list' } })
+    expect(parseSlashCommand('/mcp add', s)).toEqual({ kind: 'mcp', action: { op: 'add' } })
+    expect(parseSlashCommand('/mcp remove 1', s)).toEqual({ kind: 'mcp', action: { op: 'remove', index: 1 } })
   })
 
   it('sets a valid theme, else stays informational', () => {
@@ -301,6 +316,89 @@ describe('parseSlashCommand', () => {
       kind: 'unknown',
       name: 'frobnicate'
     })
+  })
+})
+
+describe('settings editing helpers', () => {
+  it('parseSettingsAction: bare → list, add, remove <n>, else usage', () => {
+    expect(parseSettingsAction('')).toEqual({ op: 'list' })
+    expect(parseSettingsAction('   ')).toEqual({ op: 'list' })
+    expect(parseSettingsAction('add')).toEqual({ op: 'add' })
+    expect(parseSettingsAction('remove 3')).toEqual({ op: 'remove', index: 3 })
+    expect(parseSettingsAction('rm 1')).toEqual({ op: 'remove', index: 1 })
+    expect(parseSettingsAction('remove')).toEqual({ op: 'usage' }) // no index
+    expect(parseSettingsAction('remove 0')).toEqual({ op: 'usage' }) // 1-based
+    expect(parseSettingsAction('remove x')).toEqual({ op: 'usage' })
+    expect(parseSettingsAction('bogus')).toEqual({ op: 'usage' })
+  })
+
+  it('resolveHookEventInput maps a number or passes a name through', () => {
+    expect(resolveHookEventInput('1')).toBe('PreToolUse')
+    expect(resolveHookEventInput('2')).toBe('PostToolUse')
+    expect(resolveHookEventInput(String(HOOK_EVENTS.length))).toBe(HOOK_EVENTS[HOOK_EVENTS.length - 1])
+    expect(resolveHookEventInput('99')).toBe('99') // out of range → left as-is (rejected downstream)
+    expect(resolveHookEventInput('Stop')).toBe('Stop')
+  })
+
+  it('buildHook validates the event and requires a command', () => {
+    expect(buildHook('PostToolUse', 'edit_file', 'npm test')).toEqual({
+      event: 'PostToolUse',
+      matcher: 'edit_file',
+      command: 'npm test'
+    })
+    // Blank matcher becomes "any".
+    expect(buildHook('Stop', '', 'echo done')).toEqual({ event: 'Stop', matcher: '*', command: 'echo done' })
+    expect(buildHook('Nope', '*', 'x')).toEqual({ error: expect.stringContaining('unknown event') })
+    expect(buildHook('PostToolUse', '*', '   ')).toEqual({ error: expect.stringContaining('command') })
+  })
+
+  it('buildStdioMcpServer builds a header-free stdio config and validates input', () => {
+    expect(buildStdioMcpServer([], 'files', 'npx', '-y @scope/server .')).toEqual({
+      id: 'files',
+      name: 'files',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@scope/server', '.'],
+      enabled: true
+    })
+    // No args → args omitted (not an empty array).
+    expect(buildStdioMcpServer([], 'plain', 'my-server', '')).toEqual({
+      id: 'plain',
+      name: 'plain',
+      transport: 'stdio',
+      command: 'my-server',
+      enabled: true
+    })
+    // Never produces a url or headers — it's a local process, no auth path.
+    const built = buildStdioMcpServer([], 'x', 'cmd', '')
+    expect('error' in built ? {} : built).not.toHaveProperty('url')
+    expect('error' in built ? {} : built).not.toHaveProperty('headers')
+
+    expect(buildStdioMcpServer([], 'bad name', 'cmd', '')).toEqual({ error: expect.stringContaining('name') })
+    expect(buildStdioMcpServer(['dup'], 'dup', 'cmd', '')).toEqual({ error: expect.stringContaining('already exists') })
+    expect(buildStdioMcpServer([], 'ok', '', '')).toEqual({ error: expect.stringContaining('command') })
+  })
+
+  it('renderMcpList never prints a header value (secret) — only the transport summary', () => {
+    const withSecret: McpServerConfig = {
+      id: 'remote',
+      name: 'remote',
+      transport: 'http',
+      command: '',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'super-secret-token' },
+      enabled: true
+    }
+    const out = renderMcpList([withSecret], makePainter(false))
+    expect(out).toContain('remote')
+    expect(out).toContain('https://example.com/mcp')
+    expect(out).not.toContain('super-secret-token')
+    expect(out).not.toContain('Authorization')
+  })
+
+  it('renderHookList / renderMcpList show a "none" note when empty', () => {
+    expect(renderHookList([], makePainter(false))).toContain('No hooks')
+    expect(renderMcpList([], makePainter(false))).toContain('No MCP servers')
   })
 })
 
@@ -995,20 +1093,19 @@ describe('runTui', () => {
     expect([...fp.store.values()].some((c) => c.title.endsWith('(fork)'))).toBe(true)
   })
 
-  it('/mcp and /skills render the capability snapshot', async () => {
+  it('/skills and /agents render the capability snapshot', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     d.capabilities = async () => ({
       skills: [{ name: 'pdf', detail: 'PDFs' }],
       agents: [],
-      mcp: [{ name: 'github', detail: 'gh' }],
+      mcp: [],
       hooks: []
     })
-    const t = fakeIo(['/skills', '/mcp', '/agents', null])
+    const t = fakeIo(['/skills', '/agents', null])
     d.io = t.io
     await runTui(opts, d)
     const out = t.text()
     expect(out).toContain('pdf')
-    expect(out).toContain('github')
     expect(out).toContain('No agents active') // empty list
   })
 
@@ -1035,7 +1132,7 @@ describe('runTui', () => {
 
   it('reports capability info unavailable without a provider', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
-    const t = fakeIo(['/hooks', null])
+    const t = fakeIo(['/skills', null])
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('capability info is unavailable')
@@ -1275,6 +1372,141 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('/new starts a fresh chat')
+  })
+
+  // ---- Settings surface: /settings, /hooks, /mcp ----
+
+  it('/settings prints the file path, the desktop-panel note, and the restart note', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.settingsPath = () => '/profile/settings.json'
+    const t = fakeIo(['/settings', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('/profile/settings.json')
+    expect(out).toContain('desktop app has the full settings panel')
+    expect(out).toContain('picked up on restart')
+  })
+
+  it('/hooks lists configured hooks with the settings path + restart note', async () => {
+    const hook: Hook = { event: 'PostToolUse', matcher: 'edit_file', command: 'npm test' }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { hooks: [hook] })
+    d.settingsPath = () => '/profile/settings.json'
+    const t = fakeIo(['/hooks', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('PostToolUse')
+    expect(out).toContain('npm test')
+    expect(out).toContain('/profile/settings.json')
+    expect(out).toContain('picked up on restart')
+  })
+
+  it('/hooks add walks the fields, confirms, and persists the new hook', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    // command line, then: event (by number), matcher, command, confirm, EOF
+    const t = fakeIo(['/hooks add', '2', 'edit_file', 'npm run typecheck', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([
+      { hooks: [{ event: 'PostToolUse', matcher: 'edit_file', command: 'npm run typecheck' }] }
+    ])
+    expect(t.text()).toContain('hook added')
+  })
+
+  it('/hooks add rejects an unknown event without persisting', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    const t = fakeIo(['/hooks add', 'Bogus', '*', 'echo hi', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([])
+    expect(t.text()).toContain('unknown event')
+  })
+
+  it('/hooks remove deletes the numbered hook', async () => {
+    const h1: Hook = { event: 'PreToolUse', matcher: 'run_shell', command: 'a' }
+    const h2: Hook = { event: 'Stop', matcher: '*', command: 'b' }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { hooks: [h1, h2] })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    const t = fakeIo(['/hooks remove 1', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([{ hooks: [h2] }])
+    expect(t.text()).toContain('removed hook 1')
+  })
+
+  it('/hooks remove out of range is reported, not persisted', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { hooks: [] })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    const t = fakeIo(['/hooks remove 5', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toEqual([])
+    expect(t.text()).toContain('no hook #5')
+  })
+
+  it('/hooks add is unavailable when no settings writer is wired', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.settingsPath = () => '/p/s.json' // note: no updateSettings
+    const t = fakeIo(['/hooks add', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('unavailable')
+  })
+
+  it('/mcp add creates a header-free stdio server (never a URL or auth header)', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    // command line, then: name, command, args, confirm, EOF
+    const t = fakeIo(['/mcp add', 'files', 'npx', '-y @scope/fs .', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toHaveLength(1)
+    const server = saved[0].mcpServers![0]
+    expect(server).toEqual({
+      id: 'files',
+      name: 'files',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@scope/fs', '.'],
+      enabled: true
+    })
+    expect(server).not.toHaveProperty('url')
+    expect(server).not.toHaveProperty('headers')
+    expect(t.text()).toContain('MCP server added')
+  })
+
+  it('/mcp lists servers without leaking header secrets and points to the desktop app', async () => {
+    const remote: McpServerConfig = {
+      id: 'remote',
+      name: 'remote',
+      transport: 'http',
+      command: '',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'secret-xyz' },
+      enabled: true
+    }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], { mcpServers: [remote] })
+    d.settingsPath = () => '/p/s.json'
+    const t = fakeIo(['/mcp', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('remote')
+    expect(out).not.toContain('secret-xyz')
+    expect(out).toContain('desktop app')
   })
 })
 
