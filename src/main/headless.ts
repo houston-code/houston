@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
+import { isApprovalPolicy, type AppSettings, type ApprovalPolicy, type ProviderConfig } from '@shared/types'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
+import { missingKeyHint } from '@shared/provider-keys'
 import type { AgentEvent, AgentRunRequest, ChatMessage } from '@shared/agent'
 
 /**
@@ -117,16 +118,28 @@ export function resolveHeadlessModel(
 ): { providerId: string; model: string } | { error: string } {
   const pick = (p: { id: string; defaultModel?: string; models: { id: string }[] }): string =>
     opts.model ?? p.defaultModel ?? p.models[0]?.id ?? ''
+  // Preflight: a provider that needs a key but has none would otherwise start the
+  // run and fail deep in the provider adapter with a raw error (e.g. `invalid
+  // x-api-key`). Surface an actionable message up front instead. The auto-select
+  // path below already skips keyless providers, so this only guards the two paths
+  // where the provider is chosen explicitly (--provider or a saved selection).
+  const keyError = (p: ProviderConfig | undefined): string | null =>
+    p && p.requiresKey && !p.hasKey ? missingKeyHint(p.id) : null
 
   if (opts.providerId) {
     const p = settings.providers.find((pr) => pr.id === opts.providerId)
     if (!p) return { error: `Unknown provider: ${opts.providerId}` }
     const model = pick(p)
     if (!model) return { error: `No model for provider "${opts.providerId}". Pass --model.` }
+    const noKey = keyError(p)
+    if (noKey) return { error: noKey }
     return { providerId: p.id, model }
   }
 
   if (settings.selected) {
+    const p = settings.providers.find((pr) => pr.id === settings.selected!.providerId)
+    const noKey = keyError(p)
+    if (noKey) return { error: noKey }
     return { providerId: settings.selected.providerId, model: opts.model ?? settings.selected.model }
   }
 

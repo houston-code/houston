@@ -125,6 +125,36 @@ describe('resolveHeadlessModel', () => {
     expect(error).not.toMatch(/in the app/i)
     expect(error).toContain('--provider')
   })
+
+  it('errors up front when an explicit provider needs a key but has none', () => {
+    const s = settings({
+      providers: [{ id: 'openrouter', requiresKey: true, hasKey: false, models: [{ id: 'x' }] }]
+    } as Partial<AppSettings>)
+    const result = resolveHeadlessModel(s, { providerId: 'openrouter', model: 'x' })
+    expect(result).toHaveProperty('error')
+    const error = (result as { error: string }).error
+    // Actionable: names the env var, not the raw provider failure.
+    expect(error).toContain('OPENROUTER_API_KEY')
+    expect(error).not.toMatch(/x-api-key/i)
+  })
+
+  it('errors when the saved selection points at a keyless provider', () => {
+    const s = settings({
+      providers: [{ id: 'anthropic', requiresKey: true, hasKey: false, models: [{ id: 'claude' }] }],
+      selected: { providerId: 'anthropic', model: 'claude' }
+    } as Partial<AppSettings>)
+    const result = resolveHeadlessModel(s, {})
+    expect(result).toHaveProperty('error')
+    expect((result as { error: string }).error).toContain('ANTHROPIC_API_KEY')
+  })
+
+  it('still resolves when a keyless provider does not require a key', () => {
+    const s = settings({
+      providers: [{ id: 'ollama', requiresKey: false, hasKey: false, models: [{ id: 'llama' }] }],
+      selected: { providerId: 'ollama', model: 'llama' }
+    } as Partial<AppSettings>)
+    expect(resolveHeadlessModel(s, {})).toEqual({ providerId: 'ollama', model: 'llama' })
+  })
 })
 
 /** Build deps with a scripted startRun that emits the given events. */
