@@ -38,4 +38,28 @@ describe('ComposerBuffer', () => {
     expect(c.flush()).toBe('unterminated ')
     expect(c.pending).toBe(false)
   })
+
+  it('reports inFence so the driver can hint how to close an open fence', () => {
+    const c = new ComposerBuffer()
+    expect(c.inFence).toBe(false)
+    c.push('```ts')
+    expect(c.inFence).toBe(true) // pending because of the fence, not a backslash
+    c.push('code')
+    expect(c.inFence).toBe(true)
+    expect(c.push('```')).toBe('```ts\ncode\n```') // typing the close fence submits
+    expect(c.inFence).toBe(false)
+  })
+
+  it('a trailing backslash is a continuation, not a fence', () => {
+    const c = new ComposerBuffer()
+    c.push('line one \\')
+    expect(c.pending).toBe(true)
+    expect(c.inFence).toBe(false)
+  })
+
+  it('normalizes a CRLF tail so backslash-continuation survives a \\r\\n stream', () => {
+    const c = new ComposerBuffer()
+    expect(c.push('continue \\\r')).toBeNull() // \r must not defeat the trailing backslash
+    expect(c.push('second')).toBe('continue \nsecond')
+  })
 })

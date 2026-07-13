@@ -16,10 +16,13 @@ export class ComposerBuffer {
    * is complete, or null to keep reading (a continuation is pending).
    */
   push(line: string): string | null {
+    // Normalize a CRLF tail so a piped `\r\n` stream doesn't defeat the trailing
+    // backslash check below (an interactive TTY already strips the `\r`).
+    const clean = line.replace(/\r$/, '')
     // A trailing backslash means "continue on the next line" — drop the backslash.
     // A doubled backslash at the end is a literal, not a continuation.
-    const continued = /(^|[^\\])\\$/.test(line)
-    this.lines.push(continued ? line.slice(0, -1) : line)
+    const continued = /(^|[^\\])\\$/.test(clean)
+    this.lines.push(continued ? clean.slice(0, -1) : clean)
     if (continued) return null
     if (this.inOpenFence()) return null
     return this.flush()
@@ -28,6 +31,15 @@ export class ComposerBuffer {
   /** True while a continuation is pending (used to pick the continuation prompt). */
   get pending(): boolean {
     return this.lines.length > 0
+  }
+
+  /**
+   * True when the pending continuation is an unclosed code fence (vs a trailing
+   * backslash). The driver uses this to hint how to submit, so a stray/opening
+   * ```/``~~~`` can't silently trap the composer with no way out but Ctrl-C.
+   */
+  get inFence(): boolean {
+    return this.inOpenFence()
   }
 
   /** Assemble and reset — used on completion, or to submit what's buffered at EOF. */

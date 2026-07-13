@@ -125,4 +125,21 @@ describe('renderPicker', () => {
     expect(lines[1]).toContain('[x] A')
     expect(lines[2]).toContain('[ ] B')
   })
+
+  describe('empty option list (e.g. an options-less ask_user)', () => {
+    const empty = initialPickerState({ title: 'Free text?', options: [] })
+
+    it('does not throw or NaN on navigation/commit', () => {
+      expect(() => reducePicker(empty, { type: 'up' })).not.toThrow()
+      expect(reducePicker(empty, { type: 'up' }).state.cursor).toBe(0) // not NaN
+      expect(reducePicker(empty, { type: 'down' }).state.cursor).toBe(0)
+      expect(() => reducePicker(empty, { type: 'enter' })).not.toThrow()
+    })
+
+    it('hands off to the typed prompt on enter/char, cancels on esc', () => {
+      expect(reducePicker(empty, { type: 'enter' }).outcome).toEqual({ kind: 'type' })
+      expect(reducePicker(empty, { type: 'char' }).outcome).toEqual({ kind: 'type' })
+      expect(reducePicker(empty, { type: 'cancel' }).outcome).toEqual({ kind: 'cancel' })
+    })
+  })
 })

@@ -77,16 +77,18 @@ export function initialPickerState(spec: PickerSpec): PickerState {
   return { spec, cursor: 0, checked: new Set() }
 }
 
-const wrap = (i: number, len: number): number => ((i % len) + len) % len
+// Wrap an index into [0, len); len === 0 (an empty option list) stays at 0 rather
+// than producing NaN via `% 0`.
+const wrap = (i: number, len: number): number => (len === 0 ? 0 : ((i % len) + len) % len)
 
-/** Compute the committed value for the current selection. */
+/** Compute the committed value for the current selection, '' when there are no options. */
 function commitValue(s: PickerState): string {
   if (s.spec.multiSelect) {
     const picked = s.spec.options.filter((_, i) => s.checked.has(i)).map((o) => o.value)
     // With nothing checked, committing takes the cursor's option (a sensible default).
-    return picked.length ? picked.join(', ') : s.spec.options[s.cursor].value
+    return picked.length ? picked.join(', ') : (s.spec.options[s.cursor]?.value ?? '')
   }
-  return s.spec.options[s.cursor].value
+  return s.spec.options[s.cursor]?.value ?? ''
 }
 
 /**
@@ -96,6 +98,16 @@ function commitValue(s: PickerState): string {
  */
 export function reducePicker(s: PickerState, key: PickerKey): { state: PickerState; outcome?: PickerOutcome } {
   const len = s.spec.options.length
+  // Nothing to pick from (e.g. an ask_user with no options): there's nothing to
+  // commit or navigate, so hand off to the typed prompt on any resolving key and
+  // ignore the rest, rather than committing/deref-ing an out-of-range cursor.
+  if (len === 0) {
+    if (key.type === 'cancel') return { state: s, outcome: { kind: 'cancel' } }
+    if (key.type === 'up' || key.type === 'down' || key.type === 'digit' || key.type === 'space') {
+      return { state: s }
+    }
+    return { state: s, outcome: { kind: 'type' } } // enter / char → typed answer
+  }
   switch (key.type) {
     case 'up':
       return { state: { ...s, cursor: wrap(s.cursor - 1, len) } }
