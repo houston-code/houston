@@ -14,6 +14,7 @@ import type {
   ToolCall,
   ToolSchema
 } from '@shared/agent'
+import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
 import { DEFAULT_COMPACTION_THRESHOLD, resolveShellOutputBudget } from '@shared/defaults'
@@ -1133,7 +1134,7 @@ export async function startRun(
           landed = true
           messages.push({
             role: 'user',
-            content: landingReminder(decision.iterationsLeft, decision.trigger)
+            content: `${SYSTEM_NOTE_PREFIX} ${landingReminder(decision.iterationsLeft, decision.trigger)}`
           })
           persist(messages)
         }
@@ -1428,7 +1429,7 @@ export async function startRun(
           mutated: iterMutated
         })
         if (action.kind === 'nudge') {
-          messages.push({ role: 'user', content: action.message })
+          messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${action.message}` })
           persist(messages)
         } else if (action.kind === 'stop') {
           // Persisted past the corrective nudge — end the run cleanly with a

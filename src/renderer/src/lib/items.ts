@@ -1,5 +1,6 @@
 import {
   COMPACTION_SUMMARY_PREFIX,
+  SYSTEM_NOTE_PREFIX,
   type AgentEvent,
   type ChatMessage,
   type PlanPayload,
@@ -412,7 +413,13 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
   const items: DisplayItem[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      if (m.content.trim() || m.images?.length) {
+      // An automated guidance turn the loop injected (a stall nudge, the budget
+      // landing reminder) rides on a user message but isn't from the user — show it
+      // as a system notice, not a user bubble, and keep it out of `lastUserText`.
+      if (m.content.startsWith(SYSTEM_NOTE_PREFIX)) {
+        const text = m.content.slice(SYSTEM_NOTE_PREFIX.length).trim()
+        if (text) items.push({ kind: 'notice', id: nextId(), text, tone: 'info' })
+      } else if (m.content.trim() || m.images?.length) {
         items.push({
           kind: 'user',
           id: nextId(),
