@@ -2,11 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readFileSync, statSync } from 'node:fs'
 import {
   cliCollectSecrets,
   cliGetHeaders,
   cliGetKey,
   cliHasKey,
+  cliRemoveKey,
+  cliSetKey,
   envVarCandidates,
   genericEnvVar,
   resetCredentialWarnings
@@ -40,6 +43,13 @@ describe('env var mapping', () => {
 
   it('sanitizes arbitrary ids into the generic form', () => {
     expect(genericEnvVar('my custom.provider-2')).toBe('HOUSTON_API_KEY_MY_CUSTOM_PROVIDER_2')
+  })
+
+  it('maps catalog hosts to their documented variables (keying parity)', () => {
+    expect(envVarCandidates('openrouter')).toEqual(['OPENROUTER_API_KEY', 'HOUSTON_API_KEY_OPENROUTER'])
+    expect(envVarCandidates('groq')).toEqual(['GROQ_API_KEY', 'HOUSTON_API_KEY_GROQ'])
+    // A catalog key set via its conventional env var resolves end-to-end.
+    expect(cliGetKey('openrouter', { env: { OPENROUTER_API_KEY: 'or-key' }, dataDir: dir })).toBe('or-key')
   })
 
   it('prefers a well-known variable, then the generic, then the file', () => {
@@ -178,5 +188,46 @@ describe('cliCollectSecrets', () => {
 
   it('returns [] when no sources are present', () => {
     expect(cliCollectSecrets({ dataDir: dir, env: {} })).toEqual([])
+  })
+
+  it('still redacts built-in provider env keys after the shared-map refactor', () => {
+    const env = { OPENAI_API_KEY: 'openai-secret-key', GROQ_API_KEY: 'groq-secret-key' }
+    expect(cliCollectSecrets({ dataDir: dir, env }).sort()).toEqual(
+      ['groq-secret-key', 'openai-secret-key'].sort()
+    )
+  })
+})
+
+describe('cliSetKey / cliRemoveKey', () => {
+  it('writes a key to cli-credentials.json with 0600 perms and reads it back', () => {
+    const res = cliSetKey('openrouter', 'or-secret', { dataDir: dir, env: {} })
+    expect(res.shadowedByEnv).toBeNull()
+    expect(cliGetKey('openrouter', { dataDir: dir, env: {} })).toBe('or-secret')
+    if (process.platform !== 'win32') {
+      const mode = statSync(join(dir, 'cli-credentials.json')).mode
+      expect(mode & 0o077).toBe(0) // owner-only
+    }
+  })
+
+  it('merges into an existing file without clobbering other keys', () => {
+    cliSetKey('openrouter', 'or-secret', { dataDir: dir, env: {} })
+    cliSetKey('groq', 'groq-secret', { dataDir: dir, env: {} })
+    const parsed = JSON.parse(readFileSync(join(dir, 'cli-credentials.json'), 'utf8'))
+    expect(parsed).toEqual({ openrouter: 'or-secret', groq: 'groq-secret' })
+  })
+
+  it('reports the env var that shadows a freshly stored key', () => {
+    const res = cliSetKey('openrouter', 'stored', { dataDir: dir, env: { OPENROUTER_API_KEY: 'env-wins' } })
+    expect(res.shadowedByEnv).toBe('OPENROUTER_API_KEY')
+    // Env still wins in resolution, matching the warning.
+    expect(cliGetKey('openrouter', { dataDir: dir, env: { OPENROUTER_API_KEY: 'env-wins' } })).toBe('env-wins')
+  })
+
+  it('removes a stored key, and is a no-op when there is nothing to remove', () => {
+    cliSetKey('openrouter', 'or-secret', { dataDir: dir, env: {} })
+    expect(cliRemoveKey('openrouter', { dataDir: dir })).toBe(true)
+    expect(cliGetKey('openrouter', { dataDir: dir, env: {} })).toBeNull()
+    expect(cliRemoveKey('openrouter', { dataDir: dir })).toBe(false)
+    expect(cliRemoveKey('never-had-one', { dataDir: dir })).toBe(false)
   })
 })

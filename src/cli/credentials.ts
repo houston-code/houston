@@ -1,6 +1,11 @@
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getUserDataDir } from '../main/userData'
+import {
+  allProviderKeyEnvVars,
+  genericKeyEnvVar,
+  providerKeyEnvVars
+} from '@shared/provider-keys'
 
 /**
  * Credential source for the standalone CLI. Electron's `safeStorage` (the desktop
@@ -23,12 +28,13 @@ import { getUserDataDir } from '../main/userData'
  * like `anthropic`, plus web-search key ids like `web-search:brave`).
  */
 
-/** Well-known environment variables per credential id, tried before the generic form. */
-const ENV_ALIASES: Record<string, string[]> = {
-  anthropic: ['ANTHROPIC_API_KEY'],
-  openai: ['OPENAI_API_KEY'],
-  gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
-  // Web-search keys: tavily reuses the legacy bare id (see @shared/search).
+/**
+ * Well-known env vars for non-provider credential ids (web-search keys). Provider
+ * key env vars live in @shared/provider-keys — the single source of truth shared
+ * with the missing-key preflight — so a new catalog host only needs adding there.
+ * Tavily reuses the legacy bare id (see @shared/search).
+ */
+const WEB_SEARCH_ENV_ALIASES: Record<string, string[]> = {
   'web-search': ['TAVILY_API_KEY'],
   'web-search:brave': ['BRAVE_API_KEY'],
   'web-search:exa': ['EXA_API_KEY']
@@ -36,12 +42,18 @@ const ENV_ALIASES: Record<string, string[]> = {
 
 /** `HOUSTON_API_KEY_<ID>` with the id uppercased and non-alphanumerics collapsed to `_`. */
 export function genericEnvVar(id: string): string {
-  return `HOUSTON_API_KEY_${id.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`
+  return genericKeyEnvVar(id)
 }
 
-/** The env var names checked for a credential id, in precedence order. */
+/**
+ * The env var names checked for a credential id, in precedence order: any
+ * web-search alias, then the provider's documented name(s) + generic fallback.
+ * (For a provider id there's no web-search alias, so this is exactly the provider
+ * key env vars; for a web-search id the provider map has no entry, so it's the
+ * alias + generic form.)
+ */
 export function envVarCandidates(id: string): string[] {
-  return [...(ENV_ALIASES[id] ?? []), genericEnvVar(id)]
+  return [...(WEB_SEARCH_ENV_ALIASES[id] ?? []), ...providerKeyEnvVars(id)]
 }
 
 export interface CredentialDeps {
@@ -185,8 +197,12 @@ export function cliCollectSecrets(deps: CredentialDeps = {}): string[] {
   const dataDir = deps.dataDir ?? getUserDataDir()
   const out = new Set<string>()
 
-  // Env: the well-known per-provider vars plus any generic HOUSTON_API_KEY_* override.
-  const knownEnvNames = new Set<string>(Object.values(ENV_ALIASES).flat())
+  // Env: the well-known per-provider + web-search vars plus any generic
+  // HOUSTON_API_KEY_* override.
+  const knownEnvNames = new Set<string>([
+    ...allProviderKeyEnvVars(),
+    ...Object.values(WEB_SEARCH_ENV_ALIASES).flat()
+  ])
   for (const [name, value] of Object.entries(env)) {
     if (!value || value.length < 8) continue
     if (knownEnvNames.has(name) || name.startsWith('HOUSTON_API_KEY_')) out.add(value)
@@ -219,4 +235,42 @@ export function cliGetKey(id: string, deps: CredentialDeps = {}): string | null 
 /** True when `cliGetKey` would resolve a credential for this id. */
 export function cliHasKey(id: string, deps: CredentialDeps = {}): boolean {
   return cliGetKey(id, deps) !== null
+}
+
+/**
+ * Persist a key for `id` into `cli-credentials.json` (the CLI's writable key store;
+ * the desktop app's safeStorage isn't reachable here). Reads-merges-writes the flat
+ * `{ "<id>": "<key>" }` map and rewrites the file 0600 so a fresh file — or an
+ * existing group/world-readable one — ends up owner-only. Returns the resolved env
+ * var name if `id`'s key is currently coming from the environment, so the caller can
+ * warn that the env var still shadows what was just written (env wins in cliGetKey).
+ */
+export function cliSetKey(
+  id: string,
+  key: string,
+  deps: CredentialDeps = {}
+): { shadowedByEnv: string | null } {
+  const env = deps.env ?? process.env
+  const dataDir = deps.dataDir ?? getUserDataDir()
+  const path = join(dataDir, 'cli-credentials.json')
+  const current = readJsonObject(path)
+  current[id] = key
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  const envName = envVarCandidates(id).find((name) => env[name])
+  return { shadowedByEnv: envName ?? null }
+}
+
+/**
+ * Remove `id`'s key from `cli-credentials.json`. Returns true if a stored key was
+ * removed. A no-op (returns false) when the file is absent, malformed, or has no
+ * such entry — nothing to remove and nothing to rewrite.
+ */
+export function cliRemoveKey(id: string, deps: CredentialDeps = {}): boolean {
+  const dataDir = deps.dataDir ?? getUserDataDir()
+  const path = join(dataDir, 'cli-credentials.json')
+  const current = readJsonObject(path)
+  if (!(id in current)) return false
+  delete current[id]
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  return true
 }

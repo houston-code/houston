@@ -7,14 +7,23 @@ import {
   configureHasKey,
   configureHeaderSecrets,
   getProvider,
-  getSettings
+  getSettings,
+  saveSettings
 } from '../main/store'
 import { setUserDataDir } from '../main/userData'
 import { configureLogRedactor, log } from '../main/logger'
 import { configureTitleRedaction } from '../main/conversations'
 import { redactSecrets } from '../main/agent/redact'
 import { resolveUserDataDir } from './paths'
-import { cliCollectSecrets, cliGetHeaders, cliGetKey, cliHasKey } from './credentials'
+import {
+  cliCollectSecrets,
+  cliGetHeaders,
+  cliGetKey,
+  cliHasKey,
+  cliRemoveKey,
+  cliSetKey
+} from './credentials'
+import { runProvidersCommand, type ProvidersDeps } from './providers'
 
 /**
  * Standalone CLI entry — the interactive TUI (`-i`) and one-shot headless (`-p`)
@@ -64,6 +73,8 @@ Usage:
   houston -i [options]                 stay-resident interactive session
   houston -p "<prompt>" [options]      one-shot run; assistant text on stdout
 
+  houston providers [...]              manage model providers and their API keys
+
 Options:
   --cwd <dir>          project folder (default: the current directory)
   --provider <id>      provider id from your settings (default: your selection)
@@ -75,6 +86,12 @@ Options:
   --resume <id>        (-p) resume a specific session
   -h, --help           this help
   -v, --version        print the version
+
+Providers:
+  houston providers                    list configured providers and hosts to add
+  houston providers add <id>           add a catalog host (e.g. openrouter, groq)
+  houston providers set-key <id> [key] store an API key (key from arg or stdin)
+  houston providers remove-key <id>    forget a stored API key
 
 Credentials (checked in this order):
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / HOUSTON_API_KEY_<ID>
@@ -132,6 +149,14 @@ async function main(): Promise<number> {
 
   wireCliHost()
 
+  // `houston providers …` — manage providers/keys before the run-mode parsers,
+  // which only match `-i`/`-p`. Matched as the first positional so flags before it
+  // don't hide it.
+  const positionals = argv.slice(2).filter((a) => !a.startsWith('-'))
+  if (positionals[0] === 'providers') {
+    return runProvidersCommand(argv.slice(argv.indexOf('providers') + 1), providersDeps())
+  }
+
   // Same mode selection as the desktop binary: `-i` wins, then `-p`; anything
   // else is usage (the desktop app opens the GUI here — the CLI has none).
   const tui = parseTuiArgs(argv, process.cwd())
@@ -141,6 +166,33 @@ async function main(): Promise<number> {
 
   process.stderr.write(USAGE)
   return 2
+}
+
+/** Read all of stdin as UTF-8 (for a key piped into `providers set-key`). */
+function readAllStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (chunk) => (data += chunk))
+    process.stdin.on('end', () => resolve(data))
+    process.stdin.on('error', reject)
+  })
+}
+
+/** Host wiring for the `providers` subcommand (real store + credential file). */
+function providersDeps(): ProvidersDeps {
+  return {
+    getSettings,
+    saveSettings,
+    hasKey: (id) => cliHasKey(id),
+    setKey: (id, key) => cliSetKey(id, key),
+    removeKey: (id) => cliRemoveKey(id),
+    out: (s) => process.stdout.write(s),
+    err: (s) => process.stderr.write(s),
+    isMac: process.platform === 'darwin',
+    // Only consume stdin when it's piped — a TTY would block waiting for input.
+    readStdin: async () => (process.stdin.isTTY ? null : readAllStdin())
+  }
 }
 
 /** True when this module is the executed entry (bundled CLI), not an import. */

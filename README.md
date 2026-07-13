@@ -523,17 +523,31 @@ client code, built without the desktop shell. (From a source checkout:
 `safeStorage`) and can't be read outside it, so the CLI resolves credentials in
 this order:
 
-1. Environment variables — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-   `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), and web-search keys
-   (`TAVILY_API_KEY`, `BRAVE_API_KEY`, `EXA_API_KEY`). Any provider id —
-   including custom endpoints — also works via `HOUSTON_API_KEY_<ID>` (the id
-   uppercased, non-alphanumerics as `_`).
-2. `cli-credentials.json` in the profile dir — a flat
+1. Environment variables. The built-in providers use their conventional names
+   (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` or `GOOGLE_API_KEY`),
+   as do the catalog hosts you can add (`OPENROUTER_API_KEY`, `GROQ_API_KEY`,
+   `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `DEEPINFRA_API_KEY`, and so on), plus
+   the web-search keys (`TAVILY_API_KEY`, `BRAVE_API_KEY`, `EXA_API_KEY`). Any
+   provider id, including custom endpoints, also works via `HOUSTON_API_KEY_<ID>`
+   (the id uppercased, non-alphanumerics as `_`).
+2. `cli-credentials.json` in the profile dir: a flat
    `{"<provider-id>": "<key>"}` map for keys that should persist across shells.
-   Create it yourself and `chmod 600` it; it is plaintext by design (a headless
-   box has no OS keyring), and the CLI warns if it's readable by other users.
+   The `houston providers set-key` command writes it for you (`0600`), or create
+   it by hand and `chmod 600` it. It is plaintext by design (a headless box has
+   no OS keyring), and the CLI warns if it's readable by other users.
 
-Local providers (Ollama, LM Studio) need no key at all — point the CLI at the
+If a provider that needs a key doesn't have one, the CLI now says so up front
+with the exact variable to set, instead of failing mid-run with a raw provider
+error. Manage providers and keys from the terminal with the `houston providers`
+command:
+
+```bash
+node houston-cli.cjs providers                       # list configured providers + hosts to add
+node houston-cli.cjs providers add openrouter        # register a catalog host (OpenRouter, Groq, ...)
+printf %s "sk-..." | node houston-cli.cjs providers set-key openrouter   # store its key (piped, not echoed)
+```
+
+Local providers (Ollama, LM Studio) need no key at all: point the CLI at the
 same machine and it just works.
 
 **Custom auth headers.** A provider or MCP server can carry custom HTTP headers
