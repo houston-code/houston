@@ -146,6 +146,15 @@ export interface StallOptions {
    * budget guard. Defaults to false (headless behavior) so callers opt in.
    */
   interactive?: boolean
+  /**
+   * Whether the run's policy even permits workspace-mutating tool calls. In Plan
+   * mode writes/shell are blocked outright, so a mutation can never succeed and
+   * "no forward progress" is the *defined* behavior, not a stall — the whole
+   * point of the mode is to research and propose without touching files. When
+   * false, the no-progress rule is disabled entirely (it can neither nudge nor
+   * stop); the repeated-call / repeated-error rules still apply. Defaults to true.
+   */
+  mutationsAllowed?: boolean
 }
 
 /**
@@ -157,6 +166,7 @@ export interface StallOptions {
 export class StallDetector {
   private readonly thresholds: StallThresholds
   private readonly interactive: boolean
+  private readonly mutationsAllowed: boolean
   /** Count of consecutive iterations ending with a given repeated call signature. */
   private repeatCall: { sig: string; count: number } | null = null
   /** Count of consecutive iterations ending with a given repeated error signature. */
@@ -174,6 +184,7 @@ export class StallDetector {
   constructor(thresholds: StallThresholds = DEFAULT_STALL_THRESHOLDS, opts: StallOptions = {}) {
     this.thresholds = thresholds
     this.interactive = opts.interactive === true
+    this.mutationsAllowed = opts.mutationsAllowed !== false
   }
 
   observe(obs: IterationObservation): StallAction {
@@ -292,11 +303,12 @@ export class StallDetector {
           'retrying.'
       }
     }
-    if (this.noProgress >= this.thresholds.noProgressLimit) {
+    if (this.mutationsAllowed && this.noProgress >= this.thresholds.noProgressLimit) {
       return {
         reason: 'made no progress for several turns',
         // A weak signal — read-only investigation/planning legitimately trips it.
         // Interactively it nudges only; headless it may stop as a budget guard.
+        // (Skipped entirely when the policy forbids mutations — see mutationsAllowed.)
         canStop: !this.interactive,
         message:
           'You have gone several turns without making any change to the project (no edits or ' +

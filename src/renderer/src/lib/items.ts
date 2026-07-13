@@ -378,8 +378,20 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       const finalized = finalizeStreaming(items)
       return [...finalized, { kind: 'notice', id: nextId(), text: e.message, tone: 'error' }]
     }
-    default:
+    case 'usage':
+    case 'turn_start':
+      // Not transcript items: usage totals are folded into the store/control bar,
+      // and turn_start is adopted by App. No display change here.
       return items
+    default: {
+      // Exhaustiveness guard: a new AgentEvent variant fails to compile here until
+      // this reducer handles it (the mechanism that keeps the TUI, GUI, and headless
+      // event consumers from drifting). Non-throwing so an unforeseen event can never
+      // crash the transcript render — it's just ignored, as before.
+      const _exhaustive: never = e
+      void _exhaustive
+      return items
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent, ChatMessage } from '@shared/agent'
+import type { AgentEvent, ChatMessage, PlanDecision } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import {
@@ -540,6 +540,7 @@ interface Recorder {
   runs: Array<{ providerId: string; model: string; policy: string; messages: ChatMessage[] }>
   approvals: Array<[string, string, string]>
   questions: Array<[string, string, string]>
+  plans: Array<[string, string, PlanDecision]>
   cancels: string[]
   accepted: () => number
 }
@@ -553,6 +554,7 @@ function deps(
   const runs: Recorder['runs'] = []
   const approvals: Recorder['approvals'] = []
   const questions: Recorder['questions'] = []
+  const plans: Recorder['plans'] = []
   const cancels: string[] = []
   let accepted = 0
   const d: TuiDeps = {
@@ -573,11 +575,12 @@ function deps(
     },
     resolveApproval: (r, c, dec) => approvals.push([r, c, dec]),
     resolveQuestion: (r, c, ans) => questions.push([r, c, ans]),
+    resolvePlan: (r, c, dec) => plans.push([r, c, dec]),
     cancelRun: (r) => cancels.push(r),
     io: undefined as unknown as TuiIo,
     newId: () => `run-${runs.length + 1}`
   }
-  return { d, rec: { runs, approvals, questions, cancels, accepted: () => accepted } }
+  return { d, rec: { runs, approvals, questions, plans, cancels, accepted: () => accepted } }
 }
 
 /** An in-memory conversation store standing in for conversations.ts. */
@@ -1272,5 +1275,79 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('/new starts a fresh chat')
+  })
+})
+
+describe('runTui — plan review (present_plan)', () => {
+  const planEvent = { runId: 'x', type: 'plan_ready' as const, callId: 'p1', plan: { title: 'Refactor auth', body: 'Move the guard to middleware.' } }
+  const withPlan = (): AgentEvent[] => [planEvent, { runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('renders the plan and resolves accept (auto-edit) — the run does not hang', async () => {
+    const { d, rec } = deps(withPlan())
+    const t = fakeIo(['do it', 'a', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Refactor auth')
+    expect(t.text()).toContain('Move the guard to middleware.')
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'accept', mode: 'auto-edit' }]])
+  })
+
+  it('resolves accept-ask (approve each edit)', async () => {
+    const { d, rec } = deps(withPlan())
+    d.io = fakeIo(['do it', 'k', null]).io
+    await runTui(opts, d)
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'accept', mode: 'ask' }]])
+  })
+
+  it('resolves reject', async () => {
+    const { d, rec } = deps(withPlan())
+    d.io = fakeIo(['do it', 'r', null]).io
+    await runTui(opts, d)
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
+  })
+
+  it('resolves suggest, carrying the typed note', async () => {
+    const { d, rec } = deps(withPlan())
+    d.io = fakeIo(['do it', 's', 'add tests first', null]).io
+    await runTui(opts, d)
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'suggest', note: 'add tests first' }]])
+  })
+
+  it('edit opens the editor and accepts the edited body', async () => {
+    const { d, rec } = deps(withPlan())
+    d.io = fakeIo(['do it', 'e', null]).io
+    d.editText = async (initial) => `${initial}\n\nEdited by hand.`
+    await runTui(opts, d)
+    expect(rec.plans).toHaveLength(1)
+    const [, , decision] = rec.plans[0]
+    expect(decision.kind).toBe('accept')
+    if (decision.kind === 'accept') expect(decision.editedBody).toContain('Edited by hand.')
+  })
+
+  it('edit with no editor configured falls back to accepting as presented', async () => {
+    const { d, rec } = deps(withPlan())
+    const t = fakeIo(['do it', 'e', null])
+    d.io = t.io
+    // No editText dep wired → no editor available.
+    await runTui(opts, d)
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'accept', mode: 'auto-edit' }]])
+    expect(t.text()).toMatch(/no editor available/i)
+  })
+
+  // Parity guard (runtime complement to the assertNever compile guard): every
+  // BLOCKING interaction the loop awaits must be resolved by the client, or the
+  // run hangs. plan_ready was the case that regressed — it was silently dropped.
+  it('resolves every blocking interaction so the run never hangs', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'a1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which?', options: [{ label: 'A' }] },
+      { runId: 'x', type: 'plan_ready', callId: 'p1', plan: { title: 'Plan' } },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    d.io = fakeIo(['go', 'y', '1', 'r', null]).io
+    await runTui(opts, d)
+    expect(rec.approvals).toHaveLength(1)
+    expect(rec.questions).toHaveLength(1)
+    expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
   })
 })

@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy, type AppSettings, type ApprovalPolicy, type ProviderConfig } from '@shared/types'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import { missingKeyHint } from '@shared/provider-keys'
-import type { AgentEvent, AgentRunRequest, ChatMessage } from '@shared/agent'
+import { assertNever } from '@shared/assert'
+import type { AgentEvent, AgentRunRequest, ChatMessage, PlanDecision } from '@shared/agent'
 
 /**
  * One-shot headless mode: run a single prompt through the agent loop without the
@@ -185,6 +186,7 @@ export interface HeadlessDeps {
   ) => Promise<void>
   resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
   resolveQuestion: (runId: string, callId: string, answer: string) => void
+  resolvePlan: (runId: string, callId: string, decision: PlanDecision) => void
   out: (s: string) => void
   err: (s: string) => void
   newId?: () => string
@@ -369,6 +371,30 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         }
         if (e.stopReason === 'error' || e.stopReason === 'aborted') failed = true
         break
+      case 'plan_ready':
+        // No interactive reviewer in headless. Print the plan (the deliverable of a
+        // plan-mode run) and reject so present_plan unblocks without editing anything,
+        // matching the read-only intent of the default policy. Re-run with --full-auto
+        // (which isn't Plan mode, so this is never reached) to actually make changes.
+        if (!opts.json) {
+          deps.out(`\n${e.plan.title}\n`)
+          if (e.plan.body) deps.out(`${e.plan.body}\n`)
+          deps.err('· no interactive reviewer (headless) — plan not executed; use --full-auto to make changes\n')
+        }
+        deps.resolvePlan(e.runId, e.callId, { kind: 'reject' })
+        break
+      case 'compaction':
+        if (!opts.json) deps.err(`· compacted ${e.summarized} messages\n`)
+        break
+      // Internal/streaming events with no headless surface: the --json path above
+      // already emits each verbatim, and the human output doesn't show them.
+      case 'reasoning':
+      case 'subagent':
+      case 'tool_progress':
+      case 'turn_start':
+        break
+      default:
+        assertNever(e, 'headless:unhandled agent event')
     }
   }
 
