@@ -59,6 +59,14 @@ describe('conversationToHtml', () => {
     expect(html).toContain('<style>')
   })
 
+  it('declares a restrictive Content-Security-Policy', () => {
+    const html = conversationToHtml(makeConversation())
+    expect(html).toContain('http-equiv="Content-Security-Policy"')
+    expect(html).toContain("default-src 'none'")
+    // The inline stylesheet is the only thing the policy permits.
+    expect(html).toContain("style-src 'unsafe-inline'")
+  })
+
   it('escapes content so it cannot inject markup or scripts', () => {
     const html = conversationToHtml(
       makeConversation({
