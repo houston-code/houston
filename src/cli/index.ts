@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { parseTuiArgs } from '../main/tui'
-import { parseHeadlessArgs } from '../main/headless'
+import { parseTuiArgs, type TuiOptions } from '../main/tui'
+import { parseHeadlessArgs, type HeadlessOptions } from '../main/headless'
 import { runTuiEntry, runHeadlessEntry } from '../main/terminalEntry'
 import { configureAgentHost } from '../main/agentHost'
 import {
@@ -72,7 +72,7 @@ export function nodeVersionError(nodeVersion: string, min = MIN_NODE_MAJOR): str
 export const USAGE = `Houston CLI ${VERSION} — coding agent in your terminal (no desktop app required).
 
 Usage:
-  houston -i [options]                 stay-resident interactive session
+  houston [options]                    stay-resident interactive session (bare command; same as -i)
   houston -p "<prompt>" [options]      one-shot run; assistant text on stdout
 
   houston providers [...]              manage model providers and their API keys
@@ -163,12 +163,9 @@ async function main(): Promise<number> {
     return runProvidersCommand(argv.slice(argv.indexOf('providers') + 1), providersDeps())
   }
 
-  // Same mode selection as the desktop binary: `-i` wins, then `-p`; anything
-  // else is usage (the desktop app opens the GUI here — the CLI has none).
-  const tui = parseTuiArgs(argv, process.cwd())
-  const headless = tui ? null : parseHeadlessArgs(argv, process.cwd())
-  if (tui) return runTuiEntry(tui)
-  if (headless) return runHeadlessEntry(headless)
+  const mode = selectRunMode(argv, process.cwd(), Boolean(process.stdin.isTTY))
+  if (mode.kind === 'tui') return runTuiEntry(mode.options)
+  if (mode.kind === 'headless') return runHeadlessEntry(mode.options)
 
   process.stderr.write(USAGE)
   return 2
@@ -200,6 +197,31 @@ function providersDeps(): ProvidersDeps {
     // Only consume stdin when it's piped — a TTY would block waiting for input.
     readStdin: async () => (process.stdin.isTTY ? null : readAllStdin())
   }
+}
+
+export type RunMode =
+  | { kind: 'tui'; options: TuiOptions }
+  | { kind: 'headless'; options: HeadlessOptions }
+  | { kind: 'usage' }
+
+/**
+ * Decide what a standalone-CLI invocation runs, once `-h`/`-v`/node-version have
+ * been ruled out. Explicit modes stay explicit — `-i` (or `--interactive`/`--tui`)
+ * wins, then `-p` — but unlike the desktop binary (where a bare launch opens the
+ * GUI), a bare `houston` at a TTY defaults to interactive, so typing `houston`
+ * alone drops into the REPL just like `houston -i`. A bare invocation with no TTY
+ * (a pipe, CI, cron) has nowhere to host a REPL, so it falls to usage rather than
+ * hanging on input that will never arrive. Pure — takes the TTY flag as input —
+ * so the whole decision is unit-testable.
+ */
+export function selectRunMode(argv: string[], cwd: string, isTTY: boolean): RunMode {
+  const tui = parseTuiArgs(argv, cwd)
+  if (tui) return { kind: 'tui', options: tui }
+  const headless = parseHeadlessArgs(argv, cwd)
+  if (headless) return { kind: 'headless', options: headless }
+  // No explicit mode: a bare `houston`. Interactive on a real terminal, else usage.
+  if (isTTY) return { kind: 'tui', options: parseTuiArgs(argv, cwd, true)! }
+  return { kind: 'usage' }
 }
 
 /** True when this module is the executed entry (bundled CLI), not an import. */

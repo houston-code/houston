@@ -356,7 +356,7 @@ Grab the artifact for your platform:
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
-| Any (terminal only) | Node ≥ 22 | `houston-cli.cjs` — the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i` | **No** — re-download to update |
+| Any (terminal only) | Node ≥ 22 | `houston-cli.cjs` — the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i`, or put it on your PATH as `houston` | **No** — re-download to update |
 
 > **macOS builds are signed and notarized**, so they open with no Gatekeeper warning
 > and update in place. **Windows and Linux builds are unsigned** for now:
@@ -454,6 +454,10 @@ Houston -i
 Houston -i --cwd ~/code/myproj --model claude --approval auto-edit
 ```
 
+The `-i` flag is what tells the desktop binary to skip the window. With the
+[standalone CLI](#standalone-cli-no-desktop-app) on your PATH there's no window to
+skip, so a bare `houston` is enough: `houston` alone starts the same session.
+
 The conversation streams live as the agent works: assistant replies are rendered
 as markdown (headings, lists, tables, code blocks) right in the terminal, followed
 by reasoning, tool activity with a snippet of each result (including live progress
@@ -524,6 +528,29 @@ commands, approvals, sandboxing, and session persistence described in
 [Interactive terminal](#interactive-terminal) work identically: it is the same
 client code, built without the desktop shell. (From a source checkout:
 `npm run build:cli` produces `out/cli/houston-cli.cjs`.)
+
+**Run it as a bare `houston` command.** Once it's on your PATH, typing `houston`
+by itself drops straight into the interactive terminal, with no flag and no
+`node …/houston-cli.cjs` prefix:
+
+```bash
+# From a source checkout: build the bundle and symlink it onto your PATH.
+npm run install:cli                  # → ~/.local/bin/houston (override with --dir)
+
+# From a downloaded release asset: drop it on your PATH yourself.
+chmod +x houston-cli.cjs && mv houston-cli.cjs ~/.local/bin/houston
+
+houston                              # interactive session (same as `houston -i`)
+houston -p "quick one-shot"          # or script a single run
+```
+
+A bare `houston` starts interactive only when it has a real terminal; in a pipe
+or CI (no TTY) it prints usage instead of hanging, so use `-p "<prompt>"` there.
+`npm run install:cli` symlinks the built bundle (a rebuild is picked up with no
+reinstall) and, if the target dir isn't on your PATH yet, prints the line to add.
+Prefer npm's own linking? The package exposes a `houston` `bin`, so
+`npm run build:cli && npm link` works too. On Windows use `npm link` (npm writes
+a `houston.cmd` shim) or invoke the bundle directly.
 
 **API keys.** The desktop app's keys live in the OS keychain (Electron
 `safeStorage`) and can't be read outside it, so the CLI resolves credentials in

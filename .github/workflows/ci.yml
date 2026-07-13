@@ -90,6 +90,19 @@ jobs:
           echo "$out"
           [ "$code" -ne 0 ] || { echo "::error::CLI -p with no key unexpectedly exited 0"; exit 1; }
           echo "$out" | grep -q "No model configured" || { echo "::error::CLI -p did not surface the expected 'No model configured' error"; exit 1; }
+      - name: Smoke the CLI installer (bare `houston` on PATH)
+        run: |
+          set -euo pipefail
+          # install-cli.mjs symlinks the built bundle into a bin dir as `houston`.
+          # Point it at a scratch dir and confirm the resulting command runs — so
+          # the "run it as a bare houston" path can't silently rot.
+          bindir="$(mktemp -d)/bin"
+          node scripts/install-cli.mjs --dir "$bindir"
+          [ -L "$bindir/houston" ] || { echo "::error::installer did not create a houston symlink"; exit 1; }
+          ver="$(node -p "require('./package.json').version")"
+          got="$(PATH="$bindir:$PATH" houston --version)"
+          echo "houston --version -> $got (expected $ver)"
+          [ "$got" = "$ver" ] || { echo "::error::bare houston --version printed '$got', expected '$ver'"; exit 1; }
 
   # Exercise the Linux bubblewrap backend for REAL — the macOS-bound developer can't
   # run it locally, so CI is the source of truth. Installs bubblewrap, enables

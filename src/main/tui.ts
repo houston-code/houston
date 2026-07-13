@@ -77,8 +77,17 @@ export interface TuiOptions {
  * the headless check and then the GUI. Shares flag plumbing with headless so the
  * two entry points accept the same `--cwd` / `--provider` / `--model` /
  * `--approval` / `--full-auto` / `--accept-terms` options.
+ *
+ * `defaultInteractive` lets a caller treat the absence of `-i` as interactive
+ * anyway (still honoring the other flags): the standalone CLI passes it when a
+ * bare `houston` is typed at a TTY, so `houston` alone drops into the REPL. The
+ * desktop binary leaves it false so a bare `Houston` still opens the GUI.
  */
-export function parseTuiArgs(argv: string[], defaultCwd: string): TuiOptions | null {
+export function parseTuiArgs(
+  argv: string[],
+  defaultCwd: string,
+  defaultInteractive = false
+): TuiOptions | null {
   let interactive = false
   let cwd = defaultCwd
   let providerId: string | undefined
@@ -113,7 +122,7 @@ export function parseTuiArgs(argv: string[], defaultCwd: string): TuiOptions | n
     }
   }
 
-  if (!interactive) return null
+  if (!interactive && !defaultInteractive) return null
   return { cwd, providerId, model, approvalPolicy, acceptTerms, color: true }
 }
 

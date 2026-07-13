@@ -7,6 +7,9 @@
     "email": "dev@houstoncode.ai"
   },
   "main": "./out/main/index.js",
+  "bin": {
+    "houston": "./out/cli/houston-cli.cjs"
+  },
   "homepage": "https://github.com/piyushvijay/houston",
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
@@ -21,6 +24,7 @@
     "gen:guide": "node scripts/gen-guide.mjs",
     "build": "npm run gen:guide && npm run typecheck && electron-vite build",
     "build:cli": "npm run gen:guide && node scripts/build-cli.mjs",
+    "install:cli": "npm run build:cli && node scripts/install-cli.mjs",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck:e2e": "tsc --noEmit -p tsconfig.e2e.json",
