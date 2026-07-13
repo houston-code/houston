@@ -62,6 +62,12 @@ describe('buildSessionCommand', () => {
       `source '/t/i' 2>/dev/null`
     )
   })
+
+  it('captures cwd/env under a private umask so the temp files are 0600', () => {
+    const out = buildSessionCommand('make', { cwd: '/proj', env: '' }, paths)
+    expect(out).toContain(`(umask 077; pwd > '/t/c')`)
+    expect(out).toContain(`(umask 077; export -p > '/t/e')`)
+  })
 })
 
 describe('applySessionResult', () => {
