@@ -138,6 +138,15 @@ export const openEventSourceStream: SseConnectFn = (url, headers, { onEvent, onE
   }
 }
 
+/** Whether two URLs share an origin (scheme + host + port). */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
+}
+
 export class McpSseClient implements McpConnection {
   private extraHeaders: Record<string, string> = {}
   private sseUrl = ''
@@ -173,7 +182,7 @@ export class McpSseClient implements McpConnection {
     })
 
     this.stream = await this.connectStream(this.sseUrl, this.streamHeaders(), {
-      onEvent: (e) => this.onEvent(e, resolveEndpoint),
+      onEvent: (e) => this.onEvent(e, resolveEndpoint, rejectEndpoint),
       onError: (err) => {
         rejectEndpoint(err)
         this.failAll(`SSE stream error: ${err.message}`)
@@ -243,10 +252,29 @@ export class McpSseClient implements McpConnection {
   }
 
   /** Handle one event off the SSE stream: the endpoint URL or a JSON-RPC reply. */
-  private onEvent(e: SseEvent, resolveEndpoint: () => void): void {
+  private onEvent(e: SseEvent, resolveEndpoint: () => void, rejectEndpoint: (err: Error) => void): void {
     if (e.event === 'endpoint') {
       // The endpoint is usually relative; resolve it against the SSE URL.
-      this.postUrl = new URL(e.data.trim(), this.sseUrl).toString()
+      let resolved: string
+      try {
+        resolved = new URL(e.data.trim(), this.sseUrl).toString()
+      } catch {
+        rejectEndpoint(new Error(`MCP SSE server sent an invalid endpoint: ${e.data.trim()}`))
+        return
+      }
+      // SECURITY: the endpoint is server-controlled and every subsequent JSON-RPC
+      // POST carries the user's auth headers. Refuse an endpoint whose origin differs
+      // from the SSE URL, so a malicious or compromised server can't redirect those
+      // authenticated POSTs (and the bearer token they carry) to an attacker host.
+      if (!sameOrigin(resolved, this.sseUrl)) {
+        rejectEndpoint(
+          new Error(
+            `MCP SSE server advertised a cross-origin endpoint (${new URL(resolved).origin}); refusing to send credentials off-origin.`
+          )
+        )
+        return
+      }
+      this.postUrl = resolved
       resolveEndpoint()
       return
     }
