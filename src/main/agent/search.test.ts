@@ -68,6 +68,19 @@ describe('searchContents (JS fallback)', () => {
   it('throws on an invalid regex', async () => {
     await expect(fallback('(')).rejects.toThrow(/Invalid regular expression/)
   })
+
+  it('reports a missing search path plainly instead of "no matches"', async () => {
+    await expect(
+      searchContents({
+        pattern: 'answer',
+        workspace,
+        searchRel: 'nope/here',
+        startAbs: join(workspace, 'nope', 'here'),
+        rgPath: null,
+        max: 100
+      })
+    ).rejects.toThrow(/Search path not found/i)
+  })
 })
 
 describe('searchContents options (JS fallback)', () => {
@@ -152,6 +165,42 @@ describe('searchContents (ripgrep)', () => {
   it.skipIf(!rg)('surfaces an invalid pattern as an error', async () => {
     const res = await runRipgrep(rg as string, '(', workspace, '.', 100)
     expect(res.error).toBeTruthy()
+  })
+
+  it.skipIf(!rg)('runRipgrep surfaces the real IO error for a missing path (no --no-messages)', async () => {
+    // Regression: --no-messages used to swallow this, leaving a generic "ripgrep
+    // error" that the caller then mislabeled as an invalid regex.
+    const res = await runRipgrep(rg as string, 'answer', workspace, 'nope/here', 100)
+    expect(res.matches).toEqual([])
+    expect(res.error).toMatch(/no such file|not found|io error/i)
+  })
+
+  it.skipIf(!rg)('reports a missing search path plainly, not as an invalid regex', async () => {
+    await expect(
+      searchContents({
+        pattern: 'answer',
+        workspace,
+        searchRel: 'nope/here',
+        startAbs: join(workspace, 'nope', 'here'),
+        rgPath: rg,
+        max: 100
+      })
+    ).rejects.toThrow(/Search path not found/i)
+  })
+
+  it.skipIf(!rg)('reports a bad pattern with ripgrep own message, not a mislabeled path error', async () => {
+    // A valid path plus a genuinely bad regex: the error must clearly be about the
+    // regex (ripgrep says "regex parse error"), never a generic path failure.
+    await expect(
+      searchContents({
+        pattern: '(',
+        workspace,
+        searchRel: '.',
+        startAbs: workspace,
+        rgPath: rg,
+        max: 100
+      })
+    ).rejects.toThrow(/regex/i)
   })
 })
 
