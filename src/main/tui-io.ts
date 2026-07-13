@@ -218,6 +218,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
   return {
     out,
+    // Erase the current terminal line (e.g. the composer's typed-but-abandoned input
+    // on Ctrl-C) so the next prompt redraws clean.
+    clearLine: () => rawWrite(CLEAR_LINE),
     readLine: (prompt, opts) =>
       new Promise<string | null>((resolve) => {
         if (closed) {
@@ -249,12 +252,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       }),
     onInterrupt: (handler) => {
       // Debounce: a single Ctrl-C can surface via more than one path (the streaming
-      // watcher vs. readline's own 'SIGINT'); collapse near-simultaneous fires so
-      // the run is cancelled — and the notice printed — exactly once.
+      // watcher vs. readline's own 'SIGINT'); collapse those near-simultaneous fires
+      // so the run is cancelled — and the notice printed — exactly once. Kept small
+      // (50ms) so a deliberate double-tap (Ctrl-C twice to exit the composer) still
+      // registers as two.
       let last = -Infinity
       const fire = (): void => {
         const t = now()
-        if (t - last < 200) return
+        if (t - last < 50) return
         last = t
         handler()
       }
