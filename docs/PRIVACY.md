@@ -8,7 +8,7 @@
 
 # Houston — Privacy Policy
 
-**Last updated: June 29, 2026 · Version 1.0**
+**Last updated: July 13, 2026 · Version 1.1**
 
 This Privacy Policy explains how Houston (the "Software"), published by [Licensor]
 ("we", "us", "our"), handles your information. It is part of the
@@ -18,9 +18,11 @@ This Privacy Policy explains how Houston (the "Software"), published by [Licenso
 
 - **Houston runs on your device.** Your conversations, settings, and project data
   are stored locally on your computer.
-- **We collect no analytics or telemetry.** Houston does not send your usage,
-  conversations, code, or personal data to us. We operate no server that receives
-  your content.
+- **We collect no analytics or telemetry from the app.** Houston runs no in-app
+  instrumentation that sends your usage, conversations, code, or personal data to
+  us, and we operate no server that receives your content. The only usage signal we
+  can see is the aggregate download and update-check count our download host keeps
+  for released files (see "Application updates" below); it holds no personal data.
 - **Your data leaves your device only to providers you choose.** When you use a
   feature that reaches the network — sending a prompt to an AI model, searching
   the web, connecting an external tool, or checking for app updates — data goes to
@@ -66,7 +68,11 @@ that requires it, and only to the destination you have configured. Specifically:
 - **Application updates.** Packaged builds may contact the update service to check
   for and download new versions. This involves standard network metadata (such as
   your IP address and app version) handled by that service; it does not send your
-  conversations or project data.
+  conversations or project data. Like any download host, the update service keeps
+  aggregate counts of how many times each released file is fetched, including the
+  small metadata file an update check reads. We may consult those aggregate counts
+  to gauge rough adoption. They are totals held by that service, not by us, contain
+  no personal data, and involve no tracking inside the app.
 
 **These third parties operate under their own privacy policies and terms, not
 ours.** Their handling of your data — including whether they log it, how long

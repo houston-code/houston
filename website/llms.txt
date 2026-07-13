@@ -1,13 +1,13 @@
 # Houston
 
-> Houston is a free, cross-platform desktop coding agent that you point at your own AI model. Give it a project folder and it reads, edits, searches, and runs code — with every consequential action gated by an approval flow and, where the OS supports it, shell commands run in a sandbox. It runs locally and collects no analytics or telemetry.
+> Houston is a free, cross-platform desktop coding agent that you point at your own AI model. Give it a project folder and it reads, edits, searches, and runs code, with every consequential action gated by an approval flow and, where the OS supports it, shell commands run in a sandbox. It runs locally and collects no analytics or telemetry from the app.
 
 ## What it is
 
 - Type: desktop application (macOS, Windows, Linux), built with Electron, React, and TypeScript.
 - Price: free. You bring your own model API keys, or run a local model; you pay only your provider's usage, never Houston.
 - Bring your own model: Claude (Anthropic), GPT (OpenAI), Gemini (Google), any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Switch models per conversation.
-- Privacy: runs on your device; no telemetry. Data leaves only to providers you configure, when you use a feature that reaches the network.
+- Privacy: runs on your device; no in-app telemetry. Data leaves only to providers you configure, when you use a feature that reaches the network. Our download host keeps aggregate download and update-check counts for released files (no personal data, no in-app tracking).
 - Safety: choose an approval mode from review-every-action to full autonomy; shell commands are sandboxed where the OS supports it.
 
 ## Key capabilities

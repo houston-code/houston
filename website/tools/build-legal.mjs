@@ -140,7 +140,7 @@ const DOCS = [
     out: resolve(SITE, "privacy.html"),
     slug: "privacy.html",
     title: "Privacy Policy — Houston",
-    description: "How Houston handles your data: it runs on your device, collects no analytics or telemetry, and your data leaves only to the providers you choose.",
+    description: "How Houston handles your data: it runs on your device, collects no analytics or telemetry from the app, and your data leaves only to the providers you choose.",
   },
   {
     src: resolve(ROOT, "docs", "TERMS.md"),
