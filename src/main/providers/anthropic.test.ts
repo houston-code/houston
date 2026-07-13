@@ -208,3 +208,51 @@ describe('toAnthropicMessages role alternation', () => {
     expect(out[2]).toEqual({ role: 'user', content: 'second' })
   })
 })
+
+describe('anthropic usage reporting', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  /** A fake stream whose finalMessage reports the given usage counts. */
+  function streamWithUsage(usage: Record<string, number>): unknown {
+    return {
+      async *[Symbol.asyncIterator]() {
+        /* no streamed events */
+      },
+      finalMessage: async () => ({ content: [], stop_reason: 'end_turn', usage })
+    }
+  }
+
+  async function drainDoneUsage(usage: Record<string, number>): Promise<Record<string, number>> {
+    h.stream.mockReturnValue(streamWithUsage(usage))
+    const provider = createAnthropicProvider('sk-test')
+    const gen = provider.streamChat({
+      model: 'claude-opus-4-8',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest)
+    let done: { usage?: Record<string, number> } | undefined
+    for await (const ev of gen) {
+      if (ev.type === 'done') done = ev as { usage?: Record<string, number> }
+    }
+    return done?.usage ?? {}
+  }
+
+  it('reports total input (fresh + cache read + cache write) and surfaces the split', async () => {
+    const usage = await drainDoneUsage({
+      input_tokens: 500,
+      cache_read_input_tokens: 9000,
+      cache_creation_input_tokens: 500,
+      output_tokens: 42
+    })
+    expect(usage.inputTokens).toBe(10_000) // 500 + 9000 + 500 — full context for the meter
+    expect(usage.cacheReadTokens).toBe(9000)
+    expect(usage.cacheWriteTokens).toBe(500)
+    expect(usage.outputTokens).toBe(42)
+  })
+
+  it('omits the cache fields when no caching happened', async () => {
+    const usage = await drainDoneUsage({ input_tokens: 1000, output_tokens: 10 })
+    expect(usage.inputTokens).toBe(1000)
+    expect(usage.cacheReadTokens).toBeUndefined()
+    expect(usage.cacheWriteTokens).toBeUndefined()
+  })
+})

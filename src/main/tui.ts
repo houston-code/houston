@@ -976,6 +976,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
     const toolArgs = new Map<string, Record<string, unknown>>()
+    // Per-turn token/cost tally. The loop emits a `usage` event per model round
+    // (and per subagent), which would be noisy to print each time — the live
+    // session total already sits in the status line above the composer. So we sum
+    // the round usages here and print one compact summary when the turn ends.
+    let turnInputTokens = 0
+    let turnOutputTokens = 0
+    let turnCost = 0
     // Assistant text streams through a markdown renderer that emits whole blocks
     // as they finalize. Any non-text event flushes the pending block first, so
     // text always renders before the tool line / prompt that follows it.
@@ -1085,15 +1092,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           sessionCost.inputTokens += e.inputTokens
           sessionCost.outputTokens += e.outputTokens
           sessionCost.cost += e.cost
-          // Current context size ≈ the tokens sent this turn; feeds the status line.
-          contextTokens = e.inputTokens
-          deps.io.out(
-            paint(
-              `\n· ${e.inputTokens}+${e.outputTokens} tok · $${e.cost.toFixed(4)}` +
-                `  (session ${formatSessionCost(sessionCost)})\n`,
-              'dim'
-            )
-          )
+          turnInputTokens += e.inputTokens
+          turnOutputTokens += e.outputTokens
+          turnCost += e.cost
+          // Current context size ≈ the last MAIN round's input tokens; feeds the
+          // status line. Subagent usage events carry inputTokens: 0, so guard
+          // against them resetting the meter to zero mid-turn.
+          if (e.inputTokens) contextTokens = e.inputTokens
           break
         case 'error':
           deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
@@ -1106,7 +1111,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         case 'done':
           endedCleanly = e.stopReason === 'end_turn'
-          deps.io.out('\n')
+          // One compact cost summary for the whole turn (this turn + running
+          // session), instead of a line per model round. Only when the turn
+          // actually spent tokens; otherwise just a blank separator.
+          if (turnInputTokens || turnOutputTokens) {
+            const turnTally: SessionCost = {
+              inputTokens: turnInputTokens,
+              outputTokens: turnOutputTokens,
+              cost: turnCost
+            }
+            deps.io.out(
+              paint(
+                `\n· turn ${formatSessionCost(turnTally)}  (session ${formatSessionCost(sessionCost)})\n`,
+                'dim'
+              )
+            )
+          } else {
+            deps.io.out('\n')
+          }
           break
       }
     }

@@ -49,13 +49,59 @@ export function modelPricing(model: string): ModelPricing | null {
   return null
 }
 
-/** Estimated USD cost of one turn's tokens for `model` (0 when the price is unknown). */
-export function turnCostUsd(model: string, inputTokens: number, outputTokens: number): number {
+/**
+ * Prompt-cache price multipliers, relative to a model's base input rate: a cached
+ * prefix that is *read* bills at 10% of the input price, and *writing* a (5-minute)
+ * cache entry bills at 125%. These are Anthropic's published multipliers; OpenAI /
+ * Gemini caching differs, so only providers that report a cache split (currently
+ * Anthropic) get the discount — everyone else falls back to flat input pricing.
+ */
+export const CACHE_READ_PRICE_MULTIPLIER = 0.1
+export const CACHE_WRITE_PRICE_MULTIPLIER = 1.25
+
+/** The prompt-cache split of a turn's input tokens, for caching-aware cost. */
+export interface CacheTokens {
+  /** Tokens served from cache (a subset of inputTokens), billed at 0.1x input. */
+  readTokens?: number
+  /** Tokens that wrote a new cache entry (a subset of inputTokens), billed at 1.25x input. */
+  writeTokens?: number
+}
+
+/**
+ * Estimated USD cost of one turn's tokens for `model` (0 when the price is unknown).
+ *
+ * `inputTokens` is the FULL input prefix — fresh tokens plus any served from or
+ * written to the prompt cache. When a `cache` split is given, the cached portions
+ * are priced at their reduced/elevated multipliers and only the remaining fresh
+ * tokens pay the full input rate; without it, every input token pays full rate (the
+ * historical behavior). This matters a lot for agent loops, where a warm cache means
+ * most of each turn's input is a cheap cache read, not full-price fresh input.
+ */
+export function turnCostUsd(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  cache?: CacheTokens
+): number {
   const p = modelPricing(model)
   if (!p) return 0
-  const inTok = Number.isFinite(inputTokens) && inputTokens > 0 ? inputTokens : 0
-  const outTok = Number.isFinite(outputTokens) && outputTokens > 0 ? outputTokens : 0
-  return (inTok / 1_000_000) * p.input + (outTok / 1_000_000) * p.output
+  const inTok = clampTokens(inputTokens)
+  const outTok = clampTokens(outputTokens)
+  const cacheRead = Math.min(inTok, clampTokens(cache?.readTokens))
+  const cacheWrite = Math.min(inTok - cacheRead, clampTokens(cache?.writeTokens))
+  // The fresh, full-price portion is whatever wasn't a cache read/write. The min()
+  // guards above keep the parts from exceeding the whole if a provider's counts drift.
+  const freshInput = inTok - cacheRead - cacheWrite
+  const inputCost =
+    freshInput * p.input +
+    cacheRead * p.input * CACHE_READ_PRICE_MULTIPLIER +
+    cacheWrite * p.input * CACHE_WRITE_PRICE_MULTIPLIER
+  return inputCost / 1_000_000 + (outTok / 1_000_000) * p.output
+}
+
+/** Non-negative finite token count, else 0. */
+function clampTokens(v: number | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0
 }
 
 /** Format a USD amount with precision that scales to the magnitude: `$0.0042`, `$0.071`, `$1.23`. */
