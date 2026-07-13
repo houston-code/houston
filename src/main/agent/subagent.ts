@@ -1,6 +1,7 @@
 import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
 import { getTool, type ToolContext } from './tools'
 import type { ShellSession } from './shell-session'
+import { isSandboxed } from '../sandbox'
 
 /**
  * A nested subagent: the main agent delegates a scoped task to a fresh loop with
@@ -10,11 +11,13 @@ import type { ShellSession } from './shell-session'
  * Two tiers:
  * - Read-only (default): reads the project with the read tools, no approvals,
  *   can't change anything or leave the machine — the parent does any writing.
- * - Writable (opt-in): additionally edits files and runs shell commands, still
- *   confined to the project sandbox (workspace roots for edits, Seatbelt/bwrap for
- *   shell) with no network. The parent grants this by approving the
- *   dispatch_writable_agent call; the subagent then works autonomously within that
- *   sandbox, so its individual tool calls need no further prompts.
+ * - Writable (opt-in): additionally edits files (workspace-root contained in JS) and,
+ *   where the host has an OS sandbox, runs shell commands confined to the project with
+ *   no network. On a host with no OS sandbox, run_shell is refused — a background
+ *   subagent can't prompt for the consent an unconfined command needs — so it is
+ *   edits-only there. The parent grants this by approving the dispatch_writable_agent
+ *   call; the subagent then works autonomously, so its individual tool calls need no
+ *   further prompts.
  */
 
 /** Tools any subagent may use — local, read-only, no network egress. */
@@ -49,22 +52,29 @@ const MAX_SUBAGENT_ITERATIONS = 16
 const SUBAGENT_MAX_TOKENS = 4096
 
 /** Tier-specific constraints + reporting contract, shared by the default and custom agents. */
-function subAgentConstraints(workspace: string, writable: boolean): string {
-  const capabilities = writable
-    ? `You are working inside the project at ${workspace}. You can READ (read_file, list_dir, glob, search_files, ast_grep) and make CHANGES: edit files (write_file, edit_file, multi_edit, apply_patch) and run shell commands (run_shell). All of it is confined to the project sandbox with no network access — you cannot reach outside the workspace or the internet.`
-    : `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files, ast_grep. You cannot edit files, run commands, or access the network.`
+function subAgentConstraints(workspace: string, writable: boolean, shellSandboxed: boolean): string {
+  let capabilities: string
+  if (!writable) {
+    capabilities = `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files, ast_grep. You cannot edit files, run commands, or access the network.`
+  } else if (shellSandboxed) {
+    capabilities = `You are working inside the project at ${workspace}. You can READ (read_file, list_dir, glob, search_files, ast_grep) and make CHANGES: edit files (write_file, edit_file, multi_edit, apply_patch) and run shell commands (run_shell). All of it is confined to the project sandbox with no network access — you cannot reach outside the workspace or the internet.`
+  } else {
+    // No OS sandbox on this host, so run_shell is refused for a subagent (see runSubAgent):
+    // a background subagent can't prompt for the consent an unconfined command needs.
+    capabilities = `You are working inside the project at ${workspace}. You can READ (read_file, list_dir, glob, search_files, ast_grep) and EDIT files (write_file, edit_file, multi_edit, apply_patch), confined to the project with no network. This host has no OS sandbox, so run_shell is NOT available to you — make the edits you can and note in your report anything that still needs a command run (the main agent can run it with approval).`
+  }
   return `${capabilities}
 
 Your final message is your entire report back to the calling agent — make it self-contained: include the concrete outcome (what you found or changed, file paths, key code) it needs, not a narration of your steps. Be concise.`
 }
 
-function subAgentSystemPrompt(workspace: string, writable: boolean): string {
+function subAgentSystemPrompt(workspace: string, writable: boolean, shellSandboxed: boolean): string {
   const role = writable
     ? `You are an implementation subagent. Another agent has delegated a focused task to you. Carry it out end to end — make the edits and run the commands needed — then report what you did.`
     : `You are a research subagent. Another agent has delegated a focused question to you. Investigate efficiently, then answer it directly.`
   return `${role}
 
-${subAgentConstraints(workspace, writable)}`
+${subAgentConstraints(workspace, writable, shellSandboxed)}`
 }
 
 export interface SubAgentOptions {
@@ -88,6 +98,12 @@ export interface SubAgentOptions {
   writable?: boolean
   /** Allowed roots for edits (workspace + added dirs). Defaults to [workspace]. */
   roots?: string[]
+  /**
+   * Whether the host OS-confines shell execution. Defaults to the live sandbox status.
+   * When false, the writable tier's `run_shell` is refused (a background subagent can't
+   * prompt for the consent an unconfined command requires); injected for testing.
+   */
+  shellSandboxed?: boolean
   /** Persistent shell state for run_shell (writable tier). */
   shellSession?: ShellSession
   /** Cap on a single shell command's output kept in a tool result. */
@@ -100,16 +116,23 @@ export interface SubAgentOptions {
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const { provider, model, workspace, prompt, signal } = opts
   const writable = opts.writable === true
+  // Whether this host OS-confines shell. When it doesn't, a writable subagent's
+  // run_shell is refused below: unlike the main loop it can't surface a per-call
+  // approval, and the main loop never runs an UNCONFINED shell command without one.
+  const shellSandboxed = opts.shellSandboxed ?? isSandboxed()
   const allowedTools = resolveSubAgentTools(opts.tools, writable)
   const allowedToolSet = new Set<string>(allowedTools)
   const tools = allowedTools.map((name) => getTool(name)!.schema)
   // A custom agent's prompt still gets the tier constraints appended.
   const system = opts.systemOverride
-    ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace, writable)}`
-    : subAgentSystemPrompt(workspace, writable)
+    ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace, writable, shellSandboxed)}`
+    : subAgentSystemPrompt(workspace, writable, shellSandboxed)
   // Tool-execution context. Reads default their roots to [workspace]; the writable
   // tier passes the real roots (for edits) and a shell session, and never allows
-  // network — so run_shell stays sandboxed with no egress.
+  // network — so run_shell stays sandboxed with no egress. NOTE: a confined shell can
+  // still READ outside the workspace (the sandbox is a write/network jail, not a read
+  // one). We accept that here: with allowNetwork:false the subagent has no egress, so a
+  // read can't leave the machine, and its file writes stay contained to `roots`.
   const toolCtx: ToolContext = {
     workspace,
     roots: opts.roots ?? [workspace],
@@ -158,6 +181,15 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         output = writable
           ? `Tool not available to this subagent: ${call.name}`
           : `Tool not available to a read-only subagent: ${call.name}`
+      } else if (call.name === 'run_shell' && !shellSandboxed) {
+        // Fail closed: on a host with no OS sandbox the command would run UNCONFINED,
+        // and a background subagent can't surface the approval the main loop requires
+        // for that. Refuse it here; the subagent can still edit files (path-contained
+        // in JS on every OS) and report what still needs a command run.
+        output =
+          'run_shell is unavailable to a subagent on this host: it has no OS-enforced sandbox, so the ' +
+          'command would run unconfined, and a background subagent cannot prompt for the required consent. ' +
+          'Make the edits you can and note what still needs a command; the main agent can run it with approval.'
       } else {
         try {
           output = await tool.execute(call.arguments, toolCtx)
