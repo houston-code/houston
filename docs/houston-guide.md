@@ -48,17 +48,18 @@ Type `/` in the composer for the command menu. The exact set depends on the
 client, but the common built-ins are:
 
 - `/new` (alias `/clear`): start a fresh conversation.
-- `/compact`: summarize older turns now to free up context (desktop).
-- `/plan`, `/ask`, `/auto`, `/full`: switch the approval mode (desktop; the
-  interactive terminal uses `/approval` to do the same).
+- `/compact`: summarize older turns now to free up context.
+- `/plan`: switch to plan mode (read-only). In the desktop app `/ask`, `/auto`,
+  and `/full` switch the other approval modes; the terminal uses `/approval <policy>`.
 - `/review`: run an adversarial review of your uncommitted changes and fix what
   it confirms.
 - `/skills`, `/agents`: list the workspace's skills and custom agents.
 - `/help`: list the available commands.
 
 The interactive terminal adds terminal-specific commands such as `/model` (list
-or switch model), `/approval`, `/resume`, `/fork`, `/cost`, `/mcp`, `/hooks`,
-`/theme`, `/image`, `/cwd`, and `/exit`.
+or switch model), `/login` (set an API key, also `/providers`), `/approval`,
+`/settings`, `/resume`, `/fork`, `/cost`, `/mcp`, `/hooks`, `/theme`, `/image`,
+`/cwd`, and `/exit`.
 
 **Custom commands.** Any Markdown file in `.houston/commands/<name>.md` becomes a
 `/name` command. The file body is a prompt template: `$ARGUMENTS` is replaced
