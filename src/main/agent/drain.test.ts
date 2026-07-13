@@ -154,32 +154,4 @@ describe('runAndDrain', () => {
       expect.objectContaining({ conversationId: cid, providerId: 'anthropic', model: 'claude' })
     )
   })
-
-  it('marks runs interactive by default, including the queued flush', async () => {
-    // A window is watching a runAndDrain run, so it must be interactive — otherwise
-    // the weak no-progress stall hard-stops a read-only GUI investigation instead of
-    // nudging (the "repeating myself" false stop). The queued follow-up turn goes
-    // back through runAndDrain, so it inherits the same default.
-    const cid = 'conv-interactive'
-    addToQueue({ conversationId: cid, userText: 'A', providerId: 'anthropic', model: 'm', approvalPolicy: 'ask' })
-    endRunsWith({ done: 'end_turn' })
-
-    await runAndDrain(io(), cid, runReq(cid))
-    await settle()
-
-    expect(h.startRun).toHaveBeenCalledTimes(2)
-    expect(h.startRun.mock.calls[0][0].interactive).toBe(true) // original turn
-    expect(h.startRun.mock.calls[1][0].interactive).toBe(true) // queued flush
-    clearQueue(cid)
-  })
-
-  it('preserves an explicit interactive:false (autonomous background run)', async () => {
-    const cid = 'conv-bg'
-    endRunsWith({ done: 'end_turn' })
-
-    await runAndDrain(io(), cid, { ...runReq(cid), interactive: false })
-    await settle()
-
-    expect(h.startRun.mock.calls[0][0].interactive).toBe(false)
-  })
 })

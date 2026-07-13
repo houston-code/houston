@@ -308,8 +308,6 @@ export interface AppSettings {
   stallRepeatCallLimit?: number
   /** Stall detection: same error signature this many times → stall (min 2). */
   stallRepeatErrorLimit?: number
-  /** Stall detection: this many consecutive turns with no file change → stall (min 2). */
-  stallNoProgressLimit?: number
   /**
    * The verification command run by the end-of-run gate (e.g. `npm run typecheck`
    * or `npm test`). Runs through the same sandbox as `run_shell`. Never inferred:

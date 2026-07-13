@@ -94,7 +94,7 @@ import {
   summarizationSystemPrompt
 } from './compaction'
 import { buildPinnedMessages } from './workingMemory'
-import { StallDetector, resolveStallThresholds, isMutatingKind } from './stall'
+import { StallDetector, resolveStallThresholds } from './stall'
 import { resolveBudgetLimits, shouldLand, landingReminder } from './budget'
 import {
   shouldVerify,
@@ -986,22 +986,15 @@ export async function startRun(
     let landed = false
 
     // Stall / loop detection. Watches the per-iteration tool pattern for
-    // unproductive cycling (same call repeated, same error repeated, or several
-    // turns with no file change) and asks us to nudge once, then stop if it
-    // persists. Disabled when the setting is off (an inert detector is simplest,
-    // but we just skip observing so no work is done).
+    // unproductive cycling (same call repeated, or same error repeated) and asks
+    // us to nudge once, then stop if it persists. Disabled when the setting is off
+    // (an inert detector is simplest, but we just skip observing so no work is done).
     const stallEnabled = settings.stallDetection !== false
     const stallDetector = new StallDetector(
       resolveStallThresholds({
         repeatCallLimit: settings.stallRepeatCallLimit,
-        repeatErrorLimit: settings.stallRepeatErrorLimit,
-        noProgressLimit: settings.stallNoProgressLimit
-      }),
-      // A user is watching TUI/GUI runs, so the weak no-progress stall nudges but
-      // never hard-stops there; headless runs keep it as a budget guard. In Plan
-      // mode nothing may mutate, so "no progress" is the defined behavior, not a
-      // stall — disable that rule entirely there (repeated-call/error still apply).
-      { interactive: req.interactive === true, mutationsAllowed: req.approvalPolicy !== 'plan' }
+        repeatErrorLimit: settings.stallRepeatErrorLimit
+      })
     )
 
     // End-of-run verification gate (opt-in). Tracks whether this run modified any
@@ -1414,19 +1407,16 @@ export async function startRun(
       }
 
       // Stall-detection accumulators for this iteration: error signatures from
-      // failed tool results and whether any workspace-mutating (write/shell) call
-      // ran. Both the parallel and sequential result paths populate these; we feed
-      // them to the detector once the iteration's tool calls have all resolved.
-      // `observeStall` reacts to the detector's decision (nudge once, then stop if
-      // it persists) and returns true when the run was ended so the caller returns.
+      // failed tool results. Both the parallel and sequential result paths populate
+      // this; we feed it to the detector once the iteration's tool calls have all
+      // resolved. `observeStall` reacts to the detector's decision (nudge once, then
+      // stop if it persists) and returns true when the run was ended so the caller returns.
       const iterErrors: string[] = []
-      let iterMutated = false
       const observeStall = (): boolean => {
         if (!stallEnabled) return false
         const action = stallDetector.observe({
           calls: toolCalls,
-          errors: iterErrors,
-          mutated: iterMutated
+          errors: iterErrors
         })
         if (action.kind === 'nudge') {
           messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${action.message}` })
@@ -1511,7 +1501,6 @@ export async function startRun(
         // a verify pass.
         const kind = lookupTool(r.call.name)?.kind
         if (!r.ok) iterErrors.push(r.output)
-        if (r.ok && isMutatingKind(kind)) iterMutated = true
         if (r.ok && kind === 'write') filesModified = true
         // Persist after each append so a mid-turn abort return (which skips the
         // trailing onMessages) still leaves completed results in the saved log.

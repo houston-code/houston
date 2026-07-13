@@ -327,13 +327,6 @@ export interface AgentRunRequest {
   model: string
   approvalPolicy: ApprovalPolicy
   messages: ChatMessage[]
-  /**
-   * True when a human is watching this run (the TUI or GUI). Softens the
-   * no-progress stall guard so a long read-only investigation isn't hard-stopped
-   * with a user present (see stall.ts). Omitted for headless/autonomous runs,
-   * which keep the stop as a budget guard.
-   */
-  interactive?: boolean
 }
 
 /** What the renderer sends to start a turn in a conversation. */

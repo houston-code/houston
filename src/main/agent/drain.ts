@@ -55,15 +55,8 @@ export async function runAndDrain(
   // Tag the run with its conversation so the loop enforces one live run per
   // conversation (a second would interleave its setMessages writes and corrupt
   // the log). The slot is freed when this run ends, before any queue drain below.
-  //
-  // runAndDrain is the renderer-facing orchestrator (its DrainIO streams to a
-  // window), so a human is watching by default — mark the run interactive unless
-  // the caller opts out. This softens the weak no-progress stall from a hard stop
-  // to a nudge (see stall.ts), so a long read-only GUI investigation isn't killed
-  // out from under the user. Autonomous background runs (spawnSession) pass
-  // `interactive: false` to keep the no-progress stop as a budget guard.
   await startRun(
-    { ...runReq, conversationId, interactive: runReq.interactive ?? true },
+    { ...runReq, conversationId },
     send,
     (msgs) => setMessages(conversationId, msgs),
     owner
