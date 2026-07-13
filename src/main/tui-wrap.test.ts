@@ -47,3 +47,25 @@ describe('wrapAnsi', () => {
     expect(wrapAnsi('anything', 0)).toBe('anything')
   })
 })
+
+describe('unicode width', () => {
+  it('counts CJK / fullwidth glyphs as 2 columns and emoji as 2', () => {
+    expect(visibleWidth('中文')).toBe(4) // two wide chars
+    expect(visibleWidth('a中b')).toBe(4) // 1 + 2 + 1
+    expect(visibleWidth('😀')).toBe(2) // astral emoji
+    expect(visibleWidth('ab')).toBe(2)
+  })
+
+  it('never truncates inside a surrogate pair (no broken half-character)', () => {
+    // Old code sliced by code unit and could emit a lone high surrogate → "�".
+    const out = truncateVisible('😀😀😀', 3)
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/) // no lone high surrogate
+    expect(out).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/) // no lone low surrogate
+    expect(visibleWidth(out)).toBeLessThanOrEqual(3)
+  })
+
+  it('does not truncate when a wide-char string already fits', () => {
+    expect(truncateVisible('中文', 4)).toBe('中文') // width 4 == max
+    expect(truncateVisible('中文字', 4)).toMatch(/…$/) // width 6 > 4 → cut, ellipsis
+  })
+})

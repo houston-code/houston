@@ -556,7 +556,10 @@ export async function planDecisionFor(
 }
 
 function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+  // Count/slice by code point so a cut never lands inside a surrogate pair (which
+  // would emit a broken half-character). `.length`/`.slice` work in code units.
+  const cps = [...s]
+  return cps.length > max ? `${cps.slice(0, max - 1).join('')}…` : s
 }
 
 /** Media type for an image path by extension, or null if not a supported image. */
@@ -1487,6 +1490,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'clear') {
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
+        pendingImages = [] // don't carry a staged /image into the fresh conversation
+        contextTokens = 0 // the context meter belongs to the old conversation
         deps.io.out(paint('· conversation cleared\n', 'dim'))
         continue
       }
@@ -1997,6 +2002,11 @@ function handleInfoCommand(
   }
   if (name === 'theme') {
     deps.io.out(paint(`themes: ${Object.keys(THEMES).join(', ')}  (usage: /theme <name>)\n`, 'dim'))
+    return
+  }
+  if (name === 'image') {
+    // Bare /image (no path) used to be a silent no-op; show how to use it.
+    deps.io.out(paint('usage: /image <path>  (attach an image to your next message)\n', 'dim'))
     return
   }
   if (name === 'approval') {

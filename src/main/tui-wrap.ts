@@ -16,9 +16,38 @@ export function stripAnsi(s: string): string {
   return s.replace(SGR, '')
 }
 
-/** Visible column width of a string, ignoring SGR escapes. */
+/**
+ * Display columns a single code point occupies: 0 for combining/zero-width marks,
+ * 2 for East-Asian wide + fullwidth glyphs and astral emoji, 1 otherwise. A
+ * pragmatic wcwidth (not exhaustive) so CJK / emoji don't miscount and overflow
+ * the status line, and so truncation never lands mid-wide-char. `.length` counted
+ * these as 1 (or, for astral chars, as 2 code units), which was wrong both ways.
+ */
+export function charWidth(cp: number): number {
+  if ((cp >= 0x0300 && cp <= 0x036f) || cp === 0x200b || (cp >= 0x200c && cp <= 0x200f) || cp === 0xfeff) {
+    return 0 // combining marks / zero-width
+  }
+  if (
+    (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) || // CJK, Kana, … Yi
+    (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK compatibility ideographs
+    (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK compatibility forms
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth forms
+    (cp >= 0x1f000 && cp <= 0x1faff) || // emoji & pictographs
+    (cp >= 0x20000 && cp <= 0x3fffd) // CJK Ext B+
+  ) {
+    return 2
+  }
+  return 1
+}
+
+/** Visible column width of a string: sums per-code-point width, ignoring SGR escapes. */
 export function visibleWidth(s: string): number {
-  return stripAnsi(s).length
+  let w = 0
+  for (const ch of stripAnsi(s)) w += charWidth(ch.codePointAt(0) ?? 0)
+  return w
 }
 
 /**
@@ -28,20 +57,24 @@ export function visibleWidth(s: string): number {
  */
 export function truncateVisible(s: string, max: number, ellipsis = '…'): string {
   if (visibleWidth(s) <= max) return s
-  const keep = Math.max(0, max - ellipsis.length)
+  const keep = Math.max(0, max - visibleWidth(ellipsis))
   let out = ''
   let shown = 0
   let i = 0
-  while (i < s.length && shown < keep) {
+  while (i < s.length) {
     const m = matchSgrAt(s, i)
     if (m) {
       out += m
       i += m.length
       continue
     }
-    out += s[i]
-    shown++
-    i++
+    const cp = s.codePointAt(i) ?? 0
+    const ch = String.fromCodePoint(cp)
+    const w = charWidth(cp)
+    if (shown + w > keep) break // stop before a partial/over-width char
+    out += ch
+    shown += w
+    i += ch.length // advance a full code point (never split a surrogate pair)
   }
   const hadColor = out.includes(`${ESC}[`)
   return `${out}${ellipsis}${hadColor ? `${ESC}[0m` : ''}`
@@ -100,14 +133,18 @@ function hardSplit(word: string, width: number): string[] {
       i += m.length
       continue
     }
-    if (shown === width) {
+    const cp = word.codePointAt(i) ?? 0
+    const ch = String.fromCodePoint(cp)
+    const w = charWidth(cp)
+    // Break before a char that would overflow the row (only if we've placed one).
+    if (cur && shown + w > width) {
       chunks.push(cur)
       cur = ''
       shown = 0
     }
-    cur += word[i]
-    shown++
-    i++
+    cur += ch
+    shown += w
+    i += ch.length // full code point (never split a surrogate pair)
   }
   if (cur) chunks.push(cur)
   return chunks
