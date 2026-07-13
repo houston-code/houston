@@ -43,6 +43,7 @@ import {
   getSecretHeaders,
   hasKey,
   hasStoredKey,
+  isWeakEncryptionBackend,
   setCredential,
   setKey,
   setSecretHeaders
@@ -56,6 +57,18 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(state.userData, { recursive: true, force: true })
+})
+
+describe('isWeakEncryptionBackend', () => {
+  it('flags only the Linux hardcoded-key basic_text backend', () => {
+    expect(isWeakEncryptionBackend('linux', 'basic_text')).toBe(true)
+    expect(isWeakEncryptionBackend('linux', 'gnome_libsecret')).toBe(false)
+    expect(isWeakEncryptionBackend('linux', 'kwallet')).toBe(false)
+    expect(isWeakEncryptionBackend('linux', null)).toBe(false)
+    // The concept is Linux-specific; other platforms have DPAPI/Keychain.
+    expect(isWeakEncryptionBackend('darwin', 'basic_text')).toBe(false)
+    expect(isWeakEncryptionBackend('win32', 'basic_text')).toBe(false)
+  })
 })
 
 describe('secrets store', () => {
