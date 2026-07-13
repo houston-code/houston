@@ -989,6 +989,41 @@ describe('runTui', () => {
     expect(rec.runs[0]).toMatchObject({ providerId: 'ollama', model: 'llama' })
   })
 
+  it('preflights the key: submitting on a keyless provider skips the run and hints /login', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      selected: { providerId: 'openai', model: 'gpt' },
+      providers: [{ id: 'openai', requiresKey: true, hasKey: false, models: [{ id: 'gpt' }], defaultModel: 'gpt' }]
+    } as Partial<AppSettings>)
+    const t = fakeIo(['do something', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // No run started (no phantom turn that fails deep in the adapter), and the user
+    // message isn't left dangling; an actionable /login hint is shown instead.
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toMatch(/no API key/i)
+    expect(t.text()).toContain('/login')
+  })
+
+  it('survives a persistence failure instead of crashing the REPL', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.persist = {
+      create: () => ({ id: 'c1' }),
+      setMessages: () => {
+        throw new Error('ENOSPC: no space left on device')
+      },
+      list: () => [],
+      search: () => [],
+      get: () => null,
+      fork: () => null
+    }
+    const t = fakeIo(['hello', 'again', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0) // clean exit, not a Fatal
+    expect(rec.runs).toHaveLength(2) // both turns ran despite the store throwing
+    expect(t.text()).toMatch(/couldn't save the conversation/i)
+  })
+
   it('reports an unknown slash command without starting a run', async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['/nope', null])
@@ -1823,14 +1858,27 @@ describe('runTui — /login & keyless start', () => {
     const base = deps(events, over)
     const setKeyCalls: Array<[string, string]> = []
     const patches: Array<Partial<AppSettings>> = []
+    const keyed = new Set<string>()
     base.d.setKey = (id, key) => {
       setKeyCalls.push([id, key])
+      keyed.add(id) // reality: getSettings recomputes hasKey, so this provider is now ready
       return { shadowedByEnv: null }
     }
     base.d.updateSettings = (patch) => {
       patches.push(patch)
     }
     base.d.isMac = true
+    // getSettings recomputes hasKey from the credential store on every read; mirror
+    // that so a just-stored key marks its provider ready (the run-time key preflight
+    // reads getSettings().hasKey).
+    const origGetSettings = base.d.getSettings
+    base.d.getSettings = () => {
+      const s = origGetSettings()
+      return {
+        ...s,
+        providers: s.providers.map((p) => (keyed.has(p.id) ? { ...p, hasKey: true } : p))
+      }
+    }
     return { ...base, setKeyCalls, patches }
   }
 

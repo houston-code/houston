@@ -1321,6 +1321,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // turn (so merely opening and closing the REPL doesn't litter history). Null
   // until then, or after `/clear` starts a fresh one.
   let conversationId: string | null = null
+  // Persist the running message log, best-effort. A store failure (disk full, bad
+  // perms) must degrade to an ephemeral session, not crash the REPL mid-turn — a
+  // throw here otherwise propagates out of startRun (no catch there) to a Fatal.
+  let warnedPersistFail = false
+  const persistMessages = (msgs: ChatMessage[]): void => {
+    if (!deps.persist || !conversationId) return
+    try {
+      deps.persist.setMessages(conversationId, msgs)
+    } catch (e) {
+      if (!warnedPersistFail) {
+        warnedPersistFail = true
+        deps.io.out(paint(`· couldn't save the conversation (continuing unsaved): ${(e as Error).message}\n`, 'dim'))
+      }
+    }
+  }
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
@@ -1466,16 +1481,29 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         const query = result.query.trim()
-        const convs = query ? deps.persist.search(opts.cwd, query) : deps.persist.list(opts.cwd)
+        let convs: ResumeEntry[]
+        try {
+          convs = query ? deps.persist.search(opts.cwd, query) : deps.persist.list(opts.cwd)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't list sessions: ${(e as Error).message}\n`, 'dim'))
+          continue
+        }
         deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
         if (!convs.length) continue
-        const ans = await deps.io.readLine('> ')
+        // discardPending like the other prompts, so type-ahead can't auto-select.
+        const ans = await deps.io.readLine('> ', { discardPending: true })
         const id = ans === null ? null : parseResumeSelection(ans, convs)
         if (!id) {
           deps.io.out(paint('· cancelled\n', 'dim'))
           continue
         }
-        const conv = deps.persist.get(id)
+        let conv: { messages: ChatMessage[] } | null
+        try {
+          conv = deps.persist.get(id)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't load that session: ${(e as Error).message}\n`, 'dim'))
+          continue
+        }
         if (!conv) {
           deps.io.out(paint('· that session could not be loaded\n', 'dim'))
           continue
@@ -1490,7 +1518,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· nothing to fork yet; start a conversation first\n', 'dim'))
           continue
         }
-        const forked = deps.persist.fork(conversationId)
+        let forked: { id: string } | null
+        try {
+          forked = deps.persist.fork(conversationId)
+        } catch (e) {
+          deps.io.out(paint(`· could not fork this session: ${(e as Error).message}\n`, 'dim'))
+          continue
+        }
         if (!forked) {
           deps.io.out(paint('· could not fork this session\n', 'dim'))
           continue
@@ -1504,7 +1538,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· capability info is unavailable\n', 'dim'))
           continue
         }
-        const snap = await deps.capabilities()
+        let snap: CapabilitySnapshot
+        try {
+          snap = await deps.capabilities()
+        } catch (e) {
+          deps.io.out(paint(`· couldn't read ${result.which}: ${(e as Error).message}\n`, 'dim'))
+          continue
+        }
         const labels = { skills: 'Skills', agents: 'Agents' }
         deps.io.out(`${renderCapabilityList(labels[result.which], snap[result.which], paint)}\n`)
         continue
@@ -1619,6 +1659,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       continue
     }
 
+    // Preflight the key. A provider that needs one but has none — switched to via
+    // /model, a saved selection whose key was since removed, etc. — would otherwise
+    // start a run that fails deep in the adapter with a raw error and leave the
+    // typed prompt dangling in `messages` (double-stacked onto the next turn).
+    // Surface an actionable /login hint and skip the run instead.
+    const activeProvider = deps.getSettings().providers.find((p) => p.id === providerId)
+    if (activeProvider?.requiresKey && !activeProvider.hasKey) {
+      deps.io.out(paint(`· ${providerId} has no API key — run /login to set one\n`, 'yellow'))
+      continue
+    }
+
     messages.push({
       role: 'user',
       content: text,
@@ -1626,10 +1677,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     })
     pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session
-    // survives restarts and is resumable. Ephemeral when no store is injected.
+    // survives restarts and is resumable. Ephemeral when no store is injected, or
+    // when the store can't be written (degrade rather than crash the REPL).
     if (deps.persist && !conversationId) {
-      conversationId = deps.persist.create({ workspace: opts.cwd, providerId, model }).id
+      try {
+        conversationId = deps.persist.create({ workspace: opts.cwd, providerId, model }).id
+      } catch (e) {
+        if (!warnedPersistFail) {
+          warnedPersistFail = true
+          deps.io.out(paint(`· couldn't start a saved conversation (continuing unsaved): ${(e as Error).message}\n`, 'dim'))
+        }
+      }
     }
+    // Persist the user's message up front (like the GUI) so an early run error can't
+    // lose the prompt or leave an empty "New chat" orphan in /resume and the sidebar.
+    persistMessages(messages)
     const runId = newId()
     activeRunId = runId
     const req: AgentRunRequest = {
@@ -1859,8 +1921,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     await deps.startRun(req, send, (m: ChatMessage[]) => {
       messages = m
       // Mirror the GUI: persist the running message log so the session is durable
-      // and resumable even if it's interrupted mid-turn.
-      if (deps.persist && conversationId) deps.persist.setMessages(conversationId, m)
+      // and resumable even if it's interrupted mid-turn. Guarded so a store failure
+      // can't crash the run (a throw here has no catch on the startRun side).
+      persistMessages(m)
     })
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.
