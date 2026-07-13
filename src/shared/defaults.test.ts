@@ -5,6 +5,7 @@ import {
   backfillDefaultModels,
   defaultProviders,
   defaultSettings,
+  reconcileSelectedModel,
   resolveShellOutputBudget,
   stripBuiltInModelLabels
 } from './defaults'
@@ -163,5 +164,62 @@ describe('backfillDefaultModels', () => {
   it('is a no-op when the saved list already matches the defaults', () => {
     const saved = defaultProviders()
     expect(backfillDefaultModels(saved)).toEqual(saved)
+  })
+})
+
+describe('reconcileSelectedModel', () => {
+  const providers = [
+    provider({
+      id: 'anthropic',
+      kind: 'anthropic',
+      defaultModel: 'claude-opus-4-8',
+      models: [{ id: 'claude-opus-4-8' }, { id: 'claude-haiku-4-5' }]
+    }),
+    provider({ id: 'openai', kind: 'openai', models: [{ id: 'gpt-5.6-sol' }] })
+  ]
+
+  it('leaves a null selection null (initial default is the caller’s job)', () => {
+    expect(reconcileSelectedModel(providers, null)).toBeNull()
+  })
+
+  it('keeps a selection that still resolves to a real provider + model', () => {
+    const sel = { providerId: 'anthropic', model: 'claude-haiku-4-5' }
+    expect(reconcileSelectedModel(providers, sel)).toBe(sel)
+  })
+
+  it('re-points to the provider default when the selected model was removed', () => {
+    // The user deletes claude-haiku-4-5 while it was selected; the provider survives.
+    const sel = { providerId: 'anthropic', model: 'claude-haiku-4-5-removed' }
+    expect(reconcileSelectedModel(providers, sel)).toEqual({
+      providerId: 'anthropic',
+      model: 'claude-opus-4-8'
+    })
+  })
+
+  it('re-points to the first model when the provider default was itself removed', () => {
+    const withRemovedDefault = [
+      provider({
+        id: 'anthropic',
+        kind: 'anthropic',
+        defaultModel: 'claude-opus-4-8-removed',
+        models: [{ id: 'claude-haiku-4-5' }]
+      })
+    ]
+    const sel = { providerId: 'anthropic', model: 'gone' }
+    expect(reconcileSelectedModel(withRemovedDefault, sel)).toEqual({
+      providerId: 'anthropic',
+      model: 'claude-haiku-4-5'
+    })
+  })
+
+  it('clears the selection when its provider was removed entirely', () => {
+    const sel = { providerId: 'deleted-provider', model: 'whatever' }
+    expect(reconcileSelectedModel(providers, sel)).toBeNull()
+  })
+
+  it('clears the selection when the provider survives but has no models left', () => {
+    const emptied = [provider({ id: 'anthropic', kind: 'anthropic', models: [] })]
+    const sel = { providerId: 'anthropic', model: 'claude-opus-4-8' }
+    expect(reconcileSelectedModel(emptied, sel)).toBeNull()
   })
 })

@@ -133,11 +133,16 @@ export function ModelPicker({
       cancelled = true
     }
   }, [providerId, model, providerKind, listedTools])
-  const triggerLabel = selected
-    ? `${selectedProvider && selectedModel ? modelName(selectedProvider.kind, selectedModel) : selected.model}${
-        selectedModel && windowLabel(selectedModel) ? ` · ${windowLabel(selectedModel)}` : ''
-      }`
-    : 'Select a model…'
+  // Only label the trigger when the selection resolves to a model that still exists.
+  // A selection pointing at a removed model/provider falls through to the placeholder
+  // (the store reconciles these away on save/load, but stay defensive so a stale id is
+  // never shown as if it were pickable).
+  const triggerLabel =
+    selected && selectedProvider && selectedModel
+      ? `${modelName(selectedProvider.kind, selectedModel)}${
+          windowLabel(selectedModel) ? ` · ${windowLabel(selectedModel)}` : ''
+        }`
+      : 'Select a model…'
 
   const openMenu = (): void => {
     const idx = flat.findIndex((f) => `${f.providerId}::${f.modelId}` === selectedKey)

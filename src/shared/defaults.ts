@@ -1,4 +1,4 @@
-import type { AppSettings, ProviderConfig } from './types'
+import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 
 export const SETTINGS_SCHEMA_VERSION = 4
@@ -159,6 +159,34 @@ export function stripBuiltInModelLabels(saved: ProviderConfig[]): ProviderConfig
     if (!p.builtIn || !p.models.some((m) => m.label !== undefined)) return p
     return { ...p, models: p.models.map(({ label: _label, ...m }) => m) }
   })
+}
+
+/**
+ * Keep `selected` pointing at a model that still exists. When the user removes the
+ * selected model (or its whole provider) from settings, the stale selection would
+ * otherwise linger and the picker would render an unusable, removed id. Reconcile:
+ *   - the selection still resolves to a real provider + model → keep it.
+ *   - its provider survives but that model is gone → fall back to the provider's
+ *     default (or first) model, so the user stays on the same provider.
+ *   - the provider itself is gone or now has no models → clear it (null); the picker
+ *     then shows "Select a model…", and load-time defaulting re-fills a ready one.
+ * A null selection is left null: choosing an initial default is the caller's job.
+ */
+export function reconcileSelectedModel(
+  providers: ProviderConfig[],
+  selected: SelectedModel | null
+): SelectedModel | null {
+  if (!selected) return null
+  const provider = providers.find((p) => p.id === selected.providerId)
+  if (!provider || provider.models.length === 0) return null
+  if (provider.models.some((m) => m.id === selected.model)) return selected
+  // The selected model was removed. Re-point within the same provider, guarding against
+  // a `defaultModel` that pointed at the just-removed id.
+  const fallback =
+    provider.defaultModel && provider.models.some((m) => m.id === provider.defaultModel)
+      ? provider.defaultModel
+      : provider.models[0].id
+  return { providerId: provider.id, model: fallback }
 }
 
 export function defaultSettings(): AppSettings {
