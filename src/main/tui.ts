@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { isApprovalPolicy, type AppSettings, type ApprovalPolicy } from '@shared/types'
+import {
+  isApprovalPolicy,
+  type AppSettings,
+  type ApprovalPolicy,
+  type Hook,
+  type McpServerConfig
+} from '@shared/types'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
   expandTemplate,
@@ -551,12 +557,18 @@ export type SlashResult =
   | { kind: 'clear' }
   | { kind: 'resume'; query: string }
   | { kind: 'fork' }
-  | { kind: 'capability'; which: 'skills' | 'agents' | 'mcp' | 'hooks' }
+  | { kind: 'capability'; which: 'skills' | 'agents' }
   | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'image'; path: string }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
   | { kind: 'compact' }
+  /** The settings overview hub (/settings). */
+  | { kind: 'settings' }
+  /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
+  | { kind: 'hooks'; action: SettingsAction }
+  /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
+  | { kind: 'mcp'; action: SettingsAction }
   /** A template command (custom `.houston/commands` or first-party `/review`): run the expanded prompt as a turn. */
   | { kind: 'prompt'; text: string }
   | { kind: 'unknown'; name: string }
@@ -590,9 +602,13 @@ export function parseSlashCommand(
       return { kind: 'fork' }
     case 'skills':
     case 'agents':
-    case 'mcp':
-    case 'hooks':
       return { kind: 'capability', which: name }
+    case 'settings':
+      return { kind: 'settings' }
+    case 'hooks':
+      return { kind: 'hooks', action: parseSettingsAction(arg) }
+    case 'mcp':
+      return { kind: 'mcp', action: parseSettingsAction(arg) }
     case 'theme': {
       if (isThemeName(arg)) return { kind: 'set-theme', theme: arg }
       return { kind: 'handled' } // no/invalid arg → driver lists themes
@@ -669,7 +685,9 @@ export const HELP_TEXT = [
   '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
   '  /skills /agents       list workspace skills / custom agents',
-  '  /mcp /hooks           list configured MCP servers / hooks',
+  '  /settings             settings overview + where to edit them',
+  '  /hooks [add|remove n] list or edit lifecycle hooks',
+  '  /mcp [add|remove n]   list or edit MCP servers (terminal adds stdio only)',
   '  /theme [name]         list or switch color theme (default | bright | mono)',
   '  /image <path>         attach an image to your next message',
   '  /cwd                  show the working directory',
@@ -678,6 +696,119 @@ export const HELP_TEXT = [
   '',
   'While a turn runs: Ctrl-C interrupts it. Answer approvals with y / n / a.'
 ].join('\n')
+
+// --- Settings editing (/settings, /hooks, /mcp) ------------------------------
+// A small, safe subset of settings editing for the terminal. The desktop app has
+// the full panel; here we cover lifecycle hooks and *local* (stdio) MCP servers.
+// We deliberately never touch auth: remote/URL MCP and header secrets are the
+// desktop app's job (the CLI can't persist header secrets — see store.ts), so the
+// terminal add flow builds header-free stdio configs only.
+
+/** Lifecycle events a hook can bind to (mirrors the Hook.event union in types.ts). */
+export const HOOK_EVENTS: Hook['event'][] = [
+  'PreToolUse',
+  'PostToolUse',
+  'UserPromptSubmit',
+  'SessionStart',
+  'Stop',
+  'PreCompact'
+]
+
+/** What the user asked /hooks or /mcp to do. `remove` carries a 1-based index. */
+export type SettingsAction =
+  | { op: 'list' }
+  | { op: 'add' }
+  | { op: 'remove'; index: number }
+  | { op: 'usage' }
+
+/** Parse the argument of /hooks or /mcp into an action. Bare command → list. */
+export function parseSettingsAction(arg: string): SettingsAction {
+  const [verb, ...rest] = arg.trim().split(/\s+/).filter(Boolean)
+  if (!verb) return { op: 'list' }
+  if (verb === 'add') return { op: 'add' }
+  if (verb === 'remove' || verb === 'rm' || verb === 'delete') {
+    const n = Number.parseInt(rest[0] ?? '', 10)
+    if (Number.isInteger(n) && n >= 1) return { op: 'remove', index: n }
+    return { op: 'usage' }
+  }
+  return { op: 'usage' }
+}
+
+/** Map a hook-event answer (a 1-based number or a name) to a candidate event string. */
+export function resolveHookEventInput(input: string): string {
+  const n = Number.parseInt(input.trim(), 10)
+  if (Number.isInteger(n) && n >= 1 && n <= HOOK_EVENTS.length) return HOOK_EVENTS[n - 1]
+  return input.trim()
+}
+
+/** Validate raw field input into a Hook, or return an error to show the user. */
+export function buildHook(event: string, matcher: string, command: string): Hook | { error: string } {
+  if (!(HOOK_EVENTS as string[]).includes(event)) {
+    return { error: `unknown event "${event}" (expected one of: ${HOOK_EVENTS.join(', ')})` }
+  }
+  const cmd = command.trim()
+  if (!cmd) return { error: 'a hook needs a shell command to run' }
+  // Lifecycle events have no tool to match; a blank matcher means "any".
+  return { event: event as Hook['event'], matcher: matcher.trim() || '*', command: cmd }
+}
+
+/**
+ * Validate raw field input into a *stdio* MCP server config, or return an error.
+ * No url/headers/env by construction: remote transports and header secrets are the
+ * desktop app's domain, so a terminal-added server is always a local process.
+ */
+export function buildStdioMcpServer(
+  existingIds: string[],
+  name: string,
+  command: string,
+  argsStr: string
+): McpServerConfig | { error: string } {
+  const id = name.trim()
+  if (!/^[\w-]+$/.test(id)) {
+    return { error: 'name must be letters, numbers, hyphens or underscores (no spaces)' }
+  }
+  if (existingIds.includes(id)) return { error: `an MCP server named "${id}" already exists` }
+  const cmd = command.trim()
+  if (!cmd) return { error: 'a command to spawn is required (e.g. npx)' }
+  const args = argsStr.trim() ? argsStr.trim().split(/\s+/) : undefined
+  return { id, name: id, transport: 'stdio', command: cmd, ...(args ? { args } : {}), enabled: true }
+}
+
+/** Numbered list of hooks, or a "none" note. */
+export function renderHookList(hooks: Hook[], paint: Painter): string {
+  if (!hooks.length) return paint('No hooks configured.', 'dim')
+  return hooks
+    .map(
+      (h, i) =>
+        `  ${paint(`${i + 1}.`, 'dim')} ${paint(h.event, 'cyan')}  ${h.matcher}  ${paint('→', 'dim')} ${h.command}`
+    )
+    .join('\n')
+}
+
+/**
+ * Numbered list of MCP servers. Only the transport summary is shown — never the
+ * `headers` map, whose values are secrets (masked on read, but we don't print them
+ * at all).
+ */
+export function renderMcpList(servers: McpServerConfig[], paint: Painter): string {
+  if (!servers.length) return paint('No MCP servers configured.', 'dim')
+  return servers
+    .map((s, i) => {
+      const transport = s.transport ?? 'stdio'
+      const detail =
+        transport === 'stdio'
+          ? `${s.command}${s.args?.length ? ` ${s.args.join(' ')}` : ''}`
+          : (s.url ?? '')
+      const off = s.enabled === false ? paint(' (disabled)', 'dim') : ''
+      return `  ${paint(`${i + 1}.`, 'dim')} ${paint(s.name ?? s.id, 'cyan')}${off}  ${paint(`[${transport}]`, 'dim')}  ${detail}`
+    })
+    .join('\n')
+}
+
+/** The "where the file is / changes need a restart" footer shared by the settings commands. */
+export function renderSettingsFooter(path: string, paint: Painter): string {
+  return paint(`settings file: ${path}\n(changes are picked up on restart)`, 'dim')
+}
 
 // --- The interactive driver --------------------------------------------------
 
@@ -759,6 +890,10 @@ export interface TuiDeps {
   commands?: () => Promise<Command[]>
   /** Compact the given conversation on demand (the `/compact` command). */
   compact?: (id: string, providerId: string, model: string) => Promise<CompactResult>
+  /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
+  updateSettings?: (patch: Partial<AppSettings>) => void
+  /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
+  settingsPath?: () => string
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
   loadImage?: (path: string) => { image: ImageAttachment } | { error: string }
   /**
@@ -962,8 +1097,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         const snap = await deps.capabilities()
-        const labels = { skills: 'Skills', agents: 'Agents', mcp: 'MCP servers', hooks: 'Hooks' }
+        const labels = { skills: 'Skills', agents: 'Agents' }
         deps.io.out(`${renderCapabilityList(labels[result.which], snap[result.which], paint)}\n`)
+        continue
+      }
+      if (result.kind === 'settings') {
+        renderSettingsOverview(deps, paint)
+        continue
+      }
+      if (result.kind === 'hooks') {
+        await runHooksCommand(result.action, deps, paint)
+        continue
+      }
+      if (result.kind === 'mcp') {
+        await runMcpCommand(result.action, deps, paint)
         continue
       }
       if (result.kind === 'image') {
@@ -1357,4 +1504,129 @@ function handleInfoCommand(
       deps.io.out(`  ${paint(p.id, 'cyan')}${flag}: ${models}\n`)
     }
   }
+}
+
+/**
+ * The /settings hub: where the file lives, that the desktop app has the full panel,
+ * and the safe subset editable from the terminal. Read-only — the editing verbs live
+ * on /hooks and /mcp.
+ */
+function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
+  const path = deps.settingsPath?.() ?? '(unknown)'
+  const lines = [
+    paint('Settings', 'bold'),
+    `  file: ${path}`,
+    '',
+    '  The desktop app has the full settings panel: models, API keys, remote and',
+    '  authenticated MCP servers, hooks, and more.',
+    '  From the terminal you can edit a safe subset:',
+    `    ${paint('/hooks', 'cyan')}   list, or  /hooks add  ·  /hooks remove <n>`,
+    `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (local stdio servers)  ·  /mcp remove <n>`,
+    '',
+    paint('  Changes are picked up on restart.', 'dim')
+  ]
+  deps.io.out(`${lines.join('\n')}\n`)
+}
+
+/** /hooks: list, add (guided), or remove a lifecycle hook. Persists via deps.updateSettings. */
+async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
+  const hooks = deps.getSettings().hooks ?? []
+  const path = deps.settingsPath?.() ?? '(unknown)'
+
+  if (action.op === 'usage') {
+    deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
+    return
+  }
+  if (action.op === 'list') {
+    deps.io.out(`${renderHookList(hooks, paint)}\n${renderSettingsFooter(path, paint)}\n`)
+    return
+  }
+  if (!deps.updateSettings) {
+    deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
+    return
+  }
+  if (action.op === 'remove') {
+    if (action.index > hooks.length) {
+      deps.io.out(paint(`· no hook #${action.index} (there ${hooks.length === 1 ? 'is 1' : `are ${hooks.length}`})\n`, 'yellow'))
+      return
+    }
+    const removed = hooks[action.index - 1]
+    // Rebuild without the removed entry (never mutate the settings array in place).
+    deps.updateSettings({ hooks: hooks.filter((_, i) => i !== action.index - 1) })
+    deps.io.out(paint(`· removed hook ${action.index} (${removed.event} ${removed.matcher}). Applies on restart.\n`, 'dim'))
+    return
+  }
+
+  // op === 'add' — guided, one field per prompt.
+  deps.io.out(`Add a hook.\n  ${paint('events:', 'dim')} ${HOOK_EVENTS.map((e, i) => `${i + 1}) ${e}`).join('   ')}\n`)
+  const evAns = await deps.io.readLine('event (number or name): ')
+  if (evAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const matcherAns = await deps.io.readLine('matcher (tool name or glob, e.g. edit_file or *; blank = any): ')
+  if (matcherAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const cmdAns = await deps.io.readLine('command (shell to run): ')
+  if (cmdAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+
+  const built = buildHook(resolveHookEventInput(evAns), matcherAns, cmdAns)
+  if ('error' in built) return void deps.io.out(paint(`· ${built.error}\n`, 'yellow'))
+
+  deps.io.out(`\n${paint('hook:', 'dim')} ${built.event}  ${built.matcher}  → ${built.command}\n`)
+  const ok = await deps.io.readLine('Add this hook? [y/N] ', { discardPending: true })
+  if (parseApprovalAnswer(ok ?? '') !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+  deps.updateSettings({ hooks: [...hooks, built] })
+  deps.io.out(paint('· hook added. Applies on restart.\n', 'dim'))
+}
+
+/**
+ * /mcp: list, add (guided, stdio only), or remove an MCP server. Persists via
+ * deps.updateSettings. The add flow never collects a URL or auth headers, so it
+ * can't touch the header-secret path the CLI intentionally doesn't write; remote or
+ * authenticated servers are directed to the desktop app.
+ */
+async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
+  const servers = deps.getSettings().mcpServers ?? []
+  const path = deps.settingsPath?.() ?? '(unknown)'
+
+  if (action.op === 'usage') {
+    deps.io.out(paint('usage: /mcp   ·   /mcp add   ·   /mcp remove <n>\n', 'yellow'))
+    return
+  }
+  if (action.op === 'list') {
+    deps.io.out(`${renderMcpList(servers, paint)}\n${renderSettingsFooter(path, paint)}\n`)
+    deps.io.out(paint('Remote (URL) or authenticated servers: add them in the desktop app.\n', 'dim'))
+    return
+  }
+  if (!deps.updateSettings) {
+    deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
+    return
+  }
+  if (action.op === 'remove') {
+    if (action.index > servers.length) {
+      deps.io.out(paint(`· no MCP server #${action.index} (there ${servers.length === 1 ? 'is 1' : `are ${servers.length}`})\n`, 'yellow'))
+      return
+    }
+    const removed = servers[action.index - 1]
+    deps.updateSettings({ mcpServers: servers.filter((_, i) => i !== action.index - 1) })
+    deps.io.out(paint(`· removed MCP server ${action.index} (${removed.name ?? removed.id}). Applies on restart.\n`, 'dim'))
+    return
+  }
+
+  // op === 'add' — local stdio servers only.
+  deps.io.out(paint('Add a local (stdio) MCP server. For remote or authenticated servers, use the desktop app.\n', 'dim'))
+  const nameAns = await deps.io.readLine('name (letters, numbers, - or _): ')
+  if (nameAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const cmdAns = await deps.io.readLine('command to spawn (e.g. npx): ')
+  if (cmdAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const argsAns = await deps.io.readLine('args (space-separated, optional): ')
+  if (argsAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+
+  const built = buildStdioMcpServer(servers.map((s) => s.id), nameAns, cmdAns, argsAns)
+  if ('error' in built) return void deps.io.out(paint(`· ${built.error}\n`, 'yellow'))
+
+  deps.io.out(
+    `\n${paint('server:', 'dim')} ${built.name}  [stdio]  ${built.command}${built.args?.length ? ` ${built.args.join(' ')}` : ''}\n`
+  )
+  const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
+  if (parseApprovalAnswer(ok ?? '') !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+  deps.updateSettings({ mcpServers: [...servers, built] })
+  deps.io.out(paint('· MCP server added. Applies on restart.\n', 'dim'))
 }

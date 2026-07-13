@@ -159,6 +159,11 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
       commands: () => loadCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
       compact: (id, providerId, model) => compactConversationNow(id, providerId, model),
+      // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
+      updateSettings: (patch) => {
+        updateSettings(patch)
+      },
+      settingsPath: () => join(getUserDataDir(), 'settings.json'),
       io: createTerminalIo({
         paint: makePainter(tui.color),
         history,
