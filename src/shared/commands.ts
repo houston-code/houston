@@ -63,18 +63,96 @@ export function mergeCommands(builtin: Command[], custom: Command[]): Command[] 
 export const REVIEW_TEMPLATE =
   'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
 
+/** The interactive clients that surface built-in slash commands. */
+export type CommandClient = 'gui' | 'tui'
+
 /**
- * First-party template commands available in every client. Unlike custom commands
- * (loaded per workspace from `.houston/commands`), these ship with the app. They
- * behave like custom commands — a `/name` expands to a prompt turn — but are always
- * present and win over a same-named custom command via `mergeCommands`.
+ * A built-in command in the canonical catalog: a `Command` plus the set of
+ * clients that surface it. Some built-ins are shared (`/new`, `/help`), some are
+ * client-specific (the TUI has terminal-only `/theme` and `/exit`; the GUI has
+ * approval-policy presets like `/auto`), so a flat shared list would be wrong —
+ * the `clients` tag is what lets one catalog drive both menus.
  */
-export const BUILTIN_TEMPLATE_COMMANDS: Command[] = [
+export interface BuiltinCommand extends Command {
+  /** Clients that expose this command. */
+  clients: CommandClient[]
+}
+
+/**
+ * Every built-in slash command, the single source of truth across clients. The
+ * GUI and TUI each used to keep a private copy that drifted out of sync; both now
+ * derive their menus from this list via `builtinCommands(client)`. It is also the
+ * authoritative answer to "what slash commands does Houston have?", so the
+ * product's own self-knowledge can never disagree with what the clients offer.
+ *
+ * Template commands (a `template` that expands into a prompt turn, e.g. `/review`)
+ * are present in every client and win over a same-named custom command via
+ * `mergeCommands`; the rest are actions handled by each client.
+ */
+export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
+  { name: 'new', description: 'Start a new chat', clients: ['gui', 'tui'] },
+  { name: 'clear', description: 'Start a new chat (alias for /new)', clients: ['gui', 'tui'] },
+  { name: 'compact', description: 'Summarize older turns to free up context now', clients: ['gui'] },
+  {
+    name: 'plan',
+    description: 'Plan mode: read-only (research & propose, no edits/commands)',
+    clients: ['gui']
+  },
+  { name: 'ask', description: 'Approval: ask before every edit and command', clients: ['gui'] },
+  { name: 'auto', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui'] },
+  { name: 'full', description: 'Approval: full auto (sandboxed)', clients: ['gui'] },
+  { name: 'model', description: 'List or switch the active model', clients: ['tui'] },
+  { name: 'approval', description: 'Show or set the approval policy', clients: ['tui'] },
+  { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['tui'] },
+  { name: 'fork', description: 'Branch the current session into a copy', clients: ['tui'] },
+  { name: 'cost', description: 'Session token and cost totals', clients: ['tui'] },
+  {
+    name: 'skills',
+    description: 'List the workspace skills (.houston/skills)',
+    clients: ['gui', 'tui']
+  },
+  {
+    name: 'agents',
+    description: 'List the workspace agents (.houston/agents)',
+    clients: ['gui', 'tui']
+  },
+  { name: 'mcp', description: 'List configured MCP servers', clients: ['tui'] },
+  { name: 'hooks', description: 'List configured hooks', clients: ['tui'] },
+  { name: 'theme', description: 'List or switch the color theme', clients: ['tui'] },
+  { name: 'image', description: 'Attach an image to your next message', clients: ['tui'] },
+  { name: 'cwd', description: 'Show the working directory', clients: ['tui'] },
+  { name: 'help', description: 'List the available slash commands', clients: ['gui', 'tui'] },
   {
     name: 'review',
     description: 'Adversarial review of your uncommitted changes',
+    clients: ['gui', 'tui'],
     // Runs immediately on submit rather than expanding into the composer.
     autoRun: true,
     template: REVIEW_TEMPLATE
-  }
+  },
+  { name: 'exit', description: 'Leave', clients: ['tui'] },
+  { name: 'quit', description: 'Leave', clients: ['tui'] }
 ]
+
+/** Strip the catalog-only `clients` tag, yielding a plain `Command`. */
+function toCommand(c: BuiltinCommand): Command {
+  const cmd: Command = { name: c.name, description: c.description }
+  if (c.template !== undefined) cmd.template = c.template
+  if (c.autoRun !== undefined) cmd.autoRun = c.autoRun
+  return cmd
+}
+
+/** The built-in commands a given client surfaces, as plain `Command`s. */
+export function builtinCommands(client: CommandClient): Command[] {
+  return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map(toCommand)
+}
+
+/**
+ * First-party template commands (those that expand into a prompt turn, e.g.
+ * `/review`). Unlike custom commands (loaded per workspace from
+ * `.houston/commands`), these ship with the app, are present in every client, and
+ * win over a same-named custom command via `mergeCommands`.
+ */
+export const BUILTIN_TEMPLATE_COMMANDS: Command[] = BUILTIN_COMMAND_CATALOG.filter(
+  (c) => c.template !== undefined
+).map(toCommand)
