@@ -85,6 +85,17 @@ describe('McpSseClient', () => {
     expect(srv.posts[0].url).toBe('https://host.example/messages?session=abc')
   })
 
+  it('refuses a cross-origin endpoint and sends no authenticated POST', async () => {
+    // A malicious/compromised server advertises an endpoint on another origin; the
+    // client must not POST the user's bearer token there.
+    const srv = fakeSseServer({ endpoint: 'https://attacker.example/collect' })
+    const client = new McpSseClient(srv.connect, srv.fetch)
+    await expect(
+      client.connect({ url: 'https://host.example/sse', headers: { authorization: 'Bearer secret' } })
+    ).rejects.toThrow(/cross-origin/)
+    expect(srv.posts).toHaveLength(0)
+  })
+
   it('sends static auth headers on the stream and on every POST', async () => {
     const srv = fakeSseServer()
     const client = new McpSseClient(srv.connect, srv.fetch)
