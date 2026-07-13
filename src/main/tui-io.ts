@@ -274,6 +274,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       rl.pause()
       let buf = ''
       let done = false
+      // CRITICAL for secrecy: readline keeps its own 'keypress' listener on stdin and
+      // SOFTWARE-echoes every typed character to the output — even in raw mode, which
+      // only stops the *terminal* driver's echo, not readline's. Left attached, each
+      // keystroke would print the real character next to our mask (`b•2•4•…`), leaking
+      // the key. Detach every current keypress listener for the duration (the spinner
+      // watcher's was already removed by stopInterruptWatch above, so this is
+      // readline's) and restore them in finish so the next read still works.
+      const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
+      for (const l of priorKeypress) stdin.removeListener('keypress', l)
       rawWrite(prompt)
       const finish = (value: string | null): void => {
         if (done) return
@@ -283,6 +292,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         pending = null
         try {
           stdin.removeListener('keypress', onKey)
+          for (const l of priorKeypress) stdin.on('keypress', l) // restore readline's echo/edit
           stdin.setRawMode(false)
           rl.resume() // re-sync readline for the next read (mirrors the picker)
           rl.pause()
