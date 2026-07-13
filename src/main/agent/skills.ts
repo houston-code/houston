@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { parseFrontmatter } from '@shared/frontmatter'
+import { HOUSTON_GUIDE } from './guide-content'
 
 /**
  * Skills: reusable instruction bundles in `.houston/skills/<name>/SKILL.md`. Each
@@ -18,6 +19,45 @@ export interface Skill {
   description: string
   /** Workspace-relative path to the skill's instructions, for the agent to read. */
   path: string
+  /**
+   * In-memory instructions for a built-in skill (one that ships with Houston
+   * rather than living in a workspace file). When set, {@link loadSkillBody}
+   * serves this directly instead of reading `path` from the workspace.
+   */
+  body?: string
+}
+
+/**
+ * Skills that ship with Houston itself, present in every run regardless of the
+ * workspace. `houston-guide` lets the agent answer questions about Houston's own
+ * features from an authoritative source instead of guessing (the system prompt
+ * points the agent at it). Its body is compiled in via {@link HOUSTON_GUIDE}, so
+ * there is no workspace file to read.
+ *
+ * These are merged into the agent's skill list at the run seam (see
+ * {@link withBuiltinSkills}), NOT inside {@link loadSkills} — so the `/skills`
+ * command keeps listing only the workspace's own `.houston/skills`.
+ */
+export const BUILTIN_SKILLS: Skill[] = [
+  {
+    name: 'houston-guide',
+    description:
+      "How Houston itself works: its slash commands, skills, subagents, hooks, plugins, MCP servers, approval modes and permission rules, plan mode, sandboxing, GitHub tools, and settings. Load this to answer any question about Houston's own features.",
+    path: '(built-in)',
+    body: HOUSTON_GUIDE
+  }
+]
+
+/**
+ * Merge Houston's built-in skills with a workspace's loaded skills for the agent
+ * runtime. Built-ins win a name collision, so a workspace can't shadow (or
+ * silently override) `houston-guide`.
+ */
+export function withBuiltinSkills(workspaceSkills: Skill[]): Skill[] {
+  const reserved = new Set(BUILTIN_SKILLS.map((s) => s.name.toLowerCase()))
+  const merged = [...BUILTIN_SKILLS, ...workspaceSkills.filter((s) => !reserved.has(s.name.toLowerCase()))]
+  merged.sort((a, b) => a.name.localeCompare(b.name))
+  return merged
 }
 
 export async function loadSkills(workspace: string): Promise<Skill[]> {
@@ -59,6 +99,11 @@ export async function loadSkills(workspace: string): Promise<Skill[]> {
  * workspace-relative path.
  */
 export async function loadSkillBody(workspace: string, skill: Skill): Promise<string | null> {
+  // Built-in skills carry their instructions in memory (no workspace file).
+  if (skill.body !== undefined) {
+    const text = skill.body.trim()
+    return text || null
+  }
   let raw: string
   try {
     raw = (await fs.readFile(join(workspace, skill.path), 'utf8')).trim()

@@ -9,7 +9,20 @@ import reactHooks from 'eslint-plugin-react-hooks'
  * fast and free of project-service wiring.
  */
 export default tseslint.config(
-  { ignores: ['out/**', 'release/**', 'build/**', 'dist/**', 'node_modules/**', 'scripts/**', 'website/**', '*.config.*'] },
+  {
+    ignores: [
+      'out/**',
+      'release/**',
+      'build/**',
+      'dist/**',
+      'node_modules/**',
+      'scripts/**',
+      'website/**',
+      '*.config.*',
+      // Generated from docs/houston-guide.md by scripts/gen-guide.mjs.
+      'src/main/agent/guide-content.ts'
+    ]
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

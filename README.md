@@ -115,6 +115,12 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   default set, never grant write/shell/network). Add a `.houston/skills/<name>/SKILL.md`
   to register a skill: its description is surfaced to the agent, which reads the
   full instructions on demand.
+- **Explains itself.** Ask how Houston works (its slash commands, approval modes,
+  hooks, MCP servers, skills, sandboxing, and more) and the agent answers from a
+  built-in guide instead of guessing. The guide lives in
+  [docs/houston-guide.md](docs/houston-guide.md) and ships as a built-in
+  `houston-guide` skill, so Houston's self-knowledge stays accurate as features
+  change.
 - **MCP servers.** Connect Model Context Protocol servers in Settings — a local
   **stdio** process or a remote **HTTP** (streamable) or **SSE** endpoint (with
   optional static bearer-token / custom auth headers). Their tools are offered to the agent namespaced as
