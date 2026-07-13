@@ -112,6 +112,19 @@ describe('parseTuiArgs', () => {
     expect(parseTuiArgs(['-i', '--full-auto'], '/d')?.approvalPolicy).toBe('full-auto')
     expect(parseTuiArgs(['-i', '--approval', 'bogus'], '/d')?.approvalPolicy).toBe('ask')
   })
+
+  it('defaultInteractive treats a bare invocation as interactive', () => {
+    // Absent the flag, still null by default (desktop binary falls through to GUI)...
+    expect(parseTuiArgs(['node', 'app'], '/d')).toBeNull()
+    expect(parseTuiArgs(['node', 'app'], '/d', false)).toBeNull()
+    // ...but non-null when the caller opts in (bare `houston` at a TTY).
+    expect(parseTuiArgs(['node', 'app'], '/d', true)).not.toBeNull()
+  })
+
+  it('defaultInteractive still parses the other flags', () => {
+    const o = parseTuiArgs(['--cwd', '/proj', '--model=gpt', '--full-auto'], '/d', true)
+    expect(o).toMatchObject({ cwd: '/proj', model: 'gpt', approvalPolicy: 'full-auto' })
+  })
 })
 
 describe('makePainter', () => {
