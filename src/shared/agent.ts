@@ -82,6 +82,18 @@ export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'error' | 'abo
 export interface TokenUsage {
   inputTokens?: number
   outputTokens?: number
+  /**
+   * Portion of `inputTokens` served from the provider's prompt cache (Anthropic's
+   * `cache_read_input_tokens`). Still counted in `inputTokens` (it's real context
+   * that fills the window), but it bills far below the base input rate, so the cost
+   * estimate prices it separately. Absent for providers that don't report a split.
+   */
+  cacheReadTokens?: number
+  /**
+   * Portion of `inputTokens` that wrote a new prompt-cache entry (Anthropic's
+   * `cache_creation_input_tokens`). Bills slightly *above* the base input rate.
+   */
+  cacheWriteTokens?: number
 }
 
 /** A single event in a streamed provider response. */

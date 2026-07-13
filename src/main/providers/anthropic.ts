@@ -279,18 +279,21 @@ export function createAnthropicProvider(
       const reasoning = reasoningFromMessage(final.content)
       // With caching, input_tokens counts only the *uncached* prefix; add the
       // cached reads/writes back so the reported context size stays accurate.
+      // Surface the split too: cache reads bill at ~10% and cache writes at ~125%
+      // of the input rate, so the cost estimate can price them instead of charging
+      // the whole (cache-heavy) prefix at the full input rate.
       const u = final.usage
-      const inputTokens = u
-        ? (u.input_tokens ?? 0) +
-          (u.cache_read_input_tokens ?? 0) +
-          (u.cache_creation_input_tokens ?? 0)
-        : undefined
+      const cacheReadTokens = u?.cache_read_input_tokens ?? 0
+      const cacheWriteTokens = u?.cache_creation_input_tokens ?? 0
+      const inputTokens = u ? (u.input_tokens ?? 0) + cacheReadTokens + cacheWriteTokens : undefined
       yield {
         type: 'done',
         stopReason: mapStopReason(final.stop_reason),
         usage: {
           inputTokens,
-          outputTokens: final.usage?.output_tokens
+          outputTokens: final.usage?.output_tokens,
+          ...(cacheReadTokens ? { cacheReadTokens } : {}),
+          ...(cacheWriteTokens ? { cacheWriteTokens } : {})
         },
         ...(reasoning.length ? { reasoning } : {})
       }

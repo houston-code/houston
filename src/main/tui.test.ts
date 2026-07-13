@@ -646,6 +646,26 @@ describe('runTui', () => {
     expect(t.text()).toContain('Bye.')
   })
 
+  it('prints one end-of-turn cost summary, not a line per model round', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'text', delta: 'working' },
+      { runId: 'x', type: 'usage', inputTokens: 30000, outputTokens: 100, cost: 0.16 },
+      { runId: 'x', type: 'usage', inputTokens: 40000, outputTokens: 200, cost: 0.21 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['do it', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    // One combined summary for the whole turn (30k+40k in, 100+200 out, $0.37),
+    // carrying the running session total (same, as it's the only turn).
+    expect(out).toContain('· turn 70,000+300 tok · $0.3700')
+    expect(out).toContain('(session 70,000+300 tok · $0.3700)')
+    // The old per-round lines (raw, unseparated counts) are gone.
+    expect(out).not.toContain('30000+100')
+    expect(out).not.toContain('40000+200')
+  })
+
   it('assembles a multi-line message (backslash continuation) into one turn', async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['first line \\', 'second line', null])

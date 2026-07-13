@@ -749,6 +749,8 @@ export async function startRun(
         // subagent context), while output + cost accumulate. Mirrors dispatchReview.
         let subInput = 0
         let subOutput = 0
+        let subCacheRead = 0
+        let subCacheWrite = 0
         return runSubAgent({
           provider,
           model: req.model,
@@ -760,6 +762,8 @@ export async function startRun(
           onUsage: (u) => {
             subInput += u.inputTokens ?? 0
             subOutput += u.outputTokens ?? 0
+            subCacheRead += u.cacheReadTokens ?? 0
+            subCacheWrite += u.cacheWriteTokens ?? 0
           }
         }).finally(() => {
           if (subInput || subOutput) {
@@ -767,7 +771,10 @@ export async function startRun(
               type: 'usage',
               inputTokens: 0,
               outputTokens: subOutput,
-              cost: turnCostUsd(req.model, subInput, subOutput)
+              cost: turnCostUsd(req.model, subInput, subOutput, {
+                readTokens: subCacheRead,
+                writeTokens: subCacheWrite
+              })
             })
           }
         })
@@ -787,6 +794,8 @@ export async function startRun(
         }
         let subInput = 0
         let subOutput = 0
+        let subCacheRead = 0
+        let subCacheWrite = 0
         return runSubAgent({
           provider,
           model: req.model,
@@ -804,6 +813,8 @@ export async function startRun(
           onUsage: (u) => {
             subInput += u.inputTokens ?? 0
             subOutput += u.outputTokens ?? 0
+            subCacheRead += u.cacheReadTokens ?? 0
+            subCacheWrite += u.cacheWriteTokens ?? 0
           }
         }).finally(() => {
           if (subInput || subOutput) {
@@ -811,7 +822,10 @@ export async function startRun(
               type: 'usage',
               inputTokens: 0,
               outputTokens: subOutput,
-              cost: turnCostUsd(req.model, subInput, subOutput)
+              cost: turnCostUsd(req.model, subInput, subOutput, {
+                readTokens: subCacheRead,
+                writeTokens: subCacheWrite
+              })
             })
           }
         })
@@ -823,6 +837,8 @@ export async function startRun(
         // ephemeral subagent contexts), while output + cost accumulate.
         let reviewInput = 0
         let reviewOutput = 0
+        let reviewCacheRead = 0
+        let reviewCacheWrite = 0
         return reviewWorkspaceChanges({
           provider,
           model: req.model,
@@ -836,6 +852,8 @@ export async function startRun(
           onUsage: (u) => {
             reviewInput += u.inputTokens ?? 0
             reviewOutput += u.outputTokens ?? 0
+            reviewCacheRead += u.cacheReadTokens ?? 0
+            reviewCacheWrite += u.cacheWriteTokens ?? 0
           },
           signal: abort.signal
         }).finally(() => {
@@ -844,7 +862,10 @@ export async function startRun(
               type: 'usage',
               inputTokens: 0,
               outputTokens: reviewOutput,
-              cost: turnCostUsd(req.model, reviewInput, reviewOutput)
+              cost: turnCostUsd(req.model, reviewInput, reviewOutput, {
+                readTokens: reviewCacheRead,
+                writeTokens: reviewCacheWrite
+              })
             })
           }
         })
@@ -1146,6 +1167,8 @@ export async function startRun(
       let stopReason: StopReason = 'end_turn'
       let turnInput = 0
       let turnOutput = 0
+      let turnCacheRead = 0
+      let turnCacheWrite = 0
       let turnReasoning: ReasoningBlock[] = []
 
       // Stream the model turn, retrying transient failures with backoff — but only
@@ -1157,6 +1180,8 @@ export async function startRun(
         stopReason = 'end_turn'
         turnInput = 0
         turnOutput = 0
+        turnCacheRead = 0
+        turnCacheWrite = 0
         turnReasoning = []
         let emitted = false
         try {
@@ -1188,6 +1213,8 @@ export async function startRun(
                 turnInput = ev.usage.inputTokens
               }
               if (ev.usage?.outputTokens) turnOutput = ev.usage.outputTokens
+              turnCacheRead = ev.usage?.cacheReadTokens ?? 0
+              turnCacheWrite = ev.usage?.cacheWriteTokens ?? 0
               if (ev.reasoning?.length) turnReasoning = ev.reasoning
             } else if (ev.type === 'error') {
               throw new Error(ev.message)
@@ -1266,7 +1293,10 @@ export async function startRun(
       }
 
       if (turnInput || turnOutput) {
-        const turnCost = turnCostUsd(req.model, turnInput, turnOutput)
+        const turnCost = turnCostUsd(req.model, turnInput, turnOutput, {
+          readTokens: turnCacheRead,
+          writeTokens: turnCacheWrite
+        })
         // Accumulate for the adaptive-budget cost ceiling (the landing trigger).
         cumulativeCostUsd += turnCost
         emit({

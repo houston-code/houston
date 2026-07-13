@@ -138,6 +138,40 @@ describe('turnCostUsd', () => {
     expect(turnCostUsd('local-model', 1000, 1000)).toBe(0)
     expect(turnCostUsd('claude-opus-4-8', 0, 0)).toBe(0)
   })
+
+  it('prices cache reads at 0.1x and cache writes at 1.25x the input rate', () => {
+    // 1M input on Opus ($5/M): all fresh = $5; all cache-read = $0.50; all cache-write = $6.25.
+    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 0)).toBeCloseTo(5, 6)
+    expect(
+      turnCostUsd('claude-opus-4-8', 1_000_000, 0, { readTokens: 1_000_000 })
+    ).toBeCloseTo(0.5, 6)
+    expect(
+      turnCostUsd('claude-opus-4-8', 1_000_000, 0, { writeTokens: 1_000_000 })
+    ).toBeCloseTo(6.25, 6)
+  })
+
+  it('charges only the fresh remainder at full input rate (cache-heavy loop)', () => {
+    // 100k input where 90k is a cache read, 5k a cache write, 5k fresh — plus 2k output.
+    // 5k*5 + 90k*0.5 + 5k*6.25 + 2k*25, all per-million.
+    const expected =
+      (5_000 * 5 + 90_000 * 0.5 + 5_000 * 6.25 + 2_000 * 25) / 1_000_000
+    expect(
+      turnCostUsd('claude-opus-4-8', 100_000, 2_000, { readTokens: 90_000, writeTokens: 5_000 })
+    ).toBeCloseTo(expected, 6)
+    // The caching-aware figure is far below the flat estimate for the same tokens.
+    expect(expected).toBeLessThan(turnCostUsd('claude-opus-4-8', 100_000, 2_000))
+  })
+
+  it('never lets the cache split exceed the total input (clamps parts to the whole)', () => {
+    // Bogus counts where read+write > input must not produce a negative fresh cost.
+    const cost = turnCostUsd('claude-opus-4-8', 1_000, 0, {
+      readTokens: 10_000,
+      writeTokens: 10_000
+    })
+    expect(cost).toBeGreaterThanOrEqual(0)
+    // Whole input treated as cache read (0.1x): 1000 * 5 * 0.1 / 1e6.
+    expect(cost).toBeCloseTo((1_000 * 5 * 0.1) / 1_000_000, 6)
+  })
 })
 
 describe('formatUsd', () => {
