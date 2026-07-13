@@ -83,7 +83,10 @@ export function runRipgrep(
     const args = [
       '--no-heading',
       '--color=never',
-      '--no-messages',
+      // NOT --no-messages: it suppresses ripgrep's file/IO error text (e.g. a
+      // missing search path), which would leave us with an empty stderr and a
+      // generic "ripgrep error". We want the real reason so the caller can report
+      // it instead of mislabeling every code-2 exit as an invalid regex.
       '--no-ignore', // match the JS walk: search everything except the dirs below
       ...[...SKIP_DIRS].map((d) => `--glob=!${d}`)
     ]
@@ -110,16 +113,29 @@ export function runRipgrep(
       if (out.length < 5_000_000) out += c.toString()
     })
     child.stderr.on('data', (c: Buffer) => {
-      err += c.toString()
+      if (err.length < 64_000) err += c.toString()
     })
     child.on('error', (e) => resolve({ matches: [], error: e.message }))
     child.on('close', (code) => {
-      // rg exit codes: 0 = matches, 1 = no matches, 2 = error (e.g. bad regex).
-      if (code === 2) {
+      // rg exit codes: 0 = matches, 1 = no matches, 2 = error (bad regex, missing
+      // path, unreadable file). When we got matches, return them regardless of the
+      // code — a per-file read error during an otherwise-successful search still
+      // yields exit 2, and it should not discard good results. Only surface an error
+      // when code 2 produced nothing.
+      // Searching the root as `-- .` makes ripgrep prefix every path with `./`;
+      // strip it so output paths are clean and consistent with the JS fallback
+      // (which emits workspace-relative paths). Only the leading path prefix is
+      // touched, never text inside a match line.
+      const matches = out
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => clip(l.replace(/^\.\//, '')))
+        .slice(0, max)
+      if (matches.length === 0 && code === 2) {
         resolve({ matches: [], error: err.trim() || 'ripgrep error' })
         return
       }
-      resolve({ matches: out.split('\n').filter(Boolean).map(clip).slice(0, max) })
+      resolve({ matches })
     })
   })
 }
@@ -206,6 +222,13 @@ export interface SearchOptions extends MatchOptions {
 /** Search file contents, preferring ripgrep and falling back to the JS walk. */
 export async function searchContents(o: SearchOptions): Promise<string> {
   if (!o.pattern) throw new Error('pattern is required.')
+  // A missing search root is a common, actionable mistake (e.g. searching a path
+  // that isn't there because deps aren't installed). Surface it plainly and the
+  // same way for both backends — ripgrep would otherwise report an opaque IO error
+  // and the JS walk would silently return "No matches found", both misleading.
+  if (!existsSync(o.startAbs)) {
+    throw new Error(`Search path not found: ${o.searchRel}`)
+  }
   const matchOpts: MatchOptions = {
     ignoreCase: o.ignoreCase,
     glob: o.glob,
@@ -222,7 +245,11 @@ export async function searchContents(o: SearchOptions): Promise<string> {
       o.signal,
       matchOpts
     )
-    if (error) throw new Error(`Invalid regular expression: ${error}`)
+    // Surface ripgrep's own message verbatim: it already self-describes the cause
+    // ("regex parse error: …" for a bad pattern, an IO message otherwise). Do not
+    // blanket-label every failure as an invalid regex — that misled the model into
+    // retrying a valid pattern when the real problem was elsewhere.
+    if (error) throw new Error(error)
     return matches.length ? matches.join('\n') : 'No matches found.'
   }
   let regex: RegExp
