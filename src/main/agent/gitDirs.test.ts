@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gitWritableRoots, type GitDirsIo } from './gitDirs'
 
@@ -25,10 +25,16 @@ describe('gitWritableRoots (injected io)', () => {
   it('returns the worktree git dir AND the common dir for a linked worktree', () => {
     const ws = '/repo/.worktrees/feat'
     const gitDir = '/repo/.git/worktrees/feat'
-    const io = fakeIo({
-      [join(ws, '.git')]: `gitdir: ${gitDir}\n`,
-      [join(gitDir, 'commondir')]: '../..\n'
-    })
+    // A per-worktree dir has HEAD + commondir; the common dir has HEAD + objects.
+    const io = fakeIo(
+      {
+        [join(ws, '.git')]: `gitdir: ${gitDir}\n`,
+        [join(gitDir, 'HEAD')]: 'ref: refs/heads/feat\n',
+        [join(gitDir, 'commondir')]: '../..\n',
+        ['/repo/.git/HEAD']: 'ref: refs/heads/main\n'
+      },
+      ['/repo/.git/objects']
+    )
     // commondir `../..` resolved against the git dir = the main repo's `.git`.
     expect(gitWritableRoots(ws, io)).toEqual([gitDir, '/repo/.git'])
   })
@@ -46,36 +52,59 @@ describe('gitWritableRoots (injected io)', () => {
   it('returns only the git dir for a submodule (no commondir file)', () => {
     const ws = '/super/sub'
     const gitDir = '/super/.git/modules/sub'
-    const io = fakeIo({ [join(ws, '.git')]: `gitdir: ${gitDir}\n` })
+    // A submodule git dir has its own HEAD + objects (no commondir file).
+    const io = fakeIo(
+      {
+        [join(ws, '.git')]: `gitdir: ${gitDir}\n`,
+        [join(gitDir, 'HEAD')]: 'ref: refs/heads/main\n'
+      },
+      [join(gitDir, 'objects')]
+    )
     expect(gitWritableRoots(ws, io)).toEqual([gitDir])
   })
 
   it('resolves a relative gitdir pointer against the workspace', () => {
     const ws = '/repo/wt'
-    const io = fakeIo({
-      [join(ws, '.git')]: 'gitdir: ../.git/worktrees/wt\n',
-      ['/repo/.git/worktrees/wt/commondir']: '../..\n'
-    })
-    expect(gitWritableRoots(ws, io)).toEqual(['/repo/.git/worktrees/wt', '/repo/.git'])
+    const gitDir = '/repo/.git/worktrees/wt'
+    const io = fakeIo(
+      {
+        [join(ws, '.git')]: 'gitdir: ../.git/worktrees/wt\n',
+        [join(gitDir, 'HEAD')]: 'ref: refs/heads/wt\n',
+        [join(gitDir, 'commondir')]: '../..\n',
+        ['/repo/.git/HEAD']: 'ref: refs/heads/main\n'
+      },
+      ['/repo/.git/objects']
+    )
+    expect(gitWritableRoots(ws, io)).toEqual([gitDir, '/repo/.git'])
   })
 
   it('honors an absolute commondir pointer', () => {
     const ws = '/a/wt'
     const gitDir = '/elsewhere/git/worktrees/wt'
-    const io = fakeIo({
-      [join(ws, '.git')]: `gitdir: ${gitDir}\n`,
-      [join(gitDir, 'commondir')]: '/elsewhere/git\n'
-    })
+    const io = fakeIo(
+      {
+        [join(ws, '.git')]: `gitdir: ${gitDir}\n`,
+        [join(gitDir, 'HEAD')]: 'ref: refs/heads/wt\n',
+        [join(gitDir, 'commondir')]: '/elsewhere/git\n',
+        ['/elsewhere/git/HEAD']: 'ref: refs/heads/main\n'
+      },
+      ['/elsewhere/git/objects']
+    )
     expect(gitWritableRoots(ws, io)).toEqual([gitDir, '/elsewhere/git'])
   })
 
   it('drops a git dir that already lives inside the workspace', () => {
     const ws = '/repo'
+    const gitDir = '/repo/nested/.git'
     // A `.git` *file* pointing back inside the workspace adds nothing new.
-    const io = fakeIo({
-      [join(ws, '.git')]: 'gitdir: /repo/nested/.git\n',
-      ['/repo/nested/.git/commondir']: '.\n'
-    })
+    const io = fakeIo(
+      {
+        [join(ws, '.git')]: 'gitdir: /repo/nested/.git\n',
+        [join(gitDir, 'HEAD')]: 'ref: refs/heads/main\n',
+        [join(gitDir, 'commondir')]: '.\n'
+      },
+      [join(gitDir, 'objects')]
+    )
     expect(gitWritableRoots(ws, io)).toEqual([])
   })
 
@@ -88,9 +117,60 @@ describe('gitWritableRoots (injected io)', () => {
   it('ignores a blank commondir file', () => {
     const ws = '/repo/wt'
     const gitDir = '/repo/.git/worktrees/wt'
+    const io = fakeIo(
+      {
+        [join(ws, '.git')]: `gitdir: ${gitDir}`,
+        [join(gitDir, 'HEAD')]: 'ref: refs/heads/wt\n',
+        [join(gitDir, 'commondir')]: '\n'
+      },
+      [join(gitDir, 'objects')]
+    )
+    expect(gitWritableRoots(ws, io)).toEqual([gitDir])
+  })
+
+  // --- SECURITY: hostile `.git` pointer files must not widen the writable roots
+  // (HTN-H-01). A `.git` *file* is attacker-controlled when an untrusted project is
+  // opened (e.g. delivered inside an archive), so a pointer must only ever resolve
+  // to a directory that genuinely IS a git dir. ---
+
+  it('refuses a `.git` file that points at the filesystem root', () => {
+    const ws = '/evil/project'
+    const io = fakeIo({ [join(ws, '.git')]: 'gitdir: /\n' })
+    expect(gitWritableRoots(ws, io)).toEqual([])
+  })
+
+  it('refuses a gitdir target that is not a real git dir', () => {
+    const ws = '/evil/project'
+    // `/tmp/loot` exists as a directory but has no HEAD, so it is not a git dir.
+    const io = fakeIo({ [join(ws, '.git')]: 'gitdir: /tmp/loot\n' }, ['/tmp/loot'])
+    expect(gitWritableRoots(ws, io)).toEqual([])
+  })
+
+  it('refuses the filesystem root even if it is dressed up to look like a git dir', () => {
+    const ws = '/evil/project'
+    const io = fakeIo({ [join(ws, '.git')]: 'gitdir: /\n', ['/HEAD']: 'x\n' }, ['/objects'])
+    expect(gitWritableRoots(ws, io)).toEqual([])
+  })
+
+  it('refuses the home directory even if it is dressed up to look like a git dir', () => {
+    const ws = '/evil/project'
+    const home = homedir()
+    const io = fakeIo(
+      { [join(ws, '.git')]: `gitdir: ${home}\n`, [join(home, 'HEAD')]: 'x\n' },
+      [join(home, 'objects')]
+    )
+    expect(gitWritableRoots(ws, io)).toEqual([])
+  })
+
+  it('drops a crafted commondir that is not itself a real git dir', () => {
+    const ws = '/repo/wt'
+    const gitDir = '/repo/.git/worktrees/wt'
+    // The git dir itself is valid, but its commondir points at `/` — not a git dir —
+    // so only the (validated) git dir is returned, never `/`.
     const io = fakeIo({
-      [join(ws, '.git')]: `gitdir: ${gitDir}`,
-      [join(gitDir, 'commondir')]: '\n'
+      [join(ws, '.git')]: `gitdir: ${gitDir}\n`,
+      [join(gitDir, 'HEAD')]: 'ref: refs/heads/wt\n',
+      [join(gitDir, 'commondir')]: '/\n'
     })
     expect(gitWritableRoots(ws, io)).toEqual([gitDir])
   })
