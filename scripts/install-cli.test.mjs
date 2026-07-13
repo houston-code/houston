@@ -37,16 +37,17 @@ describe('chooseBinDir', () => {
     expect(onPath).toBe(true)
   })
 
-  it('falls through to ~/bin when only that candidate is on PATH', () => {
-    const { dir, onPath } = chooseBinDir({ home: HOME, pathValue: '/home/dev/bin:/usr/bin' })
-    expect(dir).toBe('/home/dev/bin')
-    expect(onPath).toBe(true)
-  })
-
-  it('uses /usr/local/bin when it is the only candidate on PATH', () => {
-    const { dir, onPath } = chooseBinDir({ home: HOME, pathValue: '/usr/local/bin:/usr/bin' })
-    expect(dir).toBe('/usr/local/bin')
-    expect(onPath).toBe(true)
+  it('always defaults to ~/.local/bin, even when another bin dir is on PATH', () => {
+    // Deterministic: it no longer falls through to whichever candidate happens
+    // to be on PATH (~/bin, /usr/local/bin). onPath reflects only ~/.local/bin.
+    expect(chooseBinDir({ home: HOME, pathValue: '/home/dev/bin:/usr/bin' })).toEqual({
+      dir: '/home/dev/.local/bin',
+      onPath: false
+    })
+    expect(chooseBinDir({ home: HOME, pathValue: '/usr/local/bin:/usr/bin' })).toEqual({
+      dir: '/home/dev/.local/bin',
+      onPath: false
+    })
   })
 
   it('honours an explicit override and reports whether it is on PATH', () => {
