@@ -2,6 +2,7 @@ import { safeStorage } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { getUserDataDir } from './userData'
+import { log } from './logger'
 
 /**
  * Credential storage. Secrets are encrypted with Electron `safeStorage`, which on
@@ -71,10 +72,44 @@ function persist(data: SecretsFile): void {
   cachedSecretValues = null
 }
 
+/**
+ * Whether a `safeStorage` backend id means weak, hardcoded-key encryption rather
+ * than a real OS keyring. Electron's Linux `basic_text` backend encrypts with a
+ * well-known key when no Secret Service is available, yet `isEncryptionAvailable()`
+ * still returns true — so ciphertext at rest would be trivially reversible. Pure +
+ * exported for testing.
+ */
+export function isWeakEncryptionBackend(platform: NodeJS.Platform, backend: string | null): boolean {
+  return platform === 'linux' && backend === 'basic_text'
+}
+
+/** The live safeStorage backend id, or null when it can't be determined (non-Linux). */
+function selectedBackend(): string | null {
+  try {
+    return safeStorage.getSelectedStorageBackend()
+  } catch {
+    return null // not Linux, or an Electron without the API
+  }
+}
+
+let warnedWeakBackend = false
+
 function assertEncryptionAvailable(): void {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error(
       'OS encryption (Keychain) is unavailable, so credentials cannot be stored securely.'
+    )
+  }
+  // `isEncryptionAvailable()` returns true even for Linux's hardcoded-key
+  // `basic_text` backend, which is NOT real at-rest encryption. Warn once so we
+  // never silently imply keys are strongly encrypted when the ciphertext is
+  // reversible with a well-known key (the 0600 file mode is then the only guard).
+  if (!warnedWeakBackend && isWeakEncryptionBackend(process.platform, selectedBackend())) {
+    warnedWeakBackend = true
+    log.warn(
+      'safeStorage has no OS keyring available and is using the insecure "basic_text" backend: ' +
+        'stored credentials are encrypted with a well-known key, not strongly encrypted at rest. ' +
+        'Unlock or install a Secret Service keyring (e.g. gnome-keyring / kwallet) for real encryption.'
     )
   }
 }
