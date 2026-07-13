@@ -1202,6 +1202,24 @@ describe('runTui', () => {
     expect(rec.runs[0].messages.at(-1)!.images).toBeUndefined()
   })
 
+  it('bare /image (no path) shows usage instead of a silent no-op', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/image', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toMatch(/usage: \/image <path>/)
+  })
+
+  it('/clear drops a staged image so it does not ride into the fresh conversation', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.loadImage = (p) => ({ image: { mediaType: 'image/png', data: `b64:${p}` } })
+    const t = fakeIo(['/image shot.png', '/clear', 'a fresh start', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages.at(-1)!.images).toBeUndefined() // staged image was dropped
+  })
+
   it('reports capability info unavailable without a provider', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['/skills', null])
