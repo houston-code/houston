@@ -74,6 +74,12 @@ describe('run_shell surfaces the honest sandbox signal', () => {
     expect(out).toMatch(/Started background shell \w+/)
     expect(out).toContain(UNSANDBOXED_SHELL_NOTE)
   })
+
+  it('describes the sandbox without hardcoding one platform (runs on Linux/Windows too)', () => {
+    const description = getTool('run_shell')!.schema.description
+    expect(description).not.toMatch(/macOS|Seatbelt/)
+    expect(UNSANDBOXED_SHELL_NOTE).not.toMatch(/macOS|Seatbelt/)
+  })
 })
 
 describe('run_shell foreground timeout', () => {
