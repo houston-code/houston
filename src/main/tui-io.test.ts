@@ -100,6 +100,19 @@ describe('createTerminalIo lifecycle', () => {
     await expect(p).resolves.toBeNull()
   })
 
+  it('resolves reads with null once closed, never re-questioning a dead interface', async () => {
+    // Guards the ERR_USE_AFTER_CLOSE crash: after EOF at an in-run prompt (Ctrl-D),
+    // the driver's next composer read must resolve null (→ clean exit), not call
+    // rl.question on a closed interface (which throws).
+    const f = fakeRl()
+    const io = createTerminalIo({ createInterface: () => f.rl, write: () => {}, drainInput: () => {} })
+    f.fire('close')
+    const questionsBefore = f.calls.filter((c) => c === 'question').length
+    await expect(io.readLine('> ')).resolves.toBeNull()
+    await expect(io.readLine('again')).resolves.toBeNull()
+    expect(f.calls.filter((c) => c === 'question').length).toBe(questionsBefore)
+  })
+
   it('cancelRead resolves the pending read with null and pauses', async () => {
     const f = fakeRl()
     const io = createTerminalIo({ createInterface: () => f.rl, write: () => {}, drainInput: () => {} })
