@@ -151,23 +151,89 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     rawWrite(s)
   }
 
+  // --- Interrupt watch. While a turn streams, the interface is paused AND the
+  // terminal is raw, so a Ctrl-C is neither a SIGINT (raw disables ISIG) nor a
+  // delivered byte (paused stdin doesn't flow) — it just sits buffered, so the run
+  // couldn't be interrupted. During that window we resume stdin under a minimal raw
+  // keypress listener that acts ONLY on Ctrl-C and swallows everything else (no
+  // echo, no type-ahead into the next prompt). readLine and the picker detach it
+  // and handle their own Ctrl-C (readline's 'SIGINT' / the picker's cancel key), so
+  // exactly one consumer owns stdin at a time — the same discipline the picker uses.
+  let interruptHandler: (() => void) | null = null
+  let watching = false
+  const onWatchKey = (_s: string, key: { ctrl?: boolean; name?: string } | undefined): void => {
+    if (key?.ctrl && key.name === 'c') interruptHandler?.()
+  }
+  const startInterruptWatch = (): void => {
+    const stdin = process.stdin
+    if (watching || !stdin.isTTY || typeof stdin.setRawMode !== 'function') return
+    try {
+      emitKeypressEvents(stdin)
+      stdin.setRawMode(true)
+      stdin.resume()
+      stdin.on('keypress', onWatchKey)
+      watching = true
+    } catch {
+      /* no TTY / raw mode unavailable — Ctrl-C during streaming just won't fire */
+    }
+  }
+  const stopInterruptWatch = (): void => {
+    if (!watching) return
+    watching = false
+    try {
+      process.stdin.removeListener('keypress', onWatchKey)
+      process.stdin.pause()
+    } catch {
+      /* best-effort */
+    }
+  }
+  // Safety net: however the process ends (clean exit, uncaught error, SIGTERM),
+  // leave the terminal usable — drop the keypress listener and restore cooked mode.
+  // Raw mode is on during every streaming turn now (the watcher), so a crash mid-run
+  // could otherwise leave the user's shell in raw mode until they run `reset`.
+  if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+    process.on('exit', () => {
+      try {
+        process.stdin.removeListener('keypress', onWatchKey)
+        process.stdin.setRawMode(false)
+      } catch {
+        /* best-effort */
+      }
+    })
+  }
+
   // Start idle → paused, so keystrokes typed before the first read (or while
   // output streams between reads) aren't echoed into the transcript.
   rl.pause()
-  // Ctrl-D / closed stdin ends any outstanding read with EOF.
-  rl.on('close', () => settle(null))
+  // Once stdin ends (Ctrl-D at an empty read, a closed pipe, a dropped terminal)
+  // the interface is dead: it settles the outstanding read with EOF and, via this
+  // flag, makes every subsequent readLine resolve null immediately. Calling
+  // rl.question on a closed interface throws ERR_USE_AFTER_CLOSE, which would
+  // otherwise crash the next composer read after an in-run Ctrl-D.
+  let closed = false
+  rl.on('close', () => {
+    closed = true
+    settle(null)
+  })
 
   return {
     out,
     readLine: (prompt, opts) =>
       new Promise<string | null>((resolve) => {
+        if (closed) {
+          resolve(null) // interface already ended — no more reads possible
+          return
+        }
         pending = resolve
         // A per-read AbortController so cancelRead / EOF can cancel this exact
         // question (see `settle`), leaving no dangling callback for the next read.
         const ac = new AbortController()
         questionAbort = ac
-        // Pause the spinner while a prompt is on screen so it can't repaint over it.
+        // Pause the spinner while a prompt is on screen so it can't repaint over it,
+        // and hand stdin from the streaming Ctrl-C watcher to readline (which now owns
+        // input, including its own Ctrl-C via the 'SIGINT' event).
         stopTimer(true)
+        stopInterruptWatch()
         // Drop type-ahead before a security-sensitive prompt so a stray buffered
         // 'y' can't answer an approval the user never actually saw.
         if (opts?.discardPending) drainInput()
@@ -177,10 +243,27 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           rl.pause() // back to idle: stop echoing until the next read
           pending = null
           startTimer() // resume the spinner if the turn is still running
+          if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
           resolve(answer)
         })
       }),
-    onInterrupt: (handler) => rl.on('SIGINT', handler),
+    onInterrupt: (handler) => {
+      // Debounce: a single Ctrl-C can surface via more than one path (the streaming
+      // watcher vs. readline's own 'SIGINT'); collapse near-simultaneous fires so
+      // the run is cancelled — and the notice printed — exactly once.
+      let last = -Infinity
+      const fire = (): void => {
+        const t = now()
+        if (t - last < 200) return
+        last = t
+        handler()
+      }
+      // The streaming watcher (raw keypress) uses this while a turn runs and no
+      // prompt is up; readline's 'SIGINT' covers a Ctrl-C typed at a cooked read
+      // (and keeps readline's default close-on-Ctrl-C from ending the session).
+      interruptHandler = fire
+      rl.on('SIGINT', fire)
+    },
     cancelRead: () => {
       settle(null)
       rl.pause()
@@ -190,6 +273,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       spinnerStart = now()
       tick = 0
       startTimer()
+      // A turn is now running with no prompt up — watch for Ctrl-C so it can be
+      // interrupted while it streams.
+      startInterruptWatch()
     },
     setSpinnerLabel: (label) => {
       if (spinnerLabel !== null) spinnerLabel = label
@@ -197,16 +283,20 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     stopSpinner: () => {
       spinnerLabel = null
       stopTimer(true)
+      stopInterruptWatch()
     },
     select: async (spec) => {
       // Stop the spinner while the picker owns the screen (mirrors readLine): its
       // 100ms redraw would otherwise paint frames into the picker's multi-line
-      // region and fight its cursor-up redraw, tearing it.
+      // region and fight its cursor-up redraw, tearing it. The picker also owns
+      // stdin (its own raw keypress + Ctrl-C cancel), so release the watcher first.
       stopTimer(true)
+      stopInterruptWatch()
       try {
         return await runPicker(spec, rl, rawWrite, paint)
       } finally {
         startTimer() // resume the spinner if a turn is still running
+        if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
       }
     }
   }
