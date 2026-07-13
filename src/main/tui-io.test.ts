@@ -113,6 +113,27 @@ describe('createTerminalIo lifecycle', () => {
     expect(f.calls.filter((c) => c === 'question').length).toBe(questionsBefore)
   })
 
+  it('readSecret (off-TTY fallback) still resolves a submitted value', async () => {
+    // process.stdin.isTTY is false under vitest, so readSecret degrades to a normal
+    // read (the raw-mode masking is MANUAL-VERIFY, like the picker).
+    const f = fakeRl()
+    const io = createTerminalIo({ createInterface: () => f.rl, write: () => {}, drainInput: () => {} })
+    const p = io.readSecret!('key › ')
+    expect(f.calls).toContain('question')
+    f.submit('sk-secret')
+    await expect(p).resolves.toBe('sk-secret')
+  })
+
+  it('readSecret resolves null on close instead of hanging', async () => {
+    // Regression (R2): a masked prompt must not outlive the interface. If stdin closes
+    // while `key ›` is up, the read has to settle to null, not hang the /login loop.
+    const f = fakeRl()
+    const io = createTerminalIo({ createInterface: () => f.rl, write: () => {}, drainInput: () => {} })
+    const p = io.readSecret!('key › ')
+    f.fire('close')
+    await expect(p).resolves.toBeNull()
+  })
+
   it('cancelRead resolves the pending read with null and pauses', async () => {
     const f = fakeRl()
     const io = createTerminalIo({ createInterface: () => f.rl, write: () => {}, drainInput: () => {} })

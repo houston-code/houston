@@ -89,6 +89,53 @@ describe('providers add', () => {
   })
 })
 
+describe('providers add --url (custom endpoint)', () => {
+  it('adds a custom OpenAI-compatible endpoint with a generated id', async () => {
+    const t = makeDeps({ newId: () => 'abcd1234-ef56-7890-1234-567890abcdef' })
+    const code = await runProvidersCommand(
+      ['add', '--url', 'https://router.internal/v1', '--label', 'Corp Router'],
+      t.deps
+    )
+    expect(code).toBe(0)
+    const p = t.settings().providers.find((pr) => pr.baseUrl === 'https://router.internal/v1')
+    expect(p).toBeDefined()
+    expect(p!.kind).toBe('openai-compatible')
+    expect(p!.label).toBe('Corp Router')
+    expect(p!.id).toBe('custom-abcd1234')
+    expect(p!.requiresKey).toBe(false)
+    expect(p!.builtIn).toBe(false)
+    expect(t.out()).toContain('set-key custom-abcd1234')
+  })
+
+  it('honors an explicit --id', async () => {
+    const t = makeDeps()
+    await runProvidersCommand(['add', '--url', 'https://x/v1', '--id', 'myrouter'], t.deps)
+    expect(t.settings().providers.some((p) => p.id === 'myrouter')).toBe(true)
+  })
+
+  it('falls back to a stable id when no id generator is wired', async () => {
+    const t = makeDeps() // no newId
+    await runProvidersCommand(['add', '--url', 'https://x/v1'], t.deps)
+    expect(t.settings().providers.some((p) => p.id === 'custom-endpoint')).toBe(true)
+  })
+
+  it('rejects a non-http url', async () => {
+    const t = makeDeps()
+    const code = await runProvidersCommand(['add', '--url', 'ftp://nope'], t.deps)
+    expect(code).toBe(2)
+    expect(t.err()).toContain('http')
+    expect(t.settings().providers.some((p) => p.baseUrl === 'ftp://nope')).toBe(false)
+  })
+
+  it('rejects a duplicate id', async () => {
+    const t = makeDeps()
+    await runProvidersCommand(['add', '--url', 'https://x/v1', '--id', 'dup'], t.deps)
+    const code = await runProvidersCommand(['add', '--url', 'https://y/v1', '--id', 'dup'], t.deps)
+    expect(code).toBe(2)
+    expect(t.err()).toContain('already exists')
+  })
+})
+
 describe('providers remove', () => {
   it('removes a non-built-in provider', async () => {
     const t = makeDeps()

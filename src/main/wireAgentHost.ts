@@ -3,6 +3,7 @@ import {
   addPermissionRule,
   configureHasKey,
   configureHeaderSecrets,
+  configureSetKey,
   getProvider,
   getSettings
 } from './store'
@@ -13,6 +14,7 @@ import {
   getSecretHeaders,
   hasKey,
   hasStoredKey,
+  setKey,
   setSecretHeaders
 } from './secrets'
 import { configureLogRedactor } from './logger'
@@ -32,6 +34,12 @@ import { redactSecrets } from './agent/redact'
  */
 export function wireAgentHost(): void {
   configureHasKey(hasKey)
+  // safeStorage is the desktop's only key store, so the environment never shadows a
+  // stored key here (unlike the CLI) — always report no shadow.
+  configureSetKey((id, key) => {
+    setKey(id, key)
+    return { shadowedByEnv: null }
+  })
   configureHeaderSecrets({ get: getSecretHeaders, set: setSecretHeaders, remove: deleteSecretHeaders })
   // Scrub stored secrets (and token-shaped strings) from every log line.
   configureLogRedactor((message) => redactSecrets(message, collectSecretValues()))

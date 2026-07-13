@@ -216,40 +216,132 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     settle(null)
   })
 
+  // A normal echoed line read. Extracted so `readSecret` can reuse it as its
+  // off-TTY fallback (where masking isn't possible anyway).
+  const plainRead = (prompt: string, opts?: { discardPending?: boolean }): Promise<string | null> =>
+    new Promise<string | null>((resolve) => {
+      if (closed) {
+        resolve(null) // interface already ended — no more reads possible
+        return
+      }
+      pending = resolve
+      // A per-read AbortController so cancelRead / EOF can cancel this exact
+      // question (see `settle`), leaving no dangling callback for the next read.
+      const ac = new AbortController()
+      questionAbort = ac
+      // Pause the spinner while a prompt is on screen so it can't repaint over it,
+      // and hand stdin from the streaming Ctrl-C watcher to readline (which now owns
+      // input, including its own Ctrl-C via the 'SIGINT' event).
+      stopTimer(true)
+      stopInterruptWatch()
+      // Drop type-ahead before a security-sensitive prompt so a stray buffered
+      // 'y' can't answer an approval the user never actually saw.
+      if (opts?.discardPending) drainInput()
+      rl.resume()
+      rl.question(prompt, { signal: ac.signal }, (answer) => {
+        questionAbort = null
+        rl.pause() // back to idle: stop echoing until the next read
+        pending = null
+        startTimer() // resume the spinner if the turn is still running
+        if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
+        resolve(answer)
+      })
+    })
+
+  /**
+   * Read a line WITHOUT echoing it — for pasting an API key (the `/login` flow).
+   * Runs in transient raw mode (same discipline as the picker: entered and exited
+   * here, never held across streaming output), masking each character as `•`.
+   * Resolves the typed value, or null on Ctrl-C / a bare Ctrl-D. The secret is never
+   * handed to readline, so it can't enter Up/Down history. Off-TTY (no raw mode) it
+   * degrades to a visible `plainRead` — the interactive client always has a TTY, so
+   * that path is only a defensive fallback.
+   *
+   * MANUAL-VERIFY: the raw-mode keypress plumbing can't run in CI (no TTY), exactly
+   * like `runPicker`. The off-TTY fallback and the settle/close integration are
+   * unit-tested (tui-io.test.ts); the masking + backspace behavior is verified by hand.
+   */
+  const readSecret = (prompt: string): Promise<string | null> => {
+    const stdin = process.stdin
+    if (closed) return Promise.resolve(null)
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(prompt)
+    return new Promise<string | null>((resolve) => {
+      // Hand stdin from the streaming Ctrl-C watcher / spinner to this reader, and
+      // drop any type-ahead so buffered bytes can't seed the secret.
+      stopTimer(true)
+      stopInterruptWatch()
+      drainInput()
+      rl.pause()
+      let buf = ''
+      let done = false
+      rawWrite(prompt)
+      const finish = (value: string | null): void => {
+        if (done) return
+        done = true
+        // Release the close/cancel hook we registered below (whether we got here via a
+        // keypress or via settle itself), so a later close can't double-fire.
+        pending = null
+        try {
+          stdin.removeListener('keypress', onKey)
+          stdin.setRawMode(false)
+          rl.resume() // re-sync readline for the next read (mirrors the picker)
+          rl.pause()
+        } catch {
+          /* best-effort restore */
+        }
+        rawWrite('\n') // raw mode swallowed the Enter, so terminate the line ourselves
+        startTimer()
+        if (spinnerLabel !== null) startInterruptWatch()
+        resolve(value)
+      }
+      // Register with the same settle mechanism readLine uses, so an interface
+      // `close` (EOF / dropped terminal / closed pipe) or a `cancelRead` resolves this
+      // hidden prompt to null instead of hanging the loop. settle() calls this with
+      // null; a real submit goes through finish() from the keypress handler first.
+      pending = finish
+      const onKey = (
+        str: string,
+        key: { name?: string; ctrl?: boolean } | undefined
+      ): void => {
+        const k = key ?? {}
+        if (k.ctrl && k.name === 'c') return finish(null) // cancel
+        if (k.ctrl && k.name === 'd') return finish(buf.length ? buf : null) // EOF: submit or cancel
+        if (k.name === 'return' || k.name === 'enter') return finish(buf)
+        if (k.name === 'backspace' || k.name === 'delete') {
+          if (buf.length) {
+            buf = buf.slice(0, -1)
+            rawWrite('\b \b')
+          }
+          return
+        }
+        // Accept printable characters only (a paste may arrive as a multi-char burst);
+        // ignore control/navigation keys so arrows and the like don't corrupt the key.
+        if (!k.ctrl && typeof str === 'string' && str.length) {
+          const printable = [...str].filter((c) => c >= ' ' && c !== '\x7f')
+          if (printable.length) {
+            buf += printable.join('')
+            rawWrite('•'.repeat(printable.length))
+          }
+        }
+      }
+      try {
+        emitKeypressEvents(stdin)
+        stdin.setRawMode(true)
+        stdin.resume()
+        stdin.on('keypress', onKey)
+      } catch {
+        finish(null) // raw mode unavailable — treat as cancel (TTY is guaranteed in practice)
+      }
+    })
+  }
+
   return {
     out,
     // Erase the current terminal line (e.g. the composer's typed-but-abandoned input
     // on Ctrl-C) so the next prompt redraws clean.
     clearLine: () => rawWrite(CLEAR_LINE),
-    readLine: (prompt, opts) =>
-      new Promise<string | null>((resolve) => {
-        if (closed) {
-          resolve(null) // interface already ended — no more reads possible
-          return
-        }
-        pending = resolve
-        // A per-read AbortController so cancelRead / EOF can cancel this exact
-        // question (see `settle`), leaving no dangling callback for the next read.
-        const ac = new AbortController()
-        questionAbort = ac
-        // Pause the spinner while a prompt is on screen so it can't repaint over it,
-        // and hand stdin from the streaming Ctrl-C watcher to readline (which now owns
-        // input, including its own Ctrl-C via the 'SIGINT' event).
-        stopTimer(true)
-        stopInterruptWatch()
-        // Drop type-ahead before a security-sensitive prompt so a stray buffered
-        // 'y' can't answer an approval the user never actually saw.
-        if (opts?.discardPending) drainInput()
-        rl.resume()
-        rl.question(prompt, { signal: ac.signal }, (answer) => {
-          questionAbort = null
-          rl.pause() // back to idle: stop echoing until the next read
-          pending = null
-          startTimer() // resume the spinner if the turn is still running
-          if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
-          resolve(answer)
-        })
-      }),
+    readLine: plainRead,
+    readSecret,
     onInterrupt: (handler) => {
       // Debounce: a single Ctrl-C can surface via more than one path (the streaming
       // watcher vs. readline's own 'SIGINT'); collapse those near-simultaneous fires

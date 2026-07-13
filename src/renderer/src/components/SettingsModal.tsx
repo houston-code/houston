@@ -35,6 +35,8 @@ import {
 import {
   catalogForPlatform,
   catalogEntryToProvider,
+  customEndpointToProvider,
+  customProviderId,
   type CatalogEntry
 } from '@shared/provider-catalog'
 
@@ -691,23 +693,8 @@ export function SettingsModal({
     const label = newLabel.trim()
     const baseUrl = newUrl.trim()
     if (!label || !baseUrl) return
-    const id = `custom-${crypto.randomUUID().slice(0, 8)}`
-    setSettings((s) => ({
-      ...s,
-      providers: [
-        ...s.providers,
-        {
-          id,
-          kind: 'openai-compatible',
-          label,
-          baseUrl,
-          models: [],
-          requiresKey: false,
-          hasKey: false,
-          builtIn: false
-        }
-      ]
-    }))
+    const provider = customEndpointToProvider(customProviderId(crypto.randomUUID()), label, baseUrl)
+    setSettings((s) => ({ ...s, providers: [...s.providers, provider] }))
     setNewLabel('')
     setNewUrl('')
   }

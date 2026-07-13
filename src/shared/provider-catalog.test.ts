@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   PROVIDER_CATALOG,
   catalogEntryToProvider,
-  catalogForPlatform
+  catalogForPlatform,
+  customEndpointError,
+  customEndpointToProvider,
+  customProviderId
 } from './provider-catalog'
 import { defaultProviders } from './defaults'
 
@@ -74,5 +77,48 @@ describe('catalogEntryToProvider', () => {
   it('carries requiresKey through for local hosts', () => {
     const entry = PROVIDER_CATALOG.find((e) => e.id === 'vllm')!
     expect(catalogEntryToProvider(entry).requiresKey).toBe(false)
+  })
+})
+
+describe('customProviderId', () => {
+  it('derives a stable custom-<8 hex> id from a UUID', () => {
+    expect(customProviderId('abcd1234-ef56-7890-1234-567890abcdef')).toBe('custom-abcd1234')
+  })
+
+  it('matches the GUI-legacy shape (first 8 chars of the raw UUID)', () => {
+    const uuid = 'aaaabbbb-cccc-dddd-eeee-ffff00001111'
+    expect(customProviderId(uuid)).toBe(`custom-${uuid.slice(0, 8)}`)
+  })
+
+  it('falls back to custom-endpoint for an empty seed', () => {
+    expect(customProviderId('')).toBe('custom-endpoint')
+    expect(customProviderId('----')).toBe('custom-endpoint')
+  })
+})
+
+describe('customEndpointToProvider', () => {
+  it('builds a keyless openai-compatible provider with no models', () => {
+    const p = customEndpointToProvider('custom-abc', 'My Router', 'https://x/v1')
+    expect(p).toEqual({
+      id: 'custom-abc',
+      kind: 'openai-compatible',
+      label: 'My Router',
+      baseUrl: 'https://x/v1',
+      models: [],
+      requiresKey: false,
+      hasKey: false,
+      builtIn: false
+    })
+  })
+})
+
+describe('customEndpointError', () => {
+  it('requires a label and an http(s) URL', () => {
+    expect(customEndpointError('', 'https://x/v1')).toMatch(/label/)
+    expect(customEndpointError('L', '')).toMatch(/URL/)
+    expect(customEndpointError('L', 'ftp://x')).toMatch(/http/)
+    expect(customEndpointError('L', 'example.com/v1')).toMatch(/http/) // bare host rejected
+    expect(customEndpointError('L', 'https://x/v1')).toBeNull()
+    expect(customEndpointError('L', 'http://localhost:8000/v1')).toBeNull()
   })
 })

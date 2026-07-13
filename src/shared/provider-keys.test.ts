@@ -3,7 +3,8 @@ import {
   allProviderKeyEnvVars,
   genericKeyEnvVar,
   missingKeyHint,
-  providerKeyEnvVars
+  providerKeyEnvVars,
+  providerKeyUrl
 } from './provider-keys'
 
 describe('providerKeyEnvVars', () => {
@@ -48,11 +49,31 @@ describe('missingKeyHint', () => {
     const hint = missingKeyHint('anthropic')
     expect(hint).toContain('"anthropic"')
     expect(hint).toContain('ANTHROPIC_API_KEY')
-    expect(hint).toContain('cli-credentials.json')
     expect(hint).not.toMatch(/x-api-key/i)
+  })
+
+  it('points at the interactive /login flow and the non-interactive CLI subcommand', () => {
+    const hint = missingKeyHint('anthropic')
+    expect(hint).toContain('houston -i')
+    expect(hint).toContain('/login')
+    expect(hint).toContain('houston providers set-key anthropic')
+    // The old opaque credentials-file instruction is gone.
+    expect(hint).not.toContain('cli-credentials.json')
   })
 
   it('uses just the generic form for an unknown provider', () => {
     expect(missingKeyHint('acme')).toContain('HOUSTON_API_KEY_ACME')
+  })
+})
+
+describe('providerKeyUrl', () => {
+  it('returns a sign-up URL for built-in cloud providers', () => {
+    expect(providerKeyUrl('anthropic')).toMatch(/^https:\/\//)
+    expect(providerKeyUrl('openai')).toMatch(/^https:\/\//)
+    expect(providerKeyUrl('gemini')).toMatch(/^https:\/\//)
+  })
+
+  it('returns undefined for a custom / unknown id', () => {
+    expect(providerKeyUrl('custom-abc12345')).toBeUndefined()
   })
 })

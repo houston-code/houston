@@ -2,6 +2,9 @@ import type { AppSettings, ProviderConfig } from '@shared/types'
 import {
   catalogForPlatform,
   catalogEntryToProvider,
+  customEndpointError,
+  customEndpointToProvider,
+  customProviderId,
   type CatalogEntry
 } from '@shared/provider-catalog'
 import { providerKeyEnvVars } from '@shared/provider-keys'
@@ -12,6 +15,7 @@ import { providerKeyEnvVars } from '@shared/provider-keys'
  *
  *   houston providers [list]        list configured providers + hosts you can add
  *   houston providers add <id>      add a catalog host (OpenRouter, Groq, …)
+ *   houston providers add --url <url> [--label <l>] [--id <id>]   add a custom endpoint
  *   houston providers remove <id>   remove a non-built-in provider
  *   houston providers set-key <id> [key]   store a key in cli-credentials.json
  *   houston providers remove-key <id>      forget a stored key
@@ -32,6 +36,8 @@ export interface ProvidersDeps {
   out: (s: string) => void
   err: (s: string) => void
   isMac: boolean
+  /** Generate an id for a custom endpoint (injected so this stays pure/testable). */
+  newId?: () => string
   /** A secret piped on stdin when not given as an arg; null when stdin is a TTY. */
   readStdin?: () => Promise<string | null>
 }
@@ -44,7 +50,7 @@ export async function runProvidersCommand(args: string[], deps: ProvidersDeps): 
     case 'ls':
       return listProviders(deps)
     case 'add':
-      return addProvider(rest[0], deps)
+      return addProvider(rest, deps)
     case 'remove':
     case 'rm':
       return removeProvider(rest[0], deps)
@@ -61,6 +67,8 @@ export async function runProvidersCommand(args: string[], deps: ProvidersDeps): 
 export const PROVIDERS_USAGE = `Usage:
   houston providers [list]              list configured providers and hosts to add
   houston providers add <id>            add a catalog host (e.g. openrouter, groq)
+  houston providers add --url <url> [--label <l>] [--id <id>]
+                                        add a custom OpenAI-compatible endpoint
   houston providers remove <id>         remove a non-built-in provider
   houston providers set-key <id> [key]  store an API key (key from arg or stdin)
   houston providers remove-key <id>     forget a stored API key
@@ -93,9 +101,35 @@ function listProviders(deps: ProvidersDeps): number {
   return 0
 }
 
-function addProvider(id: string | undefined, deps: ProvidersDeps): number {
+/** Parsed `providers add` args: a positional host id, plus custom-endpoint flags. */
+interface AddArgs {
+  positional?: string
+  id?: string
+  url?: string
+  label?: string
+}
+
+/** Pull `--url`/`--label`/`--id` flags and the first positional out of `add`'s args. */
+function parseAddArgs(rest: string[]): AddArgs {
+  const out: AddArgs = {}
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]
+    if (a === '--url') out.url = rest[++i]
+    else if (a === '--label') out.label = rest[++i]
+    else if (a === '--id') out.id = rest[++i]
+    else if (!a.startsWith('-') && out.positional === undefined) out.positional = a
+  }
+  return out
+}
+
+function addProvider(rest: string[], deps: ProvidersDeps): number {
+  const args = parseAddArgs(rest)
+  // `--url` → a custom OpenAI-compatible endpoint (GUI parity with "Add custom").
+  if (args.url !== undefined) return addCustomEndpoint(args, deps)
+
+  const id = args.positional
   if (!id) {
-    deps.err(`Pass a host id, e.g. "houston providers add openrouter".\n${PROVIDERS_USAGE}`)
+    deps.err(`Pass a host id, e.g. "houston providers add openrouter", or --url for a custom endpoint.\n${PROVIDERS_USAGE}`)
     return 2
   }
   const settings = deps.getSettings()
@@ -108,7 +142,7 @@ function addProvider(id: string | undefined, deps: ProvidersDeps): number {
     const ids = catalogForPlatform(deps.isMac)
       .map((e) => e.id)
       .join(', ')
-    deps.err(`Unknown host "${id}". Known hosts: ${ids}\n`)
+    deps.err(`Unknown host "${id}". Known hosts: ${ids}  (or add a custom one with --url)\n`)
     return 2
   }
   deps.saveSettings({
@@ -119,6 +153,29 @@ function addProvider(id: string | undefined, deps: ProvidersDeps): number {
   if (entry.requiresKey) {
     deps.out(`Set its key with: houston providers set-key ${entry.id}\n`)
   }
+  return 0
+}
+
+/** Add a custom OpenAI-compatible endpoint from `--url` (+ optional `--label`/`--id`). */
+function addCustomEndpoint(args: AddArgs, deps: ProvidersDeps): number {
+  const url = args.url?.trim() ?? ''
+  const label = args.label?.trim() || 'Custom endpoint'
+  const err = customEndpointError(label, url)
+  if (err) {
+    deps.err(`${err} (e.g. --url https://router.internal/v1)\n`)
+    return 2
+  }
+  const settings = deps.getSettings()
+  const id = args.id?.trim() || customProviderId(deps.newId?.() ?? '')
+  if (settings.providers.some((p) => p.id === id)) {
+    deps.err(`A provider with id "${id}" already exists (pass a different --id).\n`)
+    return 2
+  }
+  const provider = customEndpointToProvider(id, label, url)
+  deps.saveSettings({ ...settings, providers: [...settings.providers, provider] })
+  deps.out(`Added ${label} (${id}) at ${url}.\n`)
+  deps.out(`If it needs a key:  houston providers set-key ${id}\n`)
+  deps.out(`Pick a model at run time with:  --model ${id}/<model-id>\n`)
   return 0
 }
 
