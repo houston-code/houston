@@ -112,11 +112,22 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   return { prompt, cwd, providerId, model, approvalPolicy, json, acceptTerms, continueSession, resumeId }
 }
 
+/**
+ * The provider+model to run, or an error. `recoverable` marks the errors that an
+ * interactive session can fix by setting up a provider (a missing key, or nothing
+ * configured yet) — the TUI opens its `/login` wizard for those instead of exiting.
+ * An explicit bad flag (unknown `--provider`, a provider with no model) is NOT
+ * recoverable: it's a usage error to report, not a setup step.
+ */
+export type ResolvedModel =
+  | { providerId: string; model: string }
+  | { error: string; recoverable: boolean }
+
 /** Resolve the provider + model to use for a headless run from flags and settings. */
 export function resolveHeadlessModel(
   settings: AppSettings,
   opts: Pick<HeadlessOptions, 'providerId' | 'model'>
-): { providerId: string; model: string } | { error: string } {
+): ResolvedModel {
   const pick = (p: { id: string; defaultModel?: string; models: { id: string }[] }): string =>
     opts.model ?? p.defaultModel ?? p.models[0]?.id ?? ''
   // Preflight: a provider that needs a key but has none would otherwise start the
@@ -129,18 +140,18 @@ export function resolveHeadlessModel(
 
   if (opts.providerId) {
     const p = settings.providers.find((pr) => pr.id === opts.providerId)
-    if (!p) return { error: `Unknown provider: ${opts.providerId}` }
+    if (!p) return { error: `Unknown provider: ${opts.providerId}`, recoverable: false }
     const model = pick(p)
-    if (!model) return { error: `No model for provider "${opts.providerId}". Pass --model.` }
+    if (!model) return { error: `No model for provider "${opts.providerId}". Pass --model.`, recoverable: false }
     const noKey = keyError(p)
-    if (noKey) return { error: noKey }
+    if (noKey) return { error: noKey, recoverable: true }
     return { providerId: p.id, model }
   }
 
   if (settings.selected) {
     const p = settings.providers.find((pr) => pr.id === settings.selected!.providerId)
     const noKey = keyError(p)
-    if (noKey) return { error: noKey }
+    if (noKey) return { error: noKey, recoverable: true }
     return { providerId: settings.selected.providerId, model: opts.model ?? settings.selected.model }
   }
 
@@ -149,11 +160,12 @@ export function resolveHeadlessModel(
 
   // Host-neutral: this path is shared by the desktop app's headless mode and the
   // standalone CLI, so it can't point at "the app". Both honor --provider/--model,
-  // and both need a provider with a usable API key first (the CLI documents its
-  // env-var / cli-credentials.json options in --help).
+  // and both need a provider with a usable API key first. Recoverable: the TUI can
+  // open /login here; headless just prints it.
   return {
     error:
-      'No model configured. Pass --provider and --model, or set up a provider with an API key first.'
+      'No model configured. Pass --provider and --model, or set up a provider with an API key first.',
+    recoverable: true
   }
 }
 

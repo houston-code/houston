@@ -58,6 +58,36 @@ function hasKey(id: string): boolean {
 }
 
 /**
+ * Injected "store this API key" writer, the write-side companion to
+ * {@link configureHasKey}. A seam for the same reason: the real backing differs per
+ * host — the Electron shell wires safeStorage (`secrets.setKey`, wireAgentHost.ts);
+ * the standalone CLI wires its plaintext credentials file (`cliSetKey`, src/cli).
+ * Lets the host-neutral terminal client (the TUI's `/login` flow) persist a key
+ * without importing either backend. Returns the env var currently shadowing the id,
+ * if any, so the caller can warn that the environment still wins (CLI only; the
+ * desktop resolves keys from safeStorage alone, so it always reports null).
+ */
+let setKeyFn: ((id: string, key: string) => { shadowedByEnv: string | null }) | null = null
+
+/** Bind the API-key writer. Optional — hosts that can't persist keys leave it unset. */
+export function configureSetKey(fn: (id: string, key: string) => { shadowedByEnv: string | null }): void {
+  setKeyFn = fn
+}
+
+/** True when a writable key store is wired (so the TUI can offer in-session key entry). */
+export function canSetKey(): boolean {
+  return setKeyFn !== null
+}
+
+/** Persist an API key for `id`. Throws if no writer was wired — guard with {@link canSetKey}. */
+export function setProviderKey(id: string, key: string): { shadowedByEnv: string | null } {
+  if (!setKeyFn) {
+    throw new Error('No writable key store configured — call configureSetKey() during startup.')
+  }
+  return setKeyFn(id, key)
+}
+
+/**
  * Injected store for custom-header VALUES (a provider/MCP-server bearer token). A seam
  * for the same reason as {@link configureHasKey}: the real backing is `./secrets`
  * (electron safeStorage), which the store must not import so it stays portable. The

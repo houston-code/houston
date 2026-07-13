@@ -155,6 +155,35 @@ describe('resolveHeadlessModel', () => {
     } as Partial<AppSettings>)
     expect(resolveHeadlessModel(s, {})).toEqual({ providerId: 'ollama', model: 'llama' })
   })
+
+  // `recoverable` tells the TUI whether to open /login (missing key / nothing set up)
+  // or just report a usage error (bad flag). Headless prints either way.
+  it('marks a missing key and an unconfigured profile as recoverable', () => {
+    const noKey = resolveHeadlessModel(
+      settings({
+        providers: [{ id: 'anthropic', requiresKey: true, hasKey: false, models: [{ id: 'claude' }] }],
+        selected: { providerId: 'anthropic', model: 'claude' }
+      } as Partial<AppSettings>),
+      {}
+    )
+    expect(noKey).toMatchObject({ recoverable: true })
+    const empty = resolveHeadlessModel(settings({ providers: [], selected: null }), {})
+    expect(empty).toMatchObject({ recoverable: true })
+  })
+
+  it('marks a bad --provider and a no-model provider as non-recoverable usage errors', () => {
+    expect(resolveHeadlessModel(settings(), { providerId: 'nope' })).toMatchObject({
+      recoverable: false
+    })
+    const noModel = settings({
+      providers: [{ id: 'custom-x', requiresKey: false, hasKey: false, models: [] as { id: string }[] }],
+      selected: null
+    } as Partial<AppSettings>)
+    expect(resolveHeadlessModel(noModel, { providerId: 'custom-x' })).toMatchObject({
+      error: expect.stringContaining('Pass --model'),
+      recoverable: false
+    })
+  })
 })
 
 /** Build deps with a scripted startRun that emits the given events. */

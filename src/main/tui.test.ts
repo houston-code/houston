@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import type { AppSettings, Hook, McpServerConfig } from '@shared/types'
+import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
+import { catalogForPlatform } from '@shared/provider-catalog'
 import type { AgentEvent, ChatMessage, PlanDecision } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
@@ -15,6 +16,13 @@ import {
   resolveQuestionAnswer,
   parseSlashCommand,
   resolveModelArg,
+  keyableProviders,
+  renderProviderMenu,
+  parseProviderMenuChoice,
+  renderCatalogMenu,
+  parseCatalogChoice,
+  pickModelFor,
+  renderNoModelStatus,
   composerPrompt,
   extractDiff,
   colorizeDiff,
@@ -42,6 +50,19 @@ import {
   type TuiPersist,
   type ResumeEntry
 } from './tui'
+
+/** A full ProviderConfig from a partial — fills kind/label/builtIn for /login tests. */
+const prov = (over: Partial<ProviderConfig>): ProviderConfig =>
+  ({
+    id: 'x',
+    kind: 'openai-compatible',
+    label: over.id ?? 'x',
+    requiresKey: true,
+    hasKey: false,
+    models: [],
+    builtIn: false,
+    ...over
+  }) as ProviderConfig
 
 const settings = (over: Partial<AppSettings> = {}): AppSettings =>
   ({
@@ -1617,5 +1638,252 @@ describe('runTui — plan review (present_plan)', () => {
     expect(rec.approvals).toHaveLength(1)
     expect(rec.questions).toHaveLength(1)
     expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
+  })
+})
+
+describe('/login helpers', () => {
+  it('keyableProviders keeps only key-requiring providers', () => {
+    const s = settings({
+      providers: [
+        prov({ id: 'anthropic', requiresKey: true, hasKey: false, models: [] }),
+        prov({ id: 'ollama', requiresKey: false, hasKey: false, models: [] })
+      ]
+    })
+    expect(keyableProviders(s).map((p) => p.id)).toEqual(['anthropic'])
+  })
+
+  it('parseProviderMenuChoice maps numbers to provider / other / cancel', () => {
+    expect(parseProviderMenuChoice('1', 2)).toEqual({ kind: 'provider', index: 0 })
+    expect(parseProviderMenuChoice('2', 2)).toEqual({ kind: 'provider', index: 1 })
+    expect(parseProviderMenuChoice('3', 2)).toEqual({ kind: 'other' }) // the "Other host…" row
+    expect(parseProviderMenuChoice('', 2)).toEqual({ kind: 'cancel' }) // Enter → skip
+    expect(parseProviderMenuChoice('9', 2)).toEqual({ kind: 'cancel' })
+    expect(parseProviderMenuChoice('x', 2)).toEqual({ kind: 'cancel' })
+  })
+
+  it('parseCatalogChoice maps numbers to host / custom / cancel', () => {
+    expect(parseCatalogChoice('1', 3)).toEqual({ kind: 'host', index: 0 })
+    expect(parseCatalogChoice('3', 3)).toEqual({ kind: 'host', index: 2 })
+    expect(parseCatalogChoice('4', 3)).toEqual({ kind: 'custom' }) // the trailing custom row
+    expect(parseCatalogChoice('', 3)).toEqual({ kind: 'cancel' })
+  })
+
+  it('pickModelFor prefers defaultModel, then the first model, else null', () => {
+    expect(pickModelFor({ defaultModel: 'd', models: [{ id: 'a' }] } as never)).toBe('d')
+    expect(pickModelFor({ models: [{ id: 'a' }] } as never)).toBe('a')
+    expect(pickModelFor({ models: [] } as never)).toBeNull()
+  })
+
+  it('renderProviderMenu shows key status and the Other-host row', () => {
+    const providers = keyableProviders(
+      settings({
+        providers: [
+          prov({ id: 'anthropic', label: 'Anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }] }),
+          prov({ id: 'openai', label: 'OpenAI', requiresKey: true, hasKey: false, models: [{ id: 'gpt-5' }] })
+        ]
+      })
+    )
+    const out = renderProviderMenu(providers, makePainter(false), { firstRun: true })
+    expect(out).toContain('No model is ready yet')
+    expect(out).toContain('1)')
+    expect(out).toContain('Anthropic')
+    expect(out).toContain('key set')
+    expect(out).toContain('no key')
+    expect(out).toContain('Other host')
+  })
+
+  it('renderCatalogMenu lists hosts flatly then a Custom endpoint row', () => {
+    const out = renderCatalogMenu(catalogForPlatform(true), makePainter(false))
+    expect(out).toContain('OpenRouter')
+    expect(out).toContain('Custom endpoint')
+    // locals carry the inline "no key needed" note rather than a separate section
+    expect(out).toContain('no key needed')
+  })
+
+  it('renderNoModelStatus points at /login', () => {
+    const out = renderNoModelStatus('ask', '/proj', makePainter(false))
+    expect(out).toContain('/login')
+    expect(out).toContain('ask')
+  })
+
+  it('parseSlashCommand routes /login and /providers to the login flow', () => {
+    expect(parseSlashCommand('/login', settings())).toEqual({ kind: 'login' })
+    expect(parseSlashCommand('/providers', settings())).toEqual({ kind: 'login' })
+  })
+})
+
+describe('runTui — /login & keyless start', () => {
+  // Build wizard-capable deps: a keyless start (no ready provider) plus recorders
+  // for the injected setKey / updateSettings seams.
+  function wizardDeps(events: AgentEvent[], over: Partial<AppSettings>) {
+    const base = deps(events, over)
+    const setKeyCalls: Array<[string, string]> = []
+    const patches: Array<Partial<AppSettings>> = []
+    base.d.setKey = (id, key) => {
+      setKeyCalls.push([id, key])
+      return { shadowedByEnv: null }
+    }
+    base.d.updateSettings = (patch) => {
+      patches.push(patch)
+    }
+    base.d.isMac = true
+    return { ...base, setKeyCalls, patches }
+  }
+
+  const twoProviders = [
+    prov({ id: 'anthropic', requiresKey: true, hasKey: false, models: [{ id: 'claude' }], defaultModel: 'claude' }),
+    prov({ id: 'openai', requiresKey: true, hasKey: false, models: [{ id: 'gpt-5' }], defaultModel: 'gpt-5' })
+  ]
+
+  it('auto-launches setup on a keyless start, stores a key, then runs (no eject)', async () => {
+    const { d, rec, setKeyCalls, patches } = wizardDeps(
+      [
+        { runId: 'x', type: 'text', delta: 'ok' },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ],
+      { selected: null, providers: twoProviders }
+    )
+    // pick #1 (anthropic), paste a key, then send a real prompt, then EOF.
+    const t = fakeIo(['1', 'sk-ant-123', 'fix the bug', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(setKeyCalls).toEqual([['anthropic', 'sk-ant-123']])
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+    // The selection is persisted so the next launch skips setup.
+    expect(patches.some((p) => (p.selected as { providerId?: string } | null)?.providerId === 'anthropic')).toBe(true)
+    expect(t.text()).toContain('Key saved for anthropic')
+  })
+
+  it('skipping setup lands in a gated REPL, not the shell', async () => {
+    const { d, rec } = wizardDeps([], { selected: null, providers: twoProviders })
+    // Enter to skip, then try a prompt (blocked), then EOF.
+    const t = fakeIo(['', 'hello', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(rec.runs).toHaveLength(0) // no turn ran without a model
+    expect(t.text()).toContain('No provider set up yet')
+    expect(t.text()).toContain('No model is ready yet. Run /login')
+  })
+
+  it('/login mid-session stores a key and switches the active model', async () => {
+    const { d, rec, setKeyCalls } = wizardDeps(
+      [
+        { runId: 'x', type: 'text', delta: 'ok' },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ],
+      // Boot ready on anthropic; openai has no key yet.
+      {
+        selected: { providerId: 'anthropic', model: 'claude' },
+        providers: [
+          prov({ id: 'anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }], defaultModel: 'claude' }),
+          prov({ id: 'openai', requiresKey: true, hasKey: false, models: [{ id: 'gpt-5' }], defaultModel: 'gpt-5' })
+        ]
+      }
+    )
+    const t = fakeIo(['/login', '2', 'sk-openai', 'do it', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(setKeyCalls).toEqual([['openai', 'sk-openai']])
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0]).toMatchObject({ providerId: 'openai', model: 'gpt-5' })
+  })
+
+  it('/login → Other host adds a catalog host and stores its key', async () => {
+    const { d, rec, setKeyCalls, patches } = wizardDeps(
+      [
+        { runId: 'x', type: 'text', delta: 'ok' },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ],
+      {
+        selected: { providerId: 'anthropic', model: 'claude' },
+        providers: [
+          prov({ id: 'anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }], defaultModel: 'claude' })
+        ]
+      }
+    )
+    // menu: 1) anthropic, 2) Other host…; catalog item 1 is OpenRouter (first entry).
+    const t = fakeIo(['/login', '2', '1', 'sk-or-key', 'go', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(patches.some((p) => (p.providers ?? []).some((pr) => pr.id === 'openrouter'))).toBe(true)
+    expect(setKeyCalls).toEqual([['openrouter', 'sk-or-key']])
+    // OpenRouter has no models yet, so the active model stays on anthropic.
+    expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+    expect(t.text()).toContain('has no models yet')
+  })
+
+  it('/login → Other host → Custom endpoint adds a URL-based provider', async () => {
+    const { d, patches } = wizardDeps([], {
+      selected: { providerId: 'anthropic', model: 'claude' },
+      providers: [
+        prov({ id: 'anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }], defaultModel: 'claude' })
+      ]
+    })
+    d.newId = () => 'aaaabbbb-cccc-dddd-eeee-ffff00001111'
+    // The custom-endpoint row is the item after every catalog host.
+    const customIdx = String(catalogForPlatform(true).length + 1)
+    const t = fakeIo([
+      '/login',
+      '2',
+      customIdx,
+      'My Router',
+      'https://router.internal/v1',
+      '', // no key needed (endpoint is keyless)
+      null
+    ])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    const added = patches
+      .flatMap((p) => p.providers ?? [])
+      .find((pr) => pr.baseUrl === 'https://router.internal/v1')
+    expect(added).toBeDefined()
+    expect(added!.id).toMatch(/^custom-/)
+    expect(added!.label).toBe('My Router')
+    expect(added!.kind).toBe('openai-compatible')
+  })
+
+  it('an unknown --provider is a usage error: prints it and exits, no wizard', async () => {
+    const { d, rec } = wizardDeps([], { selected: null, providers: twoProviders })
+    const t = fakeIo([null])
+    d.io = t.io
+    const code = await runTui({ ...opts, providerId: 'bogus' }, d)
+    expect(code).toBe(1)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toContain('Unknown provider: bogus')
+    expect(t.text()).not.toContain('Other host') // the setup wizard never opened
+  })
+
+  it('without a writable key store, a keyless start still prints the error and exits', async () => {
+    // No setKey wired → fall back to the headless-style message + exit 1 (old behavior).
+    const { d } = deps([], { selected: null, providers: twoProviders })
+    const t = fakeIo([null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(1)
+    expect(t.text()).toContain('No model configured')
+  })
+
+  it('a stored openai selection with no key opens setup instead of the confusing eject', async () => {
+    // The original bug: selected=openai, no key → the message named openai and ejected.
+    // Now it opens /login; picking anthropic clears the stale selection.
+    const { d, rec, setKeyCalls } = wizardDeps(
+      [
+        { runId: 'x', type: 'text', delta: 'ok' },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ],
+      { selected: { providerId: 'openai', model: 'gpt-5' }, providers: twoProviders }
+    )
+    const t = fakeIo(['1', 'sk-ant', 'go', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(setKeyCalls).toEqual([['anthropic', 'sk-ant']])
+    expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
   })
 })

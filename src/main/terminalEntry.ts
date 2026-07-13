@@ -17,7 +17,7 @@ import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
 import { loadCommands } from './agent/commands'
 import { compactConversationNow } from './agent/compact'
-import { getSettings, updateSettings } from './store'
+import { canSetKey, getSettings, setProviderKey, updateSettings } from './store'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
 import { runTui, makePainter, mediaTypeForImagePath, type TuiOptions } from './tui'
@@ -163,6 +163,11 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
       updateSettings: (patch) => {
         updateSettings(patch)
       },
+      // In-session API-key entry for /login. Writes through the host's key store
+      // (safeStorage on the desktop, cli-credentials.json on the CLI); absent only
+      // if no writable store was wired, which disables /login gracefully.
+      ...(canSetKey() ? { setKey: (id: string, key: string) => setProviderKey(id, key) } : {}),
+      isMac: process.platform === 'darwin',
       settingsPath: () => join(getUserDataDir(), 'settings.json'),
       io: createTerminalIo({
         paint: makePainter(tui.color),

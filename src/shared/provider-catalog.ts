@@ -163,3 +163,46 @@ export function catalogEntryToProvider(entry: CatalogEntry): ProviderConfig {
     builtIn: false
   }
 }
+
+/**
+ * A stable `custom-<8 hex>` id for a user-supplied endpoint, derived from a UUID (or
+ * any seed). Shared so every client (GUI Settings, TUI /login, CLI providers add)
+ * mints the same shape — a bare `randomUUID().slice(0,8)` and a hand-rolled strip
+ * had drifted apart. Falls back to `custom-endpoint` for an empty/degenerate seed.
+ */
+export function customProviderId(seed: string): string {
+  const hex = seed.replace(/[^a-z0-9]/gi, '').slice(0, 8)
+  return `custom-${hex || 'endpoint'}`
+}
+
+/**
+ * Build a provider config for a user-supplied OpenAI-compatible endpoint (a label + a
+ * base URL). Keyless by default like a local server — the user attaches a key
+ * afterward if the endpoint needs one. Shared by all three clients so the shape can't
+ * drift (mirrors {@link catalogEntryToProvider} for the known-host path).
+ */
+export function customEndpointToProvider(id: string, label: string, baseUrl: string): ProviderConfig {
+  return {
+    id,
+    kind: 'openai-compatible',
+    label,
+    baseUrl,
+    models: [],
+    requiresKey: false,
+    hasKey: false,
+    builtIn: false
+  }
+}
+
+/**
+ * Validate a custom endpoint's label + base URL. Returns an error message, or null
+ * when both are acceptable. One rule for every client so validation can't differ by
+ * surface (the GUI used to accept a bare host or a non-http scheme).
+ */
+export function customEndpointError(label: string, url: string): string | null {
+  if (!label.trim()) return 'a label is required'
+  const u = url.trim()
+  if (!u) return 'a base URL is required'
+  if (!/^https?:\/\//i.test(u)) return 'the base URL must start with http:// or https://'
+  return null
+}

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { parseTuiArgs } from '../main/tui'
 import { parseHeadlessArgs } from '../main/headless'
 import { runTuiEntry, runHeadlessEntry } from '../main/terminalEntry'
@@ -6,6 +7,7 @@ import {
   addPermissionRule,
   configureHasKey,
   configureHeaderSecrets,
+  configureSetKey,
   getProvider,
   getSettings,
   saveSettings
@@ -90,6 +92,7 @@ Options:
 Providers:
   houston providers                    list configured providers and hosts to add
   houston providers add <id>           add a catalog host (e.g. openrouter, groq)
+  houston providers add --url <url>    add a custom OpenAI-compatible endpoint
   houston providers set-key <id> [key] store an API key (key from arg or stdin)
   houston providers remove-key <id>    forget a stored API key
 
@@ -107,6 +110,9 @@ Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 export function wireCliHost(): void {
   setUserDataDir(resolveUserDataDir())
   configureHasKey((id) => cliHasKey(id))
+  // In-session key writes (the TUI's /login flow) land in cli-credentials.json,
+  // the same store `houston providers set-key` uses.
+  configureSetKey((id, key) => cliSetKey(id, key))
   // Scrub stored secrets (and token-shaped strings) from every log line.
   configureLogRedactor((message) => redactSecrets(message, cliCollectSecrets()))
   // Known-value source for redacting derived conversation titles.
@@ -190,6 +196,7 @@ function providersDeps(): ProvidersDeps {
     out: (s) => process.stdout.write(s),
     err: (s) => process.stderr.write(s),
     isMac: process.platform === 'darwin',
+    newId: () => randomUUID(),
     // Only consume stdin when it's piped — a TTY would block waiting for input.
     readStdin: async () => (process.stdin.isTTY ? null : readAllStdin())
   }

@@ -46,18 +46,37 @@ export function allProviderKeyEnvVars(): string[] {
 }
 
 /**
+ * Where to get an API key for each built-in cloud provider — shown next to the key
+ * prompt in the TUI's `/login` flow so a new user isn't left guessing. Catalog hosts
+ * (OpenRouter, Groq, …) carry their own `docsUrl` in provider-catalog.ts; this covers
+ * the always-present built-ins. Unknown ids (custom endpoints) return undefined.
+ */
+const PROVIDER_KEY_URLS: Record<string, string> = {
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  openai: 'https://platform.openai.com/api-keys',
+  gemini: 'https://aistudio.google.com/apikey'
+}
+
+/** Sign-up / key-management URL for a built-in provider id, or undefined if unknown. */
+export function providerKeyUrl(id: string): string | undefined {
+  return PROVIDER_KEY_URLS[id]
+}
+
+/**
  * Actionable message for a provider whose required API key isn't set. Replaces the
  * raw provider error (e.g. `invalid x-api-key`) that a keyless run otherwise fails
- * with. Names the primary env var and points at the CLI's other credential sources;
- * the desktop app is mentioned since this path is shared with its headless mode.
+ * with. Used on the non-interactive headless path (both hosts), so it leads with the
+ * env var and the interactive `houston -i` + /login flow — both work on the desktop
+ * app and the standalone CLI — and mentions the CLI's non-interactive subcommand as
+ * a parenthetical. The interactive TUI never shows this: it opens /login instead.
  */
 export function missingKeyHint(id: string): string {
   const vars = providerKeyEnvVars(id)
   const generic = genericKeyEnvVar(id)
   const envPart = vars.length > 1 ? `${vars[0]} (or ${generic})` : generic
   return (
-    `No API key set for provider "${id}". Set ${envPart}, or add "${id}" to ` +
-    `cli-credentials.json in your profile dir, then re-run. ` +
-    `(The CLI's "houston providers" command can set this up; the desktop app uses Settings.)`
+    `No API key set for provider "${id}". Set ${envPart} in your environment, ` +
+    `or start an interactive session with "houston -i" and run /login to set one. ` +
+    `(On the CLI, "houston providers set-key ${id}" stores a key non-interactively.)`
   )
 }

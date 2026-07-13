@@ -4,8 +4,18 @@ import {
   type AppSettings,
   type ApprovalPolicy,
   type Hook,
-  type McpServerConfig
+  type McpServerConfig,
+  type ProviderConfig
 } from '@shared/types'
+import {
+  catalogForPlatform,
+  catalogEntryToProvider,
+  customEndpointError,
+  customEndpointToProvider,
+  customProviderId,
+  type CatalogEntry
+} from '@shared/provider-catalog'
+import { providerKeyUrl } from '@shared/provider-keys'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
   expandTemplate,
@@ -308,6 +318,15 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
   return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
 }
 
+/** The status line shown before any provider is set up: no model, just the /login nudge. */
+export function renderNoModelStatus(policy: ApprovalPolicy, cwd: string, paint: Painter): string {
+  return [
+    paint('no model (run /login)', 'yellow'),
+    paint(policy, 'dim'),
+    paint(shortCwd(cwd), 'dim')
+  ].join(paint(' · ', 'dim'))
+}
+
 /** A tiny 10-cell context-fill bar like `▓▓▓░░░░░░░`. */
 function contextBar(pct: number, cells = 10): string {
   const filled = Math.round((Math.min(100, Math.max(0, pct)) / 100) * cells)
@@ -569,6 +588,8 @@ export type SlashResult =
   | { kind: 'hooks'; action: SettingsAction }
   /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
   | { kind: 'mcp'; action: SettingsAction }
+  /** Set or replace a provider API key, or add a host (/login, /providers). */
+  | { kind: 'login' }
   /** A template command (custom `.houston/commands` or first-party `/review`): run the expanded prompt as a turn. */
   | { kind: 'prompt'; text: string }
   | { kind: 'unknown'; name: string }
@@ -609,6 +630,9 @@ export function parseSlashCommand(
       return { kind: 'hooks', action: parseSettingsAction(arg) }
     case 'mcp':
       return { kind: 'mcp', action: parseSettingsAction(arg) }
+    case 'login':
+    case 'providers':
+      return { kind: 'login' }
     case 'theme': {
       if (isThemeName(arg)) return { kind: 'set-theme', theme: arg }
       return { kind: 'handled' } // no/invalid arg → driver lists themes
@@ -676,6 +700,7 @@ export const HELP_TEXT = [
   'Commands:',
   '  /help                 show this help',
   '  /model [id]           list models, or switch (providerId, providerId/model, or model)',
+  '  /login                set or replace a provider API key, or add a host',
   '  /approval [policy]    show or set policy (plan | ask | auto-edit | full-auto)',
   '  /plan                 shortcut: switch to plan mode (read-only research & propose)',
   '  /clear, /new          start a fresh conversation',
@@ -810,6 +835,248 @@ export function renderSettingsFooter(path: string, paint: Painter): string {
   return paint(`settings file: ${path}\n(changes are picked up on restart)`, 'dim')
 }
 
+// --- /login: in-session API-key setup ----------------------------------------
+// A guided flow to set a provider's API key — or add a host — without leaving the
+// session or hand-editing a credentials file. Auto-launched on a keyless start and
+// reachable any time via /login (alias /providers). The pure pieces (menu render +
+// choice parsing + custom-endpoint validation) are exported for tests; the async
+// driver below reads input and persists through the injected setKey/updateSettings
+// seams (writing to safeStorage on the desktop, cli-credentials.json on the CLI).
+
+/** Configured providers that authenticate with an API key — the rows of the /login menu. */
+export function keyableProviders(settings: AppSettings): ProviderConfig[] {
+  return settings.providers.filter((p) => p.requiresKey)
+}
+
+/** Render the provider menu: each keyable provider with its key status, then "Other host…". */
+export function renderProviderMenu(
+  providers: ProviderConfig[],
+  paint: Painter,
+  opts: { firstRun: boolean }
+): string {
+  const lines: string[] = [
+    opts.firstRun
+      ? paint('No model is ready yet. None of your providers has an API key.', 'yellow')
+      : paint('Providers (key status on this profile):', 'bold')
+  ]
+  providers.forEach((p, i) => {
+    const status = p.hasKey ? paint('✓ key set', 'green') : paint('✗ no key ', 'dim')
+    const models = p.models.map((m) => m.id).join(', ') || paint('no models yet', 'dim')
+    lines.push(`  ${paint(`${i + 1})`, 'cyan')} ${(p.label ?? p.id).padEnd(12)} ${status}   ${models}`)
+  })
+  const other = providers.length + 1
+  lines.push(
+    `  ${paint(`${other})`, 'cyan')} ${'Other host…'.padEnd(12)} ${paint('OpenRouter, Groq, a local server, and more', 'dim')}`
+  )
+  lines.push(
+    paint(
+      opts.firstRun
+        ? 'Pick a number to set up, or press Enter to skip for now.'
+        : 'Pick a provider to set or replace its key (Enter to cancel).',
+      'dim'
+    )
+  )
+  return lines.join('\n')
+}
+
+/**
+ * Interpret a numbered-menu answer where 1..count select a listed item, count+1 is a
+ * trailing extra row, and anything else (blank, non-numeric, out of range) cancels.
+ * Shared by the provider menu and the add-host menu below.
+ */
+function parseNumberedChoice(
+  answer: string,
+  count: number
+): { kind: 'item'; index: number } | { kind: 'extra' } | { kind: 'cancel' } {
+  const n = Number.parseInt(answer.trim(), 10)
+  if (!Number.isInteger(n)) return { kind: 'cancel' }
+  if (n >= 1 && n <= count) return { kind: 'item', index: n - 1 }
+  if (n === count + 1) return { kind: 'extra' }
+  return { kind: 'cancel' }
+}
+
+/** Interpret a provider-menu answer: a listed provider, the "Other host…" item, or cancel. */
+export function parseProviderMenuChoice(
+  answer: string,
+  providerCount: number
+): { kind: 'provider'; index: number } | { kind: 'other' } | { kind: 'cancel' } {
+  const c = parseNumberedChoice(answer, providerCount)
+  if (c.kind === 'item') return { kind: 'provider', index: c.index }
+  if (c.kind === 'extra') return { kind: 'other' }
+  return { kind: 'cancel' }
+}
+
+/** Render the "add a host" menu: one flat numbered list of catalog hosts, then "Custom endpoint". */
+export function renderCatalogMenu(catalog: CatalogEntry[], paint: Painter): string {
+  const lines: string[] = [
+    paint('Add a host. Pick a known one, or point Houston at any OpenAI-compatible server:', 'bold')
+  ]
+  catalog.forEach((e, i) => {
+    const note = e.requiresKey ? e.blurb : `${e.blurb} · no key needed`
+    lines.push(`  ${paint(`${String(i + 1).padStart(2)})`, 'cyan')} ${e.label.padEnd(16)} ${paint(note, 'dim')}`)
+  })
+  const custom = catalog.length + 1
+  lines.push(
+    `  ${paint(`${String(custom).padStart(2)})`, 'cyan')} ${'Custom endpoint'.padEnd(16)} ${paint('enter your own label + base URL', 'dim')}`
+  )
+  lines.push(paint('Pick a host to add (Enter to cancel).', 'dim'))
+  return lines.join('\n')
+}
+
+/** Interpret an add-host answer: a catalog host, the custom-endpoint item, or cancel. */
+export function parseCatalogChoice(
+  answer: string,
+  catalogCount: number
+): { kind: 'host'; index: number } | { kind: 'custom' } | { kind: 'cancel' } {
+  const c = parseNumberedChoice(answer, catalogCount)
+  if (c.kind === 'item') return { kind: 'host', index: c.index }
+  if (c.kind === 'extra') return { kind: 'custom' }
+  return { kind: 'cancel' }
+}
+
+/** The model to switch to after setting up a provider: its default, else its first model, else none. */
+export function pickModelFor(provider: ProviderConfig): string | null {
+  return provider.defaultModel ?? provider.models[0]?.id ?? null
+}
+
+/**
+ * Paste a key (hidden) for `provider` and, if the provider has a model, switch to it.
+ * Returns the provider+model to run, or null when no key was entered for a
+ * key-required provider or the provider has no models yet (a freshly-added host).
+ */
+async function keyEntryFor(
+  provider: ProviderConfig,
+  deps: TuiDeps,
+  paint: Painter,
+  keyUrl: string | undefined
+): Promise<{ providerId: string; model: string } | null> {
+  const readSecret = deps.io.readSecret ?? deps.io.readLine
+  const name = provider.label ?? provider.id
+  if (keyUrl) deps.io.out(paint(`${name} → get a key at ${keyUrl}\n`, 'dim'))
+
+  const optional = !provider.requiresKey
+  deps.io.out(
+    paint(
+      optional
+        ? 'Paste an API key if this endpoint needs one (Enter to skip; hidden):'
+        : 'Paste your API key (hidden; not saved to shell or session history):',
+      'dim'
+    ) + '\n'
+  )
+  const key = (await readSecret(paint('key › ', 'green')))?.trim() ?? ''
+  if (!key) {
+    if (!optional) {
+      deps.io.out(paint('· no key entered, nothing changed\n', 'dim'))
+      return null
+    }
+  } else if (deps.setKey) {
+    const { shadowedByEnv } = deps.setKey(provider.id, key)
+    deps.io.out(paint(`· Key saved for ${name} (owner-only, on this profile). It's active now.\n`, 'dim'))
+    if (shadowedByEnv) {
+      deps.io.out(
+        paint(
+          `· Note: ${shadowedByEnv} is set in your environment and takes precedence over the stored key.\n`,
+          'yellow'
+        )
+      )
+    }
+  }
+
+  const model = pickModelFor(provider)
+  if (!model) {
+    deps.io.out(
+      paint(`· ${name} has no models yet. Add one with:  /model ${provider.id}/<model-id>\n`, 'dim')
+    )
+    return null
+  }
+  // Persist the selection so the next launch skips setup and reopens this provider.
+  deps.updateSettings?.({ selected: { providerId: provider.id, model } })
+  deps.io.out(paint(`· Model set to ${provider.id} / ${model}.\n`, 'dim'))
+  return { providerId: provider.id, model }
+}
+
+/**
+ * The "Other host…" branch: add a catalog host or a custom OpenAI-compatible endpoint,
+ * persist it, and return it (with any docs URL) for the key-entry step. Null on cancel
+ * or when settings can't be written here.
+ */
+async function addHostInteractive(
+  deps: TuiDeps,
+  paint: Painter,
+  newId: () => string
+): Promise<{ provider: ProviderConfig; keyUrl?: string } | null> {
+  if (!deps.updateSettings) {
+    deps.io.out(paint('· adding a host is unavailable here\n', 'dim'))
+    return null
+  }
+  const isMac = deps.isMac ?? process.platform === 'darwin'
+  const settings = deps.getSettings()
+  const configured = new Set(settings.providers.map((p) => p.id))
+  const catalog = catalogForPlatform(isMac).filter((e) => !configured.has(e.id))
+
+  deps.io.out(`${renderCatalogMenu(catalog, paint)}\n`)
+  const ans = await deps.io.readLine(paint('host › ', 'green'))
+  if (ans === null) return null
+  const choice = parseCatalogChoice(ans, catalog.length)
+  if (choice.kind === 'cancel') {
+    deps.io.out(paint('· cancelled\n', 'dim'))
+    return null
+  }
+  if (choice.kind === 'host') {
+    const entry = catalog[choice.index]
+    const provider = catalogEntryToProvider(entry)
+    deps.updateSettings({ providers: [...settings.providers, provider] })
+    deps.io.out(paint(`· Added ${entry.label} (${entry.id}) at ${entry.baseUrl}.\n`, 'dim'))
+    return { provider, keyUrl: entry.docsUrl }
+  }
+
+  // Custom endpoint — label + base URL, mirroring the GUI's add-endpoint.
+  const label = await deps.io.readLine('Label for this endpoint (e.g. My Router): ')
+  if (label === null) return null
+  const url = await deps.io.readLine('Base URL (e.g. https://router.internal/v1): ')
+  if (url === null) return null
+  const err = customEndpointError(label, url)
+  if (err) {
+    deps.io.out(paint(`· ${err}\n`, 'yellow'))
+    return null
+  }
+  const provider = customEndpointToProvider(customProviderId(newId()), label.trim(), url.trim())
+  deps.updateSettings({ providers: [...settings.providers, provider] })
+  deps.io.out(paint(`· Added ${provider.label} (${provider.id}) at ${provider.baseUrl}.\n`, 'dim'))
+  return { provider }
+}
+
+/**
+ * The /login driver: pick a provider (or add a host), paste a key (hidden), and have
+ * it take effect immediately. Returns the provider+model to switch to when setup
+ * yields a usable model, or null when the user cancels/skips or only added a
+ * model-less host (the caller then stays put / drops into the gated REPL). The caller
+ * guards on deps.setKey before invoking this.
+ */
+async function runProviderSetup(
+  deps: TuiDeps,
+  paint: Painter,
+  newId: () => string,
+  o: { firstRun: boolean }
+): Promise<{ providerId: string; model: string } | null> {
+  const providers = keyableProviders(deps.getSettings())
+  deps.io.out(`${renderProviderMenu(providers, paint, o)}\n`)
+  const ans = await deps.io.readLine(paint(o.firstRun ? 'setup › ' : 'login › ', 'green'))
+  if (ans === null) return null
+  const choice = parseProviderMenuChoice(ans, providers.length)
+  if (choice.kind === 'cancel') {
+    deps.io.out(paint('· no provider selected\n', 'dim'))
+    return null
+  }
+  if (choice.kind === 'provider') {
+    const target = providers[choice.index]
+    return keyEntryFor(target, deps, paint, providerKeyUrl(target.id))
+  }
+  const added = await addHostInteractive(deps, paint, newId)
+  if (!added) return null
+  return keyEntryFor(added.provider, deps, paint, added.keyUrl)
+}
+
 // --- The interactive driver --------------------------------------------------
 
 /** Abstract terminal I/O, so the driver runs headless in tests. */
@@ -829,6 +1096,13 @@ export interface TuiIo {
    * a prompt they never saw.
    */
   readLine: (prompt: string, opts?: { discardPending?: boolean }) => Promise<string | null>
+  /**
+   * Read a line without echoing it — for pasting an API key in the `/login` flow.
+   * Resolves the typed value, or null on cancel (Ctrl-C) / EOF. Optional: off-TTY
+   * and in tests it's absent, and the driver falls back to `readLine` (the value
+   * still never reaches composer history, which only records real prompt lines).
+   */
+  readSecret?: (prompt: string) => Promise<string | null>
   /**
    * Register a handler for an interrupt (Ctrl-C). The driver uses it to cancel
    * the in-flight run without exiting. Optional so tests can drive interrupts
@@ -894,6 +1168,15 @@ export interface TuiDeps {
   compact?: (id: string, providerId: string, model: string) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
   updateSettings?: (patch: Partial<AppSettings>) => void
+  /**
+   * Persist an API key for a provider (the `/login` flow). Returns the env var
+   * currently shadowing the id, if any, so the driver can warn. Absent ⇒ no
+   * writable key store, so `/login` and the keyless-start wizard are disabled and
+   * the driver falls back to printing the missing-key error.
+   */
+  setKey?: (id: string, key: string) => { shadowedByEnv: string | null }
+  /** Whether the host is macOS — filters the provider catalog (e.g. oMLX). Defaults to the current platform. */
+  isMac?: boolean
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
   settingsPath?: () => string
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
@@ -948,15 +1231,39 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.out(paint('· Houston terms accepted (recorded for future runs)\n', 'dim'))
   }
 
+  // Mutable session state. providerId/model may be null until a provider is set up:
+  // an interactive session never ejects for a missing key (see below).
+  let providerId: string | null
+  let model: string | null
   const resolved = resolveHeadlessModel(settings, opts)
   if ('error' in resolved) {
-    deps.io.out(`${resolved.error}\n`)
-    return 1
+    // A missing key (or nothing configured yet) is a setup step here, not a fatal
+    // error: when a writable key store is wired, auto-launch the /login wizard
+    // instead of exiting. A non-recoverable error (an unknown --provider, a provider
+    // with no model) is a real usage mistake — print it and exit, don't misdirect the
+    // user into key setup.
+    if (resolved.recoverable && deps.setKey) {
+      const setup = await runProviderSetup(deps, paint, newId, { firstRun: true })
+      providerId = setup?.providerId ?? null
+      model = setup?.model ?? null
+      if (!setup) {
+        deps.io.out(
+          paint(
+            '· No provider set up yet. Run /login any time, or set an env var\n' +
+              '  (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) and restart.\n',
+            'dim'
+          )
+        )
+      }
+    } else {
+      deps.io.out(`${resolved.error}\n`)
+      return 1
+    }
+  } else {
+    providerId = resolved.providerId
+    model = resolved.model
   }
 
-  // Mutable session state.
-  let providerId = resolved.providerId
-  let model = resolved.model
   let policy = opts.approvalPolicy
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
@@ -1021,7 +1328,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   deps.io.out(
     `${paint('Houston', 'bold', 'cyan')} (interactive)\n` +
       `${paint(`  cwd:      ${opts.cwd}`, 'dim')}\n` +
-      `${paint(`  model:    ${providerId} / ${model}`, 'dim')}\n` +
+      `${paint(
+        providerId && model
+          ? `  model:    ${providerId} / ${model}`
+          : '  model:    (none yet, /login to set a key)',
+        'dim'
+      )}\n` +
       `${paint(`  approval: ${policy}`, 'dim')}\n` +
       `${paint('  /help for commands, Ctrl-D to exit', 'dim')}\n`
   )
@@ -1034,9 +1346,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       autoInput = null
     } else {
       // A persistent status line above the composer: model, policy, cwd, cost, and
-      // context-window fill — so live session state is always visible.
+      // context-window fill — so live session state is always visible. Before a
+      // provider is set up it shows a "no model" prompt pointing at /login instead.
       deps.io.out(
-        `${renderStatusLine({ providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens }, columns(), paint)}\n`
+        `${
+          providerId && model
+            ? renderStatusLine(
+                { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens },
+                columns(),
+                paint
+              )
+            : renderNoModelStatus(policy, opts.cwd, paint)
+        }\n`
       )
       // Read a (possibly multi-line) message: a trailing backslash or an open code
       // fence keeps reading, so a fenced snippet isn't split at the first newline.
@@ -1146,6 +1467,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         await runMcpCommand(result.action, deps, paint)
         continue
       }
+      if (result.kind === 'login') {
+        if (!deps.setKey) {
+          deps.io.out(paint('· setting API keys isn’t available here\n', 'dim'))
+          continue
+        }
+        const setup = await runProviderSetup(deps, paint, newId, { firstRun: false })
+        if (setup) {
+          providerId = setup.providerId
+          model = setup.model
+        }
+        continue
+      }
       if (result.kind === 'image') {
         if (!deps.loadImage) {
           deps.io.out(paint('· image attachments are unavailable\n', 'dim'))
@@ -1181,7 +1514,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'compact') {
-        if (!deps.compact || !conversationId) {
+        if (!deps.compact || !conversationId || !providerId || !model) {
           deps.io.out(paint('· nothing to compact yet; start a conversation first\n', 'dim'))
           continue
         }
@@ -1223,6 +1556,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         )
         continue
       }
+    }
+
+    // A turn needs a model. Until a provider is set up, gate submission and point at
+    // /login — never eject, so the user can set a key and keep this session.
+    if (!providerId || !model) {
+      deps.io.out(paint('No model is ready yet. Run /login to set an API key first.\n', 'yellow'))
+      continue
     }
 
     messages.push({
@@ -1490,8 +1830,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 function handleInfoCommand(
   line: string,
   state: {
-    providerId: string
-    model: string
+    providerId: string | null
+    model: string | null
     policy: ApprovalPolicy
     cwd: string
     sessionCost: SessionCost
@@ -1529,12 +1869,17 @@ function handleInfoCommand(
   }
   if (name === 'model' || name === 'model?') {
     const settings = deps.getSettings()
-    deps.io.out(paint(`current: ${state.providerId} / ${state.model}\n`, 'dim'))
+    const current =
+      state.providerId && state.model ? `${state.providerId} / ${state.model}` : '(none, run /login)'
+    deps.io.out(paint(`current: ${current}\n`, 'dim'))
     for (const p of settings.providers) {
       const ready = !p.requiresKey || p.hasKey
       const flag = ready ? '' : paint(' (no key)', 'yellow')
       const models = p.models.map((m) => m.id).join(', ') || paint('none', 'dim')
       deps.io.out(`  ${paint(p.id, 'cyan')}${flag}: ${models}\n`)
+    }
+    if (settings.providers.some((p) => p.requiresKey && !p.hasKey)) {
+      deps.io.out(paint('  → run /login to add a key for a provider marked (no key)\n', 'dim'))
     }
   }
 }
