@@ -514,7 +514,10 @@ const applyPatch: ToolDef = {
     for (const op of ops) {
       const abs = resolveInRoots(roots, op.path)
       if (op.type === 'add') {
-        if (await exists(abs)) throw new Error(`Add File: ${op.path} already exists.`)
+        if (await exists(abs))
+          throw new Error(
+            `Add File: ${op.path} already exists. Use '*** Update File: ${op.path}' to modify it instead of adding it.`
+          )
         staged.push({ abs, content: op.content, verb: 'add' })
         added += 1
       } else if (op.type === 'delete') {
@@ -532,7 +535,9 @@ const applyPatch: ToolDef = {
         if (op.moveTo) {
           const target = resolveInRoots(roots, op.moveTo)
           if (target !== abs && (await exists(target))) {
-            throw new Error(`Move to: ${op.moveTo} already exists.`)
+            throw new Error(
+              `Move to: ${op.moveTo} already exists. Pick a destination that does not exist, or edit that file directly.`
+            )
           }
           staged.push({ abs, content: null, verb: 'delete' })
           staged.push({ abs: target, content: data, verb: 'update' })

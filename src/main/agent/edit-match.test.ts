@@ -25,8 +25,9 @@ describe('resolveEdit — exact', () => {
     expect(() => resolveEdit('abc', '', 'q')).toThrow(/must not be empty/)
   })
 
-  it('rejects identical old/new', () => {
+  it('rejects identical old/new with a hint that it changes nothing', () => {
     expect(() => resolveEdit('abc', 'a', 'a')).toThrow(/identical/)
+    expect(() => resolveEdit('abc', 'a', 'a')).toThrow(/make no change|differ from the original/i)
   })
 
   it('prefers exact over fuzzy when both could match', () => {
