@@ -1415,7 +1415,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       let raw: string | null = null
       let resetComposer = false
       for (;;) {
-        const p = composer.pending ? paint('… ', 'dim') : composerPrompt(policy, paint)
+        // In an open code fence, hint how to send so a stray ``` can't trap the
+        // composer with no visible way out (typing the closing ``` submits).
+        const p = composer.pending
+          ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
+          : composerPrompt(policy, paint)
         const line = await deps.io.readLine(p)
         if (line === null) {
           // Ctrl-C settles the read too: 'reset' discards this entry and re-prompts,
@@ -1746,7 +1750,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           enqueue(async () => {
             deps.io.out(`${renderQuestion(e.question, e.options, e.multiSelect ?? false, paint)}\n`)
             let answer: string | null = null
-            if (deps.io.select) {
+            // Only offer the arrow-key picker when there's something to pick — an
+            // options-less question is a free-text prompt, so go straight to typing.
+            if (deps.io.select && e.options.length > 0) {
               const r = await deps.io.select({
                 title: e.question,
                 multiSelect: e.multiSelect ?? false,

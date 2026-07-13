@@ -825,6 +825,33 @@ describe('runTui', () => {
     expect(rec.runs[0].messages).toEqual([{ role: 'user', content: 'first line \nsecond line' }])
   })
 
+  it('hints how to close an open code fence, and the close submits', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['```ts', 'const x = 1', '```', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // While the fence is open the continuation prompt guides the user out.
+    expect(t.reads.some((r) => r.prompt.includes('to close and send'))).toBe(true)
+    // Typing the closing fence submits the whole block as one turn.
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages).toEqual([{ role: 'user', content: '```ts\nconst x = 1\n```' }])
+  })
+
+  it('an options-less ask_user falls back to a typed answer (no picker crash)', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Name it?', options: [] },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    // io.select is present; the driver must skip it for an empty option list.
+    const t = fakeIo(['go', 'my answer', null])
+    t.io.select = async () => {
+      throw new Error('picker must not be used for an options-less question')
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.questions).toEqual([['run-1', 'q1', 'my answer']])
+  })
+
   it('prompts for and records an approval decision', async () => {
     const { d, rec } = deps([
       { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
