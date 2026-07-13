@@ -61,6 +61,12 @@ const api = {
   readClipboard: (): Promise<ClipboardContent> => ipcRenderer.invoke(IPC.clipboardRead),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
+  /** The workspace's skills (.houston/skills), name + description, for /skills. */
+  listSkills: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
+    ipcRenderer.invoke(IPC.skillsList, workspace),
+  /** The workspace's custom agents (.houston/agents), name + description, for /agents. */
+  listAgents: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
+    ipcRenderer.invoke(IPC.agentsList, workspace),
   /** Git repo info for the "new chat in a worktree" picker (or isRepo:false). */
   getRepoInfo: (workspace: string): Promise<RepoInfo> =>
     ipcRenderer.invoke(IPC.gitRepoInfo, workspace),

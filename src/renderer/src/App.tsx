@@ -102,11 +102,14 @@ const FindBar = lazy(() => import('./components/FindBar').then((m) => ({ default
 /** Built-in slash commands (custom ones are loaded from the workspace). */
 const BUILTIN_COMMANDS: Command[] = [
   { name: 'new', description: 'Start a new chat' },
+  { name: 'clear', description: 'Start a new chat (alias for /new)' },
   { name: 'compact', description: 'Summarize older turns to free up context now' },
   { name: 'plan', description: 'Plan mode — read-only (research & propose, no edits/commands)' },
   { name: 'ask', description: 'Approval: ask before every edit and command' },
   { name: 'auto', description: 'Approval: auto-approve edits, ask for commands' },
   { name: 'full', description: 'Approval: full auto (sandboxed)' },
+  { name: 'skills', description: 'List the workspace skills (.houston/skills)' },
+  { name: 'agents', description: 'List the workspace agents (.houston/agents)' },
   { name: 'help', description: 'List the available slash commands' },
   {
     name: 'review',
@@ -1094,12 +1097,36 @@ export default function App(): JSX.Element {
     }
   }, [currentId, settings, chat])
 
+  // Read-only listing for /skills and /agents: fetch the workspace's capabilities
+  // and surface their names in a notice (mirrors how /help lists command names).
+  const onListCapability = useCallback(
+    async (kind: 'skills' | 'agents') => {
+      if (!workspace) {
+        chat.notify(`Open a folder first to list ${kind}.`)
+        return
+      }
+      const list =
+        kind === 'skills'
+          ? await window.api.listSkills(workspace)
+          : await window.api.listAgents(workspace)
+      const label = kind === 'skills' ? 'Skills' : 'Agents'
+      if (!list.length) {
+        chat.notify(`No ${kind} found in .houston/${kind}.`)
+        return
+      }
+      chat.notify(`${label} (${list.length}): ${list.map((c) => c.name).join(', ')}`)
+    },
+    [workspace, chat]
+  )
+
   const onCommand = useCallback(
     (cmd: Command) => {
       // Only built-in action commands reach here; custom (template) commands are
       // expanded into the composer by the Composer itself.
-      if (cmd.name === 'new') void onNewChat()
+      if (cmd.name === 'new' || cmd.name === 'clear') void onNewChat()
       else if (cmd.name === 'compact') void onCompact()
+      else if (cmd.name === 'skills') void onListCapability('skills')
+      else if (cmd.name === 'agents') void onListCapability('agents')
       else if (cmd.name === 'help') {
         chat.notify(
           'Commands: ' + BUILTIN_COMMANDS.map((c) => `/${c.name}`).join('  ') +
@@ -1111,7 +1138,7 @@ export default function App(): JSX.Element {
         chat.notify(`Approval mode: ${policy}`)
       }
     },
-    [onNewChat, onCompact, onChangePolicy, chat, commands]
+    [onNewChat, onCompact, onListCapability, onChangePolicy, chat, commands]
   )
 
   // ---- Keyboard shortcuts, command palette, mode cycling ----
