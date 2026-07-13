@@ -18,6 +18,8 @@ import {
   resolveModelArg,
   keyableProviders,
   renderProviderMenu,
+  summarizeModels,
+  otherHostExamples,
   parseProviderMenuChoice,
   renderCatalogMenu,
   parseCatalogChoice,
@@ -1705,6 +1707,44 @@ describe('/login helpers', () => {
     expect(out).toContain('Other host')
   })
 
+  it('summarizeModels caps the preview and collapses the rest to +N more', () => {
+    const paint = makePainter(false)
+    expect(summarizeModels([], paint)).toBe('no models yet')
+    expect(summarizeModels(['a', 'b'], paint)).toBe('a, b') // under the cap: shown in full
+    const many = Array.from({ length: 30 }, (_, i) => `m${i}`)
+    const out = summarizeModels(many, paint, 4)
+    expect(out).toContain('m0, m1, m2, m3')
+    expect(out).toContain('+26 more')
+    expect(out).not.toContain('m10') // the tail is collapsed, not printed
+  })
+
+  it('renderProviderMenu caps a huge model list instead of dumping every id', () => {
+    const providers = keyableProviders(
+      settings({
+        providers: [
+          prov({
+            id: 'openrouter',
+            label: 'OpenRouter',
+            requiresKey: true,
+            hasKey: true,
+            models: Array.from({ length: 300 }, (_, i) => ({ id: `vendor/model-${i}` }))
+          })
+        ]
+      })
+    )
+    const out = renderProviderMenu(providers, makePainter(false), { firstRun: true })
+    expect(out).toContain('more') // e.g. "+296 more"
+    expect(out).not.toContain('vendor/model-299') // the wall of ids is not printed
+  })
+
+  it('otherHostExamples names addable hosts plus the custom-endpoint option', () => {
+    const addable = catalogForPlatform(true).filter((e) => e.id === 'groq' || e.id === 'together')
+    const out = otherHostExamples(addable)
+    expect(out).toContain('Groq')
+    expect(out).toContain('a custom endpoint')
+    expect(out).not.toContain('OpenRouter') // not in the addable list we passed
+  })
+
   it('renderCatalogMenu lists hosts flatly then a Custom endpoint row', () => {
     const out = renderCatalogMenu(catalogForPlatform(true), makePainter(false))
     expect(out).toContain('OpenRouter')
@@ -1828,6 +1868,23 @@ describe('runTui — /login & keyless start', () => {
     // OpenRouter has no models yet, so the active model stays on anthropic.
     expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
     expect(t.text()).toContain('has no models yet')
+  })
+
+  it('the Other-host hint excludes an already-configured host (e.g. OpenRouter as row 2)', async () => {
+    const { d } = wizardDeps([], {
+      selected: { providerId: 'anthropic', model: 'claude' },
+      providers: [
+        prov({ id: 'anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }], defaultModel: 'claude' }),
+        prov({ id: 'openrouter', label: 'OpenRouter', requiresKey: true, hasKey: true, models: [{ id: 'x' }], defaultModel: 'x' })
+      ]
+    })
+    const t = fakeIo(['/login', '', null]) // open /login, cancel at the menu, exit
+    d.io = t.io
+    await runTui(opts, d)
+    const text = t.text()
+    expect(text).toMatch(/2\).*OpenRouter/) // OpenRouter is a numbered provider row
+    const otherLine = text.split('\n').find((l) => l.includes('Other host')) ?? ''
+    expect(otherLine).not.toContain('OpenRouter') // but the hint doesn't re-advertise it
   })
 
   it('/login → Other host → Custom endpoint adds a URL-based provider', async () => {
