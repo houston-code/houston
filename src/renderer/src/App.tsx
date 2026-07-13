@@ -11,7 +11,7 @@ import {
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, PlanDecision, ReasoningEffort, RepoInfo } from '@shared/agent'
-import { mergeCommands, REVIEW_TEMPLATE, type Command } from '@shared/commands'
+import { mergeCommands, builtinCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { resolveCapabilities } from '@shared/usage'
 import { branchNameError, planNewChatWorkspace, suggestBranch } from './lib/worktree'
@@ -99,26 +99,10 @@ const CommandPalette = lazy(() =>
 )
 const FindBar = lazy(() => import('./components/FindBar').then((m) => ({ default: m.FindBar })))
 
-/** Built-in slash commands (custom ones are loaded from the workspace). */
-const BUILTIN_COMMANDS: Command[] = [
-  { name: 'new', description: 'Start a new chat' },
-  { name: 'clear', description: 'Start a new chat (alias for /new)' },
-  { name: 'compact', description: 'Summarize older turns to free up context now' },
-  { name: 'plan', description: 'Plan mode — read-only (research & propose, no edits/commands)' },
-  { name: 'ask', description: 'Approval: ask before every edit and command' },
-  { name: 'auto', description: 'Approval: auto-approve edits, ask for commands' },
-  { name: 'full', description: 'Approval: full auto (sandboxed)' },
-  { name: 'skills', description: 'List the workspace skills (.houston/skills)' },
-  { name: 'agents', description: 'List the workspace agents (.houston/agents)' },
-  { name: 'help', description: 'List the available slash commands' },
-  {
-    name: 'review',
-    description: 'Adversarial review of your uncommitted changes',
-    // Runs immediately on submit (autoRun) rather than expanding into the composer.
-    autoRun: true,
-    template: REVIEW_TEMPLATE
-  }
-]
+/** Built-in slash commands, derived from the shared catalog (custom ones are
+ * loaded from the workspace). Same source the TUI and the agent's product
+ * knowledge draw from, so the three never drift apart. */
+const BUILTIN_COMMANDS: Command[] = builtinCommands('gui')
 
 /** Map a policy-preset command name to its ApprovalPolicy. */
 const POLICY_COMMANDS: Record<string, ApprovalPolicy> = {

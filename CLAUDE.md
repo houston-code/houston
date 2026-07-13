@@ -22,6 +22,22 @@ them from drifting:
 - When you add an `AgentEvent` or a blocking tool, wire the GUI, the TUI, and
   headless in the same change, and add/extend the parity coverage.
 
+## Product self-knowledge
+
+Houston answers questions about its own features (slash commands, skills, hooks,
+MCP, permissions, plan mode, sandboxing, settings, etc.) from `docs/houston-guide.md`.
+That file is the single source of truth: `scripts/gen-guide.mjs` inlines it into
+`src/main/agent/guide-content.ts` (which runs automatically before `build` and
+`build:cli`), and it is served to the agent as the built-in `houston-guide` skill
+(`BUILTIN_SKILLS` in `src/main/agent/skills.ts`, merged in at the run seam in
+`loop.ts`). The system prompt points the agent at that skill.
+
+When you add or change a user-facing feature, update `docs/houston-guide.md` in the
+same change and run `npm run gen:guide`. A test in `src/main/agent/skills.test.ts`
+fails if the doc and the generated constant drift, so a stale guide is caught in CI.
+The built-in slash commands it documents come from `BUILTIN_COMMAND_CATALOG` in
+`src/shared/commands.ts` (the one source both clients derive their menus from).
+
 ## Competitor mentions
 
 Never name competing tools or products in any artifact in this repo — code, comments,

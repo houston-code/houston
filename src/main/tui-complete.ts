@@ -3,6 +3,7 @@
  * mentions. The matching logic is pure (this file); the readline `completer`
  * wiring + the async file lookup live at the edges so this stays unit-testable.
  */
+import { builtinCommands } from '@shared/commands'
 
 /** A built-in slash command, for completion + the (future) command menu. */
 export interface CommandSpec {
@@ -10,25 +11,8 @@ export interface CommandSpec {
   description: string
 }
 
-export const COMMANDS: CommandSpec[] = [
-  { name: 'help', description: 'show help' },
-  { name: 'model', description: 'list or switch model' },
-  { name: 'approval', description: 'show or set approval policy' },
-  { name: 'clear', description: 'start a fresh conversation' },
-  { name: 'new', description: 'start a fresh conversation' },
-  { name: 'resume', description: 'reopen (or search) a saved session' },
-  { name: 'fork', description: 'branch the current session into a copy' },
-  { name: 'cost', description: 'session token + cost totals' },
-  { name: 'skills', description: 'list workspace skills' },
-  { name: 'agents', description: 'list custom agents' },
-  { name: 'mcp', description: 'list configured MCP servers' },
-  { name: 'hooks', description: 'list configured hooks' },
-  { name: 'theme', description: 'list or switch color theme' },
-  { name: 'image', description: 'attach an image to your next message' },
-  { name: 'cwd', description: 'show the working directory' },
-  { name: 'exit', description: 'leave' },
-  { name: 'quit', description: 'leave' }
-]
+/** The TUI's built-in commands, derived from the shared catalog (single source). */
+export const COMMANDS: CommandSpec[] = builtinCommands('tui')
 
 /** The `@<query>` mention token at the end of `line`, or null if not in one. */
 export function mentionQuery(line: string): string | null {

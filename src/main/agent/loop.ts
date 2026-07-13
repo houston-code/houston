@@ -74,7 +74,7 @@ import {
 } from './spawn'
 import { matchingHooks, runHooks } from './hooks'
 import { loadAgents } from './agents'
-import { loadSkills, resolveSkillInstructions } from './skills'
+import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
@@ -549,7 +549,9 @@ export async function startRun(
     // gates tool calls live — only the prose the model already saw is fixed.
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
-    const skills = await loadSkills(workspace)
+    // Merge Houston's built-in skills (e.g. houston-guide) with the workspace's
+    // own for the agent runtime; `/skills` still lists only the workspace's.
+    const skills = withBuiltinSkills(await loadSkills(workspace))
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
     // boundary, so they are NEVER auto-run for an opened repo — only when the user
