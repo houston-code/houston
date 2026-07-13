@@ -180,6 +180,66 @@ describe('StallDetector — no progress', () => {
   })
 })
 
+describe('StallDetector — interactive no-progress', () => {
+  const read = (p: string): { calls: ToolCall[]; errors: string[]; mutated: boolean } => ({
+    calls: [call('read_file', { path: p })],
+    errors: [],
+    mutated: false
+  })
+
+  it('nudges once but never hard-stops read-only work when a user is watching', () => {
+    const d = new StallDetector(thresholds({ noProgressLimit: 3, repeatCallLimit: 99 }), {
+      interactive: true
+    })
+    expect(d.observe(read('a')).kind).toBe('ok') // 1
+    expect(d.observe(read('b')).kind).toBe('ok') // 2
+    expect(d.observe(read('c')).kind).toBe('nudge') // 3 → single corrective nudge
+    // Past the nudge, more read-only turns must NOT stop the run — the user is
+    // present and this is legitimate investigation. It stays quiet indefinitely.
+    for (let i = 0; i < 12; i++) {
+      expect(d.observe(read(`x${i}`)).kind).toBe('ok')
+    }
+  })
+
+  it('still stops on the stronger repeated-call stall even when interactive', () => {
+    const d = new StallDetector(thresholds({ repeatCallLimit: 3 }), { interactive: true })
+    const same = { calls: [call('read_file', { path: 'a' })], errors: [], mutated: false }
+    expect(d.observe(same).kind).toBe('ok') // 1
+    expect(d.observe(same).kind).toBe('ok') // 2
+    expect(d.observe(same).kind).toBe('nudge') // 3 → nudge
+    expect(d.observe(same).kind).toBe('ok') // reset window
+    expect(d.observe(same).kind).toBe('ok')
+    expect(d.observe(same).kind).toBe('stop') // repeats past the nudge → stop
+  })
+
+  it('still stops on the stronger repeated-error stall even when interactive', () => {
+    const d = new StallDetector(thresholds({ repeatErrorLimit: 3, repeatCallLimit: 99 }), {
+      interactive: true
+    })
+    const fail = (i: number): { calls: ToolCall[]; errors: string[]; mutated: boolean } => ({
+      calls: [call('run_shell', { cmd: `try-${i}` })], // vary calls so only the error repeats
+      errors: ['Error: ENOENT no such file'],
+      mutated: false
+    })
+    expect(d.observe(fail(0)).kind).toBe('ok')
+    expect(d.observe(fail(1)).kind).toBe('ok')
+    expect(d.observe(fail(2)).kind).toBe('nudge')
+    expect(d.observe(fail(3)).kind).toBe('ok')
+    expect(d.observe(fail(4)).kind).toBe('ok')
+    expect(d.observe(fail(5)).kind).toBe('stop')
+  })
+
+  it('keeps the no-progress stop for headless runs (interactive not set)', () => {
+    const d = new StallDetector(thresholds({ noProgressLimit: 3, repeatCallLimit: 99 }))
+    expect(d.observe(read('a')).kind).toBe('ok')
+    expect(d.observe(read('b')).kind).toBe('ok')
+    expect(d.observe(read('c')).kind).toBe('nudge')
+    expect(d.observe(read('d')).kind).toBe('ok')
+    expect(d.observe(read('e')).kind).toBe('ok')
+    expect(d.observe(read('f')).kind).toBe('stop') // headless still stops
+  })
+})
+
 describe('StallDetector — healthy runs', () => {
   it('never fires when the model makes varied, mutating progress', () => {
     const d = new StallDetector()

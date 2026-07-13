@@ -968,7 +968,10 @@ export async function startRun(
         repeatCallLimit: settings.stallRepeatCallLimit,
         repeatErrorLimit: settings.stallRepeatErrorLimit,
         noProgressLimit: settings.stallNoProgressLimit
-      })
+      }),
+      // A user is watching TUI/GUI runs, so the weak no-progress stall nudges but
+      // never hard-stops there; headless runs keep it as a budget guard.
+      { interactive: req.interactive === true }
     )
 
     // End-of-run verification gate (opt-in). Tracks whether this run modified any
