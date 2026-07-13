@@ -364,7 +364,7 @@ export function renderCapabilityList(label: string, items: CapabilityItem[], pai
   if (!items.length) return paint(`No ${label.toLowerCase()} active in this folder.`, 'dim')
   const lines = [paint(`${label}:`, 'bold')]
   for (const it of items) {
-    const detail = it.detail ? paint(` — ${truncate(it.detail, 70)}`, 'dim') : ''
+    const detail = it.detail ? paint(` (${truncate(it.detail, 70)})`, 'dim') : ''
     lines.push(`  ${paint(it.name, 'cyan')}${detail}`)
   }
   return lines.join('\n')
@@ -390,7 +390,7 @@ export function renderQuestion(
 ): string {
   const lines = [`\n${paint('? ', 'magenta')}${paint(question, 'bold')}`]
   options.forEach((o, i) => {
-    const desc = o.description ? paint(`  — ${o.description}`, 'dim') : ''
+    const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
     lines.push(`  ${paint(String(i + 1), 'cyan')}. ${o.label}${desc}`)
   })
   const hint = multiSelect
@@ -763,7 +763,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   })
 
   deps.io.out(
-    `${paint('Houston', 'bold', 'cyan')} — interactive\n` +
+    `${paint('Houston', 'bold', 'cyan')} (interactive)\n` +
       `${paint(`  cwd:      ${opts.cwd}`, 'dim')}\n` +
       `${paint(`  model:    ${providerId} / ${model}`, 'dim')}\n` +
       `${paint(`  approval: ${policy}`, 'dim')}\n` +
@@ -838,12 +838,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         conversationId = id
         messages = conv.messages
-        deps.io.out(paint(`· resumed — ${messages.length} message(s)\n`, 'dim'))
+        deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
         continue
       }
       if (result.kind === 'fork') {
         if (!deps.persist || !conversationId) {
-          deps.io.out(paint('· nothing to fork yet — start a conversation first\n', 'dim'))
+          deps.io.out(paint('· nothing to fork yet; start a conversation first\n', 'dim'))
           continue
         }
         const forked = deps.persist.fork(conversationId)
@@ -852,7 +852,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         conversationId = forked.id
-        deps.io.out(paint('· forked — continuing on a copy, original left intact\n', 'dim'))
+        deps.io.out(paint('· forked: continuing on a copy, original left intact\n', 'dim'))
         continue
       }
       if (result.kind === 'capability') {
