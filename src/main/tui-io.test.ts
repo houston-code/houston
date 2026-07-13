@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
+import { EventEmitter } from 'node:events'
 import { resolveColor, createTerminalIo, type ReadlineLike } from './tui-io'
 
 describe('resolveColor', () => {
@@ -122,6 +123,46 @@ describe('createTerminalIo lifecycle', () => {
     expect(f.calls).toContain('question')
     f.submit('sk-secret')
     await expect(p).resolves.toBe('sk-secret')
+  })
+
+  it('readSecret masks input and suppresses readline echo (raw TTY)', async () => {
+    // Reproduces the leak where readline software-echoes each typed char next to our
+    // mask (b•2•4•…). Stub a fake TTY for process.stdin so the raw-mode path runs.
+    const realStdin = process.stdin
+    const fake = new EventEmitter() as unknown as NodeJS.ReadStream
+    Object.assign(fake, { isTTY: true, setRawMode: () => {}, resume: () => {}, pause: () => {} })
+    // A pre-existing readline-style keypress listener that would echo the raw char.
+    const echoed: string[] = []
+    const readlineEcho = (s: string): void => {
+      if (s) echoed.push(s)
+    }
+    fake.on('keypress', readlineEcho)
+    Object.defineProperty(process, 'stdin', { value: fake, configurable: true })
+    try {
+      const writes: string[] = []
+      const f = fakeRl()
+      const io = createTerminalIo({
+        createInterface: () => f.rl,
+        write: (s) => writes.push(s),
+        drainInput: () => {}
+      })
+      const p = io.readSecret!('key › ')
+      // readline's echo listener is detached; only readSecret's own handler remains.
+      expect(fake.listenerCount('keypress')).toBe(1)
+      fake.emit('keypress', 'x', { name: 'x' })
+      fake.emit('keypress', '9', { name: '9' })
+      fake.emit('keypress', '', { name: 'return' })
+      await expect(p).resolves.toBe('x9')
+      const out = writes.join('')
+      expect(out).toContain('••') // masked, one bullet per char
+      expect(out).not.toContain('x') // the real characters never hit the screen
+      expect(out).not.toContain('9')
+      expect(echoed).toEqual([]) // readline never got to echo them
+      // readline's listener is restored so the next read still works.
+      expect(fake.listeners('keypress')).toContain(readlineEcho)
+    } finally {
+      Object.defineProperty(process, 'stdin', { value: realStdin, configurable: true })
+    }
   })
 
   it('readSecret resolves null on close instead of hanging', async () => {
