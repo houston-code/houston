@@ -75,6 +75,8 @@ export interface SpawnDeps {
       model: string
       approvalPolicy: ApprovalPolicy
       messages: ChatMessage[]
+      /** False for autonomous background runs (keeps the no-progress stall's hard stop). */
+      interactive?: boolean
     }
   ): void
 }
@@ -151,7 +153,11 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           providerId: input.providerId,
           model: input.model,
           approvalPolicy: input.approvalPolicy,
-          messages: [userMessage]
+          messages: [userMessage],
+          // Autonomous background run — no human is steering it, so keep the
+          // no-progress stall's hard stop as a budget guard (see stall.ts). Runs
+          // through runAndDrain, which would otherwise default this to interactive.
+          interactive: false
         })
 
         return {
