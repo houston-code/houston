@@ -71,6 +71,16 @@ export interface ChatMessage {
 export const COMPACTION_SUMMARY_PREFIX =
   'Summary of the earlier conversation (older messages were compacted to save context):'
 
+/**
+ * Prefix on an automated guidance turn the loop injects on the model's behalf (a
+ * stall nudge, the budget "landing" reminder). It has to ride on a `user` message
+ * because providers drop a mid-conversation `system` role (Anthropic passes system
+ * out-of-band), but the prefix makes clear to the model that it's an automated
+ * system note, not something the user typed — and lets the renderer show it as a
+ * system notice rather than a user bubble (and skip it as the "last user message").
+ */
+export const SYSTEM_NOTE_PREFIX = 'Automated note from Houston (not from the user):'
+
 export interface ToolSchema {
   name: string
   description: string

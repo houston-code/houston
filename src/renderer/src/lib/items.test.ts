@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { COMPACTION_SUMMARY_PREFIX, type AgentEvent, type ChatMessage } from '@shared/agent'
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  SYSTEM_NOTE_PREFIX,
+  type AgentEvent,
+  type ChatMessage
+} from '@shared/agent'
 import {
   itemsFromMessages,
   lastUserText,
@@ -30,6 +35,23 @@ describe('itemsFromMessages', () => {
     const items = itemsFromMessages(messages)
     const user = items.find((i): i is UserItem => i.kind === 'user')
     expect(user?.isSummary).toBeUndefined()
+  })
+
+  it('renders an injected system note as an info notice, not a user bubble', () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'add a file menu' },
+      { role: 'user', content: `${SYSTEM_NOTE_PREFIX} You have gone several turns without a change.` },
+      { role: 'assistant', content: 'ok' }
+    ]
+    const items = itemsFromMessages(messages)
+    // Exactly one user bubble (the real turn); the note is a notice with the prefix stripped.
+    expect(items.filter((i) => i.kind === 'user')).toHaveLength(1)
+    const notice = items.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(notice?.tone).toBe('info')
+    expect(notice?.text).toBe('You have gone several turns without a change.')
+    expect(notice?.text).not.toContain(SYSTEM_NOTE_PREFIX)
+    // The note must not become the "last user message" (Esc-Esc recall, etc.).
+    expect(lastUserText(items)).toBe('add a file menu')
   })
 
   it('rebuilds an answered ask_user call as a question card', () => {
