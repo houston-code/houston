@@ -149,6 +149,10 @@ export function conversationToHtml(conv: Conversation): string {
     '<html lang="en">',
     '<head>',
     '<meta charset="utf-8">',
+    // Defense-in-depth: the document is fully escaped and self-contained, but a CSP
+    // makes that structural — no scripts, no network, only the inline stylesheet —
+    // so a future templating regression can't turn the export into an active page.
+    `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'">`,
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     `<title>${escapeHtml(title)}</title>`,
     `<style>${STYLES}</style>`,
