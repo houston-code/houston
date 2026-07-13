@@ -141,7 +141,10 @@ export function resolveEdit(
   replaceAll = false
 ): EditResult {
   if (oldString === '') throw new Error('old_string must not be empty.')
-  if (oldString === newString) throw new Error('old_string and new_string are identical.')
+  if (oldString === newString)
+    throw new Error(
+      'old_string and new_string are identical, so the edit would make no change. Make the replacement text differ from the original.'
+    )
 
   const hasBom = content.charCodeAt(0) === 0xfeff
   const raw = hasBom ? content.slice(1) : content

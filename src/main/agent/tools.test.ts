@@ -482,11 +482,11 @@ describe('apply_patch', () => {
     expect(await run('read_file', { path: 'k.ts' })).toBe('value')
   })
 
-  it('refuses to add over an existing file', async () => {
+  it('refuses to add over an existing file and points to Update File', async () => {
     await run('write_file', { path: 'there.ts', content: 'x' })
     await expect(
       run('apply_patch', { patch: patch('*** Add File: there.ts', '+y') })
-    ).rejects.toThrow(/already exists/)
+    ).rejects.toThrow(/already exists.*Update File/s)
   })
 
   it('applies a hunk whose context drifted by whitespace (resilient match)', async () => {
