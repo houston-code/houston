@@ -1045,7 +1045,32 @@ describe('runTui', () => {
     expect(t.text()).toContain('No model configured')
   })
 
-  it('previews the diff of a write before its approval prompt', async () => {
+  it('previews the diff of a write from the approval event args (real event order)', async () => {
+    // The loop emits tool_approval (carrying args) and blocks; tool_start comes only
+    // AFTER the decision. So the diff must come from e.args, not a prior tool_start —
+    // otherwise the user approves the edit blind.
+    const { d } = deps([
+      {
+        runId: 'x',
+        type: 'tool_approval',
+        callId: 'c1',
+        name: 'edit_file',
+        summary: 'edit a.ts',
+        kind: 'write',
+        args: { path: 'a.ts', old_string: 'foo', new_string: 'bar' }
+      },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['edit it', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('-foo')
+    expect(out).toContain('+bar')
+  })
+
+  it('falls back to tool_start args for the diff when the approval event omits them', async () => {
+    // Defensive path: an event without args still shows a diff if tool_start was seen.
     const { d } = deps([
       {
         runId: 'x',
@@ -1060,9 +1085,8 @@ describe('runTui', () => {
     const t = fakeIo(['edit it', 'y', null])
     d.io = t.io
     await runTui(opts, d)
-    const out = t.text()
-    expect(out).toContain('-foo')
-    expect(out).toContain('+bar')
+    expect(t.text()).toContain('-foo')
+    expect(t.text()).toContain('+bar')
   })
 
   it('accumulates session cost across turns and prints it on /cost', async () => {

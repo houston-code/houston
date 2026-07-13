@@ -1718,7 +1718,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
             deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
             if (e.kind === 'write') {
-              const diff = extractDiff(toolArgs.get(e.callId) ?? {})
+              // The approval event carries the tool args (`tool_start` is emitted only
+              // AFTER approval resolves, so `toolArgs` is still empty here for a write).
+              // Prefer them so the user sees the edit before approving it; fall back to
+              // toolArgs for any (older/test) event that omits args.
+              const diff = extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
               if (diff) deps.io.out(`${colorizeDiff(diff, paint)}\n`)
             }
             let decision: 'allow' | 'deny' | 'always' | null = null
