@@ -132,7 +132,7 @@ export function renderPicker(s: PickerState, paint: Painter): string[] {
     const pointer = i === s.cursor ? paint('›', 'cyan') : ' '
     const box = s.spec.multiSelect ? (s.checked.has(i) ? '[x] ' : '[ ] ') : ''
     const label = i === s.cursor ? paint(o.label, 'cyan') : o.label
-    const desc = o.description ? paint(`  — ${o.description}`, 'dim') : ''
+    const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
     lines.push(`${pointer} ${box}${label}${desc}`)
   })
   const hint = s.spec.multiSelect
