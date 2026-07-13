@@ -1,24 +1,26 @@
 import type { ToolCall } from '@shared/agent'
-import type { ToolKind } from './tools'
 
 /**
  * Stall / loop detection for the agent turn loop.
  *
- * A model that has lost the plot tends to fail in a few recognizable ways:
+ * A model that has lost the plot tends to fail in two recognizable ways:
  *  - it re-issues the *same* tool call with the *same* arguments over and over
  *    (re-reading a file it already read, re-running a command whose output it
  *    already has), never using the result;
  *  - it hits the *same* error repeatedly (a bad path, a failing command) and
- *    keeps retrying it verbatim instead of changing approach;
- *  - it "spins" — several iterations of read-only tool calls with no edit or
- *    command that actually changes the workspace, making no forward progress.
+ *    keeps retrying it verbatim instead of changing approach.
  *
- * None of these is fatal on its own, but left unchecked they burn the whole
- * iteration/cost budget without landing a change. The detector watches the
- * per-iteration tool pattern and, when a threshold is crossed, asks the loop to
- * inject ONE corrective nudge (a real user-style message the model sees next
- * turn). If the same pattern persists after the nudge, it escalates to a stop
- * so the run ends cleanly instead of looping forever.
+ * Neither is fatal on its own, but left unchecked they burn the whole iteration
+ * budget without landing a change. The detector watches the per-iteration tool
+ * pattern and, when a threshold is crossed, asks the loop to inject ONE corrective
+ * nudge (a real user-style message the model sees next turn). If the same pattern
+ * persists after the nudge, it escalates to a stop so the run ends cleanly instead
+ * of looping forever.
+ *
+ * (A third, weaker "no forward progress" heuristic — several read-only turns with
+ * no file mutation — was removed: it fired on legitimate investigation, planning,
+ * review, and Q&A, and the real budget/loop guards are `maxIterations`, the two
+ * stalls below, and the optional cost ceiling.)
  *
  * This module is intentionally pure and side-effect free: the loop feeds it the
  * calls/errors of each iteration and acts on the returned decision. That keeps
@@ -31,15 +33,12 @@ export interface StallThresholds {
   repeatCallLimit: number
   /** Same error signature seen at least this many times → stall. */
   repeatErrorLimit: number
-  /** This many consecutive iterations with no workspace-mutating call → stall. */
-  noProgressLimit: number
 }
 
 /** Sensible defaults — conservative enough not to fire on normal exploration. */
 export const DEFAULT_STALL_THRESHOLDS: StallThresholds = {
   repeatCallLimit: 3,
-  repeatErrorLimit: 3,
-  noProgressLimit: 6
+  repeatErrorLimit: 3
 }
 
 /**
@@ -54,20 +53,9 @@ export function resolveStallThresholds(
     typeof v === 'number' && Number.isFinite(v) && v >= 2 ? Math.floor(v) : dflt
   return {
     repeatCallLimit: pick(override?.repeatCallLimit, DEFAULT_STALL_THRESHOLDS.repeatCallLimit),
-    repeatErrorLimit: pick(override?.repeatErrorLimit, DEFAULT_STALL_THRESHOLDS.repeatErrorLimit),
-    noProgressLimit: pick(override?.noProgressLimit, DEFAULT_STALL_THRESHOLDS.noProgressLimit)
+    repeatErrorLimit: pick(override?.repeatErrorLimit, DEFAULT_STALL_THRESHOLDS.repeatErrorLimit)
   }
 }
-
-/**
- * Tool kinds that actually change the workspace. A run consisting only of reads
- * (or of `ask_user`, `find_tools`, etc.) is making no forward progress on the
- * task, which is what `noProgressLimit` watches for. `network`/`mcp` are treated
- * as non-mutating for progress purposes: they may have side effects, but they're
- * not edits to the tree, and counting an opaque MCP call as "progress" would let
- * a model spin on a read-only MCP query forever.
- */
-const MUTATING_KINDS: ReadonlySet<ToolKind> = new Set<ToolKind>(['write', 'shell'])
 
 /**
  * A stable, order-independent signature for a tool call: its name plus a
@@ -120,8 +108,6 @@ export interface IterationObservation {
    * pass the tool output verbatim — no need to signature it at the push site.
    */
   errors: string[]
-  /** Did any call this iteration invoke a workspace-mutating (write/shell) tool? */
-  mutated: boolean
 }
 
 /** What the loop should do after an iteration. */
@@ -133,30 +119,6 @@ export type StallAction =
   /** The stall persisted past the nudge — end the run with a 'stalled' limit. */
   | { kind: 'stop'; reason: string }
 
-/** Options controlling how aggressively the detector may end a run. */
-export interface StallOptions {
-  /**
-   * True when a human is watching the run (the TUI or GUI). The no-progress
-   * stall — several turns of read-only work with no file change — is a weak
-   * signal that legitimately fires on investigation, planning, code review, and
-   * plain Q&A. When a user is present to react, we nudge once but never hard-stop
-   * on it, so a long read-only investigation isn't killed out from under them.
-   * The stronger repeated-call / repeated-error stalls (a genuinely stuck model)
-   * still stop, and headless/autonomous runs keep the no-progress stop as a
-   * budget guard. Defaults to false (headless behavior) so callers opt in.
-   */
-  interactive?: boolean
-  /**
-   * Whether the run's policy even permits workspace-mutating tool calls. In Plan
-   * mode writes/shell are blocked outright, so a mutation can never succeed and
-   * "no forward progress" is the *defined* behavior, not a stall — the whole
-   * point of the mode is to research and propose without touching files. When
-   * false, the no-progress rule is disabled entirely (it can neither nudge nor
-   * stop); the repeated-call / repeated-error rules still apply. Defaults to true.
-   */
-  mutationsAllowed?: boolean
-}
-
 /**
  * Stateful, per-run stall detector. Construct one per `startRun`, call
  * {@link StallDetector.observe} once per iteration with that iteration's calls +
@@ -165,14 +127,10 @@ export interface StallOptions {
  */
 export class StallDetector {
   private readonly thresholds: StallThresholds
-  private readonly interactive: boolean
-  private readonly mutationsAllowed: boolean
   /** Count of consecutive iterations ending with a given repeated call signature. */
   private repeatCall: { sig: string; count: number } | null = null
   /** Count of consecutive iterations ending with a given repeated error signature. */
   private repeatError: { sig: string; count: number } | null = null
-  /** Consecutive iterations with no workspace-mutating call. */
-  private noProgress = 0
   /**
    * True once we've injected the corrective nudge and are giving the model one
    * chance to change course. If the very next stall trips, we escalate to stop
@@ -181,29 +139,20 @@ export class StallDetector {
    */
   private nudged = false
 
-  constructor(thresholds: StallThresholds = DEFAULT_STALL_THRESHOLDS, opts: StallOptions = {}) {
+  constructor(thresholds: StallThresholds = DEFAULT_STALL_THRESHOLDS) {
     this.thresholds = thresholds
-    this.interactive = opts.interactive === true
-    this.mutationsAllowed = opts.mutationsAllowed !== false
   }
 
   observe(obs: IterationObservation): StallAction {
     const repeatedCallSig = this.trackRepeatedCall(obs.calls)
     const repeatedErrorSig = this.trackRepeatedError(obs.errors)
-    this.noProgress = obs.mutated ? 0 : this.noProgress + 1
 
     const trigger = this.pickTrigger(repeatedCallSig, repeatedErrorSig)
     if (!trigger) return { kind: 'ok' }
 
     if (this.nudged) {
-      // Already gave a nudge and the model kept stalling. Escalate to stop only
-      // for stalls that may end the run; a no-progress stall in an interactive
-      // session can't (see `canStop`) — a human is watching, so we stay quiet
-      // rather than kill their read-only investigation. Reset so we don't
-      // re-evaluate the same tally every iteration and re-enter this branch.
-      if (trigger.canStop) return { kind: 'stop', reason: trigger.reason }
-      this.reset()
-      return { kind: 'ok' }
+      // Already gave a nudge and the model kept stalling — end the run cleanly.
+      return { kind: 'stop', reason: trigger.reason }
     }
     // First offense: inject one corrective reminder and reset the counters so we
     // don't immediately re-trip on the same tally next iteration; give the model
@@ -271,20 +220,17 @@ export class StallDetector {
 
   /**
    * Choose which stall (if any) tripped, and build the matching human message.
-   * Repeated-call and repeated-error stalls are more specific (they name the
-   * offending call/error), so they win over the generic no-progress stall. Each
-   * trigger reports whether it may end the run (`canStop`): the two specific
-   * stalls always can, while the weak no-progress stall may only stop a
-   * non-interactive run (see {@link StallOptions.interactive}).
+   * The repeated-call stall wins over repeated-error when both trip in the same
+   * iteration (it names the offending call directly). Either one may end the run
+   * once it persists past the nudge.
    */
   private pickTrigger(
     repeatedCallSig: string | null,
     repeatedErrorSig: string | null
-  ): { message: string; reason: string; canStop: boolean } | null {
+  ): { message: string; reason: string } | null {
     if (repeatedCallSig) {
       return {
         reason: 'repeated the same tool call',
-        canStop: true,
         message:
           'You appear to be repeating the same tool call with the same arguments, and you ' +
           'already have that result. Do not run it again — use the result you already have and ' +
@@ -295,26 +241,11 @@ export class StallDetector {
     if (repeatedErrorSig) {
       return {
         reason: 'repeated the same failing action',
-        canStop: true,
         message:
           `You keep hitting the same error ("${repeatedErrorSig}") from the same action. ` +
           'Retrying it unchanged will not help. Change your approach and fix the underlying ' +
           'cause. If you cannot get past it, stop and explain what is blocking you rather than ' +
           'retrying.'
-      }
-    }
-    if (this.mutationsAllowed && this.noProgress >= this.thresholds.noProgressLimit) {
-      return {
-        reason: 'made no progress for several turns',
-        // A weak signal — read-only investigation/planning legitimately trips it.
-        // Interactively it nudges only; headless it may stop as a budget guard.
-        // (Skipped entirely when the policy forbids mutations — see mutationsAllowed.)
-        canStop: !this.interactive,
-        message:
-          'You have gone several turns without making any change to the project (no edits or ' +
-          'commands that alter files). If you have enough information, make the change now. If ' +
-          'you are stuck, change your approach; if that is not possible, stop and summarize your ' +
-          'findings and what is blocking you.'
       }
     }
     return null
@@ -324,11 +255,5 @@ export class StallDetector {
   private reset(): void {
     this.repeatCall = null
     this.repeatError = null
-    this.noProgress = 0
   }
-}
-
-/** Whether a tool kind counts as a workspace-mutating action (edit/command). */
-export function isMutatingKind(kind: ToolKind | undefined): boolean {
-  return kind !== undefined && MUTATING_KINDS.has(kind)
 }

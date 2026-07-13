@@ -1721,8 +1721,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       providerId,
       model,
       approvalPolicy: policy,
-      messages,
-      interactive: true
+      messages
     }
     // Serialize interactive prompts (approvals/questions) so two readLine calls
     // never overlap on the single input stream.
