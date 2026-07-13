@@ -33,21 +33,23 @@ export function resolveTarget(input, home) {
 
 /**
  * Decide which directory the `houston` symlink goes in. An explicit override
- * wins; otherwise pick the first of the well-known user/system bin dirs,
- * favouring one that is already on PATH so the command works without a shell
- * edit. Pure — takes the environment as input so it's unit-testable.
+ * wins; otherwise default to ~/.local/bin, the conventional per-user bin dir.
+ *
+ * This is deterministic on purpose. The earlier heuristic picked the first of
+ * several candidates that happened to be on PATH, so it chose different dirs
+ * depending on the exact PATH the installer inherited — a login shell and an
+ * `npm run` child can expose different PATHs, so the same machine could resolve
+ * to ~/.local/bin one time and ~/bin the next. That surprised users and didn't
+ * match the documented default. We still report whether the dir is on PATH so
+ * the caller can print the add-to-PATH hint. Pure — takes the environment as
+ * input so it's unit-testable.
  *
  * @returns {{ dir: string, onPath: boolean }}
  */
 export function chooseBinDir({ home, pathValue = '', override } = {}) {
   const entries = pathValue.split(delimiter).filter(Boolean)
-  if (override) {
-    const dir = resolveTarget(override, home)
-    return { dir, onPath: entries.includes(dir) }
-  }
-  const candidates = [join(home, '.local', 'bin'), join(home, 'bin'), '/usr/local/bin']
-  const preferred = candidates.find((d) => entries.includes(d))
-  return { dir: preferred ?? candidates[0], onPath: Boolean(preferred) }
+  const dir = override ? resolveTarget(override, home) : join(home, '.local', 'bin')
+  return { dir, onPath: entries.includes(dir) }
 }
 
 /** The shell line that puts `dir` on PATH, for the "not on PATH yet" hint. */
@@ -113,11 +115,11 @@ function main(argv) {
 
   console.log(`Linked ${link} -> ${CLI_ARTIFACT}`)
   if (onPath) {
-    console.log(`\nRun it:  ${LINK_NAME} -i`)
+    console.log(`\nRun it:  ${LINK_NAME}`)
   } else {
     console.log(
       `\n${dir} isn't on your PATH yet. Add it (then restart your shell):\n` +
-        `  ${pathHint(dir)}\n\nThen:  ${LINK_NAME} -i`
+        `  ${pathHint(dir)}\n\nThen:  ${LINK_NAME}`
     )
   }
 }
