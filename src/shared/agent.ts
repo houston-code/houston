@@ -134,6 +134,15 @@ export interface ChatRequest {
   reasoningSummary?: ReasoningSummary
   /** Response verbosity (OpenAI Responses). */
   verbosity?: Verbosity
+  /**
+   * Send Anthropic-style `cache_control` breakpoints on an OpenAI-compatible
+   * request, opting an explicit-caching upstream (Claude/Qwen/Gemini routed via
+   * an aggregator host) into prompt caching. Set only when the route is gated as
+   * cache-capable (see `providers/caching.ts`); plain OpenAI-compatible servers
+   * must never receive the nonstandard field. Ignored by the other adapters
+   * (native Anthropic always sends its own breakpoints).
+   */
+  explicitCacheControl?: boolean
   signal?: AbortSignal
 }
 

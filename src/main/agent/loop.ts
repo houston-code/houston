@@ -22,6 +22,7 @@ import { turnCostUsd } from '@shared/usage'
 import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
 import { createSecretRedactor } from './redact'
 import { createProvider } from '../providers'
+import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig } from './projectConfig'
@@ -521,6 +522,11 @@ export async function startRun(
     // name-heuristics don't know. Undefined when the model carries no metadata.
     const selectedModelCaps = providerConfig.models.find((m) => m.id === req.model)?.caps
     const reasoningCapable = selectedModelCaps?.reasoning
+    // Opt explicit-caching routes (Claude/Qwen/Gemini via an aggregator host) into
+    // prompt caching on the iterative loops. One-shot calls (title, compaction)
+    // stay opted out: a cache write is a surcharge that only pays off when the
+    // next turn reads it back.
+    const explicitCacheControl = needsExplicitCacheControl(req.model, selectedModelCaps)
 
     let provider
     try {
@@ -768,6 +774,7 @@ export async function startRun(
           signal: abort.signal,
           systemOverride: agent?.systemPrompt,
           tools: agent?.tools,
+          explicitCacheControl,
           onUsage: (u) => {
             subInput += u.inputTokens ?? 0
             subOutput += u.outputTokens ?? 0
@@ -822,6 +829,7 @@ export async function startRun(
           shellOutputMaxBytes: resolveShellOutputBudget(settings),
           systemOverride: agent?.systemPrompt,
           tools: agent?.tools,
+          explicitCacheControl,
           onUsage: (u) => {
             subInput += u.inputTokens ?? 0
             subOutput += u.outputTokens ?? 0
@@ -861,6 +869,7 @@ export async function startRun(
           base,
           paths,
           effort,
+          explicitCacheControl,
           onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
           onSubAgent: (ev) =>
             emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
@@ -1210,6 +1219,7 @@ export async function startRun(
             reasoningCapable,
             reasoningSummary,
             verbosity,
+            explicitCacheControl,
             signal: abort.signal
           })) {
             if (ev.type === 'text') {

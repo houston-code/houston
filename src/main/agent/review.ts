@@ -330,6 +330,8 @@ export interface RunReviewOptions {
   onSubAgent?: (ev: ReviewSubAgentEvent) => void
   /** Called with each nested subagent turn's token usage, so the caller can meter review cost. */
   onUsage?: (usage: TokenUsage) => void
+  /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
+  explicitCacheControl?: boolean
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
 }
@@ -356,6 +358,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     modelCalls++
     return baseRunAgent({
       ...o,
+      ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
       onUsage: (u) => {
         inputTokens += u.inputTokens ?? 0
         outputTokens += u.outputTokens ?? 0
@@ -509,6 +512,8 @@ export interface ReviewWorkspaceOptions {
   onSubAgent?: (ev: ReviewSubAgentEvent) => void
   /** Called with each nested subagent turn's token usage, so the caller can meter review cost. */
   onUsage?: (usage: TokenUsage) => void
+  /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
+  explicitCacheControl?: boolean
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -550,6 +555,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     onProgress: opts.onProgress,
     onSubAgent: opts.onSubAgent,
     onUsage: opts.onUsage,
+    explicitCacheControl: opts.explicitCacheControl,
     signal: opts.signal,
     runAgent: opts.runAgent
   })

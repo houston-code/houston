@@ -110,6 +110,13 @@ export interface SubAgentOptions {
   shellOutputMaxBytes?: number
   /** Called with each turn's token usage, so callers (e.g. a review) can total cost. */
   onUsage?: (usage: TokenUsage) => void
+  /**
+   * Send `cache_control` breakpoints on OpenAI-compatible requests (see
+   * `ChatRequest.explicitCacheControl`). The caller gates this per route; a
+   * subagent loop re-reads its prefix every iteration, so it benefits the same
+   * way the main loop does.
+   */
+  explicitCacheControl?: boolean
 }
 
 /** Run a subagent loop to completion and return its final report text. */
@@ -156,6 +163,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         messages,
         tools,
         maxTokens: SUBAGENT_MAX_TOKENS,
+        ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
         signal
       })) {
         if (ev.type === 'text') text += ev.text

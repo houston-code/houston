@@ -62,6 +62,41 @@ function mapFinishReason(reason: string | null | undefined, hadToolCalls: boolea
   return 'end_turn'
 }
 
+const EPHEMERAL = { type: 'ephemeral' as const }
+
+/**
+ * Add Anthropic-style prompt-cache breakpoints to a built Chat Completions
+ * request: one on the system message (covers the static tools+system prefix)
+ * and one on the last user/tool message (the moving edge, so each turn of the
+ * loop reuses everything before it). Mirrors `markMessagesCacheBreakpoint` in
+ * anthropic.ts; aggregator hosts translate the parts through to the upstream.
+ *
+ * Only called for routes gated by `needsExplicitCacheControl` — the fields are
+ * nonstandard, so plain OpenAI-compatible servers must never see them. Mutates
+ * in place; the message array is freshly built per request. Exported for testing.
+ */
+export function markOpenAICacheBreakpoints(messages: OpenAIMessage[]): void {
+  const system = messages.find((m) => m.role === 'system')
+  if (system && typeof system.content === 'string') {
+    ;(system as { content: unknown }).content = [
+      { type: 'text', text: system.content, cache_control: EPHEMERAL }
+    ]
+  }
+  // The loop's last message is always user or tool (the model replies to it);
+  // anything else means an unusual caller, where skipping the moving breakpoint
+  // is safe — the system breakpoint above still caches the static prefix.
+  const last = messages[messages.length - 1]
+  if (!last || (last.role !== 'user' && last.role !== 'tool')) return
+  if (typeof last.content === 'string') {
+    ;(last as { content: unknown }).content = [
+      { type: 'text', text: last.content, cache_control: EPHEMERAL }
+    ]
+  } else if (Array.isArray(last.content) && last.content.length > 0) {
+    ;(last.content[last.content.length - 1] as { cache_control?: typeof EPHEMERAL }).cache_control =
+      EPHEMERAL
+  }
+}
+
 /**
  * Adapter for OpenAI and any OpenAI-compatible endpoint (Ollama, LM Studio,
  * vLLM, OpenRouter, etc.). Local endpoints often don't need a key — callers pass
@@ -98,10 +133,15 @@ export function createOpenAIProvider(
       // heuristic, covering host-routed reasoning models the regex doesn't know.
       const reasoningEffort = openaiReasoningEffort(req.model, req.reasoningEffort, req.reasoningCapable)
 
+      const messages = toOpenAIMessages(req.system, req.messages)
+      // Explicit-caching upstreams (Claude/Qwen/Gemini via an aggregator) only
+      // cache when breakpoints are present; the caller gates this per route.
+      if (req.explicitCacheControl) markOpenAICacheBreakpoints(messages)
+
       const stream = await client.chat.completions.create(
         {
           model: req.model,
-          messages: toOpenAIMessages(req.system, req.messages),
+          messages,
           stream: true,
           // Ask for a final usage-only chunk. Most OpenAI-compatible servers honour
           // this; those that don't simply never send it, which we handle gracefully.
