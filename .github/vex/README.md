@@ -16,6 +16,14 @@ assessed and accepted. Everything else still blocks a release.
 The document is also attached to each GitHub Release and cosign-signed alongside the SBOMs,
 so downstream consumers get your risk assessment, not just the dependency list.
 
+## Disclaimer
+
+SBOMs, VEX documents, and security advisories published with releases are good-faith
+assessments as of their stated timestamp, provided for information only. They are not a
+warranty or guarantee of security and may be revised without notice. The binding version of
+this statement lives in the site Terms of Use (`website/terms.html`, "Disclaimer of
+warranties"); keep the two in sync if either changes.
+
 ## Adding a statement (the triage)
 
 When the scan gate flags a High/Critical you are not going to fix immediately, add a
