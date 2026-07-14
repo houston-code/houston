@@ -344,6 +344,89 @@ describe('modelOptionFromListing', () => {
   })
 })
 
+describe('openai adapter: explicit cache_control breakpoints', () => {
+  beforeEach(() => {
+    h.create.mockReset()
+    h.ctor.mockReset()
+  })
+
+  /** Run one turn and return the body passed to chat.completions.create. */
+  async function createBody(req: Partial<ChatRequest>): Promise<Record<string, unknown>> {
+    h.create.mockResolvedValue(streamOf([stopChunk()]))
+    const provider = createOpenAIProvider('k', 'https://openrouter.ai/api/v1')
+    for await (const _e of provider.streamChat({
+      model: 'anthropic/claude-sonnet-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    })) {
+      void _e
+    }
+    return h.create.mock.calls[0][0] as Record<string, unknown>
+  }
+
+  const EPHEMERAL = { type: 'ephemeral' }
+
+  it('marks the system message and the last user message when opted in', async () => {
+    const body = await createBody({
+      system: 'be terse',
+      messages: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'ok' },
+        { role: 'user', content: 'second' }
+      ],
+      explicitCacheControl: true
+    })
+    const messages = body.messages as Array<Record<string, unknown>>
+    expect(messages[0]).toEqual({
+      role: 'system',
+      content: [{ type: 'text', text: 'be terse', cache_control: EPHEMERAL }]
+    })
+    // Only the LAST message carries the moving breakpoint.
+    expect(messages[1]).toEqual({ role: 'user', content: 'first' })
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'second', cache_control: EPHEMERAL }]
+    })
+  })
+
+  it('marks the last content part when the last message already has parts', async () => {
+    const body = await createBody({
+      messages: [
+        { role: 'user', content: 'see', images: [{ mediaType: 'image/png', data: 'AAA' }] }
+      ],
+      explicitCacheControl: true
+    })
+    const messages = body.messages as Array<Record<string, unknown>>
+    const parts = messages[messages.length - 1].content as Array<Record<string, unknown>>
+    expect(parts[parts.length - 1]).toMatchObject({ type: 'image_url', cache_control: EPHEMERAL })
+    expect(parts[0]).not.toHaveProperty('cache_control')
+  })
+
+  it('marks a trailing tool result (the common loop shape)', async () => {
+    const body = await createBody({
+      messages: [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read_file', arguments: {} }] },
+        { role: 'tool', content: 'file body', toolCallId: 'c1', toolName: 'read_file' }
+      ],
+      explicitCacheControl: true
+    })
+    const messages = body.messages as Array<Record<string, unknown>>
+    expect(messages[messages.length - 1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'c1',
+      content: [{ type: 'text', text: 'file body', cache_control: EPHEMERAL }]
+    })
+  })
+
+  it('sends a completely standard request when not opted in', async () => {
+    const body = await createBody({ system: 'be terse' })
+    expect(JSON.stringify(body)).not.toContain('cache_control')
+    const messages = body.messages as Array<Record<string, unknown>>
+    expect(messages[0]).toEqual({ role: 'system', content: 'be terse' })
+    expect(messages[1]).toEqual({ role: 'user', content: 'hi' })
+  })
+})
+
 describe('openai adapter: reasoning_effort gating', () => {
   beforeEach(() => {
     h.create.mockReset()
