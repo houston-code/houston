@@ -172,3 +172,21 @@ export function sortedModels(kind: ProviderKind, models: ModelOption[]): ModelOp
     return naturalCompare(a.label ?? a.id, b.label ?? b.id)
   })
 }
+
+/**
+ * The model to use for a provider when none was chosen explicitly: its
+ * `defaultModel` when that id is still in the list, else the most capable model
+ * by the display ordering above, else null (no models). Every "pick a default"
+ * path shares this — the naive `defaultModel ?? models[0]` it replaces read the
+ * STORED order, which for a live-fetched aggregator list is whatever arbitrary
+ * order the provider's API returned (often newest-created first), landing new
+ * logins on an obscure variant instead of a flagship.
+ */
+export function pickDefaultModel(p: {
+  kind: ProviderKind
+  defaultModel?: string
+  models: ModelOption[]
+}): string | null {
+  if (p.defaultModel && p.models.some((m) => m.id === p.defaultModel)) return p.defaultModel
+  return sortedModels(p.kind, p.models)[0]?.id ?? null
+}

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy, type AppSettings, type ApprovalPolicy, type ProviderConfig } from '@shared/types'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import { missingKeyHint } from '@shared/provider-keys'
+import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import type { AgentEvent, AgentRunRequest, ChatMessage, PlanDecision } from '@shared/agent'
 
@@ -128,8 +129,7 @@ export function resolveHeadlessModel(
   settings: AppSettings,
   opts: Pick<HeadlessOptions, 'providerId' | 'model'>
 ): ResolvedModel {
-  const pick = (p: { id: string; defaultModel?: string; models: { id: string }[] }): string =>
-    opts.model ?? p.defaultModel ?? p.models[0]?.id ?? ''
+  const pick = (p: ProviderConfig): string => opts.model ?? pickDefaultModel(p) ?? ''
   // Preflight: a provider that needs a key but has none would otherwise start the
   // run and fail deep in the provider adapter with a raw error (e.g. `invalid
   // x-api-key`). Surface an actionable message up front instead. The auto-select

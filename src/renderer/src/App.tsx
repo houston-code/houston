@@ -14,6 +14,7 @@ import type { ConversationMeta, PlanDecision, ReasoningEffort, RepoInfo } from '
 import { mergeCommands, builtinCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { resolveCapabilities } from '@shared/usage'
+import { pickDefaultModel } from '@shared/models'
 import { branchNameError, planNewChatWorkspace, suggestBranch } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
 import { useRunningConversations } from './hooks/useRunningConversations'
@@ -139,7 +140,7 @@ const CREATE_PR_PROMPT = `Create a GitHub pull request for my current changes, u
 function defaultSelection(settings: AppSettings): SelectedModel | null {
   if (settings.selected) return settings.selected
   const ready = settings.providers.find((p) => (!p.requiresKey || p.hasKey) && p.models.length > 0)
-  if (ready) return { providerId: ready.id, model: ready.defaultModel ?? ready.models[0].id }
+  if (ready) return { providerId: ready.id, model: pickDefaultModel(ready) ?? ready.models[0].id }
   return null
 }
 
