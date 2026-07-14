@@ -146,7 +146,7 @@ const DOCS = [
     src: resolve(ROOT, "docs", "TERMS.md"),
     out: resolve(SITE, "terms.html"),
     slug: "terms.html",
-    title: "Terms of Use — Houston",
+    title: "Houston Terms of Use",
     description: "The terms that govern your use of the Houston desktop coding agent.",
   },
 ];
