@@ -60,6 +60,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
+      # License gate: no AGPL/copyleft/source-available license anywhere in the
+      # installed dependency tree, and everything that ships must satisfy the
+      # permissive allowlist. Policy + exceptions live in scripts/license-gate.mjs
+      # and scripts/license-gate-exceptions.json.
+      - run: npm run license-gate
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
@@ -350,6 +355,7 @@ jobs:
             # Exactly the required `test` job's checks, against the tree that will actually land.
             # Any failure exits non-zero (set -e) without committing or pushing, so main stays green.
             npm ci
+            npm run license-gate
             npm run lint
             npm run typecheck
             npm test

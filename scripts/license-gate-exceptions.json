@@ -1,0 +1,4 @@
+{
+  "$comment": "Reviewed one-off exceptions for scripts/license-gate.mjs. Each entry allows ONE package with ONE exact reported license string in ONE closure ('production' or 'dev'), and must say why it is safe. Matching is exact on the license string, so a license change on a version bump re-triggers the gate. Tier-1 forbidden licenses (AGPL/SSPL/BUSL/...) can never be excepted. Unused entries fail the gate; prune them.",
+  "exceptions": []
+}
