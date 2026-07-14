@@ -100,6 +100,11 @@ function fakeFetch(map: Record<string, { status: number; headers: Record<string,
 }
 
 describe('fetchUrlAsText', () => {
+  // Tests that aren't about DNS behavior must stub the resolver: the default
+  // does a REAL dns.lookup on the fake hostnames, and a slow resolver (typical
+  // for the reserved .example TLD on CI runners) hangs past the test timeout.
+  const publicHost = async (): Promise<string[]> => ['93.184.216.34']
+
   it('returns converted text for an HTML body', async () => {
     const fetchImpl = fakeFetch({
       'https://example.com/': {
@@ -108,7 +113,7 @@ describe('fetchUrlAsText', () => {
         body: '<p>Hello world</p>'
       }
     })
-    const out = await fetchUrlAsText('https://example.com/', { fetchImpl })
+    const out = await fetchUrlAsText('https://example.com/', { fetchImpl, resolveHost: publicHost })
     expect(out).toContain('HTTP 200')
     expect(out).toContain('Hello world')
   })
@@ -118,7 +123,7 @@ describe('fetchUrlAsText', () => {
       'https://a.example/': { status: 302, headers: { location: 'https://b.example/final' }, body: '' },
       'https://b.example/final': { status: 200, headers: { 'content-type': 'text/plain' }, body: 'arrived' }
     })
-    const out = await fetchUrlAsText('https://a.example/', { fetchImpl })
+    const out = await fetchUrlAsText('https://a.example/', { fetchImpl, resolveHost: publicHost })
     expect(out).toContain('arrived')
   })
 
@@ -126,7 +131,9 @@ describe('fetchUrlAsText', () => {
     const fetchImpl = fakeFetch({
       'https://a.example/': { status: 302, headers: { location: 'http://169.254.169.254/' }, body: '' }
     })
-    await expect(fetchUrlAsText('https://a.example/', { fetchImpl })).rejects.toThrow(/private or loopback/)
+    await expect(
+      fetchUrlAsText('https://a.example/', { fetchImpl, resolveHost: publicHost })
+    ).rejects.toThrow(/private or loopback/)
   })
 
   it('rejects a blocked URL before fetching', async () => {
@@ -141,7 +148,11 @@ describe('fetchUrlAsText', () => {
         body: 'x'.repeat(50)
       }
     })
-    const out = await fetchUrlAsText('https://big.example/', { fetchImpl, maxBytes: 10 })
+    const out = await fetchUrlAsText('https://big.example/', {
+      fetchImpl,
+      resolveHost: publicHost,
+      maxBytes: 10
+    })
     expect(out).toContain('[truncated at 10 bytes]')
   })
 
