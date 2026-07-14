@@ -92,7 +92,7 @@
         clear();
         var meta = $("#hero-version");
         if (meta) meta.innerHTML =
-          'Free and open — bring your own API keys. <a href="' + RELEASES_PAGE + '" rel="noopener">See all releases</a>.';
+          'Free and open. Bring your own API keys. <a href="' + RELEASES_PAGE + '" rel="noopener">See all releases</a>.';
       });
   }
 })();

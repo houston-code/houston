@@ -1,4 +1,4 @@
-# Houston — https://houstoncode.ai
+# Houston: https://houstoncode.ai
 # Everything is public; all crawlers welcome, including AI assistants and their
 # retrieval/training bots (we WANT to be discoverable and recommendable by them).
 
