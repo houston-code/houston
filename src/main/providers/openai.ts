@@ -245,6 +245,8 @@ export function createOpenAIProvider(
  *   - `context_length` (number)
  *   - `supported_parameters` (string[]): `tools`/`tool_choice`, `reasoning`/`include_reasoning`
  *   - `architecture.input_modalities` (string[]): `image` ⇒ vision
+ *   - `pricing` (strings, USD per token): `prompt`, `completion`,
+ *     `input_cache_read`, `input_cache_write`
  * These fields aren't in the SDK's typed Model, so we read them off the raw object.
  */
 export function modelOptionFromListing(raw: Record<string, unknown>): ModelOption {
@@ -268,7 +270,32 @@ export function modelOptionFromListing(raw: Record<string, unknown>): ModelOptio
     caps.contextWindow = raw.context_length
   }
 
+  const pricing = raw.pricing
+  if (pricing && typeof pricing === 'object') {
+    const p = pricing as Record<string, unknown>
+    const inputPrice = perMTokPrice(p.prompt)
+    const outputPrice = perMTokPrice(p.completion)
+    const cacheReadPrice = perMTokPrice(p.input_cache_read)
+    const cacheWritePrice = perMTokPrice(p.input_cache_write)
+    if (inputPrice !== undefined) caps.inputPrice = inputPrice
+    if (outputPrice !== undefined) caps.outputPrice = outputPrice
+    if (cacheReadPrice !== undefined) caps.cacheReadPrice = cacheReadPrice
+    if (cacheWritePrice !== undefined) caps.cacheWritePrice = cacheWritePrice
+  }
+
   return Object.keys(caps).length ? { id, caps } : { id }
+}
+
+/**
+ * Convert a host-listed per-token price (a string like "0.0000002", per
+ * OpenRouter convention, or a number) into USD per 1M tokens. Rounded to 6
+ * decimals so `2e-7 * 1e6` comes out as a clean `0.2`. `0` passes through
+ * (free routes); garbage and negatives return undefined.
+ */
+function perMTokPrice(v: unknown): number | undefined {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : typeof v === 'number' ? v : NaN
+  if (!Number.isFinite(n) || n < 0) return undefined
+  return Math.round(n * 1e12) / 1e6
 }
 
 /** Fetch the live model list (GET /models). Works for OpenAI and most compatible servers. */

@@ -8,6 +8,7 @@ import {
   modelPricing,
   resolveCapabilities,
   resolveContextWindow,
+  resolvePricing,
   resolveToolSupport,
   turnCostUsd
 } from './usage'
@@ -198,6 +199,21 @@ describe('turnCostUsd', () => {
     expect(expected).toBeLessThan(turnCostUsd('claude-opus-4-8', 100_000, 2_000))
   })
 
+  it('prices a host-routed model from its listed caps (no heuristic match)', () => {
+    // deepseek via a rich host: the name-heuristics return null, so without caps
+    // this model costs $0; the listed prices make it real.
+    const caps = { inputPrice: 0.5, outputPrice: 2, cacheReadPrice: 0.05, cacheWritePrice: 0 }
+    expect(turnCostUsd('deepseek/deepseek-r1', 1_000_000, 1_000_000)).toBe(0)
+    expect(turnCostUsd('deepseek/deepseek-r1', 1_000_000, 1_000_000, undefined, caps)).toBeCloseTo(2.5, 6)
+    expect(
+      turnCostUsd('deepseek/deepseek-r1', 1_000_000, 0, { readTokens: 1_000_000 }, caps)
+    ).toBeCloseTo(0.05, 6)
+    // Listed free cache writes must not fall back to the 1.25x surcharge.
+    expect(
+      turnCostUsd('deepseek/deepseek-r1', 1_000_000, 0, { writeTokens: 1_000_000 }, caps)
+    ).toBeCloseTo(0, 6)
+  })
+
   it('never lets the cache split exceed the total input (clamps parts to the whole)', () => {
     // Bogus counts where read+write > input must not produce a negative fresh cost.
     const cost = turnCostUsd('claude-opus-4-8', 1_000, 0, {
@@ -267,6 +283,46 @@ describe('modelCapabilities', () => {
   it('is case-insensitive', () => {
     expect(modelCapabilities('Claude-Opus-4-8')).toEqual({ vision: true, reasoning: true })
     expect(modelCapabilities('GPT-4O')).toEqual({ vision: true, reasoning: false })
+  })
+})
+
+describe('resolvePricing', () => {
+  it('prefers listed prices over the family heuristic, per-field', () => {
+    // A host-routed Claude: listed input/output win; the family heuristic still
+    // supplies nothing for cache here (Claude uses the multiplier fallback), so
+    // only the listed cache prices appear.
+    const p = resolvePricing('anthropic/claude-sonnet-5', {
+      inputPrice: 2.8,
+      outputPrice: 14,
+      cacheReadPrice: 0.28,
+      cacheWritePrice: 3.5
+    })
+    expect(p).toEqual({ input: 2.8, output: 14, cacheRead: 0.28, cacheWrite: 3.5 })
+  })
+
+  it('falls back per-field to the heuristic when a listing is partial', () => {
+    // Listed input only: output comes from the sonnet family heuristic.
+    expect(resolvePricing('claude-sonnet-4-6', { inputPrice: 2.8 })).toMatchObject({
+      input: 2.8,
+      output: 15
+    })
+  })
+
+  it('resolves a host-only model entirely from caps, and null without them', () => {
+    expect(resolvePricing('deepseek/deepseek-r1', { inputPrice: 0.5, outputPrice: 2 })).toEqual({
+      input: 0.5,
+      output: 2
+    })
+    expect(resolvePricing('deepseek/deepseek-r1')).toBeNull()
+    // A price for only one side can't make a usable pricing.
+    expect(resolvePricing('deepseek/deepseek-r1', { inputPrice: 0.5 })).toBeNull()
+  })
+
+  it('keeps listed zero prices (free routes cost nothing, not heuristic rates)', () => {
+    expect(resolvePricing('meta-llama/llama-3.3-70b:free', { inputPrice: 0, outputPrice: 0 })).toEqual({
+      input: 0,
+      output: 0
+    })
   })
 })
 

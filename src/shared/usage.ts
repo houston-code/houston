@@ -74,6 +74,29 @@ export function modelPricing(model: string): ModelPricing | null {
 }
 
 /**
+ * Resolve a model's pricing, preferring host-listed prices (`caps`, from the model
+ * listing) over the name-heuristics — per-field, mirroring how
+ * {@link resolveCapabilities} treats capability flags. Host prices are exact where
+ * the heuristics approximate, and the only pricing at all for host-routed ids the
+ * heuristics don't know (deepseek, qwen, …). Returns null only when neither side
+ * can supply an input+output rate.
+ */
+export function resolvePricing(model: string, caps?: ModelCaps): ModelPricing | null {
+  const h = modelPricing(model)
+  const input = caps?.inputPrice ?? h?.input
+  const output = caps?.outputPrice ?? h?.output
+  if (input === undefined || output === undefined) return null
+  const cacheRead = caps?.cacheReadPrice ?? h?.cacheRead
+  const cacheWrite = caps?.cacheWritePrice ?? h?.cacheWrite
+  return {
+    input,
+    output,
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {})
+  }
+}
+
+/**
  * Fallback prompt-cache price multipliers, relative to a model's base input rate:
  * a cached prefix that is *read* bills at 10% of the input price, and *writing* a
  * (5-minute) cache entry bills at 125%. These are Anthropic's published
@@ -102,14 +125,18 @@ export interface CacheTokens {
  * tokens pay the full input rate; without it, every input token pays full rate (the
  * historical behavior). This matters a lot for agent loops, where a warm cache means
  * most of each turn's input is a cheap cache read, not full-price fresh input.
+ *
+ * `caps` carries host-listed per-model prices when available (see
+ * {@link resolvePricing}); without it, the name-heuristic rates apply.
  */
 export function turnCostUsd(
   model: string,
   inputTokens: number,
   outputTokens: number,
-  cache?: CacheTokens
+  cache?: CacheTokens,
+  caps?: ModelCaps
 ): number {
-  const p = modelPricing(model)
+  const p = resolvePricing(model, caps)
   if (!p) return 0
   const inTok = clampTokens(inputTokens)
   const outTok = clampTokens(outputTokens)
