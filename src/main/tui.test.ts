@@ -731,24 +731,50 @@ function deps(
 }
 
 /** An in-memory conversation store standing in for conversations.ts. */
-function fakePersist(seed: Array<ResumeEntry & { messages: ChatMessage[] }> = []) {
+function fakePersist(
+  seed: Array<ResumeEntry & { messages: ChatMessage[]; providerId?: string; model?: string }> = []
+) {
   const store = new Map<
     string,
-    { title: string; updatedAt: number; workspace: string; messages: ChatMessage[] }
+    {
+      title: string
+      updatedAt: number
+      workspace: string
+      messages: ChatMessage[]
+      providerId?: string
+      model?: string
+    }
   >()
   for (const s of seed) {
-    store.set(s.id, { title: s.title, updatedAt: s.updatedAt, workspace: '/proj', messages: s.messages })
+    store.set(s.id, {
+      title: s.title,
+      updatedAt: s.updatedAt,
+      workspace: '/proj',
+      messages: s.messages,
+      providerId: s.providerId,
+      model: s.model
+    })
   }
+  // Every setModel call, so a test can assert the meta was (or wasn't) rewritten.
+  const setModelCalls: Array<{ id: string; providerId: string; model: string }> = []
   let seq = 0
   const persist: TuiPersist = {
-    create: ({ workspace }) => {
+    create: ({ workspace, providerId, model }) => {
       const id = `conv-${++seq}`
-      store.set(id, { title: 'New chat', updatedAt: 0, workspace, messages: [] })
+      store.set(id, { title: 'New chat', updatedAt: 0, workspace, messages: [], providerId, model })
       return { id }
     },
     setMessages: (id, messages) => {
       const c = store.get(id)
       if (c) c.messages = messages
+    },
+    setModel: (id, providerId, model) => {
+      setModelCalls.push({ id, providerId, model })
+      const c = store.get(id)
+      if (c) {
+        c.providerId = providerId
+        c.model = model
+      }
     },
     list: (workspace) =>
       [...store.entries()]
@@ -770,7 +796,7 @@ function fakePersist(seed: Array<ResumeEntry & { messages: ChatMessage[] }> = []
       return c ? { messages: c.messages } : null
     }
   }
-  return { persist, store }
+  return { persist, store, setModelCalls }
 }
 
 const opts = {
@@ -989,6 +1015,54 @@ describe('runTui', () => {
     expect(rec.runs[0]).toMatchObject({ providerId: 'ollama', model: 'llama' })
   })
 
+  it('a /model switch rewrites the existing conversation’s stored provider/model', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    // Turn 1 creates conv-1 under the session default (anthropic/claude); then a
+    // /model switch, and turn 2 runs under ollama/llama in the SAME conversation.
+    const t = fakeIo(['first', '/model ollama', 'second', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // The stored meta follows the model actually used, so the scorecard and a GUI
+    // re-open don't attribute the chat to the model it was merely created under.
+    expect(fp.store.get('conv-1')).toMatchObject({ providerId: 'ollama', model: 'llama' })
+    // create() already stored turn 1's model, so setModel fires only once — for the switch.
+    expect(fp.setModelCalls).toEqual([{ id: 'conv-1', providerId: 'ollama', model: 'llama' }])
+  })
+
+  it('leaves the stored model untouched when it never changes', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    const t = fakeIo(['first', 'second', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Two turns under the same model: create() covers it, so the setModel seam is
+    // never touched (the guard skips the redundant, updatedAt-bumping write).
+    expect(fp.setModelCalls).toEqual([])
+    expect(fp.store.get('conv-1')).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+  })
+
+  it('re-syncs the stored model on the first turn after /resume', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {}, (req) => req.messages)
+    // A saved chat created under a different model than this session's active one.
+    const fp = fakePersist([
+      { id: 'saved', title: 'Old', updatedAt: 5, messages: [], providerId: 'ollama', model: 'llama' }
+    ])
+    d.persist = fp.persist
+    d.now = () => 1000
+    const t = fakeIo(['/resume', '1', 'continue', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // The turn runs under the session's active model (resume doesn't switch it)...
+    expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+    // ...so the resumed chat's stored meta is rewritten to match, in place (no new conv).
+    expect(fp.store.size).toBe(1)
+    expect(fp.store.get('saved')).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+    expect(fp.setModelCalls).toEqual([{ id: 'saved', providerId: 'anthropic', model: 'claude' }])
+  })
+
   it('preflights the key: submitting on a keyless provider skips the run and hints /login', async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
       selected: { providerId: 'openai', model: 'gpt' },
@@ -1011,6 +1085,9 @@ describe('runTui', () => {
       setMessages: () => {
         throw new Error('ENOSPC: no space left on device')
       },
+      setModel: () => {
+        throw new Error('ENOSPC: no space left on device')
+      },
       list: () => [],
       search: () => [],
       get: () => null,
@@ -1021,6 +1098,29 @@ describe('runTui', () => {
     const code = await runTui(opts, d)
     expect(code).toBe(0) // clean exit, not a Fatal
     expect(rec.runs).toHaveLength(2) // both turns ran despite the store throwing
+    expect(t.text()).toMatch(/couldn't save the conversation/i)
+  })
+
+  it('survives a setModel failure on a /model switch instead of crashing the REPL', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    // create + setMessages succeed; only the meta rewrite (triggered by the switch) throws.
+    d.persist = {
+      create: () => ({ id: 'c1' }),
+      setMessages: () => {},
+      setModel: () => {
+        throw new Error('EROFS: read-only file system')
+      },
+      list: () => [],
+      search: () => [],
+      get: () => null,
+      fork: () => null
+    }
+    const t = fakeIo(['first', '/model ollama', 'second', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0) // the throwing seam is caught, not fatal
+    expect(rec.runs).toHaveLength(2) // the post-switch turn still ran
+    expect(rec.runs[1]).toMatchObject({ providerId: 'ollama', model: 'llama' })
     expect(t.text()).toMatch(/couldn't save the conversation/i)
   })
 

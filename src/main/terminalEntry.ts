@@ -29,6 +29,7 @@ import { highlightToHtml } from './syntax'
 import {
   createConversation,
   setMessages,
+  updateConversationMeta,
   listConversations,
   getConversation,
   searchConversations,
@@ -179,6 +180,9 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
         create: ({ workspace, providerId, model }) =>
           createConversation({ workspace, providerId, model }),
         setMessages,
+        // Keep the stored provider/model current after a `/model` switch or a `/resume`
+        // (the GUI's per-send updateConversationMeta counterpart).
+        setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model }),
         // Recent conversations for this folder, newest first, for the `/resume` picker.
         list: (workspace) =>
           listConversations()
