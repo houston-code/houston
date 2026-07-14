@@ -1,6 +1,7 @@
 import type { Content, GoogleGenAI } from '@google/genai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import type { ModelOption } from '@shared/types'
 import { geminiThinkingBudget } from './reasoning'
 
 export function toGeminiContents(messages: ChatMessage[]): Content[] {
@@ -153,15 +154,34 @@ export function createGeminiProvider(apiKey: string): Provider {
   }
 }
 
+/**
+ * Map one entry from the Gemini models.list response into a ModelOption,
+ * capturing the context window from `inputTokenLimit` when the API provides it
+ * (the Gemini counterpart of `modelOptionFromListing` in openai.ts). An absent
+ * or non-positive limit leaves `caps` off entirely, so the name-heuristics in
+ * usage.ts take over. Returns null for a nameless entry.
+ */
+export function modelOptionFromGeminiListing(m: {
+  name?: string
+  inputTokenLimit?: number
+}): ModelOption | null {
+  const id = (m.name ?? '').replace(/^models\//, '')
+  if (!id) return null
+  if (typeof m.inputTokenLimit === 'number' && m.inputTokenLimit > 0) {
+    return { id, caps: { contextWindow: m.inputTokenLimit } }
+  }
+  return { id }
+}
+
 /** Fetch the live model list from the Gemini API. */
-export async function listGeminiModels(apiKey: string): Promise<string[]> {
+export async function listGeminiModels(apiKey: string): Promise<ModelOption[]> {
   const { GoogleGenAI } = await import('@google/genai')
   const ai = new GoogleGenAI({ apiKey })
-  const out: string[] = []
+  const out: ModelOption[] = []
   const pager = await ai.models.list()
   for await (const m of pager) {
-    const name = (m.name ?? '').replace(/^models\//, '')
-    if (name) out.push(name)
+    const opt = modelOptionFromGeminiListing(m)
+    if (opt) out.push(opt)
   }
   return out
 }

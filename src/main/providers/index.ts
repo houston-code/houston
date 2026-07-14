@@ -56,8 +56,9 @@ export function createProvider(config: ProviderConfig): Provider {
 
 /**
  * Fetch the live model list for a provider. OpenAI / OpenAI-compatible hosts may
- * return capability metadata (see `modelOptionFromListing`); Anthropic and Gemini
- * return ids only, so their capabilities come from the name-heuristics in usage.ts.
+ * return capability metadata (see `modelOptionFromListing`), and Gemini reports
+ * each model's context window (`inputTokenLimit`); Anthropic returns ids only,
+ * so its capabilities come from the name-heuristics in usage.ts.
  */
 export async function listModels(config: ProviderConfig): Promise<ModelOption[]> {
   const key = getKey(config.id)
@@ -71,7 +72,7 @@ export async function listModels(config: ProviderConfig): Promise<ModelOption[]>
     case 'openai-compatible':
       return listOpenAIModels(key, config.baseUrl, headers)
     case 'gemini':
-      return (await listGeminiModels(key ?? '')).map((id) => ({ id }))
+      return listGeminiModels(key ?? '')
     default:
       return []
   }
