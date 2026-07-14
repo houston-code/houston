@@ -72,6 +72,20 @@ export interface ModelCaps {
   reasoning?: boolean
   /** Context window in tokens. */
   contextWindow?: number
+  /**
+   * Host-listed prices in USD per 1M tokens (converted from the per-token strings
+   * rich hosts report). Exact where the name-heuristics in `usage.ts` are
+   * approximations — and the only pricing available at all for host-routed models
+   * the heuristics don't know (deepseek, qwen, …). `0` is meaningful (free-tier
+   * routes bill nothing); absent means the host listed no price.
+   */
+  inputPrice?: number
+  /** USD per 1M output tokens (see {@link ModelCaps.inputPrice}). */
+  outputPrice?: number
+  /** USD per 1M prompt-cache-read tokens; presence signals the route caches at all. */
+  cacheReadPrice?: number
+  /** USD per 1M prompt-cache-write tokens; `0` = writes are free. */
+  cacheWritePrice?: number
 }
 
 export interface ModelOption {

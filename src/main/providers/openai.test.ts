@@ -306,6 +306,42 @@ describe('modelOptionFromListing', () => {
     expect(modelOptionFromListing({ id: 'a', context_length: 0 })).toEqual({ id: 'a' })
     expect(modelOptionFromListing({ id: 'b', context_length: 'big' })).toEqual({ id: 'b' })
   })
+
+  it('captures per-token pricing strings as USD per 1M tokens', () => {
+    // OpenRouter convention: string prices in USD per token.
+    const opt = modelOptionFromListing({
+      id: 'anthropic/claude-sonnet-5',
+      pricing: {
+        prompt: '0.000003',
+        completion: '0.000015',
+        input_cache_read: '0.0000002', // must come out a clean 0.2, not 0.19999...
+        input_cache_write: '0.0000025'
+      }
+    })
+    expect(opt.caps).toEqual({
+      inputPrice: 3,
+      outputPrice: 15,
+      cacheReadPrice: 0.2,
+      cacheWritePrice: 2.5
+    })
+  })
+
+  it('keeps zero prices (free routes) and partial pricing objects', () => {
+    const opt = modelOptionFromListing({
+      id: 'free/model',
+      pricing: { prompt: '0', completion: '0' }
+    })
+    expect(opt.caps).toEqual({ inputPrice: 0, outputPrice: 0 })
+  })
+
+  it('ignores malformed or negative prices', () => {
+    expect(
+      modelOptionFromListing({
+        id: 'x',
+        pricing: { prompt: 'free!', completion: '-0.01', input_cache_read: {} }
+      })
+    ).toEqual({ id: 'x' })
+  })
 })
 
 describe('openai adapter: reasoning_effort gating', () => {

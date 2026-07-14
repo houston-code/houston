@@ -515,10 +515,12 @@ export async function startRun(
       emit({ type: 'error', message: `Unknown provider: ${req.providerId}` })
       return
     }
-    // Host-listed reasoning support for the selected model, used to override the
-    // adapter's id-based heuristic so host-routed reasoning models still get a
-    // reasoning param. Undefined when the model carries no capability metadata.
-    const reasoningCapable = providerConfig.models.find((m) => m.id === req.model)?.caps?.reasoning
+    // Host-listed capability metadata for the selected model. `reasoning` overrides
+    // the adapter's id-based heuristic so host-routed reasoning models still get a
+    // reasoning param; the pricing fields make cost estimates exact for models the
+    // name-heuristics don't know. Undefined when the model carries no metadata.
+    const selectedModelCaps = providerConfig.models.find((m) => m.id === req.model)?.caps
+    const reasoningCapable = selectedModelCaps?.reasoning
 
     let provider
     try {
@@ -778,10 +780,13 @@ export async function startRun(
               type: 'usage',
               inputTokens: 0,
               outputTokens: subOutput,
-              cost: turnCostUsd(req.model, subInput, subOutput, {
-                readTokens: subCacheRead,
-                writeTokens: subCacheWrite
-              })
+              cost: turnCostUsd(
+                req.model,
+                subInput,
+                subOutput,
+                { readTokens: subCacheRead, writeTokens: subCacheWrite },
+                selectedModelCaps
+              )
             })
           }
         })
@@ -829,10 +834,13 @@ export async function startRun(
               type: 'usage',
               inputTokens: 0,
               outputTokens: subOutput,
-              cost: turnCostUsd(req.model, subInput, subOutput, {
-                readTokens: subCacheRead,
-                writeTokens: subCacheWrite
-              })
+              cost: turnCostUsd(
+                req.model,
+                subInput,
+                subOutput,
+                { readTokens: subCacheRead, writeTokens: subCacheWrite },
+                selectedModelCaps
+              )
             })
           }
         })
@@ -869,10 +877,13 @@ export async function startRun(
               type: 'usage',
               inputTokens: 0,
               outputTokens: reviewOutput,
-              cost: turnCostUsd(req.model, reviewInput, reviewOutput, {
-                readTokens: reviewCacheRead,
-                writeTokens: reviewCacheWrite
-              })
+              cost: turnCostUsd(
+                req.model,
+                reviewInput,
+                reviewOutput,
+                { readTokens: reviewCacheRead, writeTokens: reviewCacheWrite },
+                selectedModelCaps
+              )
             })
           }
         })
@@ -1298,10 +1309,13 @@ export async function startRun(
       }
 
       if (turnInput || turnOutput) {
-        const turnCost = turnCostUsd(req.model, turnInput, turnOutput, {
-          readTokens: turnCacheRead,
-          writeTokens: turnCacheWrite
-        })
+        const turnCost = turnCostUsd(
+          req.model,
+          turnInput,
+          turnOutput,
+          { readTokens: turnCacheRead, writeTokens: turnCacheWrite },
+          selectedModelCaps
+        )
         // Accumulate for the adaptive-budget cost ceiling (the landing trigger).
         cumulativeCostUsd += turnCost
         emit({
