@@ -6,7 +6,7 @@
   updated before that ships. Have a lawyer review before relying on it.
 -->
 
-# Houston — Privacy Policy
+# Houston Privacy Policy
 
 **Last updated: July 13, 2026 · Version 1.1**
 
@@ -24,8 +24,8 @@ This Privacy Policy explains how Houston (the "Software"), published by [Licenso
   can see is the aggregate download and update-check count our download host keeps
   for released files (see "Application updates" below); it holds no personal data.
 - **Your data leaves your device only to providers you choose.** When you use a
-  feature that reaches the network — sending a prompt to an AI model, searching
-  the web, connecting an external tool, or checking for app updates — data goes to
+  feature that reaches the network (sending a prompt to an AI model, searching
+  the web, connecting an external tool, or checking for app updates), data goes to
   that destination, under that destination's own privacy policy, not ours.
 - **You control where your data goes.** Because Houston is "bring your own model",
   you decide which providers and regions handle your data, and you are responsible
@@ -36,14 +36,14 @@ This Privacy Policy explains how Houston (the "Software"), published by [Licenso
 Houston stores the following locally, in your operating system's application-data
 directory, and does not transmit it to us:
 
-- **Conversations** — your messages, the model's responses, and a record of tool
+- **Conversations**: your messages, the model's responses, and a record of tool
   activity, saved one file per conversation.
-- **Settings** — your preferences, configured providers and endpoints, model
+- **Settings**: your preferences, configured providers and endpoints, model
   selections, permission rules, and similar configuration.
-- **API keys and credentials** — stored using your operating system's secure
+- **API keys and credentials**: stored using your operating system's secure
   credential storage (for example, the OS keychain) where available, so they are
   encrypted at rest rather than kept in plain configuration files.
-- **Window and interface state** — for example, window size and panel layout.
+- **Window and interface state**: for example, window size and panel layout.
 
 You can delete this data at any time by deleting the relevant conversations or
 settings within the app, or by removing Houston's application-data directory and
@@ -54,9 +54,9 @@ uninstalling the Software.
 Houston is designed so that data leaves your device only when you use a feature
 that requires it, and only to the destination you have configured. Specifically:
 
-- **AI model providers.** When you send a message, the content of your prompt —
-  which may include your messages, selected files, code, images, and related
-  context — is sent to the AI model provider you have configured (using the API
+- **AI model providers.** When you send a message, the content of your prompt
+  (which may include your messages, selected files, code, images, and related
+  context) is sent to the AI model provider you have configured (using the API
   key or endpoint you supplied) so it can generate a response. This includes
   local models you run yourself, in which case the data stays on your own machine
   or network.
@@ -75,8 +75,8 @@ that requires it, and only to the destination you have configured. Specifically:
   no personal data, and involve no tracking inside the app.
 
 **These third parties operate under their own privacy policies and terms, not
-ours.** Their handling of your data — including whether they log it, how long
-they retain it, and whether they use it to train or improve their models —
+ours.** Their handling of your data (including whether they log it, how long
+they retain it, and whether they use it to train or improve their models)
 is governed by them, and varies by provider and plan. Review each provider's
 policy before connecting, and choose providers and settings appropriate for the
 sensitivity of your data.
@@ -86,7 +86,7 @@ sensitivity of your data.
 We do not receive, store, or process the data you send to the third-party
 providers you configure. We are not an intermediary for that traffic; it flows
 directly from your device to the destination you chose. As a result, for that
-data, the provider — not us — is the relevant party for any data-subject request,
+data, the provider, not us, is the relevant party for any data-subject request,
 retention question, or compliance matter.
 
 ## 4. Data residency and your compliance obligations
@@ -94,8 +94,8 @@ retention question, or compliance matter.
 Because you choose your providers and their regions, **you determine where your
 data is processed and stored, and you are solely responsible for meeting any
 data-residency, cross-border-transfer, data-protection, or sectoral requirements
-that apply to you** — for example, the GDPR, UK GDPR, CCPA/CPRA, HIPAA, or
-similar laws. Houston gives you the controls (which provider, which endpoint,
+that apply to you** (for example, the GDPR, UK GDPR, CCPA/CPRA, HIPAA, or
+similar laws). Houston gives you the controls (which provider, which endpoint,
 which region, local vs. hosted models); the choices, and their legal
 consequences, are yours.
 

@@ -29,7 +29,7 @@
   <text x="96" y="360" font-size="72" font-weight="700" fill="#f4f8ff" letter-spacing="-2">A coding agent that runs</text>
   <text x="96" y="446" font-size="72" font-weight="700" letter-spacing="-2" fill="#8fbcff">on your machine.</text>
 
-  <text x="96" y="516" font-size="30" fill="#c4d3ef">Bring your own model — Claude, GPT, Gemini, or a local LLM.</text>
+  <text x="96" y="516" font-size="30" fill="#c4d3ef">Bring your own model: Claude, GPT, Gemini, or a local LLM.</text>
 
   <g font-size="22" fill="#cdd9f2">
     <rect x="96" y="548" width="196" height="44" rx="22" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
