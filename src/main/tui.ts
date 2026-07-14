@@ -358,6 +358,15 @@ export interface ResumeEntry {
 export interface TuiPersist {
   create: (input: { workspace: string; providerId: string; model: string }) => { id: string }
   setMessages: (id: string, messages: ChatMessage[]) => void
+  /**
+   * Rewrite the backing conversation's provider/model. `create` records them once,
+   * but the session's active model drifts when the user switches with `/model` or
+   * resumes a chat first created under a different model — leaving the stored value
+   * stale, which mis-attributes the usage scorecard and makes a GUI re-open reopen
+   * on the wrong model. The GUI keeps this in step via `updateConversationMeta` on
+   * every send; this is the terminal's counterpart.
+   */
+  setModel: (id: string, providerId: string, model: string) => void
   list: (workspace: string) => ResumeEntry[]
   get: (id: string) => { messages: ChatMessage[] } | null
   /** Recent sessions in this folder whose title/content matches `query`. */
@@ -1339,6 +1348,28 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
   }
+  // The provider/model last written to the backing conversation's meta. `create`
+  // stores them once; after that a `/model` switch or a `/resume` onto a chat made
+  // under a different model leaves the stored value stale (see setModel). We track
+  // what we've persisted and, when a turn runs under a different model, rewrite it —
+  // mirroring the GUI, which calls updateConversationMeta on every send. null means
+  // "unknown" (freshly resumed/forked), which forces the next turn to re-sync.
+  let persistedProviderId: string | null = null
+  let persistedModel: string | null = null
+  const syncPersistedModel = (): void => {
+    if (!deps.persist || !conversationId || !providerId || !model) return
+    if (persistedProviderId === providerId && persistedModel === model) return
+    try {
+      deps.persist.setModel(conversationId, providerId, model)
+      persistedProviderId = providerId
+      persistedModel = model
+    } catch (e) {
+      if (!warnedPersistFail) {
+        warnedPersistFail = true
+        deps.io.out(paint(`· couldn't save the conversation (continuing unsaved): ${(e as Error).message}\n`, 'dim'))
+      }
+    }
+  }
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
@@ -1490,6 +1521,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'clear') {
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
+        persistedProviderId = persistedModel = null // stored meta belongs to the old conversation
         pendingImages = [] // don't carry a staged /image into the fresh conversation
         contextTokens = 0 // the context meter belongs to the old conversation
         deps.io.out(paint('· conversation cleared\n', 'dim'))
@@ -1530,6 +1562,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         conversationId = id
         messages = conv.messages
+        // The resumed chat's stored model is unknown to the driver; mark the meta
+        // stale so the first turn re-syncs it to the model actually in use (which may
+        // differ from the one it was created under).
+        persistedProviderId = persistedModel = null
         deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
         continue
       }
@@ -1550,6 +1586,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         conversationId = forked.id
+        // The fork is a fresh conversation whose stored model we don't track; mark it
+        // stale so the next turn re-syncs the meta to the active model.
+        persistedProviderId = persistedModel = null
         deps.io.out(paint('· forked: continuing on a copy, original left intact\n', 'dim'))
         continue
       }
@@ -1702,6 +1741,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (deps.persist && !conversationId) {
       try {
         conversationId = deps.persist.create({ workspace: opts.cwd, providerId, model }).id
+        // create() stored these, so the meta already matches — no sync needed below.
+        persistedProviderId = providerId
+        persistedModel = model
       } catch (e) {
         if (!warnedPersistFail) {
           warnedPersistFail = true
@@ -1712,6 +1754,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Persist the user's message up front (like the GUI) so an early run error can't
     // lose the prompt or leave an empty "New chat" orphan in /resume and the sidebar.
     persistMessages(messages)
+    // Keep the stored provider/model in step with the model this turn actually runs
+    // under (after a `/model` switch or a `/resume`) — same ordering as the GUI, which
+    // follows setMessages with updateConversationMeta on every send.
+    syncPersistedModel()
     const runId = newId()
     activeRunId = runId
     const req: AgentRunRequest = {
