@@ -1015,6 +1015,27 @@ describe('runTui', () => {
     expect(rec.runs[0]).toMatchObject({ providerId: 'ollama', model: 'llama' })
   })
 
+  it('/model persists the switch as the saved selection (like the GUI picker)', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    const t = fakeIo(['/model ollama', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Without this write the next launch resolves the startup model from the old
+    // stored `selected` and the switch silently evaporates on restart.
+    expect(saved).toEqual([{ selected: { providerId: 'ollama', model: 'llama' } }])
+  })
+
+  it('/model still switches in-memory when no settings writer is wired', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    // note: no updateSettings seam — the ephemeral-host case
+    const t = fakeIo(['/model ollama', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0]).toMatchObject({ providerId: 'ollama', model: 'llama' })
+  })
+
   it('a /model switch rewrites the existing conversation’s stored provider/model', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const fp = fakePersist()

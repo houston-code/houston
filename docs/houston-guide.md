@@ -40,7 +40,9 @@ OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in
 Settings, fetch its live model list, and pick a model. The picker shows each
 model's context window and capability badges (tool calling, vision, reasoning)
 and warns before you pick one that cannot call tools. Keys are stored encrypted
-by the OS keychain and never touch the renderer.
+by the OS keychain and never touch the renderer. The selection is shared across
+clients: picking a model in the desktop app or switching with `/model` in the
+terminal saves it as the default for future sessions.
 
 ## Slash commands
 
