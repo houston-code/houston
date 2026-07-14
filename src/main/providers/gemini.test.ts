@@ -1,13 +1,26 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
-import { createGeminiProvider, toGeminiContents } from './gemini'
+import {
+  createGeminiProvider,
+  listGeminiModels,
+  modelOptionFromGeminiListing,
+  toGeminiContents
+} from './gemini'
 
 // Mock the lazily-imported SDK so we can feed a synthetic content stream and
 // assert how the adapter turns it into provider events.
 const h = vi.hoisted(() => ({ stream: vi.fn() }))
 vi.mock('@google/genai', () => {
   class GoogleGenAI {
-    models = { generateContentStream: h.stream }
+    models = {
+      generateContentStream: h.stream,
+      list: async () =>
+        (async function* () {
+          yield { name: 'models/gemini-2.5-pro', inputTokenLimit: 1048576 }
+          yield { name: 'models/embedding-001' }
+          yield { name: '' }
+        })()
+    }
   }
   return { GoogleGenAI }
 })
@@ -121,5 +134,42 @@ describe('gemini usage reporting', () => {
   it('omits the cache field when no hits are reported', async () => {
     const usage = await drainDoneUsage({ promptTokenCount: 1_000, candidatesTokenCount: 10 })
     expect(usage).toEqual({ inputTokens: 1_000, outputTokens: 10 })
+  })
+})
+
+describe('modelOptionFromGeminiListing', () => {
+  it('strips the models/ prefix and captures inputTokenLimit as the context window', () => {
+    expect(
+      modelOptionFromGeminiListing({ name: 'models/gemini-2.5-pro', inputTokenLimit: 1048576 })
+    ).toEqual({ id: 'gemini-2.5-pro', caps: { contextWindow: 1048576 } })
+  })
+
+  it('returns just the id when inputTokenLimit is absent', () => {
+    expect(modelOptionFromGeminiListing({ name: 'models/gemini-embedding-001' })).toEqual({
+      id: 'gemini-embedding-001'
+    })
+  })
+
+  it('ignores a non-positive inputTokenLimit', () => {
+    expect(modelOptionFromGeminiListing({ name: 'models/a', inputTokenLimit: 0 })).toEqual({
+      id: 'a'
+    })
+    expect(modelOptionFromGeminiListing({ name: 'models/b', inputTokenLimit: -1 })).toEqual({
+      id: 'b'
+    })
+  })
+
+  it('returns null for a nameless entry', () => {
+    expect(modelOptionFromGeminiListing({})).toBeNull()
+    expect(modelOptionFromGeminiListing({ name: '', inputTokenLimit: 32768 })).toBeNull()
+  })
+})
+
+describe('listGeminiModels', () => {
+  it('maps the pager into ModelOptions, dropping nameless entries', async () => {
+    expect(await listGeminiModels('test-key')).toEqual([
+      { id: 'gemini-2.5-pro', caps: { contextWindow: 1048576 } },
+      { id: 'embedding-001' }
+    ])
   })
 })
