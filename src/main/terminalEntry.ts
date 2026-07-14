@@ -29,6 +29,7 @@ import { highlightToHtml } from './syntax'
 import {
   createConversation,
   setMessages,
+  updateConversationMeta,
   listConversations,
   getConversation,
   searchConversations,
@@ -242,7 +243,10 @@ export async function runHeadlessEntry(headless: HeadlessOptions): Promise<numbe
         },
         create: ({ workspace, providerId, model }) =>
           createConversation({ workspace, providerId, model }),
-        setMessages
+        setMessages,
+        // Keep a resumed conversation's stored model in step with the model this
+        // run actually used, so usage attribution and a GUI re-open don't diverge.
+        setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
       }
     })
   } catch (e) {
