@@ -6,9 +6,9 @@
   Have a lawyer review this before relying on it. This is a template, not legal advice.
 -->
 
-# Houston — Terms of Use
+# Houston Terms of Use
 
-**Last updated: June 29, 2026 · Version 1.0**
+**Last updated: July 14, 2026 · Version 1.1**
 
 These Terms of Use ("Terms") are a binding agreement between you ("you" or
 "your") and [Licensor] ("we", "us", or "our") and govern your access to and use
@@ -80,7 +80,7 @@ You agree not to use Houston to:
 You are responsible for ensuring your use, and your transfer of data to the
 providers you select, complies with applicable export, sanctions, and trade laws.
 
-## 6. AI output — no reliance
+## 6. AI output: no reliance
 
 Houston relies on third-party AI models that you select. AI output may be
 inaccurate, incomplete, insecure, biased, or otherwise wrong, and may not be
@@ -110,8 +110,8 @@ Protocol servers, and content the agent fetches from the web.
 - **Their terms govern.** Your use of any third-party service or model is subject
   to that provider's own terms of service, acceptable-use policy, and privacy
   policy. Review them before connecting.
-- **Their data and training practices govern.** The data you send to a provider —
-  including your prompts, code, files, and other inputs — is handled under that
+- **Their data and training practices govern.** The data you send to a provider
+  (including your prompts, code, files, and other inputs) is handled under that
   provider's policies, **including whether the provider logs, retains, or uses
   that data to train or improve its models.** Practices vary by provider and plan.
   It is your responsibility to choose providers and settings consistent with your
@@ -126,7 +126,7 @@ Protocol servers, and content the agent fetches from the web.
 How Houston handles data is described in the [Privacy Policy](PRIVACY.md). In
 short, Houston stores your data locally on your device and does not collect
 analytics or telemetry from the app; data leaves your device only to the providers and
-services you choose to use. **You — not we — determine where your data goes when
+services you choose to use. **You, not we, determine where your data goes when
 you select a provider, and you are solely responsible for meeting any
 data-residency, data-protection, sectoral, or cross-border transfer obligations
 that apply to you** (for example, GDPR, UK GDPR, CCPA/CPRA, HIPAA, or similar).
@@ -152,8 +152,11 @@ AVAILABLE", WITHOUT WARRANTIES OF ANY KIND, EXPRESS, IMPLIED, OR STATUTORY,
 INCLUDING WITHOUT LIMITATION IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
 PARTICULAR PURPOSE, TITLE, ACCURACY, AND NON-INFRINGEMENT. WE DO NOT WARRANT THAT
 HOUSTON WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE, THAT DEFECTS WILL BE
-CORRECTED, OR THAT OUTPUT WILL BE ACCURATE OR RELIABLE. YOU USE HOUSTON AT YOUR
-OWN RISK.
+CORRECTED, OR THAT OUTPUT WILL BE ACCURATE OR RELIABLE. SECURITY ARTIFACTS
+PUBLISHED WITH RELEASES (INCLUDING SOFTWARE BILLS OF MATERIALS, VEX DOCUMENTS,
+AND SECURITY ADVISORIES) ARE GOOD-FAITH ASSESSMENTS AS OF THEIR STATED
+TIMESTAMP, ARE PROVIDED FOR INFORMATION ONLY, ARE NOT A WARRANTY OR GUARANTEE OF
+SECURITY, AND MAY BE REVISED WITHOUT NOTICE. YOU USE HOUSTON AT YOUR OWN RISK.
 
 ## 13. Limitation of liability
 
