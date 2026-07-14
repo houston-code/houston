@@ -1344,9 +1344,6 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let pendingImages: ImageAttachment[] = []
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
-  // A synthetic message to run next without a composer read — used by the plan
-  // review flow to auto-send "proceed" after the user accepts a plan.
-  let autoInput: string | null = null
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -1420,69 +1417,62 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   )
 
   for (;;) {
-    let text: string
-    if (autoInput !== null) {
-      // A plan-accept (or similar) queued a message; run it without a composer read.
-      text = autoInput
-      autoInput = null
-    } else {
-      // A persistent status line above the composer: model, policy, cwd, cost, and
-      // context-window fill — so live session state is always visible. Before a
-      // provider is set up it shows a "no model" prompt pointing at /login instead.
-      deps.io.out(
-        `${
-          providerId && model
-            ? renderStatusLine(
-                { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens },
-                columns(),
-                paint
-              )
-            : renderNoModelStatus(policy, opts.cwd, paint)
-        }\n`
-      )
-      // Read a (possibly multi-line) message: a trailing backslash or an open code
-      // fence keeps reading, so a fenced snippet isn't split at the first newline.
-      const composer = new ComposerBuffer()
-      let raw: string | null = null
-      let resetComposer = false
-      atComposer = true // Ctrl-C now means "clear/exit the composer" (see onInterrupt)
-      for (;;) {
-        // In an open code fence, hint how to send so a stray ``` can't trap the
-        // composer with no visible way out (typing the closing ``` submits).
-        const p = composer.pending
-          ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
-          : composerPrompt(policy, paint)
-        const line = await deps.io.readLine(p)
-        if (line === null) {
-          // Ctrl-C settles the read too: 'reset' discards this entry and re-prompts,
-          // 'exit' (a second Ctrl-C) leaves like Ctrl-D; otherwise it's a real EOF.
-          if (composerInterrupt === 'reset') {
-            composerInterrupt = null
-            resetComposer = true
-            break
-          }
-          if (composerInterrupt === 'exit') {
-            composerInterrupt = null
-            break // raw stays null → exit below
-          }
-          if (composer.pending) raw = composer.flush() // EOF mid-entry → submit what we have
+    // A persistent status line above the composer: model, policy, cwd, cost, and
+    // context-window fill — so live session state is always visible. Before a
+    // provider is set up it shows a "no model" prompt pointing at /login instead.
+    deps.io.out(
+      `${
+        providerId && model
+          ? renderStatusLine(
+              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens },
+              columns(),
+              paint
+            )
+          : renderNoModelStatus(policy, opts.cwd, paint)
+      }\n`
+    )
+    // Read a (possibly multi-line) message: a trailing backslash or an open code
+    // fence keeps reading, so a fenced snippet isn't split at the first newline.
+    const composer = new ComposerBuffer()
+    let raw: string | null = null
+    let resetComposer = false
+    atComposer = true // Ctrl-C now means "clear/exit the composer" (see onInterrupt)
+    for (;;) {
+      // In an open code fence, hint how to send so a stray ``` can't trap the
+      // composer with no visible way out (typing the closing ``` submits).
+      const p = composer.pending
+        ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
+        : composerPrompt(policy, paint)
+      const line = await deps.io.readLine(p)
+      if (line === null) {
+        // Ctrl-C settles the read too: 'reset' discards this entry and re-prompts,
+        // 'exit' (a second Ctrl-C) leaves like Ctrl-D; otherwise it's a real EOF.
+        if (composerInterrupt === 'reset') {
+          composerInterrupt = null
+          resetComposer = true
           break
         }
-        const done = composer.push(line)
-        if (done !== null) {
-          raw = done
-          break
+        if (composerInterrupt === 'exit') {
+          composerInterrupt = null
+          break // raw stays null → exit below
         }
+        if (composer.pending) raw = composer.flush() // EOF mid-entry → submit what we have
+        break
       }
-      atComposer = false // sub-prompts below are not the composer
-      if (resetComposer) continue // Ctrl-C discarded the input — draw a fresh prompt
-      if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
-      text = raw.trim()
-      if (!text) continue
-      // Persist composer submissions (commands included) for cross-restart recall;
-      // approval/question answers go through a different read and aren't saved.
-      deps.persistHistory?.(text)
+      const done = composer.push(line)
+      if (done !== null) {
+        raw = done
+        break
+      }
     }
+    atComposer = false // sub-prompts below are not the composer
+    if (resetComposer) continue // Ctrl-C discarded the input — draw a fresh prompt
+    if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
+    let text = raw.trim()
+    if (!text) continue
+    // Persist composer submissions (commands included) for cross-restart recall;
+    // approval/question answers go through a different read and aren't saved.
+    deps.persistHistory?.(text)
 
     if (text.startsWith('/')) {
       const result = parseSlashCommand(text, deps.getSettings(), templateCommands)
@@ -1756,16 +1746,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.startSpinner?.('Working')
 
-    // Track whether this turn produced a plan (assistant text) and how it ended,
-    // to offer a plan→execute handoff when running under plan mode. `sawPlanReady`
-    // suppresses that heuristic when the model used the real present_plan flow (which
-    // already collected a decision), leaving the handoff only for text-only plans.
-    let sawText = false
-    let endedCleanly = false
-    let sawPlanReady = false
     const send = (e: AgentEvent): void => {
       if (e.type === 'text') {
-        sawText = true
         deps.io.out(md.push(e.delta))
         return
       }
@@ -1875,7 +1857,6 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· compacted ${e.summarized} messages\n`, 'dim'))
           break
         case 'done':
-          endedCleanly = e.stopReason === 'end_turn'
           // One compact cost summary for the whole turn (this turn + running
           // session), instead of a line per model round. Only when the turn
           // actually spent tokens; otherwise just a blank separator.
@@ -1899,7 +1880,6 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The agent presented a finished plan and is blocked awaiting a verdict.
           // Render it and collect the same accept / suggest / reject decision the
           // GUI's plan panel does, then unblock present_plan via resolvePlan.
-          sawPlanReady = true
           enqueue(async () => {
             deps.io.out(`${renderPlan(e.plan, paint)}\n`)
             let action: PlanAction | null = null
@@ -1949,20 +1929,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     await prompts
     activeRunId = null
 
-    // Plan-mode handoff: when a plan-mode turn presents a plan and stops, offer to
-    // switch to auto-edit and carry it out — the decision point plan mode is for,
-    // instead of manually /approval-ing and re-asking.
-    if (policy === 'plan' && sawText && endedCleanly && !sawPlanReady) {
-      deps.io.out(
-        paint('\nPlan ready. Run it? [y] switch to auto-edit and proceed · anything else keeps planning\n', 'magenta')
-      )
-      const ans = await deps.io.readLine('> ', { discardPending: true })
-      if (parseApprovalAnswer(ans ?? '') === 'allow') {
-        policy = 'auto-edit'
-        autoInput = 'Proceed with the plan you just described.'
-        deps.io.out(paint('· switching to auto-edit and carrying out the plan\n', 'dim'))
-      }
-    }
+    // A plan-mode turn hands off to execution through the present_plan flow: the agent
+    // calls present_plan, the plan_ready case above renders it and collects an
+    // accept / suggest / reject verdict, and accepting flips the policy to auto-edit
+    // (or ask) and carries the plan out. There is deliberately no text-only fallback:
+    // treating any plain assistant answer as a "plan" spuriously offered to leave plan
+    // mode after ordinary questions.
   }
 
   deps.io.out(paint('\nBye.\n', 'dim'))
