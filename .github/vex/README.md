@@ -19,7 +19,8 @@ so downstream consumers get your risk assessment, not just the dependency list.
 ## Adding a statement (the triage)
 
 When the scan gate flags a High/Critical you are not going to fix immediately, add a
-statement to the `statements` array and bump the top-level `version`. Example:
+statement to the `statements` array, bump the top-level `version`, and set the top-level
+`last_updated` to the edit date. Example:
 
 ```json
 {
@@ -37,6 +38,10 @@ statement to the `statements` array and bump the top-level `version`. Example:
   `vulnerable_code_not_present`, `vulnerable_code_not_in_execute_path`,
   `vulnerable_code_cannot_be_controlled_by_adversary`, `inline_mitigations_already_exist`.
 - **`impact_statement`**: a human-readable reason, recommended for `not_affected`.
+- **Notes must be self-contained.** The document is attached to public releases and read
+  far from this repo, so `status_notes` / `impact_statement` must carry the full rationale
+  on their own. Never reference repo-internal paths (this README included) or anything
+  else a downstream consumer cannot access; link only public URLs, if anything.
 
 `not_affected` / `fixed` suppress the finding in the gate; `affected` /
 `under_investigation` document it without suppressing (so it still blocks until resolved).
@@ -71,4 +76,5 @@ is at or above 150.0.7871.115:
 3. `npm run dist:unpacked`, then regenerate the binary SBOM and confirm
    `grype sbom:... --only-fixed` reports no fixable High/Critical;
 4. run `npm run test:e2e`;
-5. **delete these `under_investigation` statements** and bump the top-level `version`.
+5. **delete these `under_investigation` statements**, bump the top-level `version`, and
+   update `last_updated`.
