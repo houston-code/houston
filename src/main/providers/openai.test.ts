@@ -125,6 +125,59 @@ describe('openai adapter: tool calls emitted as text (Ollama)', () => {
   })
 })
 
+describe('openai usage reporting', () => {
+  beforeEach(() => h.create.mockReset())
+
+  /** The trailing usage-only chunk (empty `choices`) most compatible servers send. */
+  const usageChunk = (usage: Record<string, unknown>): unknown => ({ choices: [], usage })
+
+  const doneUsageOf = (events: ProviderStreamEvent[]): Record<string, number> | undefined =>
+    (events.find((e) => e.type === 'done') as { usage?: Record<string, number> } | undefined)?.usage
+
+  it('surfaces the prompt-cache split from prompt_tokens_details', async () => {
+    // Unlike Anthropic, prompt_tokens already INCLUDES the cached portion — the
+    // split is surfaced as subsets, never added on top. `cache_write_tokens` is
+    // the OpenRouter extension for upstreams that bill cache writes.
+    const events = await run([
+      textChunk('ok'),
+      stopChunk(),
+      usageChunk({
+        prompt_tokens: 10_000,
+        completion_tokens: 42,
+        prompt_tokens_details: { cached_tokens: 9_000, cache_write_tokens: 500 }
+      })
+    ])
+    expect(doneUsageOf(events)).toEqual({
+      inputTokens: 10_000,
+      outputTokens: 42,
+      cacheReadTokens: 9_000,
+      cacheWriteTokens: 500
+    })
+  })
+
+  it('omits the cache fields when the server reports no split', async () => {
+    const events = await run([
+      textChunk('ok'),
+      stopChunk(),
+      usageChunk({ prompt_tokens: 1_000, completion_tokens: 5 })
+    ])
+    expect(doneUsageOf(events)).toEqual({ inputTokens: 1_000, outputTokens: 5 })
+  })
+
+  it('omits the cache fields on a zero-count details object (cold cache)', async () => {
+    const events = await run([
+      textChunk('ok'),
+      stopChunk(),
+      usageChunk({
+        prompt_tokens: 1_000,
+        completion_tokens: 5,
+        prompt_tokens_details: { cached_tokens: 0 }
+      })
+    ])
+    expect(doneUsageOf(events)).toEqual({ inputTokens: 1_000, outputTokens: 5 })
+  })
+})
+
 describe('toOpenAIMessages', () => {
   it('maps a plain user + tool result to text-only messages', () => {
     const msgs: ChatMessage[] = [

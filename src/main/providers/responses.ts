@@ -79,7 +79,12 @@ interface ResponsesEvent {
   delta?: string
   item?: { type?: string; call_id?: string; name?: string; arguments?: string }
   response?: {
-    usage?: { input_tokens?: number; output_tokens?: number }
+    usage?: {
+      input_tokens?: number
+      output_tokens?: number
+      /** Prompt-cache read split; `cached_tokens` is a subset of `input_tokens`. */
+      input_tokens_details?: { cached_tokens?: number }
+    }
     incomplete_details?: { reason?: string } | null
   }
   message?: string
@@ -118,6 +123,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       let hadToolCalls = false
       let inputTokens: number | undefined
       let outputTokens: number | undefined
+      let cacheReadTokens: number | undefined
       let stopReason: StopReason = 'end_turn'
 
       for await (const event of stream) {
@@ -150,6 +156,9 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
             const u = ev.response?.usage
             inputTokens = u?.input_tokens
             outputTokens = u?.output_tokens
+            // OpenAI caches automatically (no opt-in) and bills reads below the
+            // input rate; writes are free, so there's no write counterpart here.
+            cacheReadTokens = u?.input_tokens_details?.cached_tokens
             if (ev.response?.incomplete_details?.reason === 'max_output_tokens') stopReason = 'max_tokens'
             break
           }
@@ -163,7 +172,11 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       yield {
         type: 'done',
         stopReason: hadToolCalls ? 'tool_use' : stopReason,
-        usage: { inputTokens, outputTokens }
+        usage: {
+          inputTokens,
+          outputTokens,
+          ...(cacheReadTokens ? { cacheReadTokens } : {})
+        }
       }
     }
   }

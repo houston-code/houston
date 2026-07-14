@@ -1,7 +1,24 @@
-import { describe, expect, it } from 'vitest'
-import type { ChatMessage } from '@shared/agent'
-import { toResponsesInput, toResponsesTools } from './responses'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
+import { createResponsesProvider, toResponsesInput, toResponsesTools } from './responses'
 import { openaiResponsesReasoning } from './reasoning'
+
+// Mock the lazily-imported SDK so we can feed a synthetic Responses event stream
+// and assert how the adapter turns it into provider events.
+const h = vi.hoisted(() => ({ create: vi.fn() }))
+vi.mock('openai', () => {
+  class FakeOpenAI {
+    responses = { create: h.create }
+  }
+  return { default: FakeOpenAI }
+})
+
+/** Build an async-iterable Responses stream from event literals. */
+function streamOf(events: unknown[]): AsyncIterable<unknown> {
+  return (async function* () {
+    for (const e of events) yield e
+  })()
+}
 
 describe('toResponsesInput', () => {
   it('maps a user message to input_text', () => {
@@ -90,5 +107,41 @@ describe('openaiResponsesReasoning', () => {
   it('returns undefined when off or unsupported', () => {
     expect(openaiResponsesReasoning('gpt-5.1', 'off')).toBeUndefined()
     expect(openaiResponsesReasoning('gpt-4o', 'high')).toBeUndefined()
+  })
+})
+
+describe('responses usage reporting', () => {
+  beforeEach(() => h.create.mockReset())
+
+  async function drainDoneUsage(usage: Record<string, unknown>): Promise<Record<string, number>> {
+    h.create.mockResolvedValue(
+      streamOf([
+        { type: 'response.output_text.delta', delta: 'ok' },
+        { type: 'response.completed', response: { usage } }
+      ])
+    )
+    const provider = createResponsesProvider('k')
+    let done: { usage?: Record<string, number> } | undefined
+    for await (const ev of provider.streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      if (ev.type === 'done') done = ev as { usage?: Record<string, number> }
+    }
+    return done?.usage ?? {}
+  }
+
+  it('surfaces cached reads from input_tokens_details (subset of input_tokens)', async () => {
+    const usage = await drainDoneUsage({
+      input_tokens: 8_000,
+      output_tokens: 30,
+      input_tokens_details: { cached_tokens: 7_000 }
+    })
+    expect(usage).toEqual({ inputTokens: 8_000, outputTokens: 30, cacheReadTokens: 7_000 })
+  })
+
+  it('omits the cache field when no split is reported', async () => {
+    const usage = await drainDoneUsage({ input_tokens: 1_000, output_tokens: 10 })
+    expect(usage).toEqual({ inputTokens: 1_000, outputTokens: 10 })
   })
 })
