@@ -23,7 +23,6 @@ import {
   parseProviderMenuChoice,
   renderCatalogMenu,
   parseCatalogChoice,
-  pickModelFor,
   renderNoModelStatus,
   composerPrompt,
   extractDiff,
@@ -1933,12 +1932,6 @@ describe('/login helpers', () => {
     expect(parseCatalogChoice('3', 3)).toEqual({ kind: 'host', index: 2 })
     expect(parseCatalogChoice('4', 3)).toEqual({ kind: 'custom' }) // the trailing custom row
     expect(parseCatalogChoice('', 3)).toEqual({ kind: 'cancel' })
-  })
-
-  it('pickModelFor prefers defaultModel, then the first model, else null', () => {
-    expect(pickModelFor({ defaultModel: 'd', models: [{ id: 'a' }] } as never)).toBe('d')
-    expect(pickModelFor({ models: [{ id: 'a' }] } as never)).toBe('a')
-    expect(pickModelFor({ models: [] } as never)).toBeNull()
   })
 
   it('renderProviderMenu shows key status and the Other-host row', () => {

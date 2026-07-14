@@ -1,5 +1,6 @@
 import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
+import { pickDefaultModel } from './models'
 
 export const SETTINGS_SCHEMA_VERSION = 4
 
@@ -182,11 +183,7 @@ export function reconcileSelectedModel(
   if (provider.models.some((m) => m.id === selected.model)) return selected
   // The selected model was removed. Re-point within the same provider, guarding against
   // a `defaultModel` that pointed at the just-removed id.
-  const fallback =
-    provider.defaultModel && provider.models.some((m) => m.id === provider.defaultModel)
-      ? provider.defaultModel
-      : provider.models[0].id
-  return { providerId: provider.id, model: fallback }
+  return { providerId: provider.id, model: pickDefaultModel(provider) ?? provider.models[0].id }
 }
 
 export function defaultSettings(): AppSettings {

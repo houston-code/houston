@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelOption } from './types'
-import { modelDisplayName, naturalCompare, sortedModels } from './models'
+import { modelDisplayName, naturalCompare, pickDefaultModel, sortedModels } from './models'
 
 const ids = (ms: ModelOption[]): string[] => ms.map((m) => m.id)
 const m = (...xs: string[]): ModelOption[] => xs.map((id) => ({ id }))
@@ -159,5 +159,34 @@ describe('sortedModels', () => {
       { id: 'x', label: 'Apple' }
     ]
     expect(sortedModels('openai-compatible', stored).map((o) => o.label)).toEqual(['Apple', 'Banana'])
+  })
+})
+
+describe('pickDefaultModel', () => {
+  it('honors defaultModel when it is still in the list', () => {
+    expect(
+      pickDefaultModel({ kind: 'openai', defaultModel: 'gpt-5.5', models: m('gpt-5.6-sol', 'gpt-5.5') })
+    ).toBe('gpt-5.5')
+  })
+
+  it('ignores a dangling defaultModel that was removed from the list', () => {
+    expect(
+      pickDefaultModel({ kind: 'openai', defaultModel: 'gone', models: m('gpt-5.5') })
+    ).toBe('gpt-5.5')
+  })
+
+  it('picks by capability order, not stored order (the aggregator-login case)', () => {
+    // A live-fetched aggregator list arrives in the provider's own order (often
+    // newest-created first), putting an efficiency-tier variant at models[0]. The
+    // pick must not hand a fresh login that arbitrary head — it takes the flagship
+    // by the display ordering instead.
+    const fetched = m('openai/gpt-5.6-luna-pro', 'openai/gpt-5.6-luna', 'openai/gpt-5.6-sol')
+    expect(pickDefaultModel({ kind: 'openai-compatible', models: fetched })).toBe(
+      'openai/gpt-5.6-sol'
+    )
+  })
+
+  it('returns null when the provider has no models', () => {
+    expect(pickDefaultModel({ kind: 'openai-compatible', models: [] })).toBeNull()
   })
 })

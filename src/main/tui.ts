@@ -36,6 +36,7 @@ import type {
 } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import { contextWindowFor, contextPercent } from '@shared/usage'
+import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { truncateVisible } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
@@ -988,11 +989,6 @@ export function parseCatalogChoice(
   return { kind: 'cancel' }
 }
 
-/** The model to switch to after setting up a provider: its default, else its first model, else none. */
-export function pickModelFor(provider: ProviderConfig): string | null {
-  return provider.defaultModel ?? provider.models[0]?.id ?? null
-}
-
 /**
  * Paste a key (hidden) for `provider` and, if the provider has a model, switch to it.
  * Returns the provider+model to run, or null when no key was entered for a
@@ -1036,7 +1032,7 @@ async function keyEntryFor(
     }
   }
 
-  const model = pickModelFor(provider)
+  const model = pickDefaultModel(provider)
   if (!model) {
     deps.io.out(
       paint(`· ${name} has no models yet. Add one with:  /model ${provider.id}/<model-id>\n`, 'dim')
