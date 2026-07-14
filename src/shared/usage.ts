@@ -42,6 +42,13 @@ export function modelPricing(model: string): ModelPricing | null {
   if (m.includes('gpt-4.1')) return { input: 2, output: 8 }
   if (m.includes('o4-mini') || m.includes('o3-mini')) return { input: 1.1, output: 4.4 }
   if (/(^|[^a-z0-9])o3([^a-z0-9]|$)/.test(m)) return { input: 2, output: 8 }
+  // The gpt-5.6 family is priced per codename tier; the bare gpt-5.6 alias routes to
+  // sol, so it takes the flagship rate. Earlier gpt-5.x keep the flat family rate.
+  if (m.includes('gpt-5.6')) {
+    if (m.includes('terra')) return { input: 2.5, output: 15 }
+    if (m.includes('luna')) return { input: 1, output: 6 }
+    return { input: 5, output: 30 }
+  }
   if (m.includes('gpt-5')) return { input: 1.25, output: 10 }
   // Google (Gemini)
   if (m.includes('gemini') && m.includes('flash')) return { input: 0.3, output: 2.5 }
@@ -130,6 +137,10 @@ export function contextWindowFor(model: string): number | null {
     return 200_000
   }
   if (m.includes('gemini')) return 1_000_000
+  // The gpt-5.6 family (sol/terra/luna tiers, and the bare gpt-5.6 alias) ships a
+  // 1M-token window; the minor-version range keeps future 5.x bumps on it, like the
+  // Claude ranges above. gpt-5 through gpt-5.5 (and their -mini/-nano) stay at 400K.
+  if (/gpt-5\.[6-9]/.test(m)) return 1_000_000
   if (m.includes('gpt-5')) return 400_000
   if (m.includes('gpt-4.1')) return 1_000_000
   if (m.includes('gpt-4o')) return 128_000

@@ -68,8 +68,15 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('gpt-5')).toBe(400_000)
     expect(contextWindowFor('gpt-5-mini')).toBe(400_000)
     expect(contextWindowFor('gpt-5-nano')).toBe(400_000)
-    expect(contextWindowFor('gpt-5.5')).toBe(400_000) // minor bumps stay on the GPT-5 window
+    expect(contextWindowFor('gpt-5.5')).toBe(400_000) // 5.x below 5.6 stay on the GPT-5 window
     expect(contextWindowFor('gpt-5.4')).toBe(400_000)
+    // The gpt-5.6 family moved to a 1M window, all tiers plus the bare alias; future
+    // 5.x minor bumps stay on it.
+    expect(contextWindowFor('gpt-5.6-sol')).toBe(1_000_000)
+    expect(contextWindowFor('gpt-5.6-terra')).toBe(1_000_000)
+    expect(contextWindowFor('gpt-5.6-luna')).toBe(1_000_000)
+    expect(contextWindowFor('gpt-5.6')).toBe(1_000_000)
+    expect(contextWindowFor('gpt-5.7')).toBe(1_000_000)
     expect(contextWindowFor('gpt-4o')).toBe(128_000)
     expect(contextWindowFor('gpt-4o-mini')).toBe(128_000)
     expect(contextWindowFor('gpt-4.1')).toBe(1_000_000)
@@ -118,6 +125,15 @@ describe('modelPricing', () => {
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6 })
     expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5 })
     expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10 })
+  })
+
+  it('prices the gpt-5.6 codename tiers individually', () => {
+    expect(modelPricing('gpt-5.6-sol')).toEqual({ input: 5, output: 30 })
+    expect(modelPricing('gpt-5.6-terra')).toEqual({ input: 2.5, output: 15 })
+    expect(modelPricing('gpt-5.6-luna')).toEqual({ input: 1, output: 6 })
+    // The bare alias routes to sol; earlier 5.x keep the flat family rate.
+    expect(modelPricing('gpt-5.6')).toEqual({ input: 5, output: 30 })
+    expect(modelPricing('gpt-5.5')).toEqual({ input: 1.25, output: 10 })
   })
 
   it('returns null for unknown / local models', () => {
