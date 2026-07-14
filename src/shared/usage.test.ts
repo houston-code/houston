@@ -118,22 +118,25 @@ describe('contextPercent', () => {
 
 describe('modelPricing', () => {
   it('matches Claude / GPT / Gemini families', () => {
+    // Claude families carry no explicit cache prices — they use the fallback
+    // multipliers (0.1x read / 1.25x write of the input rate).
     expect(modelPricing('claude-fable-5')).toEqual({ input: 10, output: 50 })
     expect(modelPricing('claude-opus-4-8')).toEqual({ input: 5, output: 25 })
     expect(modelPricing('claude-sonnet-4-6')).toEqual({ input: 3, output: 15 })
     expect(modelPricing('claude-haiku-4-5')).toEqual({ input: 1, output: 5 })
-    expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6 })
-    expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5 })
-    expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10 })
+    // OpenAI / Gemini families carry explicit cache rates: discounted reads, free writes.
+    expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 })
   })
 
   it('prices the gpt-5.6 codename tiers individually', () => {
-    expect(modelPricing('gpt-5.6-sol')).toEqual({ input: 5, output: 30 })
-    expect(modelPricing('gpt-5.6-terra')).toEqual({ input: 2.5, output: 15 })
-    expect(modelPricing('gpt-5.6-luna')).toEqual({ input: 1, output: 6 })
+    expect(modelPricing('gpt-5.6-sol')).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 })
+    expect(modelPricing('gpt-5.6-terra')).toEqual({ input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 })
+    expect(modelPricing('gpt-5.6-luna')).toEqual({ input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 })
     // The bare alias routes to sol; earlier 5.x keep the flat family rate.
-    expect(modelPricing('gpt-5.6')).toEqual({ input: 5, output: 30 })
-    expect(modelPricing('gpt-5.5')).toEqual({ input: 1.25, output: 10 })
+    expect(modelPricing('gpt-5.6')).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 })
+    expect(modelPricing('gpt-5.5')).toEqual({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 })
   })
 
   it('returns null for unknown / local models', () => {
@@ -164,6 +167,23 @@ describe('turnCostUsd', () => {
     expect(
       turnCostUsd('claude-opus-4-8', 1_000_000, 0, { writeTokens: 1_000_000 })
     ).toBeCloseTo(6.25, 6)
+  })
+
+  it('uses the family cache rates on OpenAI / Gemini: discounted reads, free writes', () => {
+    // gpt-4o reads at its listed $1.25/M (0.5x input), NOT the Anthropic 0.1x fallback.
+    expect(turnCostUsd('gpt-4o', 1_000_000, 0, { readTokens: 1_000_000 })).toBeCloseTo(1.25, 6)
+    // gpt-5 reads at $0.125/M (0.1x input).
+    expect(turnCostUsd('gpt-5', 1_000_000, 0, { readTokens: 1_000_000 })).toBeCloseTo(0.125, 6)
+    // Gemini flash reads at $0.075/M (0.25x input).
+    expect(
+      turnCostUsd('gemini-2.5-flash', 1_000_000, 0, { readTokens: 1_000_000 })
+    ).toBeCloseTo(0.075, 6)
+    // Cache writes are free on these families — the explicit 0 must not fall back
+    // to Anthropic's 1.25x surcharge.
+    expect(turnCostUsd('gpt-4o', 1_000_000, 0, { writeTokens: 1_000_000 })).toBeCloseTo(0, 6)
+    expect(
+      turnCostUsd('gemini-2.5-flash', 1_000_000, 0, { writeTokens: 1_000_000 })
+    ).toBeCloseTo(0, 6)
   })
 
   it('charges only the fresh remainder at full input rate (cache-heavy loop)', () => {

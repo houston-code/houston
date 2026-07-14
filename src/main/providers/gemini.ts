@@ -109,12 +109,16 @@ export function createGeminiProvider(apiKey: string): Provider {
       let sawToolCall = false
       let inputTokens: number | undefined
       let outputTokens: number | undefined
+      let cacheReadTokens: number | undefined
       for await (const chunk of stream) {
         // usageMetadata is cumulative across the stream; keep the latest seen.
         const usage = chunk.usageMetadata
         if (usage) {
           inputTokens = usage.promptTokenCount
           outputTokens = usage.candidatesTokenCount
+          // Implicit-cache hits (Gemini 2.5+ caches automatically). A subset of
+          // promptTokenCount, billed below the input rate; implicit writes are free.
+          cacheReadTokens = usage.cachedContentTokenCount
         }
         // Iterate parts so we can separate "thought" parts (reasoning) from the
         // answer text — chunk.text would merge them.
@@ -139,7 +143,11 @@ export function createGeminiProvider(apiKey: string): Provider {
       yield {
         type: 'done',
         stopReason: sawToolCall ? 'tool_use' : 'end_turn',
-        usage: { inputTokens, outputTokens }
+        usage: {
+          inputTokens,
+          outputTokens,
+          ...(cacheReadTokens ? { cacheReadTokens } : {})
+        }
       }
     }
   }

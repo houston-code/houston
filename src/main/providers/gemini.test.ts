@@ -1,6 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import type { ChatMessage } from '@shared/agent'
-import { toGeminiContents } from './gemini'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
+import { createGeminiProvider, toGeminiContents } from './gemini'
+
+// Mock the lazily-imported SDK so we can feed a synthetic content stream and
+// assert how the adapter turns it into provider events.
+const h = vi.hoisted(() => ({ stream: vi.fn() }))
+vi.mock('@google/genai', () => {
+  class GoogleGenAI {
+    models = { generateContentStream: h.stream }
+  }
+  return { GoogleGenAI }
+})
 
 describe('toGeminiContents', () => {
   it('maps a user turn and a tool result (functionResponse)', () => {
@@ -76,5 +86,40 @@ describe('toGeminiContents', () => {
         ]
       }
     ])
+  })
+})
+
+describe('gemini usage reporting', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  async function drainDoneUsage(usageMetadata: Record<string, number>): Promise<Record<string, number>> {
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield { usageMetadata, candidates: [{ content: { parts: [{ text: 'ok' }] } }] }
+      })()
+    )
+    const provider = createGeminiProvider('k')
+    let done: { usage?: Record<string, number> } | undefined
+    for await (const ev of provider.streamChat({
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      if (ev.type === 'done') done = ev as { usage?: Record<string, number> }
+    }
+    return done?.usage ?? {}
+  }
+
+  it('surfaces implicit-cache hits from cachedContentTokenCount (subset of promptTokenCount)', async () => {
+    const usage = await drainDoneUsage({
+      promptTokenCount: 5_000,
+      candidatesTokenCount: 20,
+      cachedContentTokenCount: 4_000
+    })
+    expect(usage).toEqual({ inputTokens: 5_000, outputTokens: 20, cacheReadTokens: 4_000 })
+  })
+
+  it('omits the cache field when no hits are reported', async () => {
+    const usage = await drainDoneUsage({ promptTokenCount: 1_000, candidatesTokenCount: 10 })
+    expect(usage).toEqual({ inputTokens: 1_000, outputTokens: 10 })
   })
 })

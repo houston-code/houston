@@ -19,6 +19,19 @@ export interface SessionUsage {
 export interface ModelPricing {
   input: number
   output: number
+  /**
+   * Price per 1M cached-input tokens read back from the prompt cache. Cache-read
+   * discounts vary by family (Anthropic 0.1x, GPT-4o 0.5x, GPT-4.1/o-series 0.25x,
+   * GPT-5 0.1x, Gemini 0.25x), so it's a price, not a shared multiplier. Absent ⇒
+   * fall back to `input * CACHE_READ_PRICE_MULTIPLIER` (the Anthropic rate).
+   */
+  cacheRead?: number
+  /**
+   * Price per 1M tokens that wrote a new cache entry. `0` means writes are free
+   * (OpenAI, Gemini implicit caching) — distinct from absent, which falls back to
+   * `input * CACHE_WRITE_PRICE_MULTIPLIER` (Anthropic's 1.25x surcharge).
+   */
+  cacheWrite?: number
 }
 
 /**
@@ -35,42 +48,47 @@ export function modelPricing(model: string): ModelPricing | null {
   if (m.includes('opus')) return { input: 5, output: 25 }
   if (m.includes('sonnet')) return { input: 3, output: 15 }
   if (m.includes('haiku')) return { input: 1, output: 5 }
-  // OpenAI (GPT / o-series)
-  if (m.includes('gpt-4o-mini')) return { input: 0.15, output: 0.6 }
-  if (m.includes('gpt-4o')) return { input: 2.5, output: 10 }
-  if (m.includes('gpt-4.1-mini')) return { input: 0.4, output: 1.6 }
-  if (m.includes('gpt-4.1')) return { input: 2, output: 8 }
-  if (m.includes('o4-mini') || m.includes('o3-mini')) return { input: 1.1, output: 4.4 }
-  if (/(^|[^a-z0-9])o3([^a-z0-9]|$)/.test(m)) return { input: 2, output: 8 }
+  // OpenAI (GPT / o-series). Cache reads bill at a per-family discount (0.5x on
+  // GPT-4o, 0.25x on GPT-4.1/o-series, 0.1x on GPT-5.x); cache writes are free
+  // (cacheWrite: 0), unlike Anthropic's 1.25x write surcharge.
+  if (m.includes('gpt-4o-mini')) return { input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 }
+  if (m.includes('gpt-4o')) return { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 0 }
+  if (m.includes('gpt-4.1-mini')) return { input: 0.4, output: 1.6, cacheRead: 0.1, cacheWrite: 0 }
+  if (m.includes('gpt-4.1')) return { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 }
+  if (m.includes('o4-mini') || m.includes('o3-mini'))
+    return { input: 1.1, output: 4.4, cacheRead: 0.275, cacheWrite: 0 }
+  if (/(^|[^a-z0-9])o3([^a-z0-9]|$)/.test(m)) return { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 }
   // The gpt-5.6 family is priced per codename tier; the bare gpt-5.6 alias routes to
   // sol, so it takes the flagship rate. Earlier gpt-5.x keep the flat family rate.
   if (m.includes('gpt-5.6')) {
-    if (m.includes('terra')) return { input: 2.5, output: 15 }
-    if (m.includes('luna')) return { input: 1, output: 6 }
-    return { input: 5, output: 30 }
+    if (m.includes('terra')) return { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }
+    if (m.includes('luna')) return { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 }
+    return { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 }
   }
-  if (m.includes('gpt-5')) return { input: 1.25, output: 10 }
-  // Google (Gemini)
-  if (m.includes('gemini') && m.includes('flash')) return { input: 0.3, output: 2.5 }
-  if (m.includes('gemini')) return { input: 1.25, output: 10 }
+  if (m.includes('gpt-5')) return { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 }
+  // Google (Gemini). Implicit caching: reads at 0.25x, writes free.
+  if (m.includes('gemini') && m.includes('flash'))
+    return { input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0 }
+  if (m.includes('gemini')) return { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 }
   return null
 }
 
 /**
- * Prompt-cache price multipliers, relative to a model's base input rate: a cached
- * prefix that is *read* bills at 10% of the input price, and *writing* a (5-minute)
- * cache entry bills at 125%. These are Anthropic's published multipliers; OpenAI /
- * Gemini caching differs, so only providers that report a cache split (currently
- * Anthropic) get the discount — everyone else falls back to flat input pricing.
+ * Fallback prompt-cache price multipliers, relative to a model's base input rate:
+ * a cached prefix that is *read* bills at 10% of the input price, and *writing* a
+ * (5-minute) cache entry bills at 125%. These are Anthropic's published
+ * multipliers and apply when a family has no explicit `cacheRead`/`cacheWrite`
+ * price (the Claude families); OpenAI and Gemini rates differ per family, so
+ * those carry explicit prices in {@link modelPricing} instead.
  */
 export const CACHE_READ_PRICE_MULTIPLIER = 0.1
 export const CACHE_WRITE_PRICE_MULTIPLIER = 1.25
 
 /** The prompt-cache split of a turn's input tokens, for caching-aware cost. */
 export interface CacheTokens {
-  /** Tokens served from cache (a subset of inputTokens), billed at 0.1x input. */
+  /** Tokens served from cache (a subset of inputTokens), billed below the input rate. */
   readTokens?: number
-  /** Tokens that wrote a new cache entry (a subset of inputTokens), billed at 1.25x input. */
+  /** Tokens that wrote a new cache entry (a subset of inputTokens); free on some families, a surcharge on others. */
   writeTokens?: number
 }
 
@@ -79,7 +97,8 @@ export interface CacheTokens {
  *
  * `inputTokens` is the FULL input prefix — fresh tokens plus any served from or
  * written to the prompt cache. When a `cache` split is given, the cached portions
- * are priced at their reduced/elevated multipliers and only the remaining fresh
+ * are priced at the family's cache rates (explicit `cacheRead`/`cacheWrite` prices
+ * when known, the Anthropic multipliers otherwise) and only the remaining fresh
  * tokens pay the full input rate; without it, every input token pays full rate (the
  * historical behavior). This matters a lot for agent loops, where a warm cache means
  * most of each turn's input is a cheap cache read, not full-price fresh input.
@@ -99,10 +118,11 @@ export function turnCostUsd(
   // The fresh, full-price portion is whatever wasn't a cache read/write. The min()
   // guards above keep the parts from exceeding the whole if a provider's counts drift.
   const freshInput = inTok - cacheRead - cacheWrite
-  const inputCost =
-    freshInput * p.input +
-    cacheRead * p.input * CACHE_READ_PRICE_MULTIPLIER +
-    cacheWrite * p.input * CACHE_WRITE_PRICE_MULTIPLIER
+  // Family-specific cache prices when known; the Anthropic multipliers otherwise.
+  // `??` (not `||`) so an explicit 0 — free cache writes — is honored.
+  const cacheReadPrice = p.cacheRead ?? p.input * CACHE_READ_PRICE_MULTIPLIER
+  const cacheWritePrice = p.cacheWrite ?? p.input * CACHE_WRITE_PRICE_MULTIPLIER
+  const inputCost = freshInput * p.input + cacheRead * cacheReadPrice + cacheWrite * cacheWritePrice
   return inputCost / 1_000_000 + (outTok / 1_000_000) * p.output
 }
 

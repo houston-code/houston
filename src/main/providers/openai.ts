@@ -117,6 +117,8 @@ export function createOpenAIProvider(
       let finishReason: string | null = null
       let inputTokens: number | undefined
       let outputTokens: number | undefined
+      let cacheReadTokens: number | undefined
+      let cacheWriteTokens: number | undefined
 
       // Some OpenAI-compatible servers (notably Ollama on certain model templates,
       // and historically whenever streaming) return a tool call as plain assistant
@@ -138,6 +140,16 @@ export function createOpenAIProvider(
         if (chunk.usage) {
           inputTokens = chunk.usage.prompt_tokens
           outputTokens = chunk.usage.completion_tokens
+          // Prompt-cache split. Unlike Anthropic, `prompt_tokens` already INCLUDES
+          // the cached portion, so these are surfaced as subsets, not added back.
+          // `cached_tokens` is standard OpenAI; `cache_write_tokens` is the
+          // OpenRouter extension for upstreams that bill cache writes (Anthropic
+          // models routed through it) — absent elsewhere, so read off a loose type.
+          const details = chunk.usage.prompt_tokens_details as
+            | { cached_tokens?: number; cache_write_tokens?: number }
+            | undefined
+          cacheReadTokens = details?.cached_tokens
+          cacheWriteTokens = details?.cache_write_tokens
         }
         const choice = chunk.choices[0]
         if (!choice) continue
@@ -214,7 +226,12 @@ export function createOpenAIProvider(
       yield {
         type: 'done',
         stopReason: mapFinishReason(finishReason, hadToolCalls),
-        usage: { inputTokens, outputTokens }
+        usage: {
+          inputTokens,
+          outputTokens,
+          ...(cacheReadTokens ? { cacheReadTokens } : {}),
+          ...(cacheWriteTokens ? { cacheWriteTokens } : {})
+        }
       }
     }
   }
