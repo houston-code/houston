@@ -641,9 +641,12 @@ AppImage feeds (+ `latest-*.yml`) are what `electron-updater` uses to auto-updat
 installed app (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
 fails if a vendored binary is missing, so a build can't silently ship without search.
 
-Per-PR CI runs on Linux only (×1 Actions-minute multiplier): the unit gate (lint +
-typecheck + vitest), the real bubblewrap sandbox exercise, and a `dist:linux` packaging
-smoke that gates merge but uploads no artifact. The full matrix — Linux x64, macOS arm64,
+Per-PR CI runs on Linux only (×1 Actions-minute multiplier): a dependency license gate
+(`npm run license-gate`, which fails the PR if any package in the installed tree carries
+AGPL or another copyleft/source-available license, and holds everything that ships to a
+permissive allowlist), the unit gate (lint + typecheck + vitest), the real bubblewrap
+sandbox exercise, and a `dist:linux` packaging smoke that gates merge but uploads no
+artifact. The full matrix — Linux x64, macOS arm64,
 macOS x64 (Intel), and Windows x64, each packaging on its own runner — runs nightly in
 [`nightly-build.yml`](.github/workflows/nightly-build.yml), which also smoke-tests the
 packaged macOS app with Playwright and uploads inspection-only artifacts
