@@ -1648,6 +1648,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'set-model') {
         providerId = result.providerId
         model = result.model
+        // Persist the switch as the saved selection, mirroring the GUI's picker —
+        // otherwise the next launch snaps back to whatever `selected` was stored
+        // last (usually by a long-ago /login) and the switch silently evaporates.
+        deps.updateSettings?.({ selected: { providerId, model } })
         deps.io.out(paint(`· model → ${providerId} / ${model}\n`, 'dim'))
         continue
       }
