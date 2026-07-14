@@ -1330,30 +1330,41 @@ describe('runTui', () => {
     expect(t.text()).toContain('capability info is unavailable')
   })
 
-  it('plan mode: accepting a plan switches to auto-edit and auto-runs it', async () => {
+  it('plan mode: a plain assistant answer does not trigger a plan→execute handoff', async () => {
+    // Regression: any assistant text delta used to be treated as a runnable "plan",
+    // so a plain answer in plan mode spuriously offered to leave plan mode — and
+    // accepting injected "Proceed with the plan…" with no plan to proceed on. The
+    // handoff now flows only through present_plan (plan_ready), so a plain answer
+    // must produce no prompt and keep plan mode.
     const { d, rec } = deps([
-      { runId: 'x', type: 'text', delta: 'Here is the plan.' },
+      { runId: 'x', type: 'text', delta: 'This function validates the auth token.' },
       { runId: 'x', type: 'done', stopReason: 'end_turn' }
     ])
-    const t = fakeIo(['make a plan', 'y', null]) // prompt, accept, then EOF
+    const t = fakeIo(['what does this function do?', 'y', null])
     d.io = t.io
     await runTui({ ...opts, approvalPolicy: 'plan' }, d)
+    expect(t.text()).not.toContain('Plan ready')
+    // The 'y' is an ordinary follow-up message, still under plan mode — not an
+    // accepted handoff that flips to auto-edit and injects the proceed message.
     expect(rec.runs).toHaveLength(2)
-    expect(rec.runs[0].policy).toBe('plan')
-    expect(rec.runs[1].policy).toBe('auto-edit')
-    expect(rec.runs[1].messages.at(-1)!.content).toBe('Proceed with the plan you just described.')
+    expect(rec.runs[1].policy).toBe('plan')
+    expect(rec.runs[1].messages.at(-1)!.content).toBe('y')
+    expect(
+      rec.runs.some((r) => r.messages.at(-1)!.content === 'Proceed with the plan you just described.')
+    ).toBe(false)
   })
 
-  it('plan mode: declining keeps planning and does not re-run', async () => {
+  it('plan mode: a text-only turn stays in plan mode with no extra prompt', async () => {
     const { d, rec } = deps([
-      { runId: 'x', type: 'text', delta: 'A plan.' },
+      { runId: 'x', type: 'text', delta: 'Here is what I found.' },
       { runId: 'x', type: 'done', stopReason: 'end_turn' }
     ])
-    const t = fakeIo(['plan it', 'n', null])
+    const t = fakeIo(['look around', null])
     d.io = t.io
     await runTui({ ...opts, approvalPolicy: 'plan' }, d)
     expect(rec.runs).toHaveLength(1)
     expect(rec.runs[0].policy).toBe('plan')
+    expect(t.text()).not.toContain('Plan ready')
   })
 
   it('no plan prompt outside plan mode', async () => {
