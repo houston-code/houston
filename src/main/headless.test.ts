@@ -348,12 +348,14 @@ describe('runHeadless', () => {
   })
 
   /** A session store fake + a startRun that echoes messages to onMessages. */
-  function withSession(seed: Array<{ id: string; workspace: string; messages: ChatMessage[] }> = []) {
-    const store = new Map(seed.map((s) => [s.id, { ...s }]))
+  type StoredConv = { id: string; workspace: string; messages: ChatMessage[]; providerId?: string; model?: string }
+  function withSession(seed: Array<StoredConv> = []) {
+    const store = new Map<string, StoredConv>(seed.map((s) => [s.id, { ...s }]))
     let seq = 0
     const base = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
     const { d } = base
     const startedWith: { conversationId?: string; messages: ChatMessage[] }[] = []
+    const setModelCalls: Array<[string, string, string]> = []
     d.startRun = async (req, send, onMessages) => {
       startedWith.push({ conversationId: req.conversationId, messages: req.messages.map((m) => ({ ...m })) })
       onMessages?.([...req.messages, { role: 'assistant', content: 'ok' }])
@@ -365,17 +367,25 @@ describe('runHeadless', () => {
         const recent = [...store.values()].filter((c) => c.workspace === workspace).at(-1)
         return recent ?? null
       },
-      create: ({ workspace }) => {
+      create: ({ workspace, providerId, model }) => {
         const id = `conv-${++seq}`
-        store.set(id, { id, workspace, messages: [] })
+        store.set(id, { id, workspace, messages: [], providerId, model })
         return { id }
       },
       setMessages: (id, messages) => {
         const c = store.get(id)
         if (c) c.messages = messages
+      },
+      setModel: (id, providerId, model) => {
+        setModelCalls.push([id, providerId, model])
+        const c = store.get(id)
+        if (c) {
+          c.providerId = providerId
+          c.model = model
+        }
       }
     }
-    return { d, store, startedWith, out: base.out, err: base.err }
+    return { d, store, startedWith, setModelCalls, out: base.out, err: base.err }
   }
 
   it('creates and persists a conversation for a plain run', async () => {
@@ -417,6 +427,35 @@ describe('runHeadless', () => {
     await runHeadless({ ...baseOpts, continueSession: true }, d)
     expect(startedWith[0].conversationId).toBe('conv-1') // a fresh one
     expect(startedWith[0].messages).toEqual([{ role: 'user', content: 'hi' }])
+  })
+
+  it('rewrites a resumed session stored under a different model to the resolved model', async () => {
+    // Prior session was created under a different provider+model than this run resolves to.
+    const { d, store, setModelCalls } = withSession([
+      { id: 'a', workspace: '/proj', messages: [{ role: 'user', content: 'earlier' }], providerId: 'openai', model: 'gpt' }
+    ])
+    // Default deps resolve to anthropic/claude (via settings.selected).
+    await runHeadless({ ...baseOpts, resumeId: 'a' }, d)
+    expect(setModelCalls).toEqual([['a', 'anthropic', 'claude']])
+    // Stored meta now tracks the model that actually ran (not the create-time one).
+    expect(store.get('a')).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+  })
+
+  it('does not call setModel on the fresh-create path (create already stores the model)', async () => {
+    const { d, setModelCalls } = withSession()
+    await runHeadless(baseOpts, d)
+    expect(setModelCalls).toEqual([])
+  })
+
+  it('does not crash the run when setModel throws (best-effort persistence)', async () => {
+    const { d } = withSession([
+      { id: 'a', workspace: '/proj', messages: [{ role: 'user', content: 'earlier' }], providerId: 'openai', model: 'gpt' }
+    ])
+    d.session!.setModel = () => {
+      throw new Error('store write failed')
+    }
+    const code = await runHeadless({ ...baseOpts, resumeId: 'a' }, d)
+    expect(code).toBe(0)
   })
 
   it('stays ephemeral (no conversation id) when no session store is wired', async () => {

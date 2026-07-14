@@ -213,6 +213,13 @@ export interface HeadlessDeps {
     load: (opts: { workspace: string; id?: string }) => { id: string; messages: ChatMessage[] } | null
     create: (input: { workspace: string; providerId: string; model: string }) => { id: string }
     setMessages: (id: string, messages: ChatMessage[]) => void
+    /**
+     * Rewrite a conversation's stored provider+model. Only needed when resuming a
+     * prior session under a different model than it was created with, so its stored
+     * meta (and the model a GUI re-open lands on) tracks what actually ran. The
+     * fresh-create path already stores the right model via `create`.
+     */
+    setModel: (id: string, providerId: string, model: string) => void
   }
 }
 
@@ -261,6 +268,17 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     if (prior) {
       conversationId = prior.id
       messages.push(...prior.messages)
+      // The conversation stored its provider+model at create time, but this run
+      // executes under the resolved --provider/--model (or settings.selected),
+      // which can differ from what the resumed session was created with. Rewrite
+      // the stored meta so usage attribution and a later GUI re-open track the
+      // model that actually ran. Best-effort: a store failure must not crash the
+      // run (the create path needs no such rewrite — `create` stored it already).
+      try {
+        deps.session.setModel(prior.id, resolved.providerId, resolved.model)
+      } catch {
+        // ignore — persistence is best-effort
+      }
     } else {
       conversationId = deps.session.create({
         workspace: opts.cwd,
