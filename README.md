@@ -417,6 +417,12 @@ Houston -p "Summarize the architecture" --cwd ~/code/myproj --accept-terms
 # let it edit files and run commands (still sandboxed to the project)
 Houston -p "Add a unit test for utils/date.ts and run the suite" --cwd . --full-auto
 
+# gate shell commands but approve them when the run asks (instead of denying)
+Houston -p "Fix the lint errors" --approval auto-edit --on-approval allow
+
+# CI guard: exit non-zero if the run needs anything the policy doesn't auto-approve
+Houston -p "Summarize open TODOs" --on-approval fail
+
 # machine-readable: one JSON object per agent event
 Houston -p "List the TODOs" --json
 
@@ -427,17 +433,29 @@ Houston -i   # /resume picks up the same conversation
 
 Flags: `--cwd <dir>` (project folder, default the current directory),
 `--provider <id>` / `--model <id>` (default your selected model), `--approval
-<plan|ask|auto-edit|full-auto>` (default `plan`), `--json`, `--accept-terms`,
-`--continue` (resume the most recent session in the folder), `--resume <id>`
-(resume a specific one). Assistant text streams to stdout, tool activity — plus a
-one-line token/cost total, failed tools, and an early-stop notice if the run hits
-a step/output limit — to stderr, and the process exits non-zero on error. It
+<plan|ask|auto-edit|full-auto>` (default `plan`), `--on-approval
+<allow|deny|fail>` (below), `--json`, `--accept-terms`, `--continue` (resume the
+most recent session in the folder), `--resume <id>` (resume a specific one).
+Assistant text streams to stdout, tool activity (plus a one-line token/cost
+total, failed tools, and an early-stop notice if the run hits a step/output
+limit) to stderr, and the process exits non-zero on error. It
 reuses your saved settings and Keychain-stored API keys. Each run is saved as a
 conversation (shared with the app and the interactive `-i` session), so you can
 script a prompt and then take over where it left off. The run prints its session
 id (`· session <id>` on stderr, or a `{"type":"session","conversationId":…}` line
 first in `--json`) so a script can capture it and `--resume <id>` that exact
 session later.
+
+**Approval prompts with no human.** Interactively, some tool calls pause for
+your approval: whatever the chosen `--approval` policy gates (shell commands
+under `auto-edit`, writes and shell under `ask`), plus the calls every policy
+asks about (first network or MCP use, shell that escapes the project or runs
+unsandboxed). A headless run has nobody to ask, so `--on-approval` decides:
+`deny` refuses the call (the agent is told and works within what the policy
+auto-approves), `allow` approves it, and `fail` refuses it and exits non-zero so
+a script can tell the run needed more than it was granted. The default is
+`deny`, except under `full-auto` (which already opts into everything) where it
+is `allow`; an unrecognized value is treated as `deny`.
 
 **First-run terms.** The GUI shows a one-time gate to accept the
 [Terms of Use](docs/TERMS.md), [Privacy Policy](docs/PRIVACY.md), and

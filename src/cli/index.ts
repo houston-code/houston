@@ -69,7 +69,7 @@ export function nodeVersionError(nodeVersion: string, min = MIN_NODE_MAJOR): str
   return null
 }
 
-export const USAGE = `Houston CLI ${VERSION} — coding agent in your terminal (no desktop app required).
+export const USAGE = `Houston CLI ${VERSION}: coding agent in your terminal (no desktop app required).
 
 Usage:
   houston [options]                    stay-resident interactive session (bare command; same as -i)
@@ -78,16 +78,18 @@ Usage:
   houston providers [...]              manage model providers and their API keys
 
 Options:
-  --cwd <dir>          project folder (default: the current directory)
-  --provider <id>      provider id from your settings (default: your selection)
-  --model <id>         model id (default: your selection)
-  --approval <policy>  plan | ask | auto-edit | full-auto
-  --accept-terms       accept the terms on first use of this profile
-  --json               (-p) machine-readable: one JSON event per line
-  --continue           (-p) resume the folder's most recent session
-  --resume <id>        (-p) resume a specific session
-  -h, --help           this help
-  -v, --version        print the version
+  --cwd <dir>           project folder (default: the current directory)
+  --provider <id>       provider id from your settings (default: your selection)
+  --model <id>          model id (default: your selection)
+  --approval <policy>   plan | ask | auto-edit | full-auto
+  --on-approval <mode>  (-p) approval prompts with no human: allow | deny | fail
+                        (default: deny, or allow under full-auto)
+  --accept-terms        accept the terms on first use of this profile
+  --json                (-p) machine-readable: one JSON event per line
+  --continue            (-p) resume the folder's most recent session
+  --resume <id>         (-p) resume a specific session
+  -h, --help            this help
+  -v, --version         print the version
 
 Providers:
   houston providers                    list configured providers and hosts to add
@@ -98,10 +100,10 @@ Providers:
 
 Credentials (checked in this order):
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / HOUSTON_API_KEY_<ID>
-  <profile>/cli-credentials.json — {"<provider-id>": "<key>"} with 0600 perms
+  <profile>/cli-credentials.json: {"<provider-id>": "<key>"} with 0600 perms
 
 Custom provider/MCP auth headers (optional):
-  <profile>/cli-headers.json — {"provider:<id>"|"mcp:<id>": {"<Header>": "<value>"}} with 0600 perms
+  <profile>/cli-headers.json: {"provider:<id>"|"mcp:<id>": {"<Header>": "<value>"}} with 0600 perms
 
 Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 `

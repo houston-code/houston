@@ -16,6 +16,26 @@ import type { AgentEvent, AgentRunRequest, ChatMessage, PlanDecision } from '@sh
  * can be unit-tested; index.ts wires the real deps when a prompt flag is present.
  */
 
+/**
+ * What headless does when the loop asks for a tool approval (there is no human
+ * to answer). Approval prompts fire under 'ask'/'auto-edit' for their gated
+ * kinds, and under EVERY policy for the always-prompt cases: network/MCP first
+ * use, unconfined shell, and workspace-escaping shell.
+ * - allow: approve the call (the pre-flag behavior, and full-auto's default)
+ * - deny:  refuse the call; the agent sees the denial and continues within
+ *          what the policy auto-approves
+ * - fail:  refuse the call AND exit non-zero, so a script can tell the run hit
+ *          a permission wall it wasn't granted
+ */
+export const HEADLESS_APPROVAL_MODES = ['allow', 'deny', 'fail'] as const
+
+export type HeadlessApprovalMode = (typeof HEADLESS_APPROVAL_MODES)[number]
+
+/** Runtime guard: true when `v` is a known `--on-approval` mode. */
+export function isHeadlessApprovalMode(v: unknown): v is HeadlessApprovalMode {
+  return typeof v === 'string' && (HEADLESS_APPROVAL_MODES as readonly string[]).includes(v)
+}
+
 export interface HeadlessOptions {
   prompt: string
   cwd: string
@@ -27,6 +47,14 @@ export interface HeadlessOptions {
    * `--full-auto` (or `--approval auto-edit`) headless — under plan mode it never fires.
    */
   approvalPolicy: ApprovalPolicy
+  /**
+   * `--on-approval`: how to resolve approval prompts (see HEADLESS_APPROVAL_MODES).
+   * Defaults per policy: 'allow' under full-auto (that policy already opted into
+   * everything, and unsandboxed CI hosts prompt for every shell command), 'deny'
+   * otherwise — a policy chosen to gate actions keeps gating them unattended
+   * instead of being silently rubber-stamped into full-auto.
+   */
+  onApproval: HeadlessApprovalMode
   json: boolean
   /** `--continue`: resume the most recent session in this folder (script → take over). */
   continueSession: boolean
@@ -67,6 +95,7 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   let providerId: string | undefined
   let model: string | undefined
   let approvalPolicy: ApprovalPolicy = 'plan'
+  let onApproval: HeadlessApprovalMode | undefined
   let json = false
   let acceptTerms = false
   let continueSession = false
@@ -102,6 +131,12 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'
+    } else if (name === '--on-approval') {
+      const { value, next } = flagValue(argv, i)
+      // Fail closed: an unrecognized value denies rather than falling back to
+      // the policy default, which under --full-auto would silently be 'allow'.
+      onApproval = isHeadlessApprovalMode(value) ? value : 'deny'
+      i = next
     } else if (name === '--json') {
       json = true
     } else if (name === '--accept-terms') {
@@ -110,7 +145,20 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   }
 
   if (prompt === undefined || prompt === '') return null
-  return { prompt, cwd, providerId, model, approvalPolicy, json, acceptTerms, continueSession, resumeId }
+  return {
+    prompt,
+    cwd,
+    providerId,
+    model,
+    approvalPolicy,
+    // An explicit --on-approval wins regardless of flag order; otherwise the
+    // policy picks: full-auto keeps auto-approving, the gating policies deny.
+    onApproval: onApproval ?? (approvalPolicy === 'full-auto' ? 'allow' : 'deny'),
+    json,
+    acceptTerms,
+    continueSession,
+    resumeId
+  }
 }
 
 /**
@@ -226,9 +274,11 @@ export interface HeadlessDeps {
 /**
  * Run one prompt to completion and return an exit code (0 ok, 1 error). In
  * `--json` mode every agent event is emitted as a JSON line; otherwise assistant
- * text streams to stdout and tool activity to stderr. Approval prompts (only
- * possible under ask/auto-edit) are auto-approved since there's no human — the
- * default 'plan' policy is read-only and never prompts.
+ * text streams to stdout and tool activity to stderr. Approval prompts (from the
+ * gating policies, and from the always-prompt cases every policy has: network/MCP
+ * first use, unconfined or workspace-escaping shell) are resolved per
+ * `opts.onApproval` since there's no human to ask — denied by default, approved
+ * under full-auto or an explicit `--on-approval allow`.
  */
 export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Promise<number> {
   const settings = deps.getSettings()
@@ -263,7 +313,7 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     const wantsPrior = opts.continueSession || opts.resumeId !== undefined
     const prior = wantsPrior ? deps.session.load({ workspace: opts.cwd, id: opts.resumeId }) : null
     if (wantsPrior && !prior) {
-      deps.err('· no prior session to resume — starting a fresh one\n')
+      deps.err('· no prior session to resume; starting a fresh one\n')
     }
     if (prior) {
       conversationId = prior.id
@@ -352,14 +402,26 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         cost += e.cost
         break
       case 'tool_approval':
-        if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
-        deps.resolveApproval(e.runId, e.callId, 'allow')
+        // No human to answer the prompt: resolve per --on-approval. 'allow'
+        // approves the call; 'deny'/'fail' refuse it, so the policy's gates hold
+        // in unattended runs instead of being rubber-stamped ('fail' also flips
+        // the exit code so a script can tell the run hit a permission wall).
+        if (opts.onApproval === 'allow') {
+          if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
+          deps.resolveApproval(e.runId, e.callId, 'allow')
+        } else {
+          if (!opts.json) {
+            deps.err(`· denying ${e.name} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
+          }
+          if (opts.onApproval === 'fail') failed = true
+          deps.resolveApproval(e.runId, e.callId, 'deny')
+        }
         break
       case 'tool_question':
         // No interactive user in headless mode — auto-answer so an `ask_user`
         // call can't hang the run forever. The agent gets a clear signal to
         // proceed on its own rather than a silent empty string.
-        if (!opts.json) deps.err('· no interactive user (headless) — auto-answering ask_user\n')
+        if (!opts.json) deps.err('· no interactive user (headless): auto-answering ask_user\n')
         deps.resolveQuestion(
           e.runId,
           e.callId,
@@ -409,7 +471,7 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         if (!opts.json) {
           deps.out(`\n${e.plan.title}\n`)
           if (e.plan.body) deps.out(`${e.plan.body}\n`)
-          deps.err('· no interactive reviewer (headless) — plan not executed; use --full-auto to make changes\n')
+          deps.err('· no interactive reviewer (headless): plan not executed; use --full-auto to make changes\n')
         }
         deps.resolvePlan(e.runId, e.callId, { kind: 'reject' })
         break
