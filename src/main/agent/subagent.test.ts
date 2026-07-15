@@ -4,13 +4,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
+import { checkpointFileCount, restoreCheckpoint, clearCheckpoints } from './checkpoints'
 
 let ws: string
 
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-sub-'))
 })
-afterEach(() => rmSync(ws, { recursive: true, force: true }))
+afterEach(() => {
+  clearCheckpoints()
+  rmSync(ws, { recursive: true, force: true })
+})
 
 /** A scripted provider: each call yields the next pre-programmed turn. */
 function scriptedProvider(turns: ProviderStreamEvent[][]): Provider {
@@ -253,6 +257,66 @@ describe('runSubAgent', () => {
       expect(report).toContain('Wrote out.txt')
       expect(existsSync(join(ws, 'out.txt'))).toBe(true)
       expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('hello from subagent')
+    })
+
+    it('records edits in the dispatching turn checkpoint when checkpointRunId is set', async () => {
+      writeFileSync(join(ws, 'existing.txt'), 'before-sub')
+      const patch = [
+        '*** Begin Patch',
+        '*** Update File: existing.txt',
+        '@@',
+        '-before-sub',
+        '+after-sub',
+        '*** Add File: created.txt',
+        '+made by subagent',
+        '*** End Patch'
+      ].join('\n')
+      const provider = scriptedProvider([
+        [
+          { type: 'tool_call', call: { id: 'p1', name: 'apply_patch', arguments: { patch } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Patched.' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'apply the change',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws],
+        checkpointRunId: 'parent-run-1'
+      })
+      expect(readFileSync(join(ws, 'existing.txt'), 'utf8')).toBe('after-sub')
+      expect(readFileSync(join(ws, 'created.txt'), 'utf8')).toBe('made by subagent')
+      // Both files landed in the PARENT run's checkpoint, so reverting the turn
+      // undoes the delegated changes too.
+      expect(checkpointFileCount('parent-run-1')).toBe(2)
+      expect(await restoreCheckpoint('parent-run-1')).toBe(2)
+      expect(readFileSync(join(ws, 'existing.txt'), 'utf8')).toBe('before-sub')
+      expect(existsSync(join(ws, 'created.txt'))).toBe(false)
+    })
+
+    it('does not record checkpoints when no checkpointRunId is given', async () => {
+      const provider = scriptedProvider([
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'plain.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Wrote.' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'write it',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws]
+      })
+      expect(readFileSync(join(ws, 'plain.txt'), 'utf8')).toBe('x')
+      expect(checkpointFileCount('parent-run-1')).toBe(0)
     })
 
     it('a declared allow-list can narrow the writable tier to a subset', async () => {

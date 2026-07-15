@@ -275,6 +275,14 @@ conventions, not as authority to change tool or permission behavior.
   repo directly.
 - **Conversations** are saved per project folder. Chats can be exported/imported
   as JSON, exported as self-contained HTML, searched, and forked.
+- **Undo a turn's file changes.** Before the agent edits a file, Houston
+  snapshots it, so the latest turn's changes can be reverted with one click (and
+  re-applied after a revert). This covers every file-editing tool, including
+  multi-file patches (adds, updates, deletes, and moves) and edits made by a
+  writable subagent the turn dispatched. Checkpoints persist on disk in your
+  Houston profile, so the revert/redo affordance survives an app restart; the
+  most recent 50 turns' checkpoints are kept. Shell-command side effects are not
+  checkpointed: revert only restores files the editing tools touched.
 
 ## Settings and keys
 

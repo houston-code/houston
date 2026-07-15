@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  mkdirSync,
+  statSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -10,8 +19,11 @@ import {
   checkpointFileCount,
   getConversationCheckpoint,
   noteConversationRun,
-  clearCheckpoints
+  clearCheckpoints,
+  flushCheckpoints,
+  writeTargets
 } from './checkpoints'
+import { setUserDataDir, resetUserDataDir } from '../userData'
 
 let ws: string
 
@@ -19,8 +31,10 @@ beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-cp-'))
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await flushCheckpoints()
   clearCheckpoints()
+  resetUserDataDir()
   rmSync(ws, { recursive: true, force: true })
 })
 
@@ -197,7 +211,11 @@ describe('checkpoints', () => {
       writeFileSync(join(ws, 'a.txt'), 'modified')
       await recordResult('run-a', [ws], 'a.txt')
 
-      expect(getConversationCheckpoint('conv1')).toEqual({ runId: 'run-a', files: 1, reverted: false })
+      expect(await getConversationCheckpoint('conv1')).toEqual({
+        runId: 'run-a',
+        files: 1,
+        reverted: false
+      })
     })
 
     it('reflects reverted state across restore and reapply', async () => {
@@ -208,18 +226,18 @@ describe('checkpoints', () => {
       await recordResult('run-a', [ws], 'a.txt')
 
       await restoreCheckpoint('run-a')
-      expect(getConversationCheckpoint('conv1')?.reverted).toBe(true)
+      expect((await getConversationCheckpoint('conv1'))?.reverted).toBe(true)
       await reapplyCheckpoint('run-a')
-      expect(getConversationCheckpoint('conv1')?.reverted).toBe(false)
+      expect((await getConversationCheckpoint('conv1'))?.reverted).toBe(false)
     })
 
-    it('returns null for a conversation with no recorded run', () => {
-      expect(getConversationCheckpoint('unknown')).toBeNull()
+    it('returns null for a conversation with no recorded run', async () => {
+      expect(await getConversationCheckpoint('unknown')).toBeNull()
     })
 
-    it('returns null when the latest run changed no files (nothing to revert)', () => {
+    it('returns null when the latest run changed no files (nothing to revert)', async () => {
       noteConversationRun('conv1', 'run-empty')
-      expect(getConversationCheckpoint('conv1')).toBeNull()
+      expect(await getConversationCheckpoint('conv1')).toBeNull()
     })
 
     it('tracks only the latest run — a newer no-op run hides an earlier revertable one', async () => {
@@ -228,11 +246,11 @@ describe('checkpoints', () => {
       writeFileSync(join(ws, 'a.txt'), 'original')
       await recordOriginal('run-a', [ws], 'a.txt')
       await recordResult('run-a', [ws], 'a.txt')
-      expect(getConversationCheckpoint('conv1')).not.toBeNull()
+      expect(await getConversationCheckpoint('conv1')).not.toBeNull()
 
       // ...then run-b ran on the same conversation and touched nothing.
       noteConversationRun('conv1', 'run-b')
-      expect(getConversationCheckpoint('conv1')).toBeNull()
+      expect(await getConversationCheckpoint('conv1')).toBeNull()
     })
 
     it('is cleared by clearCheckpoints', async () => {
@@ -240,10 +258,232 @@ describe('checkpoints', () => {
       writeFileSync(join(ws, 'a.txt'), 'x')
       await recordOriginal('run-a', [ws], 'a.txt')
       await recordResult('run-a', [ws], 'a.txt')
-      expect(getConversationCheckpoint('conv1')).not.toBeNull()
+      expect(await getConversationCheckpoint('conv1')).not.toBeNull()
 
       clearCheckpoints()
-      expect(getConversationCheckpoint('conv1')).toBeNull()
+      expect(await getConversationCheckpoint('conv1')).toBeNull()
+    })
+  })
+
+  describe('writeTargets (which files a write-kind call touches)', () => {
+    it('maps single-file tools to their path argument', () => {
+      expect(writeTargets('write_file', { path: 'a.txt', content: 'x' })).toEqual([
+        { path: 'a.txt', deleted: false }
+      ])
+      expect(writeTargets('edit_file', { path: 'b.ts', edits: [] })).toEqual([
+        { path: 'b.ts', deleted: false }
+      ])
+    })
+
+    it('returns nothing for write-kind tools with no file target', () => {
+      expect(writeTargets('dispatch_writable_agent', { prompt: 'go' })).toEqual([])
+      expect(writeTargets('write_file', {})).toEqual([])
+    })
+
+    it('maps every op in an apply_patch envelope, including both ends of a move', () => {
+      const patch = [
+        '*** Begin Patch',
+        '*** Add File: added.txt',
+        '+hello',
+        '*** Update File: changed.txt',
+        '@@',
+        '-old',
+        '+new',
+        '*** Update File: from.txt',
+        '*** Move to: to.txt',
+        '@@',
+        '-a',
+        '+b',
+        '*** Delete File: gone.txt',
+        '*** End Patch'
+      ].join('\n')
+      expect(writeTargets('apply_patch', { patch })).toEqual([
+        { path: 'added.txt', deleted: false },
+        { path: 'changed.txt', deleted: false },
+        { path: 'from.txt', deleted: true },
+        { path: 'to.txt', deleted: false },
+        { path: 'gone.txt', deleted: true }
+      ])
+    })
+
+    it('returns nothing for a malformed patch (its execute() fails before writing)', () => {
+      expect(writeTargets('apply_patch', { patch: 'not a patch' })).toEqual([])
+      expect(writeTargets('apply_patch', {})).toEqual([])
+    })
+  })
+
+  describe('deliberate deletes (apply_patch Delete File / a move source)', () => {
+    it('revert restores a deleted file; redo re-deletes it', async () => {
+      const f = join(ws, 'gone.txt')
+      writeFileSync(f, 'doomed content')
+      await recordOriginal('r', [ws], 'gone.txt')
+      rmSync(f) // the patch deletes it
+      await recordResult('r', [ws], 'gone.txt', { expectAbsent: true })
+
+      expect(await restoreCheckpoint('r')).toBe(1)
+      expect(readFileSync(f, 'utf8')).toBe('doomed content')
+
+      expect(await reapplyCheckpoint('r')).toBe(1)
+      expect(existsSync(f)).toBe(false)
+    })
+
+    it('round-trips a move (source restored + target removed on revert, back on redo)', async () => {
+      const from = join(ws, 'from.txt')
+      writeFileSync(from, 'moving content')
+      await recordOriginal('r', [ws], 'from.txt')
+      await recordOriginal('r', [ws], 'to.txt')
+      // The patch applies the move.
+      rmSync(from)
+      writeFileSync(join(ws, 'to.txt'), 'moving content')
+      await recordResult('r', [ws], 'from.txt', { expectAbsent: true })
+      await recordResult('r', [ws], 'to.txt')
+
+      expect(await restoreCheckpoint('r')).toBe(2)
+      expect(readFileSync(from, 'utf8')).toBe('moving content')
+      expect(existsSync(join(ws, 'to.txt'))).toBe(false)
+
+      expect(await reapplyCheckpoint('r')).toBe(2)
+      expect(existsSync(from)).toBe(false)
+      expect(readFileSync(join(ws, 'to.txt'), 'utf8')).toBe('moving content')
+    })
+
+    it('still skips redo when the file is unexpectedly missing (expectAbsent not set)', async () => {
+      const f = join(ws, 'a.txt')
+      writeFileSync(f, 'original')
+      await recordOriginal('r', [ws], 'a.txt')
+      rmSync(f) // vanished, but the tool did NOT mean to delete it
+      await recordResult('r', [ws], 'a.txt')
+
+      await restoreCheckpoint('r')
+      expect(readFileSync(f, 'utf8')).toBe('original')
+      expect(await reapplyCheckpoint('r')).toBe(0)
+      expect(readFileSync(f, 'utf8')).toBe('original')
+    })
+  })
+
+  describe('persistence (checkpoints survive a restart via userData/checkpoints)', () => {
+    let dataDir: string
+
+    beforeEach(() => {
+      dataDir = mkdtempSync(join(tmpdir(), 'houston-cp-data-'))
+      setUserDataDir(dataDir)
+    })
+
+    afterEach(async () => {
+      await flushCheckpoints()
+      clearCheckpoints()
+      resetUserDataDir()
+      rmSync(dataDir, { recursive: true, force: true })
+    })
+
+    /** Record one modified file under conv1/run-a and flush it to disk. */
+    async function recordOneChange(): Promise<string> {
+      const f = join(ws, 'a.txt')
+      writeFileSync(f, 'original')
+      noteConversationRun('conv1', 'run-a')
+      await recordOriginal('run-a', [ws], 'a.txt')
+      writeFileSync(f, 'modified')
+      await recordResult('run-a', [ws], 'a.txt')
+      await flushCheckpoints()
+      return f
+    }
+
+    it('restores the affordance and the files after a "restart" (memory cleared)', async () => {
+      const f = await recordOneChange()
+      clearCheckpoints() // simulate the app restarting
+
+      const cp = await getConversationCheckpoint('conv1')
+      expect(cp).toEqual({ runId: 'run-a', files: 1, reverted: false })
+      expect(await restoreCheckpoint('run-a')).toBe(1)
+      expect(readFileSync(f, 'utf8')).toBe('original')
+      expect(await reapplyCheckpoint('run-a')).toBe(1)
+      expect(readFileSync(f, 'utf8')).toBe('modified')
+    })
+
+    it('persists the reverted flag across a restart', async () => {
+      await recordOneChange()
+      await restoreCheckpoint('run-a')
+      await flushCheckpoints()
+      clearCheckpoints()
+
+      expect((await getConversationCheckpoint('conv1'))?.reverted).toBe(true)
+      expect(await reapplyCheckpoint('run-a')).toBe(1)
+    })
+
+    it('writes checkpoint files with owner-only permissions', async () => {
+      await recordOneChange()
+      const dir = join(dataDir, 'checkpoints')
+      if (process.platform !== 'win32') {
+        expect(statSync(dir).mode & 0o777).toBe(0o700)
+        expect(statSync(join(dir, 'run-a.json')).mode & 0o777).toBe(0o600)
+      }
+    })
+
+    it('never turns a runId into a path (traversal-shaped ids stay memory-only)', async () => {
+      writeFileSync(join(ws, 'a.txt'), 'x')
+      await recordOriginal('../escape', [ws], 'a.txt')
+      await flushCheckpoints()
+      // Works in memory, but nothing with that name was written anywhere on disk.
+      expect(checkpointFileCount('../escape')).toBe(1)
+      expect(existsSync(join(dataDir, 'escape.json'))).toBe(false)
+      expect(existsSync(join(dataDir, 'checkpoints', 'escape.json'))).toBe(false)
+      // And a traversal-shaped id is never used to READ a file either.
+      expect(await restoreCheckpoint('../../etc/passwd')).toBe(0)
+    })
+
+    it('ignores a corrupt checkpoint file', async () => {
+      await recordOneChange()
+      await flushCheckpoints()
+      writeFileSync(join(dataDir, 'checkpoints', 'run-a.json'), 'not json {{{')
+      clearCheckpoints()
+
+      expect(await getConversationCheckpoint('conv1')).toBeNull()
+      expect(await restoreCheckpoint('run-a')).toBe(0)
+    })
+
+    it('drops persisted entries whose paths escape the recorded roots', async () => {
+      await recordOneChange()
+      await flushCheckpoints()
+      const file = join(dataDir, 'checkpoints', 'run-a.json')
+      const data = JSON.parse(readFileSync(file, 'utf8'))
+      data.files.push({ path: '/etc/passwd', before: 'evil', after: 'evil', afterCaptured: true })
+      writeFileSync(file, JSON.stringify(data))
+      clearCheckpoints()
+
+      // The tampered entry is dropped on load; the legitimate one survives.
+      expect(await getConversationCheckpoint('conv1')).toEqual({
+        runId: 'run-a',
+        files: 1,
+        reverted: false
+      })
+    })
+
+    it('prunes the oldest run files beyond the cap', async () => {
+      // MAX_CHECKPOINTS is 50; record 51 runs, each touching one file.
+      for (let i = 0; i < 51; i++) {
+        writeFileSync(join(ws, `f${i}.txt`), 'x')
+        await recordOriginal(`run-${i}`, [ws], `f${i}.txt`)
+      }
+      await flushCheckpoints()
+      const files = readdirSync(join(dataDir, 'checkpoints')).filter(
+        (f) => f.endsWith('.json') && f !== 'index.json'
+      )
+      expect(files.length).toBeLessThanOrEqual(50)
+      expect(files).toContain('run-50.json')
+    })
+
+    it('stays memory-only when no user-data directory is wired', async () => {
+      resetUserDataDir()
+      const f = join(ws, 'a.txt')
+      writeFileSync(f, 'original')
+      await recordOriginal('run-x', [ws], 'a.txt')
+      writeFileSync(f, 'modified')
+      await recordResult('run-x', [ws], 'a.txt')
+      await flushCheckpoints()
+
+      expect(await restoreCheckpoint('run-x')).toBe(1)
+      expect(readFileSync(f, 'utf8')).toBe('original')
+      expect(existsSync(join(dataDir, 'checkpoints'))).toBe(false)
     })
   })
 })
