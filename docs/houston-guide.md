@@ -25,6 +25,10 @@ ships as a desktop app and as terminal clients.
 - **Headless (`houston -p "<prompt>"`).** Runs one prompt and streams the result
   to stdout, then exits. Read-only by default; add `--full-auto` to let it edit
   and run commands, `--json` for machine-readable events. Good for scripts and CI.
+  With no human to answer approval prompts, `--on-approval <allow|deny|fail>`
+  decides what a gated tool call gets: denied by default (allowed under
+  `--full-auto`), with `fail` also exiting non-zero so a script can tell the run
+  hit a permission wall.
 - **Standalone CLI.** The same `-p` and `-i` clients as a single self-contained
   Node script, with no desktop app and no browser engine. Runs on headless Linux
   servers; API keys come from environment variables.

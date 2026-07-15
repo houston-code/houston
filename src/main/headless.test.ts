@@ -31,6 +31,7 @@ describe('parseHeadlessArgs', () => {
       providerId: 'openai',
       model: 'gpt',
       approvalPolicy: 'plan',
+      onApproval: 'deny',
       json: true,
       acceptTerms: false,
       continueSession: false,
@@ -61,6 +62,29 @@ describe('parseHeadlessArgs', () => {
   it('ignores unknown tokens like the binary/app path', () => {
     const o = parseHeadlessArgs(['/Applications/Houston.app/...', '-p', 'hi'], '/d')
     expect(o?.prompt).toBe('hi')
+  })
+
+  it('defaults --on-approval to deny for gating policies and allow under full-auto', () => {
+    expect(parseHeadlessArgs(['-p', 'x'], '/d')?.onApproval).toBe('deny')
+    expect(parseHeadlessArgs(['-p', 'x', '--approval', 'ask'], '/d')?.onApproval).toBe('deny')
+    expect(parseHeadlessArgs(['-p', 'x', '--approval', 'auto-edit'], '/d')?.onApproval).toBe('deny')
+    expect(parseHeadlessArgs(['-p', 'x', '--full-auto'], '/d')?.onApproval).toBe('allow')
+    expect(parseHeadlessArgs(['-p', 'x', '--approval', 'full-auto'], '/d')?.onApproval).toBe('allow')
+  })
+
+  it('honors an explicit --on-approval over the policy default, regardless of flag order', () => {
+    expect(parseHeadlessArgs(['-p', 'x', '--on-approval', 'allow'], '/d')?.onApproval).toBe('allow')
+    expect(parseHeadlessArgs(['-p', 'x', '--on-approval=fail'], '/d')?.onApproval).toBe('fail')
+    // Explicit deny survives a later --full-auto (and vice versa) — the flag is
+    // resolved after parsing, not positionally.
+    expect(parseHeadlessArgs(['-p', 'x', '--on-approval', 'deny', '--full-auto'], '/d')?.onApproval).toBe('deny')
+    expect(parseHeadlessArgs(['-p', 'x', '--full-auto', '--on-approval', 'deny'], '/d')?.onApproval).toBe('deny')
+  })
+
+  it('fails closed (deny) on an unrecognized --on-approval value, even under full-auto', () => {
+    // Falling back to the policy default would make a typo fail OPEN under
+    // --full-auto (silently allow); an explicit-but-bogus value must deny.
+    expect(parseHeadlessArgs(['-p', 'x', '--full-auto', '--on-approval', 'bogus'], '/d')?.onApproval).toBe('deny')
   })
 })
 
@@ -223,6 +247,7 @@ const baseOpts = {
   prompt: 'hi',
   cwd: '/proj',
   approvalPolicy: 'plan' as const,
+  onApproval: 'deny' as const, // the non-full-auto parse default
   json: false,
   acceptTerms: false,
   continueSession: false
@@ -268,13 +293,56 @@ describe('runHeadless', () => {
     expect(out.join('')).toContain('picked: [No interactive user is available in headless mode')
   })
 
-  it('auto-approves tool approval prompts', async () => {
-    const { d, approvals } = deps([
+  it('auto-approves tool approval prompts under --on-approval allow', async () => {
+    const { d, err, approvals } = deps([
       { runId: 'run-1', type: 'tool_approval', callId: 'c1', name: 'write_file', summary: 'x', kind: 'write' },
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
     ])
-    await runHeadless({ ...baseOpts, approvalPolicy: 'auto-edit' }, d)
+    const code = await runHeadless({ ...baseOpts, approvalPolicy: 'auto-edit', onApproval: 'allow' }, d)
+    expect(code).toBe(0)
     expect(approvals).toEqual([['run-1', 'c1', 'allow']])
+    expect(err.join('')).toContain('auto-approving write_file')
+  })
+
+  it('denies tool approval prompts under --on-approval deny without failing the run', async () => {
+    const { d, err, approvals } = deps([
+      { runId: 'run-1', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'x', kind: 'shell' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    const code = await runHeadless({ ...baseOpts, approvalPolicy: 'auto-edit', onApproval: 'deny' }, d)
+    // The gated call is refused (the agent adapts), but the run itself is fine.
+    expect(code).toBe(0)
+    expect(approvals).toEqual([['run-1', 'c1', 'deny']])
+    expect(err.join('')).toContain('denying run_shell')
+    expect(err.join('')).toContain('--on-approval allow')
+  })
+
+  it('denies AND exits non-zero under --on-approval fail so a script sees the permission wall', async () => {
+    const { d, approvals } = deps([
+      { runId: 'run-1', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'x', kind: 'shell' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    const code = await runHeadless({ ...baseOpts, approvalPolicy: 'auto-edit', onApproval: 'fail' }, d)
+    expect(code).toBe(1)
+    expect(approvals).toEqual([['run-1', 'c1', 'deny']])
+  })
+
+  it('always resolves an approval prompt (never leaves the loop blocked), whatever the mode', async () => {
+    // Mirror the real loop: emit the prompt and BLOCK until it is resolved. If
+    // headless dropped the event in any mode, this test would hang.
+    for (const onApproval of ['allow', 'deny', 'fail'] as const) {
+      let resolveDecision: (d: string) => void = () => {}
+      const decided = new Promise<string>((r) => (resolveDecision = r))
+      const startRun: HeadlessDeps['startRun'] = async (req, send) => {
+        send({ runId: req.runId, type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'x', kind: 'shell' })
+        await decided
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+      const { d } = deps([], { startRun, resolveApproval: (_r, _c, dec) => resolveDecision(dec) })
+      const code = await runHeadless({ ...baseOpts, onApproval }, d)
+      expect(code).toBe(onApproval === 'fail' ? 1 : 0)
+      expect(await decided).toBe(onApproval === 'allow' ? 'allow' : 'deny')
+    }
   })
 
   it('resolves a plan_ready (reject) and prints the plan so present_plan cannot hang', async () => {
