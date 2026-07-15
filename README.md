@@ -82,11 +82,14 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   you've switched to another conversation. If the turn fails or you stop it, the
   queue is held — retry (or send) it deliberately rather than firing onto a broken
   turn.
-- **Research subagents.** The agent can `dispatch_agent` to hand a focused,
-  read-only question to a subagent with its own fresh context. The subagent
-  reads, globs, and searches the project and reports back — keeping the main
-  agent's context clean. Subagents can't edit, run commands, or use the network,
-  and the tokens they spend roll into the conversation's usage meter.
+- **Subagent delegation.** The agent can `dispatch_agent` to hand a focused,
+  read-only question to a subagent with its own fresh context: it reads, globs,
+  and searches the project and reports back, keeping the main agent's context
+  clean. `dispatch_writable_agent` delegates a whole implementation task to a
+  subagent that can also edit files and, where the host has an OS sandbox, run
+  shell commands, confined to the project with no network access; that dispatch
+  is approval-gated, so one consent covers the delegated task. Tokens a subagent
+  spends roll into the conversation's usage meter.
 - **Spawn separate sessions.** Where a subagent reports back into the current turn,
   `spawn_session` spins off a *separate* chat: the agent hands it a task, optionally
   on its own git branch and worktree, and sets it running autonomously in the
@@ -109,10 +112,12 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   tokens its nested reviewers spend roll into the conversation's usage meter, so a
   multi-agent review isn't a silent black box.
 - **Custom agents & skills.** Drop a Markdown file in `.houston/agents/` to define
-  a specialized read-only subagent (front-matter `description` + a system-prompt
-  body) — the main agent can dispatch it by name. An optional front-matter `tools:`
-  list narrows which read-only tools that agent may use (it can only restrict the
-  default set, never grant write/shell/network). Add a `.houston/skills/<name>/SKILL.md`
+  a specialized subagent (front-matter `description` + a system-prompt body); the
+  main agent can dispatch it by name. Agents are read-only by default; mark one
+  `write: true` to make it dispatchable via the approval-gated
+  `dispatch_writable_agent`. An optional front-matter `tools:` list narrows which
+  tools that agent may use (it can only restrict its tier's set, never widen
+  it, and never grants network access). Add a `.houston/skills/<name>/SKILL.md`
   to register a skill: its description is surfaced to the agent, which reads the
   full instructions on demand.
 - **Explains itself.** Ask how Houston works (its slash commands, approval modes,
