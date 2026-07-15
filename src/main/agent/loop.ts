@@ -1720,12 +1720,39 @@ export async function startRun(
               rewriteError = `A PreToolUse hook rewrote the input, but it was invalid:\n${validationError(call.name, tool.schema.parameters, issues)}`
             }
           }
+          // A rewrite changes what will actually run, so the permission rules are
+          // re-matched against the rewritten arguments — `ruleAction` above was the
+          // verdict on the model's ORIGINAL args. Without this, a user hook could
+          // transform a permitted command into one a managed/project deny covers
+          // (those tiers must stay tighten-only: hooks are user-level config and can
+          // never loosen them), or keep riding an allow that matched only the
+          // original subject.
+          const execRuleAction =
+            execArgs === call.arguments
+              ? ruleAction
+              : matchRule(permissionRules, call.name, permissionSubject(call.name, execArgs), roots)
 
           if (pre.blocked) {
             output = `Blocked by a PreToolUse hook:\n${pre.message || '(no output)'}`
             ok = false
           } else if (rewriteError) {
             output = rewriteError
+            ok = false
+          } else if (execRuleAction === 'deny') {
+            // Only reachable via a rewrite (an original-args deny is caught before
+            // hooks run), and it wins over a hook's `approve`. Attribute a managed
+            // deny honestly, mirroring the pre-hook gate above.
+            const byManaged =
+              managedPolicy.permissionRules.length > 0 &&
+              matchRule(
+                managedPolicy.permissionRules,
+                call.name,
+                permissionSubject(call.name, execArgs),
+                roots
+              ) === 'deny'
+            output = byManaged
+              ? "A PreToolUse hook rewrote the input, and the rewritten input is denied by your organization's managed policy."
+              : 'A PreToolUse hook rewrote the input, and the rewritten input is denied by a permission rule.'
             ok = false
           } else {
             // A permission rule can force-allow or force-ask; otherwise the policy
@@ -1737,7 +1764,7 @@ export async function startRun(
               typeof execArgs.command === 'string' &&
               shellReferencesExternalPath(execArgs.command, roots)
             const { mustApprove, unsandboxedShell } = decideApproval({
-              ruleAction,
+              ruleAction: execRuleAction,
               policy: run.policy,
               kind: tool.kind,
               override: run.override.has(tool.kind),
