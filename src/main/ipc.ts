@@ -927,10 +927,14 @@ export function registerIpc(): void {
 
   // The revertable checkpoint for a conversation's latest run (or null). The renderer
   // fetches this when re-opening a conversation so the revert/redo affordance — built
-  // only from live events otherwise — survives a transcript rebuild.
+  // only from live events otherwise — survives a transcript rebuild, and (via the
+  // on-disk fallback) an app restart.
   ipcMain.handle(
     IPC.checkpointGet,
-    (_event, conversationId: string): { runId: string; files: number; reverted: boolean } | null =>
+    (
+      _event,
+      conversationId: string
+    ): Promise<{ runId: string; files: number; reverted: boolean } | null> =>
       getConversationCheckpoint(conversationId)
   )
 

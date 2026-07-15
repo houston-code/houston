@@ -14,6 +14,12 @@ import type {
 import type { ApprovalPolicy, PermissionRule } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
+import {
+  restoreCheckpoint,
+  reapplyCheckpoint,
+  getConversationCheckpoint,
+  clearCheckpoints
+} from './checkpoints'
 import { toAnthropicMessages } from '../providers/anthropic'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
@@ -362,6 +368,52 @@ describe('startRun', () => {
     })
     expect(types(r)).toContain('tool_approval')
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('hi')
+  })
+
+  it('checkpoints every file an apply_patch touches, so the turn reverts and redoes', async () => {
+    writeFileSync(join(ws, 'changed.txt'), 'old line\n')
+    writeFileSync(join(ws, 'gone.txt'), 'delete me')
+    const patch = [
+      '*** Begin Patch',
+      '*** Add File: added.txt',
+      '+hello',
+      '*** Update File: changed.txt',
+      '@@',
+      '-old line',
+      '+new line',
+      '*** Delete File: gone.txt',
+      '*** End Patch'
+    ].join('\n')
+    const r = await run({
+      policy: 'full-auto',
+      conversationId: 'conv-cp-patch',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'p1', name: 'apply_patch', arguments: { patch } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'patched' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    try {
+      const result = r.events.find((e) => e.type === 'tool_result')
+      expect(result).toMatchObject({ name: 'apply_patch', ok: true })
+      // All three files are in the turn's checkpoint…
+      const cp = await getConversationCheckpoint('conv-cp-patch')
+      expect(cp?.files).toBe(3)
+      // …reverting restores the pre-turn state, including the deleted file…
+      expect(await restoreCheckpoint(cp!.runId)).toBe(3)
+      expect(existsSync(join(ws, 'added.txt'))).toBe(false)
+      expect(readFileSync(join(ws, 'changed.txt'), 'utf8')).toBe('old line\n')
+      expect(readFileSync(join(ws, 'gone.txt'), 'utf8')).toBe('delete me')
+      // …and redo re-applies the whole patch, including the delete.
+      expect(await reapplyCheckpoint(cp!.runId)).toBe(3)
+      expect(readFileSync(join(ws, 'added.txt'), 'utf8')).toBe('hello')
+      expect(readFileSync(join(ws, 'changed.txt'), 'utf8')).toBe('new line\n')
+      expect(existsSync(join(ws, 'gone.txt'))).toBe(false)
+    } finally {
+      clearCheckpoints()
+    }
   })
 
   it('does not write when the user denies', async () => {

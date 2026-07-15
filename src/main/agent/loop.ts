@@ -38,7 +38,6 @@ import {
   type ToolContext,
   type ToolKind
 } from './tools'
-import { parsePatch } from './apply-patch'
 import {
   ReadCache,
   isCacheableRead,
@@ -62,7 +61,7 @@ import {
   shellRulePatterns
 } from './permissions'
 import { grantConversationOverride, overrideForConversation } from './overrides'
-import { recordOriginal, recordResult, noteConversationRun } from './checkpoints'
+import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
 import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed } from '../sandbox'
 import { formatFile } from './format'
@@ -823,6 +822,9 @@ export async function startRun(
           signal: abort.signal,
           writable: true,
           roots,
+          // Record the subagent's edits in THIS run's checkpoint, so the turn's
+          // revert/redo covers delegated changes too.
+          checkpointRunId: runId,
           // A fresh shell session so the subagent's cwd/env changes don't leak into
           // the parent agent's persistent shell.
           shellSession: createShellSession(workspace),
@@ -969,16 +971,10 @@ export async function startRun(
     // Map a tool's `path` argument to a canonical absolute path the way the file
     // tools do, so cache dependencies and write-invalidation keys line up exactly.
     const resolvePath = (rel: string): string => resolveInRoots(roots, rel)
-    // Files an apply_patch touches, for path-precise cache invalidation.
-    const patchPaths = (patch: string): string[] => {
-      try {
-        return parsePatch(patch).flatMap((op) =>
-          op.type === 'update' && op.moveTo ? [op.path, op.moveTo] : [op.path]
-        )
-      } catch {
-        return []
-      }
-    }
+    // Files an apply_patch touches, for path-precise cache invalidation. Derived
+    // from the checkpoint target list so the two stay in lockstep.
+    const patchPaths = (patch: string): string[] =>
+      writeTargets('apply_patch', { patch }).map((t) => t.path)
     // Invalidate cached reads after a mutating tool call. A write invalidates the
     // paths it touched (or everything, if those paths can't be determined); shell —
     // and anything else non-read that changes state — clears the cache wholesale.
@@ -1836,9 +1832,13 @@ export async function startRun(
               output = 'Denied by the user.'
               ok = false
             } else {
-              // Snapshot the target's prior content so this turn's file changes can be reverted.
-              if (tool.kind === 'write' && typeof execArgs.path === 'string') {
-                await recordOriginal(runId, roots, execArgs.path)
+              // Snapshot each target's prior content so this turn's file changes can
+              // be reverted — one path for the single-file tools, every add/update/
+              // delete/move path for apply_patch.
+              if (tool.kind === 'write') {
+                for (const t of writeTargets(call.name, execArgs)) {
+                  await recordOriginal(runId, roots, t.path)
+                }
               }
               emit({ type: 'tool_start', callId: call.id, name: call.name, args: execArgs, kind: tool.kind })
               await plugins.emit('onToolStart', { tool: call.name, input: execArgs })
@@ -1909,10 +1909,14 @@ export async function startRun(
                   // Formatting is best-effort; never fail the tool over it.
                 }
               }
-              // Snapshot the file's final content (after any hook/formatter)
-              // so the change can be faithfully redone after a revert.
-              if (ok && tool.kind === 'write' && typeof execArgs.path === 'string') {
-                await recordResult(runId, roots, execArgs.path)
+              // Snapshot each file's final content (after any hook/formatter)
+              // so the change can be faithfully redone after a revert. A file an
+              // apply_patch deliberately deleted records its absence as the
+              // post-turn state, so redo re-deletes it.
+              if (ok && tool.kind === 'write') {
+                for (const t of writeTargets(call.name, execArgs)) {
+                  await recordResult(runId, roots, t.path, { expectAbsent: t.deleted })
+                }
               }
               // Diagnostics-on-save (opt-in): after a successful write, run a fast
               // checker (eslint/ruff/gofmt) on the file and append any problems so

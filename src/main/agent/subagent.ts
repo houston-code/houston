@@ -1,5 +1,6 @@
 import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
 import { getTool, type ToolContext } from './tools'
+import { recordOriginal, recordResult, writeTargets } from './checkpoints'
 import type { ShellSession } from './shell-session'
 import { isSandboxed } from '../sandbox'
 
@@ -99,6 +100,12 @@ export interface SubAgentOptions {
   /** Allowed roots for edits (workspace + added dirs). Defaults to [workspace]. */
   roots?: string[]
   /**
+   * Record the subagent's file edits in this run's checkpoint (the dispatching
+   * turn's), so reverting/redoing the parent turn covers delegated changes too.
+   * Absent => edits aren't checkpointed (read-only tiers have nothing to record).
+   */
+  checkpointRunId?: string
+  /**
    * Whether the host OS-confines shell execution. Defaults to the live sandbox status.
    * When false, the writable tier's `run_shell` is refused (a background subagent can't
    * prompt for the consent an unconfined command requires); injected for testing.
@@ -140,9 +147,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   // still READ outside the workspace (the sandbox is a write/network jail, not a read
   // one). We accept that here: with allowNetwork:false the subagent has no egress, so a
   // read can't leave the machine, and its file writes stay contained to `roots`.
+  const roots = opts.roots ?? [workspace]
   const toolCtx: ToolContext = {
     workspace,
-    roots: opts.roots ?? [workspace],
+    roots,
     allowNetwork: false,
     signal,
     ...(opts.shellSession ? { shellSession: opts.shellSession } : {}),
@@ -199,8 +207,18 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           'command would run unconfined, and a background subagent cannot prompt for the required consent. ' +
           'Make the edits you can and note what still needs a command; the main agent can run it with approval.'
       } else {
+        // Snapshot write targets into the dispatching turn's checkpoint, exactly
+        // as the main loop does for its own write tools, so "revert" covers the
+        // subagent's edits. (Shell side effects aren't checkpointed here — the
+        // main loop doesn't checkpoint run_shell either.)
+        const cpRunId = tool.kind === 'write' ? opts.checkpointRunId : undefined
+        const targets = cpRunId ? writeTargets(call.name, call.arguments) : []
+        for (const t of targets) await recordOriginal(cpRunId!, roots, t.path)
         try {
           output = await tool.execute(call.arguments, toolCtx)
+          for (const t of targets) {
+            await recordResult(cpRunId!, roots, t.path, { expectAbsent: t.deleted })
+          }
         } catch (e) {
           output = `Error: ${(e as Error).message}`
         }
