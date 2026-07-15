@@ -177,7 +177,12 @@ function findAstGrep(): string | null {
   return candidates.find((p) => existsSync(p)) ?? resolveAstGrep()
 }
 
-describe('runAstGrep / searchStructural (ast-grep binary)', () => {
+// Each test spawns the real binary — and on a checkout where @ast-grep/cli's
+// postinstall didn't run, that path is the node shim (node startup + runtime
+// binary resolution per invocation). Give every test room under full-suite
+// parallelism / contended CI runners so none can flake on the default 5s
+// timeout (same rationale as git.test.ts).
+describe('runAstGrep / searchStructural (ast-grep binary)', { timeout: 30_000 }, () => {
   const ag = findAstGrep()
   let workspace: string
 

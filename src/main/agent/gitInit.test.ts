@@ -37,7 +37,10 @@ describe('initGitRepo', () => {
     expect(res.error).toBeTruthy()
   })
 
-  it.runIf(hasGit)('initializes a plain directory into a git repo', async () => {
+  // Spawns 5 real `git` subprocesses (isRepo ×2, initGitRepo's rev-parse + init,
+  // ls-files); give it room under full-suite parallelism / contended CI runners so
+  // it can't flake on the default 5s timeout (same rationale as git.test.ts).
+  it.runIf(hasGit)('initializes a plain directory into a git repo', { timeout: 30_000 }, async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitinit-')))
     try {
       writeFileSync(join(dir, 'app.ts'), 'export const x = 1\n')
@@ -60,7 +63,7 @@ describe('initGitRepo', () => {
     }
   })
 
-  it.runIf(hasGit)('is idempotent on an existing repo (reports alreadyRepo, no error)', async () => {
+  it.runIf(hasGit)('is idempotent on an existing repo (reports alreadyRepo, no error)', { timeout: 30_000 }, async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitinit-')))
     try {
       execFileSync('git', ['init', '-q', dir], { stdio: 'ignore' })
