@@ -348,6 +348,45 @@ describe('startRun', () => {
     expect(pluginResult.output).not.toContain('stored-opaque-credential-value-xyz')
   })
 
+  it('redacts stored secrets from a subagent tool output before its transcript reaches the provider', async () => {
+    h.secrets = ['stored-opaque-credential-value-xyz']
+    writeFileSync(join(ws, 'config.env'), 'KEY=stored-opaque-credential-value-xyz')
+    // A dispatched subagent's tool outputs ship to the provider from ITS OWN
+    // transcript (never via flushResult), so record every provider request and
+    // inspect the one carrying the subagent's read_file result.
+    const requests: ChatMessage[][] = []
+    const turns: ProviderStreamEvent[][] = [
+      // main: delegate a research task
+      [
+        { type: 'tool_call', call: { id: 'd1', name: 'dispatch_agent', arguments: { description: 'read config', prompt: 'read config.env' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      // subagent: read the config holding this install's stored credential
+      [
+        { type: 'tool_call', call: { id: 's1', name: 'read_file', arguments: { path: 'config.env' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      // subagent: report back
+      [{ type: 'text', text: 'read it' }, { type: 'done', stopReason: 'end_turn' }],
+      // main: finish
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    let i = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        requests.push((req.messages ?? []) as ChatMessage[])
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        for (const ev of turn) yield ev
+      }
+    }
+    await run({ policy: 'full-auto', provider })
+    const subTranscript = requests.find((ms) => ms.some((m) => m.role === 'tool' && m.toolCallId === 's1'))
+    expect(subTranscript).toBeTruthy()
+    const toolMsg = subTranscript!.find((m) => m.role === 'tool' && m.toolCallId === 's1')
+    expect(String(toolMsg?.content)).not.toContain('stored-opaque-credential-value-xyz')
+    expect(String(toolMsg?.content)).toContain('[redacted:secret]')
+  })
+
   it('redacts secrets from the user turn before the model and transcript see it', async () => {
     h.secrets = ['stored-opaque-credential-value-xyz']
     const r = await run({

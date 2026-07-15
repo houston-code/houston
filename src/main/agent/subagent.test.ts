@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import { createSecretRedactor } from './redact'
 import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
 import { checkpointFileCount, restoreCheckpoint, clearCheckpoints } from './checkpoints'
 
@@ -182,6 +183,66 @@ describe('runSubAgent', () => {
     })
     expect(report).toContain('Done.')
     // The model only saw the rejection note, never the file contents.
+  })
+
+  it('redacts secrets from a tool output before the transcript reaches the provider', async () => {
+    // A config file holding this install's own stored credential (an opaque value
+    // with no recognizable format) plus a token-shaped third-party secret — the same
+    // two layers the main loop's flushResult redaction covers.
+    writeFileSync(
+      join(ws, 'config.env'),
+      'KEY=stored-opaque-credential-value-xyz\nGH=ghp_' + 'A'.repeat(36)
+    )
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const provider = recordingProvider(
+      [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'config.env' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Read it.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      sink
+    )
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'read config.env',
+      signal: new AbortController().signal,
+      redact: createSecretRedactor(['stored-opaque-credential-value-xyz'])
+    })
+    // The transcript sent on the subagent's next turn carries the scrubbed output:
+    // known-value redaction strips the stored key, pattern redaction the GitHub token.
+    const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 'c1')
+    expect(String(toolMsg?.content)).not.toContain('stored-opaque-credential-value-xyz')
+    expect(String(toolMsg?.content)).not.toContain('ghp_')
+    expect(String(toolMsg?.content)).toContain('[redacted:secret]')
+    expect(String(toolMsg?.content)).toContain('[redacted:github-token]')
+  })
+
+  it('leaves tool outputs untouched when no redactor is given', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'plain contents, nothing secret')
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const provider = recordingProvider(
+      [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      sink
+    )
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'read note.txt',
+      signal: new AbortController().signal
+    })
+    const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 'c1')
+    expect(String(toolMsg?.content)).toContain('plain contents, nothing secret')
   })
 
   it('reports each turn token usage via onUsage', async () => {
