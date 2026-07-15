@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, ChatMessage, Provider, ProviderStreamEvent } from '@shared/agent'
-import type { Hook } from '@shared/types'
+import type { AgentEvent, ChatMessage, Provider, ProviderStreamEvent, ToolApprovalDecision } from '@shared/agent'
+import type { Hook, PermissionRule } from '@shared/types'
 import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
 
 // Integration coverage for the lifecycle-hook wiring in the agent loop
@@ -18,7 +18,10 @@ const h = vi.hoisted(() => ({
   // A queue of results per hook command (shifted per call); falls back to static.
   script: {} as Record<string, Array<Partial<SandboxRunResult>>>,
   static: {} as Record<string, Partial<SandboxRunResult>>,
-  calls: [] as SandboxRunOptions[]
+  calls: [] as SandboxRunOptions[],
+  // Admin managed-policy rules (highest-precedence, tighten-only tier), injected
+  // through the `./managedPolicy` mock below; default none.
+  managedRules: [] as PermissionRule[]
 }))
 
 vi.mock('../agentHost', () => ({
@@ -27,6 +30,11 @@ vi.mock('../agentHost', () => ({
   getProvider: () => ({ id: 'anthropic', kind: 'anthropic', label: 'A', models: [], requiresKey: false, hasKey: true, builtIn: true }),
   getKey: () => null,
   collectSecrets: () => []
+}))
+// The admin managed policy normally reads a fixed root-owned system path; in tests
+// we inject its rules through the hoisted holder instead of touching the real path.
+vi.mock('./managedPolicy', () => ({
+  loadManagedPolicy: async () => ({ permissionRules: h.managedRules })
 }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => [] }))
@@ -51,7 +59,7 @@ vi.mock('../sandbox', async (importActual) => {
   }
 })
 
-const { startRun } = await import('./loop')
+const { startRun, resolveApproval } = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
 function scripted(turns: ProviderStreamEvent[][]): Provider & { calls: number } {
@@ -69,29 +77,44 @@ let ws: string
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loophooks-'))
   h.settings.hooks = []
+  h.settings.permissionRules = []
   h.script = {}
   h.static = {}
   h.calls = []
+  h.managedRules = []
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
   vi.restoreAllMocks()
 })
 
-async function run(opts: { turns?: ProviderStreamEvent[][]; provider?: Provider; userText?: string }): Promise<{ events: AgentEvent[]; messages: ChatMessage[] }> {
+async function run(opts: {
+  turns?: ProviderStreamEvent[][]
+  provider?: Provider
+  userText?: string
+  onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
+}): Promise<{ events: AgentEvent[]; messages: ChatMessage[] }> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
+  const runId = `run-${Math.round(Math.random() * 1e9)}`
   const events: AgentEvent[] = []
   let messages: ChatMessage[] = []
   await startRun(
     {
-      runId: `run-${events.length}-${ws.length}`,
+      runId,
       workspace: ws,
       providerId: 'anthropic',
       model: 'claude-test',
       approvalPolicy: 'ask',
       messages: [{ role: 'user', content: opts.userText ?? 'do it' }]
     },
-    (e) => events.push(e),
+    (e) => {
+      events.push(e)
+      if (e.type === 'tool_approval' && opts.onApproval) {
+        // Respond on a later tick — the loop registers the approval resolver on the
+        // line *after* it emits tool_approval, just as the real renderer replies async.
+        setTimeout(() => opts.onApproval!(e.callId, (d) => resolveApproval(runId, e.callId, d)), 0)
+      }
+    },
     (m) => {
       messages = m
     }
@@ -144,5 +167,89 @@ describe('lifecycle hooks in the loop', () => {
     const injected = messages.filter((m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('keep going'))
     expect(injected).toHaveLength(3) // MAX_STOP_CONTINUATIONS
     expect(events.at(-1)?.type).toBe('done')
+  })
+})
+
+// A PreToolUse hook may rewrite a call's arguments, which changes what actually
+// runs — so the loop must re-match the permission rules against the REWRITTEN
+// arguments, not carry over the verdict computed on the model's original ones.
+// Otherwise a user-level hook could transform a permitted call into one a managed
+// deny covers (the guardrail tiers are tighten-only: user config must never be
+// able to loosen them), or keep riding an allow rule the rewrite no longer earns.
+describe('PreToolUse rewrites are re-matched against permission rules', () => {
+  /** One scripted turn: a single write_file call, then a plain closing turn. */
+  const writeTurns = (path: string): ProviderStreamEvent[][] => [
+    [
+      { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path, content: 'hello' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+  /** A hook stdout directive that rewrites the write to `path`. */
+  const rewriteTo = (path: string, extra: Record<string, unknown> = {}): Partial<SandboxRunResult> => ({
+    stdout: JSON.stringify({ updatedInput: { path, content: 'rewritten' }, ...extra })
+  })
+  const toolResult = (events: AgentEvent[]): string => {
+    const e = events.find((x) => x.type === 'tool_result')
+    return e && 'output' in e ? String(e.output) : ''
+  }
+
+  it('a rewrite into a managed deny is refused, even when the hook also approves', async () => {
+    h.managedRules = [{ action: 'deny', tool: 'write_file', match: 'secret*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'rw' }]
+    // The hook both rewrites the target into denied territory AND tries to
+    // auto-approve — the deny must win over the approve.
+    h.static = { rw: rewriteTo('secret.txt', { decision: 'approve' }) }
+    const { events } = await run({
+      turns: writeTurns('ok.txt'),
+      onApproval: (_id, decide) => decide('allow') // hang-proofing; must never fire
+    })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(false) // denied outright, not prompted
+    expect(toolResult(events)).toContain("denied by your organization's managed policy")
+    expect(existsSync(join(ws, 'secret.txt'))).toBe(false)
+    expect(existsSync(join(ws, 'ok.txt'))).toBe(false)
+  })
+
+  it('a rewrite into a user deny rule is refused with the plain-rule message', async () => {
+    h.settings.permissionRules = [{ action: 'deny', tool: 'write_file', match: 'secret*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'rw' }]
+    h.static = { rw: rewriteTo('secret.txt') }
+    // The approval handler must never be needed (deny short-circuits the prompt);
+    // it's here so a regression fails the assertions instead of hanging the test.
+    const { events } = await run({
+      turns: writeTurns('ok.txt'),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(toolResult(events)).toContain('denied by a permission rule')
+    expect(toolResult(events)).not.toContain('managed policy')
+    expect(existsSync(join(ws, 'secret.txt'))).toBe(false)
+  })
+
+  it('an allow rule matching only the original args does not auto-approve the rewrite', async () => {
+    h.settings.permissionRules = [{ action: 'allow', tool: 'write_file', match: 'notes*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'rw' }]
+    h.static = { rw: rewriteTo('other.txt') }
+    const { events } = await run({
+      turns: writeTurns('notes.txt'),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    // Without the re-match the stale allow would skip the prompt and write other.txt.
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(true)
+    expect(toolResult(events)).toContain('Denied by the user')
+    expect(existsSync(join(ws, 'other.txt'))).toBe(false)
+  })
+
+  it('an allow rule matching the rewritten args auto-approves it', async () => {
+    h.settings.permissionRules = [{ action: 'allow', tool: 'write_file', match: 'allowed*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'rw' }]
+    h.static = { rw: rewriteTo('allowed.txt') }
+    // No prompt is expected; the handler only exists so a regression fails fast.
+    const { events } = await run({
+      turns: writeTurns('draft.txt'),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(false)
+    expect(readFileSync(join(ws, 'allowed.txt'), 'utf8')).toBe('rewritten')
+    expect(existsSync(join(ws, 'draft.txt'))).toBe(false)
   })
 })
