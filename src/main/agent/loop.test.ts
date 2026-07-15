@@ -57,7 +57,11 @@ const h = vi.hoisted(() => ({
   // Admin managed-policy rules the loop should treat as the highest-precedence,
   // tighten-only tier (above the project + user). Swapped per test via the
   // `./managedPolicy` mock below; default none so most tests are unaffected.
-  managedRules: [] as PermissionRule[]
+  managedRules: [] as PermissionRule[],
+  // Forced OS-sandbox status for the `../sandbox` partial mock below. Null (the
+  // default) keeps the host's real value, so existing tests are platform-honest;
+  // the writable-subagent gate tests set false to simulate an unconfined host.
+  sandboxed: null as boolean | null
 }))
 
 vi.mock('../agentHost', () => ({
@@ -98,6 +102,16 @@ vi.mock('./tools', async (importActual) => {
 })
 vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
+// Partial mock of the sandbox status so the writable-subagent unconfined-shell gate
+// can be exercised deterministically on any platform. Only isSandboxed is overridden
+// (and only when a test sets h.sandboxed); execution helpers stay real.
+vi.mock('../sandbox', async (importActual) => {
+  const actual = await importActual<typeof import('../sandbox')>()
+  return {
+    ...actual,
+    isSandboxed: () => h.sandboxed ?? actual.isSandboxed()
+  }
+})
 // Stub the plugin loader with a host that records every event the loop fires, so
 // we can assert the lifecycle hooks (onUserMessage/onToolStart/onToolResult) fire
 // at the right points. The real loader/host is covered in plugins.test.ts. The
@@ -173,6 +187,7 @@ beforeEach(() => {
   h.verifyRunner = null
   h.verifyRuns = []
   h.managedRules = []
+  h.sandboxed = null
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -2163,6 +2178,127 @@ describe('dispatch_writable_agent', () => {
     })
     const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_writable_agent')
     expect(typeof toolMsg?.content === 'string' && toolMsg.content).toContain('Unknown agent')
+  })
+})
+
+describe('writable subagent unconfined-shell gate', () => {
+  // On a host with no OS sandbox, a writable subagent's run_shell is propagated to
+  // the user as its own tool_approval (minted callId under the dispatch call) instead
+  // of being refused. These force h.sandboxed = false so they run identically on a
+  // sandboxed macOS dev machine and unsandboxed Linux CI.
+
+  /** One dispatch turn whose subagent runs `command`, then reports, then main ends. */
+  const gateTurns = (command: string): ProviderStreamEvent[][] => [
+    [
+      { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'shell task', prompt: 'run it' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [
+      { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [{ type: 'text', text: 'sub done' }, { type: 'done', stopReason: 'end_turn' }],
+    [{ type: 'text', text: 'main done' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+
+  it('propagates the command as a tool_approval and runs it on allow', async () => {
+    h.sandboxed = false
+    const r = await run({
+      turns: gateTurns('echo sub-gated-ok'),
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const approvals = r.events.filter((e) => e.type === 'tool_approval')
+    expect(approvals.map((a) => ('name' in a ? a.name : ''))).toEqual([
+      'dispatch_writable_agent',
+      'run_shell'
+    ])
+    const shell = approvals[1] as Extract<AgentEvent, { type: 'tool_approval' }>
+    // Minted under the dispatch call, flagged as unconfined, labeled as the subagent's.
+    expect(shell.callId).toBe('d1.shell.1')
+    expect(shell.kind).toBe('shell')
+    expect(shell.sandboxed).toBe(false)
+    expect(shell.summary).toContain('Subagent:')
+    expect(shell.args).toEqual({ command: 'echo sub-gated-ok' })
+    // The approved command surfaced as a live row: start, then a result with the
+    // real output (so what ran unconfined is visible in the transcript).
+    expect(r.events.some((e) => e.type === 'tool_start' && e.callId === 'd1.shell.1')).toBe(true)
+    const result = r.events.find((e) => e.type === 'tool_result' && e.callId === 'd1.shell.1') as
+      | Extract<AgentEvent, { type: 'tool_result' }>
+      | undefined
+    expect(result?.ok).toBe(true)
+    expect(result?.output).toContain('sub-gated-ok')
+  })
+
+  it('a denied command is refused without running', async () => {
+    h.sandboxed = false
+    const r = await run({
+      turns: gateTurns('touch denied-marker.txt'),
+      policy: 'ask',
+      onApproval: (id, decide) => decide(id.includes('.shell.') ? 'deny' : 'allow')
+    })
+    // Refused before execution: no marker file, no tool_start row, a failed result.
+    expect(existsSync(join(ws, 'denied-marker.txt'))).toBe(false)
+    expect(r.events.some((e) => e.type === 'tool_start' && e.callId === 'd1.shell.1')).toBe(false)
+    const result = r.events.find((e) => e.type === 'tool_result' && e.callId === 'd1.shell.1') as
+      | Extract<AgentEvent, { type: 'tool_result' }>
+      | undefined
+    expect(result?.ok).toBe(false)
+    expect(result?.output).toBe('Denied by the user.')
+  })
+
+  it("'always' grants the unconfined-shell consent, so the next command skips the prompt", async () => {
+    h.sandboxed = false
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'two commands', prompt: 'run both' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo first-cmd' } } },
+          { type: 'tool_call', call: { id: 's2', name: 'run_shell', arguments: { command: 'echo second-cmd' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'sub done' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'main done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'ask',
+      onApproval: (id, decide) => decide(id.includes('.shell.') ? 'always' : 'allow')
+    })
+    // Only the FIRST command prompted; the "Allow for run" consent covered the second.
+    const shellApprovals = r.events.filter(
+      (e) => e.type === 'tool_approval' && 'name' in e && e.name === 'run_shell'
+    )
+    expect(shellApprovals.length).toBe(1)
+    // Both commands still ran, each visible as its own row.
+    for (const [id, marker] of [
+      ['d1.shell.1', 'first-cmd'],
+      ['d1.shell.2', 'second-cmd']
+    ] as const) {
+      const result = r.events.find((e) => e.type === 'tool_result' && e.callId === id) as
+        | Extract<AgentEvent, { type: 'tool_result' }>
+        | undefined
+      expect(result?.ok).toBe(true)
+      expect(result?.output).toContain(marker)
+    }
+  })
+
+  it('a deny permission rule refuses the command without prompting', async () => {
+    h.sandboxed = false
+    h.settings.permissionRules = [{ action: 'deny', tool: 'run_shell', match: '*' }]
+    try {
+      const r = await run({
+        turns: gateTurns('touch rule-denied.txt'),
+        policy: 'full-auto'
+      })
+      // No prompt reached the user and nothing ran — the deny rule won outright.
+      expect(r.events.some((e) => e.type === 'tool_approval')).toBe(false)
+      expect(r.events.some((e) => e.type === 'tool_start' && e.callId === 'd1.shell.1')).toBe(false)
+      expect(existsSync(join(ws, 'rule-denied.txt'))).toBe(false)
+    } finally {
+      h.settings.permissionRules = []
+    }
   })
 })
 

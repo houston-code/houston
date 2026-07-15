@@ -74,7 +74,9 @@ export interface ToolContext {
    * Run a WRITABLE subagent — edits files and runs shell commands, sandboxed to the
    * project with no network (injected by the loop). Gated by the approval on the
    * dispatch_writable_agent call, so the loop supplies this only when writes are
-   * permitted; the subagent then works autonomously within the sandbox.
+   * permitted; the subagent then works autonomously within the sandbox. On a host
+   * with no OS sandbox, each of its shell commands is instead propagated back to
+   * the user as its own approval prompt (the loop's unconfined-shell gate).
    */
   dispatchWritableSubAgent?: (prompt: string, agent?: string) => Promise<string>
   /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
@@ -1285,12 +1287,16 @@ const dispatchWritableAgent: ToolDef = {
   // Delegates write authority to a subagent, so the dispatch itself is gated by the
   // normal write approval (and blocked in plan mode) — one consent covers the whole
   // delegated task, which the subagent then carries out autonomously in the sandbox.
+  // The one exception is UNCONFINED shell: on a host with no OS sandbox each of the
+  // subagent's run_shell commands is propagated back to the user as its own approval
+  // prompt (see the gate in loop.ts), preserving the main loop's invariant that an
+  // unconfined command never runs without per-command consent.
   kind: 'write',
   summarize: (a) => `Writable subagent: ${str(a, 'description') || 'task'}`,
   schema: {
     name: 'dispatch_writable_agent',
     description:
-      'Delegate a self-contained task to a subagent that can EDIT files (and, where the host has an OS sandbox, RUN shell commands) in its own fresh context, then returns a written report. Everything it does is confined to the project with no network access; on a host without an OS sandbox (e.g. Windows) the subagent is edits-only — run any needed commands through the main agent instead. Approving this call grants the subagent write access for the whole delegated task (it will not prompt again per action), so scope the task clearly. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
+      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Everything it does is confined to the project with no network access. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; the one exception is a host without an OS sandbox (e.g. Windows), where each shell command the subagent runs asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },

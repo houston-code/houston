@@ -705,6 +705,56 @@ export async function startRun(
     const ghPath = resolveGh()
     const ghExec = ghPath ? runGh(ghPath) : undefined
 
+    /**
+     * Apply the side effects of the user's verdict on an approval prompt — "Allow
+     * for run" kind overrides (plus the conscious unconfined-shell consent), and
+     * "Always allow/deny" permission-rule persistence — and return whether the call
+     * may proceed. Shared by the main tool-call gate and the writable subagent's
+     * per-command unconfined-shell gate, so a decision means exactly the same thing
+     * whichever prompt it answered.
+     */
+    const applyApprovalDecision = (
+      decision: ToolApprovalDecision,
+      toolName: string,
+      execArgs: Record<string, unknown>,
+      kind: ToolKind,
+      unsandboxedShell: boolean
+    ): boolean => {
+      if (decision === 'always') {
+        // "Allow for run" — auto-approve this KIND for the rest of the run, and
+        // remember it on the conversation so later turns inherit the consent.
+        run.override.add(kind)
+        // "Allow for run" on an unconfined-shell prompt is the conscious consent
+        // to keep running unsandboxed; a generic override never sets this.
+        if (unsandboxedShell) run.shellUnsandboxedOverride = true
+        grantConversationOverride(conversationId, kind, unsandboxedShell)
+      } else if (decision === 'rule-allow' || decision === 'rule-deny') {
+        // "Always allow/deny" — persist a permission rule for this tool + subject
+        // so the choice survives restarts, and splice it into this run's rules
+        // (after the managed + project guardrail rules, which only tighten, so a
+        // user's live consent can never shadow an admin or project rule) now.
+        // For an ALLOW on run_shell we store generalized, per-sub-command prefixes
+        // (dropping the `cd` prelude) instead of the exact command, and skip any
+        // pattern an existing rule already allows — so repeated commands don't pile
+        // up one near-identical rule each. Deny stays exact (a broad deny is risky).
+        const action = decision === 'rule-allow' ? 'allow' : 'deny'
+        const subject = permissionSubject(toolName, execArgs)
+        const matches =
+          action === 'allow' && toolName === 'run_shell' && subject
+            ? shellRulePatterns(subject)
+            : [subject || '*']
+        for (const match of matches) {
+          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, match)) {
+            continue
+          }
+          const rule: PermissionRule = { action, tool: toolName, match }
+          addPermissionRule(rule)
+          permissionRules.splice(guardrailRuleCount, 0, rule)
+        }
+      }
+      return decision !== 'deny' && decision !== 'rule-deny'
+    }
+
     // Shared tool-execution context. `run.policy` and `run.override` are read at
     // call time so a mid-run policy change or an "Allow for run" decision earlier
     // in the turn takes effect. `allowNetwork` governs the shell sandbox's network
@@ -809,6 +859,69 @@ export async function startRun(
             `Agent "${agentName}" is read-only. Use dispatch_agent for it, or add \`write: true\` to its .houston/agents file to allow changes.`
           )
         }
+        // Per-command consent for UNCONFINED shell. On a host with no OS sandbox the
+        // subagent's run_shell would otherwise be refused (it can't prompt from the
+        // background); this gate propagates each such command to the user as a normal
+        // tool_approval on a minted callId. Deny rules still win without a prompt, the
+        // per-run unconfined-shell consent ("Allow for run") skips further prompts
+        // exactly as it does for the main loop, and the command's start/result are
+        // emitted so a command running unconfined on this machine is never invisible.
+        // Only consulted by runSubAgent when the host lacks an OS sandbox.
+        let gateSeq = 0
+        const gateUnconfinedShell = async (
+          args: Record<string, unknown>,
+          runCommand: () => Promise<string>
+        ): Promise<string> => {
+          const subject = permissionSubject('run_shell', args)
+          if (matchRule(permissionRules, 'run_shell', subject, roots) === 'deny') {
+            return 'Denied by a permission rule.'
+          }
+          const subCallId = `${callId}.shell.${++gateSeq}`
+          const summary = `Subagent: ${getTool('run_shell')!.summarize(args)}`
+          if (!run.shellUnsandboxedOverride) {
+            // Track + emit like any approval so re-adopt replay and cancelRun
+            // (which resolves pending approvals as deny) cover this prompt too.
+            run.pendingApprovals.set(subCallId, {
+              name: 'run_shell',
+              summary,
+              args,
+              kind: 'shell',
+              sandboxed: false
+            })
+            emit({
+              type: 'tool_approval',
+              callId: subCallId,
+              name: 'run_shell',
+              summary,
+              args,
+              kind: 'shell',
+              sandboxed: false
+            })
+            const decision = await waitForApproval(run, subCallId)
+            run.pendingApprovals.delete(subCallId)
+            const approved = applyApprovalDecision(decision, 'run_shell', args, 'shell', true)
+            if (!approved) {
+              emit({
+                type: 'tool_result',
+                callId: subCallId,
+                name: 'run_shell',
+                ok: false,
+                output: 'Denied by the user.'
+              })
+              return 'Denied by the user. Do not retry this command; work around it or note it in your report.'
+            }
+          }
+          emit({ type: 'tool_start', callId: subCallId, name: 'run_shell', args, kind: 'shell' })
+          try {
+            const output = redact(await runCommand())
+            emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: true, output })
+            return output
+          } catch (e) {
+            const output = redact(`Error: ${(e as Error).message}`)
+            emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: false, output })
+            return output
+          }
+        }
         let subInput = 0
         let subOutput = 0
         let subCacheRead = 0
@@ -828,6 +941,7 @@ export async function startRun(
           // the parent agent's persistent shell.
           shellSession: createShellSession(workspace),
           shellOutputMaxBytes: resolveShellOutputBudget(settings),
+          gateUnconfinedShell,
           systemOverride: agent?.systemPrompt,
           tools: agent?.tools,
           explicitCacheControl,
@@ -1805,39 +1919,9 @@ export async function startRun(
               const decision = await waitForApproval(run, call.id)
               // Resolved (or cancelled) — it's no longer awaiting the user.
               run.pendingApprovals.delete(call.id)
-              if (decision === 'always') {
-                // "Allow for run" — auto-approve this KIND for the rest of the run, and
-                // remember it on the conversation so later turns inherit the consent.
-                run.override.add(tool.kind)
-                // "Allow for run" on an unconfined-shell prompt is the conscious consent
-                // to keep running unsandboxed; a generic override never sets this.
-                if (unsandboxedShell) run.shellUnsandboxedOverride = true
-                grantConversationOverride(conversationId, tool.kind, unsandboxedShell)
-              } else if (decision === 'rule-allow' || decision === 'rule-deny') {
-                // "Always allow/deny" — persist a permission rule for this tool + subject
-                // so the choice survives restarts, and splice it into this run's rules
-                // (after the managed + project guardrail rules, which only tighten, so a
-                // user's live consent can never shadow an admin or project rule) now.
-                // For an ALLOW on run_shell we store generalized, per-sub-command prefixes
-                // (dropping the `cd` prelude) instead of the exact command, and skip any
-                // pattern an existing rule already allows — so repeated commands don't pile
-                // up one near-identical rule each. Deny stays exact (a broad deny is risky).
-                const action = decision === 'rule-allow' ? 'allow' : 'deny'
-                const subject = permissionSubject(call.name, execArgs)
-                const matches =
-                  action === 'allow' && call.name === 'run_shell' && subject
-                    ? shellRulePatterns(subject)
-                    : [subject || '*']
-                for (const match of matches) {
-                  if (action === 'allow' && alreadyAllowedAsRule(permissionRules, call.name, match)) {
-                    continue
-                  }
-                  const rule: PermissionRule = { action, tool: call.name, match }
-                  addPermissionRule(rule)
-                  permissionRules.splice(guardrailRuleCount, 0, rule)
-                }
-              }
-              approved = decision !== 'deny' && decision !== 'rule-deny'
+              // Overrides + rule persistence live in applyApprovalDecision (shared
+              // with the writable subagent's unconfined-shell gate).
+              approved = applyApprovalDecision(decision, call.name, execArgs, tool.kind, unsandboxedShell)
             }
 
             if (!approved) {
