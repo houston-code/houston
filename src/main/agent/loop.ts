@@ -548,14 +548,13 @@ export async function startRun(
     const managedPolicy = await loadManagedPolicy()
     const projectConfig = await loadProjectConfig(workspace)
     // The two guardrail tiers that outrank the user. A mid-run "Always allow/deny"
-    // is spliced in just BELOW this count so live consent can never shadow an admin
-    // or project rule (see the splice near the approval handler).
-    const guardrailRuleCount = managedPolicy.permissionRules.length + projectConfig.permissionRules.length
-    const permissionRules = [
-      ...managedPolicy.permissionRules,
-      ...projectConfig.permissionRules,
-      ...(settings.permissionRules ?? [])
-    ]
+    // is spliced in just BELOW their count so live consent can never shadow an admin
+    // or project rule (see the splice near the approval handler). The slice is also
+    // kept separately so the approval gate can tell a guardrail-mandated `ask` from
+    // a user-tier one — only the latter can be skipped by a hook's `approve`.
+    const guardrailRules = [...managedPolicy.permissionRules, ...projectConfig.permissionRules]
+    const guardrailRuleCount = guardrailRules.length
+    const permissionRules = [...guardrailRules, ...(settings.permissionRules ?? [])]
     // The system prompt is built once and can't change mid-run, so plan-mode
     // *guidance* is a snapshot of the starting policy. The runtime plan-mode
     // *block* below reads `run.policy`, so toggling plan on/off mid-run still
@@ -1773,9 +1772,22 @@ export async function startRun(
               shellEscapesWorkspace
             })
 
+            // An `ask` mandated by the managed policy or the project guardrails can
+            // never be skipped by a hook's `approve`: those tiers are tighten-only
+            // (see parseTightenOnlyRules) and hooks are user-level config, so honoring
+            // the directive would let the user's own hook suppress a prompt an admin
+            // or the project explicitly required. Matched against execArgs — what will
+            // actually run. A user-tier `ask` rule stays hook-skippable: the user
+            // softening their own rule loosens nothing above their tier.
+            const guardrailAsk =
+              pre.approved &&
+              guardrailRules.length > 0 &&
+              matchRule(guardrailRules, call.name, permissionSubject(call.name, execArgs), roots) === 'ask'
+
             let approved = true
-            // A PreToolUse hook that explicitly approves skips the approval prompt.
-            if (mustApprove && !pre.approved) {
+            // A PreToolUse hook that explicitly approves skips the approval prompt —
+            // unless a guardrail-tier `ask` rule forced it (above).
+            if (mustApprove && (!pre.approved || guardrailAsk)) {
               // Track the prompt so it can be replayed if the renderer re-opens this
               // conversation while the call is still blocking (the event is one-shot).
               run.pendingApprovals.set(call.id, {

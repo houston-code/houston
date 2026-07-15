@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ChatMessage, Provider, ProviderStreamEvent, ToolApprovalDecision } from '@shared/agent'
@@ -170,6 +170,23 @@ describe('lifecycle hooks in the loop', () => {
   })
 })
 
+/** One scripted turn: a single write_file call, then a plain closing turn. */
+const writeTurns = (path: string): ProviderStreamEvent[][] => [
+  [
+    { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path, content: 'hello' } } },
+    { type: 'done', stopReason: 'tool_use' }
+  ],
+  [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+]
+/** A hook stdout directive that rewrites the write to `path`. */
+const rewriteTo = (path: string, extra: Record<string, unknown> = {}): Partial<SandboxRunResult> => ({
+  stdout: JSON.stringify({ updatedInput: { path, content: 'rewritten' }, ...extra })
+})
+const toolResult = (events: AgentEvent[]): string => {
+  const e = events.find((x) => x.type === 'tool_result')
+  return e && 'output' in e ? String(e.output) : ''
+}
+
 // A PreToolUse hook may rewrite a call's arguments, which changes what actually
 // runs — so the loop must re-match the permission rules against the REWRITTEN
 // arguments, not carry over the verdict computed on the model's original ones.
@@ -177,23 +194,6 @@ describe('lifecycle hooks in the loop', () => {
 // deny covers (the guardrail tiers are tighten-only: user config must never be
 // able to loosen them), or keep riding an allow rule the rewrite no longer earns.
 describe('PreToolUse rewrites are re-matched against permission rules', () => {
-  /** One scripted turn: a single write_file call, then a plain closing turn. */
-  const writeTurns = (path: string): ProviderStreamEvent[][] => [
-    [
-      { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path, content: 'hello' } } },
-      { type: 'done', stopReason: 'tool_use' }
-    ],
-    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
-  ]
-  /** A hook stdout directive that rewrites the write to `path`. */
-  const rewriteTo = (path: string, extra: Record<string, unknown> = {}): Partial<SandboxRunResult> => ({
-    stdout: JSON.stringify({ updatedInput: { path, content: 'rewritten' }, ...extra })
-  })
-  const toolResult = (events: AgentEvent[]): string => {
-    const e = events.find((x) => x.type === 'tool_result')
-    return e && 'output' in e ? String(e.output) : ''
-  }
-
   it('a rewrite into a managed deny is refused, even when the hook also approves', async () => {
     h.managedRules = [{ action: 'deny', tool: 'write_file', match: 'secret*' }]
     h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'rw' }]
@@ -251,5 +251,75 @@ describe('PreToolUse rewrites are re-matched against permission rules', () => {
     expect(events.some((e) => e.type === 'tool_approval')).toBe(false)
     expect(readFileSync(join(ws, 'allowed.txt'), 'utf8')).toBe('rewritten')
     expect(existsSync(join(ws, 'draft.txt'))).toBe(false)
+  })
+})
+
+// A PreToolUse hook's `{decision:"approve"}` skips the approval prompt — but only
+// a prompt the user's own config or the coarse policy asked for. An `ask` mandated
+// by the managed policy or the project guardrails is tighten-only territory: hooks
+// are user-level config, so the directive must never suppress a prompt an admin or
+// the project explicitly required.
+describe('hook approve cannot skip a guardrail-mandated ask', () => {
+  /** A hook that only approves (no rewrite). */
+  const approve: Partial<SandboxRunResult> = { stdout: JSON.stringify({ decision: 'approve' }) }
+
+  it('a managed-policy ask rule still prompts when the hook approves', async () => {
+    h.managedRules = [{ action: 'ask', tool: 'write_file', match: 'guarded*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'ok' }]
+    h.static = { ok: approve }
+    const { events } = await run({
+      turns: writeTurns('guarded.txt'),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    // Without the guardrail re-check the hook's approve skips the prompt entirely.
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(true)
+    expect(toolResult(events)).toContain('Denied by the user')
+    expect(existsSync(join(ws, 'guarded.txt'))).toBe(false)
+  })
+
+  it('a project-guardrail ask rule still prompts, and an allow proceeds normally', async () => {
+    mkdirSync(join(ws, '.houston'), { recursive: true })
+    writeFileSync(
+      join(ws, '.houston', 'settings.json'),
+      JSON.stringify({ permissionRules: [{ action: 'ask', tool: 'write_file', match: 'guarded*' }] })
+    )
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'ok' }]
+    h.static = { ok: approve }
+    const { events } = await run({
+      turns: writeTurns('guarded.txt'),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(true)
+    // The forced prompt is real and binding, not a dead end — allowing it runs the call.
+    expect(readFileSync(join(ws, 'guarded.txt'), 'utf8')).toBe('hello')
+  })
+
+  it("a user-tier ask rule stays skippable by the user's own hook", async () => {
+    h.settings.permissionRules = [{ action: 'ask', tool: 'write_file', match: 'guarded*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'ok' }]
+    h.static = { ok: approve }
+    // The deny handler is hang-proofing: if a prompt wrongly fires, the write is
+    // denied and the file assertion fails instead of the test hanging.
+    const { events } = await run({
+      turns: writeTurns('guarded.txt'),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(false)
+    expect(readFileSync(join(ws, 'guarded.txt'), 'utf8')).toBe('hello')
+  })
+
+  it('a rewrite into managed-ask territory prompts on the rewritten args despite the approve', async () => {
+    h.managedRules = [{ action: 'ask', tool: 'write_file', match: 'guarded*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'write_file', command: 'rw' }]
+    // Original args match no rule; only the rewritten path lands on the managed ask.
+    h.static = { rw: rewriteTo('guarded.txt', { decision: 'approve' }) }
+    const { events } = await run({
+      turns: writeTurns('free.txt'),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(true)
+    expect(toolResult(events)).toContain('Denied by the user')
+    expect(existsSync(join(ws, 'guarded.txt'))).toBe(false)
+    expect(existsSync(join(ws, 'free.txt'))).toBe(false)
   })
 })
