@@ -14,6 +14,7 @@ import type {
   AgentEvent,
   ChatMessage,
   Conversation,
+  ConversationCompaction,
   ConversationError,
   ConversationMeta,
   ConversationUsage,
@@ -272,8 +273,15 @@ export function computeScorecard(): Scorecard {
  * `errored` carries the failed-run flag forward without the message payload.
  */
 function toMeta(conv: Conversation): ConversationMeta {
-  // schemaVersion is a storage detail — keep it out of the UI list payload.
-  const { messages: _messages, lastError, schemaVersion: _schemaVersion, ...rest } = conv
+  // schemaVersion is a storage detail, and compaction carries a summary that can
+  // run to kilobytes — keep both out of the UI list payload.
+  const {
+    messages: _messages,
+    lastError,
+    schemaVersion: _schemaVersion,
+    compaction: _compaction,
+    ...rest
+  } = conv
   return { ...rest, errored: !!lastError }
 }
 
@@ -412,6 +420,28 @@ export function setConversationError(id: string, error: ConversationError | null
   } else {
     if (conv.lastError === undefined) return
     delete conv.lastError
+  }
+  write(conv)
+}
+
+/**
+ * Persist (or clear) the loop's context-compaction state, so the next run resumes
+ * from the last summary instead of re-summarizing the same head every turn. Pass
+ * `null` when a log rewrite (e.g. `/compact`) invalidates the stored cut. Skips
+ * the write when nothing changes and never bumps `updatedAt` — compaction is
+ * bookkeeping, not user activity, and shouldn't reorder the sidebar.
+ */
+export function setCompaction(id: string, compaction: ConversationCompaction | null): void {
+  const conv = read(id)
+  if (!conv) return
+  if (compaction) {
+    if (conv.compaction?.cut === compaction.cut && conv.compaction.summary === compaction.summary) {
+      return
+    }
+    conv.compaction = compaction
+  } else {
+    if (conv.compaction === undefined) return
+    delete conv.compaction
   }
   write(conv)
 }

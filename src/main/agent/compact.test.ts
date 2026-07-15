@@ -6,15 +6,23 @@ import { COMPACTION_SUMMARY_PREFIX, estimateTokens } from './compaction'
 const h = vi.hoisted(() => ({
   conv: null as { id: string; workspace: string; messages: ChatMessage[] } | null,
   saved: null as ChatMessage[] | null,
+  // Arguments of every setCompaction call, so tests can assert the stored
+  // loop-compaction state was cleared when (and only when) the log is rewritten.
+  compactionSet: [] as unknown[],
   provider: null as Provider | null
 }))
 
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
-vi.mock('../agentHost', () => ({ getProvider: () => ({ id: 'anthropic', kind: 'anthropic' }) }))
+vi.mock('../agentHost', () => ({
+  getProvider: () => ({ id: 'anthropic', kind: 'anthropic', models: [] })
+}))
 vi.mock('../conversations', () => ({
   getConversation: () => h.conv,
   setMessages: (_id: string, m: ChatMessage[]) => {
     h.saved = m
+  },
+  setCompaction: (_id: string, c: unknown) => {
+    h.compactionSet.push(c)
   }
 }))
 
@@ -23,6 +31,7 @@ const { applyCompaction, compactConversationNow } = await import('./compact')
 afterEach(() => {
   h.conv = null
   h.saved = null
+  h.compactionSet = []
   h.provider = null
   vi.restoreAllMocks()
 })
@@ -101,6 +110,9 @@ describe('compactConversationNow', () => {
     expect(out.slice(2)).toEqual(messages.slice(6))
     expect(res.summarized).toBe(6)
     expect(h.saved).toEqual(out)
+    // The rewrite invalidates any loop-persisted compaction state (its cut indexes
+    // the old log), so the manual compact must clear it alongside the new log.
+    expect(h.compactionSet).toEqual([null])
   })
 
   it('does nothing when the whole conversation already fits the kept-tail budget', async () => {
@@ -114,6 +126,7 @@ describe('compactConversationNow', () => {
     const res = await compactConversationNow('c2', 'anthropic', 'claude-test')
     expect(res).toEqual({ ok: true, summarized: 0, reason: 'empty' })
     expect(h.saved).toBeNull()
+    expect(h.compactionSet).toEqual([]) // nothing rewritten — stored state untouched
   })
 
   it('compacts a long chat made of only a couple of large turns', async () => {
@@ -167,5 +180,6 @@ describe('compactConversationNow', () => {
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/empty summary/)
     expect(h.saved).toBeNull()
+    expect(h.compactionSet).toEqual([]) // failed — stored state untouched
   })
 })

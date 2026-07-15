@@ -1,8 +1,8 @@
 import type { ChatMessage } from '@shared/agent'
-import { contextWindowFor } from '@shared/usage'
+import { resolveContextWindow } from '@shared/usage'
 import { createProvider } from '../providers'
 import { getProvider } from '../agentHost'
-import { getConversation, setMessages } from '../conversations'
+import { getConversation, setCompaction, setMessages } from '../conversations'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -64,7 +64,12 @@ export async function compactConversationNow(
   const conv = getConversation(id)
   if (!conv) return { ok: false, summarized: 0, error: 'Conversation not found.' }
 
-  const window = contextWindowFor(model)
+  const cfg = getProvider(providerId)
+  if (!cfg) return { ok: false, summarized: 0, error: `Unknown provider: ${providerId}` }
+
+  // Host-listed capability metadata first, then the family heuristic — the caps
+  // are what carry the real window for BYO models the heuristics don't know.
+  const window = resolveContextWindow(model, cfg.models?.find((m) => m.id === model)?.caps)
   const keepTailBudget = window ? Math.floor(window * KEEP_TAIL_FRACTION) : DEFAULT_KEEP_TAIL_BUDGET
 
   // Nothing worth doing if the whole conversation already fits in the tail we'd keep.
@@ -79,9 +84,6 @@ export async function compactConversationNow(
     const userTurns = conv.messages.filter((m) => m.role === 'user').length
     return { ok: true, summarized: 0, reason: userTurns === 0 ? 'empty' : 'single-turn' }
   }
-
-  const cfg = getProvider(providerId)
-  if (!cfg) return { ok: false, summarized: 0, error: `Unknown provider: ${providerId}` }
 
   let provider
   try {
@@ -122,5 +124,10 @@ export async function compactConversationNow(
 
   const messages = [...summaryMsgs, ...conv.messages.slice(target)]
   setMessages(id, messages)
+  // The rewrite embeds the summary in the log itself, so any loop-persisted
+  // compaction state now indexes into the wrong log — clear it rather than let a
+  // stale cut drop messages the stored summary never covered. The loop re-persists
+  // fresh state the next time it compacts.
+  setCompaction(id, null)
   return { ok: true, summarized: target, messages }
 }

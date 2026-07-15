@@ -182,3 +182,40 @@ describe('conversation id guard — non-UUID ids never reach the filesystem', ()
     expect(getConversation(upper)?.id).toBe(upper)
   })
 })
+
+describe('setCompaction — persisted loop-compaction state', () => {
+  it('round-trips state and clears it on null', async () => {
+    writeRaw(ID_A, JSON.stringify(legacyConv(ID_A)))
+    const { getConversation, setCompaction } = await import('./conversations')
+    setCompaction(ID_A, { cut: 4, summary: 'dense summary' })
+    expect(getConversation(ID_A)!.compaction).toEqual({ cut: 4, summary: 'dense summary' })
+    setCompaction(ID_A, null)
+    expect(getConversation(ID_A)!.compaction).toBeUndefined()
+  })
+
+  it('never bumps updatedAt — compaction is bookkeeping, not user activity', async () => {
+    writeRaw(ID_A, JSON.stringify(legacyConv(ID_A)))
+    const { getConversation, setCompaction } = await import('./conversations')
+    setCompaction(ID_A, { cut: 4, summary: 'S' })
+    expect(getConversation(ID_A)!.updatedAt).toBe(2) // legacyConv's stored value
+  })
+
+  it('skips the write entirely when nothing changes', async () => {
+    // A legacy file gains schemaVersion on any write-through; clearing state that
+    // was never set must leave the raw bytes untouched.
+    const raw = JSON.stringify(legacyConv(ID_A))
+    writeRaw(ID_A, raw)
+    const { setCompaction } = await import('./conversations')
+    setCompaction(ID_A, null)
+    expect(readFileSync(convPath(ID_A), 'utf8')).toBe(raw)
+  })
+
+  it('stays out of the lightweight list payload', async () => {
+    writeRaw(ID_A, JSON.stringify(legacyConv(ID_A)))
+    const { listConversations, setCompaction } = await import('./conversations')
+    setCompaction(ID_A, { cut: 4, summary: 'a summary that can run to kilobytes' })
+    const meta = listConversations()[0] as unknown as Record<string, unknown>
+    expect(meta.id).toBe(ID_A)
+    expect('compaction' in meta).toBe(false)
+  })
+})

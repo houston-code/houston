@@ -18,6 +18,7 @@ import {
 } from '@shared/types'
 import {
   backfillDefaultModels,
+  DEFAULT_COMPACTION_THRESHOLD,
   defaultSettings,
   reconcileSelectedModel,
   SETTINGS_SCHEMA_VERSION,
@@ -143,9 +144,18 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
     const newOpenAiModels = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4']
     providers = stripBuiltInModelLabels(backfillDefaultModels(providers, newOpenAiModels))
   }
+  // v5: the compaction threshold defaults to window-relative sizing, and only an
+  // explicit override is stored. Older versions stamped the fixed default into
+  // every settings.json, indistinguishable from a user choice — drop exactly that
+  // value so those installs pick up the automatic behavior. Any other stored
+  // number was set deliberately and is kept as an override.
+  const upgraded = { ...raw }
+  if (fromVersion < 5 && upgraded.compactionThreshold === DEFAULT_COMPACTION_THRESHOLD) {
+    delete upgraded.compactionThreshold
+  }
   const merged: AppSettings = {
     ...base,
-    ...raw,
+    ...upgraded,
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     providers
   }

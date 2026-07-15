@@ -2,11 +2,14 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 4
+export const SETTINGS_SCHEMA_VERSION = 5
 
 /**
- * Default context-compaction threshold in tokens. Comfortable for large-context
- * cloud models (Claude/GPT/Gemini); small-context local models should lower it.
+ * Fallback context-compaction threshold in tokens, used only when the selected
+ * model's context window is unknown (a custom/local model with no capability
+ * metadata). When the window IS known, the threshold scales to it instead — see
+ * `resolveCompactionThreshold` in main/agent/compaction.ts. An explicit
+ * `compactionThreshold` setting overrides both.
  */
 export const DEFAULT_COMPACTION_THRESHOLD = 100_000
 
@@ -193,7 +196,9 @@ export function defaultSettings(): AppSettings {
     selected: null,
     approvalPolicy: 'ask',
     recentWorkspaces: [],
-    compactionThreshold: DEFAULT_COMPACTION_THRESHOLD,
+    // compactionThreshold is deliberately unset: absent means "automatic"
+    // (window-relative — see resolveCompactionThreshold); only a user's explicit
+    // override is ever stored.
     shellOutputMaxBytes: DEFAULT_SHELL_OUTPUT_MAX_BYTES,
     reasoningEffort: 'off',
     stallDetection: true,

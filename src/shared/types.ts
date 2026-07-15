@@ -252,7 +252,9 @@ export interface AppSettings {
   systemPromptExtra?: string
   /**
    * Compact the conversation when the estimated context exceeds this many tokens.
-   * 0 disables compaction. Lower it for small-context local models.
+   * Unset means automatic: a fraction of the selected model's context window
+   * (COMPACTION_WINDOW_FRACTION), falling back to a fixed default when the window
+   * is unknown. Set a number to override that sizing; 0 disables compaction.
    */
   compactionThreshold?: number
   /**
