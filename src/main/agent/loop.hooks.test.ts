@@ -21,7 +21,11 @@ const h = vi.hoisted(() => ({
   calls: [] as SandboxRunOptions[],
   // Admin managed-policy rules (highest-precedence, tighten-only tier), injected
   // through the `./managedPolicy` mock below; default none.
-  managedRules: [] as PermissionRule[]
+  managedRules: [] as PermissionRule[],
+  // What isSandboxed() reports. Real hosts differ (macOS confines, Linux CI often
+  // doesn't), which changes shell-approval behavior — so tests pin it. Default true
+  // (a confining host, the behavior these tests were written against).
+  sandboxed: true
 }))
 
 vi.mock('../agentHost', () => ({
@@ -44,12 +48,14 @@ vi.mock('./plugins', () => ({
   loadPlugins: async () => ({ has: () => false, size: 0, emit: async () => {} }),
   loadPluginsIfEnabled: async () => ({ has: () => false, size: 0, emit: async () => {} })
 }))
-// Fake the sandbox runner so hooks don't spawn real processes; keep every other
-// sandbox export real (isSandboxed etc.) so the loop's approval logic is unchanged.
+// Fake the sandbox runner so hooks don't spawn real processes, and pin isSandboxed
+// so shell-approval behavior doesn't vary by host; every other sandbox export stays
+// real so the loop's approval logic is otherwise unchanged.
 vi.mock('../sandbox', async (importActual) => {
   const actual = await importActual<typeof import('../sandbox')>()
   return {
     ...actual,
+    isSandboxed: () => h.sandboxed,
     runSandboxed: async (o: SandboxRunOptions): Promise<SandboxRunResult> => {
       h.calls.push(o)
       const queued = h.script[o.command]?.shift()
@@ -82,6 +88,7 @@ beforeEach(() => {
   h.static = {}
   h.calls = []
   h.managedRules = []
+  h.sandboxed = true
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -321,5 +328,80 @@ describe('hook approve cannot skip a guardrail-mandated ask', () => {
     expect(toolResult(events)).toContain('Denied by the user')
     expect(existsSync(join(ws, 'guarded.txt'))).toBe(false)
     expect(existsSync(join(ws, 'free.txt'))).toBe(false)
+  })
+})
+
+// On a host with no enforceable OS sandbox, every shell command prompts until the
+// user picks "Allow for run" on an unconfined-shell prompt (the per-run consent,
+// run.shellUnsandboxedOverride). That consent stops the *default* every-command
+// prompt — it must not silence a permission `ask` rule. The managed/project tiers
+// are tighten-only, and even the user's own ask rule already survives a generic
+// override on a confining host, so this consent gets no more power than that.
+describe('unconfined-shell override cannot skip an ask rule', () => {
+  /** One turn issuing two sequential shell commands, then a closing turn. */
+  const shellTurns = (first: string, second: string): ProviderStreamEvent[][] => [
+    [
+      { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: first } } },
+      { type: 'tool_call', call: { id: 's2', name: 'run_shell', arguments: { command: second } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+  const prompts = (events: AgentEvent[]): AgentEvent[] =>
+    events.filter((e) => e.type === 'tool_approval')
+  const resultFor = (events: AgentEvent[], callId: string): string => {
+    const e = events.find((x) => x.type === 'tool_result' && 'callId' in x && x.callId === callId)
+    return e && 'output' in e ? String(e.output) : ''
+  }
+  /** Whether some executed sandbox command contains `text` (session preludes may wrap it). */
+  const ran = (text: string): boolean => h.calls.some((c) => c.command.includes(text))
+
+  it('a managed-policy ask rule still prompts after "Allow for run" on an unconfined shell', async () => {
+    h.sandboxed = false
+    h.managedRules = [{ action: 'ask', tool: 'run_shell', match: 'rm *' }]
+    let prompted = 0
+    const { events } = await run({
+      turns: shellTurns('echo hi', 'rm -rf build'),
+      // First prompt is the plain unconfined-shell one — grant the per-run consent.
+      // The second (the managed ask) must still fire; deny it to prove it is binding.
+      onApproval: (_id, decide) => decide(prompted++ === 0 ? 'always' : 'deny')
+    })
+    const p = prompts(events)
+    expect(p).toHaveLength(2)
+    // Both prompts carry the unconfined banner — the ask rule doesn't hide that the
+    // command would run unsandboxed.
+    expect(p[0]).toMatchObject({ callId: 's1', sandboxed: false })
+    expect(p[1]).toMatchObject({ callId: 's2', sandboxed: false })
+    expect(resultFor(events, 's2')).toContain('Denied by the user')
+    expect(ran('echo hi')).toBe(true)
+    expect(ran('rm -rf build')).toBe(false)
+  })
+
+  it("a user-tier ask rule also survives — per-run consent is not the user's hook", async () => {
+    // Unlike a hook approve (which may skip the user's OWN ask rule — see above), the
+    // per-run unconfined-shell consent says nothing about the rule's subject: a user
+    // rule written to always prompt keeps prompting, as it does under a generic
+    // override on a confining host.
+    h.sandboxed = false
+    h.settings.permissionRules = [{ action: 'ask', tool: 'run_shell', match: 'rm *' }]
+    let prompted = 0
+    const { events } = await run({
+      turns: shellTurns('echo hi', 'rm -rf build'),
+      // Approve the second prompt: the forced prompt is real, not a dead end.
+      onApproval: (_id, decide) => decide(prompted++ === 0 ? 'always' : 'allow')
+    })
+    expect(prompts(events)).toHaveLength(2)
+    expect(ran('rm -rf build')).toBe(true)
+  })
+
+  it('without an ask rule the consent still auto-approves later commands (no over-tightening)', async () => {
+    h.sandboxed = false
+    const { events } = await run({
+      turns: shellTurns('echo hi', 'echo bye'),
+      onApproval: (_id, decide) => decide('always')
+    })
+    expect(prompts(events)).toHaveLength(1)
+    expect(ran('echo hi')).toBe(true)
+    expect(ran('echo bye')).toBe(true)
   })
 })

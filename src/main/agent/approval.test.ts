@@ -123,6 +123,12 @@ describe('decideApproval', () => {
     it('shell under ask prompts', () => {
       expect(decideApproval(base({ kind: 'shell', policy: 'ask' })).mustApprove).toBe(true)
     })
+
+    it('an ask rule beats a generic override (per-run consent never skips an ask rule)', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', ruleAction: 'ask', override: true })).mustApprove
+      ).toBe(true)
+    })
   })
 
   describe('on a NON-confining host (shellSandboxed=false) — the unconfined-shell gate', () => {
@@ -156,6 +162,40 @@ describe('decideApproval', () => {
       expect(
         decideApproval(
           base({ kind: 'shell', shellSandboxed: false, shellUnsandboxedOverride: true })
+        )
+      ).toEqual({ mustApprove: false, unsandboxedShell: true })
+    })
+
+    it('an ask rule still prompts after the unconfined-shell override (tighten-only)', () => {
+      // The per-run consent stops the default every-command prompt; it is not consent
+      // to skip a rule — managed/project or the user's own — that says "always ask".
+      expect(
+        decideApproval(
+          base({
+            kind: 'shell',
+            shellSandboxed: false,
+            ruleAction: 'ask',
+            shellUnsandboxedOverride: true
+          })
+        )
+      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+    })
+
+    it('an ask-rule prompt keeps the unsandboxed banner even without the override', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', shellSandboxed: false, ruleAction: 'ask' }))
+      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+    })
+
+    it('the override still auto-approves an allow-ruled command (no over-tightening)', () => {
+      expect(
+        decideApproval(
+          base({
+            kind: 'shell',
+            shellSandboxed: false,
+            ruleAction: 'allow',
+            shellUnsandboxedOverride: true
+          })
         )
       ).toEqual({ mustApprove: false, unsandboxedShell: true })
     })
