@@ -1902,6 +1902,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'compaction':
           deps.io.out(paint(`\n· compacted ${e.summarized} messages\n`, 'dim'))
           break
+        case 'notice':
+          // A user-addressed note (a hook's systemMessage) — display-only, never
+          // part of the model's context.
+          deps.io.out(paint(`\n· ${e.message}\n`, 'dim'))
+          break
         case 'done':
           // One compact cost summary for the whole turn (this turn + running
           // session), instead of a line per model round. Only when the turn
