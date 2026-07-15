@@ -1,0 +1,1051 @@
+[
+  {
+    "name": "read_file",
+    "description": "Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path relative to the project root."
+        },
+        "offset": {
+          "type": "number",
+          "description": "First line to read (1-based). Omit to start at the beginning."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Maximum number of lines to read from offset. Omit to read to the end."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "write_file",
+    "description": "Create or overwrite a text file within the project with the given content. Creates parent directories as needed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path relative to the project root."
+        },
+        "content": {
+          "type": "string",
+          "description": "The full file contents to write."
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "edit_file",
+    "description": "Replace a string in a file with a new string. The old string is matched verbatim first; if that fails it is matched ignoring each line's indentation/whitespace (so minor drift does not lose the edit). By default the old string must resolve to exactly one match; set replace_all to replace every occurrence.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path relative to the project root."
+        },
+        "old_string": {
+          "type": "string",
+          "description": "The exact text to replace."
+        },
+        "new_string": {
+          "type": "string",
+          "description": "The replacement text."
+        },
+        "replace_all": {
+          "type": "boolean",
+          "description": "Replace every occurrence (default false)."
+        }
+      },
+      "required": [
+        "path",
+        "old_string",
+        "new_string"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "multi_edit",
+    "description": "Apply several exact-string replacements to a single file in one atomic operation. The edits are applied in order (each later edit sees the result of the earlier ones), and the file is only written if every edit succeeds. Each edit follows the same rules as edit_file: old_string must occur exactly once unless replace_all is set. Prefer this over multiple edit_file calls when changing several places in the same file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path relative to the project root."
+        },
+        "edits": {
+          "type": "array",
+          "description": "The edits to apply, in order.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "old_string": {
+                "type": "string",
+                "description": "The exact text to replace."
+              },
+              "new_string": {
+                "type": "string",
+                "description": "The replacement text."
+              },
+              "replace_all": {
+                "type": "boolean",
+                "description": "Replace every occurrence of this edit (default false)."
+              }
+            },
+            "required": [
+              "old_string",
+              "new_string"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "path",
+        "edits"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "apply_patch",
+    "description": "Apply a multi-file patch in one atomic operation using the OpenAI patch format: an envelope between \"*** Begin Patch\" and \"*** End Patch\" containing \"*** Add File: <path>\" (with +lines), \"*** Update File: <path>\" (optionally followed by \"*** Move to: <path>\", then @@/space/-/+ hunks), and \"*** Delete File: <path>\". Either every change applies or none does. Prefer this when a single change spans several files; use edit_file/multi_edit for one file.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "patch": {
+          "type": "string",
+          "description": "The patch envelope."
+        }
+      },
+      "required": [
+        "patch"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_dir",
+    "description": "List the entries in a directory within the project.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Directory path relative to the project root (default \".\")."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "glob",
+    "description": "Find files whose path matches a glob pattern (e.g. \"**/*.ts\", \"src/**/*.test.tsx\"). Returns matching paths relative to the project root, most-recently-modified first. Skips node_modules, .git, dotfiles, and build output.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "A glob pattern, e.g. \"**/*.ts\" or \"src/*.json\"."
+        },
+        "path": {
+          "type": "string",
+          "description": "Directory to search within (default project root). The pattern is matched relative to this directory."
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_files",
+    "description": "Search file contents across the project using a regular expression. Returns matching \"path:line: text\" entries. Uses a bundled ripgrep for speed, falling back to a built-in scan. Skips node_modules, .git, and build output.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "A regular expression."
+        },
+        "path": {
+          "type": "string",
+          "description": "Subdirectory to search within (default project root)."
+        },
+        "ignore_case": {
+          "type": "boolean",
+          "description": "Case-insensitive match (default false)."
+        },
+        "glob": {
+          "type": "string",
+          "description": "Only search files whose path matches this glob (e.g. \"*.ts\", \"src/**/*.tsx\")."
+        },
+        "context": {
+          "type": "number",
+          "description": "Lines of context to show before and after each match (like grep -C)."
+        },
+        "files_with_matches": {
+          "type": "boolean",
+          "description": "Return only the matching file paths, not the matching lines (default false)."
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "ast_grep",
+    "description": "Structural (AST-aware) code search using ast-grep. Matches code by syntax-tree shape rather than text, so it ignores formatting/whitespace and supports meta-variables: $NAME matches one node, $$$ARGS matches a list. Examples: \"console.log($A)\", \"function $F($$$) { $$$ }\", \"useEffect($CB, [])\". Returns matching \"path:line:col: text\" entries. Prefer this over search_files when you want occurrences of a code *pattern* (calls, declarations, JSX elements) without regex false positives. Requires the language of the code.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "An ast-grep structural pattern, e.g. \"console.log($A)\" or \"function $F($$$) { $$$ }\"."
+        },
+        "lang": {
+          "type": "string",
+          "description": "Language of the pattern/files: ts, tsx, js, jsx, py, rust, go, java, c, cpp, ruby, etc."
+        },
+        "path": {
+          "type": "string",
+          "description": "Subdirectory to search within (default project root)."
+        }
+      },
+      "required": [
+        "pattern",
+        "lang"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "run_shell",
+    "description": "Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; on a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The shell command to run (executed with /bin/bash -c)."
+        },
+        "background": {
+          "type": "boolean",
+          "description": "Run without waiting and return a shell id (default false). Use for long-running processes."
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "description": "Wall-clock limit for a foreground command, in seconds (default 300, max 600). Raise it for a slow one-shot such as a cold dependency install; ignored when background:true."
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "read_shell_output",
+    "description": "Read new output from a background shell started by run_shell. By default returns only output produced since the last read; set full:true for everything buffered. Also reports whether the shell is still running and its exit code.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "shell_id": {
+          "type": "string",
+          "description": "The id returned by run_shell with background:true."
+        },
+        "full": {
+          "type": "boolean",
+          "description": "Return all buffered output, not just new output (default false)."
+        }
+      },
+      "required": [
+        "shell_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "kill_shell",
+    "description": "Stop a background shell started by run_shell.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "shell_id": {
+          "type": "string",
+          "description": "The id returned by run_shell with background:true."
+        }
+      },
+      "required": [
+        "shell_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "web_fetch",
+    "description": "Fetch a URL over http/https and return its contents as text (HTML is converted to readable text). Use for documentation, references, or APIs. Network egress always requires approval. Private and loopback addresses are blocked.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "An http or https URL to fetch."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "view_localhost",
+    "description": "Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page's console output. The screenshot is returned as an image you can view directly — so you can SEE the web UI you built and iterate on it, instead of guessing. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "A loopback URL to load, e.g. \"http://localhost:3000\"."
+        },
+        "selector": {
+          "type": "string",
+          "description": "Optional CSS selector — screenshot just that element's bounding box instead of the whole viewport (e.g. \"#app\", \".hero\")."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "web_search",
+    "description": "Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a search-provider API key set in Settings.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "The search query."
+        },
+        "max_results": {
+          "type": "number",
+          "description": "Maximum results to return (1–10, default 5)."
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "todo_write",
+    "description": "Record or update your task list — a scratchpad for planning and tracking multi-step work. Pass the FULL list every time (it replaces the previous one). Use it to break a complex task into steps and to track progress; keep exactly one item \"in_progress\" while you work on it and mark items \"completed\" as you finish. Has no side effects on the project.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "todos": {
+          "type": "array",
+          "description": "The full todo list, replacing any previous one.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": "What needs to be done."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed"
+                ],
+                "description": "Current status of this item."
+              }
+            },
+            "required": [
+              "content",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "todos"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "skill",
+    "description": "Load a project skill's full instructions by name and follow them. Skills are reusable procedures defined for this project (they're listed in your context when any exist). The moment a task matches a listed skill, invoke this — before doing the work — to get the complete SKILL.md, then follow it exactly. Returns the instructions, or the list of available skills if the name is unknown.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The exact name of the skill to load, as listed in your context."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "pr_sweep",
+    "description": "Plan and track a multi-PR sweep — a board, like todo_write but specialized for working a batch of pull requests. Pass the FULL list of items every time (it replaces the previous one); keep exactly one item \"in_progress\" and advance each item's status as you go. This tool only records state — it has no side effects; you do the real work with the other tools.\n\nTwo modes:\n- \"author\": turn each task into its own PR. For each item: create a branch (e.g. `git worktree add` or `git checkout -b` via run_shell), make the change, commit, push the branch (`git push -u origin <branch>`), then gh_pr_create. Status flow: pending → in_progress → pushed → pr_open → done (or failed). Record the branch and the PR url as you get them.\n- \"process\": work a list of existing open PRs (find them with gh_pr_list). For each item: gh_pr_checkout the PR, review/fix it (run_shell/review_changes), commit, push, gh_pr_comment if needed, then mark done. Record the PR reference.\n\nWork items one at a time, update this board after each meaningful step, and put a short note on anything that fails or needs the user.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "author",
+            "process"
+          ],
+          "description": "\"author\" to create new PRs from tasks; \"process\" to work existing PRs."
+        },
+        "items": {
+          "type": "array",
+          "description": "The full sweep board, replacing any previous one.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "task": {
+                "type": "string",
+                "description": "What this item is — the task to author, or the existing PR to process."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "pushed",
+                  "pr_open",
+                  "done",
+                  "failed"
+                ],
+                "description": "Current status of this item."
+              },
+              "branch": {
+                "type": "string",
+                "description": "The branch worked on (author) or the PR head branch (process)."
+              },
+              "pr": {
+                "type": "string",
+                "description": "PR reference once known — a number, \"#123\", or a URL."
+              },
+              "note": {
+                "type": "string",
+                "description": "Short note: a blocker, what was done, or why it failed."
+              }
+            },
+            "required": [
+              "task",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "items"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "ask_user",
+    "description": "Ask the user a question and wait for their answer before continuing. Use this to resolve a genuine ambiguity or get a decision only the user can make (which option, which approach, a missing detail) — not for routine narration or confirmations you can infer. Offer 2–4 concise options; the user may also type their own answer. Returns the user’s answer as text. Available in Plan mode, so use it to settle open questions before presenting a plan.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The question to ask. Be specific and concise."
+        },
+        "options": {
+          "type": "array",
+          "description": "Suggested answers (2–4 recommended). The user can also type a custom answer.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "description": "Short option text the user selects."
+              },
+              "description": {
+                "type": "string",
+                "description": "Optional one-line explanation of what choosing this option means."
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "multiSelect": {
+          "type": "boolean",
+          "description": "Allow the user to select more than one option (default false)."
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "recall_history",
+    "description": "Page back into the EARLIER conversation after older turns have been compacted or their large tool outputs elided from your context. This reads your own full, un-summarized message log (read-only, no side effects). Filter by a substring `query` (case-insensitive; matches message text and tool-call arguments) and/or a message-index range (`from`/`to`, 0-based, as shown in the `#N` labels of a prior recall). Returns the matching earlier messages as compact labeled lines. Use it to recover a detail (a path, a value, an earlier decision) you no longer see rather than re-reading files or re-running commands. Output is size-capped; narrow the query or range if you need more of a specific message.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Case-insensitive substring to match against message text and tool-call arguments."
+        },
+        "from": {
+          "type": "number",
+          "description": "First message index to include (0-based, inclusive). Omit to start at the beginning."
+        },
+        "to": {
+          "type": "number",
+          "description": "Last message index to include (0-based, inclusive). Omit to read to the end."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Maximum number of matching messages to return (most recent matches win). Default 30."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "dispatch_agent",
+    "description": "Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. \"find where auth tokens are validated and summarize the flow\". Do your own editing based on its report.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "A short label for the task (a few words)."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The full task/question for the subagent, with all the context it needs."
+        },
+        "agent": {
+          "type": "string",
+          "description": "Optional: the name of a custom agent (from .houston/agents) to use. Omit for the default research agent."
+        }
+      },
+      "required": [
+        "description",
+        "prompt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "dispatch_writable_agent",
+    "description": "Delegate a self-contained task to a subagent that can EDIT files (and, where the host has an OS sandbox, RUN shell commands) in its own fresh context, then returns a written report. Everything it does is confined to the project with no network access; on a host without an OS sandbox (e.g. Windows) the subagent is edits-only — run any needed commands through the main agent instead. Approving this call grants the subagent write access for the whole delegated task (it will not prompt again per action), so scope the task clearly. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. \"add pagination to the users endpoint and update its tests\". For read-only investigation, use dispatch_agent instead.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "A short label for the task (a few words)."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The full task for the subagent, with all the context and acceptance criteria it needs."
+        },
+        "agent": {
+          "type": "string",
+          "description": "Optional: the name of a custom agent (from .houston/agents, marked `write: true`) to use. Omit for the default writable agent."
+        }
+      },
+      "required": [
+        "description",
+        "prompt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "spawn_session",
+    "description": "Spawn a SEPARATE chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into THIS turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it to run work in parallel — e.g. hand off an independent feature onto its own git branch/worktree while you continue here. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. It starts fresh with no view of this conversation, so put everything it needs in `prompt`.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "The full task and context for the new session — it becomes the first message and is all the session sees, so include every detail it needs to work on its own."
+        },
+        "title": {
+          "type": "string",
+          "description": "Optional short title for the chat as it appears in the sidebar (a few words). Omit to derive one from the prompt."
+        },
+        "worktree": {
+          "type": "object",
+          "description": "Optional: run the session on a FRESH git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.",
+          "properties": {
+            "branch": {
+              "type": "string",
+              "description": "New branch name to create and check out for the session."
+            },
+            "base": {
+              "type": "string",
+              "description": "Optional base ref to branch from (defaults to the current HEAD)."
+            }
+          },
+          "required": [
+            "branch"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "review_changes",
+    "description": "Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don't inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done, then fix what it confirms and verify the fixes directly. One review plus targeted fixes is usually enough: re-run it only if you make further substantial changes, and pass paths to scope the re-review to what changed rather than re-reviewing the whole diff. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch, and paths to limit the review to specific files.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "string",
+          "description": "Optional git ref to diff against (e.g. \"main\" or a commit SHA). Default: HEAD (all uncommitted changes)."
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional: limit the review to these project-relative paths/directories (e.g. [\"src/api\"]). Default: the whole diff."
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "high"
+          ],
+          "description": "Verification depth. 'high' verifies each finding with several independent skeptics and keeps only the majority-confirmed ones (more thorough, more model calls); 'normal' uses a single verifier. Default 'normal' — use 'high' for security-sensitive or high-stakes changes."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "git_status",
+    "description": "Show the working-tree status of the project git repository (staged, unstaged, and untracked changes). Read-only. Optionally restrict to a path.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Optional path within the project to restrict to."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "git_diff",
+    "description": "Show uncommitted changes in the project git repository as a unified diff (both staged and unstaged). Read-only. Optionally restrict to a path.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Optional path within the project to restrict to."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_pr_create",
+    "description": "Open a GitHub pull request for the current branch using the gh CLI. The branch must already be pushed to the remote (push it first with run_shell, e.g. `git push -u origin <branch>`). Requires approval (network) and is refused in plan mode. Returns the new PR URL.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "PR title."
+        },
+        "body": {
+          "type": "string",
+          "description": "PR description (Markdown). Omit for an empty body."
+        },
+        "base": {
+          "type": "string",
+          "description": "Base branch to merge into (e.g. \"main\"). Defaults to the repo default branch."
+        },
+        "head": {
+          "type": "string",
+          "description": "Head branch the PR is opened from. Defaults to the current branch."
+        },
+        "draft": {
+          "type": "boolean",
+          "description": "Open as a draft PR (default false)."
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_pr_list",
+    "description": "List pull requests in the current repository via the gh CLI. Returns \"#<number> [state] <title> (<headBranch> by <author>) <url>\" per PR. Requires approval (network).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "closed",
+            "merged",
+            "all"
+          ],
+          "description": "Which PRs to list (default open)."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max PRs to return (1–100, default 30)."
+        },
+        "author": {
+          "type": "string",
+          "description": "Filter by author login (e.g. \"@me\" for yours)."
+        },
+        "label": {
+          "type": "string",
+          "description": "Filter by label."
+        },
+        "base": {
+          "type": "string",
+          "description": "Filter by base branch."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_pr_view",
+    "description": "View a pull request's details (title, state, author, body, file stats) via the gh CLI. Omit number to view the PR for the current branch. Set diff:true to also include the unified diff. Read-only, but requires approval (network).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "PR number. Omit to use the current branch's PR."
+        },
+        "diff": {
+          "type": "boolean",
+          "description": "Also include the PR diff (default false)."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_pr_comment",
+    "description": "Post a comment on a GitHub pull request via the gh CLI. Omit number to comment on the current branch's PR. Requires approval (network) and is refused in plan mode.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "PR number. Omit to use the current branch's PR."
+        },
+        "body": {
+          "type": "string",
+          "description": "The comment body (Markdown)."
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_pr_checkout",
+    "description": "Check out a GitHub pull request branch locally via the gh CLI (fetches the branch and switches the working tree to it). Use it to review or update an existing PR. Requires approval (network) and is refused in plan mode. Note: this switches the current checkout — commit or stash your work first.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "The PR number to check out."
+        }
+      },
+      "required": [
+        "number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_pr_checks",
+    "description": "Show the CI check (status) rollup for a pull request via the gh CLI. Omit number to use the current branch's PR. Use it to see whether CI passed before relying on a PR. Read-only, but requires approval (network).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "PR number. Omit to use the current branch's PR."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_repo_create",
+    "description": "Create a new GitHub repository via the gh CLI. By default it creates a PRIVATE repo from the current project directory (adds it as the \"origin\" remote) and pushes the existing commits — so commit your work first (the directory must be a git repo with at least one commit; run `git init && git add -A && git commit` via run_shell if needed). Set source:false to instead create an empty remote repo with no local wiring. Requires approval (network) and is refused in plan mode. Returns the new repository URL.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Repository name, or \"owner/name\" to create under an org/user you can access."
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "private",
+            "public",
+            "internal"
+          ],
+          "description": "Repository visibility (default private)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short repository description."
+        },
+        "source": {
+          "type": "boolean",
+          "description": "Create from the current project directory and add it as the \"origin\" remote (default true). The directory must be a git repo with at least one commit."
+        },
+        "push": {
+          "type": "boolean",
+          "description": "Push the existing local commits to the new repo after creating it (default true; requires source)."
+        },
+        "clone": {
+          "type": "boolean",
+          "description": "Clone the new (empty) repo into the project directory (default false; only when source is false)."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_issue_list",
+    "description": "List issues in the current repository via the gh CLI. Returns \"#<number> [state] <title> {labels} by <author> <url>\" per issue. Requires approval (network).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "closed",
+            "all"
+          ],
+          "description": "Which issues to list (default open)."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Max issues to return (1–100, default 30)."
+        },
+        "author": {
+          "type": "string",
+          "description": "Filter by author login (e.g. \"@me\" for yours)."
+        },
+        "assignee": {
+          "type": "string",
+          "description": "Filter by assignee login (e.g. \"@me\")."
+        },
+        "label": {
+          "type": "string",
+          "description": "Filter by label."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_issue_view",
+    "description": "View a GitHub issue (title, state, author, labels, body) via the gh CLI. Set comments:true to include the comment thread. Read-only, but requires approval (network).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "The issue number."
+        },
+        "comments": {
+          "type": "boolean",
+          "description": "Also include the comment thread (default false)."
+        }
+      },
+      "required": [
+        "number"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_issue_create",
+    "description": "Open a new GitHub issue via the gh CLI. Requires approval (network) and is refused in plan mode. Returns the new issue URL.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Issue title."
+        },
+        "body": {
+          "type": "string",
+          "description": "Issue body (Markdown). Omit for an empty body."
+        },
+        "label": {
+          "type": "string",
+          "description": "Comma-separated labels to apply (each must already exist in the repo)."
+        },
+        "assignee": {
+          "type": "string",
+          "description": "Comma-separated assignees (use \"@me\" for yourself)."
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_issue_comment",
+    "description": "Post a comment on a GitHub issue via the gh CLI. Requires approval (network) and is refused in plan mode.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "The issue number."
+        },
+        "body": {
+          "type": "string",
+          "description": "The comment body (Markdown)."
+        }
+      },
+      "required": [
+        "number",
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_run_list",
+    "description": "List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns \"<run-id> [status] <workflow>: <title> (<branch>)\" per run — use a run-id with gh_run_view to inspect it. Requires approval (network).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "number",
+          "description": "Max runs to return (1–50, default 20)."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Filter by branch name."
+        },
+        "workflow": {
+          "type": "string",
+          "description": "Filter by workflow name or file (e.g. \"ci.yml\")."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed",
+            "success",
+            "failure",
+            "cancelled"
+          ],
+          "description": "Filter by run status or conclusion."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_run_view",
+    "description": "View a GitHub Actions workflow run (its jobs and their status) via the gh CLI. Set log_failed:true to print the logs of only the failed steps — the fastest way to diagnose a CI failure. Get run ids from gh_run_list. Read-only, but requires approval (network).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "number",
+          "description": "The run id (databaseId from gh_run_list)."
+        },
+        "log_failed": {
+          "type": "boolean",
+          "description": "Print the logs of the failed steps instead of the run summary (default false)."
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

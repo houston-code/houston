@@ -22,6 +22,18 @@ them from drifting:
 - When you add an `AgentEvent` or a blocking tool, wire the GUI, the TUI, and
   headless in the same change, and add/extend the parity coverage.
 
+## Agent-behavior goldens
+
+`src/main/agent/golden.test.ts` pins the agent's behavior surface — the system
+prompt (per client config and model family), the tool schemas sent to the model,
+provider request assembly, and the `AgentEvent` stream — against golden files in
+`src/main/agent/goldens/`. Any change to `prompt.ts`, tool descriptions/schemas
+in `tools.ts`, or `loop.ts` request/event wiring fails this test; that failure is
+the feature. Review the diff, and when the change is intentional regenerate with
+`npm run goldens:update` and commit the updated goldens in the same change (the
+golden diff documents the behavior change for review). Never hand-edit a golden
+file, and never regenerate without reading the diff.
+
 ## Product self-knowledge
 
 Houston answers questions about its own features (slash commands, skills, hooks,

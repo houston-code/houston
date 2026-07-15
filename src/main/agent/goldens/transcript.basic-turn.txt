@@ -1,0 +1,33 @@
+# golden transcript: basic-turn
+
+--- request 1 ---
+model: claude-sonnet-5
+reasoning: effort=off capable=- summary=- verbosity=-
+explicitCacheControl: false
+system: sha256:067fda013ef2 (9191 chars)
+tools (39): read_file, write_file, edit_file, multi_edit, apply_patch, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_run_list, gh_run_view
+messages (3):
+1. user: "Pinned working memory (kept verbatim across compaction):\n\nOriginal task:\nWhat do my notes say?"
+2. assistant: "Understood. I will keep the pinned task, todo list, and files in play in mind."
+3. user: "What do my notes say?"
+--- request 2 ---
+model: claude-sonnet-5
+reasoning: effort=off capable=- summary=- verbosity=-
+explicitCacheControl: false
+system: sha256:067fda013ef2 (9191 chars)
+tools (39): read_file, write_file, edit_file, multi_edit, apply_patch, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_run_list, gh_run_view
+messages (5):
+1. user: "Pinned working memory (kept verbatim across compaction):\n\nOriginal task:\nWhat do my notes say?\n\nFiles in play (most recent first):\n- notes.txt"
+2. assistant: "Understood. I will keep the pinned task, todo list, and files in play in mind."
+3. user: "What do my notes say?"
+4. assistant: ""
+     -> calls read_file#c1 {"path":"notes.txt"}
+5. tool[read_file#c1]: "remember the milk\n"
+--- events ---
+usage {"cost":0.0042,"inputTokens":1200,"outputTokens":40}
+tool_start {"args":{"path":"notes.txt"},"callId":"c1","kind":"read","name":"read_file"}
+tool_result {"callId":"c1","name":"read_file","ok":true,"output":"remember the milk\n"}
+text {"delta":"The notes say: "}
+text {"delta":"remember the milk."}
+usage {"cost":0.00408,"inputTokens":1300,"outputTokens":12}
+done {"stopReason":"end_turn"}
