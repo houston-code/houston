@@ -82,7 +82,12 @@ export interface ApprovalInputs {
  * rule nor a generic "Allow for run" (which may have been granted for an unrelated
  * tool, or authored on a machine where shell *was* sandboxed) substitutes for
  * conscious consent to run unconfined. Such a command always prompts until the user
- * grants the unconfined-shell-specific override.
+ * grants the unconfined-shell-specific override — and a permission `ask` rule keeps
+ * prompting even after that. The override is consent to run unconfined without the
+ * default every-command prompt; it is not consent to skip a rule that mandates one.
+ * The managed/project tiers are tighten-only (their `ask` must never be silenced by
+ * any user-level state), and even a user's own `ask` rule already survives a generic
+ * override on a confining host, so the unconfined-shell override gets no more power.
  *
  * A shell command that references a path *outside* the workspace defeats the same
  * project-confinement premise even on a confining host (the sandbox may still let
@@ -96,6 +101,9 @@ export function decideApproval(inputs: ApprovalInputs): {
   const { ruleAction, policy, kind, override, shellSandboxed, shellUnsandboxedOverride } = inputs
 
   if (kind === 'shell' && !shellSandboxed) {
+    // An `ask` rule (any tier) wins over the per-run unconfined-shell consent;
+    // `unsandboxedShell` stays true so the prompt still carries the unconfined banner.
+    if (ruleAction === 'ask') return { mustApprove: true, unsandboxedShell: true }
     return { mustApprove: !shellUnsandboxedOverride, unsandboxedShell: true }
   }
   if (ruleAction === 'allow') return { mustApprove: false, unsandboxedShell: false }
