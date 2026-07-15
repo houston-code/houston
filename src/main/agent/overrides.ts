@@ -23,13 +23,36 @@ export interface ConversationOverride {
    * RunState.shellUnsandboxedOverride).
    */
   unsandboxedShell: boolean
+  /**
+   * Egress destinations (see {@link networkDestination}) the user granted "Allow for
+   * run" on. Network consent is per-DESTINATION, not per-kind: approving a fetch to
+   * one host never widens into a blanket pass for all network egress.
+   */
+  networkHosts: Set<string>
+  /**
+   * Whether the user has answered the one-time full-auto shell-network consent
+   * (grant or decline). Once answered, later turns don't re-prompt.
+   */
+  shellNetworkDecided: boolean
+  /**
+   * Whether shell commands may reach the network this conversation. Set by granting
+   * the shell-network consent (full-auto) or "Allow for run" on a shell command
+   * (auto-edit/ask). Drives the sandbox's network switch (RunState.shellNetworkGranted).
+   */
+  shellNetworkGranted: boolean
 }
 
 const store = new Map<string, ConversationOverride>()
 
 /** A fresh, empty override — for a headless run, or a conversation with no grants yet. */
 export function emptyOverride(): ConversationOverride {
-  return { kinds: new Set(), unsandboxedShell: false }
+  return {
+    kinds: new Set(),
+    unsandboxedShell: false,
+    networkHosts: new Set(),
+    shellNetworkDecided: false,
+    shellNetworkGranted: false
+  }
 }
 
 /**
@@ -40,7 +63,13 @@ export function emptyOverride(): ConversationOverride {
 export function overrideForConversation(conversationId: string | undefined): ConversationOverride {
   const stored = conversationId ? store.get(conversationId) : undefined
   if (!stored) return emptyOverride()
-  return { kinds: new Set(stored.kinds), unsandboxedShell: stored.unsandboxedShell }
+  return {
+    kinds: new Set(stored.kinds),
+    unsandboxedShell: stored.unsandboxedShell,
+    networkHosts: new Set(stored.networkHosts),
+    shellNetworkDecided: stored.shellNetworkDecided,
+    shellNetworkGranted: stored.shellNetworkGranted
+  }
 }
 
 /**
@@ -57,6 +86,36 @@ export function grantConversationOverride(
   const cur = store.get(conversationId) ?? emptyOverride()
   cur.kinds.add(kind)
   if (unsandboxedShell) cur.unsandboxedShell = true
+  store.set(conversationId, cur)
+}
+
+/**
+ * Record a per-destination network grant ("Allow for run" on a network tool) so later
+ * turns of the same conversation don't re-prompt for the same host. No-op headless.
+ */
+export function grantConversationNetworkHost(
+  conversationId: string | undefined,
+  host: string
+): void {
+  if (!conversationId) return
+  const cur = store.get(conversationId) ?? emptyOverride()
+  cur.networkHosts.add(host)
+  store.set(conversationId, cur)
+}
+
+/**
+ * Record the answer to the full-auto shell-network consent so later turns inherit it
+ * (a grant stops the sandbox running shell offline; a decline stops the re-prompt).
+ * No-op headless.
+ */
+export function grantConversationShellNetwork(
+  conversationId: string | undefined,
+  granted: boolean
+): void {
+  if (!conversationId) return
+  const cur = store.get(conversationId) ?? emptyOverride()
+  cur.shellNetworkDecided = true
+  if (granted) cur.shellNetworkGranted = true
   store.set(conversationId, cur)
 }
 

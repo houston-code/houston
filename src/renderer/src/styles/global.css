@@ -1956,8 +1956,15 @@ h6.md-h {
 }
 .tool-row__approval {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 0 12px 11px;
+}
+.tool-row__approval-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.85em;
+  color: var(--text-muted, #888);
 }
 .tool-row__images {
   display: flex;

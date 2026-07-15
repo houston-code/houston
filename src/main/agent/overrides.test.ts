@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from 'vitest'
 import {
   overrideForConversation,
   grantConversationOverride,
+  grantConversationNetworkHost,
+  grantConversationShellNetwork,
   clearConversationOverride,
   emptyOverride
 } from './overrides'
@@ -64,5 +66,37 @@ describe('conversation overrides', () => {
     grantConversationOverride(CONV, 'write', true)
     clearConversationOverride(CONV)
     expect(overrideForConversation(CONV)).toEqual(emptyOverride())
+  })
+
+  it('remembers per-destination network grants, and they are independent', () => {
+    grantConversationNetworkHost(CONV, 'api.github.com')
+    const next = overrideForConversation(CONV)
+    expect(next.networkHosts.has('api.github.com')).toBe(true)
+    expect(next.networkHosts.has('evil.example')).toBe(false)
+    grantConversationNetworkHost(CONV, 'docs.example.com')
+    expect(overrideForConversation(CONV).networkHosts).toEqual(
+      new Set(['api.github.com', 'docs.example.com'])
+    )
+  })
+
+  it('records the shell-network decision (grant vs decline), both sticky', () => {
+    grantConversationShellNetwork(CONV, true)
+    let next = overrideForConversation(CONV)
+    expect(next.shellNetworkDecided).toBe(true)
+    expect(next.shellNetworkGranted).toBe(true)
+
+    clearConversationOverride(CONV)
+    // A decline is remembered as "decided" but NOT granted, so later turns don't re-ask
+    // yet still run shell offline.
+    grantConversationShellNetwork(CONV, false)
+    next = overrideForConversation(CONV)
+    expect(next.shellNetworkDecided).toBe(true)
+    expect(next.shellNetworkGranted).toBe(false)
+  })
+
+  it('network-host and shell-network grants are no-ops for a headless run', () => {
+    grantConversationNetworkHost(undefined, 'api.github.com')
+    grantConversationShellNetwork(undefined, true)
+    expect(overrideForConversation(undefined)).toEqual(emptyOverride())
   })
 })

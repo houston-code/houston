@@ -39,6 +39,7 @@ import {
 import { killShell, readShellOutput, registerShell } from './shells'
 import { runInSession, type ShellSession } from './shell-session'
 import { fetchUrlAsText } from './webfetch'
+import { findSecret } from './redact'
 import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
 import { getSearchAdapter } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
@@ -66,6 +67,13 @@ export interface ToolContext {
   conversationId?: string
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
+  /**
+   * All plaintext secret values this install holds (injected by the loop as a per-run
+   * snapshot). Used by the network tools to refuse egress of a credential — the
+   * outbound counterpart to tool-result redaction. Absent on hosts that can't
+   * enumerate secrets (the CLI, tests); those get pattern-only egress masking.
+   */
+  collectSecrets?: () => readonly string[]
   /** Active web-search provider id (selected in Settings; injected by the loop). */
   searchProvider?: string
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
@@ -1028,7 +1036,26 @@ const webFetch: ToolDef = {
   async execute(args, ctx) {
     const url = str(args, 'url')
     if (!url) throw new Error('url is required.')
+    assertNoEgressSecret(url, ctx, 'URL')
     return fetchUrlAsText(url, { signal: ctx.signal, maxBytes: MAX_READ_CHARS * 2 })
+  }
+}
+
+/**
+ * Egress-side credential masking: refuse to send an agent-authored string OUT over the
+ * network when it carries a credential — a stored value this install holds, or a
+ * well-known token FORMAT. Blocking (rather than silently stripping) keeps the model
+ * honest and avoids sending a half-mangled request; the thrown message names only the
+ * secret's TYPE, never the value. See {@link findSecret}. Complements the inbound
+ * tool-result redactor (redact.ts): that scrubs what comes back, this guards what leaves.
+ */
+function assertNoEgressSecret(value: string, ctx: ToolContext, field: string): void {
+  const leaked = findSecret(value, ctx.collectSecrets?.() ?? [])
+  if (leaked) {
+    throw new Error(
+      `Refusing to send this ${field}: it contains what looks like a credential (${leaked}). ` +
+        'Houston does not transmit secrets to remote servers. Remove the secret and retry.'
+    )
   }
 }
 
@@ -1213,6 +1240,7 @@ const webSearch: ToolDef = {
   async execute(args, ctx) {
     const query = str(args, 'query')
     if (!query) throw new Error('query is required.')
+    assertNoEgressSecret(query, ctx, 'search query')
     const provider = getSearchProviderInfo(ctx.searchProvider)
     const key = ctx.getSecret?.(provider.keyId)
     if (!key) {

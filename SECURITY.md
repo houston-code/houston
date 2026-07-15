@@ -70,7 +70,20 @@ directly from the tool's purpose and are gated by explicit user consent:
   receiving the data you direct the agent to send it. Those services are governed by
   their own terms, not by Houston.
 
-Reports that demonstrate a way to **bypass** a control that is supposed to hold — for
+Even so, *full auto* is defended in depth rather than treated as a blank cheque, because
+the sandbox can read your whole filesystem: network egress is granted **per destination**
+(not all-or-nothing), the first shell command takes a **one-time network consent** so
+blanket outbound access is never automatic (a decline runs commands offline), and
+Houston's own network tools (`web_fetch` / `web_search`) **refuse to send** a URL or query
+that carries a recognized credential. These bound the exfiltration surface; they do not
+eliminate it. A raw `curl` in `run_shell`, once shell network is granted for the run, can
+still reach an arbitrary approved-for-the-run destination, and egress bodies over TLS are
+not inspected. Closing that fully wants a per-destination forward proxy for shell egress,
+tracked on the roadmap.
+
+Reports that demonstrate a way to **bypass** a control that is supposed to hold (for
 example, escaping the shell sandbox, writing outside the workspace without approval,
-reaching a private/metadata network address through a network tool, or exfiltrating
-stored keys to the renderer or disk in plaintext — are in scope and very welcome.
+reaching a private/metadata network address through a network tool, sending network
+egress to a destination the run was never granted, exfiltrating a stored key through one
+of Houston's own network tools, or leaking stored keys to the renderer or disk in
+plaintext) are in scope and very welcome.

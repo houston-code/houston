@@ -82,12 +82,18 @@ Approval is layered. From most to least restrictive:
 - **Ask every time:** every edit and command needs a click.
 - **Auto-approve edits:** file edits go through automatically; shell commands
   still ask.
-- **Full auto:** edits and (sandboxed) commands run without asking.
+- **Full auto:** edits and (sandboxed) commands run without asking. Two egress
+  controls still hold even here, because the sandbox can read your whole
+  filesystem: network egress is granted **per destination** (approving a fetch to
+  one host does not open egress to another), and the first shell command pauses
+  once for a **shell-network consent** so blanket outbound access is never
+  automatic (declining runs commands offline).
 
 On any single tool call the user can approve once, deny, **allow for the run**
-(auto-approve that kind of tool for the rest of the conversation), or **always
-allow / always deny** (saves a permission rule so the choice persists). File
-edits show an inline red/green diff before approval.
+(auto-approve that kind of tool for the rest of the conversation, or, for a
+network call, just that one destination), or **always allow / always deny**
+(saves a permission rule so the choice persists). File edits show an inline
+red/green diff before approval.
 
 **Permission rules** (Settings) are finer-grained than the mode: `allow`,
 `deny`, or `ask`, matched on the tool plus a glob over its target, e.g. allow
@@ -236,14 +242,27 @@ off by default.
   Houston reports them as not sandboxed and never silently auto-approves one.
 
 The structured file tools stay confined to the project on every platform.
-Network from `run_shell` is *gated*, not permanently off: it is enabled in full
-auto, or when the user picks "Allow for run" on an approval. So a command that
-needs the network (cloning, installing dependencies, `gh`, `curl`) is not
-impossible, it just needs that grant. Package-manager caches (npm, pip, yarn) are
-auto-redirected to a writable temp dir, so dependency installs need no cache
-workaround once network is on. **Additional folders** (Settings) can be added to
-the file tools' allowed roots and the shell sandbox to work across more than one
-repo.
+Network from `run_shell` is *gated*, not permanently off, and it is no longer
+implied by full auto: the sandbox can read your whole filesystem, so blanket
+outbound access plus full auto would be a one-command read-and-exfiltrate. Shell
+reaches the network only after a conscious per-run grant, either the one-time
+**shell-network consent** (full auto) or "Allow for run" on a shell command
+(ask / auto-edit). A command that needs the network (cloning, installing
+dependencies, `gh`, `curl`) is not impossible, it just needs that grant;
+declining runs the command offline instead of blocking it. Package-manager caches
+(npm, pip, yarn) are auto-redirected to a writable temp dir, so dependency
+installs need no cache workaround once network is on. **Additional folders**
+(Settings) can be added to the file tools' allowed roots and the shell sandbox to
+work across more than one repo.
+
+**Credential masking on egress.** Houston's own network tools refuse to *send* a
+credential: before a `web_fetch` or `web_search` leaves the machine, its URL or
+query is scanned for a well-known token format or one of this install's stored
+secret values, and the call is refused if one is present. This is the outbound
+counterpart to the tool-result redactor (which scrubs secrets on the way back
+in), so a prompt-injected agent cannot exfiltrate a key by pasting it into a
+request. Note this covers Houston-mediated egress; a raw `curl` inside
+`run_shell` is bounded by the shell-network consent above, not by masking.
 
 ## GitHub tools
 

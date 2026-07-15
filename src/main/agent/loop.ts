@@ -56,11 +56,17 @@ import { repairDanglingToolResults } from './repair'
 import {
   alreadyAllowedAsRule,
   matchRule,
+  networkDestination,
   permissionSubject,
   shellReferencesExternalPath,
   shellRulePatterns
 } from './permissions'
-import { grantConversationOverride, overrideForConversation } from './overrides'
+import {
+  grantConversationNetworkHost,
+  grantConversationOverride,
+  grantConversationShellNetwork,
+  overrideForConversation
+} from './overrides'
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
 import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed } from '../sandbox'
@@ -150,7 +156,14 @@ interface RunState {
    */
   pendingApprovals: Map<
     string,
-    { name: string; summary: string; args: Record<string, unknown>; kind: ToolKind; sandboxed?: boolean }
+    {
+      name: string
+      summary: string
+      args: Record<string, unknown>
+      kind: ToolKind
+      sandboxed?: boolean
+      shellNetwork?: boolean
+    }
   >
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
   /**
@@ -171,6 +184,13 @@ interface RunState {
    */
   override: Set<ToolKind>
   /**
+   * Egress destinations (see {@link networkDestination}) the user granted "Allow for
+   * run" on. Network consent is per-DESTINATION, not per-kind: approving a fetch to one
+   * host never widens into a blanket pass for every host. Seeded from the conversation's
+   * accumulated grants and extended as the user approves more hosts.
+   */
+  networkHosts: Set<string>
+  /**
    * Per-run consent specifically to run UNCONFINED shell commands. On a host with no
    * enforceable sandbox, a generic `override` (granted for an unrelated tool) does NOT
    * substitute for this — the first unconfined shell command still prompts, surfacing
@@ -178,6 +198,19 @@ interface RunState {
    * false (and unused) on confining hosts like macOS.
    */
   shellUnsandboxedOverride: boolean
+  /**
+   * Whether shell commands may reach the network this run. Drives the sandbox's network
+   * switch — network egress is all-or-nothing at the OS layer, so this is one boolean,
+   * not a per-host set. Set by the one-time full-auto shell-network consent, or by
+   * "Allow for run" on a shell command (auto-edit/ask). When false, shell runs offline.
+   */
+  shellNetworkGranted: boolean
+  /**
+   * Whether the user has answered the one-time full-auto shell-network consent (grant
+   * OR decline). Guards the prompt so it fires once per run rather than on every command;
+   * a decline is remembered so the run keeps executing shell offline without re-asking.
+   */
+  shellNetworkDecided: boolean
   /**
    * The live approval policy. Seeded from the run request, but mutable so a
    * change made mid-run (e.g. the user switches the mode dropdown while the
@@ -365,7 +398,8 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       summary: a.summary,
       args: a.args,
       kind: a.kind,
-      ...(a.sandboxed === false ? { sandboxed: false } : {})
+      ...(a.sandboxed === false ? { sandboxed: false } : {}),
+      ...(a.shellNetwork ? { shellNetwork: true } : {})
     })
   }
   for (const [callId, q] of run.pendingQuestions) {
@@ -467,7 +501,10 @@ export async function startRun(
     planDecisions: new Map(),
     pendingPlans: new Map(),
     override: seededOverride.kinds,
+    networkHosts: seededOverride.networkHosts,
     shellUnsandboxedOverride: seededOverride.unsandboxedShell,
+    shellNetworkGranted: seededOverride.shellNetworkGranted,
+    shellNetworkDecided: seededOverride.shellNetworkDecided,
     policy: req.approvalPolicy,
     transcript: [],
     ...(owner !== undefined ? { owner } : {})
@@ -649,8 +686,11 @@ export async function startRun(
     // Redact secrets from content that leaves the agent's control boundary — reused
     // for the user's own input (below), tool results, and hook output. Built once from
     // this install's stored secrets (see redact.ts); snapshotted at run start, so a key
-    // added mid-run applies next run.
-    const redact = createSecretRedactor(collectSecrets())
+    // added mid-run applies next run. The same snapshot backs egress-side masking in the
+    // network tools (they refuse to SEND any of these values), so both directions of the
+    // secret boundary read from one list.
+    const knownSecrets = collectSecrets()
+    const redact = createSecretRedactor(knownSecrets)
 
     // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
     // Emit-only by design: it never lands in `messages`, so the model never sees it
@@ -717,9 +757,10 @@ export async function startRun(
 
     /**
      * Apply the side effects of the user's verdict on an approval prompt — "Allow
-     * for run" kind overrides (plus the conscious unconfined-shell consent), and
-     * "Always allow/deny" permission-rule persistence — and return whether the call
-     * may proceed. Shared by the main tool-call gate and the writable subagent's
+     * for run" grants (per-DESTINATION for network calls, per-kind otherwise, plus
+     * the conscious unconfined-shell and shell-network consents), and "Always
+     * allow/deny" permission-rule persistence — and return whether the call may
+     * proceed. Shared by the main tool-call gate and the writable subagent's
      * per-command unconfined-shell gate, so a decision means exactly the same thing
      * whichever prompt it answered.
      */
@@ -731,13 +772,28 @@ export async function startRun(
       unsandboxedShell: boolean
     ): boolean => {
       if (decision === 'always') {
-        // "Allow for run" — auto-approve this KIND for the rest of the run, and
-        // remember it on the conversation so later turns inherit the consent.
-        run.override.add(kind)
-        // "Allow for run" on an unconfined-shell prompt is the conscious consent
-        // to keep running unsandboxed; a generic override never sets this.
-        if (unsandboxedShell) run.shellUnsandboxedOverride = true
-        grantConversationOverride(conversationId, kind, unsandboxedShell)
+        const netDest = kind === 'network' ? networkDestination(toolName, execArgs) : null
+        if (netDest !== null) {
+          // "Allow for run" on a network call — grant THIS destination only, not the
+          // whole kind, so approving one host never opens egress to another. Remembered
+          // on the conversation so later turns inherit the consent.
+          run.networkHosts.add(netDest)
+          grantConversationNetworkHost(conversationId, netDest)
+        } else {
+          // "Allow for run" — auto-approve this KIND for the rest of the run, and
+          // remember it on the conversation so later turns inherit the consent.
+          run.override.add(kind)
+          // "Allow for run" on an unconfined-shell prompt is the conscious consent
+          // to keep running unsandboxed; a generic override never sets this.
+          if (unsandboxedShell) run.shellUnsandboxedOverride = true
+          // Granting shell for the run also lets shell reach the network — the
+          // pre-existing auto-edit/ask semantics; the sandbox reads this flag.
+          if (kind === 'shell') {
+            run.shellNetworkGranted = true
+            grantConversationShellNetwork(conversationId, true)
+          }
+          grantConversationOverride(conversationId, kind, unsandboxedShell)
+        }
       } else if (decision === 'rule-allow' || decision === 'rule-deny') {
         // "Always allow/deny" — persist a permission rule for this tool + subject
         // so the choice survives restarts, and splice it into this run's rules
@@ -765,11 +821,13 @@ export async function startRun(
       return decision !== 'deny' && decision !== 'rule-deny'
     }
 
-    // Shared tool-execution context. `run.policy` and `run.override` are read at
-    // call time so a mid-run policy change or an "Allow for run" decision earlier
+    // Shared tool-execution context. `run.policy` and `run.shellNetworkGranted` are
+    // read at call time so a mid-run policy change or a network-consent decision earlier
     // in the turn takes effect. `allowNetwork` governs the shell sandbox's network
-    // access, so it tracks the shell grant: full-auto, or "Allow for run" on a shell
-    // command (granting an unrelated kind no longer loosens shell networking).
+    // access; it is NO LONGER implied by full-auto — the sandbox reads the whole
+    // filesystem, so blanket egress + full-auto is an exfiltration channel. Shell now
+    // reaches the network only after a conscious per-run grant (the shell-network
+    // consent, or "Allow for run" on a shell command). See needsShellNetworkConsent.
     const makeToolContext = (
       callId: string,
       attachImage: (i: ImageAttachment) => void,
@@ -777,13 +835,14 @@ export async function startRun(
     ): ToolContext => ({
       workspace,
       roots,
-      allowNetwork: run.policy === 'full-auto' || run.override.has('shell'),
+      allowNetwork: run.shellNetworkGranted,
       signal: abort.signal,
       ...(conversationId ? { conversationId } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
       ghExec,
       getSecret: getKey,
+      collectSecrets: () => knownSecrets,
       searchProvider: settings.searchProvider,
       // Ask the user a structured question and block until they answer. The
       // resolver is registered before the event is emitted so a fast reply can't
@@ -1573,7 +1632,12 @@ export async function startRun(
             command: settings.verifyCommand!,
             workspace,
             roots,
-            allowNetwork: run.policy === 'full-auto' || run.override.has('shell'),
+            // The verify command is USER-authored (a settings field the agent can't
+            // change), not agent-authored, so it isn't part of the shell-exfiltration
+            // vector the shell-network consent guards. Keep its prior network behavior
+            // (full-auto, or an explicit shell-network grant) so a verify command that
+            // hits the network isn't silently starved in full-auto.
+            allowNetwork: run.policy === 'full-auto' || run.shellNetworkGranted,
             signal: abort.signal,
             maxBytes: resolveShellOutputBudget(settings)
           })
@@ -1932,15 +1996,36 @@ export async function startRun(
               call.name === 'run_shell' &&
               typeof execArgs.command === 'string' &&
               shellReferencesExternalPath(execArgs.command, roots)
+            // Network consent is per-DESTINATION: "Allow for run" grants only this host,
+            // so approving a fetch to one host never opens egress to every host. The
+            // granted-host set stands in for the generic kind override on network calls.
+            const netDest = tool.kind === 'network' ? networkDestination(call.name, execArgs) : null
+            const kindOverride =
+              netDest !== null ? run.networkHosts.has(netDest) : run.override.has(tool.kind)
             const { mustApprove, unsandboxedShell } = decideApproval({
               ruleAction: execRuleAction,
               policy: run.policy,
               kind: tool.kind,
-              override: run.override.has(tool.kind),
+              override: kindOverride,
               shellSandboxed: isSandboxed(),
               shellUnsandboxedOverride: run.shellUnsandboxedOverride,
               shellEscapesWorkspace
             })
+
+            // #3b: in full-auto on a confining host, the first shell command pauses once
+            // for a conscious network-consent decision. Full-auto otherwise auto-runs
+            // shell inside a sandbox that reads the whole filesystem AND (previously) had
+            // unconditional network — a one-command read-and-exfiltrate. The consent only
+            // decides the sandbox's network switch; the command itself still runs, so when
+            // it is the SOLE reason to pause, a decline runs the command offline rather
+            // than denying it.
+            const needsShellNetworkConsent =
+              tool.kind === 'shell' &&
+              run.policy === 'full-auto' &&
+              isSandboxed() &&
+              !run.shellNetworkGranted &&
+              !run.shellNetworkDecided
+            const consentOnly = needsShellNetworkConsent && !mustApprove
 
             // An `ask` mandated by the managed policy or the project guardrails can
             // never be skipped by a hook's `approve`: those tiers are tighten-only
@@ -1956,16 +2041,23 @@ export async function startRun(
 
             let approved = true
             // A PreToolUse hook that explicitly approves skips the approval prompt —
-            // unless a guardrail-tier `ask` rule forced it (above).
-            if (mustApprove && (!pre.approved || guardrailAsk)) {
+            // unless a guardrail-tier `ask` rule forced it. The one-time shell-network
+            // consent rides the same gate.
+            if ((mustApprove || needsShellNetworkConsent) && (!pre.approved || guardrailAsk)) {
               // Track the prompt so it can be replayed if the renderer re-opens this
               // conversation while the call is still blocking (the event is one-shot).
+              // The shellNetwork FRAMING is shown only when the network question is the
+              // sole reason to pause (consentOnly). When the command needs approval for
+              // another reason (a rule, an escape, an unconfined host) it keeps its normal
+              // command framing, yet approving it still grants the run's shell network
+              // below — so the flag drives UI wording, not the grant.
               run.pendingApprovals.set(call.id, {
                 name: call.name,
                 summary: tool.summarize(execArgs),
                 args: execArgs,
                 kind: tool.kind,
-                ...(unsandboxedShell ? { sandboxed: false } : {})
+                ...(unsandboxedShell ? { sandboxed: false } : {}),
+                ...(consentOnly ? { shellNetwork: true } : {})
               })
               emit({
                 type: 'tool_approval',
@@ -1974,14 +2066,31 @@ export async function startRun(
                 summary: tool.summarize(execArgs),
                 args: execArgs,
                 kind: tool.kind,
-                ...(unsandboxedShell ? { sandboxed: false } : {})
+                ...(unsandboxedShell ? { sandboxed: false } : {}),
+                ...(consentOnly ? { shellNetwork: true } : {})
               })
               const decision = await waitForApproval(run, call.id)
               // Resolved (or cancelled) — it's no longer awaiting the user.
               run.pendingApprovals.delete(call.id)
-              // Overrides + rule persistence live in applyApprovalDecision (shared
-              // with the writable subagent's unconfined-shell gate).
-              approved = applyApprovalDecision(decision, call.name, execArgs, tool.kind, unsandboxedShell)
+              if (consentOnly) {
+                // The prompt was FRAMED as the network question, so its answer decides
+                // ONLY the run's shell network — never whether the command runs (a decline
+                // runs it offline). Gated on `consentOnly` (NOT `needsShellNetworkConsent`)
+                // so a first shell command approved for another reason (an escape, an `ask`
+                // rule), shown with plain command framing, can't silently unlock run-wide
+                // egress: the network question is still asked separately. An explicit "Allow
+                // for run" on such a command still grants network via applyApprovalDecision.
+                const grant = decision !== 'deny' && decision !== 'rule-deny'
+                run.shellNetworkGranted = grant
+                run.shellNetworkDecided = true
+                grantConversationShellNetwork(conversationId, grant)
+                approved = true
+              } else {
+                // Overrides + rule persistence live in applyApprovalDecision (shared with
+                // the writable subagent's unconfined-shell gate) — including the
+                // per-destination network grant and shell → network coupling.
+                approved = applyApprovalDecision(decision, call.name, execArgs, tool.kind, unsandboxedShell)
+              }
             }
 
             if (!approved) {

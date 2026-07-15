@@ -13,6 +13,38 @@ import type { PermissionRule } from '@shared/types'
  * `* rm -rf *`; ask `write_file` matching `**` (review every write).
  */
 
+/**
+ * The egress DESTINATION a `kind:'network'` tool call reaches — the unit of the
+ * per-destination network consent (see RunState.networkHosts). "Allow for run" grants
+ * this key, not the whole `network` kind, so approving a fetch to `api.github.com`
+ * no longer silently also allows egress to an attacker's host.
+ *
+ * - `web_fetch` / `view_localhost` (any `url` arg) → the URL's lowercased hostname.
+ * - `gh_*` → `github.com` (every gh call targets GitHub; one grant covers them all).
+ * - `web_search` → `web_search` (the query goes to the one configured search provider,
+ *   which the user selected; a stable key means a single grant per run).
+ * - anything else → the tool name, so an unrecognized network tool still gets a stable,
+ *   per-tool grant rather than defaulting to a blanket pass.
+ *
+ * Always returns a non-empty key (an unparseable URL falls back to the tool name), so
+ * the caller never has to treat "no destination" as "allow".
+ */
+export function networkDestination(toolName: string, args: Record<string, unknown>): string {
+  if (toolName.startsWith('gh_')) return 'github.com'
+  if (toolName === 'web_search') return 'web_search'
+  const url = typeof args.url === 'string' ? args.url : ''
+  if (url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase()
+      if (host) return host
+    } catch {
+      // Malformed URL — fall through to the tool-name key; the fetch tool's own
+      // validation surfaces the parse error when it runs.
+    }
+  }
+  return toolName
+}
+
 /** The string a permission rule's pattern is matched against, per tool. */
 export function permissionSubject(toolName: string, args: Record<string, unknown>): string {
   const s = (k: string): string => (typeof args[k] === 'string' ? (args[k] as string) : '')

@@ -3,6 +3,7 @@ import {
   alreadyAllowedAsRule,
   cleanupPermissionRules,
   matchRule,
+  networkDestination,
   parseTightenOnlyRules,
   permissionSubject,
   shellReferencesExternalPath,
@@ -22,6 +23,29 @@ describe('permissionSubject', () => {
     expect(permissionSubject('read_file', { path: 'src/a.ts' })).toBe('src/a.ts')
     expect(permissionSubject('glob', { pattern: '**/*.ts' })).toBe('**/*.ts')
     expect(permissionSubject('read_file', {})).toBe('')
+  })
+})
+
+describe('networkDestination', () => {
+  it('keys web_fetch / view_localhost on the URL host (lowercased)', () => {
+    expect(networkDestination('web_fetch', { url: 'https://API.GitHub.com/repos' })).toBe('api.github.com')
+    expect(networkDestination('web_fetch', { url: 'http://example.com:8080/x' })).toBe('example.com')
+    expect(networkDestination('view_localhost', { url: 'http://localhost:3000/' })).toBe('localhost')
+  })
+
+  it('collapses every gh_* call onto github.com (one grant covers them all)', () => {
+    expect(networkDestination('gh_pr_create', { title: 'x' })).toBe('github.com')
+    expect(networkDestination('gh_run_view', { run_id: 1 })).toBe('github.com')
+  })
+
+  it('gives web_search a single stable key (the query has no host)', () => {
+    expect(networkDestination('web_search', { query: 'rust async' })).toBe('web_search')
+  })
+
+  it('falls back to the tool name for a malformed or missing URL (never a blanket pass)', () => {
+    expect(networkDestination('web_fetch', { url: 'not a url' })).toBe('web_fetch')
+    expect(networkDestination('web_fetch', {})).toBe('web_fetch')
+    expect(networkDestination('some_future_net_tool', {})).toBe('some_future_net_tool')
   })
 })
 

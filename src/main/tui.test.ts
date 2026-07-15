@@ -204,6 +204,16 @@ describe('approval prompt', () => {
     )
   })
 
+  it('frames the shell-network consent as a network grant, not a command gate', () => {
+    const p = renderApprovalPrompt(ev({ shellNetwork: true }), makePainter(false))
+    expect(p).toContain('network')
+    expect(p).toContain('offline')
+    // It replaces the generic command-approval prompt (no "always allow this kind").
+    expect(p).not.toContain('always allow this kind')
+    // And it never doubles as the unsandboxed warning.
+    expect(p).not.toContain('UNSANDBOXED')
+  })
+
   it('parses answers, defaulting to deny', () => {
     expect(parseApprovalAnswer('y')).toBe('allow')
     expect(parseApprovalAnswer('YES')).toBe('allow')

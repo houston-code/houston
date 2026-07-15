@@ -49,6 +49,12 @@ export interface ToolItem {
   args?: Record<string, unknown>
   toolKind?: 'read' | 'write' | 'shell' | 'network' | 'mcp'
   status: ToolStatus
+  /**
+   * True on the one-time full-auto shell-network consent prompt: the approval decides
+   * whether the run's shell commands may reach the network (declining runs them
+   * offline), not whether this command runs. Lets the approval card frame it as such.
+   */
+  shellNetwork?: boolean
   output?: string
   /** Latest progress line from a long-running tool (e.g. a review's current phase). */
   progress?: string
@@ -193,6 +199,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           // Guarded so a payload without args never wipes args already on the row.
           ...(e.args ? { args: e.args } : {}),
           toolKind: e.kind,
+          shellNetwork: e.shellNetwork === true,
           status: 'awaiting-approval'
         })
       }
@@ -205,6 +212,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           summary: e.summary,
           args: e.args,
           toolKind: e.kind,
+          ...(e.shellNetwork ? { shellNetwork: true } : {}),
           status: 'awaiting-approval'
         }
       ]

@@ -71,6 +71,20 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   so it's a cross-cutting change worth doing for all at once rather than per-tool.
   In practice the host-literal checks already stop the common cases.
 
+- **Per-destination forward proxy for shell egress.** Houston's own network tools
+  (`web_fetch`, `web_search`, `gh_*`) are now consented per destination, and shell
+  network is gated behind a one-time per-run consent so full-auto no longer implies
+  blanket egress. But once shell network is granted, a raw `curl` in `run_shell` can
+  still reach any host, because the sandbox's network switch is all-or-nothing at the
+  OS layer. Closing that wants routing shell egress through a loopback proxy Houston
+  controls (deny direct sockets in the sandbox profile, inject `HTTP(S)_PROXY`) so
+  each destination is allowlisted the same way the built-in tools are. *Why deferred:*
+  a real proxy with a per-platform sandbox-profile change is a large, cross-cutting
+  build, and even then HTTPS bodies stay opaque (only the CONNECT host is visible), so
+  it buys per-destination control but not body-level credential masking for shell. The
+  per-destination consent + egress masking shipped here bound the surface in the
+  meantime.
+
 - **Mid-run resume after a crash/restart.** Re-enter an interrupted tool loop
   exactly where it stopped. *Why deferred:* conversations already persist
   incrementally and you can continue by sending a new message; true auto-resume
