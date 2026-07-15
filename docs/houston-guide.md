@@ -123,8 +123,12 @@ context and reports back, keeping the main thread clean. An optional front-matte
 `tools:` list narrows which tools it may use. By default a subagent is read-only
 (it cannot edit, run commands, or reach the network); a subagent marked
 `write: true` gets a writable tier and is dispatched with `dispatch_writable_agent`,
-which is approval-gated because it grants write access. Tokens a subagent spends
-roll into the conversation's usage meter.
+which is approval-gated because it grants write access: one approval covers the
+whole delegated task, confined to the project with no network. On a host without
+an OS-enforced sandbox (e.g. Windows), each shell command a writable subagent runs
+would run unconfined, so it asks for its own approval first, exactly like an
+unconfined command from the main agent. Tokens a subagent spends roll into the
+conversation's usage meter.
 
 ## Spawn separate sessions (desktop)
 

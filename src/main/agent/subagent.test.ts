@@ -380,5 +380,109 @@ describe('runSubAgent', () => {
       })
       expect(sink.system).toContain('run shell commands')
     })
+
+    it('routes an unconfined run_shell through the gate and returns its output', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo gated-ok' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'Ran it.' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        sink
+      )
+      const gated: string[] = []
+      const report = await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'run echo',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws],
+        shellSandboxed: false,
+        gateUnconfinedShell: async (args, run) => {
+          gated.push(String(args.command))
+          return run()
+        }
+      })
+      expect(report).toContain('Ran it.')
+      // The command went through the gate exactly once…
+      expect(gated).toEqual(['echo gated-ok'])
+      // …the system prompt describes per-command approval instead of refusing shell…
+      expect(sink.system).toContain('EACH run_shell command first asks the user for approval')
+      expect(sink.system).not.toContain('run_shell is NOT available')
+      // …and the subagent saw the command's real output as the tool result.
+      const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 's1')
+      expect(toolMsg?.content).toContain('gated-ok')
+    })
+
+    it('returns the gate refusal to the subagent without running the command', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [
+          [
+            {
+              type: 'tool_call',
+              call: { id: 's1', name: 'run_shell', arguments: { command: 'touch should-not-exist.txt' } }
+            },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'Denied, moving on.' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        sink
+      )
+      const report = await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'run touch',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws],
+        shellSandboxed: false,
+        // Refuses without ever invoking the run thunk.
+        gateUnconfinedShell: async () => 'Denied by the user.'
+      })
+      expect(report).toContain('Denied, moving on.')
+      const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 's1')
+      expect(toolMsg?.content).toBe('Denied by the user.')
+      expect(existsSync(join(ws, 'should-not-exist.txt'))).toBe(false)
+    })
+
+    it('never consults the gate when the host IS sandboxed', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo confined-ok' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        sink
+      )
+      let consulted = false
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'run echo',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws],
+        shellSandboxed: true,
+        gateUnconfinedShell: async (_args, run) => {
+          consulted = true
+          return run()
+        }
+      })
+      // A confined command runs under the dispatch consent — no per-command gate.
+      expect(consulted).toBe(false)
+      const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 's1')
+      expect(toolMsg?.content).toContain('confined-ok')
+    })
   })
 })

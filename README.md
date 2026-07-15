@@ -86,10 +86,13 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   read-only question to a subagent with its own fresh context: it reads, globs,
   and searches the project and reports back, keeping the main agent's context
   clean. `dispatch_writable_agent` delegates a whole implementation task to a
-  subagent that can also edit files and, where the host has an OS sandbox, run
-  shell commands, confined to the project with no network access; that dispatch
-  is approval-gated, so one consent covers the delegated task. Tokens a subagent
-  spends roll into the conversation's usage meter.
+  subagent that can also edit files and run shell commands, confined to the
+  project with no network access; that dispatch is approval-gated, so one consent
+  covers the delegated task. On a host without an OS-enforced sandbox, each shell
+  command the subagent runs would be unconfined, so it is routed back to you as
+  its own approval prompt (and shown in the transcript), exactly like an
+  unconfined command from the main agent. Tokens a subagent spends roll into the
+  conversation's usage meter.
 - **Spawn separate sessions.** Where a subagent reports back into the current turn,
   `spawn_session` spins off a *separate* chat: the agent hands it a task, optionally
   on its own git branch and worktree, and sets it running autonomously in the

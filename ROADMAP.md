@@ -91,17 +91,18 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   Subagents now come in two tiers. `dispatch_agent` (and custom `.houston/agents`)
   stays read-only: the subagent reads/searches and reports back. The opt-in
   `dispatch_writable_agent` (and custom agents marked `write: true`) delegates a
-  whole task to a nested agent loop that can also edit files and, where the host
-  has an OS sandbox, run shell commands, all confined to the project with no
-  network access. The dispatch call itself is approval-gated (a write-kind tool,
-  blocked in plan mode): one consent covers the delegated task, which the subagent
-  then carries out autonomously without per-action prompts (see
-  [`subagent.ts`](src/main/agent/subagent.ts)). Streaming a nested subagent's live
-  status was already in place via the `subagent` agent event. *Still deferred:*
-  subagent shell on hosts without an OS sandbox (a background subagent can't
-  prompt for the consent an unconfined command needs, so it is edits-only there);
-  any network access for subagents; and nested delegation (a subagent dispatching
-  its own subagents).
+  whole task to a nested agent loop that can also edit files and run shell
+  commands, all confined to the project with no network access. The dispatch call
+  itself is approval-gated (a write-kind tool, blocked in plan mode): one consent
+  covers the delegated task, which the subagent then carries out autonomously
+  without per-action prompts (see [`subagent.ts`](src/main/agent/subagent.ts)).
+  The one exception is unconfined shell: on a host with no OS sandbox, each shell
+  command the subagent runs is propagated back to the user as its own approval
+  prompt with the command's run and result shown live in the transcript, matching
+  the main loop's invariant that an unconfined command never runs without
+  per-command consent. Streaming a nested subagent's live status was already in
+  place via the `subagent` agent event. *Still deferred:* network access for
+  subagents; and nested delegation (a subagent dispatching its own subagents).
 
 - **Persistent code index / semantic (embeddings) search.** Houston searches the
   project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**
