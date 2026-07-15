@@ -151,14 +151,53 @@ spawned it.
 
 ## Hooks
 
-Hooks (Settings, *Hooks*) run your own shell commands around tool calls:
+Hooks (Settings, *Hooks*) run your own shell commands at set points in the
+agent loop. Each hook names an event and, for the tool events, a matcher glob
+on the tool name (the other events match only an empty or `*` matcher):
 
-- A **PreToolUse** hook can *block* a call by exiting non-zero.
-- A **PostToolUse** hook's output is fed back to the agent (e.g. auto-format
-  after every edit, or run tests after a write).
+- **PreToolUse**: before a tool call runs. Can block the call, approve it
+  (skipping the approval prompt), or rewrite its arguments.
+- **PostToolUse**: after a tool call. The hook's output is appended to the
+  tool result so the agent sees it (e.g. auto-format after every edit, or run
+  tests after a write).
+- **UserPromptSubmit**: when you submit a message, before the turn runs. Can
+  block the prompt or inject extra context.
+- **SessionStart**: once when a run begins. Injected context is appended to
+  the system prompt.
+- **Stop**: when the agent would end its turn. Blocking forces another turn
+  with the reason fed back (e.g. "run the tests before you stop"), bounded so
+  a hook cannot keep the agent alive forever.
+- **PreCompact**: before the conversation is compacted. Injected context is
+  folded into the material being summarized, so it survives compaction.
 
-Hooks run in the same project sandbox as `run_shell`. The call's context is
-provided in `$HOUSTON_TOOL_NAME` and `$HOUSTON_TOOL_INPUT`.
+The simplest contract is the exit code: a non-zero exit blocks the blocking
+events (PreToolUse, UserPromptSubmit, Stop), and plain stdout/stderr is fed
+back to the agent as feedback. For finer control, a hook can print a single
+JSON object on stdout:
+
+- `decision`: `"block"` vetoes the action even on a zero exit; `"approve"`
+  (PreToolUse only) skips the approval prompt. A block always wins over an
+  approve.
+- `reason`: a human-readable explanation, fed back to the agent (and shown
+  with a block).
+- `additionalContext`: extra context injected where the event fires: the tool
+  result (PreToolUse), your message (UserPromptSubmit), the system prompt
+  (SessionStart), or the material being summarized (PreCompact).
+- `updatedInput` (PreToolUse only): replacement arguments the tool runs with.
+  A rewrite that fails the tool's schema fails the call rather than falling
+  back to the original arguments. Rewritten arguments are re-matched against
+  your permission rules, so the approval decision is made on what will
+  actually run: a rewrite that lands on a deny rule is refused outright, even
+  if the hook also approved. A hook can tighten policy, but it can never
+  loosen a managed or project deny.
+- `systemMessage`: a note for you rather than the agent; it is never added to
+  the model's context.
+
+When several hooks match, they run in order; any block wins, and the last
+rewrite wins. Hooks run in the same project sandbox as `run_shell` (no
+network). Context arrives in environment variables: `$HOUSTON_HOOK_EVENT`,
+`$HOUSTON_TOOL_NAME`, and `$HOUSTON_TOOL_INPUT`, plus `$HOUSTON_TOOL_RESULT`
+(PostToolUse) and `$HOUSTON_USER_PROMPT` (UserPromptSubmit).
 
 ## Plugins
 
