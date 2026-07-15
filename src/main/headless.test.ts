@@ -615,6 +615,29 @@ describe('runHeadless', () => {
     expect(failedPass.err.join('')).toContain('verification failed')
   })
 
+  it('prints a notice event (hook systemMessage) to stderr, keeping stdout clean', async () => {
+    const { d, out, err } = deps([
+      { runId: 'run-1', type: 'notice', message: 'coverage report written to /tmp/cov' },
+      { runId: 'run-1', type: 'text', delta: 'answer' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    expect(await runHeadless(baseOpts, d)).toBe(0)
+    expect(err.join('')).toContain('coverage report written to /tmp/cov')
+    // stdout stays the model's answer — the note must not pollute a piped result.
+    expect(out.join('')).not.toContain('coverage report')
+  })
+
+  it('emits the notice event as raw JSON in --json mode without duplicating to stderr', async () => {
+    const { d, out, err } = deps([
+      { runId: 'run-1', type: 'notice', message: 'note for the user' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    expect(await runHeadless({ ...baseOpts, json: true }, d)).toBe(0)
+    const lines = out.join('').trim().split('\n').map((l) => JSON.parse(l))
+    expect(lines).toContainEqual({ runId: 'run-1', type: 'notice', message: 'note for the user' })
+    expect(err.join('')).not.toContain('note for the user')
+  })
+
   it('warns when verifyOnStop is enabled under a read-only plan run', async () => {
     const { d, err } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
       getSettings: () =>

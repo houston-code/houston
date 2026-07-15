@@ -373,6 +373,12 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         { kind: 'notice', id: nextId(), text, tone: e.passed ? 'info' : 'error' }
       ]
     }
+    case 'notice': {
+      // A user-addressed note from outside the conversation (a hook's systemMessage
+      // directive) — transcript-only; it was never part of the model's context.
+      const finalized = finalizeStreaming(items)
+      return [...finalized, { kind: 'notice', id: nextId(), text: e.message, tone: 'info' }]
+    }
     case 'done': {
       const finalized = finalizeStreaming(items)
       if (e.stopReason === 'aborted') {

@@ -478,6 +478,11 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
       case 'compaction':
         if (!opts.json) deps.err(`· compacted ${e.summarized} messages\n`)
         break
+      case 'notice':
+        // A user-addressed note (a hook's systemMessage). Meta output, so stderr —
+        // stdout stays the model's answer; --json already emitted the raw event.
+        if (!opts.json) deps.err(`· ${e.message}\n`)
+        break
       // Internal/streaming events with no headless surface: the --json path above
       // already emits each verbatim, and the human output doesn't show them.
       case 'reasoning':

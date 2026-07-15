@@ -543,6 +543,14 @@ export type AgentEvent =
       type: 'verification'
       passed: boolean
     }
+  | {
+      // A note addressed to the user from outside the conversation — today a hook's
+      // `systemMessage` directive. Shown as a transcript notice and never added to
+      // the model's context (the loop only emits it; it never lands in `messages`).
+      runId: string
+      type: 'notice'
+      message: string
+    }
   | { runId: string; type: 'usage'; inputTokens: number; outputTokens: number; cost: number }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | { runId: string; type: 'error'; message: string }

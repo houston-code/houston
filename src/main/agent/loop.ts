@@ -73,7 +73,7 @@ import {
   spawnSession as engineSpawnSession,
   SPAWN_SESSION_NAME
 } from './spawn'
-import { matchingHooks, runHooks } from './hooks'
+import { matchingHooks, runHooks, type HookOutcome } from './hooks'
 import { loadAgents } from './agents'
 import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
@@ -649,6 +649,13 @@ export async function startRun(
     // added mid-run applies next run.
     const redact = createSecretRedactor(collectSecrets())
 
+    // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
+    // Emit-only by design: it never lands in `messages`, so the model never sees it
+    // (the documented contract of the directive).
+    const emitHookNotice = (outcome: HookOutcome): void => {
+      if (outcome.systemMessage) emit({ type: 'notice', message: redact(outcome.systemMessage) })
+    }
+
     // Scrub secrets out of the just-submitted user turn before anything downstream —
     // the model, plugins, hooks, and the persisted transcript — sees it, reusing the
     // same engine as tool-result redaction. A pasted API key or a token-shaped string
@@ -1151,6 +1158,7 @@ export async function startRun(
         workspace,
         abort.signal
       )
+      emitHookNotice(preCompact)
       const toSummarize = messages.slice(cut, newCut)
       const material: ChatMessage[] = preCompact.additionalContext
         ? [{ role: 'user', content: redact(preCompact.additionalContext) }, ...toSummarize]
@@ -1207,6 +1215,7 @@ export async function startRun(
       workspace,
       abort.signal
     )
+    emitHookNotice(sessionStart)
     if (sessionStart.additionalContext) {
       system += `\n\n${redact(sessionStart.additionalContext)}`
     }
@@ -1222,6 +1231,9 @@ export async function startRun(
       workspace,
       abort.signal
     )
+    // Before the block check: a hook that blocks the prompt AND posts a note still
+    // gets its note shown.
+    emitHookNotice(promptSubmit)
     if (promptSubmit.blocked) {
       emit({
         type: 'error',
@@ -1476,6 +1488,7 @@ export async function startRun(
             workspace,
             abort.signal
           )
+          emitHookNotice(stop)
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
             return
@@ -1816,6 +1829,7 @@ export async function startRun(
             workspace,
             abort.signal
           )
+          emitHookNotice(pre)
           // Resolve the arguments the tool actually runs with: a PreToolUse hook may
           // rewrite them. An invalid rewrite fails the call rather than falling back to
           // the model's original (possibly unsafe) args.
@@ -1983,6 +1997,7 @@ export async function startRun(
                 workspace,
                 abort.signal
               )
+              emitHookNotice(post)
               if (post.message) output += `\n\n[PostToolUse hook]\n${post.message}`
               // Format-on-save (opt-in): after a successful write, run the matching
               // formatter on the file the agent wrote, the way an editor would. It's

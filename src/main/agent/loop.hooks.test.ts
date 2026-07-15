@@ -99,6 +99,7 @@ async function run(opts: {
   turns?: ProviderStreamEvent[][]
   provider?: Provider
   userText?: string
+  messages?: ChatMessage[]
   onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
 }): Promise<{ events: AgentEvent[]; messages: ChatMessage[] }> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -112,7 +113,7 @@ async function run(opts: {
       providerId: 'anthropic',
       model: 'claude-test',
       approvalPolicy: 'ask',
-      messages: [{ role: 'user', content: opts.userText ?? 'do it' }]
+      messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }]
     },
     (e) => {
       events.push(e)
@@ -193,6 +194,111 @@ const toolResult = (events: AgentEvent[]): string => {
   const e = events.find((x) => x.type === 'tool_result')
   return e && 'output' in e ? String(e.output) : ''
 }
+
+// A hook's `systemMessage` directive is a note for the user, not the agent: the
+// loop surfaces it as a 'notice' event (rendered by every client) and it must
+// never land in the message log the model reads from.
+describe('hook systemMessage → user-facing notice', () => {
+  const notices = (events: AgentEvent[]): string[] =>
+    events.flatMap((e) => (e.type === 'notice' ? [e.message] : []))
+  const sysMsg = (text: string): Partial<SandboxRunResult> => ({
+    stdout: JSON.stringify({ systemMessage: text })
+  })
+  const plainTurn: ProviderStreamEvent[][] = [
+    [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+
+  it('SessionStart emits the note', async () => {
+    h.settings.hooks = [{ event: 'SessionStart', matcher: '*', command: 'ss' }]
+    h.static = { ss: sysMsg('session note') }
+    const { events } = await run({ turns: plainTurn })
+    expect(notices(events)).toEqual(['session note'])
+  })
+
+  it('UserPromptSubmit emits the note even when the hook also blocks the prompt', async () => {
+    h.settings.hooks = [{ event: 'UserPromptSubmit', matcher: '*', command: 'ups' }]
+    h.static = { ups: { stdout: JSON.stringify({ decision: 'block', systemMessage: 'prompt vetoed by policy' }) } }
+    const { events } = await run({ turns: plainTurn })
+    expect(notices(events)).toEqual(['prompt vetoed by policy'])
+    expect(events.some((e) => e.type === 'error')).toBe(true) // the block still lands
+  })
+
+  it('Stop emits the note', async () => {
+    h.settings.hooks = [{ event: 'Stop', matcher: '*', command: 'stop' }]
+    h.static = { stop: sysMsg('turn ended') }
+    const { events } = await run({ turns: plainTurn })
+    expect(notices(events)).toEqual(['turn ended'])
+  })
+
+  it('PreToolUse and PostToolUse emit their notes, and neither reaches the model context', async () => {
+    h.settings.hooks = [
+      { event: 'PreToolUse', matcher: 'write_file', command: 'pre' },
+      { event: 'PostToolUse', matcher: 'write_file', command: 'post' }
+    ]
+    h.static = { pre: sysMsg('pre note'), post: sysMsg('post note') }
+    const { events, messages } = await run({
+      turns: writeTurns('a.txt'),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(notices(events)).toEqual(['pre note', 'post note'])
+    // The documented contract: the note is for the user only. Nothing the model
+    // reads — the persisted log (tool results included) — may carry it.
+    const log = messages.map((m) => m.content).join('\n')
+    expect(log).not.toContain('pre note')
+    expect(log).not.toContain('post note')
+  })
+
+  it('PreCompact emits the note when compaction runs', async () => {
+    h.settings.hooks = [{ event: 'PreCompact', matcher: '*', command: 'pc' }]
+    h.static = { pc: sysMsg('state saved before compaction') }
+    // Enough history to have older turns to fold away; the first main send
+    // overflows, forcing the reactive compaction path (threshold stays 0).
+    const history: ChatMessage[] = []
+    for (let t = 0; t < 4; t++) {
+      history.push({ role: 'user', content: `old question ${t}` })
+      history.push({ role: 'assistant', content: `old answer ${t}` })
+    }
+    history.push({ role: 'user', content: 'current question' })
+    let mainCalls = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        // Summarization calls are the only ones that set maxTokens.
+        if (req.maxTokens != null) {
+          yield { type: 'text', text: 'SUMMARY' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        mainCalls++
+        if (mainCalls === 1) {
+          yield { type: 'error', message: 'prompt is too long: 212129 tokens > 200000 maximum' }
+          return
+        }
+        yield { type: 'text', text: 'recovered' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const { events } = await run({ provider, messages: history })
+    expect(events.some((e) => e.type === 'compaction')).toBe(true)
+    expect(notices(events)).toEqual(['state saved before compaction'])
+  })
+
+  it('emits nothing when no hook sets systemMessage', async () => {
+    h.settings.hooks = [{ event: 'Stop', matcher: '*', command: 'quiet' }]
+    h.static = { quiet: { stdout: JSON.stringify({ reason: 'all good' }) } }
+    const { events } = await run({ turns: plainTurn })
+    expect(notices(events)).toEqual([])
+  })
+
+  it('concatenates notes from multiple hooks on the same event', async () => {
+    h.settings.hooks = [
+      { event: 'Stop', matcher: '*', command: 'one' },
+      { event: 'Stop', matcher: '*', command: 'two' }
+    ]
+    h.static = { one: sysMsg('first note'), two: sysMsg('second note') }
+    const { events } = await run({ turns: plainTurn })
+    expect(notices(events)).toEqual(['first note\nsecond note'])
+  })
+})
 
 // A PreToolUse hook may rewrite a call's arguments, which changes what actually
 // runs — so the loop must re-match the permission rules against the REWRITTEN

@@ -466,6 +466,21 @@ describe('reduceEvent — loop-control notices', () => {
     expect(badNotice?.tone).toBe('error')
     expect(badNotice?.text).toMatch(/verification failed/i)
   })
+
+  it('renders a notice event (hook systemMessage) as an info notice', () => {
+    const items = reduceEvent([], { runId: RID, type: 'notice', message: 'formatted 2 files' })
+    const notice = items.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(notice?.tone).toBe('info')
+    expect(notice?.text).toBe('formatted 2 files')
+  })
+
+  it('a notice finalizes a streaming assistant bubble before appending', () => {
+    const streaming = reduceEvent([], { runId: RID, type: 'text', delta: 'partial…' })
+    const items = reduceEvent(streaming, { runId: RID, type: 'notice', message: 'note' })
+    const assistant = items.find((i) => i.kind === 'assistant')
+    expect(assistant && 'streaming' in assistant && assistant.streaming).toBe(false)
+    expect(items.at(-1)?.kind).toBe('notice')
+  })
 })
 
 describe('lastUserText', () => {

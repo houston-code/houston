@@ -1565,6 +1565,19 @@ describe('runTui', () => {
     expect(out).toContain('✓ Correctness')
   })
 
+  // Parity with the GUI transcript and headless stderr: a notice event (a hook's
+  // user-facing systemMessage) must be shown, not silently dropped.
+  it('renders a notice event (hook systemMessage)', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'notice', message: 'linted 3 files after the edit' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('linted 3 files after the edit')
+  })
+
   it('drives the spinner across a turn: start, relabel on events, stop', async () => {
     const { d } = deps([
       { runId: 'x', type: 'reasoning', delta: 'hmm' },
