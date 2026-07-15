@@ -62,6 +62,24 @@ shared code run under Node, while the React renderer runs under jsdom with
 [Testing Library](https://testing-library.com/). Renderer component tests use
 `.test.tsx` and render with `@testing-library/react`; hooks use `renderHook`.
 
+### Agent-behavior goldens
+
+`src/main/agent/golden.test.ts` runs scripted scenarios through the real agent
+loop and compares the full behavior surface — the system prompt per client
+config and model family, the tool schemas advertised to the model, every
+provider request, and the emitted event stream — against checked-in golden
+files in `src/main/agent/goldens/`. Any prompt or loop change that shifts one
+of these surfaces fails the test with a text diff.
+
+When a diff is intentional, regenerate and commit the goldens; the diff then
+documents the behavior change in your PR. Review it line by line before
+committing (never regenerate blind: an unexpected hunk is exactly the
+regression this guard exists to catch):
+
+```bash
+npm run goldens:update
+```
+
 There's also an end-to-end smoke test in [`e2e/`](e2e/) that launches the real
 Electron app with Playwright and checks the UI mounts. `npm run test:e2e` builds
 first, then prefers the packaged app from `npm run dist` (in `release/`) and
