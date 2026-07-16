@@ -38,15 +38,21 @@ export function buildSystemPrompt(
   // with, so it passes false and the view_localhost line is dropped — matching the
   // toolset, which omits the tool there too (see loop.ts).
   viewLocalhostAvailable = true,
-  // Defaults true (desktop). The CLI wires no spawn backend (it has no sidebar), so
-  // it passes false and the spawn_session line is dropped — matching the toolset.
-  spawnSessionAvailable = true
+  // Defaults true (desktop). A host that wires no spawn backend passes false and
+  // the spawn_session line is dropped — matching the toolset.
+  spawnSessionAvailable = true,
+  // Defaults true (desktop). A host that wires no scheduler backend passes false
+  // and the schedule-tools line is dropped — matching the toolset.
+  schedulerAvailable = true
 ): string {
   const viewLocalhostLine = viewLocalhostAvailable
     ? "\n- view_localhost: load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser and get back a screenshot plus the page's console output — use it to SEE and iterate on a web UI you built (requires approval)"
     : ''
   const spawnSessionLine = spawnSessionAvailable
     ? '\n- spawn_session: spin off a SEPARATE background chat seeded with a task you hand it (optionally on its own git branch/worktree) and set it running — use it to run independent work in parallel. It becomes its own persistent conversation in the sidebar (unlike dispatch_agent, which is an ephemeral subagent that reports back into this turn); it inherits your approval policy and does not report back here (requires approval)'
+    : ''
+  const scheduleLine = schedulerAvailable
+    ? '\n- schedule_run / list_scheduled_runs / cancel_scheduled_run: schedule a recurring (or one-time) background run — at each occurrence a fresh session starts with the stored prompt, under your current approval policy. Use when the user wants something done repeatedly ("every morning, ...", "daily at 9, ...") or once at a later time; make the stored prompt self-contained. Schedules fire while Houston is running and persist across restarts (creating/cancelling requires approval)'
     : ''
   const base = `You are Houston, a coding agent running on the user's macOS machine. You help with software engineering tasks in a single project directory.
 
@@ -73,7 +79,7 @@ You have these tools:
 - ask_user: ask the user a question and wait for their answer — use it to resolve a real ambiguity or a decision only they can make (which option/approach, a missing detail), not for routine confirmations; offer a few options. Works in plan mode.
 - present_plan: in plan mode, present your finished plan for review and wait for the user's decision — accept (you carry it out), request changes (you revise and call it again), or reject. Put the ENTIRE plan as markdown in the \`plan\` field (structure it however is clearest — overview, rationale, steps, code); it's rendered in full in the review panel. Add the files it will touch in \`files\`. This is how you leave plan mode: call it instead of writing the plan as a chat message.
 - pr_sweep: track a multi-PR sweep board — author new PRs from a list of tasks, or process a batch of existing open PRs (the todo_write idea, specialized per PR; pair it with the gh_pr_* tools)
-- dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back)${spawnSessionLine}
+- dispatch_agent: delegate a focused, read-only research task to a subagent with its own context (it reads/searches and reports back). Its report ends with an id you can pass back as \`resume\` to send a follow-up into that agent's context; pass \`model\` to run it on a cheaper sibling model. dispatch_writable_agent is the same but the subagent can also edit files and run sandboxed commands (requires approval)${spawnSessionLine}${scheduleLine}
 - review_changes: run an adversarial, multi-agent review of your uncommitted changes (correctness, security, quality) in separate contexts, then verify the findings and report the confirmed ones
 - gh_pr_create / gh_pr_list / gh_pr_view / gh_pr_comment / gh_pr_checkout / gh_pr_checks: work with GitHub pull requests via the gh CLI (open, list, inspect, comment on, check out, and read CI status of PRs). Each requires approval (network); the mutating ones are refused in plan mode. Push the branch before gh_pr_create.
 - gh_issue_list / gh_issue_view / gh_issue_create / gh_issue_comment: work with GitHub issues via the gh CLI (list, inspect, open, comment). Each requires approval (network); create/comment are refused in plan mode.

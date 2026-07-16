@@ -551,7 +551,7 @@
   },
   {
     "name": "dispatch_agent",
-    "description": "Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. \"find where auth tokens are validated and summarize the flow\". Do your own editing based on its report.",
+    "description": "Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. \"find where auth tokens are validated and summarize the flow\". Do your own editing based on its report. Each report ends with the subagent's id — pass it as `resume` (with your follow-up as `prompt`) to continue that agent with its context intact instead of re-dispatching from scratch.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -566,6 +566,14 @@
         "agent": {
           "type": "string",
           "description": "Optional: the name of a custom agent (from .houston/agents) to use. Omit for the default research agent."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional: run the subagent on a different model from the current provider (e.g. a cheaper/faster sibling for routine legwork). Must be one of the provider's configured model ids; omit to use the current model."
+        },
+        "resume": {
+          "type": "string",
+          "description": "Optional: the id of a subagent from an earlier dispatch in this chat (shown at the end of its report, e.g. \"ag1\"). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session."
         }
       },
       "required": [
@@ -592,6 +600,14 @@
         "agent": {
           "type": "string",
           "description": "Optional: the name of a custom agent (from .houston/agents, marked `write: true`) to use. Omit for the default writable agent."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional: run the subagent on a different model from the current provider. Must be one of the provider's configured model ids; omit to use the current model."
+        },
+        "resume": {
+          "type": "string",
+          "description": "Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session."
         }
       },
       "required": [
@@ -664,6 +680,10 @@
             "high"
           ],
           "description": "Verification depth. 'high' verifies each finding with several independent skeptics and keeps only the majority-confirmed ones (more thorough, more model calls); 'normal' uses a single verifier. Default 'normal' — use 'high' for security-sensitive or high-stakes changes."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional: run the reviewer and verifier subagents on a different model from the current provider (e.g. a cheaper sibling for a routine review). Must be one of the provider's configured model ids; omit to use the current model."
         }
       },
       "required": [],
