@@ -3,7 +3,7 @@ import { MAX_APPROVAL_NOTE, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
-import { diffLines, diffStat, type DiffLine } from '@shared/diff'
+import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
@@ -54,17 +54,43 @@ function iconFor(item: ToolItem): string {
   return TOOL_ICON[item.name] ?? KIND_ICON[item.toolKind ?? ''] ?? '·'
 }
 
-/** Build a line diff for file-changing tools, from the tool arguments. */
-function diffFor(item: ToolItem): DiffLine[] | null {
+/**
+ * The per-file diffs to show for a tool row.
+ *
+ * Prefers the main process's preview, which is the only source that knows what each
+ * file held before the write and what the edit matcher resolved the change to. That
+ * is what gives `multi_edit` and `apply_patch` a diff at all, and what lets a
+ * `write_file` over an existing file show the lines that actually changed instead of
+ * presenting the whole file as new.
+ *
+ * The argument-derived fallback below is kept for rows that have no preview: a
+ * conversation persisted before previews existed, or a write whose effect could not
+ * be modelled. It is deliberately the same (limited) rendering as before — for
+ * `write_file` it can only diff against nothing, because the arguments alone do not
+ * say what the file used to contain.
+ */
+function previewsFor(item: ToolItem): FileDiffPreview[] | null {
+  if (item.preview && item.preview.length > 0) return item.preview
   const a = item.args
   if (!a) return null
+  const path = typeof a.path === 'string' ? a.path : ''
   if (item.name === 'edit_file' && typeof a.old_string === 'string' && typeof a.new_string === 'string') {
-    return diffLines(a.old_string, a.new_string)
+    return [{ path, diff: diffLines(a.old_string, a.new_string) }]
   }
   if (item.name === 'write_file' && typeof a.content === 'string') {
-    return diffLines('', a.content)
+    return [{ path, diff: diffLines('', a.content) }]
   }
   return null
+}
+
+/**
+ * Whether a file's diff needs its own labelled header. A single unannotated file is
+ * already named by the row itself, so a header would just repeat it; more than one
+ * file, or a file that is being created/deleted/renamed, carries information the row
+ * does not.
+ */
+function needsFileHeader(p: FileDiffPreview, total: number): boolean {
+  return total > 1 || Boolean(p.created || p.deleted || p.renamedFrom)
 }
 
 const GLYPH: Record<Exclude<ToolItem['status'], 'running'>, string> = {
@@ -90,8 +116,11 @@ function ToolRow({
   const isTodo = item.name === 'todo_write' && todos.length > 0
   const sweep = item.name === 'pr_sweep' ? parseSweepItemsSafe(item.args?.items) : []
   const isSweep = item.name === 'pr_sweep' && sweep.length > 0
-  const diff = diffFor(item)
-  const stat = diff && diff.length > 0 ? diffStat(diff) : null
+  const previews = previewsFor(item)
+  // One stat across every file the call touches, so a multi-file patch reports the
+  // whole change rather than only its first file.
+  const allLines = previews ? previews.flatMap((p) => p.diff) : []
+  const stat = allLines.length > 0 ? diffStat(allLines) : null
   const { verb, target, mono } = describeTool(item)
   const awaiting = item.status === 'awaiting-approval'
 
@@ -100,7 +129,7 @@ function ToolRow({
   // Guidance to send with a denial ("no, use staging instead").
   const [note, setNote] = useState('')
   // Todo/sweep rows render their list inline, so they have nothing extra to expand.
-  const expandable = !isTodo && !isSweep && Boolean((diff && diff.length > 0) || item.output)
+  const expandable = !isTodo && !isSweep && Boolean(allLines.length > 0 || item.output)
   const toggle = (): void => {
     if (expandable) setOpen((v) => !v)
   }
@@ -184,7 +213,32 @@ function ToolRow({
         </ul>
       )}
 
-      {open && diff && diff.length > 0 && <DiffView diff={diff} />}
+      {open && previews && allLines.length > 0 && (
+        <div className="tool-row__diffs">
+          {previews.map((p, i) => (
+            <div key={`${p.path}:${i}`} className="tool-row__diff-file">
+              {needsFileHeader(p, previews.length) && (
+                <div className="tool-row__diff-head">
+                  <span className="tool-row__diff-path" title={p.path}>
+                    {p.path}
+                  </span>
+                  {p.created && <span className="tool-row__diff-tag">new file</span>}
+                  {p.deleted && <span className="tool-row__diff-tag tool-row__diff-tag--del">deleted</span>}
+                  {p.renamedFrom && (
+                    <span className="tool-row__diff-tag" title={p.renamedFrom}>
+                      renamed from {p.renamedFrom}
+                    </span>
+                  )}
+                </div>
+              )}
+              {p.diff.length > 0 && <DiffView diff={p.diff} />}
+              {p.truncated && (
+                <div className="tool-row__diff-more">Diff shortened; the change continues past this point.</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {open && item.output && !isTodo && !isSweep && <pre className="tool-row__output">{item.output}</pre>}
 
       {item.images && item.images.length > 0 && (

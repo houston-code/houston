@@ -274,6 +274,64 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
     expect(tools[0].args).toEqual({ path: 'a.txt' })
   })
 
+  it('carries a write preview from tool_approval onto the row', () => {
+    const preview = [{ path: 'a.txt', diff: [{ type: 'add' as const, text: 'hi' }] }]
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_approval',
+      callId: 'w1',
+      name: 'write_file',
+      summary: 's',
+      kind: 'write',
+      preview
+    })
+    const tools = items.filter((i): i is ToolItem => i.kind === 'tool')
+    expect(tools[0].preview).toEqual(preview)
+  })
+
+  it('carries a preview from tool_start, so an auto-approved write still gets a diff', () => {
+    // An auto-approved write never shows an approval card, so tool_start is the only
+    // place its preview can arrive.
+    const preview = [{ path: 'a.txt', diff: [{ type: 'add' as const, text: 'hi' }] }]
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_start',
+      callId: 'w1',
+      name: 'write_file',
+      args: { path: 'a.txt' },
+      kind: 'write',
+      preview
+    })
+    const tools = items.filter((i): i is ToolItem => i.kind === 'tool')
+    expect(tools[0].preview).toEqual(preview)
+  })
+
+  it('does not wipe an existing preview when a later event carries none', () => {
+    const preview = [{ path: 'a.txt', diff: [{ type: 'add' as const, text: 'hi' }] }]
+    let items = reduceEvent([], {
+      runId: 'r',
+      type: 'tool_approval',
+      callId: 'w1',
+      name: 'write_file',
+      summary: 's',
+      kind: 'write',
+      preview
+    })
+    // tool_start follows approval; the diff must survive it, since the file has now
+    // changed on disk and the "before" can never be recovered.
+    items = reduceEvent(items, {
+      runId: 'r',
+      type: 'tool_start',
+      callId: 'w1',
+      name: 'write_file',
+      args: { path: 'a.txt' },
+      kind: 'write'
+    })
+    const tools = items.filter((i): i is ToolItem => i.kind === 'tool')
+    expect(tools[0].preview).toEqual(preview)
+    expect(tools[0].status).toBe('running')
+  })
+
   it('appends an approval row when no row exists yet (the normal live first emit)', () => {
     const items = reduceEvent([], {
       runId: 'r',

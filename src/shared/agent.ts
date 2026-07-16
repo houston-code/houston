@@ -3,6 +3,8 @@
  * to/from these so the agent loop and UI never depend on a specific SDK shape.
  */
 
+import type { FileDiffPreview } from './diff'
+
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
 /** A JSON Schema object describing a tool's parameters. */
@@ -551,6 +553,14 @@ export type AgentEvent =
        * for back-compat with events constructed without it (older logs / tests).
        */
       kind?: 'read' | 'write' | 'shell' | 'network' | 'mcp'
+      /**
+       * Per-file diffs this call is about to produce, captured against the files'
+       * current contents (see `previewWrite`). Carried here as well as on
+       * `tool_approval` so an auto-approved write — one that never showed a prompt —
+       * still has a true diff on its row, and so the row keeps showing it after the
+       * write has landed and the "before" is gone from disk.
+       */
+      preview?: FileDiffPreview[]
     }
   | { runId: string; type: 'tool_progress'; callId: string; message: string }
   | {
@@ -583,6 +593,14 @@ export type AgentEvent =
        */
       args?: Record<string, unknown>
       kind: 'read' | 'write' | 'shell' | 'network' | 'mcp'
+      /**
+       * Per-file diffs this call would produce, computed against the files' current
+       * contents before it runs. Set for write-kind calls whose effect can be modelled
+       * (see `previewWrite`); absent otherwise. The renderer cannot derive this from
+       * `args` alone — it has no filesystem, so it cannot know what a file already
+       * holds, nor run the edit matcher that decides what an edit resolves to.
+       */
+      preview?: FileDiffPreview[]
       /**
        * Present and `false` only when this is a shell command about to run WITHOUT an
        * OS sandbox (no enforceable confinement on this host) — lets the approval UI warn

@@ -65,6 +65,30 @@ export function diffLines(oldStr: string, newStr: string): DiffLine[] {
   return out
 }
 
+/**
+ * A previewed change to ONE file, computed before the write lands.
+ *
+ * The renderer cannot compute this itself: it has no filesystem, so it cannot know
+ * what a file currently holds, and the resilient edit matcher that decides what an
+ * `edit_file`/`multi_edit`/`apply_patch` actually produces lives in the main
+ * process. So the main process diffs against disk and ships the result. Because it
+ * is captured BEFORE the write, the row keeps showing a true diff after the file
+ * has already changed.
+ */
+export interface FileDiffPreview {
+  /** Project-relative path, as the tool was given it. */
+  path: string
+  diff: DiffLine[]
+  /** The file does not exist yet, so every line is an addition. */
+  created?: boolean
+  /** The file is being removed. */
+  deleted?: boolean
+  /** Renamed from this path (an apply_patch "Move to"). */
+  renamedFrom?: string
+  /** The diff was cut to a line budget; `diff` is a prefix of the real change. */
+  truncated?: boolean
+}
+
 export interface DiffStat {
   added: number
   removed: number

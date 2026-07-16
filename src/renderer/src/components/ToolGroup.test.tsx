@@ -285,6 +285,141 @@ describe('ToolGroup', () => {
     expect(screen.getByText('−0')).toBeInTheDocument()
   })
 
+  it('diffs a write_file against the file it overwrites, not against nothing', () => {
+    // The gap this closes: with only args, a write_file over an existing file renders
+    // every line as new. The preview carries what the file actually held.
+    const items: ToolItem[] = [
+      tool({
+        id: 'w',
+        name: 'write_file',
+        status: 'awaiting-approval',
+        args: { path: 'src/x.ts', content: 'keep\nchanged\n' },
+        preview: [
+          {
+            path: 'src/x.ts',
+            diff: [
+              { type: 'ctx', text: 'keep' },
+              { type: 'del', text: 'was here' },
+              { type: 'add', text: 'changed' }
+            ]
+          }
+        ]
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+
+    const diff = container.querySelector('.diff')
+    expect(within(diff as HTMLElement).getByText('was here')).toBeInTheDocument()
+    // One line each way, rather than the whole file counted as added.
+    expect(screen.getByText('+1')).toBeInTheDocument()
+    expect(screen.getByText('−1')).toBeInTheDocument()
+    // A plain overwrite of an existing file needs no per-file header: the row says it.
+    expect(container.querySelector('.tool-row__diff-head')).toBeNull()
+  })
+
+  it('renders a diff for multi_edit, which previously had none at all', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 'm',
+        name: 'multi_edit',
+        status: 'awaiting-approval',
+        args: { path: 'src/m.ts', edits: [{ old_string: 'a', new_string: 'b' }] },
+        preview: [
+          {
+            path: 'src/m.ts',
+            diff: [
+              { type: 'del', text: 'a' },
+              { type: 'add', text: 'b' }
+            ]
+          }
+        ]
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    expect(container.querySelector('.diff')).not.toBeNull()
+    expect(screen.getByText('+1')).toBeInTheDocument()
+  })
+
+  it('renders one diff per file for a multi-file apply_patch, with headers and tags', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 'p',
+        name: 'apply_patch',
+        status: 'awaiting-approval',
+        args: { patch: '*** Begin Patch\n…' },
+        preview: [
+          { path: 'src/new.ts', created: true, diff: [{ type: 'add', text: 'export const x = 1' }] },
+          {
+            path: 'src/keep.ts',
+            diff: [
+              { type: 'del', text: 'const b = 2' },
+              { type: 'add', text: 'const b = 3' }
+            ]
+          },
+          { path: 'src/gone.ts', deleted: true, diff: [{ type: 'del', text: 'bye' }] }
+        ]
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+
+    // Three files, each with its own labelled diff.
+    expect(container.querySelectorAll('.diff')).toHaveLength(3)
+    expect(screen.getByText('src/new.ts')).toBeInTheDocument()
+    expect(screen.getByText('src/keep.ts')).toBeInTheDocument()
+    expect(screen.getByText('src/gone.ts')).toBeInTheDocument()
+    expect(screen.getByText('new file')).toBeInTheDocument()
+    expect(screen.getByText('deleted')).toBeInTheDocument()
+    // The stat sums the whole patch, not just its first file.
+    expect(screen.getByText('+2')).toBeInTheDocument()
+    expect(screen.getByText('−2')).toBeInTheDocument()
+  })
+
+  it('labels a renamed file with where it came from', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 'p',
+        name: 'apply_patch',
+        status: 'awaiting-approval',
+        args: { patch: '…' },
+        preview: [
+          { path: 'src/new.ts', renamedFrom: 'src/old.ts', diff: [{ type: 'add', text: 'x' }] }
+        ]
+      })
+    ]
+    render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    expect(screen.getByText('renamed from src/old.ts')).toBeInTheDocument()
+  })
+
+  it('says so when a preview was cut short rather than implying it is the whole change', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 'w',
+        name: 'write_file',
+        status: 'awaiting-approval',
+        args: { path: 'big.ts', content: 'x' },
+        preview: [{ path: 'big.ts', truncated: true, diff: [{ type: 'add', text: 'line' }] }]
+      })
+    ]
+    render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    expect(screen.getByText(/change continues past this point/)).toBeInTheDocument()
+  })
+
+  it('falls back to the args-derived diff for a row with no preview', () => {
+    // Conversations persisted before previews existed still render what they can.
+    const items: ToolItem[] = [
+      tool({
+        id: 'a',
+        name: 'edit_file',
+        status: 'done',
+        args: { path: 'src/x.ts', old_string: 'old line', new_string: 'new line' }
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    fireEvent.click(container.querySelector('.tool-row__head') as HTMLElement)
+    expect(screen.getByText('old line')).toBeInTheDocument()
+    expect(screen.getByText('new line')).toBeInTheDocument()
+  })
+
   it('renders the correct mark for each todo status', () => {
     const items: ToolItem[] = [
       tool({

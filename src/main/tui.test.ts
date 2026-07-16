@@ -29,6 +29,7 @@ import {
   renderNoModelStatus,
   composerPrompt,
   extractDiff,
+  renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
   formatSessionCost,
@@ -487,6 +488,63 @@ describe('resolveModelArg', () => {
 describe('composerPrompt', () => {
   it('reflects the live policy', () => {
     expect(composerPrompt('auto-edit', makePainter(false))).toContain('auto-edit')
+  })
+})
+
+describe('renderPreviewDiff', () => {
+  it('renders an overwrite as the lines that changed, not as a whole new file', () => {
+    // What extractDiff cannot do: it has only the args, so it must show every line
+    // of a write_file as added. The preview knows what the file held.
+    const d = renderPreviewDiff([
+      {
+        path: 'a.ts',
+        diff: [
+          { type: 'ctx', text: 'keep' },
+          { type: 'del', text: 'was here' },
+          { type: 'add', text: 'now here' }
+        ]
+      }
+    ])
+    expect(d).toContain('--- a.ts')
+    expect(d).toContain('+++ a.ts')
+    expect(d).toContain(' keep')
+    expect(d).toContain('-was here')
+    expect(d).toContain('+now here')
+    expect(d).not.toContain('(new file)')
+  })
+
+  it('renders every file of a multi-file patch, tagging new and deleted ones', () => {
+    const d = renderPreviewDiff([
+      { path: 'new.ts', created: true, diff: [{ type: 'add', text: 'x' }] },
+      { path: 'gone.ts', deleted: true, diff: [{ type: 'del', text: 'y' }] }
+    ])
+    expect(d).toContain('+++ new.ts (new file)')
+    expect(d).toContain('+++ gone.ts (deleted)')
+    expect(d).toContain('+x')
+    expect(d).toContain('-y')
+  })
+
+  it('shows a rename as the old path on the left and the new one on the right', () => {
+    const d = renderPreviewDiff([{ path: 'new.ts', renamedFrom: 'old.ts', diff: [{ type: 'add', text: 'x' }] }])
+    expect(d).toContain('--- old.ts')
+    expect(d).toContain('+++ new.ts')
+  })
+
+  it('says when the diff was cut short, and returns null with nothing to render', () => {
+    expect(renderPreviewDiff([{ path: 'a.ts', truncated: true, diff: [{ type: 'add', text: 'x' }] }])).toContain(
+      'diff shortened'
+    )
+    expect(renderPreviewDiff([])).toBeNull()
+  })
+
+  it('produces headers colorizeDiff recognizes', () => {
+    const paint = (s: string, c: string): string => `<${c}>${s}</${c}>`
+    const out = colorizeDiff(
+      renderPreviewDiff([{ path: 'a.ts', diff: [{ type: 'add', text: 'x' }] }]) as string,
+      paint
+    )
+    expect(out).toContain('<cyan>--- a.ts</cyan>')
+    expect(out).toContain('<green>+x</green>')
   })
 })
 

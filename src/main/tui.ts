@@ -21,6 +21,7 @@ import {
   type CatalogEntry
 } from '@shared/provider-catalog'
 import { providerKeyUrl } from '@shared/provider-keys'
+import type { FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
   expandTemplate,
@@ -263,11 +264,38 @@ export const APPROVAL_OPTIONS: { label: string; value: ToolApprovalDecision | 'd
 ]
 
 /**
+ * Render the per-file diff preview the main process computed against the files'
+ * real pre-write contents (see `previewWrite`) as unified-diff text.
+ *
+ * Preferred over {@link extractDiff}, which can only work from the call's arguments
+ * and therefore cannot know what a file already held: it shows a `write_file` over
+ * an existing file as an all-new file, and has nothing to show for a `multi_edit`.
+ * Returns null when there is no preview to render, so the caller can fall back.
+ */
+export function renderPreviewDiff(preview: FileDiffPreview[]): string | null {
+  if (preview.length === 0) return null
+  return preview
+    .map((f) => {
+      const tag = f.created ? ' (new file)' : f.deleted ? ' (deleted)' : ''
+      const from = f.renamedFrom ?? f.path
+      const body = f.diff
+        .map((l) => `${l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' '}${l.text}`)
+        .join('\n')
+      const more = f.truncated ? '\n… diff shortened; the change continues past this point' : ''
+      return `--- ${from}\n+++ ${f.path}${tag}\n${body}${more}`
+    })
+    .join('\n')
+}
+
+/**
  * Reconstruct a reviewable diff from a write tool's arguments (captured at
  * `tool_start`), so an edit can be seen before it's approved. Handles the shapes
  * of the built-in write tools: `apply_patch` (a ready patch envelope), `edit_file`
  * (old→new strings), and `write_file` (whole-file content). Returns null when no
  * diff can be derived.
+ *
+ * This is the FALLBACK for events that carry no preview (an older log, or a write
+ * whose effect couldn't be modelled). Prefer {@link renderPreviewDiff}.
  */
 export function extractDiff(args: Record<string, unknown>): string | null {
   const path = typeof args.path === 'string' ? args.path : undefined
@@ -2049,11 +2077,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
             deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
             if (e.kind === 'write') {
-              // The approval event carries the tool args (`tool_start` is emitted only
-              // AFTER approval resolves, so `toolArgs` is still empty here for a write).
-              // Prefer them so the user sees the edit before approving it; fall back to
-              // toolArgs for any (older/test) event that omits args.
-              const diff = extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
+              // Prefer the main process's preview: it is diffed against the files'
+              // actual contents, so an overwrite shows what changed rather than the
+              // whole file, and a multi_edit has a diff at all. Fall back to deriving
+              // one from the args (`tool_start` is emitted only AFTER approval
+              // resolves, so `toolArgs` is still empty here for a write).
+              const diff =
+                (e.preview ? renderPreviewDiff(e.preview) : null) ??
+                extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
               if (diff) deps.io.out(`${colorizeDiff(diff, paint)}\n`)
             }
             let decision: ToolApprovalDecision | null = null
