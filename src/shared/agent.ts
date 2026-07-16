@@ -33,10 +33,31 @@ export type Verbosity = 'low' | 'medium' | 'high'
  * on the next request when the turn used tools, or the API rejects the turn.
  * `redactedData` carries an encrypted (redacted) thinking block instead of text.
  */
+/**
+ * A block of model reasoning captured from a completed turn, replayed on the next
+ * request so the model keeps its chain of thought across tool calls. The fields are
+ * provider-specific and mutually exclusive in practice:
+ *
+ *  - Anthropic: `signature` authenticates a replayed `thinking` block; `redactedData`
+ *    carries an opaque `redacted_thinking` payload.
+ *  - OpenAI Responses: `id` + `encryptedContent` carry the reasoning item's state.
+ *
+ * `text` is the human-readable reasoning (Anthropic) or summary (OpenAI), and is what
+ * the UI renders. It is never sufficient on its own to replay state — a provider that
+ * has only `text` for a block must drop it rather than send an unauthenticated one.
+ */
 export interface ReasoningBlock {
   text: string
   signature?: string
   redactedData?: string
+  /** OpenAI Responses: the reasoning item's id (`rs_...`). */
+  id?: string
+  /**
+   * OpenAI Responses: the encrypted reasoning state, returned only when the request
+   * asked for `include: ['reasoning.encrypted_content']`. This is the whole payload —
+   * an `id` without it is a dangling reference to a response we never stored.
+   */
+  encryptedContent?: string
 }
 
 /** A non-image document (e.g. a PDF) attached to a message, base64-encoded. */

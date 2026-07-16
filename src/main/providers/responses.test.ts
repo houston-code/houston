@@ -110,6 +110,119 @@ describe('openaiResponsesReasoning', () => {
   })
 })
 
+describe('toResponsesInput: reasoning replay', () => {
+  const withReasoning: ChatMessage[] = [
+    { role: 'user', content: 'hi' },
+    {
+      role: 'assistant',
+      content: 'checking',
+      reasoning: [{ text: 'plan the read', id: 'rs_1', encryptedContent: 'ENC1' }],
+      toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { path: 'a.ts' } }]
+    }
+  ]
+
+  it('replays the reasoning item ahead of the message and function call it produced', () => {
+    const out = toResponsesInput(withReasoning, true)
+    expect(out).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+      {
+        type: 'reasoning',
+        id: 'rs_1',
+        encrypted_content: 'ENC1',
+        summary: [{ type: 'summary_text', text: 'plan the read' }]
+      },
+      { role: 'assistant', content: [{ type: 'output_text', text: 'checking' }] },
+      { type: 'function_call', call_id: 'call_1', name: 'read_file', arguments: '{"path":"a.ts"}' }
+    ])
+  })
+
+  it('omits reasoning when replay is off, so a non-reasoning model never sees it', () => {
+    const out = toResponsesInput(withReasoning, false)
+    expect(out.some((i) => i.type === 'reasoning')).toBe(false)
+  })
+
+  it('defaults to not replaying', () => {
+    expect(toResponsesInput(withReasoning).some((i) => i.type === 'reasoning')).toBe(false)
+  })
+
+  it('drops a block with no encrypted_content — the id alone is a dangling reference', () => {
+    // `store: false` means an id points at nothing on OpenAI's side, so replaying
+    // one without its encrypted state is a 400 rather than a lost summary.
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: 'x', reasoning: [{ text: 'summary only', id: 'rs_2' }] }
+    ]
+    expect(toResponsesInput(msgs, true).some((i) => i.type === 'reasoning')).toBe(false)
+  })
+
+  it('sends an empty summary when the turn requested no reasoning summary', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: 'x', reasoning: [{ text: '', id: 'rs_3', encryptedContent: 'ENC3' }] }
+    ]
+    expect(toResponsesInput(msgs, true)[0]).toEqual({
+      type: 'reasoning',
+      id: 'rs_3',
+      encrypted_content: 'ENC3',
+      summary: []
+    })
+  })
+})
+
+describe('responses reasoning capture', () => {
+  beforeEach(() => h.create.mockReset())
+
+  /** Drain a turn whose stream carries one reasoning item, returning [params, done]. */
+  async function captureTurn(
+    item: Record<string, unknown>,
+    req: Partial<ChatRequest> = { reasoningEffort: 'high' }
+  ): Promise<{ params: Record<string, unknown>; reasoning?: unknown }> {
+    h.create.mockResolvedValue(
+      streamOf([
+        { type: 'response.output_item.done', item },
+        { type: 'response.completed', response: {} }
+      ])
+    )
+    const provider = createResponsesProvider('k')
+    let done: { reasoning?: unknown } | undefined
+    for await (const ev of provider.streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      if (ev.type === 'done') done = ev as { reasoning?: unknown }
+    }
+    return { params: h.create.mock.calls[0][0] as Record<string, unknown>, reasoning: done?.reasoning }
+  }
+
+  it('captures a reasoning item as a replayable block on done', async () => {
+    const { reasoning } = await captureTurn({
+      type: 'reasoning',
+      id: 'rs_1',
+      encrypted_content: 'ENC1',
+      summary: [{ text: 'first ' }, { text: 'second' }]
+    })
+    expect(reasoning).toEqual([{ text: 'first second', id: 'rs_1', encryptedContent: 'ENC1' }])
+  })
+
+  it('drops a reasoning item with no encrypted_content — there is no state to carry', async () => {
+    const { reasoning } = await captureTurn({ type: 'reasoning', id: 'rs_1', summary: [{ text: 'x' }] })
+    expect(reasoning).toBeUndefined()
+  })
+
+  it('asks for encrypted reasoning and opts out of server-side storage', async () => {
+    const { params } = await captureTurn({ type: 'reasoning', id: 'rs_1', encrypted_content: 'E' })
+    expect(params).toMatchObject({ store: false, include: ['reasoning.encrypted_content'] })
+  })
+
+  it('omits the include when reasoning is off, but still opts out of storage', async () => {
+    const { params } = await captureTurn(
+      { type: 'reasoning', id: 'rs_1', encrypted_content: 'E' },
+      { reasoningEffort: 'off' }
+    )
+    expect(params).not.toHaveProperty('include')
+    expect(params.store).toBe(false)
+  })
+})
+
 describe('responses max_output_tokens', () => {
   beforeEach(() => h.create.mockReset())
 
