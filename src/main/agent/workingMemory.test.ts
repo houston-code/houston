@@ -5,6 +5,7 @@ import {
   buildPinnedMemory,
   buildPinnedMessages,
   filesInPlay,
+  lastUserTurnIndex,
   latestTodos,
   originalTask
 } from './workingMemory'
@@ -149,5 +150,56 @@ describe('buildPinnedMessages', () => {
 
   it('returns [] when there is nothing to pin', () => {
     expect(buildPinnedMessages([])).toEqual([])
+  })
+})
+
+describe('lastUserTurnIndex', () => {
+  it('finds the final user turn, ignoring the assistant/tool messages after it', () => {
+    expect(
+      lastUserTurnIndex([
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'answer' },
+        { role: 'user', content: 'current' },
+        { role: 'assistant', content: 'working' },
+        { role: 'tool', content: 'result' }
+      ])
+    ).toBe(2)
+  })
+
+  it('returns -1 when the log has no user turn', () => {
+    expect(lastUserTurnIndex([])).toBe(-1)
+    expect(lastUserTurnIndex([{ role: 'assistant', content: 'hi' }])).toBe(-1)
+  })
+
+  it('is 0 for a first turn, which leaves an empty head and pins nothing', () => {
+    const messages: ChatMessage[] = [{ role: 'user', content: 'only task' }]
+    const at = lastUserTurnIndex(messages)
+    expect(at).toBe(0)
+    expect(buildPinnedMessages(messages.slice(0, at))).toEqual([])
+  })
+
+  it('freezes the block for the duration of a turn: the head drives it, not the tail', () => {
+    // What the loop passes: everything before the final user turn. Appending the
+    // turn's own work (a read_file, whose path would otherwise land in "files in
+    // play") must not change the block — that stability is what the provider's
+    // prefix cache is matching on across the turn's iterations.
+    const head: ChatMessage[] = [
+      { role: 'user', content: 'first task' },
+      { role: 'assistant', content: 'answer' }
+    ]
+    const before = buildPinnedMessages(head)
+    const messages: ChatMessage[] = [
+      ...head,
+      { role: 'user', content: 'current' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'a', name: 'read_file', arguments: { path: 'a.ts' } }]
+      },
+      { role: 'tool', content: 'contents', toolCallId: 'a', toolName: 'read_file' }
+    ]
+    expect(buildPinnedMessages(messages.slice(0, lastUserTurnIndex(messages)))).toEqual(before)
+    // Derived from the whole log instead, the same block churns — the bug this guards.
+    expect(buildPinnedMessages(messages)).not.toEqual(before)
   })
 })
