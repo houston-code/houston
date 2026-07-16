@@ -50,7 +50,14 @@ import { activeBackendId, isSandboxed } from './sandbox'
 import { providerKeyEnvVars } from '@shared/provider-keys'
 import { runHeadless, type HeadlessOptions } from './headless'
 import { createTerminalIo, resolveColor } from './tui-io'
-import { makeCompleter } from './tui-complete'
+import {
+  makeCompleter,
+  commandMenu,
+  renderCommandMenu,
+  COMMANDS,
+  type CommandSpec
+} from './tui-complete'
+import { mergeCommands } from '@shared/commands'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { highlightToHtml } from './syntax'
 import {
@@ -415,7 +422,27 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
   let latestUpdate: { latest: string; url: string } | null = null
 
   const paint = makePainter(tui.color)
+  // Built-ins plus this workspace's own .houston/commands. The Tab completer only
+  // ever knew the built-ins, so a project's commands were undiscoverable unless you
+  // already knew their names. Loaded once; the menu redraws on every keystroke and
+  // must not touch the disk.
+  let menuCommands: CommandSpec[] = [...COMMANDS]
+  void loadCommands(tui.cwd)
+    .then((custom) => {
+      menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
+        name: c.name,
+        description: c.description
+      }))
+    })
+    .catch(() => {
+      /* no custom commands — the built-ins still list */
+    })
+
   const io = createTerminalIo({
+    menuFor: (line) => {
+      const matches = commandMenu(line, menuCommands)
+      return matches ? renderCommandMenu(matches, paint as never) : []
+    },
     paint,
     // Read live: an entry submitted this session must be recallable on the next
     // composer read, not just the ones loaded at launch.

@@ -100,6 +100,11 @@ export interface TerminalIoDeps {
   editText?: (initial: string) => Promise<string | null>
   /** Input stream. Defaults to process.stdin; a fake TTY in tests. */
   stdin?: NodeJS.ReadStream
+  /**
+   * Rows to show under the composer for the current line — the live command menu.
+   * Called on every redraw, so it must be cheap and synchronous.
+   */
+  menuFor?: (line: string) => string[]
 }
 
 /**
@@ -543,8 +548,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // terminals wrap and insert a phantom row, which would desync the redraw.
       const width = (): number =>
         Math.max(8, (deps.columns?.() ?? process.stdout.columns ?? 80) - 1)
-      const view = (): ReturnType<typeof renderEditor> =>
-        renderEditor(state, { prompt: promptNow(), width: width(), paint, continuation: paint('… ', 'dim') })
+      const view = (): ReturnType<typeof renderEditor> => {
+        // The line under the cursor drives the menu: typing `/` shows what you can
+        // run, without having to already know its name.
+        const below = deps.menuFor?.(state.lines[state.row] ?? '') ?? []
+        return renderEditor(state, {
+          prompt: promptNow(),
+          width: width(),
+          paint,
+          continuation: paint('… ', 'dim'),
+          ...(below.length ? { below } : {})
+        })
+      }
 
       // readline software-echoes every keystroke off its own 'keypress' listener,
       // even in raw mode. Detach for the duration (exactly as readSecret does) and

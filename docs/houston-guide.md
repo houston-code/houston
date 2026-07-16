@@ -51,8 +51,10 @@ terminal saves it as the default for future sessions.
 
 ## Slash commands
 
-Type `/` in the composer for the command menu. The exact set depends on the
-client, but the common built-ins are:
+Type `/` in the composer for the command menu. In the terminal it appears under
+what you are typing and filters as you go, listing each command with what it does
+— including any this project defines in `.houston/commands`. The exact set depends
+on the client, but the common built-ins are:
 
 - `/new` (alias `/clear`): start a fresh conversation.
 - `/compact`: summarize older turns now to free up context.

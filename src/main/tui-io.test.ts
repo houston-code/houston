@@ -844,3 +844,54 @@ describe('mid-run input', () => {
     expect(t.io.takeQueued!()).toEqual([]) // the CR became part of the draft, not a submit
   })
 })
+
+describe('the live command menu', () => {
+  function harness(menuFor?: (line: string) => string[]) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      ...(menuFor ? { menuFor } : {})
+    })
+    return { io, stdin, text: () => written.join('') }
+  }
+
+  it('shows the menu under the composer as you type', async () => {
+    const t = harness((line) => (line.startsWith('/') ? ['  /help   list commands'] : []))
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/')
+    expect(t.text()).toContain('/help   list commands')
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('keeps the menu out of the submitted message', async () => {
+    const t = harness(() => ['  /help   list commands'])
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/help')
+    t.stdin.push('\r')
+    // The menu is decoration under the composer, never part of the buffer.
+    await expect(read).resolves.toBe('/help')
+  })
+
+  it('drops the menu once the line stops being a command', async () => {
+    const t = harness((line) => (line === '/h' ? ['  /help   list commands'] : []))
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/h')
+    expect(t.text()).toContain('/help')
+    t.stdin.push('i there')
+    // The rows are erased with the rest of the region on the next redraw.
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('/hi there')
+  })
+
+  it('works with no menu wired at all', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('plain\r')
+    await expect(read).resolves.toBe('plain')
+  })
+})
