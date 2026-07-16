@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import type { ToolApprovalDecision } from '@shared/agent'
+import { MAX_APPROVAL_NOTE, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
@@ -83,7 +83,7 @@ function ToolRow({
   onApprove
 }: {
   item: ToolItem
-  onApprove: (callId: string, decision: ToolApprovalDecision) => void
+  onApprove: (callId: string, decision: ToolApprovalDecision, note?: string) => void
 }): JSX.Element {
   const todos = item.name === 'todo_write' ? parseTodosSafe(item.args?.todos) : []
   const isTodo = item.name === 'todo_write' && todos.length > 0
@@ -96,6 +96,8 @@ function ToolRow({
 
   // Open the diff/output by default while a change is awaiting approval.
   const [open, setOpen] = useState(awaiting)
+  // Guidance to send with a denial ("no, use staging instead").
+  const [note, setNote] = useState('')
   // Todo/sweep rows render their list inline, so they have nothing extra to expand.
   const expandable = !isTodo && !isSweep && Boolean((diff && diff.length > 0) || item.output)
   const toggle = (): void => {
@@ -223,16 +225,38 @@ function ToolRow({
           >
             Always allow
           </button>
-          <button className="btn btn--sm btn--danger" onClick={() => onApprove(item.id, 'deny')}>
+          <button
+            className="btn btn--sm btn--danger"
+            onClick={() => onApprove(item.id, 'deny', note.trim() || undefined)}
+          >
             Deny
           </button>
           <button
             className="btn btn--sm btn--danger"
             title="Save a permission rule so this is denied in future runs too"
-            onClick={() => onApprove(item.id, 'rule-deny')}
+            onClick={() => onApprove(item.id, 'rule-deny', note.trim() || undefined)}
           >
             Always deny
           </button>
+          {/*
+            Guidance rides the same interaction as the refusal. Without it a denial
+            is a dead end: the agent is told only that it was refused, so it retries
+            a variant instead of doing what you actually wanted.
+          */}
+          <input
+            className="tool-row__approval-reason"
+            type="text"
+            value={note}
+            placeholder="Why not? (optional — tell the agent what to do instead)"
+            aria-label="Reason for denying, sent to the agent"
+            maxLength={MAX_APPROVAL_NOTE}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter in the reason box means "deny, with this reason" — the only
+              // verdict the text applies to, and the one they are already typing for.
+              if (e.key === 'Enter' && note.trim()) onApprove(item.id, 'deny', note.trim())
+            }}
+          />
         </div>
       )}
     </div>
@@ -298,7 +322,7 @@ export function ToolGroup({
   onApprove
 }: {
   items: ToolItem[]
-  onApprove: (callId: string, decision: ToolApprovalDecision) => void
+  onApprove: (callId: string, decision: ToolApprovalDecision, note?: string) => void
 }): JSX.Element {
   const active = items.some((it) => it.status === 'awaiting-approval' || it.status === 'running')
   const runs = foldReadRuns(items)

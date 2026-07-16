@@ -12,7 +12,14 @@ import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shar
 import { missingKeyHint } from '@shared/provider-keys'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
-import type { AgentEvent, AgentRunRequest, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
+import type {
+  AgentEvent,
+  AgentRunRequest,
+  ChatMessage,
+  ElicitationResult,
+  PlanDecision,
+  ToolApprovalDecision
+} from '@shared/agent'
 
 /**
  * One-shot headless mode: run a single prompt through the agent loop without the
@@ -252,7 +259,12 @@ export interface HeadlessDeps {
     send: (e: AgentEvent) => void,
     onMessages?: (messages: ChatMessage[]) => void
   ) => Promise<void>
-  resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
+  resolveApproval: (
+    runId: string,
+    callId: string,
+    decision: ToolApprovalDecision,
+    note?: string
+  ) => void
   resolveQuestion: (runId: string, callId: string, answer: string) => void
   resolvePlan: (runId: string, callId: string, decision: PlanDecision) => void
   resolveElicitation: (runId: string, elicitId: string, result: ElicitationResult) => void

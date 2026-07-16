@@ -231,8 +231,13 @@ const api = {
     ipcRenderer.on(IPC.agentQueueChanged, listener)
     return () => ipcRenderer.removeListener(IPC.agentQueueChanged, listener)
   },
-  approveTool: (runId: string, callId: string, decision: ToolApprovalDecision): Promise<void> =>
-    ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision),
+  /** `note` carries the user's guidance with a verdict ("no, do X instead"). */
+  approveTool: (
+    runId: string,
+    callId: string,
+    decision: ToolApprovalDecision,
+    note?: string
+  ): Promise<void> => ipcRenderer.invoke(IPC.agentApprove, runId, callId, decision, note),
   /** Answer a pending `ask_user` question. */
   answerQuestion: (runId: string, callId: string, answer: string): Promise<void> =>
     ipcRenderer.invoke(IPC.agentRespondQuestion, runId, callId, answer),

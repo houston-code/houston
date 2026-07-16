@@ -48,7 +48,8 @@ export interface ChatController {
   /** Re-run the last turn after a failure, without re-sending the user message. */
   retry: (params: RetryParams) => Promise<void>
   cancel: () => void
-  approve: (callId: string, decision: ToolApprovalDecision) => void
+  /** `note` is optional guidance sent to the model with the verdict. */
+  approve: (callId: string, decision: ToolApprovalDecision, note?: string) => void
   /** Answer a pending `ask_user` question from the in-flight run. */
   answerQuestion: (callId: string, answer: string) => void
   answerElicitation: (elicitId: string, result: ElicitationResult) => void
@@ -224,8 +225,8 @@ export function useChat(conversationId: string | null = null): ChatController {
     if (runIdRef.current) void window.api.cancelAgent(runIdRef.current)
   }, [])
 
-  const approve = useCallback((callId: string, decision: ToolApprovalDecision) => {
-    if (runIdRef.current) void window.api.approveTool(runIdRef.current, callId, decision)
+  const approve = useCallback((callId: string, decision: ToolApprovalDecision, note?: string) => {
+    if (runIdRef.current) void window.api.approveTool(runIdRef.current, callId, decision, note)
   }, [])
 
   const answerQuestion = useCallback((callId: string, answer: string) => {

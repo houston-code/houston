@@ -39,7 +39,8 @@ import type {
   PlanAcceptMode,
   PlanDecision,
   PlanPayload,
-  QuestionOption
+  QuestionOption,
+  ToolApprovalDecision
 } from '@shared/agent'
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
@@ -219,16 +220,47 @@ export function renderApprovalPrompt(
       : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
-  return `\n${head} ${kind}\n  ${ev.summary}${warn}\n${paint('  [y] allow   [n] deny   [a] always allow this kind', 'dim')}`
+  return (
+    `\n${head} ${kind}\n  ${ev.summary}${warn}\n` +
+    paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim') +
+    paint('\n  …or type why not, and that goes back to the agent', 'dim')
+  )
 }
 
-/** Map a freeform approval answer to a decision, defaulting to deny on anything unclear. */
-export function parseApprovalAnswer(answer: string): 'allow' | 'deny' | 'always' {
-  const a = answer.trim().toLowerCase()
-  if (a === 'y' || a === 'yes' || a === 'allow') return 'allow'
-  if (a === 'a' || a === 'always') return 'always'
-  return 'deny'
+/**
+ * Map a freeform approval answer to a decision, plus any guidance the user typed.
+ *
+ * Anything unrecognized is a DENY (the safe default), but it is not discarded: a
+ * typed sentence is the user explaining what to do instead, so it rides back to
+ * the model as the reason. Previously that explanation was silently dropped and
+ * the model saw a bare refusal, which is the worst of both — the user thinks they
+ * gave direction, and the agent retries a variant of the same thing.
+ */
+export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDecision; note?: string } {
+  const raw = answer.trim()
+  const a = raw.toLowerCase()
+  if (a === 'y' || a === 'yes' || a === 'allow') return { decision: 'allow' }
+  if (a === 'a' || a === 'always' || a === 'allow-run') return { decision: 'always' }
+  if (a === '!' || a === 'always-allow') return { decision: 'rule-allow' }
+  if (a === 'x' || a === 'always-deny') return { decision: 'rule-deny' }
+  if (a === 'n' || a === 'no' || a === 'deny' || a === '') return { decision: 'deny' }
+  // Free text: a denial WITH a reason, which is the whole point.
+  return { decision: 'deny', note: raw }
 }
+
+/**
+ * The decisions offered in the approval picker. `rule-allow` / `rule-deny` persist
+ * a permission rule; the core has always supported them, but the terminal used to
+ * type them away and offer only allow/deny/always.
+ */
+export const APPROVAL_OPTIONS: { label: string; value: ToolApprovalDecision | 'deny-note'; description: string }[] = [
+  { label: 'Allow', value: 'allow', description: 'run this once' },
+  { label: 'Allow for run', value: 'always', description: 'stop asking for this kind this session' },
+  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule' },
+  { label: 'Deny', value: 'deny', description: 'refuse this once' },
+  { label: 'Deny with a reason…', value: 'deny-note', description: 'tell the agent what to do instead' },
+  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule' }
+]
 
 /**
  * Reconstruct a reviewable diff from a write tool's arguments (captured at
@@ -1269,7 +1301,16 @@ export interface TuiDeps {
     send: (e: AgentEvent) => void,
     onMessages?: (messages: ChatMessage[]) => void
   ) => Promise<void>
-  resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
+  /**
+   * Deliver the user's verdict, plus any guidance they attached ("no, do X
+   * instead"), which the loop hands to the model with the refusal.
+   */
+  resolveApproval: (
+    runId: string,
+    callId: string,
+    decision: ToolApprovalDecision,
+    note?: string
+  ) => void
   resolveQuestion: (runId: string, callId: string, answer: string) => void
   /** Deliver the user's verdict on a `present_plan` review (accept / suggest / reject). */
   resolvePlan: (runId: string, callId: string, decision: PlanDecision) => void
@@ -1437,7 +1478,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           `  Terms:   ${TERMS_URL}\n  Privacy: ${PRIVACY_URL}\n  License: ${LICENSE_URL}\n`
       )
       const answer = await deps.io.readLine('Accept? [y/N] ')
-      if (parseApprovalAnswer(answer ?? '') !== 'allow') {
+      if (parseApprovalAnswer(answer ?? '').decision !== 'allow') {
         deps.io.out('Terms not accepted. Exiting.\n')
         return 2
       }
@@ -2015,25 +2056,47 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               const diff = extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
               if (diff) deps.io.out(`${colorizeDiff(diff, paint)}\n`)
             }
-            let decision: 'allow' | 'deny' | 'always' | null = null
+            let decision: ToolApprovalDecision | null = null
+            let note: string | undefined
             if (deps.io.select) {
+              // The shell-network consent is a yes/no question about egress, not a
+              // permission rule about a command — offering "always allow"/"deny with a
+              // reason" there would be nonsense, so keep that prompt to three options.
               const r = await deps.io.select({
                 title: 'Choose:',
-                options: [
-                  { label: 'Allow', value: 'allow' },
-                  { label: 'Deny', value: 'deny' },
-                  { label: 'Always allow this kind', value: 'always' }
-                ]
+                options: e.shellNetwork
+                  ? [
+                      { label: 'Allow network', value: 'allow' },
+                      { label: 'No network', value: 'deny' },
+                      { label: 'Allow for run', value: 'always' }
+                    ]
+                  : APPROVAL_OPTIONS.map((o) => ({
+                      label: o.label,
+                      value: o.value,
+                      description: o.description
+                    }))
               })
-              if (r.kind === 'commit') decision = r.value as 'allow' | 'deny' | 'always'
-              else if (r.kind === 'cancel') decision = 'deny' // safe default
+              if (r.kind === 'commit') {
+                if (r.value === 'deny-note') {
+                  // Collect the guidance in the same interaction as the refusal.
+                  const typed = await deps.io.readLine('Why not? (what should it do instead) ', {
+                    discardPending: true
+                  })
+                  decision = 'deny'
+                  note = typed?.trim() || undefined
+                } else {
+                  decision = r.value as ToolApprovalDecision
+                }
+              } else if (r.kind === 'cancel') decision = 'deny' // safe default
               // 'type' → fall through to the typed prompt below
             }
             if (decision === null) {
               const ans = await deps.io.readLine('> ', { discardPending: true })
-              decision = parseApprovalAnswer(ans ?? '')
+              const parsed = parseApprovalAnswer(ans ?? '')
+              decision = parsed.decision
+              note = parsed.note
             }
-            deps.resolveApproval(e.runId, e.callId, decision)
+            deps.resolveApproval(e.runId, e.callId, decision, note)
           })
           break
         case 'tool_question':
@@ -2349,7 +2412,8 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
 
   deps.io.out(`\n${paint('hook:', 'dim')} ${built.event}  ${built.matcher}  → ${built.command}\n`)
   const ok = await deps.io.readLine('Add this hook? [y/N] ', { discardPending: true })
-  if (parseApprovalAnswer(ok ?? '') !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+  if (parseApprovalAnswer(ok ?? '').decision !== 'allow')
+    return void deps.io.out(paint('· not added\n', 'dim'))
   deps.updateSettings({ hooks: [...hooks, built] })
   deps.io.out(paint('· hook added. Applies on restart.\n', 'dim'))
 }
@@ -2447,7 +2511,8 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     `\n${paint('server:', 'dim')} ${built.name}  [stdio]  ${built.command}${built.args?.length ? ` ${built.args.join(' ')}` : ''}${built.cwd ? `  (cwd: ${built.cwd})` : ''}${envNote}\n`
   )
   const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
-  if (parseApprovalAnswer(ok ?? '') !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+  if (parseApprovalAnswer(ok ?? '').decision !== 'allow')
+    return void deps.io.out(paint('· not added\n', 'dim'))
   deps.updateSettings({ mcpServers: [...servers, built] })
   deps.io.out(paint('· MCP server added. Applies on restart.\n', 'dim'))
   if (built.env && deps.canStoreHeaderSecrets === false) {

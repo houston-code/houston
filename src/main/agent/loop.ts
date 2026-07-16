@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs'
 import type {
   AgentEvent,
   AgentRunRequest,
+  ApprovalResolution,
   ChatMessage,
   DocumentAttachment,
   ElicitationField,
@@ -16,7 +17,7 @@ import type {
   ToolCall,
   ToolSchema
 } from '@shared/agent'
-import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { SYSTEM_NOTE_PREFIX, sanitizeApprovalNote } from '@shared/agent'
 import { folderTrustState, isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
 import { resolveShellOutputBudget } from '@shared/defaults'
@@ -161,7 +162,7 @@ async function summarize(
 
 interface RunState {
   abort: AbortController
-  approvals: Map<string, (d: ToolApprovalDecision) => void>
+  approvals: Map<string, (r: ApprovalResolution) => void>
   /** Pending `ask_user` questions, keyed by callId, resolved with the user's answer. */
   questions: Map<string, (answer: string) => void>
   /**
@@ -329,7 +330,8 @@ function notifyActiveRunsChanged(): void {
 export function cancelRun(runId: string): void {
   const run = runs.get(runId)
   if (!run) return
-  for (const resolve of run.approvals.values()) resolve('deny')
+  for (const resolve of run.approvals.values())
+    resolve({ decision: 'deny', note: 'The user interrupted the run before answering this prompt.' })
   run.approvals.clear()
   run.pendingApprovals.clear()
   // Unblock any pending question so its tool call returns instead of hanging.
@@ -347,13 +349,19 @@ export function cancelRun(runId: string): void {
   run.abort.abort()
 }
 
-export function resolveApproval(runId: string, callId: string, decision: ToolApprovalDecision): void {
+export function resolveApproval(
+  runId: string,
+  callId: string,
+  decision: ToolApprovalDecision,
+  /** Optional guidance shown to the model with the result ("no, do X instead"). */
+  note?: string
+): void {
   const run = runs.get(runId)
   const resolve = run?.approvals.get(callId)
   if (run && resolve) {
     run.approvals.delete(callId)
     run.pendingApprovals.delete(callId)
-    resolve(decision)
+    resolve({ decision, note: sanitizeApprovalNote(note) })
   }
 }
 
@@ -516,8 +524,16 @@ export function setRunPolicy(runId: string, policy: ApprovalPolicy): void {
   if (run) run.policy = policy
 }
 
-function waitForApproval(run: RunState, callId: string): Promise<ToolApprovalDecision> {
+function waitForApproval(run: RunState, callId: string): Promise<ApprovalResolution> {
   return new Promise((resolve) => run.approvals.set(callId, resolve))
+}
+
+/**
+ * The refusal text handed to the model, carrying the user's guidance when they
+ * gave any. `base` keeps each call site's existing do-not-retry framing.
+ */
+function denialText(base: string, note?: string): string {
+  return note ? `${base} They said: ${note}` : base
 }
 
 /**
@@ -1046,12 +1062,18 @@ export async function startRun(
             kind,
             ...(unsandboxedShell ? { sandboxed: false } : {})
           })
-          const decision = await waitForApproval(run, subCallId)
+          const { decision, note } = await waitForApproval(run, subCallId)
           run.pendingApprovals.delete(subCallId)
           const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
           if (!approved) {
-            emit({ type: 'tool_result', callId: subCallId, name, ok: false, output: 'Denied by the user.' })
-            return denyNote
+            emit({
+              type: 'tool_result',
+              callId: subCallId,
+              name,
+              ok: false,
+              output: denialText('Denied by the user.', note)
+            })
+            return denialText(denyNote, note)
           }
         }
         emit({ type: 'tool_start', callId: subCallId, name, args, kind })
@@ -2394,6 +2416,10 @@ export async function startRun(
               matchRule(guardrailRules, call.name, permissionSubject(call.name, execArgs), roots) === 'ask'
 
             let approved = true
+            // Guidance the user attached to their verdict ("no, use staging instead"),
+            // carried into the refusal so the correction reaches the model in the same
+            // interaction rather than needing a separate corrective turn.
+            let approvalNote: string | undefined
             // A PreToolUse hook that explicitly approves skips the approval prompt —
             // unless a guardrail-tier `ask` rule forced it. The one-time shell-network
             // consent rides the same gate.
@@ -2423,9 +2449,10 @@ export async function startRun(
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {})
               })
-              const decision = await waitForApproval(run, call.id)
+              const { decision, note: denyGuidance } = await waitForApproval(run, call.id)
               // Resolved (or cancelled) — it's no longer awaiting the user.
               run.pendingApprovals.delete(call.id)
+              approvalNote = denyGuidance
               if (consentOnly) {
                 // The prompt was FRAMED as the network question, so its answer decides
                 // ONLY the run's shell network — never whether the command runs (a decline
@@ -2448,7 +2475,7 @@ export async function startRun(
             }
 
             if (!approved) {
-              output = 'Denied by the user.'
+              output = denialText('Denied by the user.', approvalNote)
               ok = false
             } else {
               // Snapshot each target's prior content so this turn's file changes can

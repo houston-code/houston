@@ -9,6 +9,7 @@ import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
   isPlanDecision,
   isToolApprovalDecision,
+  sanitizeApprovalNote,
   sanitizeElicitationResult,
   type AgentEvent,
   type AgentSendRequest,
@@ -888,13 +889,15 @@ export function registerIpc(): void {
 
   ipcMain.handle(
     IPC.agentApprove,
-    (event, runId: string, callId: string, decision: ToolApprovalDecision) => {
+    (event, runId: string, callId: string, decision: ToolApprovalDecision, note?: unknown) => {
       // Validate at the boundary: an unknown decision must not reach the loop (where
       // it would be treated as a non-deny "approve" and silently run the call).
       if (!isToolApprovalDecision(decision)) return
       // Only the window that started the run may resolve its approval prompts.
       if (!callerOwnsRun(event, runId)) return
-      resolveApproval(runId, callId, decision)
+      // The note is free text from the renderer: trim + cap it here rather than
+      // trusting the sender not to paste a novel into the model's context.
+      resolveApproval(runId, callId, decision, sanitizeApprovalNote(note))
     }
   )
 

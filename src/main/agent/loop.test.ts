@@ -11,6 +11,7 @@ import type {
   ProviderStreamEvent,
   ToolApprovalDecision
 } from '@shared/agent'
+import { MAX_APPROVAL_NOTE } from '@shared/agent'
 import type { ApprovalPolicy, PermissionRule } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
@@ -224,7 +225,7 @@ async function run(
     messages?: ChatMessage[]
     policy?: ApprovalPolicy
     userText?: string
-    onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
+    onApproval?: (callId: string, decide: (d: ToolApprovalDecision, note?: string) => void) => void
     onQuestion?: (callId: string, answer: (a: string) => void) => void
     onPlan?: (callId: string, plan: PlanPayload, decide: (d: PlanDecision) => void) => void
     conversationId?: string
@@ -239,7 +240,10 @@ async function run(
     if (e.type === 'tool_approval' && opts.onApproval) {
       // Respond on a later tick — the loop registers the approval resolver on the
       // line *after* it emits tool_approval, just as the real renderer replies async.
-      setTimeout(() => opts.onApproval!(e.callId, (d) => resolveApproval(runId, e.callId, d)), 0)
+      setTimeout(
+        () => opts.onApproval!(e.callId, (d, note) => resolveApproval(runId, e.callId, d, note)),
+        0
+      )
     }
     if (e.type === 'tool_question' && opts.onQuestion) {
       setTimeout(() => opts.onQuestion!(e.callId, (a) => resolveQuestion(runId, e.callId, a)), 0)
@@ -2556,6 +2560,69 @@ describe('writable subagent unconfined-shell gate', () => {
       | undefined
     expect(result?.ok).toBe(false)
     expect(result?.output).toBe('Denied by the user.')
+  })
+
+  // A refusal with no reason is a dead end: the model is told only that it was
+  // blocked, so it retries a variant instead of doing what the user wanted. The
+  // guidance has to ride the SAME interaction as the verdict.
+  it('carries the user\'s guidance into the refusal the model sees', async () => {
+    h.sandboxed = false
+    const r = await run({
+      turns: gateTurns('touch denied-marker.txt'),
+      policy: 'ask',
+      onApproval: (id, decide) =>
+        id.includes('.shell.')
+          ? decide('deny', 'use the staging bucket, not prod')
+          : decide('allow')
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.callId === 'd1.shell.1') as
+      | Extract<AgentEvent, { type: 'tool_result' }>
+      | undefined
+    expect(result?.ok).toBe(false)
+    expect(result?.output).toContain('Denied by the user.')
+    expect(result?.output).toContain('use the staging bucket, not prod')
+  })
+
+  it('caps and trims the guidance rather than piping it verbatim into the transcript', async () => {
+    h.sandboxed = false
+    const r = await run({
+      turns: gateTurns('touch denied-marker.txt'),
+      policy: 'ask',
+      onApproval: (id, decide) =>
+        id.includes('.shell.') ? decide('deny', `  ${'x'.repeat(9000)}  `) : decide('allow')
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.callId === 'd1.shell.1') as
+      | Extract<AgentEvent, { type: 'tool_result' }>
+      | undefined
+    expect(result?.output).not.toContain('  x') // trimmed
+    expect((result?.output ?? '').length).toBeLessThan(MAX_APPROVAL_NOTE + 200)
+  })
+
+  it('records an interrupt as an interrupt, not as a considered refusal', async () => {
+    // Cancelling while a prompt is up used to resolve as a plain deny, so the model's
+    // transcript claimed the user had refused the call when they had merely stopped
+    // the run — misleading context for whatever they asked for next.
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'x' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ]
+    ])
+    const runId = 'run-cancel-note'
+    const events: AgentEvent[] = []
+    const send = (e: AgentEvent): void => {
+      events.push(e)
+      if (e.type === 'tool_approval') setTimeout(() => cancelRun(runId), 0)
+    }
+    await startRun(
+      { runId, workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'ask', messages: [{ role: 'user', content: 'go' }] },
+      send
+    )
+    const result = events.find((e) => e.type === 'tool_result' && e.callId === 'w1') as
+      | Extract<AgentEvent, { type: 'tool_result' }>
+      | undefined
+    expect(result?.ok).toBe(false)
+    expect(result?.output).toContain('interrupted')
   })
 
   it("'always' grants the unconfined-shell consent, so the next command skips the prompt", async () => {

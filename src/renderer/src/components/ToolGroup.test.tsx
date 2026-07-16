@@ -147,10 +147,10 @@ describe('ToolGroup', () => {
     expect(onApprove).toHaveBeenCalledWith('call-7', 'rule-allow')
 
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
-    expect(onApprove).toHaveBeenCalledWith('call-7', 'deny')
+    expect(onApprove).toHaveBeenCalledWith('call-7', 'deny', undefined)
 
     fireEvent.click(screen.getByRole('button', { name: 'Always deny' }))
-    expect(onApprove).toHaveBeenCalledWith('call-7', 'rule-deny')
+    expect(onApprove).toHaveBeenCalledWith('call-7', 'rule-deny', undefined)
 
     expect(onApprove).toHaveBeenCalledTimes(5)
   })
@@ -376,5 +376,60 @@ describe('ToolGroup', () => {
     const head = container.querySelector('.tool-row__head')
     expect(head?.querySelector('[aria-label="running"]')).not.toBeNull()
     expect(screen.getByText('2 files')).toBeInTheDocument()
+  })
+
+  // Guidance rides the same interaction as the refusal: without it a denial is a
+  // dead end and the agent just retries a variant.
+  it('sends the typed reason with a denial', () => {
+    const onApprove = vi.fn()
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 'call-9',
+            name: 'run_shell',
+            status: 'awaiting-approval',
+            args: { command: 'aws s3 cp x s3://prod' }
+          })
+        ]}
+        onApprove={onApprove}
+      />
+    )
+    const reason = screen.getByLabelText('Reason for denying, sent to the agent')
+    fireEvent.change(reason, { target: { value: 'use the staging bucket' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    expect(onApprove).toHaveBeenCalledWith('call-9', 'deny', 'use the staging bucket')
+  })
+
+  it('denies with the reason on Enter in the reason box', () => {
+    const onApprove = vi.fn()
+    render(
+      <ToolGroup
+        items={[tool({ id: 'call-10', name: 'run_shell', status: 'awaiting-approval', args: {} })]}
+        onApprove={onApprove}
+      />
+    )
+    const reason = screen.getByLabelText('Reason for denying, sent to the agent')
+    fireEvent.change(reason, { target: { value: 'not that file' } })
+    fireEvent.keyDown(reason, { key: 'Enter' })
+    expect(onApprove).toHaveBeenCalledWith('call-10', 'deny', 'not that file')
+  })
+
+  it('offers no reason box on the shell-network consent (a yes/no about egress)', () => {
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 'call-11',
+            name: 'run_shell',
+            status: 'awaiting-approval',
+            shellNetwork: true,
+            args: {}
+          })
+        ]}
+        onApprove={vi.fn()}
+      />
+    )
+    expect(screen.queryByLabelText('Reason for denying, sent to the agent')).not.toBeInTheDocument()
   })
 })

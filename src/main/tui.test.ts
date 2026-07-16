@@ -220,14 +220,29 @@ describe('approval prompt', () => {
   })
 
   it('parses answers, defaulting to deny', () => {
-    expect(parseApprovalAnswer('y')).toBe('allow')
-    expect(parseApprovalAnswer('YES')).toBe('allow')
-    expect(parseApprovalAnswer('allow')).toBe('allow')
-    expect(parseApprovalAnswer('a')).toBe('always')
-    expect(parseApprovalAnswer('always')).toBe('always')
-    expect(parseApprovalAnswer('n')).toBe('deny')
-    expect(parseApprovalAnswer('')).toBe('deny')
-    expect(parseApprovalAnswer('garbage')).toBe('deny')
+    expect(parseApprovalAnswer('y')).toEqual({ decision: 'allow' })
+    expect(parseApprovalAnswer('YES')).toEqual({ decision: 'allow' })
+    expect(parseApprovalAnswer('allow')).toEqual({ decision: 'allow' })
+    expect(parseApprovalAnswer('a')).toEqual({ decision: 'always' })
+    expect(parseApprovalAnswer('always')).toEqual({ decision: 'always' })
+    expect(parseApprovalAnswer('n')).toEqual({ decision: 'deny' })
+    expect(parseApprovalAnswer('')).toEqual({ decision: 'deny' })
+  })
+
+  it('exposes the rule-persisting decisions the core supports', () => {
+    // These existed in the core all along; the terminal used to type them away.
+    expect(parseApprovalAnswer('!')).toEqual({ decision: 'rule-allow' })
+    expect(parseApprovalAnswer('x')).toEqual({ decision: 'rule-deny' })
+  })
+
+  // The gap this closes: a typed explanation used to be silently converted to a
+  // bare deny, so the user thought they had given direction and the agent saw only
+  // a refusal.
+  it('keeps a typed explanation as the reason for the denial', () => {
+    expect(parseApprovalAnswer('use the staging bucket, not prod')).toEqual({
+      decision: 'deny',
+      note: 'use the staging bucket, not prod'
+    })
   })
 })
 
