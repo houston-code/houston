@@ -411,6 +411,33 @@ in), so a prompt-injected agent cannot exfiltrate a key by pasting it into a
 request. Note this covers Houston-mediated egress; a raw `curl` inside
 `run_shell` is bounded by the shell-network consent above, not by masking.
 
+**Untrusted web content.** A fetched page is written by whoever runs the site,
+so `web_fetch` treats every page as data rather than instructions, and it does
+not rely on the agent simply choosing to see it that way:
+
+- **Fencing.** Page text is wrapped in an `<untrusted-content-NONCE>` fence with
+  a fresh random nonce per fetch, and the system prompt tells the agent that
+  anything inside it is attacker-controlled. The nonce is what makes the fence
+  hold: with a fixed tag, a page could close the fence itself and carry on as if
+  its text were trusted.
+- **Isolation.** Each page is scored for injection signals: text telling the
+  reader to ignore prior instructions, a new persona, an instruction to send data
+  to a URL, references to key material, text telling the reader to call Houston's
+  own tools, characters hidden from a human reader. A page that looks like an
+  attempt is not inlined at all. Instead a separate model call with no tools and
+  no conversation history reads it and reports what it says, and only that report
+  reaches the agent. The isolation is structural: there is nothing for the page to
+  act through, and no earlier instructions to talk it out of.
+- **Cost.** Ordinary pages are unaffected and arrive verbatim, so documentation
+  and code samples stay byte-exact. Only a flagged page pays for the extra call.
+  The score is deliberately loose, because a false positive costs one model call
+  and some fidelity rather than a failed fetch.
+
+Bidirectional text controls, which can make text render in a different order than
+it reads, are stripped from every page. This is defense in depth behind the
+approval gate (you still see and approve each URL), not a replacement for it: the
+classifier is a heuristic, and anyone who knows it is there can word around it.
+
 ## GitHub tools
 
 When the `gh` CLI is installed and authenticated, Houston offers dedicated tools

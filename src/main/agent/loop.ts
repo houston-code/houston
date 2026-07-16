@@ -25,6 +25,7 @@ import { resolveShellOutputBudget } from '@shared/defaults'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
 import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
 import { createSecretRedactor } from './redact'
+import { runQuarantineExtraction } from './untrusted'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt } from './prompt'
@@ -1296,6 +1297,17 @@ export async function startRun(
       getSecret: getKey,
       collectSecrets: () => knownSecrets,
       searchProvider: settings.searchProvider,
+      // Reads flagged web content on the run's own model, but with no tools and no
+      // history — so the page has nothing to act through and nothing to override.
+      quarantineExtract: ({ content, source, query }) =>
+        runQuarantineExtraction({
+          provider,
+          model: req.model,
+          content,
+          source,
+          query,
+          signal: abort.signal
+        }),
       // Ask the user a structured question and block until they answer. The
       // resolver is registered before the event is emitted so a fast reply can't
       // race ahead of it; cancelRun resolves any still-pending question.
