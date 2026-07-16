@@ -7,7 +7,10 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
-  symlinkSync
+  symlinkSync,
+  mkdirSync,
+  chmodSync,
+  statSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -572,6 +575,163 @@ describe('multi_edit', () => {
   it('rejects an empty edits array', async () => {
     await run('write_file', { path: 'm.txt', content: 'a' })
     await expect(run('multi_edit', { path: 'm.txt', edits: [] })).rejects.toThrow(/non-empty/)
+  })
+})
+
+describe('apply_patch rollback on a phase-2 failure', () => {
+  const patch = (...body: string[]): string =>
+    ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
+
+  // These drive a REAL write failure by making a directory unwritable, which is the
+  // only honest way to exercise the commit phase. Root ignores the permission bits,
+  // so there is nothing to trigger there.
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0
+  const maybe = asRoot ? it.skip : it
+
+  /** A directory the patch can compute a write into but not actually perform one in. */
+  const lockedDir = (): string => {
+    const dir = join(workspace, 'locked')
+    mkdirSync(dir)
+    chmodSync(dir, 0o555)
+    return dir
+  }
+  // Restore write permission or the temp dir can't be cleaned up.
+  afterEach(() => {
+    const dir = join(workspace, 'locked')
+    if (existsSync(dir)) chmodSync(dir, 0o755)
+  })
+
+  maybe('restores a file it had already rewritten when a later write fails', async () => {
+    // The gap: phase 1 proves every change is COMPUTABLE, not that it is WRITABLE.
+    // keep.ts commits, then the add fails — and the tool promises all-or-nothing.
+    await run('write_file', { path: 'keep.ts', content: 'const a = 1\nconst b = 2\n' })
+    lockedDir()
+
+    await expect(
+      run('apply_patch', {
+        patch: patch(
+          '*** Update File: keep.ts',
+          ' const a = 1',
+          '-const b = 2',
+          '+const b = 3',
+          '*** Add File: locked/new.ts',
+          '+x'
+        )
+      })
+    ).rejects.toThrow(/rolled back/)
+
+    // The already-committed write was undone.
+    expect(readFileSync(join(workspace, 'keep.ts'), 'utf8')).toBe('const a = 1\nconst b = 2\n')
+    expect(existsSync(join(workspace, 'locked/new.ts'))).toBe(false)
+  })
+
+  maybe('names the file the commit failed on', async () => {
+    lockedDir()
+    await expect(
+      run('apply_patch', { patch: patch('*** Add File: locked/new.ts', '+x') })
+    ).rejects.toThrow(/locked\/new\.ts/)
+  })
+
+  maybe('brings back a file it had already deleted', async () => {
+    await run('write_file', { path: 'gone.ts', content: 'important\n' })
+    lockedDir()
+
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Delete File: gone.ts', '*** Add File: locked/new.ts', '+x')
+      })
+    ).rejects.toThrow(/rolled back/)
+
+    expect(readFileSync(join(workspace, 'gone.ts'), 'utf8')).toBe('important\n')
+  })
+
+  maybe('restores a deleted file with its original permissions, not default ones', async () => {
+    // Recreating a file by writing it afresh would silently drop its exec bit.
+    writeFileSync(join(workspace, 'run.sh'), '#!/bin/sh\necho hi\n')
+    chmodSync(join(workspace, 'run.sh'), 0o755)
+    lockedDir()
+
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Delete File: run.sh', '*** Add File: locked/new.ts', '+x')
+      })
+    ).rejects.toThrow(/rolled back/)
+
+    expect(statSync(join(workspace, 'run.sh')).mode & 0o777).toBe(0o755)
+  })
+
+  maybe('restores a binary file byte-for-byte', async () => {
+    // Snapshotting as text would corrupt this on the way back.
+    const bytes = Buffer.from([0x00, 0x01, 0xff, 0xfe, 0x80, 0x00])
+    writeFileSync(join(workspace, 'blob.bin'), bytes)
+    lockedDir()
+
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Delete File: blob.bin', '*** Add File: locked/new.ts', '+x')
+      })
+    ).rejects.toThrow(/rolled back/)
+
+    expect(readFileSync(join(workspace, 'blob.bin')).equals(bytes)).toBe(true)
+  })
+
+  maybe('removes directories it created on the way, leaving no scaffold behind', async () => {
+    lockedDir()
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Add File: fresh/deep/a.ts', '+x', '*** Add File: locked/new.ts', '+y')
+      })
+    ).rejects.toThrow(/rolled back/)
+
+    expect(existsSync(join(workspace, 'fresh/deep/a.ts'))).toBe(false)
+    expect(existsSync(join(workspace, 'fresh'))).toBe(false)
+  })
+
+  maybe('leaves a pre-existing directory alone while removing the file it added', async () => {
+    // Only directories this call brought into being may be removed.
+    mkdirSync(join(workspace, 'existing'))
+    writeFileSync(join(workspace, 'existing/other.ts'), 'keep me')
+    lockedDir()
+
+    await expect(
+      run('apply_patch', {
+        patch: patch('*** Add File: existing/a.ts', '+x', '*** Add File: locked/new.ts', '+y')
+      })
+    ).rejects.toThrow(/rolled back/)
+
+    expect(existsSync(join(workspace, 'existing/a.ts'))).toBe(false)
+    expect(readFileSync(join(workspace, 'existing/other.ts'), 'utf8')).toBe('keep me')
+  })
+
+  maybe('rolls a failed move back to the source path', async () => {
+    await run('write_file', { path: 'src.ts', content: 'hello\n' })
+    lockedDir()
+
+    await expect(
+      run('apply_patch', {
+        patch: patch(
+          '*** Update File: src.ts',
+          '*** Move to: locked/dst.ts',
+          '-hello',
+          '+there'
+        )
+      })
+    ).rejects.toThrow(/rolled back/)
+
+    // The source's delete is undone and the destination never appears.
+    expect(readFileSync(join(workspace, 'src.ts'), 'utf8')).toBe('hello\n')
+    expect(existsSync(join(workspace, 'locked/dst.ts'))).toBe(false)
+  })
+
+  it('still applies a patch that can be written', async () => {
+    // The rollback machinery must not disturb the ordinary path.
+    await run('write_file', { path: 'a.ts', content: 'one\n' })
+    const out = await run('apply_patch', {
+      patch: patch('*** Update File: a.ts', '-one', '+two', '*** Add File: sub/b.ts', '+new')
+    })
+    expect(out).toMatch(/1 added, 1 updated/)
+    expect(readFileSync(join(workspace, 'a.ts'), 'utf8')).toBe('two\n')
+    expect(readFileSync(join(workspace, 'sub/b.ts'), 'utf8')).toBe('new')
   })
 })
 
