@@ -259,12 +259,18 @@ describe('modelCapabilities', () => {
     ['o4-mini', true, true],
     ['gpt-4-turbo', false, false], // text-only legacy GPT-4
     ['gpt-3.5-turbo', false, false],
-    // Google Gemini — multimodal from 1.5; thinking on 2.5.
+    // Google Gemini — multimodal from 1.5; thinking on 2.5 and the 3.x line.
     ['gemini-2.5-pro', true, true],
     ['gemini-2.5-flash', true, true],
     ['gemini-2.0-flash', true, false],
     ['gemini-1.5-pro', true, false],
     ['gemini-pro', false, false], // 1.0 was text-only
+    // Gemini 3.x: the old `2\.`-only vision pattern reported these as text-only, and the
+    // 2.5-only reasoning mirror reported them as non-reasoning. Both are wrong, and these
+    // are shipped defaults — mirrors geminiSupportsThinking in providers/reasoning.ts.
+    ['gemini-3.5-flash', true, true],
+    ['gemini-3.1-flash-lite', true, true],
+    ['gemini-3.1-pro-preview', true, true],
     // Unknown / local models report nothing.
     ['llama-3.1-8b', false, false],
     ['qwen2.5-coder', false, false],

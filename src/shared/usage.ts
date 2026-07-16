@@ -262,8 +262,10 @@ function hasVision(m: string): boolean {
   // legacy text-only gpt-4 / gpt-3.5 do not.
   if (m.includes('gpt-4o') || m.includes('gpt-4.1') || m.includes('gpt-5')) return true
   if (isOSeries(m)) return true
-  // Google: Gemini 1.5 and 2.x are multimodal; 1.0 (gemini-pro) was text-only.
-  if (m.includes('gemini')) return /gemini[^0-9]*(1\.5|2\.)/.test(m)
+  // Google: Gemini 1.5 and everything from 2.x on are multimodal; 1.0 (gemini-pro) was
+  // text-only. The 3.x line has to be listed explicitly — the old `2\.`-only pattern
+  // reported every Gemini 3 model as text-only.
+  if (m.includes('gemini')) return /gemini[^0-9]*(1\.5|2\.|3)/.test(m)
   return false
 }
 
@@ -275,8 +277,9 @@ function hasReasoning(m: string): boolean {
   // Anthropic extended thinking — Claude 3.7, the 4.x family, and Fable / Mythos.
   // Mirrors anthropicSupportsThinking in main/providers/reasoning.ts.
   if (/claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-|fable|mythos)/.test(m)) return true
-  // Google: Gemini 2.5 ("thinking") models reason. Mirrors geminiSupportsThinking.
-  if (m.includes('gemini') && /2\.5|thinking/.test(m)) return true
+  // Google: the Gemini 2.5 and 3.x lines ("thinking") reason. Mirrors geminiSupportsThinking
+  // in main/providers/reasoning.ts — keep the two in lockstep.
+  if (m.includes('gemini') && /2\.5|thinking|gemini-3/.test(m)) return true
   return false
 }
 

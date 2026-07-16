@@ -164,9 +164,15 @@ const GEMINI_BUDGET: Record<'low' | 'medium' | 'high', number> = {
   high: 16_000
 }
 
-/** Gemini 2.5 models support a configurable thinking budget. */
+/**
+ * Gemini models that support a configurable thinking budget: the 2.5 line and the 3.x
+ * line (plus anything explicitly named "thinking"). The 2.x-only gate this replaces
+ * predated Gemini 3 and silently sent NO `thinkingConfig` to 3.x models — reasoning
+ * just never happened on them, with no error to notice. Keep this in lockstep with the
+ * `hasReasoning` mirror in shared/usage.ts.
+ */
 export function geminiSupportsThinking(model: string): boolean {
-  return /2\.5|thinking/i.test(model)
+  return /2\.5|thinking|gemini-3/i.test(model)
 }
 
 /** Gemini `thinkingBudget`, or undefined when off/unsupported. */
