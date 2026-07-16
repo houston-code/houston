@@ -1,8 +1,6 @@
 import { Notification, type BrowserWindow } from 'electron'
-import { basename } from 'node:path'
 import type { AgentEvent } from '@shared/agent'
-import { APP_NAME } from '@shared/constants'
-import { prNoticeFromToolResult } from '@shared/prNotice'
+import { notificationFor, workspaceLabel, type NotifySpec } from '@shared/notify'
 
 /**
  * Native desktop notifications for agent events. We ping the user when a turn
@@ -11,53 +9,13 @@ import { prNoticeFromToolResult } from '@shared/prNotice'
  * off during a long turn and get pulled back when it matters, without being nagged
  * while they're already watching.
  *
- * `notificationFor` is pure (no Electron) so the "which events are worth a ping"
- * policy is unit-tested; `notifyAgentEvent` adds the focus gate and the OS call.
+ * The "which events are worth a ping" policy lives in @shared/notify, so the
+ * terminal clients signal on exactly the same events (they cannot import this
+ * module: the standalone CLI has no Electron). This file is the OS call and the
+ * focus gate. Re-exported here so existing callers keep one import.
  */
 
-export interface NotifySpec {
-  title: string
-  body: string
-}
-
-/**
- * The notification to show for an agent event, or null if the event isn't worth
- * interrupting the user for. `workspaceName` (a short project label) is folded
- * into the title for context when several chats run in different folders.
- */
-export function notificationFor(e: AgentEvent, workspaceName?: string): NotifySpec | null {
-  const where = workspaceName ? ` · ${workspaceName}` : ''
-  switch (e.type) {
-    case 'done':
-      // The user explicitly stopped this run — they're present, don't ping them.
-      if (e.stopReason === 'aborted') return null
-      return { title: `${APP_NAME}${where}`, body: 'Finished responding.' }
-    case 'tool_approval':
-      return { title: `${APP_NAME} needs approval${where}`, body: `${e.name}: ${e.summary}` }
-    case 'tool_question':
-      return { title: `${APP_NAME} has a question${where}`, body: e.question }
-    case 'error':
-      return { title: `${APP_NAME} hit a problem${where}`, body: e.message }
-    case 'tool_result': {
-      // A PR opening or merging (from gh_pr_create / gh_pr_view) is worth a ping.
-      const pr = prNoticeFromToolResult(e.name, e.ok, e.output)
-      if (!pr) return null
-      const num = pr.number ? ` #${pr.number}` : ''
-      return {
-        title: `${APP_NAME}${where}`,
-        body: pr.event === 'created' ? `Opened pull request${num}` : `Pull request${num} merged`
-      }
-    }
-    default:
-      return null
-  }
-}
-
-/** A short project label for a workspace path (its basename), or undefined. */
-export function workspaceLabel(workspace: string | undefined): string | undefined {
-  if (!workspace) return undefined
-  return basename(workspace) || undefined
-}
+export { notificationFor, workspaceLabel, type NotifySpec }
 
 /**
  * Fire a native notification for a notable agent event when Houston isn't focused.

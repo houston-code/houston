@@ -398,6 +398,11 @@ export function reduceEditor(s: EditorState, key: EditorKey): { state: EditorSta
 
     case 'escape':
       return { state: s }
+
+    case 'focus':
+      // The terminal telling us it gained/lost focus. Not input: the adapter reads
+      // it to gate attention signals; the buffer is unaffected.
+      return { state: s }
   }
 }
 

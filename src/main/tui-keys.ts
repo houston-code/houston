@@ -55,6 +55,11 @@ export type EditorKey =
   | { type: 'escape' }
   /** Ctrl-X Ctrl-E: hand the draft to $VISUAL/$EDITOR. */
   | { type: 'external-edit' }
+  /**
+   * The terminal reporting that its window gained/lost focus (DEC mode 1004).
+   * Not a keystroke: it lets attention signals fire only when the user is away.
+   */
+  | { type: 'focus'; on: boolean }
 
 // ESC (0x1b), built from a char code so no control character appears inside a
 // regex literal (which trips eslint's no-control-regex), matching tui-wrap.ts.
@@ -72,6 +77,17 @@ export const PASTE_END = '\x1b[201~'
 /** Enable / disable bracketed paste. Written when the composer takes the terminal. */
 export const ENABLE_BRACKETED_PASTE = '\x1b[?2004h'
 export const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
+
+/**
+ * Enable / disable focus reporting (DEC mode 1004). The terminal then sends CSI I
+ * on focus and CSI O on blur, which is the only way a terminal program can know
+ * whether anyone is looking — and therefore whether a bell is a help or a nuisance.
+ */
+export const ENABLE_FOCUS_REPORTING = '\x1b[?1004h'
+export const DISABLE_FOCUS_REPORTING = '\x1b[?1004l'
+/** What the terminal sends for focus / blur under mode 1004. */
+export const FOCUS_IN = '\x1b[I'
+export const FOCUS_OUT = '\x1b[O'
 
 /** Decoder state carried between chunks (a sequence or paste can be split across reads). */
 export interface DecoderState {
@@ -110,8 +126,11 @@ function isC1(ch: string): boolean {
   return c >= 0x80 && c <= 0x9f
 }
 
-/** Keys allowed to survive `sanitizePastedKeys` — pure content, no actions. */
-const PASTE_SAFE_KEYS = new Set<EditorKey['type']>(['char', 'paste', 'newline'])
+/**
+ * Keys allowed to survive `sanitizePastedKeys` — pure content, plus focus reports
+ * (which the terminal, not the clipboard, generates, and which change no state).
+ */
+const PASTE_SAFE_KEYS = new Set<EditorKey['type']>(['char', 'paste', 'newline', 'focus'])
 
 /**
  * Neutralize keys that arrive on the heels of a paste.
@@ -176,6 +195,12 @@ function csiKey(params: string, final: string): EditorKey | null {
   const mod = /^1;([0-9]+)$/.exec(params)?.[1]
   const wordwise = mod === '5' || mod === '3'
   switch (final) {
+    // Focus reporting (mode 1004). Only ever sent with no params, which keeps
+    // these distinct from any modified cursor key.
+    case 'I':
+      return params === '' ? { type: 'focus', on: true } : null
+    case 'O':
+      return params === '' ? { type: 'focus', on: false } : null
     case 'A':
       return { type: 'up' }
     case 'B':

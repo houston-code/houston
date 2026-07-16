@@ -250,3 +250,19 @@ describe('sanitizePastedKeys', () => {
     expect(second.keys).toEqual([{ type: 'newline' }])
   })
 })
+
+describe('decodeInput — focus reporting (mode 1004)', () => {
+  it('decodes focus in / focus out', () => {
+    expect(feed('\x1b[I')).toEqual([{ type: 'focus', on: true }])
+    expect(feed('\x1b[O')).toEqual([{ type: 'focus', on: false }])
+  })
+
+  it('does not mistake a modified cursor key for a focus report', () => {
+    // CSI O with params is not focus; only the bare form is.
+    expect(feed('\x1b[1;5I')).toEqual([])
+  })
+
+  it('keeps SS3 cursor keys working alongside it', () => {
+    expect(feed('\x1bOA')).toEqual([{ type: 'up' }])
+  })
+})

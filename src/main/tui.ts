@@ -52,6 +52,8 @@ import { truncateVisible, stripControlChars } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
+import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
+import { workspaceLabel } from '@shared/notify'
 import { ComposerBuffer } from './tui-composer'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
@@ -1319,6 +1321,14 @@ export interface TuiIo {
   setSpinnerLabel?: (label: string) => void
   stopSpinner?: () => void
   /**
+   * Emit an attention signal: set the tab/window title, and — only when the user
+   * has switched away — ring the bell and fire the terminal's notification. This
+   * is what makes a long unattended run trustworthy: a session that blocks on an
+   * approval used to sit silent, so the only way to notice was to keep looking.
+   * Optional; absent off-TTY and in tests.
+   */
+  signal?: (sig: TerminalSignal) => void
+  /**
    * Present an arrow-key selectable picker (for approvals / `ask_user`). Resolves
    * with the committed value, a request to fall back to typing, or a cancel.
    * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
@@ -1622,6 +1632,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
   }
+  // Short project label, folded into titles/notifications so two terminals in two
+  // projects are tellable apart at a glance.
+  const workspaceName = workspaceLabel(opts.cwd)
+  // Read once: the terminal tells users settings apply on restart, and re-reading
+  // per event would cost a settings load on every streamed token.
+  const notifyEnabled = settings.desktopNotifications !== false
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
@@ -1703,6 +1719,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       })
   }
 
+  deps.io.signal?.({ title: idleTitle(workspaceName) })
   deps.io.out(
     `${paint('Houston', 'bold', 'cyan')} ${paint(deps.version ? `v${deps.version}` : '', 'dim')} ${paint('(interactive)', 'dim')}\n` +
       `${paint(`  cwd:      ${opts.cwd}`, 'dim')}\n` +
@@ -2100,6 +2117,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.startSpinner?.('Working')
 
     const send = (e: AgentEvent): void => {
+      // Attention signals ride the event stream itself, so anything that blocks the
+      // run (approval, question, plan) or ends it can pull the user back. Done once,
+      // here, rather than at each case: a signal added to the policy then reaches the
+      // terminal without touching the renderer below.
+      const sig = signalFor(e, workspaceName)
+      // The title is ambient (it just describes the tab) so it is always set; the
+      // bell + notification honor the user's existing "notify me" setting.
+      if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
       if (e.type === 'text') {
         deps.io.out(md.push(e.delta))
         return
@@ -2372,6 +2397,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // mode after ordinary questions.
   }
 
+  // Hand the tab back with no title of ours; the shell sets its own at the next
+  // prompt, and a lingering "Houston · proj" would be a lie once we're gone.
+  deps.io.signal?.({ title: '' })
   deps.io.out(paint('\nBye.\n', 'dim'))
   return 0
 }

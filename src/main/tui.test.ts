@@ -2794,3 +2794,66 @@ describe('version, update check, and /doctor', () => {
     expect(t.text()).toContain('diagnostics are unavailable')
   })
 })
+
+// A terminal session that blocked on an approval used to say nothing at all: the
+// run stalls and the only way to notice is to keep looking at it.
+describe('attention signals', () => {
+  function signalIo(inputs: Array<string | null>) {
+    const base = fakeIo(inputs)
+    const signals: Array<{ title?: string; alert?: { title: string; body: string } }> = []
+    base.io.signal = (s) => signals.push(s)
+    return { ...base, signals }
+  }
+
+  it('signals when a run blocks on an approval, naming the tool', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'a1', name: 'run_shell', summary: 'rm -rf build', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = signalIo(['go', 'n', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const alerts = t.signals.filter((s) => s.alert)
+    expect(alerts.some((s) => s.alert?.title.includes('needs approval'))).toBe(true)
+    expect(alerts.some((s) => s.alert?.body.includes('rm -rf build'))).toBe(true)
+  })
+
+  it('signals when the turn finishes and returns the title to idle', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = signalIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.signals.some((s) => s.alert?.body === 'Finished responding.')).toBe(true)
+    expect(t.signals.at(-1)?.title).toBe('')
+  })
+
+  it('honors the user’s notify-me setting: title still set, no alert', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      desktopNotifications: false
+    })
+    const t = signalIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.signals.some((s) => s.alert)).toBe(false)
+    expect(t.signals.some((s) => s.title)).toBe(true)
+  })
+
+  it('does not signal for ordinary streaming', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'text', delta: 'hello' },
+      { runId: 'x', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'a.ts' } }
+    ])
+    const t = signalIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.signals.filter((s) => s.alert)).toHaveLength(0)
+  })
+
+  it('sets an idle title at startup so the tab is never blank', async () => {
+    const { d } = deps([])
+    const t = signalIo([null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.signals[0]?.title).toContain('Houston')
+  })
+})

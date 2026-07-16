@@ -14,8 +14,13 @@ import {
   sanitizePastedKeys,
   ENABLE_BRACKETED_PASTE,
   DISABLE_BRACKETED_PASTE,
+  ENABLE_FOCUS_REPORTING,
+  DISABLE_FOCUS_REPORTING,
+  FOCUS_IN,
+  FOCUS_OUT,
   type DecoderState
 } from './tui-keys'
+import { bellSequence, notifySequence, titleSequence, type TerminalSignal } from './tui-notify'
 import {
   initialEditorState,
   reduceEditor,
@@ -146,6 +151,23 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       return () => clearInterval(id)
     })
 
+  // --- Focus: whether the user is actually looking at this terminal.
+  //
+  // `sawFocusEvent` is the honest part. A terminal that doesn't implement mode
+  // 1004 simply never reports, and we must not read that silence as "focused" —
+  // that would silently disable every attention signal on those terminals. Until
+  // one arrives we don't know, and an unknown gets the signal.
+  let focused = true
+  let sawFocusEvent = false
+  // Unknown counts as away: a terminal that never reports would otherwise silence
+  // every signal, which is the failure we set out to fix. Once the terminal does
+  // report, its answer is authoritative.
+  const userIsAway = (): boolean => !sawFocusEvent || !focused
+  const noteFocus = (on: boolean): void => {
+    sawFocusEvent = true
+    focused = on
+  }
+
   let pending: ((line: string | null) => void) | null = null
   // The AbortController for the outstanding rl.question, so cancelRead / EOF can
   // actually cancel it. Without this, node:readline keeps the abandoned question
@@ -201,8 +223,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // exactly one consumer owns stdin at a time — the same discipline the picker uses.
   let interruptHandler: (() => void) | null = null
   let watching = false
-  const onWatchKey = (_s: string, key: { ctrl?: boolean; name?: string } | undefined): void => {
-    if (key?.ctrl && key.name === 'c') interruptHandler?.()
+  const onWatchKey = (
+    _s: string,
+    key: { ctrl?: boolean; name?: string; sequence?: string } | undefined
+  ): void => {
+    if (key?.ctrl && key.name === 'c') return void interruptHandler?.()
+    // Focus reports arrive as ordinary escape sequences here; readline's decoder
+    // has no name for them, so match the raw bytes.
+    if (key?.sequence === FOCUS_IN) return noteFocus(true)
+    if (key?.sequence === FOCUS_OUT) return noteFocus(false)
   }
   const startInterruptWatch = (): void => {
     if (watching || !stdin.isTTY || typeof stdin.setRawMode !== 'function') return
@@ -210,6 +239,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       emitKeypressEvents(stdin)
       stdin.setRawMode(true)
       stdin.resume()
+      // Ask the terminal to report focus while the turn runs — the window in which
+      // the user is most likely to wander off, and the only time we ping them.
+      rawWrite(ENABLE_FOCUS_REPORTING)
       stdin.on('keypress', onWatchKey)
       watching = true
     } catch {
@@ -220,6 +252,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (!watching) return
     watching = false
     try {
+      rawWrite(DISABLE_FOCUS_REPORTING)
       stdin.removeListener('keypress', onWatchKey)
       stdin.pause()
     } catch {
@@ -237,6 +270,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     process.on('exit', () => {
       try {
         stdin.removeListener('keypress', onWatchKey)
+        // Focus reporting MUST go off with us: left on, the user's shell receives
+        // a CSI I / CSI O burst every time they switch windows — visible garbage
+        // in a terminal we no longer own.
+        rawWrite(DISABLE_FOCUS_REPORTING)
         rawWrite(DISABLE_BRACKETED_PASTE)
         stdin.setRawMode(false)
       } catch {
@@ -566,6 +603,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         lastPasteAt = guarded.lastPasteAt
         for (const key of guarded.keys) {
           if (done) return
+          // The user is typing here, so focus can only mean the window state — and
+          // the editor has nothing to do with it.
+          if (key.type === 'focus') {
+            noteFocus(key.on)
+            continue
+          }
           const { state: next, outcome } = reduceEditor(state, key)
           state = next
           if (!outcome) {
@@ -632,6 +675,16 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     readLine: plainRead,
     readComposer,
     readSecret,
+    /**
+     * Write an attention signal. The title is ambient and always set; the bell and
+     * notification only fire when the terminal has told us it lost focus — a bell
+     * for something you are already watching is pure nuisance, and a nuisance bell
+     * is one people turn off.
+     */
+    signal: (sig: TerminalSignal) => {
+      if (sig.title) rawWrite(titleSequence(sig.title))
+      if (sig.alert && userIsAway()) rawWrite(bellSequence() + notifySequence(sig.alert))
+    },
     onInterrupt: (handler) => {
       // Debounce: a single Ctrl-C can surface via more than one path (the streaming
       // watcher vs. readline's own 'SIGINT'); collapse those near-simultaneous fires
