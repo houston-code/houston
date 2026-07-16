@@ -104,6 +104,19 @@ describe('loadSkills', () => {
     mkdirSync(join(ws, SKILLS_DIR, 'empty'), { recursive: true })
     expect(await loadSkills(ws)).toEqual([])
   })
+
+  it('caps at MAX_SKILLS deterministically (alphabetically first), not in readdir order', async () => {
+    // 51 skills > MAX_SKILLS (50). Sorting before the cap makes the dropped one the
+    // alphabetically LAST, deterministically — not whatever fs.readdir yielded last.
+    for (let i = 0; i < 51; i++) {
+      const n = String(i).padStart(2, '0')
+      writeSkill(`skill-${n}`, `---\ndescription: d${n}\n---\nbody`)
+    }
+    const names = (await loadSkills(ws)).map((s) => s.name)
+    expect(names).toHaveLength(50)
+    expect(names).toEqual(Array.from({ length: 50 }, (_, i) => `skill-${String(i).padStart(2, '0')}`))
+    expect(names).not.toContain('skill-50')
+  })
 })
 
 describe('loadSkillBody', () => {

@@ -67,6 +67,9 @@ export async function loadSkills(workspace: string): Promise<Skill[]> {
   } catch {
     return []
   }
+  // Sort BEFORE the MAX_SKILLS cap so which skills survive truncation is deterministic
+  // and stable across platforms (fs.readdir order isn't), matching plugins.ts.
+  entries.sort((a, b) => a.name.localeCompare(b.name))
 
   const skills: Skill[] = []
   for (const e of entries) {
