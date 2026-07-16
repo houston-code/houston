@@ -285,6 +285,23 @@ describe('runSubAgent', () => {
       expect(seen.tools).toEqual([...SUBAGENT_TOOLS, ...SUBAGENT_WRITE_TOOLS])
     })
 
+    it('fails CLOSED to read-only tools when a writable agent lists only unknown names', async () => {
+      const seen = { tools: [] as string[] }
+      await runSubAgent({
+        provider: capturingProvider(seen),
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal,
+        writable: true,
+        // None of these are Houston tool names, so the intersection is empty. It must
+        // NOT widen back to the full write+shell base — that would grant MORE than named.
+        tools: ['bash', 'grep']
+      })
+      expect(seen.tools).toEqual([...SUBAGENT_TOOLS])
+      for (const w of SUBAGENT_WRITE_TOOLS) expect(seen.tools).not.toContain(w)
+    })
+
     it('keeps the read-only tier free of write tools', async () => {
       const seen = { tools: [] as string[] }
       await runSubAgent({

@@ -3,6 +3,7 @@ import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
 import type { AppSettings, PermissionRule } from '@shared/types'
+import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
@@ -758,6 +759,11 @@ export function registerIpc(): void {
     setMessages(conv.id, messages)
     updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
 
+    // Validate the policy at the IPC boundary: an unknown value fails *open* downstream
+    // (needsApproval auto-approves any non-'ask' policy; isBlockedByPlan stops guarding),
+    // so coerce anything off the list to the most restrictive policy. Mirrors setRunPolicy.
+    const approvalPolicy = isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan'
+
     void runAndDrain(
       makeIo(event.sender),
       conv.id,
@@ -766,7 +772,7 @@ export function registerIpc(): void {
         workspace: conv.workspace,
         providerId: req.providerId,
         model: req.model,
-        approvalPolicy: req.approvalPolicy,
+        approvalPolicy,
         messages
       },
       // Record the starting window so only it can approve/answer/cancel this run.
@@ -801,6 +807,8 @@ export function registerIpc(): void {
         })
         return
       }
+      // Same boundary validation as agentStart: an unknown policy fails open, so coerce.
+      const approvalPolicy = isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan'
       void runAndDrain(
         makeIo(event.sender),
         conv.id,
@@ -809,7 +817,7 @@ export function registerIpc(): void {
           workspace: conv.workspace,
           providerId: req.providerId,
           model: req.model,
-          approvalPolicy: req.approvalPolicy,
+          approvalPolicy,
           messages: conv.messages
         },
         // Record the starting window so only it can approve/answer/cancel this run.

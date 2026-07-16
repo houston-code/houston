@@ -13,6 +13,9 @@ const h = vi.hoisted(() => ({
   resolveApproval: vi.fn(),
   resolveQuestion: vi.fn(),
   setRunPolicy: vi.fn(),
+  // Spied so the agentStart/agentRetry tests can inspect the request the handler
+  // hands the drain loop (in particular the validated approvalPolicy).
+  runAndDrain: vi.fn(),
   // Configured per test to return the WebContents id that "owns" a run.
   runOwner: vi.fn<(runId: string) => number | undefined>(),
   // Steerable "is a run live on this conversation" — the checkpoint gate reads it.
@@ -48,6 +51,13 @@ vi.mock('./agent/loop', () => ({
   onActiveRunsChanged: vi.fn(() => () => {})
 }))
 
+// Mock the drain module so agentStart/agentRetry's runAndDrain is a spy — the tests
+// assert on the request it receives without spinning up a real agent run.
+vi.mock('./agent/drain', () => ({
+  runAndDrain: h.runAndDrain,
+  drainQueue: vi.fn()
+}))
+
 import { MAX_QUESTION_ANSWER_LEN, registerIpc, resolveDeleteAction } from './ipc'
 // The real checkpoints module (not mocked): the gating tests drive actual snapshots.
 import {
@@ -57,6 +67,7 @@ import {
   clearCheckpoints
 } from './agent/checkpoints'
 import { setUserDataDir } from './userData'
+import { createConversation } from './conversations'
 
 // registerIpc wires the scheduler, whose store lives under the profile directory.
 // Production sets the userData seam before app.whenReady() (index.ts); mirror that
@@ -317,5 +328,57 @@ describe('capability listing IPC (skills / agents)', () => {
   it('returns [] for a blank workspace', async () => {
     expect(await handler(IPC.skillsList)(event, '')).toEqual([])
     expect(await handler(IPC.agentsList)(event, '')).toEqual([])
+  })
+})
+
+/**
+ * agentStart/agentRetry accept the approval policy from the renderer. An unknown value
+ * would fail OPEN downstream (needsApproval auto-approves any non-'ask' policy;
+ * isBlockedByPlan stops guarding), so the handlers must validate it at the boundary —
+ * mirroring the mid-run setRunPolicy path — and coerce anything off the list to 'plan'.
+ */
+describe('agentStart / agentRetry approval-policy validation', () => {
+  const SENDER = 5
+  const from = (senderId: number) => ({ sender: { id: senderId } })
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+  const policyOf = (): string =>
+    (h.runAndDrain.mock.calls[0][2] as { approvalPolicy: string }).approvalPolicy
+  const freshConv = (): string =>
+    createConversation({ workspace: '/tmp/ws', providerId: 'p', model: 'm' }).id
+
+  registerIpc()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    h.activeRun.mockReturnValue(null)
+  })
+
+  it('coerces an unknown policy to the most restrictive (agentStart)', async () => {
+    await handler(IPC.agentStart)(from(SENDER), {
+      runId: 'r1', conversationId: freshConv(), providerId: 'p', model: 'm',
+      approvalPolicy: 'yolo', userText: 'hi'
+    })
+    expect(h.runAndDrain).toHaveBeenCalledTimes(1)
+    expect(policyOf()).toBe('plan')
+  })
+
+  it('passes a valid policy through unchanged (agentStart)', async () => {
+    await handler(IPC.agentStart)(from(SENDER), {
+      runId: 'r1', conversationId: freshConv(), providerId: 'p', model: 'm',
+      approvalPolicy: 'full-auto', userText: 'hi'
+    })
+    expect(policyOf()).toBe('full-auto')
+  })
+
+  it('coerces an unknown policy to the most restrictive (agentRetry)', async () => {
+    await handler(IPC.agentRetry)(from(SENDER), {
+      runId: 'r2', conversationId: freshConv(), providerId: 'p', model: 'm',
+      approvalPolicy: 'nonsense'
+    })
+    expect(h.runAndDrain).toHaveBeenCalledTimes(1)
+    expect(policyOf()).toBe('plan')
   })
 })
