@@ -75,8 +75,8 @@ failing model simply end the turn.
 ## Slash commands
 
 Type `/` in the composer for the command menu. In the terminal it appears under
-what you are typing and filters as you go, listing each command with what it does
-— including any this project defines in `.houston/commands`. The exact set depends
+what you are typing and filters as you go, listing each command with what it does,
+including any this project defines in `.houston/commands`. The exact set depends
 on the client, but the common built-ins are:
 
 - `/new` (alias `/clear`): start a fresh conversation.
@@ -90,17 +90,15 @@ on the client, but the common built-ins are:
 
 The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
-`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/fork`, `/cost`,
-`/mcp`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
+`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/fork`,
+`/cost`, `/mcp`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
 
 **Themes.** `/theme` lists the terminal's palettes and `/theme <name>` switches:
-`dark` (bright foregrounds for a dark background), `light` (readable on white —
-the bright yellow a dark theme uses is not), `colorblind` (red and green carry
+`dark` (bright foregrounds for a dark background), `light` (readable on white,
+which the bright yellow a dark theme uses is not), `colorblind` (red and green carry
 most of a diff's meaning, and that is the most common form of color blindness, so
 this maps them to orange and blue instead), `mono` (no color at all), and
 `default`. Your choice is remembered.
-`/settings`, `/doctor`, `/resume`, `/spawned`, `/fork`, `/cost`, `/mcp`,
-`/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
 
 **Custom commands.** Any Markdown file in `.houston/commands/<name>.md` becomes a
 `/name` command. The file body is a prompt template: `$ARGUMENTS` is replaced
@@ -146,7 +144,7 @@ bracketed-paste support.
 **History.** Messages are remembered per project folder and survive restarts,
 including multi-line ones.
 
-**Running a shell command.** A line starting with `!` runs in your own shell — see
+**Running a shell command.** A line starting with `!` runs in your own shell. See
 "Running your own commands" below.
 
 ## Seeing what the tools did
@@ -204,7 +202,7 @@ every terminal supports them; the bell works everywhere.
 
 `/reasoning` shows the current thinking effort; `/reasoning high` (or `off`, `low`,
 `medium`, `xhigh`) sets it. It applies to every model that supports reasoning, and
-Houston says so plainly when the model you are on does not — a setting that
+Houston says so plainly when the model you are on does not, since a setting that
 silently does nothing looks like a bug rather than a fact about the model.
 
 More thinking costs more tokens and takes longer, which is why it is off by
@@ -342,8 +340,8 @@ subagent: front-matter `description` plus a system-prompt body. The main agent
 dispatches it by name with `dispatch_agent`, and it works in its own fresh
 context and reports back, keeping the main thread clean. An optional front-matter
 `tools:` list narrows which tools it may use, and an optional `model:` pins the
-agent to a (usually cheaper) sibling model from the current provider — unknown
-ids fall back to the chat's model. By default a subagent is read-only (it cannot
+agent to a (usually cheaper) sibling model from the current provider (unknown
+ids fall back to the chat's model). By default a subagent is read-only (it cannot
 edit files or run commands); a subagent marked `write: true` gets a writable tier
 and is dispatched with `dispatch_writable_agent`, which is approval-gated because
 it grants write access: one approval covers the whole delegated task's local
@@ -371,7 +369,7 @@ Where a subagent reports back into the current turn, `spawn_session` spins off a
 worktree, and sets it running in the background. It appears in the sidebar with a
 live indicator, seeded with the handed-off context. A spawned session inherits
 the current approval policy, so it is never more permissive than the chat that
-spawned it. In the TUI and headless CLI, spawned sessions run too — they execute
+spawned it. In the TUI and headless CLI, spawned sessions run too: they execute
 non-interactively (anything needing an approval is declined automatically) and
 persist as ordinary conversations you can open later with `/resume` or
 `--resume <id>`; a one-shot headless run waits for its spawned sessions before
@@ -394,7 +392,7 @@ whether or not this session started it.)
 ## Scheduled runs
 
 The agent can schedule recurring (or one-time) background runs with
-`schedule_run` — say "every morning at 9, run the tests and summarize failures"
+`schedule_run`: say "every morning at 9, run the tests and summarize failures"
 and it stores a schedule; at each occurrence a fresh session starts with the
 stored prompt, under the approval policy of the chat that created it. Specs:
 `every <N>m|h|d` (minimum 5 minutes), `daily at HH:MM`, `weekdays at HH:MM`,
@@ -402,7 +400,7 @@ stored prompt, under the approval policy of the chat that created it. Specs:
 `list_scheduled_runs` shows what's configured (with next/last fire times);
 `cancel_scheduled_run` removes one. Creating or cancelling a schedule is
 approval-gated. Schedules persist across restarts and fire while Houston (the
-desktop app or the TUI) is running — this is an in-app scheduler, not OS cron;
+desktop app or the TUI) is running. This is an in-app scheduler, not OS cron;
 an occurrence missed while Houston was closed fires once at the next launch.
 
 ## Review and multi-step tools
@@ -512,8 +510,8 @@ templates, the agent gets `mcp_list_resources`/`mcp_read_resource` and
 Houston also honors server `list_changed` notifications (tools, resources, and
 prompts refresh live), keeps long tool calls alive while the server reports
 progress, and caps any single MCP result so a runaway server cannot flood the
-context window. `/mcp tools <n>` lists exactly which tools a server exposes — a count tells you it
-works, the names tell you what you just handed the agent. `/mcp` in the terminal
+context window. `/mcp tools <n>` lists exactly which tools a server exposes: a
+count tells you it works, the names tell you what you just handed the agent. `/mcp` in the terminal
 and the Settings panel show each server's
 live connection status: connected with a tool count, needs sign-in, or the
 connect error.
