@@ -1,0 +1,74 @@
+name: Dependabot digest
+
+# Reports the Dependabot PRs whose CI is red, once a week, as a single GitHub issue.
+#
+# A Dependabot PR's CI failure notifies nobody: GitHub mails a run's *triggering actor*, and
+# for those PRs that actor is dependabot[bot]. Measured here: 17 of 97 CI runs on Dependabot
+# PRs failed with no one told. It fails quietly — the PR just sits unmerged and the dependency
+# stops updating — which is exactly why it needs a report rather than a spectacle.
+#
+# A digest, not an alert per failure: Dependabot batches its PRs weekly (see dependabot.yml),
+# so per-failure alerts would arrive five-at-once on a Monday and never again. The logic,
+# including what counts as "failing" (a cancellation does not), lives in
+# scripts/dependabot-digest.mjs where it is unit-tested.
+#
+# THIS WORKFLOW NEVER PUBLISHES ANYTHING and never merges a PR: it reads PRs and writes one
+# issue. `pull-requests: read` — it cannot approve, label, or land a Dependabot PR, only
+# report on it, so a bad digest can never ship a dependency.
+
+on:
+  schedule:
+    # 08:00 UTC Monday. Dependabot's own schedule is weekly (dependabot.yml), so this reads the
+    # batch after it has opened and CI has had the weekend's runs to settle. Cron has no
+    # timezone; this is a fixed UTC wall-clock time.
+    - cron: '0 8 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One digest at a time; a manual run supersedes a scheduled one rather than racing it to
+# file the same issue twice.
+concurrency:
+  group: dependabot-digest
+  cancel-in-progress: true
+
+jobs:
+  digest:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout, for the script
+      pull-requests: read # list the open Dependabot PRs and their check rollups
+      issues: write # file, update, or close the digest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+      # No `npm ci`: the script is dependency-free by design (node built-ins + the gh CLI that
+      # ships on the runner), so the digest can't be broken by an install failing — least of
+      # all by the very dependency update it is meant to report on.
+      - name: Report the Dependabot PRs that are failing CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/dependabot-digest.mjs
+
+  # The digest is itself a scheduled workflow, so if it breaks, GitHub tells no one — the
+  # exact gap it exists to cover. Alert on it the same way as any other.
+  alert:
+    needs: [digest]
+    # Scheduled runs only (a dispatched run already mails whoever started it), and never on a
+    # cancellation — see alert-on-failure.yml.
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: Dependabot digest
+      failed: ${{ contains(needs.*.result, 'failure') }}
