@@ -61,6 +61,27 @@ describe('toGeminiContents', () => {
     ])
   })
 
+  it('gives a user-message image that follows a tool result its own inlineData turn', () => {
+    // A functionResponse part can't share a turn with inlineData, so the image must not
+    // fold onto the tool-result turn (only its text does) — it gets a separate turn.
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'exit 0', toolCallId: 'c1', toolName: 'run' },
+      { role: 'user', content: 'look at this', images: [{ mediaType: 'image/png', data: 'IMG' }] }
+    ]
+    expect(toGeminiContents(msgs)).toEqual([
+      { role: 'model', parts: [{ functionCall: { name: 'run', args: {} } }] },
+      {
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'run', response: { result: 'exit 0' } } },
+          { text: 'look at this' }
+        ]
+      },
+      { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: 'IMG' } }] }
+    ])
+  })
+
   it('folds a plain user message following a tool result onto the same user turn', () => {
     // Gemini enforces user/model alternation, so the nudge that a stall/landing
     // check pushes after a tool-using turn must not become a second `user` turn.
@@ -165,6 +186,48 @@ describe('gemini usage reporting', () => {
   it('omits the cache field when no hits are reported', async () => {
     const usage = await drainDoneUsage({ promptTokenCount: 1_000, candidatesTokenCount: 10 })
     expect(usage).toEqual({ inputTokens: 1_000, outputTokens: 10 })
+  })
+
+  it('includes thinking tokens in the output count (candidatesTokenCount excludes thoughts)', async () => {
+    const usage = await drainDoneUsage({
+      promptTokenCount: 100,
+      candidatesTokenCount: 20,
+      thoughtsTokenCount: 50
+    })
+    expect(usage).toEqual({ inputTokens: 100, outputTokens: 70 })
+  })
+})
+
+describe('gemini stop reason', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  async function drainStopReason(candidate: Record<string, unknown>): Promise<string | undefined> {
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield { candidates: [candidate] }
+      })()
+    )
+    const provider = createGeminiProvider('k')
+    let stop: string | undefined
+    for await (const ev of provider.streamChat({
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      if (ev.type === 'done') stop = (ev as { stopReason?: string }).stopReason
+    }
+    return stop
+  }
+
+  it('maps a MAX_TOKENS finish reason to max_tokens (truncated, not a clean end_turn)', async () => {
+    expect(await drainStopReason({ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'trunc' }] } })).toBe(
+      'max_tokens'
+    )
+  })
+
+  it('reports a normal STOP finish as end_turn', async () => {
+    expect(await drainStopReason({ finishReason: 'STOP', content: { parts: [{ text: 'done' }] } })).toBe(
+      'end_turn'
+    )
   })
 })
 
