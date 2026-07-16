@@ -102,22 +102,29 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   macOS is now code-signed (Developer ID) and notarized; **Windows Authenticode signing**
   is the remaining code-signing follow-up so the first-run SmartScreen warning goes away.
 
-- **Write-capable / multi-agent delegation (write tier shipped, gaps remain).**
-  Subagents now come in two tiers. `dispatch_agent` (and custom `.houston/agents`)
-  stays read-only: the subagent reads/searches and reports back. The opt-in
-  `dispatch_writable_agent` (and custom agents marked `write: true`) delegates a
-  whole task to a nested agent loop that can also edit files and run shell
-  commands, all confined to the project with no network access. The dispatch call
-  itself is approval-gated (a write-kind tool, blocked in plan mode): one consent
-  covers the delegated task, which the subagent then carries out autonomously
-  without per-action prompts (see [`subagent.ts`](src/main/agent/subagent.ts)).
-  The one exception is unconfined shell: on a host with no OS sandbox, each shell
-  command the subagent runs is propagated back to the user as its own approval
-  prompt with the command's run and result shown live in the transcript, matching
-  the main loop's invariant that an unconfined command never runs without
-  per-command consent. Streaming a nested subagent's live status was already in
-  place via the `subagent` agent event. *Still deferred:* network access for
-  subagents; and nested delegation (a subagent dispatching its own subagents).
+- **Multi-agent orchestration beyond delegation.** Delegation itself has shipped
+  in stages. Subagents come in two tiers: `dispatch_agent` (and custom
+  `.houston/agents`) is read-only, while the opt-in `dispatch_writable_agent` (and
+  custom agents marked `write: true`) delegates a whole task to a nested agent
+  loop that can also edit files and run shell commands, all confined to the
+  project with no network access. The dispatch call itself is approval-gated (a
+  write-kind tool, blocked in plan mode): one consent covers the delegated task
+  (see [`subagent.ts`](src/main/agent/subagent.ts)) — except unconfined shell: on
+  a host with no OS sandbox, each shell command the subagent runs is propagated
+  back to the user as its own approval prompt, matching the main loop's invariant
+  that an unconfined command never runs without per-command consent. On top of
+  that, dispatches stream live turn-by-turn progress in every client; each
+  subagent is resumable by id (`resume` sends a follow-up into its retained
+  context); a dispatch or review can run on a cheaper sibling `model` (or a custom
+  agent can pin one via front-matter); subagents can fan out one level of nested
+  read-only researchers; `spawn_session` works on all three clients; and
+  `schedule_run` gives recurring/one-time background runs. *Still deferred:*
+  network access for subagents, and a full **orchestration runtime** — scripted
+  multi-agent workflows (deterministic fan-out/join pipelines), named agent teams
+  with roles, and a manager view that supervises many concurrent agents across
+  sessions. *Why deferred:* those need a first-class run-graph model,
+  cross-session messaging, and their own supervision/consent UX — a product-scale
+  design, not an increment on the dispatch tools.
 
 - **Persistent code index / semantic (embeddings) search.** Houston searches the
   project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**
