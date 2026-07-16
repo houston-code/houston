@@ -92,6 +92,13 @@ The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
 `/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/fork`, `/cost`,
 `/mcp`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
+
+**Themes.** `/theme` lists the terminal's palettes and `/theme <name>` switches:
+`dark` (bright foregrounds for a dark background), `light` (readable on white —
+the bright yellow a dark theme uses is not), `colorblind` (red and green carry
+most of a diff's meaning, and that is the most common form of color blindness, so
+this maps them to orange and blue instead), `mono` (no color at all), and
+`default`. Your choice is remembered.
 `/settings`, `/doctor`, `/resume`, `/spawned`, `/fork`, `/cost`, `/mcp`,
 `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
 

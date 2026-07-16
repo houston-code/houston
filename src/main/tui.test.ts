@@ -32,6 +32,8 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  resolveTheme,
+  THEMES,
   nextPolicy,
   renderRecoveredOutput,
   toolResultsFrom,
@@ -159,8 +161,8 @@ describe('makePainter', () => {
     expect(s.endsWith('\x1b[0m')).toBe(true)
   })
 
-  it('applies the bright theme (high-intensity foregrounds)', () => {
-    expect(makePainter(true, 'bright')('x', 'cyan')).toContain('\x1b[96m')
+  it('applies the dark theme (high-intensity foregrounds)', () => {
+    expect(makePainter(true, 'dark')('x', 'cyan')).toContain('\x1b[96m')
   })
 
   it('mono theme drops color but keeps bold structure', () => {
@@ -170,8 +172,11 @@ describe('makePainter', () => {
   })
 
   it('isThemeName guards known themes', () => {
-    expect(isThemeName('bright')).toBe(true)
+    expect(isThemeName('dark')).toBe(true)
     expect(isThemeName('nope')).toBe(false)
+    // `bright` was renamed to `dark`; it is an alias now, not a palette of its own.
+    expect(isThemeName('bright')).toBe(false)
+    expect(resolveTheme('bright')).toBe('dark')
   })
 })
 
@@ -333,7 +338,9 @@ describe('parseSlashCommand', () => {
   })
 
   it('sets a valid theme, else stays informational', () => {
-    expect(parseSlashCommand('/theme bright', s)).toEqual({ kind: 'set-theme', theme: 'bright' })
+    // `bright` resolves to its new name rather than erroring.
+    expect(parseSlashCommand('/theme bright', s)).toEqual({ kind: 'set-theme', theme: 'dark' })
+    expect(parseSlashCommand('/theme light', s)).toEqual({ kind: 'set-theme', theme: 'light' })
     expect(parseSlashCommand('/theme mono', s)).toEqual({ kind: 'set-theme', theme: 'mono' })
     expect(parseSlashCommand('/theme bogus', s)).toEqual({ kind: 'handled' })
     expect(parseSlashCommand('/theme', s)).toEqual({ kind: 'handled' })
@@ -1696,8 +1703,8 @@ describe('runTui', () => {
     const t = fakeIo(['/theme bright', null])
     d.io = t.io
     await runTui({ ...opts, color: true }, d)
-    // The confirmation line is painted with the bright palette.
-    expect(t.text()).toContain('theme → bright')
+    // `bright` is an alias, so it lands on (and reports) the theme's real name.
+    expect(t.text()).toContain('theme → dark')
   })
 
   it('/theme with no arg lists the available themes', async () => {
@@ -1705,7 +1712,7 @@ describe('runTui', () => {
     const t = fakeIo(['/theme', null])
     d.io = t.io
     await runTui(opts, d)
-    expect(t.text()).toContain('default, bright, mono')
+    expect(t.text()).toContain('default, dark, light, colorblind, mono')
   })
 
   it('/fork with no active conversation is a no-op', async () => {
@@ -3345,5 +3352,57 @@ describe('approval mode cycling', () => {
     await runTui(opts, d)
     expect(calls).toBe(0)
     expect(t.text()).not.toContain('this run too')
+  })
+})
+
+// The terminal shipped three palettes with no light/dark variants, no
+// colorblind-safe option, and no persistence — so a theme had to be re-picked on
+// every launch, which makes it a party trick rather than a setting.
+describe('themes', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('offers explicit light and dark palettes, and a colorblind-safe one', () => {
+    expect(Object.keys(THEMES)).toEqual(
+      expect.arrayContaining(['default', 'light', 'dark', 'colorblind', 'mono'])
+    )
+    // Light must not use the high-intensity yellow, which is unreadable on white.
+    expect(THEMES.light.yellow).not.toBe(THEMES.dark.yellow)
+    // Colorblind must not rely on red-vs-green, which is the whole point.
+    expect(THEMES.colorblind.red).not.toBe(THEMES.default.red)
+    expect(THEMES.colorblind.green).not.toBe(THEMES.default.green)
+  })
+
+  it('keeps the old name working', () => {
+    // `bright` was what `dark` used to be called; a saved setting must not break.
+    expect(resolveTheme('bright')).toBe('dark')
+    expect(resolveTheme('DARK')).toBe('dark')
+    expect(resolveTheme('nonsense')).toBeNull()
+  })
+
+  it('persists the choice so it survives a restart', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/theme light', null])
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toContainEqual({ tuiTheme: 'light' })
+  })
+
+  it('starts in the saved theme', async () => {
+    const { d } = deps(done, { tuiTheme: 'mono' })
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui({ ...opts, color: true }, d)
+    // mono emits no color codes, so the banner carries none.
+    expect(t.text()).not.toContain('\x1b[36m')
+  })
+
+  it('ignores a saved theme that is not one, rather than failing to start', async () => {
+    const { d } = deps(done, { tuiTheme: 'from-the-future' })
+    const t = fakeIo([null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
   })
 })

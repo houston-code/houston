@@ -490,6 +490,13 @@ export interface AppSettings {
   desktopNotifications?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
+  /**
+   * The interactive terminal's color theme. Separate from `theme` above, which is
+   * the desktop app's light/dark preference: the terminal's palettes are ANSI
+   * choices (which foregrounds are readable on this background, or which colors a
+   * colorblind reader can tell apart), not a UI appearance mode.
+   */
+  tuiTheme?: string
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /**
