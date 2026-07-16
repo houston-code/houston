@@ -2,17 +2,26 @@ name: Task evals (live)
 
 # Scheduled live-model run of the task-level eval suite (src/main/agent/evals).
 #
-# WHAT THIS ADDS OVER THE PR GATE. Every PR runs the SAME fixtures through `npm test`, but with the
-# scripted driver: a fake provider replays a canned plan, so a green run means "the harness carried a
-# correct plan to a green test". By construction that says nothing about whether a real model can
-# solve the task at all — the plan was handed to it. This job runs the identical fixtures against a
-# real model with the script ignored, which is the only way to see per-model task success move.
+# THIS IS THE ONLY GUARD THAT CATCHES A QUALITY REGRESSION. The other two can't, by construction:
 #
-# WHY IT NEVER GATES A PR. The result is non-deterministic (a model can fail a task it passed
+#   - The goldens catch a SHAPE change (the prompt text moved, a tool schema changed). They cannot
+#     tell you the change made the agent WORSE — that judgement is a human reading the diff, and
+#     `npm run goldens:update` accepts it in one command.
+#   - The scripted eval driver on every PR hands the agent a correct plan, so it grades EXECUTION.
+#     Gut the entire system prompt and the scripted suite still passes all eight tasks, because the
+#     answer was in the script.
+#
+# Only a real model solving a real task measures quality. This job runs the identical fixtures with
+# the script ignored, several attempts per task, and GRADES the result against the per-model baseline
+# checked in under src/main/agent/evals/baselines/. A task that drops materially below its baseline
+# reds this job. A live score with nothing to compare it against would just be a log line, so a
+# missing baseline reds the job too, with the command to record one.
+#
+# WHY IT STILL NEVER GATES A PR. The result is non-deterministic (a model can fail a task it passed
 # yesterday) and metered. A flaky, billed gate on every PR would train everyone to re-run it until
-# green, which is worse than no signal. So this is a scorecard, not a gate: read the summary in the
-# job log. A task that regresses HERE and passes scripted is a model-capability signal; a task that
-# fails SCRIPTED is a harness regression and reds the PR that caused it.
+# green, which is worse than no signal. Hence: nightly, with a tolerance sized to absorb one flaked
+# attempt. A task that regresses HERE is a quality/model signal; a task that fails SCRIPTED is a
+# harness regression and reds the PR that caused it.
 #
 # THIS WORKFLOW NEVER PUBLISHES ANYTHING: `permissions: contents: read`, no build/dist/release step,
 # and the only secret in scope is the model API key (step-scoped, never at job level). It is a
@@ -42,6 +51,11 @@ on:
         description: 'Provider id'
         required: false
         default: 'anthropic'
+        type: string
+      attempts:
+        description: 'Attempts per task (higher = less noise, more spend)'
+        required: false
+        default: '3'
         type: string
 
 permissions:
@@ -82,12 +96,15 @@ jobs:
             echo "::error::ANTHROPIC_API_KEY is empty/unset — the live eval suite cannot run. Set the repo secret."
             exit 1
           fi
-      # Drives the real model against every fixture and prints the scorecard (per-task PASS/FAIL,
-      # the tools each run reached for, wall-clock, and estimated spend) to the job log.
-      - name: Score the task evals
+      # Drives the real model against every fixture, grades each task against the recorded baseline,
+      # and prints the scorecard (per-task pass rate, baseline delta, the tools each run reached for,
+      # wall-clock, and estimated spend) to the job log. Fails on a regression, on an unrecorded
+      # model, or on a malformed baseline — never on a single flaked attempt.
+      - name: Score the task evals against the baseline
         env:
           HOUSTON_EVAL_LIVE: '1'
           HOUSTON_EVAL_PROVIDER: ${{ inputs.provider || 'anthropic' }}
           HOUSTON_EVAL_MODEL: ${{ inputs.model || '' }}
+          HOUSTON_EVAL_ATTEMPTS: ${{ inputs.attempts || '3' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npm run eval

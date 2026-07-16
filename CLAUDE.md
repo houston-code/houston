@@ -48,9 +48,21 @@ task's `script`: deterministic, offline, and free. The plan is handed to the age
 so a scripted failure is a *harness* regression by construction — a tool that
 stopped dispatching, an edit landing in the wrong place, an approval that never
 resolves. `HOUSTON_EVAL_LIVE=1 npm run eval` drives a **live** model over the same
-fixtures with the script ignored, scoring real per-model task success; it's metered
-and non-deterministic, so it never gates a PR (nightly `eval-live.yml` instead). A
-task that fails live but passes scripted is a model-capability signal, not a bug.
+fixtures with the script ignored, several attempts per task, graded against the
+per-model baseline in `evals/baselines/`; it's metered and non-deterministic, so it
+never gates a PR (nightly `eval-live.yml` instead).
+
+**Know which guard catches what — they are not interchangeable.** The goldens catch
+a *shape* change (the prompt moved, a schema changed) but cannot tell you the change
+made the agent worse; that's a human reading the diff, and `goldens:update` accepts
+it in one command. The scripted evals catch *execution* but not judgement: replace
+the system prompt with `'You are a bot.'` and all eight still pass, because the
+answer is in the script. Only the live driver catches a *quality* regression, which
+is why it grades against a baseline and fails rather than printing a scorecard — and
+why a model with no baseline fails loudly instead of silently running ungated.
+Record a baseline with `npm run eval:baseline`, review the scores, and commit it like
+a golden. The tolerance absorbs exactly one flaked attempt of the default three; a
+nightly that reds on model noise is one everyone learns to ignore.
 
 Two invariants the suite asserts, both worth preserving: every task directory is
 registered exactly once, and every fixture's verify command **fails** before the
