@@ -2166,7 +2166,46 @@ h6.md-h {
   gap: 8px;
 }
 
-/* ---- Diff (edit_file / write_file) ---- */
+/* ---- Diff (write tools; multi-file for apply_patch) ---- */
+/* A file's diff gets a labelled header only when the row's own target doesn't
+   already say which file it is (a multi-file patch), or when the file is being
+   created/deleted/renamed. */
+.tool-row__diff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 4px;
+  font-size: 11px;
+}
+.tool-row__diff-file + .tool-row__diff-file {
+  margin-top: 10px;
+}
+.tool-row__diff-path {
+  font-family: var(--mono);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-row__diff-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ok);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tool-row__diff-tag--del {
+  color: var(--danger);
+}
+.tool-row__diff-more {
+  margin: 2px 12px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 .diff-stat {
   display: inline-flex;
   gap: 6px;

@@ -18,6 +18,7 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import { SYSTEM_NOTE_PREFIX, sanitizeApprovalNote } from '@shared/agent'
+import type { FileDiffPreview } from '@shared/diff'
 import { folderTrustState, isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
 import { resolveShellOutputBudget } from '@shared/defaults'
@@ -42,6 +43,7 @@ import {
   type ToolContext,
   type ToolKind
 } from './tools'
+import { previewWrite } from './writePreview'
 import {
   ReadCache,
   isCacheableRead,
@@ -180,6 +182,12 @@ interface RunState {
       summary: string
       args: Record<string, unknown>
       kind: ToolKind
+      /**
+       * The write's per-file diffs, held so a re-adopting renderer replays the same
+       * card it would have seen live. It cannot be recomputed at replay time: the
+       * diff is against the pre-write file, and by then the write may have landed.
+       */
+      preview?: FileDiffPreview[]
       sandboxed?: boolean
       shellNetwork?: boolean
     }
@@ -453,6 +461,7 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       summary: a.summary,
       args: a.args,
       kind: a.kind,
+      ...(a.preview ? { preview: a.preview } : {}),
       ...(a.sandboxed === false ? { sandboxed: false } : {}),
       ...(a.shellNetwork ? { shellNetwork: true } : {})
     })
@@ -2423,6 +2432,14 @@ export async function startRun(
             // A PreToolUse hook that explicitly approves skips the approval prompt —
             // unless a guardrail-tier `ask` rule forced it. The one-time shell-network
             // consent rides the same gate.
+            // Model this write's effect on each file it touches while the "before" is
+            // still on disk. Computed once here and reused for both the approval card
+            // and tool_start: after the call runs the original content is gone, so a
+            // diff built later could only be wrong. Best-effort — a write whose effect
+            // can't be modelled just has no diff.
+            const preview =
+              tool.kind === 'write' ? await previewWrite(call.name, execArgs, roots) : null
+
             if ((mustApprove || needsShellNetworkConsent) && (!pre.approved || guardrailAsk)) {
               // Track the prompt so it can be replayed if the renderer re-opens this
               // conversation while the call is still blocking (the event is one-shot).
@@ -2436,6 +2453,7 @@ export async function startRun(
                 summary: tool.summarize(execArgs),
                 args: execArgs,
                 kind: tool.kind,
+                ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {})
               })
@@ -2446,6 +2464,7 @@ export async function startRun(
                 summary: tool.summarize(execArgs),
                 args: execArgs,
                 kind: tool.kind,
+                ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {})
               })
@@ -2486,7 +2505,14 @@ export async function startRun(
                   await recordOriginal(runId, roots, t.path)
                 }
               }
-              emit({ type: 'tool_start', callId: call.id, name: call.name, args: execArgs, kind: tool.kind })
+              emit({
+                type: 'tool_start',
+                callId: call.id,
+                name: call.name,
+                args: execArgs,
+                kind: tool.kind,
+                ...(preview ? { preview } : {})
+              })
               await plugins.emit('onToolStart', { tool: call.name, input: execArgs })
               // Serve identical read-only calls from the run cache. We only consult
               // it when there's no matching hook for this tool (a hook implies the

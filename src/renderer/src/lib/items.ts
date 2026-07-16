@@ -8,6 +8,7 @@ import {
   type QuestionOption
 } from '@shared/agent'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
+import type { FileDiffPreview } from '@shared/diff'
 import type { ImageAttachment } from '@shared/images'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 
@@ -49,6 +50,13 @@ export interface ToolItem {
   summary?: string
   args?: Record<string, unknown>
   toolKind?: 'read' | 'write' | 'shell' | 'network' | 'mcp'
+  /**
+   * Per-file diffs for a write, computed by the main process against the files'
+   * pre-write contents. The row cannot work these out from `args`: it has no
+   * filesystem, so it cannot know what a file held before, and by the time the row
+   * is rendered the write has usually already landed.
+   */
+  preview?: FileDiffPreview[]
   status: ToolStatus
   /**
    * True on the one-time full-auto shell-network consent prompt: the approval decides
@@ -221,6 +229,9 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           // derives it from args); without this it renders the verb with a blank target.
           // Guarded so a payload without args never wipes args already on the row.
           ...(e.args ? { args: e.args } : {}),
+          // Same guard as args: a payload without a preview must not wipe one already
+          // on the row.
+          ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           shellNetwork: e.shellNetwork === true,
           status: 'awaiting-approval'
@@ -234,6 +245,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           name: e.name,
           summary: e.summary,
           args: e.args,
+          ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           ...(e.shellNetwork ? { shellNetwork: true } : {}),
           status: 'awaiting-approval'
@@ -246,7 +258,12 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       // marker + docked panel), not as a generic tool row.
       if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) return finalized
       const exists = finalized.some((it) => it.kind === 'tool' && it.id === e.callId)
-      if (exists) return updateTool(finalized, e.callId, { status: 'running', args: e.args })
+      if (exists)
+        return updateTool(finalized, e.callId, {
+          status: 'running',
+          args: e.args,
+          ...(e.preview ? { preview: e.preview } : {})
+        })
       return [
         ...finalized,
         {
@@ -258,6 +275,9 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           // the row here means auto-approved tools get a toolKind too, not just the ones
           // that hit an approval prompt (which set it via tool_approval above).
           ...(e.kind ? { toolKind: e.kind } : {}),
+          // Likewise the diff: an auto-approved write never showed an approval card, so
+          // tool_start is the only place its preview arrives.
+          ...(e.preview ? { preview: e.preview } : {}),
           status: 'running'
         }
       ]
