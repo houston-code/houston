@@ -34,6 +34,7 @@ import {
   getTool,
   resolveInRoots,
   toolSchemas,
+  type DispatchAgentOptions,
   type ToolDef,
   type ToolContext,
   type ToolKind
@@ -71,7 +72,13 @@ import { recordOriginal, recordResult, noteConversationRun, writeTargets } from 
 import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed } from '../sandbox'
 import { formatFile } from './format'
-import { runSubAgent } from './subagent'
+import { MAX_SUBAGENT_DEPTH, runSubAgent } from './subagent'
+import {
+  MAX_SUBAGENT_SESSIONS,
+  getSubAgent,
+  rememberSubAgent,
+  updateSubAgentMessages
+} from './subagentSessions'
 import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
 import {
@@ -79,8 +86,15 @@ import {
   spawnSession as engineSpawnSession,
   SPAWN_SESSION_NAME
 } from './spawn'
+import {
+  SCHEDULE_TOOL_NAMES,
+  isSchedulerConfigured,
+  scheduleCancel,
+  scheduleCreate,
+  scheduleList
+} from './scheduler'
 import { matchingHooks, runHooks, type HookOutcome } from './hooks'
-import { loadAgents } from './agents'
+import { loadAgents, type CustomAgent } from './agents'
 import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
@@ -610,7 +624,11 @@ export async function startRun(
     // plugins.ts for the trust boundary.
     const plugins = await loadPluginsIfEnabled(workspace, settings.projectPlugins)
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
-    const capabilities = buildCapabilities(agents, skills)
+    const capabilities = buildCapabilities(
+      agents,
+      skills,
+      providerConfig.models.map((m) => m.id)
+    )
     // Git + GitHub awareness folded into the prompt. githubContext is a pure PATH
     // probe (no network), so the run start never triggers unapproved egress.
     const gitStatus = [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
@@ -618,10 +636,13 @@ export async function startRun(
     // at startup. The standalone CLI wires none, so drop the tool from the schema
     // set and the prompt rather than offering one that fails after an approval.
     const localhostCaptureAvailable = isCaptureBackendConfigured()
-    // Only the desktop shell wires a spawn backend (it needs the app's windows +
-    // sidebar); the CLI has none, so spawn_session is dropped from the toolset and
-    // the prompt there, mirroring view_localhost.
+    // Hosts wire a spawn backend at startup (the desktop shell and the terminal
+    // entries both do); a host that didn't gets spawn_session dropped from the
+    // toolset and the prompt, mirroring view_localhost.
     const spawnAvailable = isSpawnBackendConfigured()
+    // Same seam pattern for scheduled runs: hosts that wire a scheduler backend
+    // get the schedule tools; others have them dropped from toolset + prompt.
+    const schedulerAvailable = isSchedulerConfigured()
     let system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
@@ -632,7 +653,8 @@ export async function startRun(
       req.providerId,
       req.model,
       localhostCaptureAvailable,
-      spawnAvailable
+      spawnAvailable,
+      schedulerAvailable
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // When a lot of MCP tools are connected, sending every schema on every turn
@@ -661,6 +683,7 @@ export async function startRun(
         (s) =>
           (localhostCaptureAvailable || s.name !== VIEW_LOCALHOST_NAME) &&
           (spawnAvailable || s.name !== SPAWN_SESSION_NAME) &&
+          (schedulerAvailable || !(SCHEDULE_TOOL_NAMES as readonly string[]).includes(s.name)) &&
           // present_plan is the "exit Plan mode" tool; only offer it in Plan mode.
           (planMode || s.name !== PRESENT_PLAN_NAME)
       ),
@@ -821,6 +844,257 @@ export async function startRun(
       return decision !== 'deny' && decision !== 'rule-deny'
     }
 
+    // ---- Subagent dispatch ------------------------------------------------
+    // One implementation behind dispatch_agent and dispatch_writable_agent (and
+    // their nested and resumed forms). Stored transcripts are keyed by the
+    // conversation so a subagent id handed out this turn can be resumed in a
+    // later turn of the same chat; a conversation-less run keys by runId.
+    const subagentKey = conversationId ?? runId
+
+    /**
+     * Resolve a dispatch's model: explicit `model` argument > the custom agent's
+     * front-matter `model:` > the run's own model. An explicit argument must be
+     * one of the provider's configured ids (fail loudly — the model can correct
+     * itself from the list); an unknown front-matter id falls back silently (the
+     * agent file is checked in and shared across machines whose providers differ,
+     * so it must not break the dispatch).
+     */
+    const resolveDispatchModel = (
+      requested: string | undefined,
+      agent: CustomAgent | undefined
+    ): { model: string; error?: string } => {
+      const available = providerConfig.models.map((m) => m.id)
+      if (requested) {
+        // The run's own model is always acceptable, even when the provider config
+        // lists no models (some custom endpoints don't enumerate them).
+        if (requested === req.model) return { model: requested }
+        if (!available.includes(requested)) {
+          return {
+            model: req.model,
+            error: available.length
+              ? `Unknown model "${requested}" for provider ${req.providerId}. Configured models: ${available.join(', ')}. Omit model to use ${req.model}.`
+              : `Model overrides aren't available: provider ${req.providerId} lists no models. Omit model to use ${req.model}.`
+          }
+        }
+        return { model: requested }
+      }
+      if (agent?.model && available.includes(agent.model)) return { model: agent.model }
+      return { model: req.model }
+    }
+
+    const runDispatch = async (input: {
+      /** The dispatch tool call this agent belongs to — progress events attach to it. */
+      callId: string
+      opts: DispatchAgentOptions
+      writable: boolean
+      /** Depth of the agent being dispatched: 1 from the main agent, 2 nested. */
+      depth: number
+    }): Promise<string> => {
+      const { callId, opts, writable, depth } = input
+      const agent = opts.agent ? agentsByName.get(opts.agent) : undefined
+      if (opts.agent && !agent) return `Unknown agent: ${opts.agent}`
+      if (writable && agent && agent.write !== true) {
+        return `Agent "${opts.agent}" is read-only. Use dispatch_agent for it, or add \`write: true\` to its .houston/agents file to allow changes.`
+      }
+
+      // Resume: continue a stored transcript. The stored agent's config (model,
+      // system prompt, tool narrowing) wins over the call's arguments so the
+      // continued context reads consistently to the model.
+      const resumed = opts.resume ? getSubAgent(subagentKey, opts.resume) : undefined
+      if (opts.resume && !resumed) {
+        return `Unknown subagent id "${opts.resume}" — ids cover the ${MAX_SUBAGENT_SESSIONS} most recent dispatches of this chat and last for the app session. Dispatch a fresh agent instead.`
+      }
+      if (resumed && resumed.writable !== writable) {
+        return resumed.writable
+          ? `Subagent ${resumed.id} is writable — resume it with dispatch_writable_agent (its write authority needs that tool's approval).`
+          : `Subagent ${resumed.id} is read-only — resume it with dispatch_agent.`
+      }
+
+      const modelRes = resolveDispatchModel(opts.model, agent)
+      if (modelRes.error) return modelRes.error
+      // The dispatch bills at the SUB-model's rates, so cost/caching below use its
+      // caps, not the main run's.
+      const model = resumed ? resumed.model : modelRes.model
+      const modelCaps = providerConfig.models.find((m) => m.id === model)?.caps
+      const systemOverride = resumed ? resumed.systemOverride : agent?.systemPrompt
+      const allowedTools = resumed ? resumed.tools : agent?.tools
+
+      // Per-command consent for UNCONFINED shell (writable tier on a host with no
+      // OS sandbox): the subagent's run_shell would otherwise be refused (it can't
+      // prompt from the background), so this gate propagates each such command to
+      // the user as a normal tool_approval on a minted callId under the dispatch.
+      // Deny rules still win without a prompt, the per-run unconfined-shell
+      // consent ("Allow for run") skips further prompts exactly as it does for the
+      // main loop, and the command's start/result are emitted so a command running
+      // unconfined on this machine is never invisible. Only consulted by
+      // runSubAgent when the host lacks an OS sandbox.
+      let gateSeq = 0
+      const gateUnconfinedShell = async (
+        gateArgs: Record<string, unknown>,
+        runCommand: () => Promise<string>
+      ): Promise<string> => {
+        const subject = permissionSubject('run_shell', gateArgs)
+        if (matchRule(permissionRules, 'run_shell', subject, roots) === 'deny') {
+          return 'Denied by a permission rule.'
+        }
+        const subCallId = `${callId}.shell.${++gateSeq}`
+        const summary = `Subagent: ${getTool('run_shell')!.summarize(gateArgs)}`
+        if (!run.shellUnsandboxedOverride) {
+          // Track + emit like any approval so re-adopt replay and cancelRun
+          // (which resolves pending approvals as deny) cover this prompt too.
+          run.pendingApprovals.set(subCallId, {
+            name: 'run_shell',
+            summary,
+            args: gateArgs,
+            kind: 'shell',
+            sandboxed: false
+          })
+          emit({
+            type: 'tool_approval',
+            callId: subCallId,
+            name: 'run_shell',
+            summary,
+            args: gateArgs,
+            kind: 'shell',
+            sandboxed: false
+          })
+          const decision = await waitForApproval(run, subCallId)
+          run.pendingApprovals.delete(subCallId)
+          const approved = applyApprovalDecision(decision, 'run_shell', gateArgs, 'shell', true)
+          if (!approved) {
+            emit({
+              type: 'tool_result',
+              callId: subCallId,
+              name: 'run_shell',
+              ok: false,
+              output: 'Denied by the user.'
+            })
+            return 'Denied by the user. Do not retry this command; work around it or note it in your report.'
+          }
+        }
+        emit({ type: 'tool_start', callId: subCallId, name: 'run_shell', args: gateArgs, kind: 'shell' })
+        try {
+          const output = redact(await runCommand())
+          emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: true, output })
+          return output
+        } catch (e) {
+          const output = redact(`Error: ${(e as Error).message}`)
+          emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: false, output })
+          return output
+        }
+      }
+
+      let subInput = 0
+      let subOutput = 0
+      let subCacheRead = 0
+      let subCacheWrite = 0
+      // Nested agents' progress shares the parent dispatch's row; the arrow keeps
+      // the two narrations distinguishable.
+      const progressPrefix = depth > 1 ? '↳ ' : ''
+      let storedId: string | undefined
+      const result = await runSubAgent({
+        provider,
+        model,
+        workspace,
+        prompt: opts.prompt,
+        signal: abort.signal,
+        systemOverride,
+        tools: allowedTools,
+        // The writable tier gets the real roots and a FRESH shell session so the
+        // subagent's cwd/env changes don't leak into the parent's persistent
+        // shell, records its edits in THIS run's checkpoint (so the turn's
+        // revert/redo covers delegated changes), and carries the per-command
+        // unconfined-shell consent gate.
+        ...(writable
+          ? {
+              writable: true,
+              roots,
+              checkpointRunId: runId,
+              shellSession: createShellSession(workspace),
+              shellOutputMaxBytes: resolveShellOutputBudget(settings),
+              gateUnconfinedShell
+            }
+          : {}),
+        explicitCacheControl: needsExplicitCacheControl(model, modelCaps),
+        // The subagent's tool outputs ship to the provider from ITS transcript,
+        // which never passes flushResult — scrub them with the run-scoped redactor.
+        redact,
+        priorMessages: resumed?.messages,
+        // Progress lines carry tool-arg summaries from the subagent's own calls,
+        // so they get the same secret scrub as tool results (see the flush below).
+        onProgress: (message) =>
+          emit({ type: 'tool_progress', callId, message: redact(`${progressPrefix}${message}`) }),
+        // Store/refresh the transcript for resumability — top-level dispatches
+        // only. A nested agent's report goes to its parent subagent, not to the
+        // main model, so an id for it would name something the model never saw.
+        ...(depth === 1
+          ? {
+              onTranscript: (msgs: ChatMessage[]) => {
+                if (resumed) {
+                  updateSubAgentMessages(subagentKey, resumed.id, msgs)
+                  storedId = resumed.id
+                } else {
+                  storedId = rememberSubAgent(subagentKey, {
+                    messages: msgs,
+                    writable,
+                    ...(opts.agent ? { agentName: opts.agent } : {}),
+                    model,
+                    ...(systemOverride ? { systemOverride } : {}),
+                    ...(allowedTools ? { tools: allowedTools } : {})
+                  })
+                }
+              }
+            }
+          : {}),
+        // One more level of read-only fan-out below this agent, until the depth
+        // floor. Nested dispatch never widens write authority.
+        ...(depth < MAX_SUBAGENT_DEPTH
+          ? {
+              dispatchNested: (nestedPrompt: string, nestedAgent?: string, nestedModel?: string) =>
+                runDispatch({
+                  callId,
+                  opts: { prompt: nestedPrompt, agent: nestedAgent, model: nestedModel },
+                  writable: false,
+                  depth: depth + 1
+                })
+            }
+          : {}),
+        onUsage: (u) => {
+          subInput += u.inputTokens ?? 0
+          subOutput += u.outputTokens ?? 0
+          subCacheRead += u.cacheReadTokens ?? 0
+          subCacheWrite += u.cacheWriteTokens ?? 0
+        }
+      }).finally(() => {
+        // A subagent bills against its own (possibly cheaper) model; total its
+        // tokens and fold them into the conversation's usage when it ends.
+        // inputTokens: 0 keeps the context-size meter on the main turn (this is
+        // an ephemeral subagent context), while output + cost accumulate.
+        if (subInput || subOutput) {
+          emit({
+            type: 'usage',
+            inputTokens: 0,
+            outputTokens: subOutput,
+            cost: turnCostUsd(
+              model,
+              subInput,
+              subOutput,
+              { readTokens: subCacheRead, writeTokens: subCacheWrite },
+              modelCaps
+            )
+          })
+        }
+      })
+
+      // Tell the model how to follow up. Only when a transcript was stored — an
+      // aborted/errored run isn't resumable, and nested dispatches never are.
+      if (storedId) {
+        const tool = writable ? 'dispatch_writable_agent' : 'dispatch_agent'
+        return `${result}\n\n[subagent ${storedId} — pass resume: "${storedId}" to ${tool} to continue this agent with its context intact]`
+      }
+      return result
+    }
+
     // Shared tool-execution context. `run.policy` and `run.shellNetworkGranted` are
     // read at call time so a mid-run policy change or a network-consent decision earlier
     // in the turn takes effect. `allowNetwork` governs the shell sandbox's network
@@ -873,193 +1147,49 @@ export async function startRun(
           run.pendingPlans.set(callId, plan)
           emit({ type: 'plan_ready', callId, plan })
         }),
-      dispatchSubAgent: (prompt, agentName) => {
-        const agent = agentName ? agentsByName.get(agentName) : undefined
-        // A research subagent bills against the same model; total its tokens and
-        // fold them into the conversation's usage when it ends. inputTokens: 0
-        // keeps the context-size meter on the main turn (this is an ephemeral
-        // subagent context), while output + cost accumulate. Mirrors dispatchReview.
-        let subInput = 0
-        let subOutput = 0
-        let subCacheRead = 0
-        let subCacheWrite = 0
-        return runSubAgent({
-          provider,
-          model: req.model,
-          workspace,
-          prompt,
-          signal: abort.signal,
-          systemOverride: agent?.systemPrompt,
-          tools: agent?.tools,
-          explicitCacheControl,
-          // The subagent's tool outputs ship to the provider from ITS transcript, which
-          // never passes flushResult — scrub them with the same run-scoped redactor.
-          redact,
-          onUsage: (u) => {
-            subInput += u.inputTokens ?? 0
-            subOutput += u.outputTokens ?? 0
-            subCacheRead += u.cacheReadTokens ?? 0
-            subCacheWrite += u.cacheWriteTokens ?? 0
+      // Both tiers route through runDispatch (hoisted above), which handles the
+      // model override, resume, live progress, nesting, per-model billing, the
+      // checkpoint pass-through, and the unconfined-shell consent gate.
+      // Reaching the writable path means the dispatch_writable_agent call was
+      // already approved (kind:'write'), so the subagent works autonomously
+      // within the project sandbox.
+      dispatchSubAgent: (opts) => runDispatch({ callId, opts, writable: false, depth: 1 }),
+      dispatchWritableSubAgent: (opts) => runDispatch({ callId, opts, writable: true, depth: 1 }),
+      dispatchReview: (base, paths, effort, model) => {
+        // An explicit model runs the whole review — dimension reviewers and
+        // skeptical verifiers alike — on that (usually cheaper) sibling, billed
+        // at ITS rates. Validated like a dispatch override: fail loudly with the
+        // configured ids so the model can correct itself.
+        let reviewModel = req.model
+        let reviewCaps = selectedModelCaps
+        if (model && model !== req.model) {
+          const available = providerConfig.models.map((m) => m.id)
+          if (!available.includes(model)) {
+            return Promise.resolve(
+              available.length
+                ? `Unknown model "${model}" for provider ${req.providerId}. Configured models: ${available.join(', ')}. Omit model to use ${req.model}.`
+                : `Model overrides aren't available: provider ${req.providerId} lists no models. Omit model to use ${req.model}.`
+            )
           }
-        }).finally(() => {
-          if (subInput || subOutput) {
-            emit({
-              type: 'usage',
-              inputTokens: 0,
-              outputTokens: subOutput,
-              cost: turnCostUsd(
-                req.model,
-                subInput,
-                subOutput,
-                { readTokens: subCacheRead, writeTokens: subCacheWrite },
-                selectedModelCaps
-              )
-            })
-          }
-        })
-      },
-      dispatchWritableSubAgent: (prompt, agentName) => {
-        // A writable subagent edits files and runs shell commands, sandboxed to the
-        // project (workspace roots + Seatbelt/bwrap) with no network. Reaching this
-        // means the dispatch_writable_agent call was already approved (kind:'write'),
-        // so the subagent works autonomously within that sandbox. A named agent must
-        // be marked `write: true`; otherwise steer the model to dispatch_agent.
-        const agent = agentName ? agentsByName.get(agentName) : undefined
-        if (agentName && !agent) return Promise.resolve(`Unknown agent: ${agentName}`)
-        if (agent && agent.write !== true) {
-          return Promise.resolve(
-            `Agent "${agentName}" is read-only. Use dispatch_agent for it, or add \`write: true\` to its .houston/agents file to allow changes.`
-          )
+          reviewModel = model
+          reviewCaps = providerConfig.models.find((m2) => m2.id === model)?.caps
         }
-        // Per-command consent for UNCONFINED shell. On a host with no OS sandbox the
-        // subagent's run_shell would otherwise be refused (it can't prompt from the
-        // background); this gate propagates each such command to the user as a normal
-        // tool_approval on a minted callId. Deny rules still win without a prompt, the
-        // per-run unconfined-shell consent ("Allow for run") skips further prompts
-        // exactly as it does for the main loop, and the command's start/result are
-        // emitted so a command running unconfined on this machine is never invisible.
-        // Only consulted by runSubAgent when the host lacks an OS sandbox.
-        let gateSeq = 0
-        const gateUnconfinedShell = async (
-          args: Record<string, unknown>,
-          runCommand: () => Promise<string>
-        ): Promise<string> => {
-          const subject = permissionSubject('run_shell', args)
-          if (matchRule(permissionRules, 'run_shell', subject, roots) === 'deny') {
-            return 'Denied by a permission rule.'
-          }
-          const subCallId = `${callId}.shell.${++gateSeq}`
-          const summary = `Subagent: ${getTool('run_shell')!.summarize(args)}`
-          if (!run.shellUnsandboxedOverride) {
-            // Track + emit like any approval so re-adopt replay and cancelRun
-            // (which resolves pending approvals as deny) cover this prompt too.
-            run.pendingApprovals.set(subCallId, {
-              name: 'run_shell',
-              summary,
-              args,
-              kind: 'shell',
-              sandboxed: false
-            })
-            emit({
-              type: 'tool_approval',
-              callId: subCallId,
-              name: 'run_shell',
-              summary,
-              args,
-              kind: 'shell',
-              sandboxed: false
-            })
-            const decision = await waitForApproval(run, subCallId)
-            run.pendingApprovals.delete(subCallId)
-            const approved = applyApprovalDecision(decision, 'run_shell', args, 'shell', true)
-            if (!approved) {
-              emit({
-                type: 'tool_result',
-                callId: subCallId,
-                name: 'run_shell',
-                ok: false,
-                output: 'Denied by the user.'
-              })
-              return 'Denied by the user. Do not retry this command; work around it or note it in your report.'
-            }
-          }
-          emit({ type: 'tool_start', callId: subCallId, name: 'run_shell', args, kind: 'shell' })
-          try {
-            const output = redact(await runCommand())
-            emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: true, output })
-            return output
-          } catch (e) {
-            const output = redact(`Error: ${(e as Error).message}`)
-            emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: false, output })
-            return output
-          }
-        }
-        let subInput = 0
-        let subOutput = 0
-        let subCacheRead = 0
-        let subCacheWrite = 0
-        return runSubAgent({
-          provider,
-          model: req.model,
-          workspace,
-          prompt,
-          signal: abort.signal,
-          writable: true,
-          roots,
-          // Record the subagent's edits in THIS run's checkpoint, so the turn's
-          // revert/redo covers delegated changes too.
-          checkpointRunId: runId,
-          // A fresh shell session so the subagent's cwd/env changes don't leak into
-          // the parent agent's persistent shell.
-          shellSession: createShellSession(workspace),
-          shellOutputMaxBytes: resolveShellOutputBudget(settings),
-          gateUnconfinedShell,
-          systemOverride: agent?.systemPrompt,
-          tools: agent?.tools,
-          explicitCacheControl,
-          // Same as dispatchSubAgent: subagent tool outputs bypass flushResult, so
-          // scrub them with the run-scoped redactor before they reach the provider.
-          redact,
-          onUsage: (u) => {
-            subInput += u.inputTokens ?? 0
-            subOutput += u.outputTokens ?? 0
-            subCacheRead += u.cacheReadTokens ?? 0
-            subCacheWrite += u.cacheWriteTokens ?? 0
-          }
-        }).finally(() => {
-          if (subInput || subOutput) {
-            emit({
-              type: 'usage',
-              inputTokens: 0,
-              outputTokens: subOutput,
-              cost: turnCostUsd(
-                req.model,
-                subInput,
-                subOutput,
-                { readTokens: subCacheRead, writeTokens: subCacheWrite },
-                selectedModelCaps
-              )
-            })
-          }
-        })
-      },
-      dispatchReview: (base, paths, effort) => {
-        // The review's nested subagent calls bill against the same model; total
-        // their tokens and fold them into the conversation's usage when it ends.
-        // inputTokens: 0 keeps the context-size meter on the main turn (these are
-        // ephemeral subagent contexts), while output + cost accumulate.
+        // The review's nested subagent calls bill against the review's model;
+        // total their tokens and fold them into the conversation's usage when it
+        // ends. inputTokens: 0 keeps the context-size meter on the main turn
+        // (these are ephemeral subagent contexts), while output + cost accumulate.
         let reviewInput = 0
         let reviewOutput = 0
         let reviewCacheRead = 0
         let reviewCacheWrite = 0
         return reviewWorkspaceChanges({
           provider,
-          model: req.model,
+          model: reviewModel,
           workspace,
           base,
           paths,
           effort,
-          explicitCacheControl,
+          explicitCacheControl: needsExplicitCacheControl(reviewModel, reviewCaps),
           // The reviewers are nested subagents whose transcripts (and diff-bearing
           // prompts) ship to the provider without passing flushResult — scrub them
           // with the same run-scoped redactor.
@@ -1081,11 +1211,11 @@ export async function startRun(
               inputTokens: 0,
               outputTokens: reviewOutput,
               cost: turnCostUsd(
-                req.model,
+                reviewModel,
                 reviewInput,
                 reviewOutput,
                 { readTokens: reviewCacheRead, writeTokens: reviewCacheWrite },
-                selectedModelCaps
+                reviewCaps
               )
             })
           }
@@ -1123,6 +1253,26 @@ export async function startRun(
                 workspace,
                 ...(conversationId ? { parentConversationId: conversationId } : {})
               })
+          }
+        : {}),
+      // Back the schedule tools when a scheduler backend is wired. Create fills
+      // in the run-scoped fields the tool doesn't take — provider/model, the
+      // workspace, and `run.policy` (read live) so scheduled sessions inherit the
+      // creating chat's CURRENT approval policy, never a more permissive one.
+      ...(schedulerAvailable
+        ? {
+            scheduler: {
+              create: (input: { name: string; spec: string; prompt: string }) =>
+                scheduleCreate({
+                  ...input,
+                  providerId: req.providerId,
+                  model: req.model,
+                  approvalPolicy: run.policy,
+                  workspace
+                }),
+              list: () => scheduleList(),
+              cancel: (id: string) => scheduleCancel(id)
+            }
           }
         : {})
     })

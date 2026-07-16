@@ -54,6 +54,14 @@ function resolveSubAgentTools(allowed: string[] | undefined, writable: boolean):
 const MAX_SUBAGENT_ITERATIONS = 16
 const SUBAGENT_MAX_TOKENS = 4096
 
+/**
+ * How deep dispatches may nest: the main agent (depth 0) can dispatch subagents
+ * (depth 1), which can dispatch their own read-only researchers (depth 2), and
+ * that's the floor — a depth-2 agent gets no dispatch tool. Enforced by the loop,
+ * which only injects `dispatchNested` for agents above the floor.
+ */
+export const MAX_SUBAGENT_DEPTH = 2
+
 /** Tier-specific constraints + reporting contract, shared by the default and custom agents. */
 function subAgentConstraints(
   workspace: string,
@@ -163,6 +171,34 @@ export interface SubAgentOptions {
    * way the main loop does.
    */
   explicitCacheControl?: boolean
+  /**
+   * Called with a short line per step (turn counter + what the tool is doing) so
+   * the caller can surface live progress — without it, a long dispatch is silent
+   * until its final report and reads as a stall in the parent's UI.
+   */
+  onProgress?: (message: string) => void
+  /**
+   * Resume: the transcript of a previous run of this agent. `prompt` is appended
+   * as the next user turn, so the agent answers the follow-up with its earlier
+   * context (files it read, conclusions it reached) intact.
+   */
+  priorMessages?: ChatMessage[]
+  /**
+   * Called with the complete message log when the run ends cleanly (final answer,
+   * or step limit — both leave every tool call paired with its result). The caller
+   * stores it to make the agent resumable. NOT called after an abort or provider
+   * error, whose transcript may end mid-tool-call and can't be replayed into a
+   * provider request.
+   */
+  onTranscript?: (messages: ChatMessage[]) => void
+  /**
+   * Dispatch a nested read-only research subagent (injected by the loop, which
+   * enforces {@link MAX_SUBAGENT_DEPTH}). When present, the `dispatch_agent` tool
+   * is offered to this subagent so it can fan out focused sub-searches; always
+   * read-only regardless of this agent's own tier, so nesting never widens write
+   * authority.
+   */
+  dispatchNested?: (prompt: string, agentName?: string, model?: string) => Promise<string>
 }
 
 /** Run a subagent loop to completion and return its final report text. */
@@ -179,10 +215,18 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const allowedTools = resolveSubAgentTools(opts.tools, writable)
   const allowedToolSet = new Set<string>(allowedTools)
   const tools = allowedTools.map((name) => getTool(name)!.schema)
+  // Nested dispatch: offered as a separate capability, not part of the narrowable
+  // tier base, so a custom agent's `tools:` list can't accidentally strip it and
+  // — more importantly — can never *grant* it (only the loop injects the handler,
+  // which enforces the depth cap and the read-only nested tier).
+  if (opts.dispatchNested) tools.push(getTool('dispatch_agent')!.schema)
   // A custom agent's prompt still gets the tier constraints appended.
-  const system = opts.systemOverride
+  let system = opts.systemOverride
     ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace, writable, shellSandboxed, shellGated)}`
     : subAgentSystemPrompt(workspace, writable, shellSandboxed, shellGated)
+  if (opts.dispatchNested) {
+    system += `\n\nYou may also delegate a focused read-only sub-search to your own nested subagent via dispatch_agent — useful to explore several areas in parallel without filling your context. Nested agents are always read-only and cannot dispatch further.`
+  }
   // Tool-execution context. Reads default their roots to [workspace]; the writable
   // tier passes the real roots (for edits) and a shell session, and never allows
   // network — so run_shell stays sandboxed with no egress. NOTE: a confined shell can
@@ -198,8 +242,32 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     ...(opts.shellSession ? { shellSession: opts.shellSession } : {}),
     ...(opts.shellOutputMaxBytes ? { shellOutputMaxBytes: opts.shellOutputMaxBytes } : {})
   }
-  const messages: ChatMessage[] = [{ role: 'user', content: prompt }]
+  // A resumed agent continues its prior transcript; the new prompt is the next
+  // user turn. Copied so the caller's stored transcript isn't mutated mid-run.
+  const messages: ChatMessage[] = opts.priorMessages
+    ? [...opts.priorMessages, { role: 'user', content: prompt }]
+    : [{ role: 'user', content: prompt }]
   let lastText = ''
+
+  // Clean-completion exit: hand the transcript back (for resumability) and return.
+  const finish = (text: string): string => {
+    opts.onTranscript?.(messages)
+    return text
+  }
+
+  // One live-progress line per tool call, reusing each tool's summarize() label
+  // (the same short form the main transcript shows) plus a turn counter so the
+  // parent UI shows both what the agent is doing and how far along it is.
+  const progress = (iter: number, call: { name: string; arguments: Record<string, unknown> }): void => {
+    if (!opts.onProgress) return
+    let label: string
+    try {
+      label = getTool(call.name)?.summarize(call.arguments) ?? call.name
+    } catch {
+      label = call.name
+    }
+    opts.onProgress(`turn ${iter + 1}/${MAX_SUBAGENT_ITERATIONS} · ${label}`)
+  }
 
   for (let iter = 0; iter < MAX_SUBAGENT_ITERATIONS; iter++) {
     if (signal.aborted) return lastText.trim() || '[subagent aborted]'
@@ -230,12 +298,35 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     if (text.trim()) lastText = text
     messages.push({ role: 'assistant', content: text, ...(calls.length ? { toolCalls: calls } : {}) })
 
-    if (calls.length === 0) return text.trim() || '[subagent returned no answer]'
+    if (calls.length === 0) return finish(text.trim() || '[subagent returned no answer]')
 
     for (const call of calls) {
+      progress(iter, call)
       const tool = allowedToolSet.has(call.name) ? getTool(call.name) : undefined
       let output: string
-      if (!tool) {
+      if (call.name === 'dispatch_agent' && opts.dispatchNested) {
+        // Nested dispatch is handled here (not via toolCtx) so the loop's injected
+        // handler — which carries the depth cap and the read-only nested tier —
+        // is the only path to it.
+        const nestedPrompt =
+          typeof call.arguments.prompt === 'string' ? call.arguments.prompt.trim() : ''
+        const agentName =
+          typeof call.arguments.agent === 'string' && call.arguments.agent
+            ? call.arguments.agent
+            : undefined
+        const nestedModel =
+          typeof call.arguments.model === 'string' && call.arguments.model
+            ? call.arguments.model
+            : undefined
+        if (call.arguments.resume !== undefined && call.arguments.resume !== null) {
+          output =
+            'resume is not available from within a subagent — dispatch a fresh nested agent instead.'
+        } else if (!nestedPrompt) {
+          output = 'prompt is required.'
+        } else {
+          output = await opts.dispatchNested(nestedPrompt, agentName, nestedModel)
+        }
+      } else if (!tool) {
         output = writable
           ? `Tool not available to this subagent: ${call.name}`
           : `Tool not available to a read-only subagent: ${call.name}`
@@ -284,5 +375,5 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     }
   }
 
-  return lastText.trim() || '[subagent reached its step limit without a final answer]'
+  return finish(lastText.trim() || '[subagent reached its step limit without a final answer]')
 }

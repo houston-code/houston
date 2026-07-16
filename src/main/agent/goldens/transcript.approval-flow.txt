@@ -4,7 +4,7 @@
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
-system: sha256:c4bacb9f5e41 (8504 chars)
+system: sha256:c2c246053ccd (8780 chars)
 tools (39): read_file, write_file, edit_file, multi_edit, apply_patch, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_run_list, gh_run_view
 messages (3):
 1. user: "Pinned working memory (kept verbatim across compaction):\n\nOriginal task:\nCreate a.txt and b.txt"
@@ -14,7 +14,7 @@ messages (3):
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
-system: sha256:c4bacb9f5e41 (8504 chars)
+system: sha256:c2c246053ccd (8780 chars)
 tools (39): read_file, write_file, edit_file, multi_edit, apply_patch, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_run_list, gh_run_view
 messages (5):
 1. user: "Pinned working memory (kept verbatim across compaction):\n\nOriginal task:\nCreate a.txt and b.txt\n\nFiles in play (most recent first):\n- a.txt"
@@ -27,7 +27,7 @@ messages (5):
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
-system: sha256:c4bacb9f5e41 (8504 chars)
+system: sha256:c2c246053ccd (8780 chars)
 tools (39): read_file, write_file, edit_file, multi_edit, apply_patch, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_run_list, gh_run_view
 messages (7):
 1. user: "Pinned working memory (kept verbatim across compaction):\n\nOriginal task:\nCreate a.txt and b.txt\n\nFiles in play (most recent first):\n- b.txt\n- a.txt"

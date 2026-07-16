@@ -126,24 +126,52 @@ Drop a Markdown file in `.houston/agents/<name>.md` to define a specialized
 subagent: front-matter `description` plus a system-prompt body. The main agent
 dispatches it by name with `dispatch_agent`, and it works in its own fresh
 context and reports back, keeping the main thread clean. An optional front-matter
-`tools:` list narrows which tools it may use. By default a subagent is read-only
-(it cannot edit, run commands, or reach the network); a subagent marked
-`write: true` gets a writable tier and is dispatched with `dispatch_writable_agent`,
-which is approval-gated because it grants write access: one approval covers the
-whole delegated task, confined to the project with no network. On a host without
-an OS-enforced sandbox (e.g. Windows), each shell command a writable subagent runs
+`tools:` list narrows which tools it may use, and an optional `model:` pins the
+agent to a (usually cheaper) sibling model from the current provider — unknown
+ids fall back to the chat's model. By default a subagent is read-only (it cannot
+edit, run commands, or reach the network); a subagent marked `write: true` gets a
+writable tier and is dispatched with `dispatch_writable_agent`, which is
+approval-gated because it grants write access: one approval covers the whole
+delegated task, confined to the project with no network. On a host without an
+OS-enforced sandbox (e.g. Windows), each shell command a writable subagent runs
 would run unconfined, so it asks for its own approval first, exactly like an
 unconfined command from the main agent. Tokens a subagent spends roll into the
-conversation's usage meter.
+conversation's usage meter, priced at the model the subagent actually ran on.
 
-## Spawn separate sessions (desktop)
+While a subagent works, its dispatch row shows live progress (turn counter plus
+what it is doing), in every client. Each report ends with an id like `ag1`: the
+main agent can pass it back as `resume` to send a follow-up into that subagent's
+context instead of re-dispatching from scratch (ids last for the app session). A
+dispatch can also pass `model` to run one-off legwork on a cheaper sibling model.
+Subagents can fan out one level themselves: a dispatched agent may dispatch its
+own nested read-only researchers (never writable, and no deeper).
+
+## Spawn separate sessions
 
 Where a subagent reports back into the current turn, `spawn_session` spins off a
 *separate* chat: the agent hands it a task, optionally on its own git branch and
 worktree, and sets it running in the background. It appears in the sidebar with a
 live indicator, seeded with the handed-off context. A spawned session inherits
 the current approval policy, so it is never more permissive than the chat that
-spawned it.
+spawned it. In the TUI and headless CLI, spawned sessions run too — they execute
+non-interactively (anything needing an approval is declined automatically) and
+persist as ordinary conversations you can open later with `/resume` or
+`--resume <id>`; a one-shot headless run waits for its spawned sessions before
+exiting.
+
+## Scheduled runs
+
+The agent can schedule recurring (or one-time) background runs with
+`schedule_run` — say "every morning at 9, run the tests and summarize failures"
+and it stores a schedule; at each occurrence a fresh session starts with the
+stored prompt, under the approval policy of the chat that created it. Specs:
+`every <N>m|h|d` (minimum 5 minutes), `daily at HH:MM`, `weekdays at HH:MM`,
+`weekly on <day> at HH:MM`, or `once at YYYY-MM-DD HH:MM` (local time).
+`list_scheduled_runs` shows what's configured (with next/last fire times);
+`cancel_scheduled_run` removes one. Creating or cancelling a schedule is
+approval-gated. Schedules persist across restarts and fire while Houston (the
+desktop app or the TUI) is running — this is an in-app scheduler, not OS cron;
+an occurrence missed while Houston was closed fires once at the next launch.
 
 ## Review and multi-step tools
 
@@ -152,8 +180,9 @@ spawned it.
   per dimension, each in a fresh context, then a skeptical verifier that
   re-checks every candidate against the real code and drops false positives, and
   reports the confirmed findings. Scope it to a `base` branch or specific
-  `paths`, and raise `effort` to `high` to verify each finding with several
-  independent skeptics.
+  `paths`, raise `effort` to `high` to verify each finding with several
+  independent skeptics, or pass `model` to run the reviewers and verifiers on a
+  cheaper sibling model.
 - **`todo_write`** keeps a task list for multi-step work, rendered live in the
   transcript.
 - **`pr_sweep`** tracks batch pull-request work (author new PRs from a task list,

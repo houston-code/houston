@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -23,6 +23,13 @@ import {
 import { toAnthropicMessages } from '../providers/anthropic'
 import { resetUserDataDir, setUserDataDir } from '../userData'
 import { createConversation, getConversation, setCompaction, setMessages } from '../conversations'
+import { resetSubAgentSessions } from './subagentSessions'
+import {
+  resetSchedulerBackend,
+  setSchedulerBackend,
+  type ScheduledRunInfo,
+  type ScheduledRunInput
+} from './scheduler'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -56,6 +63,8 @@ const h = vi.hoisted(() => ({
   pluginEvents: [] as Array<{ event: string; payload: unknown }>,
   // Known secret values the tool-result redactor should strip; set per test.
   secrets: [] as string[],
+  // Models the mock provider config lists, for dispatch/review model-override tests.
+  providerModels: [] as Array<{ id: string; caps?: Record<string, unknown> }>,
   // Admin managed-policy rules the loop should treat as the highest-precedence,
   // tighten-only tier (above the project + user). Swapped per test via the
   // `./managedPolicy` mock below; default none so most tests are unaffected.
@@ -75,7 +84,7 @@ vi.mock('../agentHost', () => ({
     id: 'anthropic',
     kind: 'anthropic',
     label: 'A',
-    models: [],
+    models: h.providerModels,
     requiresKey: false,
     hasKey: true,
     builtIn: true
@@ -190,11 +199,14 @@ beforeEach(() => {
   h.verifyRuns = []
   h.managedRules = []
   h.sandboxed = null
+  h.providerModels = []
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
   h.mcpDefs = []
   h.probeTools = []
+  resetSubAgentSessions()
+  resetSchedulerBackend()
   vi.restoreAllMocks()
 })
 
@@ -3405,5 +3417,341 @@ describe('egress hardening', () => {
       expect((approvals[0] as { shellNetwork?: boolean }).shellNetwork).toBeUndefined()
       expect(shellSawNetwork).toBe(true)
     })
+  })
+})
+
+describe('subagent dispatch: progress, models, resume, nesting', () => {
+  /** A provider that scripts turns AND records each request's model + messages. */
+  function scriptedRecording(
+    turns: ProviderStreamEvent[][],
+    requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }>
+  ): Provider {
+    let i = 0
+    return {
+      async *streamChat(req) {
+        requests.push({
+          model: req.model,
+          // Snapshot: the loop keeps mutating the live array after the call.
+          messages: JSON.parse(JSON.stringify(req.messages ?? [])) as ChatMessage[],
+          tools: (req.tools ?? []).map((t) => t.name)
+        })
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        for (const ev of turn) yield ev
+      }
+    }
+  }
+
+  const dispatchCall = (args: Record<string, unknown>): ProviderStreamEvent[] => [
+    {
+      type: 'tool_call',
+      call: { id: `d${Math.random().toString(36).slice(2, 8)}`, name: 'dispatch_agent', arguments: args }
+    },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const finalText = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+
+  it('streams tool_progress for a dispatch and appends a resumable id to the report', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'the answer')
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'find', prompt: 'what does note.txt say?' }),
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        finalText('it says: the answer'),
+        finalText('all done')
+      ],
+      requests
+    )
+    const r = await run({ provider })
+    const progress = r.events.filter((e) => e.type === 'tool_progress')
+    expect(progress.length).toBeGreaterThan(0)
+    expect(progress[0].message).toContain('turn 1/16')
+    expect(progress[0].message).toContain('note.txt')
+    // The progress rows attach to the dispatch call so the UI nests them under it.
+    const start = r.events.find((e) => e.type === 'tool_start')
+    expect(start && progress[0].callId === start.callId).toBe(true)
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toContain('[subagent ag1')
+  })
+
+  it('runs a dispatch on an explicit sibling model and validates unknown ids', async () => {
+    h.providerModels = [{ id: 'claude-test' }, { id: 'cheap-model' }]
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'legwork', prompt: 'scan', model: 'cheap-model' }),
+        finalText('sub report'),
+        finalText('done')
+      ],
+      requests
+    )
+    await run({ provider })
+    // Request 0 = main turn, request 1 = the subagent's — on the override model.
+    expect(requests[1].model).toBe('cheap-model')
+    expect(requests[0].model).toBe('claude-test')
+  })
+
+  it('rejects a dispatch model the provider does not list, naming the configured ids', async () => {
+    h.providerModels = [{ id: 'claude-test' }]
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [dispatchCall({ description: 'x', prompt: 'y', model: 'nope' }), finalText('done')],
+      requests
+    )
+    const r = await run({ provider })
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toContain('Unknown model "nope"')
+    expect(result?.type === 'tool_result' && result.output).toContain('claude-test')
+    // No subagent request was made: main turn, then main turn again.
+    expect(requests).toHaveLength(2)
+  })
+
+  it('uses a custom agent front-matter model when configured, falling back when unknown', async () => {
+    mkdirSync(join(ws, '.houston/agents'), { recursive: true })
+    writeFileSync(
+      join(ws, '.houston/agents/scout.md'),
+      '---\ndescription: scout\nmodel: cheap-model\n---\nYou are a scout.'
+    )
+    h.providerModels = [{ id: 'claude-test' }, { id: 'cheap-model' }]
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'x', prompt: 'y', agent: 'scout' }),
+        finalText('sub'),
+        finalText('done')
+      ],
+      requests
+    )
+    await run({ provider })
+    expect(requests[1].model).toBe('cheap-model')
+
+    // Same agent, but the provider doesn't list the front-matter model: the
+    // dispatch silently falls back to the run's model instead of failing.
+    resetSubAgentSessions()
+    h.providerModels = [{ id: 'claude-test' }]
+    const requests2: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider2 = scriptedRecording(
+      [
+        dispatchCall({ description: 'x', prompt: 'y', agent: 'scout' }),
+        finalText('sub'),
+        finalText('done')
+      ],
+      requests2
+    )
+    await run({ provider: provider2 })
+    expect(requests2[1].model).toBe('claude-test')
+  })
+
+  it('resumes a stored subagent with its earlier context intact', async () => {
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'first', prompt: 'first task' }),
+        finalText('first report'), // subagent run 1 → stored as ag1
+        dispatchCall({ description: 'again', prompt: 'follow-up', resume: 'ag1' }),
+        finalText('second report'), // resumed subagent
+        finalText('done')
+      ],
+      requests
+    )
+    const r = await run({ provider, conversationId: 'conv-resume' })
+    // The resumed subagent's request (index 3) starts from the stored transcript.
+    const resumed = requests[3]
+    expect(resumed.messages.map((m) => m.content)).toEqual(['first task', 'first report', 'follow-up'])
+    const results = r.events.filter((e) => e.type === 'tool_result')
+    expect(results[1]?.type === 'tool_result' && results[1].output).toContain('second report')
+    expect(results[1]?.type === 'tool_result' && results[1].output).toContain('[subagent ag1')
+  })
+
+  it('rejects an unknown resume id with guidance', async () => {
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [dispatchCall({ description: 'x', prompt: 'y', resume: 'ag9' }), finalText('done')],
+      requests
+    )
+    const r = await run({ provider })
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toContain('Unknown subagent id "ag9"')
+    expect(requests).toHaveLength(2)
+  })
+
+  it('refuses to resume a read-only subagent through the writable tool', async () => {
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'first', prompt: 'first task' }),
+        finalText('first report'),
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'w1',
+              name: 'dispatch_writable_agent',
+              arguments: { description: 'again', prompt: 'follow-up', resume: 'ag1' }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        finalText('done')
+      ],
+      requests
+    )
+    const r = await run({ provider, policy: 'full-auto', conversationId: 'conv-tier' })
+    const results = r.events.filter((e) => e.type === 'tool_result')
+    expect(results[1]?.type === 'tool_result' && results[1].output).toContain(
+      'read-only — resume it with dispatch_agent'
+    )
+  })
+
+  it('offers nested dispatch one level deep, and not to the nested agent itself', async () => {
+    const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'outer', prompt: 'outer task' }),
+        // The depth-1 subagent dispatches its own nested researcher…
+        dispatchCall({ description: 'inner', prompt: 'inner question' }),
+        // …the depth-2 agent answers (its toolset must not offer dispatch_agent)…
+        finalText('inner report'),
+        // …the depth-1 agent finishes, then the main turn ends.
+        finalText('outer report'),
+        finalText('done')
+      ],
+      requests
+    )
+    const r = await run({ provider })
+    expect(requests[1].tools).toContain('dispatch_agent')
+    expect(requests[2].tools).not.toContain('dispatch_agent')
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toContain('outer report')
+  })
+})
+
+describe('scheduled runs (loop wiring)', () => {
+  const fakeBackend = (created: ScheduledRunInput[]): Parameters<typeof setSchedulerBackend>[0] => ({
+    create: (input: ScheduledRunInput): ScheduledRunInfo => {
+      created.push(input)
+      return { ...input, id: 'sch-test', nextRunAt: 4102444800000, createdAt: 1 }
+    },
+    list: () => [],
+    cancel: (id: string) => id === 'sch-test'
+  })
+
+  it('drops the schedule tools when no scheduler backend is wired', async () => {
+    const requests: Array<{ tools: string[] }> = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        requests.push({ tools: (req.tools ?? []).map((t) => t.name) })
+        yield { type: 'text', text: 'hi' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider })
+    expect(requests[0].tools).not.toContain('schedule_run')
+    expect(requests[0].tools).not.toContain('list_scheduled_runs')
+    expect(requests[0].tools).not.toContain('cancel_scheduled_run')
+  })
+
+  it('fills the run-scoped fields on schedule_run and reports the schedule back', async () => {
+    const created: ScheduledRunInput[] = []
+    setSchedulerBackend(fakeBackend(created))
+    const r = await run({
+      policy: 'full-auto', // auto-approves the write-kind schedule_run call
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'c1',
+              name: 'schedule_run',
+              arguments: { name: 'nightly tests', spec: 'daily at 09:00', prompt: 'run the tests' }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'text', text: 'scheduled' },
+          { type: 'done', stopReason: 'end_turn' }
+        ]
+      ]
+    })
+    expect(created).toHaveLength(1)
+    expect(created[0]).toMatchObject({
+      name: 'nightly tests',
+      spec: 'daily at 09:00',
+      prompt: 'run the tests',
+      providerId: 'anthropic',
+      model: 'claude-test',
+      approvalPolicy: 'full-auto'
+    })
+    expect(created[0].workspace).toBeTruthy()
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toContain('sch-test')
+  })
+
+  it('schedule_run surfaces a spec validation error from the backend', async () => {
+    setSchedulerBackend({
+      create: () => {
+        throw new Error('Interval "every 1m" is too short: the minimum is 5 minutes.')
+      },
+      list: () => [],
+      cancel: () => false
+    })
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'c1',
+              name: 'schedule_run',
+              arguments: { name: 'too fast', spec: 'every 1m', prompt: 'x' }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'text', text: 'ok' },
+          { type: 'done', stopReason: 'end_turn' }
+        ]
+      ]
+    })
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.ok).toBe(false)
+    expect(result?.type === 'tool_result' && result.output).toContain('minimum is 5 minutes')
+  })
+
+  it('lists and cancels schedules through the backend', async () => {
+    const created: ScheduledRunInput[] = []
+    setSchedulerBackend(fakeBackend(created))
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'list_scheduled_runs', arguments: {} } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'c2', name: 'cancel_scheduled_run', arguments: { id: 'sch-test' } }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'text', text: 'ok' },
+          { type: 'done', stopReason: 'end_turn' }
+        ]
+      ]
+    })
+    const results = r.events.filter((e) => e.type === 'tool_result')
+    expect(results[0]?.type === 'tool_result' && results[0].output).toContain('No scheduled runs')
+    expect(results[1]?.type === 'tool_result' && results[1].output).toContain('Cancelled scheduled run sch-test')
   })
 })
