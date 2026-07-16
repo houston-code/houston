@@ -200,6 +200,16 @@ and notification here too; the title still updates.
 Notifications use the terminal's own channel, so they need no extra tools. Not
 every terminal supports them; the bell works everywhere.
 
+## How hard the model thinks (/reasoning)
+
+`/reasoning` shows the current thinking effort; `/reasoning high` (or `off`, `low`,
+`medium`, `xhigh`) sets it. It applies to every model that supports reasoning, and
+Houston says so plainly when the model you are on does not — a setting that
+silently does nothing looks like a bug rather than a fact about the model.
+
+More thinking costs more tokens and takes longer, which is why it is off by
+default.
+
 ## Version and updates
 
 The interactive terminal shows its version in the banner at startup, and

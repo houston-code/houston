@@ -32,6 +32,7 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  renderReasoningStatus,
   renderMcpTools,
   resolveTheme,
   THEMES,
@@ -3557,5 +3558,64 @@ describe('/hooks ignores the /mcp-only verbs', () => {
       expect(code).toBe(0)
       expect(t.text()).toContain('usage: /hooks')
     }
+  })
+})
+
+// or hand-editing settings.json.
+describe('/reasoning', () => {
+  const paintNo = makePainter(false)
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('reports the current effort and the options', () => {
+    const out = renderReasoningStatus('medium', null, paintNo)
+    expect(out).toContain('thinking effort: medium')
+    expect(out).toContain('off | low | medium | high | xhigh')
+  })
+
+  // Turning thinking up on a model that cannot think looks like a bug in Houston
+  // rather than a fact about the model, unless it says so.
+  it('says when the active model cannot reason', () => {
+    expect(renderReasoningStatus('high', false, paintNo)).toContain('does not support reasoning')
+    expect(renderReasoningStatus('high', true, paintNo)).not.toContain('does not support')
+  })
+
+  it('shows the current setting with no argument', async () => {
+    const { d } = deps(done, { reasoningEffort: 'high' })
+    const t = fakeIo(['/reasoning', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('thinking effort: high')
+  })
+
+  it('sets it, and persists it through the settings the loop reads', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/reasoning high', null])
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toContainEqual({ reasoningEffort: 'high' })
+    expect(t.text()).toContain('thinking effort → high')
+  })
+
+  it('rejects an effort that is not one, rather than storing nonsense', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/reasoning enormous', null])
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toHaveLength(0)
+    expect(t.text()).toContain('thinking effort:') // fell back to reporting
+  })
+
+  it('/think is the same command', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/think low', null])
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toContainEqual({ reasoningEffort: 'low' })
   })
 })
