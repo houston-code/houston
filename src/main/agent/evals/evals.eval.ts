@@ -12,12 +12,21 @@
  * TWO DRIVERS, one set of fixtures (see `types.ts` for the split's rationale):
  *
  *   npm run eval                       scripted — deterministic, offline, gates PRs
- *   HOUSTON_EVAL_LIVE=1 npm run eval   live     — real model, scored, never gates
+ *   HOUSTON_EVAL_LIVE=1 npm run eval   live     — real model, graded vs a baseline
+ *   npm run eval:baseline              live     — record a model's baseline
+ *
+ * The scripted driver grades EXECUTION and the live driver grades QUALITY; the
+ * distinction is the point, and neither substitutes for the other. Gut the whole
+ * system prompt and the scripted suite still passes every task — the answer was
+ * in the script — while the live suite collapses. Conversely a tool that stops
+ * applying its edit fails scripted immediately.
  *
  * Live mode reads the key from the standard provider env vars (@shared/provider-keys),
  * and is selected with:
- *   HOUSTON_EVAL_PROVIDER   provider id   (default: anthropic)
- *   HOUSTON_EVAL_MODEL      model id      (default: that provider's default model)
+ *   HOUSTON_EVAL_PROVIDER    provider id   (default: anthropic)
+ *   HOUSTON_EVAL_MODEL       model id      (default: that provider's default model)
+ *   HOUSTON_EVAL_ATTEMPTS    runs per task (default: 3 live, 1 scripted)
+ *   HOUSTON_EVAL_RECORD=1    record the baseline instead of grading against it
  *
  * WHY THIS FILE OWNS EVERYTHING. `startRun` takes no provider parameter — it
  * reaches for `createProvider`/`agentHost` as module singletons — so the only
@@ -28,15 +37,25 @@
  * `fixtures.ts`; everything mock-bound stays here.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { AgentEvent, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ProviderConfig } from '@shared/types'
 import { defaultProviders } from '@shared/defaults'
 import { providerKeyEnvVars } from '@shared/provider-keys'
+import {
+  baselineFileName,
+  compareToBaseline,
+  isEvalBaseline,
+  recordBaseline,
+  type BaselineVerdict,
+  type EvalBaseline,
+  type TaskScore
+} from './baseline'
 import { materializeTask, runVerify, taskDirNames } from './fixtures'
-import { formatReport } from './report'
+import { formatReport, type TaskReport } from './report'
 import { TASKS } from './tasks'
 import type { EvalResult, EvalTask } from './types'
 
@@ -70,6 +89,51 @@ if (LIVE && !liveKey()) {
   const names = providerKeyEnvVars(PROVIDER_ID).join(' or ')
   throw new Error(`HOUSTON_EVAL_LIVE=1 needs a key for "${PROVIDER_ID}" — set ${names}.`)
 }
+
+/** Recording a baseline scores the model without grading it against one. */
+const RECORD = process.env.HOUSTON_EVAL_RECORD === '1'
+
+/**
+ * Scripted runs are deterministic, so a repeat says nothing. A live model is
+ * noisy enough that a single attempt per task is a coin-flip signal, so it is
+ * averaged over several by default.
+ */
+const ATTEMPTS = Number(process.env.HOUSTON_EVAL_ATTEMPTS) || (LIVE ? 3 : 1)
+
+const BASELINES_DIR = fileURLToPath(new URL('./baselines', import.meta.url))
+const baselineFile = join(BASELINES_DIR, baselineFileName(PROVIDER_ID, MODEL))
+
+/**
+ * Load the recorded baseline for the live model, or explain how to make one.
+ *
+ * Live mode REQUIRES a baseline rather than degrading to "just print a scorecard":
+ * an ungated live run is a log line, not a regression test, and a model added
+ * without a baseline would silently opt itself out of the only quality gate there
+ * is. That is the same false-green this suite exists to prevent, so a missing
+ * baseline reds the job with the command that fixes it.
+ */
+function loadBaseline(): EvalBaseline {
+  if (!existsSync(baselineFile)) {
+    throw new Error(
+      [
+        `No quality baseline recorded for "${PROVIDER_ID}/${MODEL}".`,
+        `Expected: ${baselineFile}`,
+        '',
+        'A live run without a baseline can only print a scorecard, which gates nothing.',
+        'Record one (this makes real, billed model calls), review the scores, and commit it:',
+        '',
+        `  HOUSTON_EVAL_PROVIDER=${PROVIDER_ID} HOUSTON_EVAL_MODEL=${MODEL} npm run eval:baseline`
+      ].join('\n')
+    )
+  }
+  const parsed: unknown = JSON.parse(readFileSync(baselineFile, 'utf8'))
+  if (!isEvalBaseline(parsed)) {
+    throw new Error(`Baseline at ${baselineFile} is malformed — re-record it with npm run eval:baseline.`)
+  }
+  return parsed
+}
+
+const BASELINE = LIVE && !RECORD ? loadBaseline() : null
 
 // ---- mocks (must precede the loop import) ----
 
@@ -245,33 +309,86 @@ describe('eval fixtures', () => {
 })
 
 describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
-  const results: EvalResult[] = []
+  const reports: TaskReport[] = []
 
   afterAll(() => {
-    if (results.length) console.log(formatReport({ driver: LIVE ? 'live' : 'scripted', model: MODEL }, results))
+    if (!reports.length) return
+    console.log(formatReport({ driver: LIVE ? 'live' : 'scripted', model: MODEL, attempts: ATTEMPTS }, reports))
+    if (!RECORD) return
+    // Recording writes the scorecard as the model's new baseline. Reviewed and
+    // committed like a golden: the diff is what documents the behavior change.
+    const scores: TaskScore[] = reports.map((r) => ({
+      taskId: r.taskId,
+      passRate: r.passRate,
+      attempts: r.attempts
+    }))
+    mkdirSync(BASELINES_DIR, { recursive: true })
+    const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date())
+    writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
+    console.log(`Recorded baseline → ${baselineFile}\nReview the scores and commit it.`)
   })
 
   it.each(TASKS.map((t) => [t.id, t] as const))(
     '%s',
     async (_id, task) => {
-      const r = await runTask(task)
-      results.push(r)
-      // Report the transcript on failure: "verify exited 1" alone can't
+      const attempts: EvalResult[] = []
+      for (let i = 0; i < ATTEMPTS; i++) attempts.push(await runTask(task))
+      const passes = attempts.filter((a) => a.passed).length
+      const passRate = passes / ATTEMPTS
+      // Show a failure when there was one: a run that passed 2/3 is far more
+      // informative reported through the attempt that failed.
+      const sample = attempts.find((a) => !a.passed) ?? attempts[attempts.length - 1]
+      const verdict: BaselineVerdict | undefined = BASELINE
+        ? compareToBaseline(BASELINE, [{ taskId: task.id, passRate, attempts: ATTEMPTS }])[0]
+        : undefined
+      reports.push({
+        taskId: task.id,
+        attempts: ATTEMPTS,
+        passRate,
+        sample,
+        costUsd: attempts.reduce((n, a) => n + a.costUsd, 0),
+        durationMs: attempts.reduce((n, a) => n + a.durationMs, 0),
+        verdict
+      })
+
+      // The transcript matters on failure: "verify exited 1" alone can't
       // distinguish a bad edit from a tool that never dispatched at all.
+      const detail = [
+        `  tools: ${sample.toolsUsed.join(' > ') || '(none dispatched)'}`,
+        sample.error ? `  run error: ${sample.error}` : '',
+        `  verify output:\n${sample.verifyOutput}`
+      ]
+        .filter(Boolean)
+        .join('\n')
+
+      // SCRIPTED grades execution: the plan was handed to the agent, so anything
+      // short of every attempt green is a harness regression.
+      if (!LIVE) {
+        expect(
+          passRate,
+          `Task "${task.id}" did not reach a green verify (exit ${sample.exitCode}).\n${detail}`
+        ).toBe(1)
+        return
+      }
+
+      // RECORDING: score, don't grade. The whole point is to capture what the
+      // model does today, including the tasks it can't do.
+      if (RECORD) return
+
+      // LIVE grades quality against the recorded baseline, with a tolerance that
+      // absorbs one flaked attempt (see DEFAULT_TOLERANCE).
       expect(
-        r.passed,
+        verdict?.kind,
         [
-          `Task "${task.id}" did not reach a green verify (exit ${r.exitCode}).`,
-          `  tools: ${r.toolsUsed.join(' > ') || '(none dispatched)'}`,
-          r.error ? `  run error: ${r.error}` : '',
-          `  verify output:\n${r.verifyOutput}`
-        ]
-          .filter(Boolean)
-          .join('\n')
-      ).toBe(true)
+          `Task "${task.id}" scored ${passes}/${ATTEMPTS} against a baseline of ` +
+            `${(BASELINE?.tasks[task.id] ?? NaN).toFixed(2)} (recorded ${BASELINE?.recordedAt}).`,
+          'A drop this size is a QUALITY regression, not model noise.',
+          detail
+        ].join('\n')
+      ).not.toBe('regressed')
     },
     // A scripted task is a handful of local tool calls; a live one is real model
-    // latency over several turns.
-    LIVE ? 300_000 : 60_000
+    // latency over several turns, repeated for every attempt.
+    LIVE ? 300_000 * ATTEMPTS : 60_000
   )
 })

@@ -34,6 +34,7 @@
     "test:watch": "vitest",
     "goldens:update": "vitest run src/main/agent/golden.test.ts -u",
     "eval": "vitest run --project evals",
+    "eval:baseline": "HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_RECORD=1 vitest run --project evals",
     "notices": "node scripts/generate-notices.mjs",
     "license-gate": "node scripts/license-gate.mjs",
     "test:e2e": "npm run build && playwright test",

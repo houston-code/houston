@@ -101,15 +101,51 @@ is handed to the agent, a failure means the harness stopped carrying a correct
 plan to a green test (a tool that no longer dispatches, an edit that lands in the
 wrong place, an approval that never resolves). That is what gates every PR.
 
+#### What each guard actually catches
+
+The three guards are not interchangeable, and it's worth being precise about the
+gap each one leaves:
+
+| guard | catches | blind to |
+| --- | --- | --- |
+| goldens | the prompt/schemas/events **changed** (shape) | whether the change made the agent worse |
+| scripted evals | the harness stopped **executing** a correct plan | the plan itself; the answer is in the script |
+| live evals | the model stopped **solving** tasks (quality) | nothing, but it's noisy and metered |
+
+Concretely: replace the whole system prompt with `'You are a bot.'` and the
+scripted suite still passes all eight tasks, because the answer was in the script.
+The goldens do fail, but only as a text diff that says the prompt changed, and
+`npm run goldens:update` accepts that in one command. Only the live driver notices
+the agent got worse.
+
+#### The live driver
+
 The **live** driver runs the identical fixtures against a real model with the
-script ignored, which is the only way to see per-model task success move. It is
-non-deterministic and metered, so it never gates a PR; it runs nightly from
-[`eval-live.yml`](.github/workflows/eval-live.yml) and prints a scorecard. To run
-it locally, set a provider key the same way the CLI does (e.g. `ANTHROPIC_API_KEY`):
+script ignored, several attempts per task, and grades each task against the
+per-model baseline checked in under `evals/baselines/`. It is non-deterministic
+and metered, so it never gates a PR; it runs nightly from
+[`eval-live.yml`](.github/workflows/eval-live.yml) and **fails on a regression**
+rather than just printing a scorecard. To run it locally, set a provider key the
+same way the CLI does (e.g. `ANTHROPIC_API_KEY`):
 
 ```bash
 HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_MODEL=claude-opus-4-8 npm run eval
 ```
+
+A model with no recorded baseline fails loudly rather than degrading to an
+ungated scorecard, since a live score with nothing to compare against gates
+nothing. Record one (this makes real, billed calls), review the scores, and commit
+the file the same way you'd commit a golden:
+
+```bash
+HOUSTON_EVAL_MODEL=claude-opus-4-8 npm run eval:baseline
+```
+
+The gate has a tolerance sized to absorb exactly one flaked attempt out of the
+default three, because a live model that reds the nightly on noise is a nightly
+everyone learns to ignore. Two flakes is a real drop and fails. A task scoring
+*above* its baseline is reported as `improved`, which means the baseline is stale
+and worth re-recording.
 
 To add a task, create `src/main/agent/evals/tasks/<id>/` with a `repo/` fixture
 and a `task.ts`, then register it in `tasks/index.ts`. Keep fixtures dependency-free
