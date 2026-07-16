@@ -328,3 +328,305 @@ describe('createTerminalIo spinner', () => {
     expect(h.scheduled()).toBe(1)
   })
 })
+
+/**
+ * A fake TTY stdin: a PassThrough that claims to be a terminal and records raw-mode
+ * transitions. Lets the raw-mode composer be driven end to end (real decoder, real
+ * editor, real redraw) with no actual terminal, which is where the paste bug lived.
+ */
+function fakeTty() {
+  const rawModes: boolean[] = []
+  const s = new PassThrough() as unknown as NodeJS.ReadStream
+  s.isTTY = true
+  s.setRawMode = ((on: boolean) => {
+    rawModes.push(on)
+    return s
+  }) as NodeJS.ReadStream['setRawMode']
+  return Object.assign(s, { rawModes })
+}
+
+describe('readComposer (raw-mode composer)', () => {
+  function harness(over: Parameters<typeof createTerminalIo>[0] = {}) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    // A controllable clock: the composer treats keys arriving within 50ms of paste
+    // bytes as clipboard content, so a test standing in for a human must let time
+    // pass between pasting and pressing Enter (see sanitizePastedKeys).
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => clock,
+      ...over
+    })
+    return {
+      io,
+      stdin,
+      written,
+      text: () => written.join(''),
+      /** Advance the clock, standing in for a human's pause before the next key. */
+      tick: (ms = 500) => {
+        clock += ms
+      }
+    }
+  }
+
+  it('submits a typed line on Enter', async () => {
+    const { io, stdin } = harness()
+    const read = io.readComposer!('> ')
+    stdin.push('hello')
+    stdin.push('\r')
+    await expect(read).resolves.toBe('hello')
+  })
+
+  // The regression this whole path exists for: a pasted block must arrive as one
+  // message, not submit its first line and replay the rest.
+  it('lands a bracketed multi-line paste as ONE message', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b[200~first line\nsecond line\nthird line\x1b[201~')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('first line\nsecond line\nthird line')
+  })
+
+  it('expands a collapsed big paste on submit', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    const body = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n')
+    t.stdin.push(`\x1b[200~${body}\x1b[201~`)
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe(body)
+  })
+
+  it('enables bracketed paste while reading and disables it on the way out', async () => {
+    const { io, stdin, text } = harness()
+    const read = io.readComposer!('> ')
+    expect(text()).toContain('\x1b[?2004h')
+    stdin.push('x\r')
+    await read
+    expect(text()).toContain('\x1b[?2004l')
+  })
+
+  it('enters raw mode for the read and restores cooked mode after', async () => {
+    const { io, stdin } = harness()
+    const read = io.readComposer!('> ')
+    stdin.push('x\r')
+    await read
+    expect(stdin.rawModes).toEqual([true, false])
+  })
+
+  it('edits with emacs keys before submitting', async () => {
+    const { io, stdin } = harness()
+    const read = io.readComposer!('> ')
+    stdin.push('world')
+    stdin.push('\x01') // Ctrl-A: start of line
+    stdin.push('hello ')
+    stdin.push('\r')
+    await expect(read).resolves.toBe('hello world')
+  })
+
+  it('recalls history with Up', async () => {
+    const { io, stdin } = harness({ history: () => ['earlier message'] })
+    const read = io.readComposer!('> ')
+    stdin.push('\x1b[A')
+    stdin.push('\r')
+    await expect(read).resolves.toBe('earlier message')
+  })
+
+  it('builds a multi-line message with Ctrl-J', async () => {
+    const { io, stdin } = harness()
+    const read = io.readComposer!('> ')
+    stdin.push('one\ntwo\r')
+    await expect(read).resolves.toBe('one\ntwo')
+  })
+
+  it('resolves null on Ctrl-D at an empty composer', async () => {
+    const { io, stdin } = harness()
+    const read = io.readComposer!('> ')
+    stdin.push('\x04')
+    await expect(read).resolves.toBeNull()
+  })
+
+  it('routes Ctrl-C through the interrupt handler and resolves null', async () => {
+    const { io, stdin } = harness()
+    let fired = 0
+    io.onInterrupt?.(() => fired++)
+    const read = io.readComposer!('> ')
+    stdin.push('abandoned draft')
+    stdin.push('\x03')
+    await expect(read).resolves.toBeNull()
+    expect(fired).toBe(1)
+  })
+
+  it('completes a slash command on Tab', async () => {
+    const { io, stdin } = harness({
+      completer: (line, cb) => cb(null, [['/help '], line])
+    })
+    const read = io.readComposer!('> ')
+    stdin.push('/he')
+    stdin.push('\t')
+    await new Promise((r) => setImmediate(r)) // the completer round trip is async
+    stdin.push('\r')
+    // The trailing space comes from the completion itself, so the next token can
+    // just be typed; the driver trims the submitted line.
+    await expect(read).resolves.toBe('/help ')
+  })
+
+  it('hands the draft to $EDITOR on Ctrl-X Ctrl-E and takes back the result', async () => {
+    const { io, stdin } = harness({
+      editText: async (initial) => `${initial} (edited)`
+    })
+    const read = io.readComposer!('> ')
+    stdin.push('draft')
+    stdin.push('\x18\x05')
+    await new Promise((r) => setImmediate(r)) // the editor round trip is async
+    stdin.push('\r')
+    await expect(read).resolves.toBe('draft (edited)')
+  })
+
+  it('searches history with Ctrl-R', async () => {
+    const { io, stdin } = harness({ history: () => ['run the tests', 'git status'] })
+    const read = io.readComposer!('> ')
+    stdin.push('\x12') // Ctrl-R
+    stdin.push('tests')
+    stdin.push('\r') // accept the match
+    stdin.push('\r') // submit it
+    await expect(read).resolves.toBe('run the tests')
+  })
+
+  it('redraws only its own rows — never a full-screen clear', async () => {
+    const { io, stdin, text } = harness()
+    const read = io.readComposer!('> ')
+    stdin.push('abc')
+    stdin.push('\r')
+    await read
+    expect(text()).not.toContain('\x1b[2J') // no screen clear
+    expect(text()).toContain('\x1b[0J') // bounded erase-to-end only
+  })
+
+  it('falls back to the readline prompt when stdin is not a TTY', async () => {
+    const plain = new PassThrough() as unknown as NodeJS.ReadStream
+    plain.isTTY = false
+    const rl = fakeRl()
+    const io = createTerminalIo({ stdin: plain, createInterface: () => rl.rl, write: () => {} })
+    const read = io.readComposer!('> ')
+    rl.submit('typed via readline')
+    await expect(read).resolves.toBe('typed via readline')
+  })
+})
+
+/**
+ * A paste body is attacker-controlled (text copied from a web page, a file, an
+ * issue comment). If it carries its own ESC[201~ it ends paste mode early, and
+ * anything after that marker would decode as real keystrokes. These pin the
+ * defense: within the post-paste window nothing but content survives.
+ */
+describe('readComposer — hostile paste content', () => {
+  function harness() {
+    const stdin = fakeTty()
+    let clock = 1000
+    let spawnedEditor = 0
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: () => {},
+      columns: () => 80,
+      now: () => clock,
+      editText: async (t) => {
+        spawnedEditor++
+        return t
+      }
+    })
+    return {
+      io,
+      stdin,
+      editorSpawns: () => spawnedEditor,
+      tick: (ms = 500) => {
+        clock += ms
+      }
+    }
+  }
+  const START = '\x1b[200~'
+  const END = '\x1b[201~'
+
+  it('does not submit a turn from a CR smuggled after an embedded end marker', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    // The clipboard payload closes paste mode itself, then "presses Enter".
+    t.stdin.push(`${START}rm -rf important${END}\r${END}`)
+    // Nothing resolved: the CR became a line break, not a submission.
+    const raced = await Promise.race([read, Promise.resolve('still-open')])
+    expect(raced).toBe('still-open')
+    // The human's own Enter, later, submits — and the payload is visibly just text.
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toContain('rm -rf important')
+  })
+
+  it('does not submit when the smuggled CR arrives in a later chunk', async () => {
+    // Chunk boundaries are attacker-influenceable (a TTY splits at its buffer
+    // size), so the guard cannot rely on the CR sharing a chunk with the paste.
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push(`${START}payload${END}`)
+    t.stdin.push(`\r${END}`)
+    const raced = await Promise.race([read, Promise.resolve('still-open')])
+    expect(raced).toBe('still-open')
+  })
+
+  it('does not spawn $EDITOR from a smuggled Ctrl-X Ctrl-E', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push(`${START}payload${END}\x18\x05${END}`)
+    await new Promise((r) => setImmediate(r))
+    expect(t.editorSpawns()).toBe(0)
+    t.tick()
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('does not quit the session from a smuggled Ctrl-D', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push(`${START}${END}\x04${END}`)
+    const raced = await Promise.race([read, Promise.resolve('still-open')])
+    expect(raced).toBe('still-open')
+  })
+
+  it('does not wipe the visible draft from a smuggled Ctrl-U', async () => {
+    // Ctrl-U would hide the payload by clearing what the user can see, so the
+    // text they review is not the text that gets sent.
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push(`${START}visible payload${END}\x15${END}`)
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toContain('visible payload')
+  })
+
+  it('strips escape sequences from a paste rather than echoing them back', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push(`${START}safe\x07\x1b]0;pwn\x07text${END}`)
+    t.tick()
+    t.stdin.push('\r')
+    const got = (await read) as string
+    expect(got).toContain('safe')
+    expect(got).not.toContain('\x1b')
+    expect(got).not.toContain('\x07')
+  })
+
+  it('lets a real keystroke through once the paste burst is over', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push(`${START}context${END}`)
+    t.tick() // the human pauses, then types and sends
+    t.stdin.push(' please review')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('context please review')
+  })
+})

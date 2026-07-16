@@ -2518,3 +2518,112 @@ describe('summarizeElevated', () => {
     expect(summarizeElevated({ allowRules: [], hooks: [1], mcpServers: [] })).toBe('1 hook')
   })
 })
+
+// The composer read goes through io.readComposer when the terminal provides one
+// (the raw-mode editor), falling back to line-at-a-time readLine otherwise. These
+// cover the driver's side of that seam; the editor itself is tested in
+// tui-editor.test.ts and the decoder in tui-keys.test.ts.
+describe('readComposer seam', () => {
+  function fakeComposerIo(inputs: Array<string | null>) {
+    const out: string[] = []
+    const interrupts: Array<() => void> = []
+    const prompts: string[] = []
+    let idx = 0
+    const io: TuiIo = {
+      out: (s) => out.push(s),
+      clearLine: () => {},
+      readLine: async () => null,
+      readComposer: async (prompt) => {
+        prompts.push(prompt)
+        const next = idx < inputs.length ? inputs[idx++] : null
+        if (next === CTRLC) {
+          interrupts.forEach((h) => h())
+          return null
+        }
+        return next
+      },
+      onInterrupt: (h) => interrupts.push(h),
+      cancelRead: () => {}
+    }
+    return { io, prompts, text: () => out.join('') }
+  }
+
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('prefers readComposer over readLine and sends its text as one turn', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeComposerIo(['hello there', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages.at(-1)?.content).toBe('hello there')
+  })
+
+  // The paste fix, end to end at the driver: a multi-line message is ONE turn,
+  // not a first line submitted with the rest replayed as further input.
+  it('sends a multi-line message as a single turn', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeComposerIo(['fix this:\n\n```js\nconst a = 1\n```', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages.at(-1)?.content).toBe('fix this:\n\n```js\nconst a = 1\n```')
+  })
+
+  it('shows the policy in the composer prompt', async () => {
+    const { d } = deps(done)
+    const t = fakeComposerIo([null])
+    d.io = t.io
+    await runTui({ ...opts, approvalPolicy: 'auto-edit' }, d)
+    expect(t.prompts[0]).toContain('auto-edit')
+  })
+
+  it('treats a null read with no interrupt as EOF and exits', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeComposerIo([null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toMatch(/Bye/)
+  })
+
+  it('Ctrl-C at the composer discards the draft and re-prompts instead of exiting', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeComposerIo([CTRLC, 'after the interrupt', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages.at(-1)?.content).toBe('after the interrupt')
+    expect(t.text()).toMatch(/Ctrl-C again or Ctrl-D to exit/)
+  })
+
+  it('a second Ctrl-C in quick succession exits', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeComposerIo([CTRLC, CTRLC, 'never sent', null])
+    d.io = t.io
+    d.now = () => 1000 // a frozen clock: both interrupts land inside the 1500ms window
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(rec.runs).toHaveLength(0)
+  })
+
+  it('slash commands still work through the composer', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeComposerIo(['/cwd', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toContain(opts.cwd)
+  })
+
+  it('persists a submitted message to history', async () => {
+    const { d, rec } = deps(done)
+    const saved: string[] = []
+    d.persistHistory = (l) => saved.push(l)
+    d.io = fakeComposerIo(['remember me', null]).io
+    await runTui(opts, d)
+    expect(saved).toEqual(['remember me'])
+    expect(rec.runs).toHaveLength(1)
+  })
+})

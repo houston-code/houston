@@ -1213,6 +1213,18 @@ export interface TuiIo {
    */
   readLine: (prompt: string, opts?: { discardPending?: boolean }) => Promise<string | null>
   /**
+   * Read a whole composer message: the raw-mode line editor, which supports
+   * bracketed paste (a multi-line paste lands as ONE editable block instead of
+   * submitting its first line and replaying the rest), multi-line editing, Ctrl-R
+   * history search, and an $EDITOR hand-off. Resolves the message, or null on
+   * end-of-input / an interrupt (which routes through `onInterrupt` first, so the
+   * driver's discard-vs-exit double-tap still applies).
+   *
+   * Optional: off-TTY and in tests it's absent and the driver falls back to
+   * `readLine` + ComposerBuffer, which reads one physical line at a time.
+   */
+  readComposer?: (prompt: string) => Promise<string | null>
+  /**
    * Read a line without echoing it — for pasting an API key in the `/login` flow.
    * Resolves the typed value, or null on cancel (Ctrl-C) / EOF. Optional: off-TTY
    * and in tests it's absent, and the driver falls back to `readLine` (the value
@@ -1610,38 +1622,51 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           : renderNoModelStatus(policy, opts.cwd, paint)
       }\n`
     )
-    // Read a (possibly multi-line) message: a trailing backslash or an open code
-    // fence keeps reading, so a fenced snippet isn't split at the first newline.
-    const composer = new ComposerBuffer()
+    // Read a message. On a real terminal this is the raw-mode editor, which takes a
+    // pasted block whole (bracketed paste) and edits multi-line drafts in place.
+    // Without one (tests, a pipe) it falls back to reading physical lines, where a
+    // trailing backslash or an open code fence continues onto the next line.
     let raw: string | null = null
     let resetComposer = false
     atComposer = true // Ctrl-C now means "clear/exit the composer" (see onInterrupt)
-    for (;;) {
-      // In an open code fence, hint how to send so a stray ``` can't trap the
-      // composer with no visible way out (typing the closing ``` submits).
-      const p = composer.pending
-        ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
-        : composerPrompt(policy, paint)
-      const line = await deps.io.readLine(p)
-      if (line === null) {
-        // Ctrl-C settles the read too: 'reset' discards this entry and re-prompts,
-        // 'exit' (a second Ctrl-C) leaves like Ctrl-D; otherwise it's a real EOF.
-        if (composerInterrupt === 'reset') {
-          composerInterrupt = null
-          resetComposer = true
+    // Ctrl-C settles either read: 'reset' discards this entry and re-prompts, 'exit'
+    // (a second Ctrl-C) leaves like Ctrl-D; otherwise a null is a real EOF.
+    const consumeInterrupt = (): 'reset' | 'exit' | null => {
+      const flag = composerInterrupt
+      composerInterrupt = null
+      return flag
+    }
+    if (deps.io.readComposer) {
+      const text = await deps.io.readComposer(composerPrompt(policy, paint))
+      if (text === null) {
+        resetComposer = consumeInterrupt() === 'reset'
+      } else {
+        raw = text
+      }
+    } else {
+      const composer = new ComposerBuffer()
+      for (;;) {
+        // In an open code fence, hint how to send so a stray ``` can't trap the
+        // composer with no visible way out (typing the closing ``` submits).
+        const p = composer.pending
+          ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
+          : composerPrompt(policy, paint)
+        const line = await deps.io.readLine(p)
+        if (line === null) {
+          const flag = consumeInterrupt()
+          if (flag === 'reset') {
+            resetComposer = true
+            break
+          }
+          if (flag === 'exit') break // raw stays null → exit below
+          if (composer.pending) raw = composer.flush() // EOF mid-entry → submit what we have
           break
         }
-        if (composerInterrupt === 'exit') {
-          composerInterrupt = null
-          break // raw stays null → exit below
+        const done = composer.push(line)
+        if (done !== null) {
+          raw = done
+          break
         }
-        if (composer.pending) raw = composer.flush() // EOF mid-entry → submit what we have
-        break
-      }
-      const done = composer.push(line)
-      if (done !== null) {
-        raw = done
-        break
       }
     }
     atComposer = false // sub-prompts below are not the composer

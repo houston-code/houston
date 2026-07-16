@@ -77,16 +77,17 @@ function safeRead(path: string): string | null {
 
 /**
  * Open `initial` in the user's `$VISUAL`/`$EDITOR` and return the saved text — the
- * "edit the plan" action of plan review. Returns null when no editor is configured
- * or it exits non-zero (aborted), so the caller falls back. Blocking (spawnSync) on
- * purpose: the TUI is idle waiting for the plan decision, and a terminal editor owns
- * the screen while open. Best-effort — a user without $EDITOR can use "suggest".
+ * "edit the plan" action of plan review, and the composer's Ctrl-X Ctrl-E draft
+ * hand-off. Returns null when no editor is configured or it exits non-zero
+ * (aborted), so the caller falls back. Blocking (spawnSync) on purpose: the TUI is
+ * idle waiting for the decision, and a terminal editor owns the screen while open.
+ * Best-effort — a user without $EDITOR can use "suggest" / keep typing.
  */
-async function editInEditor(initial: string): Promise<string | null> {
+async function editInEditor(initial: string, filename = 'PLAN.md'): Promise<string | null> {
   const editor = process.env.VISUAL || process.env.EDITOR
   if (!editor) return null
-  const dir = mkdtempSync(join(tmpdir(), 'houston-plan-'))
-  const file = join(dir, 'PLAN.md')
+  const dir = mkdtempSync(join(tmpdir(), 'houston-edit-'))
+  const file = join(dir, filename)
   try {
     writeFileSync(file, initial, 'utf8')
     const [cmd, ...args] = editor.split(/\s+/)
@@ -256,7 +257,12 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
   const paint = makePainter(tui.color)
   const io = createTerminalIo({
     paint,
-    history,
+    // Read live: an entry submitted this session must be recallable on the next
+    // composer read, not just the ones loaded at launch.
+    history: () => history,
+    columns: () => process.stdout.columns || 80,
+    // Ctrl-X Ctrl-E in the composer, same editor hand-off plan review uses.
+    editText: (initial) => editInEditor(initial, 'MESSAGE.md'),
     completer: makeCompleter((q) => findFiles(tui.cwd, q))
   })
 

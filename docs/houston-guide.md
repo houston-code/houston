@@ -21,7 +21,8 @@ ships as a desktop app and as terminal clients.
 - **Desktop app.** The full GUI: chat sidebar, diffs, preview panel, settings.
 - **Interactive terminal (`houston -i`).** A stay-resident REPL in the terminal.
   Conversation streams live, approvals and questions are answered inline, and
-  slash commands switch settings mid-session.
+  slash commands switch settings mid-session. See "The terminal composer" below
+  for how to type, paste, and edit a message.
 - **Headless (`houston -p "<prompt>"`).** Runs one prompt and streams the result
   to stdout, then exits. Read-only by default; add `--full-auto` to let it edit
   and run commands, `--json` for machine-readable events. Good for scripts and CI.
@@ -71,6 +72,42 @@ or switch model), `/login` (set an API key, also `/providers`), `/approval`,
 `/name` command. The file body is a prompt template: `$ARGUMENTS` is replaced
 with whatever the user types after the command name (if there is no placeholder,
 the args are appended). The first line is used as the command's description.
+
+## The terminal composer
+
+The interactive terminal's composer is a full line editor, so a message can be as
+long as it needs to be.
+
+**Pasting.** Paste anything, including many lines: the whole block lands in the
+composer as one editable message and is never sent line by line. A large paste
+collapses to a short placeholder like `[#1 pasted 120 lines]` so it does not bury
+the screen; the real text is what gets sent. This works even in terminals without
+bracketed-paste support.
+
+**Multi-line messages.** `Enter` sends. To add a line break instead, press
+`Ctrl-J` or `Alt-Enter`, or just paste one.
+
+**Keys.**
+
+| Key | Does |
+| --- | --- |
+| `Enter` | send the message |
+| `Ctrl-J`, `Alt-Enter` | insert a line break |
+| `Up` / `Down` | move between lines, then step through past messages |
+| `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
+| `Tab` | complete a slash command or an `@`-file mention |
+| `Ctrl-A` / `Ctrl-E` | start / end of line |
+| `Alt-B` / `Alt-F` | move a word |
+| `Ctrl-W` | delete the word before the cursor |
+| `Ctrl-K` / `Ctrl-U` | delete to end / start of line |
+| `Ctrl-Y` | paste back what was just deleted |
+| `Ctrl-X Ctrl-E` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
+| `Ctrl-L` | repaint the screen |
+| `Ctrl-C` | discard the draft (twice in a row to leave) |
+| `Ctrl-D` | leave (on an empty composer) |
+
+**History.** Messages are remembered per project folder and survive restarts,
+including multi-line ones.
 
 ## Approval modes and permissions
 

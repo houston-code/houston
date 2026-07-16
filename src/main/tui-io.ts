@@ -8,9 +8,36 @@ import {
   type PickerSpec,
   type PickerOutcome
 } from './tui-picker'
+import {
+  decodeInput,
+  initialDecoderState,
+  sanitizePastedKeys,
+  ENABLE_BRACKETED_PASTE,
+  DISABLE_BRACKETED_PASTE,
+  type DecoderState
+} from './tui-keys'
+import {
+  initialEditorState,
+  reduceEditor,
+  renderEditor,
+  setEditorText,
+  type EditorState
+} from './tui-editor'
 
 /** Carriage-return + erase-line: rewinds to column 0 and clears the current line. */
 const CLEAR_LINE = '\r\x1b[2K'
+
+/** Longest prefix shared by every candidate — how Tab completes an ambiguous token. */
+function commonPrefix(items: string[]): string {
+  if (!items.length) return ''
+  let out = items[0]
+  for (const it of items) {
+    let i = 0
+    while (i < out.length && i < it.length && out[i] === it[i]) i++
+    out = out.slice(0, i)
+  }
+  return out
+}
 
 /**
  * Real terminal I/O for interactive mode (`Houston -i`), backed by node:readline.
@@ -58,8 +85,17 @@ export interface TerminalIoDeps {
   now?: () => number
   /** readline Tab-completer (slash commands + @-files). Wired at the entry point. */
   completer?: (line: string, cb: (err: null, result: [string[], string]) => void) => void
-  /** Initial Up/Down history (newest last), seeded into readline. */
-  history?: string[]
+  /**
+   * Live composer history (newest last), read fresh on each composer read so an
+   * entry submitted this session is recallable on the next one.
+   */
+  history?: () => string[]
+  /** Terminal width, for composer wrapping. Defaults to stdout.columns. */
+  columns?: () => number
+  /** Open the draft in $VISUAL/$EDITOR (Ctrl-X Ctrl-E); null when unavailable. */
+  editText?: (initial: string) => Promise<string | null>
+  /** Input stream. Defaults to process.stdin; a fake TTY in tests. */
+  stdin?: NodeJS.ReadStream
 }
 
 /**
@@ -76,24 +112,28 @@ export function resolveColor(env: NodeJS.ProcessEnv, isTTY: boolean): boolean {
   return isTTY
 }
 
-/** Best-effort discard of bytes already buffered on stdin (type-ahead). */
-function defaultDrain(): void {
-  const stdin = process.stdin as NodeJS.ReadStream
-  while (stdin.read() !== null) {
-    /* discard whatever the user typed while output was streaming */
-  }
-}
-
 export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
+  // The input stream, injectable so the raw-mode readers (the composer, the
+  // picker, readSecret) can be driven by a fake TTY in tests — they own raw mode
+  // and key decoding, which is exactly the logic worth covering.
+  const stdin = deps.stdin ?? process.stdin
+  /** Best-effort discard of bytes already buffered on stdin (type-ahead). */
+  const defaultDrain = (): void => {
+    while (stdin.read() !== null) {
+      /* discard whatever the user typed while output was streaming */
+    }
+  }
   const rl =
     deps.createInterface?.() ??
     (nodeCreateInterface({
-      input: process.stdin,
+      input: stdin,
       output: process.stdout,
       // Tab-complete slash commands + @-file mentions, and seed persisted history
       // (readline drives Up/Down navigation once the array is seeded, newest last).
+      // Only the sub-prompt reads use this path now; the composer runs its own
+      // raw-mode editor (readComposer), which owns history and completion itself.
       completer: deps.completer,
-      history: deps.history ? [...deps.history].reverse() : undefined
+      history: deps.history ? [...deps.history()].reverse() : undefined
     }) as unknown as ReadlineLike)
   const rawWrite = deps.write ?? ((s: string) => void process.stdout.write(s))
   const drainInput = deps.drainInput ?? defaultDrain
@@ -165,7 +205,6 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (key?.ctrl && key.name === 'c') interruptHandler?.()
   }
   const startInterruptWatch = (): void => {
-    const stdin = process.stdin
     if (watching || !stdin.isTTY || typeof stdin.setRawMode !== 'function') return
     try {
       emitKeypressEvents(stdin)
@@ -181,21 +220,25 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (!watching) return
     watching = false
     try {
-      process.stdin.removeListener('keypress', onWatchKey)
-      process.stdin.pause()
+      stdin.removeListener('keypress', onWatchKey)
+      stdin.pause()
     } catch {
       /* best-effort */
     }
   }
   // Safety net: however the process ends (clean exit, uncaught error, SIGTERM),
-  // leave the terminal usable — drop the keypress listener and restore cooked mode.
-  // Raw mode is on during every streaming turn now (the watcher), so a crash mid-run
-  // could otherwise leave the user's shell in raw mode until they run `reset`.
-  if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+  // leave the terminal usable — drop the keypress listener, turn bracketed paste
+  // back off, and restore cooked mode. Raw mode is on during every streaming turn
+  // (the watcher) and every composer read, so a crash could otherwise leave the
+  // user's shell in raw mode — pasting into it garbage — until they run `reset`.
+  // Only for the process's real terminal: an injected (test) stream has no shell
+  // to hand back, and registering a process-wide hook per instance would leak.
+  if (stdin === process.stdin && stdin.isTTY && typeof stdin.setRawMode === 'function') {
     process.on('exit', () => {
       try {
-        process.stdin.removeListener('keypress', onWatchKey)
-        process.stdin.setRawMode(false)
+        stdin.removeListener('keypress', onWatchKey)
+        rawWrite(DISABLE_BRACKETED_PASTE)
+        stdin.setRawMode(false)
       } catch {
         /* best-effort */
       }
@@ -262,7 +305,6 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * unit-tested (tui-io.test.ts); the masking + backspace behavior is verified by hand.
    */
   const readSecret = (prompt: string): Promise<string | null> => {
-    const stdin = process.stdin
     if (closed) return Promise.resolve(null)
     if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(prompt)
     return new Promise<string | null>((resolve) => {
@@ -345,12 +387,250 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     })
   }
 
+  /**
+   * The composer read: a raw-mode line editor (tui-editor.ts) instead of readline.
+   *
+   * This exists for bracketed paste. readline decides where a line ends, and that
+   * decision silently destroyed multi-line pastes: the first line submitted as a
+   * turn and the rest was replayed as further input. Owning raw mode lets the
+   * paste markers (DEC 2004) mark a block as pasted, so it lands whole and
+   * editable. Owning the buffer also buys multi-line editing, Ctrl-R search over
+   * persisted history, and an $EDITOR hand-off, none of which readline could do
+   * over a driver that streams output between reads.
+   *
+   * Discipline matches the picker: raw mode is entered and exited HERE, never held
+   * across streaming output, and the redraw is bounded to the composer's own rows
+   * (cursor-up + erase-to-end) — never a full-screen clear. Any failure resolves
+   * through the readline fallback, so the composer can't become unusable.
+   *
+   * Unlike the picker, this is covered end to end in CI: `deps.stdin` takes a fake
+   * TTY, so tui-io.test.ts drives the real decoder, editor, and redraw over a
+   * PassThrough (data loss on paste is too costly a regression to leave to a
+   * manual check). The decoder (tui-keys.ts) and editor (tui-editor.ts) are pure
+   * and separately unit-tested.
+   */
+  const readComposer = (prompt: string): Promise<string | null> => {
+    if (closed) return Promise.resolve(null)
+    // No TTY / no raw mode → the readline path still works (tests, pipes).
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(prompt)
+
+    return new Promise<string | null>((resolve) => {
+      stopTimer(true)
+      stopInterruptWatch()
+      rl.pause()
+
+      let state: EditorState = initialEditorState(deps.history?.() ?? [])
+      let dec: DecoderState = initialDecoderState()
+      // When paste bytes last arrived, so keys riding in on their tail can be
+      // treated as clipboard content rather than keystrokes (see sanitizePastedKeys).
+      let lastPasteAt = -Infinity
+      let done = false
+      let drawn = false
+      let prevCursorRow = 0
+      // Reserve the last column: writing exactly `columns` cells makes some
+      // terminals wrap and insert a phantom row, which would desync the redraw.
+      const width = (): number =>
+        Math.max(8, (deps.columns?.() ?? process.stdout.columns ?? 80) - 1)
+      const view = (): ReturnType<typeof renderEditor> =>
+        renderEditor(state, { prompt, width: width(), paint, continuation: paint('… ', 'dim') })
+
+      // readline software-echoes every keystroke off its own 'keypress' listener,
+      // even in raw mode. Detach for the duration (exactly as readSecret does) and
+      // restore on the way out, or every character would print twice.
+      const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
+
+      const eraseRegion = (): void => {
+        if (!drawn) return
+        let s = ''
+        if (prevCursorRow > 0) s += `\x1b[${prevCursorRow}A`
+        s += '\r\x1b[0J'
+        rawWrite(s)
+        drawn = false
+        prevCursorRow = 0
+      }
+      const draw = (): void => {
+        const v = view()
+        let s = ''
+        if (drawn) {
+          if (prevCursorRow > 0) s += `\x1b[${prevCursorRow}A`
+          s += '\r\x1b[0J'
+        }
+        s += v.rows.join('\n')
+        const up = v.rows.length - 1 - v.cursorRow
+        if (up > 0) s += `\x1b[${up}A`
+        s += '\r'
+        if (v.cursorCol > 0) s += `\x1b[${v.cursorCol}C`
+        rawWrite(s)
+        drawn = true
+        prevCursorRow = v.cursorRow
+      }
+      const teardown = (): void => {
+        try {
+          stdin.removeListener('data', onData)
+          rawWrite(DISABLE_BRACKETED_PASTE)
+          for (const l of priorKeypress) stdin.on('keypress', l)
+          stdin.setRawMode(false)
+          rl.resume() // re-sync readline for the next (sub-prompt) read
+          rl.pause()
+        } catch {
+          /* best-effort restore */
+        }
+      }
+      const setup = (): void => {
+        emitKeypressEvents(stdin)
+        for (const l of priorKeypress) stdin.removeListener('keypress', l)
+        stdin.setRawMode(true)
+        stdin.resume()
+        rawWrite(ENABLE_BRACKETED_PASTE)
+        stdin.on('data', onData)
+      }
+      const finish = (value: string | null, echo = false): void => {
+        if (done) return
+        done = true
+        pending = null
+        eraseRegion()
+        // Leave the submitted message in the scrollback, exactly as readline did.
+        if (echo && value !== null) {
+          const v = view()
+          rawWrite(`${v.rows.join('\n')}\n`)
+        }
+        teardown()
+        startTimer()
+        if (spinnerLabel !== null) startInterruptWatch()
+        resolve(value)
+      }
+      // Register with the same settle mechanism readLine uses, so an interface
+      // close (EOF / dropped terminal) or a cancelRead resolves this read.
+      pending = (line) => finish(line)
+
+      /** Tab: ask the injected completer about the token under the cursor. */
+      const runComplete = async (): Promise<void> => {
+        const completer = deps.completer
+        if (!completer) return void draw()
+        const line = [...(state.lines[state.row] ?? '')].slice(0, state.col).join('')
+        const [hits, sub] = await new Promise<[string[], string]>((res) => {
+          try {
+            completer(line, (_e, result) => res(result))
+          } catch {
+            res([[], line])
+          }
+        })
+        if (done) return
+        if (!hits.length) return void draw()
+        const insert = hits.length === 1 ? hits[0] : commonPrefix(hits)
+        if (insert.length > sub.length) {
+          // Replace the completed token with the (longer) completion.
+          const back = [...sub].length
+          let next = state
+          for (let i = 0; i < back; i++) next = reduceEditor(next, { type: 'backspace' }).state
+          state = reduceEditor(next, { type: 'char', value: insert }).state
+        } else if (hits.length > 1) {
+          // Ambiguous and nothing more to insert: show the candidates above the composer.
+          eraseRegion()
+          rawWrite(`${hits.map((h) => h.trim()).join('  ')}\n`)
+        }
+        draw()
+      }
+
+      /**
+       * Ctrl-X Ctrl-E: hand the draft to $EDITOR, which owns the terminal while
+       * open. Owns its own teardown/setup pair (and therefore the 'data' listener),
+       * so the caller must NOT re-add the listener afterwards — doing both
+       * registered it twice, doubling every later keystroke and feeding the shared
+       * decoder each chunk twice (which corrupts a chunk-split paste).
+       */
+      const runExternalEdit = async (text: string): Promise<void> => {
+        if (!deps.editText) return void draw()
+        eraseRegion()
+        teardown()
+        let edited: string | null
+        try {
+          edited = await deps.editText(text)
+        } catch {
+          edited = null
+        }
+        if (done) return
+        setup()
+        if (edited !== null) state = setEditorText(state, edited.replace(/\n$/, ''))
+        draw()
+      }
+
+      function onData(data: Buffer | string): void {
+        const chunk = typeof data === 'string' ? data : data.toString('utf8')
+        const r = decodeInput(chunk, dec)
+        dec = r.state
+        // A paste body is attacker-controlled and can end paste mode early with its
+        // own ESC[201~; without this, the bytes it puts after that marker would run
+        // as real keys (submitting the turn, quitting, spawning $EDITOR).
+        const guarded = sanitizePastedKeys(r.keys, lastPasteAt, now())
+        lastPasteAt = guarded.lastPasteAt
+        for (const key of guarded.keys) {
+          if (done) return
+          const { state: next, outcome } = reduceEditor(state, key)
+          state = next
+          if (!outcome) {
+            draw()
+            continue
+          }
+          switch (outcome.kind) {
+            case 'submit':
+              finish(outcome.text, true)
+              return
+            case 'eof':
+              finish(null)
+              return
+            case 'interrupt': {
+              // Hand off to the shared interrupt handler (which owns the
+              // discard-vs-exit double-tap), then resolve this read as cancelled.
+              eraseRegion()
+              done = true
+              pending = null
+              teardown()
+              startTimer()
+              if (spinnerLabel !== null) startInterruptWatch()
+              interruptHandler?.()
+              resolve(null)
+              return
+            }
+            case 'clear-screen':
+              rawWrite('\x1b[2J\x1b[H')
+              drawn = false
+              draw()
+              break
+            case 'complete':
+              stdin.removeListener('data', onData)
+              void runComplete().finally(() => {
+                if (!done) stdin.on('data', onData)
+              })
+              return
+            case 'external-edit':
+              // runExternalEdit re-attaches the listener itself, via setup().
+              void runExternalEdit(outcome.text)
+              return
+          }
+        }
+      }
+
+      try {
+        setup()
+        draw()
+      } catch {
+        // Raw mode unavailable after all — fall back to the readline composer.
+        teardown()
+        done = true
+        pending = null
+        void plainRead(prompt).then(resolve)
+      }
+    })
+  }
+
   return {
     out,
     // Erase the current terminal line (e.g. the composer's typed-but-abandoned input
     // on Ctrl-C) so the next prompt redraws clean.
     clearLine: () => rawWrite(CLEAR_LINE),
     readLine: plainRead,
+    readComposer,
     readSecret,
     onInterrupt: (handler) => {
       // Debounce: a single Ctrl-C can surface via more than one path (the streaming
@@ -400,7 +680,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       stopTimer(true)
       stopInterruptWatch()
       try {
-        return await runPicker(spec, rl, rawWrite, paint)
+        return await runPicker(spec, rl, rawWrite, paint, stdin)
       } finally {
         startTimer() // resume the spinner if a turn is still running
         if (spinnerLabel !== null) startInterruptWatch() // …and re-arm Ctrl-C
@@ -425,9 +705,9 @@ function runPicker(
   spec: PickerSpec,
   rl: ReadlineLike,
   write: (s: string) => void,
-  paint: Painter
+  paint: Painter,
+  stdin: NodeJS.ReadStream
 ): Promise<PickerOutcome> {
-  const stdin = process.stdin
   // No real terminal, or no raw mode available → let the driver use the typed path.
   if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve({ kind: 'type' })
 
