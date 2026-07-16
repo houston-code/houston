@@ -452,7 +452,10 @@ export function setMessages(id: string, messages: ChatMessage[]): void {
   if (!conv) return
   conv.messages = messages
   conv.updatedAt = Date.now()
-  if (conv.title === 'New chat') {
+  // Only auto-derive over the placeholder, never over a user's own title — including a
+  // deliberate rename to the literal "New chat" (guard on titleCustom, as the generated-
+  // title path does), so setMessages can't clobber it on the next message.
+  if (!conv.titleCustom && conv.title === 'New chat') {
     const title = deriveTitle(messages)
     if (title) conv.title = title
   }

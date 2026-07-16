@@ -68,7 +68,7 @@ import {
   clearCheckpoints
 } from './agent/checkpoints'
 import { setUserDataDir } from './userData'
-import { createConversation } from './conversations'
+import { createConversation, getConversation } from './conversations'
 
 // registerIpc wires the scheduler, whose store lives under the profile directory.
 // Production sets the userData seam before app.whenReady() (index.ts); mirror that
@@ -397,5 +397,17 @@ describe('agentStart / agentRetry approval-policy validation', () => {
     })
     expect(h.runAndDrain).toHaveBeenCalledTimes(1)
     expect(policyOf()).toBe('plan')
+  })
+
+  it('persists a switched provider/model on retry (updateConversationMeta)', async () => {
+    const id = createConversation({ workspace: '/tmp/ws', providerId: 'p', model: 'm' }).id
+    await handler(IPC.agentRetry)(from(SENDER), {
+      runId: 'r3', conversationId: id, providerId: 'q', model: 'm2', approvalPolicy: 'ask'
+    })
+    // Without this, the retry runs under q/m2 while the stored meta still says p/m,
+    // mis-attributing the turn in the scorecard.
+    const updated = getConversation(id)
+    expect(updated?.providerId).toBe('q')
+    expect(updated?.model).toBe('m2')
   })
 })

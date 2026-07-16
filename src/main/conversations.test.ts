@@ -1,10 +1,18 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   conversationMatches,
+  createConversation,
   deriveTitle,
+  getConversation,
   mergeRunningTotals,
-  needsGeneratedTitle
+  needsGeneratedTitle,
+  organizeConversation,
+  setMessages
 } from './conversations'
+import { setUserDataDir, resetUserDataDir } from './userData'
 import type { AgentEvent, Conversation, ConversationUsage } from '@shared/agent'
 
 const conv = (over: Partial<Conversation>): Conversation => ({
@@ -107,5 +115,31 @@ describe('mergeRunningTotals', () => {
   it('passes the event through when there is no stored total', () => {
     const e = usage()
     expect(mergeRunningTotals(e, null)).toBe(e)
+  })
+})
+
+describe('setMessages title handling', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('does not clobber a user rename to the literal "New chat"', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    // A deliberate rename to "New chat" sets titleCustom; setMessages must not re-derive.
+    organizeConversation(c.id, { title: 'New chat' })
+    setMessages(c.id, [{ role: 'user', content: 'Fix the auth bug' }])
+    expect(getConversation(c.id)?.title).toBe('New chat')
+  })
+
+  it('still auto-derives a title over the placeholder for a non-custom chat', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'Fix the auth bug' }])
+    expect(getConversation(c.id)?.title).toBe('Fix the auth bug')
   })
 })

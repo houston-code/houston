@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
-import { resolveColor, createTerminalIo, type ReadlineLike } from './tui-io'
+import { resolveColor, createTerminalIo, pickerPhysicalRows, type ReadlineLike } from './tui-io'
 
 describe('resolveColor', () => {
   it('requires a TTY by default', () => {
@@ -703,5 +703,24 @@ describe('signal (attention) — focus gating', () => {
     expect(t.text()).toContain(']9;')
     t.stdin.push('\r')
     await read
+  })
+})
+
+describe('pickerPhysicalRows', () => {
+  it('counts wrapped rows, not just logical lines', () => {
+    // At width 4, "aaaaaa" (6 cols) wraps to 2 rows; the others fit in 1 each.
+    expect(pickerPhysicalRows(['ab', 'aaaaaa', 'cd'], 4)).toBe(4)
+  })
+
+  it('is the logical line count when nothing wraps', () => {
+    expect(pickerPhysicalRows(['ab', 'cd', 'ef'], 80)).toBe(3)
+  })
+
+  it('treats an empty line as one row and a full-width line as one row', () => {
+    expect(pickerPhysicalRows(['', 'abcd'], 4)).toBe(2)
+  })
+
+  it('falls back to the logical count when the width is unknown (0)', () => {
+    expect(pickerPhysicalRows(['ab', 'aaaaaa'], 0)).toBe(2)
   })
 })

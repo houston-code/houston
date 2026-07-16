@@ -840,6 +840,10 @@ export function registerIpc(): void {
       }
       // Same boundary validation as agentStart: an unknown policy fails open, so coerce.
       const approvalPolicy = isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan'
+      // Persist the (possibly switched) provider/model like agentStart does, so a retry
+      // after changing provider isn't run under the new one while the conversation's
+      // stored meta still names the old — which mis-attributes the turn in the scorecard.
+      updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
       void runAndDrain(
         makeIo(event.sender),
         conv.id,
