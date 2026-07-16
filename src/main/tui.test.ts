@@ -32,6 +32,7 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  renderMcpTools,
   resolveTheme,
   THEMES,
   nextPolicy,
@@ -3476,5 +3477,85 @@ describe('/image paste', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('use /image <path>')
+  })
+})
+
+// /mcp could say a server was connected and how MANY tools it had, never which —
+// so "what did I just give the agent?" had no answer short of reading the server's
+// own docs. That is the question that decides whether you trust it.
+describe('/mcp tools', () => {
+  const paintNo = makePainter(false)
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('lists the tools a connected server exposes', () => {
+    const out = renderMcpTools(
+      'docs',
+      { id: 'docs', state: 'connected', tools: 2, toolNames: ['search_docs', 'fetch_page'] },
+      paintNo
+    )
+    expect(out).toContain('docs — 2 tools')
+    expect(out).toContain('search_docs')
+    expect(out).toContain('fetch_page')
+  })
+
+  it('explains each not-connected state instead of showing an empty list', () => {
+    expect(renderMcpTools('x', undefined, paintNo)).toContain('has not connected yet')
+    expect(renderMcpTools('x', { id: 'x', state: 'needs-auth' }, paintNo)).toContain('/mcp login')
+    expect(renderMcpTools('x', { id: 'x', state: 'error', error: 'ECONNREFUSED' }, paintNo)).toContain(
+      'ECONNREFUSED'
+    )
+    expect(renderMcpTools('x', { id: 'x', state: 'connected', tools: 0, toolNames: [] }, paintNo)).toContain(
+      'exposes no tools'
+    )
+  })
+
+  // A server's tool names are remote text on their way to a terminal.
+  it('strips escape sequences from a remote tool name', () => {
+    const out = renderMcpTools(
+      'evil',
+      { id: 'evil', state: 'connected', tools: 1, toolNames: ['\x1b]52;c;pwn\x07bad'] },
+      paintNo
+    )
+    expect(out).not.toContain('\x1b')
+  })
+
+  it('parses the verb', () => {
+    expect(parseSettingsAction('tools 2')).toEqual({ op: 'tools', index: 2 })
+    expect(parseSettingsAction('tools')).toEqual({ op: 'usage' })
+  })
+
+  it('/mcp tools <n> prints them', async () => {
+    const { d } = deps(done, {
+      mcpServers: [{ id: 'docs', name: 'docs', transport: 'stdio', command: 'npx', enabled: true }]
+    })
+    const t = fakeIo(['/mcp tools 1', null])
+    d.io = t.io
+    d.mcpStatuses = () => [{ id: 'docs', state: 'connected', tools: 1, toolNames: ['search_docs'] }]
+    await runTui(opts, d)
+    expect(t.text()).toContain('search_docs')
+  })
+
+  it('names a bad index rather than throwing', async () => {
+    const { d } = deps(done, { mcpServers: [] })
+    const t = fakeIo(['/mcp tools 9', null])
+    d.io = t.io
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(t.text()).toContain('no MCP server #9')
+  })
+})
+
+// /hooks and /mcp share one action type, so a verb added for one must not fall
+// through unhandled on the other.
+describe('/hooks ignores the /mcp-only verbs', () => {
+  it('reports usage for tools/login/logout', async () => {
+    for (const verb of ['tools 1', 'login 1', 'logout 1']) {
+      const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+      const t = fakeIo([`/hooks ${verb}`, null])
+      d.io = t.io
+      const code = await runTui(opts, d)
+      expect(code).toBe(0)
+      expect(t.text()).toContain('usage: /hooks')
+    }
   })
 })

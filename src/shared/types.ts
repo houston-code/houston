@@ -231,6 +231,12 @@ export interface McpServerStatus {
   state: 'connected' | 'needs-auth' | 'error'
   /** Tool count, when connected. */
   tools?: number
+  /**
+   * The tool names, when connected. A count answers "is it working"; the names
+   * answer "what did I just give the agent", which is the question that matters
+   * when you are deciding whether to trust a server.
+   */
+  toolNames?: string[]
   /** Failure detail, when not connected. */
   error?: string
 }
