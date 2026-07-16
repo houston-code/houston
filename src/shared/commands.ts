@@ -109,6 +109,16 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Check your setup: model, sandbox, tools, MCP, terminal',
     clients: ['tui']
   },
+  {
+    name: 'verbose',
+    description: "Show each tool's full output as it runs",
+    clients: ['tui']
+  },
+  {
+    name: 'output',
+    description: 'Reprint a tool result in full (/output [n])',
+    clients: ['tui']
+  },
   { name: 'approval', description: 'Show or set the approval policy', clients: ['tui'] },
   { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['tui'] },
   { name: 'fork', description: 'Branch the current session into a copy', clients: ['tui'] },

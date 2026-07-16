@@ -65,8 +65,8 @@ client, but the common built-ins are:
 
 The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
-`/settings`, `/doctor`, `/resume`, `/fork`, `/cost`, `/mcp`, `/hooks`, `/theme`,
-`/image`, `/cwd`, and `/exit`.
+`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/fork`, `/cost`,
+`/mcp`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
 
 **Custom commands.** Any Markdown file in `.houston/commands/<name>.md` becomes a
 `/name` command. The file body is a prompt template: `$ARGUMENTS` is replaced
@@ -108,6 +108,21 @@ bracketed-paste support.
 
 **History.** Messages are remembered per project folder and survive restarts,
 including multi-line ones.
+
+## Seeing what the tools did
+
+While a turn runs, each tool result collapses to one line: the transcript is a
+conversation, not a log. Two ways to see more:
+
+- **When something fails**, the error is shown without asking. A failed tool
+  prints its first lines, so you can see why.
+- **`/verbose`** shows each tool's full output as it runs (`/verbose off` to stop,
+  or just `/verbose` to toggle).
+- **`/output`** reprints the last tool result in full, after the fact. `/output 3`
+  goes three results back. Nothing extra is stored for this: the whole output was
+  always kept in the conversation, it just had no way out to the screen.
+
+Very long output is capped with a note saying how much was left out.
 
 ## Being told when it needs you
 

@@ -331,11 +331,99 @@ export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): strin
 }
 
 /** One-line result summary: a failure marker, or a dimmed snippet of the output's first content line. */
-export function renderToolResult(name: string, ok: boolean, output: string, paint: Painter): string {
-  if (!ok) return paint(`  ✗ ${name} failed`, 'red')
-  const firstLine = output.split('\n').find((l) => l.trim()) ?? ''
+/** How many lines of a failure are shown by default — enough to see the cause. */
+export const FAILURE_LINES = 10
+/** How many lines of a successful result `/verbose` shows before collapsing. */
+export const VERBOSE_LINES = 40
+
+/**
+ * The transcript line(s) for a finished tool call.
+ *
+ * A success collapses to one dim line: the transcript is a conversation, not a
+ * log, and forty lines of `ls` output buries it. But a FAILURE used to collapse
+ * to `✗ run_shell failed` and throw the error away entirely — the one case where
+ * the output is the whole point, and the user was left to guess (or ask the agent
+ * what it just saw). Failures now show their first lines.
+ *
+ * `verbose` opens successes up too, and `/output` recovers any result in full
+ * from the persisted log afterwards.
+ */
+export function renderToolResult(
+  name: string,
+  ok: boolean,
+  output: string,
+  paint: Painter,
+  opts: { verbose?: boolean } = {}
+): string {
+  const lines = output.split('\n')
+  if (!ok) {
+    const body = trimBlank(lines)
+    if (!body.length) return paint(`  ✗ ${name} failed`, 'red')
+    const shown = body.slice(0, FAILURE_LINES).map((l) => paint(`    ${truncate(l, 200)}`, 'dim'))
+    const more =
+      body.length > FAILURE_LINES
+        ? [paint(`    … ${body.length - FAILURE_LINES} more lines (/output to see it all)`, 'dim')]
+        : []
+    return [paint(`  ✗ ${name} failed`, 'red'), ...shown, ...more].join('\n')
+  }
+  if (opts.verbose) {
+    const body = trimBlank(lines)
+    if (!body.length) return ''
+    const shown = body.slice(0, VERBOSE_LINES).map((l) => paint(`    ${truncate(l, 200)}`, 'dim'))
+    const more =
+      body.length > VERBOSE_LINES
+        ? [paint(`    … ${body.length - VERBOSE_LINES} more lines (/output to see it all)`, 'dim')]
+        : []
+    return [...shown, ...more].join('\n')
+  }
+  const firstLine = lines.find((l) => l.trim()) ?? ''
   const snippet = truncate(firstLine.trim(), 80)
   return snippet ? paint(`  ↳ ${snippet}`, 'dim') : ''
+}
+
+/** Drop leading/trailing blank lines, so a padded result doesn't render as gaps. */
+function trimBlank(lines: string[]): string[] {
+  let a = 0
+  let b = lines.length
+  while (a < b && !lines[a].trim()) a++
+  while (b > a && !lines[b - 1].trim()) b--
+  return lines.slice(a, b)
+}
+
+/**
+ * The tool results this session recorded, oldest first, read back out of the
+ * message log the run loop persists. Nothing new is stored: the full output was
+ * always there, it just had no way out to the terminal.
+ */
+export function toolResultsFrom(messages: ChatMessage[]): { name: string; output: string }[] {
+  return messages
+    .filter((m) => m.role === 'tool')
+    .map((m) => ({ name: m.toolName ?? 'tool', output: m.content }))
+}
+
+/** Cap on what `/output` prints, so recovering a huge result can't flood the terminal. */
+export const OUTPUT_LINES = 500
+
+/**
+ * Render one recovered tool result. `index` is 1-based from the most recent, so
+ * `/output` (1) is "what just happened" — the overwhelmingly common ask.
+ */
+export function renderRecoveredOutput(
+  results: { name: string; output: string }[],
+  index: number,
+  paint: Painter
+): string {
+  if (!results.length) return paint('· no tool output in this conversation yet', 'dim')
+  if (index < 1 || index > results.length) {
+    return paint(`· no tool call #${index} (this conversation has ${results.length})`, 'yellow')
+  }
+  const picked = results[results.length - index]
+  const lines = picked.output.split('\n')
+  const shown = lines.slice(0, OUTPUT_LINES)
+  const head = paint(`▣ ${picked.name}`, 'bold') + paint(`  (${index} back, ${lines.length} lines)`, 'dim')
+  const more =
+    lines.length > OUTPUT_LINES ? [paint(`… ${lines.length - OUTPUT_LINES} more lines not shown`, 'dim')] : []
+  return [head, ...shown, ...more].join('\n')
 }
 
 /** Running token/cost totals for the session. */
@@ -689,6 +777,10 @@ export type SlashResult =
   | { kind: 'settings' }
   /** Environment diagnostics (/doctor). */
   | { kind: 'doctor' }
+  /** Show more (or less) of each tool's output as it runs (/verbose). */
+  | { kind: 'verbose'; on?: boolean }
+  /** Reprint a past tool result in full (/output [n]). */
+  | { kind: 'output'; index: number }
   /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
   | { kind: 'hooks'; action: SettingsAction }
   /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
@@ -733,6 +825,17 @@ export function parseSlashCommand(
       return { kind: 'settings' }
     case 'doctor':
       return { kind: 'doctor' }
+    case 'verbose': {
+      const a = arg.trim().toLowerCase()
+      if (a === 'on') return { kind: 'verbose', on: true }
+      if (a === 'off') return { kind: 'verbose', on: false }
+      return { kind: 'verbose' } // bare /verbose toggles
+    }
+    case 'output': {
+      // `/output` means "what just happened"; a number counts back from there.
+      const n = Number.parseInt(arg.trim(), 10)
+      return { kind: 'output', index: Number.isInteger(n) && n >= 1 ? n : 1 }
+    }
     case 'hooks':
       return { kind: 'hooks', action: parseSettingsAction(arg) }
     case 'mcp':
@@ -819,6 +922,8 @@ export const HELP_TEXT = [
   '  /skills /agents       list workspace skills / custom agents',
   '  /settings             settings overview + where to edit them',
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
+  '  /verbose [on|off]     show each tool\'s full output as it runs',
+  '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /mcp [verb n]         list MCP servers; add (stdio) · remove · login · logout <n>',
   '  /theme [name]         list or switch color theme (default | bright | mono)',
@@ -1638,6 +1743,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Read once: the terminal tells users settings apply on restart, and re-reading
   // per event would cost a settings load on every streamed token.
   const notifyEnabled = settings.desktopNotifications !== false
+  // Show each tool's full output as it runs (/verbose). Off by default: the
+  // transcript is a conversation, and most results are noise until they aren't.
+  let verbose = false
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
@@ -1908,6 +2016,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         renderSettingsOverview(deps, paint)
         continue
       }
+      if (result.kind === 'verbose') {
+        verbose = result.on ?? !verbose
+        deps.io.out(
+          paint(
+            verbose
+              ? '· verbose: showing each tool\'s output as it runs (/output reprints one in full)\n'
+              : '· verbose off: tool output collapses to one line again\n',
+            'dim'
+          )
+        )
+        continue
+      }
+      if (result.kind === 'output') {
+        deps.io.out(`${renderRecoveredOutput(toolResultsFrom(messages), result.index, paint)}\n`)
+        continue
+      }
       if (result.kind === 'doctor') {
         if (!deps.doctor) {
           deps.io.out(paint('· diagnostics are unavailable here\n', 'dim'))
@@ -2141,7 +2265,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
         case 'tool_result': {
-          const line = renderToolResult(e.name, e.ok, e.output, paint)
+          const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose })
           if (line) deps.io.out(`${line}\n`)
           toolArgs.delete(e.callId)
           break

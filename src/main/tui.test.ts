@@ -32,6 +32,11 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  renderRecoveredOutput,
+  toolResultsFrom,
+  FAILURE_LINES,
+  VERBOSE_LINES,
+  OUTPUT_LINES,
   formatSessionCost,
   parseResumeSelection,
   formatRelativeTime,
@@ -602,6 +607,84 @@ describe('renderToolResult', () => {
   })
   it('is empty for successful no-output results', () => {
     expect(renderToolResult('x', true, '   \n  ', paint)).toBe('')
+  })
+
+  // A failure used to render as "✗ run_shell failed" and throw the error away —
+  // the one case where the output IS the point.
+  it('shows why a tool failed, not just that it did', () => {
+    const out = renderToolResult('run_shell', false, "error: cannot find module 'x'\n  at foo.js:3", paint)
+    expect(out).toContain('failed')
+    expect(out).toContain("cannot find module 'x'")
+    expect(out).toContain('at foo.js:3')
+  })
+
+  it('caps a long failure and says where the rest is', () => {
+    const body = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n')
+    const out = renderToolResult('run_shell', false, body, paint)
+    expect(out).toContain('line 0')
+    expect(out).not.toContain('line 39')
+    expect(out).toContain(`${40 - FAILURE_LINES} more lines`)
+    expect(out).toContain('/output')
+  })
+
+  it('still just marks a failure that produced no output', () => {
+    expect(renderToolResult('run_shell', false, '  \n ', paint)).toBe('  ✗ run_shell failed')
+  })
+
+  it('verbose opens up a successful result', () => {
+    const out = renderToolResult('read_file', true, 'a\nb\nc', paint, { verbose: true })
+    expect(out).toContain('a')
+    expect(out).toContain('c')
+  })
+
+  it('verbose caps a huge result rather than flooding the transcript', () => {
+    const body = Array.from({ length: 100 }, (_, i) => `l${i}`).join('\n')
+    const out = renderToolResult('run_shell', true, body, paint, { verbose: true })
+    expect(out).toContain('l0')
+    expect(out).not.toContain('l99')
+    expect(out).toContain(`${100 - VERBOSE_LINES} more lines`)
+  })
+})
+
+describe('recovering tool output', () => {
+  const paint = makePainter(false)
+  const messages: ChatMessage[] = [
+    { role: 'user', content: 'go' },
+    { role: 'tool', content: 'first result', toolName: 'read_file', toolCallId: 'c1' },
+    { role: 'assistant', content: 'thinking' },
+    { role: 'tool', content: 'second result', toolName: 'run_shell', toolCallId: 'c2' }
+  ]
+
+  it('reads results back out of the persisted log, oldest first', () => {
+    expect(toolResultsFrom(messages)).toEqual([
+      { name: 'read_file', output: 'first result' },
+      { name: 'run_shell', output: 'second result' }
+    ])
+  })
+
+  it('defaults to the most recent — "what just happened"', () => {
+    const out = renderRecoveredOutput(toolResultsFrom(messages), 1, paint)
+    expect(out).toContain('run_shell')
+    expect(out).toContain('second result')
+  })
+
+  it('counts back from the most recent', () => {
+    const out = renderRecoveredOutput(toolResultsFrom(messages), 2, paint)
+    expect(out).toContain('read_file')
+    expect(out).toContain('first result')
+  })
+
+  it('says so when there is nothing to show, or the index is out of range', () => {
+    expect(renderRecoveredOutput([], 1, paint)).toContain('no tool output')
+    expect(renderRecoveredOutput(toolResultsFrom(messages), 9, paint)).toContain('no tool call #9')
+  })
+
+  it('caps a gigantic result', () => {
+    const huge = [{ name: 'run_shell', output: Array.from({ length: 900 }, (_, i) => `l${i}`).join('\n') }]
+    const out = renderRecoveredOutput(huge, 1, paint)
+    expect(out).toContain('l0')
+    expect(out).not.toContain('l899')
+    expect(out).toContain(`${900 - OUTPUT_LINES} more lines not shown`)
   })
 })
 
@@ -2855,5 +2938,74 @@ describe('attention signals', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.signals[0]?.title).toContain('Houston')
+  })
+})
+
+// Tool output used to be unrecoverable: one 80-char line, forever, even though
+// the full text was already sitting in the persisted log.
+describe('/verbose and /output', () => {
+  const withTool: AgentEvent[] = [
+    { runId: 'x', type: 'tool_start', callId: 'c1', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
+    { runId: 'x', type: 'tool_result', callId: 'c1', name: 'run_shell', ok: true, output: 'alpha\nbeta\ngamma' },
+    { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  ]
+
+  it('collapses tool output to one line by default', async () => {
+    const { d } = deps(withTool)
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('alpha')
+    expect(t.text()).not.toContain('gamma')
+  })
+
+  it('/verbose opens it up for subsequent turns', async () => {
+    const { d } = deps(withTool)
+    const t = fakeIo(['/verbose', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('gamma')
+  })
+
+  it('/verbose toggles back off', async () => {
+    const { d } = deps(withTool)
+    const t = fakeIo(['/verbose on', '/verbose off', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('verbose off')
+    expect(t.text()).not.toContain('gamma')
+  })
+
+  it('/output reprints the last tool result in full, from the persisted log', async () => {
+    const { d } = deps(withTool, {}, (req) => [
+      ...req.messages,
+      { role: 'tool', content: 'alpha\nbeta\ngamma', toolName: 'run_shell', toolCallId: 'c1' }
+    ])
+    const t = fakeIo(['go', '/output', null])
+    d.io = t.io
+    await runTui(opts, d)
+    // Not shown while streaming (collapsed), but recoverable afterwards.
+    expect(t.text()).toContain('gamma')
+    expect(t.text()).toContain('run_shell')
+  })
+
+  it('/output says so when nothing has run yet', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/output', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('no tool output')
+  })
+
+  // The gap that hurt most: a failure told you nothing about why.
+  it('shows a failure’s output without any toggle', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'run_shell', ok: false, output: 'permission denied: /etc/hosts' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('permission denied: /etc/hosts')
   })
 })
