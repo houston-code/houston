@@ -10,12 +10,21 @@ export const MAX_DIFF_LINES = 300
 export function DiffView({ diff }: { diff: DiffLine[] }): JSX.Element {
   return (
     <pre className="diff">
-      {diff.slice(0, MAX_DIFF_LINES).map((l, i) => (
-        <div key={i} className={`diff__line diff__line--${l.type}`}>
-          <span className="diff__sign">{l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' '}</span>
-          <span className="diff__text">{l.text || ' '}</span>
-        </div>
-      ))}
+      {diff.slice(0, MAX_DIFF_LINES).map((l, i) =>
+        // A `skip` stands for unchanged lines folded away by hunkDiff; showing it
+        // as a normal line would print the count as if it were code.
+        l.type === 'skip' ? (
+          <div key={i} className="diff__line diff__line--skip">
+            <span className="diff__sign">⋯</span>
+            <span className="diff__text">{l.text}</span>
+          </div>
+        ) : (
+          <div key={i} className={`diff__line diff__line--${l.type}`}>
+            <span className="diff__sign">{l.type === 'add' ? '+' : l.type === 'del' ? '−' : ' '}</span>
+            <span className="diff__text">{l.text || ' '}</span>
+          </div>
+        )
+      )}
       {diff.length > MAX_DIFF_LINES && (
         <div className="diff__more">… {diff.length - MAX_DIFF_LINES} more lines</div>
       )}

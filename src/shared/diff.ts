@@ -4,11 +4,17 @@
  * Pure and dependency-free so it can be unit-tested and shared by the renderer.
  */
 
-export type DiffLineType = 'add' | 'del' | 'ctx'
+/**
+ * `skip` stands in for a run of unchanged lines that was folded away by
+ * `hunkDiff`; it carries the count so the UI can say what it hid.
+ */
+export type DiffLineType = 'add' | 'del' | 'ctx' | 'skip'
 
 export interface DiffLine {
   type: DiffLineType
   text: string
+  /** How many unchanged lines a `skip` marker stands for. */
+  count?: number
 }
 
 /**
@@ -94,7 +100,7 @@ export interface DiffStat {
   removed: number
 }
 
-/** Count added/removed lines in a diff. */
+/** Count added/removed lines in a diff (`skip` markers count for nothing). */
 export function diffStat(lines: DiffLine[]): DiffStat {
   let added = 0
   let removed = 0
@@ -103,4 +109,48 @@ export function diffStat(lines: DiffLine[]): DiffStat {
     else if (l.type === 'del') removed++
   }
   return { added, removed }
+}
+
+/** Lines of unchanged context kept either side of a change. */
+export const CONTEXT_LINES = 3
+
+/**
+ * Fold a full-file diff down to the changes plus a little context, replacing each
+ * long unchanged stretch with a single `skip` marker.
+ *
+ * This is a correctness fix, not a cosmetic one. A preview used to be the WHOLE
+ * file's diff, cut to a line budget with `slice(0, N)` — so a one-line edit at
+ * line 500 of a 600-line file produced 400 lines of untouched context and not one
+ * changed line. The approval card showed a diff with nothing in it, labelled
+ * "truncated", and the user was asked to approve that.
+ *
+ * Folding first means the budget is spent on the change instead of the file.
+ */
+export function hunkDiff(lines: DiffLine[], context = CONTEXT_LINES): DiffLine[] {
+  const changed = lines.map((l) => l.type === 'add' || l.type === 'del')
+  if (!changed.some(Boolean)) return [] // nothing changed: nothing worth showing
+
+  // Keep any line within `context` of a change.
+  const keep = lines.map((_, i) =>
+    changed.slice(Math.max(0, i - context), i + context + 1).some(Boolean)
+  )
+
+  const out: DiffLine[] = []
+  let run = 0
+  const flush = (): void => {
+    if (run > 0) {
+      out.push({ type: 'skip', text: `${run} unchanged line${run === 1 ? '' : 's'}`, count: run })
+      run = 0
+    }
+  }
+  lines.forEach((l, i) => {
+    if (keep[i]) {
+      flush()
+      out.push(l)
+    } else {
+      run++
+    }
+  })
+  flush()
+  return out
 }

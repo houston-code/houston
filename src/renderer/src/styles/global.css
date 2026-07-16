@@ -2261,6 +2261,16 @@ pre.diff {
 .diff__line--ctx .diff__text {
   color: var(--text-dim);
 }
+/* A run of unchanged lines folded away, so the diff shows the change rather than
+   the file. Not code: styled as the aside it is. */
+.diff__line--skip {
+  background: rgba(127, 127, 127, 0.07);
+}
+.diff__line--skip .diff__sign,
+.diff__line--skip .diff__text {
+  color: var(--text-dim);
+  font-style: italic;
+}
 .diff__more {
   color: var(--text-dim);
   padding-top: 4px;

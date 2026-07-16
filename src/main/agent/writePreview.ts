@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs'
-import { diffLines, type DiffLine, type FileDiffPreview } from '@shared/diff'
+import { diffLines, hunkDiff, type DiffLine, type FileDiffPreview } from '@shared/diff'
 import { parsePatch } from './apply-patch'
 import { resolveEdit } from './edit-match'
 import { editNotebook, parseNotebook, renderNotebook, type NotebookEditMode } from './notebook'
@@ -58,7 +58,10 @@ function previewOf(
   before: string | null,
   after: string | null
 ): FileDiffPreview {
-  return bounded(path, diffLines(before ?? '', after ?? ''), {
+  // Hunk BEFORE bounding. A full-file diff cut with slice(0, N) spends the whole
+  // budget on untouched context when the edit is late in the file — the preview
+  // then contains no changes at all, and the approval card shows an empty diff.
+  return bounded(path, hunkDiff(diffLines(before ?? '', after ?? '')), {
     ...(before === null ? { created: true } : {}),
     ...(after === null ? { deleted: true } : {})
   })
