@@ -6,25 +6,40 @@ name: Provider canary
 # removing or renaming a request parameter on a live model — the mocks keep answering the old
 # shape. That is exactly what bit us when Opus 4.7/4.8 changed the accepted thinking/output_config
 # shape and began returning 400 while every mocked test still passed. The
-# src/main/providers/*.integration.test.ts suites were written for precisely that class of drift
-# (they make one tiny real reasoning call per shipped model), but they self-skip without an API
-# key, so nothing ever ran them. This wires the ANTHROPIC_API_KEY secret — already used by
-# release-prepare.yml for changelog drafting — into a scheduled run so provider drift fails loudly
-# within a day instead of first surfacing when a user hits it.
+# src/main/providers/*.integration.test.ts canaries were written for precisely that class of drift
+# (one tiny real reasoning call per shipped model), but they self-skip without an API key, so
+# nothing ever ran them. This runs them on a schedule so provider drift fails loudly within a day
+# instead of first surfacing when a user hits it.
+#
+# One leg per hosted (key-requiring) provider Houston ships. They are deliberately SEPARATE JOBS
+# with no `needs` between them: each must be able to red on its own, so one provider's drift never
+# masks (or blocks the reporting of) another's, and a single provider outage doesn't hide a real
+# break.
+#
+#   anthropic -> anthropic.integration.test.ts, keyed on ANTHROPIC_API_KEY
+#   openai    -> responses.integration.test.ts, keyed on OPENAI_API_KEY
+#   gemini    -> gemini.integration.test.ts,    keyed on GEMINI_API_KEY
+#
+# That covers every provider with a hosted API to drift against. The remaining built-ins (ollama,
+# lmstudio) are `kind: openai-compatible` with `requiresKey: false` and a localhost baseUrl — a
+# local server the user pins can't change out from under us overnight, which is the whole premise
+# of a drift canary, and openai.integration.test.ts already covers that adapter against a local
+# server. A user-configured gateway (e.g. an openai-compatible proxy) isn't shipped in defaults, so
+# there's no request shape of ours to canary there either.
+#
+# NOTE on the OpenAI leg: it covers `responses.ts`, NOT `openai.ts`. The built-in OpenAI provider
+# ships without a custom base URL, and src/main/providers/index.ts routes exactly that case to
+# `createResponsesProvider` — so the Responses API is the path real users on the built-in provider
+# hit. openai.integration.test.ts drives `createOpenAIProvider` (Chat Completions) against a
+# *local* OpenAI-compatible server, which is the proxy/gateway path; it needs a running local
+# server (HOUSTON_TEST_OPENAI_BASE), never touches the hosted API, and so is NOT a hosted-drift
+# canary and is intentionally not run here.
 #
 # THIS WORKFLOW NEVER PUBLISHES ANYTHING: `permissions: contents: read`, no build/dist/release
-# step, and the only secret in scope is the Anthropic key (step-scoped, never at job level). It is
-# deliberately a SEPARATE file from nightly-build.yml, which guarantees "no publish credential in
-# scope" for the packaging matrix — putting a live API key in that job would erode that posture.
-#
-# OPENAI GAP (there is intentionally no OpenAI leg here yet):
-#   1. There is no OPENAI_API_KEY repo secret, so there is no credential to drive a hosted-OpenAI
-#      canary with in the first place.
-#   2. Even given one, src/main/providers/openai.integration.test.ts targets a *local*
-#      OpenAI-compatible server (HOUSTON_TEST_OPENAI_BASE) rather than the hosted OpenAI API, so it
-#      is not a hosted-provider-drift canary at all.
-#   Closing the gap needs BOTH an OPENAI_API_KEY secret AND a hosted-OpenAI canary test; then add a
-#   second job here mirroring the `anthropic` one below.
+# step, and each provider key is scoped to only the steps that need it (never at job or workflow
+# level). It is deliberately a SEPARATE file from nightly-build.yml, which guarantees "no publish
+# credential in scope" for the packaging matrix — putting live API keys in that job would erode
+# that posture.
 
 on:
   schedule:
@@ -83,12 +98,77 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npx vitest run --project node src/main/providers/anthropic.integration.test.ts
 
+  openai:
+    # Same shape as the `anthropic` job above; see its comments. Independent on purpose — no
+    # `needs` — so either provider can red without the other masking it.
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      # Same false-green guard as the Anthropic leg: the canary self-skips without the key, so a
+      # misconfigured secret must red the job rather than pass as a no-op.
+      - name: Require the OpenAI API key
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY is empty/unset — the live provider canary would silently skip (false green). Set the repo secret."
+            exit 1
+          fi
+      # Live call against the real OpenAI Responses API: for every shipped GPT-5/o-series model it
+      # sends the exact `reasoning: { effort, summary }` shape Houston builds and fails on a 400
+      # (removed/renamed param), a 404 (a default model that's no longer served), or any stream error.
+      - name: OpenAI live-API canary
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: npx vitest run --project node src/main/providers/responses.integration.test.ts
+
+  gemini:
+    # Same shape as the legs above; see the `anthropic` job's comments. Independent on purpose — no
+    # `needs` — so any provider can red without the others masking it.
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      # Same false-green guard as the other legs: the canary self-skips without the key, so a
+      # misconfigured secret must red the job rather than pass as a no-op.
+      - name: Require the Gemini API key
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "::error::GEMINI_API_KEY is empty/unset — the live provider canary would silently skip (false green). Set the repo secret."
+            exit 1
+          fi
+      # Live call against the real Gemini API: sends the exact `thinkingConfig` shape Houston builds
+      # on the 2.5 models (and deliberately none on 2.0-flash), so a removed/renamed param or a
+      # broken thinking gate fails here. gemini.ts throws rather than yielding an error event, so a
+      # rejected parameter surfaces as a thrown stream error.
+      - name: Gemini live-API canary
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: npx vitest run --project node src/main/providers/gemini.integration.test.ts
   # Tell a human when the canary breaks — GitHub's own failure notification for a scheduled
   # run goes to github-actions[bot]. A provider retiring a param is exactly the drift this
   # canary exists to catch, so a silent red one defeats the point. Scheduled runs only; a
   # hand-dispatched run already notifies whoever started it. See alert-on-failure.yml.
   alert:
-    needs: [anthropic]
+    # MUST list every canary leg: `contains(needs.*.result, 'failure')` only sees jobs named
+    # here, so a leg missing from this list reds silently — the exact outcome this job exists
+    # to prevent. Add new provider legs here as well as above.
+    needs: [anthropic, openai, gemini]
     if: >-
       always() && github.event_name == 'schedule'
       && !cancelled() && !contains(needs.*.result, 'cancelled')
