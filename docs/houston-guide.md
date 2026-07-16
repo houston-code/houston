@@ -222,6 +222,11 @@ Approval is layered. From most to least restrictive:
   once for a **shell-network consent** so blanket outbound access is never
   automatic (declining runs commands offline).
 
+**Reading the diff.** A file edit shows a real diff before you approve it: the
+changed part with a few lines of context (long untouched stretches are folded away
+with a note saying how many), line numbers in the gutter, the changed words picked
+out inside a modified line, and the code syntax-coloured.
+
 On any single tool call the user can approve once, deny, **allow for the run**
 (auto-approve that kind of tool for the rest of the conversation, or, for a
 network call, just that one destination), or **always allow / always deny**
