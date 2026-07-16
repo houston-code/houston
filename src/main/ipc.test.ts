@@ -56,12 +56,6 @@ import {
   noteConversationRun,
   clearCheckpoints
 } from './agent/checkpoints'
-import { setUserDataDir } from './userData'
-
-// registerIpc wires the scheduler, whose store lives under the profile directory.
-// Production sets the userData seam before app.whenReady() (index.ts); mirror that
-// invariant here so registering handlers doesn't trip the unconfigured-seam guard.
-setUserDataDir(mkdtempSync(join(tmpdir(), 'houston-ipc-userdata-')))
 
 /**
  * The delete-confirmation dialog used to be a two-button `window.confirm` whose

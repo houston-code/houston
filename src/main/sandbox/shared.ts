@@ -347,12 +347,15 @@ export function spawnWithBackend(
     command: opts.command,
     roots: opts.roots ?? [opts.workspace],
     allowNetwork: opts.allowNetwork,
+    egressProxy: opts.egressProxy,
     cwd: opts.cwd
   })
   const baseEnv = opts.env ?? process.env
   const child = spawn(launch.file, launch.args, {
     cwd: opts.cwd,
-    env: sandboxEnv(baseEnv),
+    // Launch-specific overrides (proxy env vars, forwarder switches) win over the
+    // shared sandbox env — the backend knows how its transport must be addressed.
+    env: { ...sandboxEnv(baseEnv), ...launch.env },
     detached: launch.detached,
     windowsHide: launch.windowsHide
   })
@@ -383,6 +386,7 @@ export function runWithBackend(
     command: opts.command,
     roots: opts.roots ?? [opts.workspace],
     allowNetwork: opts.allowNetwork,
+    egressProxy: opts.egressProxy,
     cwd: opts.cwd
   })
 
@@ -394,7 +398,7 @@ export function runWithBackend(
     // wrapper and leaves orphaned grandchildren alive.
     const child = spawnFn(launch.file, launch.args, {
       cwd: opts.cwd,
-      env: sandboxEnv(baseEnv),
+      env: { ...sandboxEnv(baseEnv), ...launch.env },
       detached: launch.detached,
       windowsHide: launch.windowsHide
     })

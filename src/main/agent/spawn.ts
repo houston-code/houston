@@ -62,12 +62,6 @@ export interface SpawnSessionResult {
   workspace: string
   /** Set when the session was spawned onto a fresh git worktree. */
   worktree?: ConversationWorktree
-  /**
-   * Host-specific caveat appended to the tool result — e.g. a terminal host
-   * noting the session runs non-interactively (approvals auto-declined) since it
-   * has no window for the user to answer them in.
-   */
-  note?: string
 }
 
 /** The shell-side capability injected at startup. */

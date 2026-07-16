@@ -87,20 +87,12 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   and searches the project and reports back, keeping the main agent's context
   clean. `dispatch_writable_agent` delegates a whole implementation task to a
   subagent that can also edit files and run shell commands, confined to the
-  project; that dispatch is approval-gated, so one consent covers the delegated
-  task's local actions. Either tier can also fetch public URLs and search the
-  web, with every network request routed back to you as its own per-destination
-  approval prompt (and shown live in the transcript) — a subagent's shell
-  commands never get network access. On a host without an OS-enforced sandbox,
-  each shell command the subagent runs would be unconfined, so it too is routed
-  back to you as its own approval prompt, exactly like an unconfined command
-  from the main agent. While a subagent works, its row shows
-  live turn-by-turn progress in every client. Each report ends with an id the
-  agent can `resume` to send a follow-up into that subagent's context; a dispatch
-  can pass `model` to run routine legwork on a cheaper sibling model, and a
-  subagent can fan out one level of nested read-only researchers of its own.
-  Tokens a subagent spends roll into the conversation's usage meter, priced at
-  the model it actually ran on.
+  project with no network access; that dispatch is approval-gated, so one consent
+  covers the delegated task. On a host without an OS-enforced sandbox, each shell
+  command the subagent runs would be unconfined, so it is routed back to you as
+  its own approval prompt (and shown in the transcript), exactly like an
+  unconfined command from the main agent. Tokens a subagent spends roll into the
+  conversation's usage meter.
 - **Spawn separate sessions.** Where a subagent reports back into the current turn,
   `spawn_session` spins off a *separate* chat: the agent hands it a task, optionally
   on its own git branch and worktree, and sets it running autonomously in the
@@ -108,18 +100,7 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   the handed-off context as its first message — open it to watch, answer an
   approval, or take over. The spawned session inherits your current approval policy,
   so it is never more permissive than the chat that spawned it. Use it to run
-  independent work in parallel without leaving your current chat. Spawning works
-  in the TUI and headless CLI too: sessions run non-interactively there (approvals
-  auto-declined) and persist as conversations you can pick up with `/resume` or
-  `--resume <id>`.
-- **Scheduled runs.** Ask for something recurring ("every morning at 9, run the
-  tests and summarize failures") and the agent stores a schedule with
-  `schedule_run`; at each occurrence a fresh background session starts with the
-  stored prompt, under the approval policy of the chat that created it (never
-  more permissive). Schedules persist across restarts, fire while Houston (the
-  desktop app or the TUI) is running, and catch up an occurrence missed while it
-  was closed; `list_scheduled_runs` and `cancel_scheduled_run` manage them, and
-  creating or cancelling is approval-gated.
+  independent work in parallel without leaving your current chat.
 - **Adversarial review.** `review_changes` (or `/review`) reviews your uncommitted
   changes for correctness, security, and quality. It runs an independent read-only
   reviewer per dimension — each in its own fresh context, so they don't inherit the
@@ -128,8 +109,7 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   confirmed ones. The agent can self-review after a substantial change before
   telling you it's done. Review the whole diff, a different `base` (e.g. a branch),
   or scope it to specific `paths`; raise `effort` to `high` to verify each finding
-  with several independent skeptics (majority-confirmed) for high-stakes changes,
-  or pass `model` to run the reviewers and verifiers on a cheaper sibling model.
+  with several independent skeptics (majority-confirmed) for high-stakes changes.
   Large diffs are split by file across reviewers, so nothing is skipped. The
   review streams its progress live (which reviewer/verifier is running), and the
   tokens its nested reviewers spend roll into the conversation's usage meter, so a
@@ -139,12 +119,10 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   main agent can dispatch it by name. Agents are read-only by default; mark one
   `write: true` to make it dispatchable via the approval-gated
   `dispatch_writable_agent`. An optional front-matter `tools:` list narrows which
-  tools that agent may use (it can only restrict its tier's set, never widen it;
-  network requests always stay behind the per-destination approval prompts), and
-  `model:` pins the agent to a
-  (usually cheaper) sibling model from the current provider. Add a
-  `.houston/skills/<name>/SKILL.md` to register a skill: its description is
-  surfaced to the agent, which reads the full instructions on demand.
+  tools that agent may use (it can only restrict its tier's set, never widen
+  it, and never grants network access). Add a `.houston/skills/<name>/SKILL.md`
+  to register a skill: its description is surfaced to the agent, which reads the
+  full instructions on demand.
 - **Explains itself.** Ask how Houston works (its slash commands, approval modes,
   hooks, MCP servers, skills, sandboxing, and more) and the agent answers from a
   built-in guide instead of guessing. The guide lives in
@@ -765,14 +743,9 @@ src/
 │   ├── agent/         tool definitions + the tool-calling loop + system prompt
 │   │                  (incl. compaction.ts — summarize old turns to fit context;
 │   │                   rules.ts — load project AGENTS.md / CLAUDE.md)
-│   ├── mcp/           MCP transports (stdio / streamable HTTP / SSE) + the
-│   │                  OAuth sign-in client for hosted servers (discovery,
-│   │                  dynamic registration, PKCE, refresh)
 │   ├── sandbox.ts     macOS Seatbelt profile + sandboxed command runner
-│   ├── secrets.ts     Keychain-encrypted credential storage (API keys, OAuth
-│   │                  token sets, custom header/env secrets)
-│   ├── oauth.ts       provider-account OAuth (stub; MCP-server OAuth is real
-│   │                  and lives in mcp/oauth.ts)
+│   ├── secrets.ts     Keychain-encrypted credential storage (API-key + OAuth)
+│   ├── oauth.ts       OAuth device-code/PKCE flow (stub — awaits client IDs)
 │   ├── store.ts       settings persistence
 │   ├── conversations.ts  conversation persistence (one JSON per chat)
 │   └── ipc.ts         all IPC handlers
@@ -788,7 +761,12 @@ the agent loop and UI never depend on a specific provider.
 
 - **Tool execution is sandboxed.** `run_shell` runs under `sandbox-exec` with a
   generated profile: deny-by-default, filesystem reads allowed, writes restricted
-  to the project + temp dirs, network denied unless in *full auto*.
+  to the project + temp dirs, network denied until you grant it (a one-time
+  consent in *full auto*, or "Allow for run" on a shell approval). Granted
+  network is confined to a per-domain egress allowlist on macOS and Linux:
+  direct sockets stay blocked and traffic flows through a local proxy that
+  permits package registries, VCS hosts, and domains you add in Settings (see
+  [docs/sandboxing.md](docs/sandboxing.md)).
 - **File tools are contained** to the workspace in code — any path that resolves
   outside the project root is rejected.
 - **Human in the loop.** Writes and shell commands require approval unless you

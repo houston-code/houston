@@ -1,5 +1,5 @@
 import type { ApprovalPolicy } from '@shared/types'
-import type { SandboxRunResult } from '../sandbox'
+import type { EgressProxyEndpoints, SandboxRunResult } from '../sandbox'
 import { runSandboxed, clampToolResult } from '../sandbox'
 
 /**
@@ -113,6 +113,8 @@ export interface RunVerifyInput {
   workspace: string
   roots?: string[]
   allowNetwork: boolean
+  /** Egress-proxy endpoints; with allowNetwork:true the command's egress is per-domain filtered. */
+  egressProxy?: EgressProxyEndpoints
   signal?: AbortSignal
   /** Byte cap for the fed-back output (reuse the shell-output budget). */
   maxBytes?: number
@@ -125,6 +127,7 @@ export interface RunVerifyInput {
     workspace: string
     roots?: string[]
     allowNetwork: boolean
+    egressProxy?: EgressProxyEndpoints
     timeoutMs?: number
     signal?: AbortSignal
   }) => Promise<SandboxRunResult>
@@ -148,6 +151,7 @@ export async function runVerification(input: RunVerifyInput): Promise<VerifyResu
       workspace: input.workspace,
       roots: input.roots,
       allowNetwork: input.allowNetwork,
+      egressProxy: input.egressProxy,
       timeoutMs: input.timeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS,
       signal: input.signal
     })

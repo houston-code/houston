@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import type { SandboxBackend, ShellLaunch } from './contract'
+import type { EgressProxyEndpoints, SandboxBackend, ShellLaunch } from './contract'
+import { EGRESS_PROXY_INNER_PORT, egressProxyEnv } from './egress-proxy'
 import { resolvePosixShell } from './shared'
 
 /**
@@ -18,6 +19,18 @@ import { resolvePosixShell } from './shared'
  *   - `--unshare-pid/-ipc/-uts` + `--die-with-parent` isolate and tie the lifetime of
  *     the sandbox to ours. Killing the host-side `bwrap` process group tears the whole
  *     PID namespace down atomically, so the existing process-group kill reaps everything.
+ *
+ * Proxied egress (network granted + egress allowlist active) KEEPS `--unshare-net`:
+ * the namespace still has no route out, so direct egress stays impossible, and the
+ * only road to the network is the egress proxy. The host's loopback is invisible
+ * from inside the namespace, so the proxy is reached through its unix socket
+ * (which crosses the boundary via the temp-dir bind): a small forwarder runs as
+ * the bwrap entrypoint, listens on 127.0.0.1:EGRESS_PROXY_INNER_PORT inside the
+ * namespace (bwrap brings the namespaced loopback up), bridges each connection
+ * into the unix socket, and execs the real command once the bridge is listening —
+ * see FORWARDER_SOURCE in egress-proxy.ts. The forwarder runs under the Electron
+ * binary with ELECTRON_RUN_AS_NODE=1 (plain Node semantics; the variable is
+ * scrubbed from the command's own environment).
  *
  * Where bubblewrap isn't usable (not installed, or unprivileged user namespaces are
  * disabled by the kernel/AppArmor), `selectBackend` falls back to the unconfined
@@ -82,9 +95,22 @@ export interface BwrapArgsInput {
   /** Writable temp dirs — already filtered to existing canonical paths. */
   tmpDirs: string[]
   allowNetwork: boolean
+  /** Egress proxy endpoints; with allowNetwork:true switches the launch to proxied mode. */
+  egressProxy?: EgressProxyEndpoints
+  /** Node-capable binary that runs the forwarder (production: process.execPath). */
+  nodeBin?: string
   command: string
   cwd: string
   shell?: string
+}
+
+/** True when this launch runs in proxied-egress mode (see the module docs). */
+function proxiedMode(input: Pick<BwrapArgsInput, 'allowNetwork' | 'egressProxy'>): boolean {
+  return (
+    input.allowNetwork &&
+    input.egressProxy?.unixSocketPath !== undefined &&
+    input.egressProxy?.forwarderPath !== undefined
+  )
 }
 
 /**
@@ -119,12 +145,32 @@ export function buildBwrapArgs(input: BwrapArgsInput): string[] {
     input.cwd
   ]
 
-  // network gate: empty net namespace (loopback only) when denied; share the host's when allowed
-  if (!input.allowNetwork) args.push('--unshare-net')
+  // Network gate: an empty net namespace (loopback only) when denied OR proxied —
+  // in proxied mode the forwarder below is the only bridge out. The namespace is
+  // shared with the host only for a full (mode 'all') grant.
+  const proxied = proxiedMode(input)
+  if (!input.allowNetwork || proxied) args.push('--unshare-net')
 
   // writable ONLY in roots + temp, layered over the read-only root
   for (const root of input.roots) args.push('--bind', root, root)
   for (const tmp of input.tmpDirs) args.push('--bind-try', tmp, tmp)
+
+  if (proxied) {
+    // Proxied egress: the forwarder is the entrypoint; the real command is its
+    // child (argv passed verbatim after `--`, no extra quoting layer).
+    const node = input.nodeBin ?? process.execPath
+    args.push(
+      node,
+      input.egressProxy!.forwarderPath!,
+      input.egressProxy!.unixSocketPath!,
+      String(EGRESS_PROXY_INNER_PORT),
+      '--',
+      shell,
+      '-c',
+      input.command
+    )
+    return args
+  }
 
   // exec the command (env is inherited from the spawn's env)
   args.push(shell, '-c', input.command)
@@ -197,11 +243,37 @@ export const BubblewrapBackend: SandboxBackend = {
   // Honest: the bash session prelude only runs when bash is the resolved shell. On the
   // (near-impossible) bash-less host bwrap falls back to /bin/sh and callers skip it.
   supportsSession: resolvePosixShell().isBash,
-  buildLaunch({ command, roots, allowNetwork, cwd }): ShellLaunch {
+  buildLaunch({ command, roots, allowNetwork, egressProxy, cwd }): ShellLaunch {
     const { shell, isBash } = resolvePosixShell()
     const writableRoots = dedupeExisting(roots.length ? roots : [cwd])
     const tmpDirs = dedupeExisting(linuxTmpDirs())
-    const args = buildBwrapArgs({ roots: writableRoots, tmpDirs, allowNetwork, command, cwd, shell })
-    return { file: 'bwrap', args, detached: true, windowsHide: false, supportsSession: isBash }
+    const proxied = proxiedMode({ allowNetwork, egressProxy })
+    const args = buildBwrapArgs({
+      roots: writableRoots,
+      tmpDirs,
+      allowNetwork,
+      egressProxy,
+      command,
+      cwd,
+      shell
+    })
+    return {
+      file: 'bwrap',
+      args,
+      detached: true,
+      windowsHide: false,
+      supportsSession: isBash,
+      // Proxied mode: ELECTRON_RUN_AS_NODE makes the Electron binary run the
+      // forwarder as plain Node (the forwarder scrubs it from the command's own
+      // env); the proxy vars point the toolchain at the forwarder's inner port.
+      ...(proxied
+        ? {
+            env: {
+              ELECTRON_RUN_AS_NODE: '1',
+              ...egressProxyEnv(`http://127.0.0.1:${EGRESS_PROXY_INNER_PORT}`)
+            }
+          }
+        : {})
+    }
   }
 }

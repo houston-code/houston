@@ -10,6 +10,7 @@
  */
 
 import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
+import type { SandboxEgressSettings } from './egress'
 
 export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'
 
@@ -377,6 +378,14 @@ export interface AppSettings {
   projectPlugins?: boolean
   /** Extra directories (beyond the project folder) the agent may read and write. */
   additionalRoots?: string[]
+  /**
+   * Egress policy for network-granted sandbox commands (see @shared/egress).
+   * Absent = allowlist mode: granted network is confined to the built-in
+   * dev-infrastructure allowlist (package registries, VCS hosts) plus the user's
+   * `allow` entries, enforced by a loopback proxy where the OS sandbox can
+   * confine egress. `mode: 'all'` is the explicit unrestricted escape hatch.
+   */
+  sandboxEgress?: SandboxEgressSettings
   /**
    * Show a native desktop notification when the agent finishes, needs approval,
    * asks a question, or opens/merges a pull request while Houston isn't the

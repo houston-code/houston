@@ -52,6 +52,70 @@ go via SDK constructor params), so it hardens the user's *ambient* shell secrets
 than fixing an active leak. An MCP server that legitimately needs a token still receives
 it — `McpServerConfig.env` is re-applied after the strip.
 
+## Egress allowlisting (macOS + Linux)
+
+Granting the sandbox "network" used to be all-or-nothing at the OS layer: once a run
+had the shell-network grant, a prompt-injected `curl` could read any file the sandbox
+can read (essentially everything) and POST it to any host. The egress allowlist closes
+that per-domain, **without TLS interception**: granted network is routed through a
+loopback HTTP proxy owned by the main process
+([`src/main/sandbox/egress-proxy.ts`](../src/main/sandbox/egress-proxy.ts)), and the
+OS sandbox denies every direct route out, so the proxy is the only egress path. HTTPS
+arrives at the proxy as `CONNECT host:port` and plain HTTP as an absolute-form URI —
+the hostname is visible either way, which is exactly the granularity a per-domain
+allow/deny needs. Bodies stay opaque; no masking (MITM) proxy, no trust-store changes.
+
+The policy ([`src/shared/egress.ts`](../src/shared/egress.ts), user-visible in
+Settings → Sandbox egress) is: deny entries win over every allow; user allow entries
+extend a built-in allowlist of dev infrastructure (package registries, VCS hosts);
+every entry covers its subdomains on label boundaries; anything else is refused with
+an `EGRESS_BLOCKED` body that names the host. The proxy re-reads settings per request,
+so adding a domain applies mid-run. Private/loopback/metadata IP *literals* are never
+proxied — the proxy runs outside the sandbox and must not become an SSRF pivot with
+more reach than the sandbox itself. Mode `all` (Settings) is the explicit escape hatch
+back to unrestricted granted network.
+
+Per-platform enforcement of "the proxy is the only road out":
+
+- **macOS (Seatbelt):** the proxied profile allows outbound only to loopback
+  (`(allow network-outbound (remote ip "localhost:*"))`), where the proxy listens;
+  loopback bind/inbound stay allowed so dev servers keep working. DNS is cut
+  explicitly: `getaddrinfo` resolves through the `com.apple.mDNSResponder` mach
+  service (which lives outside the sandbox), so a socket-only restriction would
+  leave a DNS-tunnel exfiltration channel open — the profile therefore *denies*
+  the resolver mach services (`com.apple.mDNSResponder`, `com.apple.dnssd.service`)
+  in the confined modes. `localhost` still resolves (via `/etc/hosts` / the numeric
+  path, no daemon) and the proxy resolves public names for the toolchain, so
+  nothing legitimate breaks. `HTTP(S)_PROXY` / `ALL_PROXY` in the command's env
+  point the toolchain at the proxy; `NO_PROXY=localhost,…` keeps loopback traffic
+  direct.
+- **Linux (bubblewrap):** proxied mode KEEPS `--unshare-net` (the empty network
+  namespace), so there is no route out at all — including to the host's loopback,
+  where the proxy's TCP port lives. The bridge is a unix socket, which crosses the
+  namespace via the temp-dir bind: a small forwarder (written by the proxy, run as
+  the bwrap entrypoint under `ELECTRON_RUN_AS_NODE=1`) listens on a fixed inner
+  loopback port, pipes each connection into the unix socket, and starts the real
+  command only once the bridge is up. The `linux-sandbox` CI job exercises this chain
+  for real (conformance tests C8a–C8d).
+- **Windows / no-sandbox hosts:** cannot be enforced (no OS mechanism blocks direct
+  sockets), so no proxy env is injected — advisory-only restriction would break
+  commands without adding security. The existing posture holds: unconfined shell
+  always requires explicit consent, even in full auto.
+
+Failure is **closed**: if the proxy cannot start, the run's shell network stays off
+rather than falling back to unrestricted egress.
+
+Known residuals, accepted and documented: an allowlisted collaborative host (e.g.
+github.com) still accepts authenticated writes, so exfiltration to *your own
+reachable services* on allowed domains remains possible — authenticated, attributable,
+and revocable, unlike arbitrary-domain egress; an allowlisted hostname that resolves
+to a private IP is not re-checked at connect time (same literal-only stance as
+`web_fetch`, see the DNS-rebinding roadmap item); and SSH/raw-TCP protocols simply
+don't traverse an HTTP proxy — under the allowlist they are blocked, which is the
+conservative direction (SSH is an uninspectable channel). On Linux, per-command
+network namespaces mean a sandboxed dev server is only reachable within its own
+command; users who need the old shared-namespace behavior can select mode `all`.
+
 ## Windows: why not AppContainer?
 
 AppContainer is the closest Windows security primitive. A process runs under a token

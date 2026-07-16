@@ -22,6 +22,7 @@ import type {
   PermissionRule,
   ProviderConfig
 } from '@shared/types'
+import type { SandboxEgressSettings } from '@shared/egress'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES, DEFAULT_MAX_ITERATIONS } from '@shared/defaults'
 import {
@@ -249,6 +250,55 @@ function HeadersField({
         setText(headersToText(parsed))
       }}
     />
+  )
+}
+
+/**
+ * "One domain per line" editor for the sandbox-egress allow/deny lists. Same
+ * local-text-while-focused pattern as ModelsField: parsing on every keystroke
+ * would strip the newline being typed. Entries are free-form here — the egress
+ * matcher (@shared/egress parseEgressEntry) tolerates pasted URLs, `*.` prefixes,
+ * and ports, so the editor only trims and drops blank lines.
+ */
+function DomainListField({
+  label,
+  domains,
+  placeholder,
+  onChange
+}: {
+  label: string
+  domains: string[]
+  placeholder: string
+  onChange: (domains: string[]) => void
+}): JSX.Element {
+  const [text, setText] = useState(() => domains.join('\n'))
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setText(domains.join('\n'))
+  }, [domains])
+
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <textarea
+        rows={3}
+        value={text}
+        placeholder={placeholder}
+        onFocus={() => {
+          focused.current = true
+        }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          focused.current = false
+          const parsed = text
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean)
+          onChange(parsed)
+          setText(parsed.join('\n'))
+        }}
+      />
+    </label>
   )
 }
 
@@ -607,6 +657,12 @@ export function SettingsModal({
       ...s,
       additionalRoots: (s.additionalRoots ?? []).filter((d) => d !== dir)
     }))
+
+  // Sandbox egress: absent settings mean allowlist mode (the secure default).
+  const egress = settings.sandboxEgress ?? {}
+  const egressMode: 'allowlist' | 'all' = egress.mode === 'all' ? 'all' : 'allowlist'
+  const patchEgress = (patch: Partial<SandboxEgressSettings>): void =>
+    setSettings((s) => ({ ...s, sandboxEgress: { ...(s.sandboxEgress ?? {}), ...patch } }))
 
   const servers = settings.mcpServers ?? []
   const setServers = (next: McpServerConfig[]): void =>
@@ -1704,30 +1760,74 @@ export function SettingsModal({
             )}
 
             {tab === 'workspace' && (
-              <SettingsSection
-                title="Additional folders"
-                desc={
-                  <>
-                    Extra directories the agent may read and write, beyond the project folder.
-                    They&apos;re added to the file tools&apos; allowed roots and the shell sandbox.
-                    Only add folders you trust the agent to modify.
-                  </>
-                }
-              >
-                {additionalRoots.map((dir) => (
-                  <div className="rule" key={dir}>
-                    <code className="rule__path" title={dir}>
-                      {dir}
-                    </code>
-                    <button className="btn btn--sm btn--danger" onClick={() => removeRoot(dir)}>
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button className="btn btn--sm" onClick={() => void addRoot()}>
-                  + Add folder
-                </button>
-              </SettingsSection>
+              <>
+                <SettingsSection
+                  title="Additional folders"
+                  desc={
+                    <>
+                      Extra directories the agent may read and write, beyond the project folder.
+                      They&apos;re added to the file tools&apos; allowed roots and the shell sandbox.
+                      Only add folders you trust the agent to modify.
+                    </>
+                  }
+                >
+                  {additionalRoots.map((dir) => (
+                    <div className="rule" key={dir}>
+                      <code className="rule__path" title={dir}>
+                        {dir}
+                      </code>
+                      <button className="btn btn--sm btn--danger" onClick={() => removeRoot(dir)}>
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <button className="btn btn--sm" onClick={() => void addRoot()}>
+                    + Add folder
+                  </button>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Sandbox egress"
+                  desc={
+                    <>
+                      Where shell commands may connect once network is granted. The allowlist
+                      restricts granted network to common development infrastructure (package
+                      registries, VCS hosts) plus the domains you add; each entry also covers its
+                      subdomains, and the deny list wins over every allow. &quot;All domains&quot;
+                      removes the restriction: any granted command can then reach any host.
+                    </>
+                  }
+                >
+                  <label className="field">
+                    <span>Mode</span>
+                    <select
+                      value={egressMode}
+                      onChange={(e) =>
+                        patchEgress({ mode: e.target.value as SandboxEgressSettings['mode'] })
+                      }
+                    >
+                      <option value="allowlist">Allowlist (recommended)</option>
+                      <option value="all">All domains</option>
+                    </select>
+                  </label>
+                  {egressMode === 'allowlist' && (
+                    <>
+                      <DomainListField
+                        label="Additional allowed domains"
+                        domains={egress.allow ?? []}
+                        placeholder={'one domain per line, e.g. artifactory.corp.example'}
+                        onChange={(allow) => patchEgress({ allow })}
+                      />
+                      <DomainListField
+                        label="Denied domains"
+                        domains={egress.deny ?? []}
+                        placeholder={'one domain per line; overrides the allowlist'}
+                        onChange={(deny) => patchEgress({ deny })}
+                      />
+                    </>
+                  )}
+                </SettingsSection>
+              </>
             )}
 
             {tab === 'keyboard' && (

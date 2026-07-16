@@ -34,7 +34,8 @@ import {
   DEFAULT_TIMEOUT_MS,
   runSandboxed,
   sandboxAvailable,
-  spawnSandboxed
+  spawnSandboxed,
+  type EgressProxyEndpoints
 } from '../sandbox'
 import { killShell, readShellOutput, registerShell } from './shells'
 import { runInSession, type ShellSession } from './shell-session'
@@ -50,24 +51,8 @@ import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
 import { runReadGit } from './gitRead'
 import { SPAWN_SESSION_NAME, type SpawnSessionResult } from './spawn'
-import type { ScheduledRunInfo } from './scheduler'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
-
-/**
- * What a dispatch tool hands the loop's subagent runner. `model` and `resume`
- * are optional refinements: run on a sibling model, or continue a stored
- * subagent (from a prior dispatch in this chat) with `prompt` as the follow-up.
- */
-export interface DispatchAgentOptions {
-  prompt: string
-  /** Named custom agent (.houston/agents) to run as. */
-  agent?: string
-  /** Model override for this dispatch — one of the current provider's model ids. */
-  model?: string
-  /** Id of a stored subagent to resume (shown at the end of its earlier report). */
-  resume?: string
-}
 
 export interface ToolContext {
   /** Canonical (realpath'd) workspace root (the primary directory). */
@@ -75,6 +60,13 @@ export interface ToolContext {
   /** All allowed roots (workspace + added directories). Defaults to [workspace]. */
   roots?: string[]
   allowNetwork: boolean
+  /**
+   * Egress-proxy endpoints (injected by the loop when the egress allowlist is
+   * active). With allowNetwork:true, run_shell threads these into the sandbox so
+   * granted network is proxied and per-domain filtered rather than unrestricted;
+   * absent = the user chose egress mode 'all' (legacy full network).
+   */
+  egressProxy?: EgressProxyEndpoints
   signal?: AbortSignal
   /**
    * The conversation this run belongs to, when started from the UI. Tagged onto a
@@ -93,7 +85,7 @@ export interface ToolContext {
   /** Active web-search provider id (selected in Settings; injected by the loop). */
   searchProvider?: string
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
-  dispatchSubAgent?: (opts: DispatchAgentOptions) => Promise<string>
+  dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
   /**
    * Run a WRITABLE subagent — edits files and runs shell commands, sandboxed to the
    * project with no network (injected by the loop). Gated by the approval on the
@@ -102,25 +94,9 @@ export interface ToolContext {
    * with no OS sandbox, each of its shell commands is instead propagated back to
    * the user as its own approval prompt (the loop's unconfined-shell gate).
    */
-  dispatchWritableSubAgent?: (opts: DispatchAgentOptions) => Promise<string>
+  dispatchWritableSubAgent?: (prompt: string, agent?: string) => Promise<string>
   /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
-  dispatchReview?: (
-    base?: string,
-    paths?: string[],
-    effort?: 'normal' | 'high',
-    model?: string
-  ) => Promise<string>
-  /**
-   * Manage scheduled background runs (injected by the loop when the host wired a
-   * scheduler backend; the loop fills in the run's provider, model, approval
-   * policy, and workspace on create). Backs schedule_run / list_scheduled_runs /
-   * cancel_scheduled_run; undefined on hosts with no scheduler.
-   */
-  scheduler?: {
-    create(input: { name: string; spec: string; prompt: string }): ScheduledRunInfo
-    list(): ScheduledRunInfo[]
-    cancel(id: string): boolean
-  }
+  dispatchReview?: (base?: string, paths?: string[], effort?: 'normal' | 'high') => Promise<string>
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
@@ -808,6 +784,41 @@ export function networkBlockHint(
 }
 
 /**
+ * Signatures of the egress proxy refusing a destination: the deny body's marker
+ * (plain HTTP, or a client that prints the tunnel response), and the
+ * "403 from proxy" shapes curl/libcurl/npm print for a refused CONNECT.
+ */
+const EGRESS_DENIED_RE =
+  /EGRESS_BLOCKED|proxy[^\n]*403|403[^\n]*proxy|CONNECT tunnel failed[^\n]*403/i
+
+/** The hint appended to a failure caused by the egress allowlist refusing a host. */
+export const EGRESS_BLOCKED_HINT =
+  '[note: this command had network access, but restricted to the sandbox egress allowlist (package registries, ' +
+  'VCS hosts, plus any domains added in Settings under "Sandbox egress"). The proxy refused a destination that is ' +
+  'not on the allowlist. This is policy, not an outage: do not retry the same host. If the destination is ' +
+  'legitimately needed, ask the user to add its domain in Settings under "Sandbox egress" (or switch egress ' +
+  'mode to "all domains"), then retry.]'
+
+/**
+ * Return {@link EGRESS_BLOCKED_HINT} when a *failed* command that ran with
+ * PROXIED network looks like it was refused by the egress allowlist — so the
+ * agent asks for the domain instead of retrying or calling the network broken.
+ * Only fires in proxied mode (network granted + egress endpoints), which is
+ * disjoint from {@link networkBlockHint} (network not granted).
+ */
+export function egressBlockHint(
+  allowNetwork: boolean,
+  proxied: boolean,
+  result: { exitCode: number | null; timedOut?: boolean },
+  output: string
+): string {
+  if (!allowNetwork || !proxied) return ''
+  const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
+  if (!failed) return ''
+  return EGRESS_DENIED_RE.test(output) ? EGRESS_BLOCKED_HINT : ''
+}
+
+/**
  * Signatures of a filesystem write the sandbox denied — most commonly a tool
  * writing to its $HOME cache (`~/.npm`, `~/.cache`, …), which is outside the
  * writable roots. Deliberately excludes a bare "operation not permitted" (that
@@ -911,7 +922,7 @@ const runShell: ToolDef = {
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; on a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.',
+      'Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; granted network is restricted to an egress allowlist of dev-infrastructure domains (package registries, VCS hosts, plus domains the user adds in Settings), so a refused destination is policy, not an outage. On a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.',
     parameters: objectSchema(
       {
         command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' },
@@ -939,6 +950,7 @@ const runShell: ToolDef = {
         workspace: ctx.workspace,
         roots: rootsOf(ctx),
         allowNetwork: ctx.allowNetwork,
+        egressProxy: ctx.egressProxy,
         signal: ctx.signal
       })
       const id = registerShell(command, child, ctx.conversationId)
@@ -957,6 +969,7 @@ const runShell: ToolDef = {
           workspace: ctx.workspace,
           roots: rootsOf(ctx),
           allowNetwork: ctx.allowNetwork,
+          egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
           run: runSandboxed
@@ -967,6 +980,7 @@ const runShell: ToolDef = {
           workspace: ctx.workspace,
           roots: rootsOf(ctx),
           allowNetwork: ctx.allowNetwork,
+          egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal
         })
@@ -983,9 +997,12 @@ const runShell: ToolDef = {
     if (body) parts.push(body)
     if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
-    // At most one diagnostic hint: a network-blocked failure, else a sandbox
-    // write-denied failure (e.g. a package manager's cache write to ~/.npm).
-    const netHint = networkBlockHint(ctx.allowNetwork, result, body)
+    // At most one diagnostic hint: an egress-allowlist refusal (network granted
+    // but the destination denied), else a network-blocked failure (network not
+    // granted), else a sandbox write-denied failure (e.g. a package manager's
+    // cache write to ~/.npm). The first two are disjoint by construction.
+    const egressHint = egressBlockHint(ctx.allowNetwork, ctx.egressProxy !== undefined, result, body)
+    const netHint = egressHint || networkBlockHint(ctx.allowNetwork, result, body)
     if (netHint) parts.push(netHint)
     else {
       const writeHint = sandboxWriteBlockHint(result, body)
@@ -1318,7 +1335,7 @@ const dispatchAgent: ToolDef = {
   schema: {
     name: 'dispatch_agent',
     description:
-      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project, and can fetch public URLs and search the web (each network request asks the user for approval first); it cannot edit files or run commands. It returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report. Each report ends with the subagent\'s id — pass it as `resume` (with your follow-up as `prompt`) to continue that agent with its context intact instead of re-dispatching from scratch.',
+      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },
@@ -1330,16 +1347,6 @@ const dispatchAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the name of a custom agent (from .houston/agents) to use. Omit for the default research agent.'
-        },
-        model: {
-          type: 'string',
-          description:
-            "Optional: run the subagent on a different model from the current provider (e.g. a cheaper/faster sibling for routine legwork). Must be one of the provider's configured model ids; omit to use the current model."
-        },
-        resume: {
-          type: 'string',
-          description:
-            'Optional: the id of a subagent from an earlier dispatch in this chat (shown at the end of its report, e.g. "ag1"). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session.'
         }
       },
       ['description', 'prompt']
@@ -1349,12 +1356,7 @@ const dispatchAgent: ToolDef = {
     const prompt = str(args, 'prompt')
     if (!prompt) throw new Error('prompt is required.')
     if (!ctx.dispatchSubAgent) throw new Error('Subagents are not available in this context.')
-    return ctx.dispatchSubAgent({
-      prompt,
-      agent: str(args, 'agent') || undefined,
-      model: str(args, 'model') || undefined,
-      resume: str(args, 'resume') || undefined
-    })
+    return ctx.dispatchSubAgent(prompt, str(args, 'agent') || undefined)
   }
 }
 
@@ -1371,7 +1373,7 @@ const dispatchWritableAgent: ToolDef = {
   schema: {
     name: 'dispatch_writable_agent',
     description:
-      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Edits and commands are confined to the project, and its shell commands have no network; it can also fetch public URLs and search the web, with each network request asking the user for approval first. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; on a host without an OS sandbox (e.g. Windows), each shell command it runs also asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
+      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Everything it does is confined to the project with no network access. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; the one exception is a host without an OS sandbox (e.g. Windows), where each shell command the subagent runs asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },
@@ -1384,16 +1386,6 @@ const dispatchWritableAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the name of a custom agent (from .houston/agents, marked `write: true`) to use. Omit for the default writable agent.'
-        },
-        model: {
-          type: 'string',
-          description:
-            "Optional: run the subagent on a different model from the current provider. Must be one of the provider's configured model ids; omit to use the current model."
-        },
-        resume: {
-          type: 'string',
-          description:
-            'Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session.'
         }
       },
       ['description', 'prompt']
@@ -1405,12 +1397,7 @@ const dispatchWritableAgent: ToolDef = {
     if (!ctx.dispatchWritableSubAgent) {
       throw new Error('Writable subagents are not available in this context.')
     }
-    return ctx.dispatchWritableSubAgent({
-      prompt,
-      agent: str(args, 'agent') || undefined,
-      model: str(args, 'model') || undefined,
-      resume: str(args, 'resume') || undefined
-    })
+    return ctx.dispatchWritableSubAgent(prompt, str(args, 'agent') || undefined)
   }
 }
 
@@ -1433,9 +1420,8 @@ function formatSpawnResult(r: SpawnSessionResult): string {
       : `Workspace: ${r.workspace}`
   )
   lines.push(
-    'It is its own persisted conversation the user can open. It runs independently and will not report back into this chat.'
+    'It appears in the sidebar with a running indicator; the user can open it to watch, answer an approval, or take over. It runs independently and will not report back into this chat.'
   )
-  if (r.note) lines.push(r.note)
   return lines.join('\n')
 }
 
@@ -1515,110 +1501,6 @@ const spawnSessionTool: ToolDef = {
   }
 }
 
-/** Local-time stamp for schedule confirmations/listings, or a note for a spent one-shot. */
-function formatFireTime(ms: number | null): string {
-  return ms === null ? 'never (already fired)' : new Date(ms).toLocaleString()
-}
-
-const scheduleRun: ToolDef = {
-  // Creates standing config that starts unattended background runs later — a
-  // consent-worthy state change, so it's gated like a write (and refused in
-  // read-only plan mode).
-  kind: 'write',
-  summarize: (a) => `Schedule run: ${str(a, 'name') || str(a, 'spec') || '?'}`,
-  schema: {
-    name: 'schedule_run',
-    description:
-      'Schedule a recurring (or one-time) background agent run. At each occurrence, a fresh session is started with the stored prompt — it appears alongside the other chats and runs autonomously under your current approval policy (never more permissive). Use it for routine, self-contained jobs the user wants repeated — e.g. "daily at 09:00, run the test suite and summarize any failures". The fired session sees ONLY the stored prompt, so make it self-contained. Schedules fire while Houston is running (this is an in-app scheduler, not OS cron) and persist across restarts; an occurrence missed while Houston was closed fires once at the next launch.',
-    parameters: objectSchema(
-      {
-        name: {
-          type: 'string',
-          description: "A short human name (a few words); becomes each fired session's title."
-        },
-        spec: {
-          type: 'string',
-          description:
-            'When to run: "every <N>m|h|d" (minimum 5 minutes), "daily at HH:MM", "weekdays at HH:MM", "weekly on <day> at HH:MM", or "once at YYYY-MM-DD HH:MM" — times are local, 24-hour.'
-        },
-        prompt: {
-          type: 'string',
-          description:
-            'The full task each fired run starts with. Self-contained: the fired session sees nothing from this chat.'
-        }
-      },
-      ['name', 'spec', 'prompt']
-    )
-  },
-  async execute(args, ctx) {
-    const name = str(args, 'name').trim()
-    const spec = str(args, 'spec').trim()
-    const prompt = str(args, 'prompt').trim()
-    if (!name) throw new Error('name is required.')
-    if (!spec) throw new Error('spec is required.')
-    if (!prompt) throw new Error('prompt is required — each fired run starts with only this text.')
-    if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
-    const info = ctx.scheduler.create({ name, spec, prompt })
-    return (
-      `Scheduled "${info.name}" (id ${info.id}) — ${info.spec}; next run ${formatFireTime(info.nextRunAt)}.\n` +
-      `Each occurrence starts a fresh background session with the stored prompt (model ${info.model}, ` +
-      `"${info.approvalPolicy}" approvals). Schedules fire while Houston is running; cancel with ` +
-      `cancel_scheduled_run({ id: "${info.id}" }).`
-    )
-  }
-}
-
-const listScheduledRuns: ToolDef = {
-  kind: 'read',
-  summarize: () => 'List scheduled runs',
-  schema: {
-    name: 'list_scheduled_runs',
-    description:
-      'List the scheduled background runs configured on this machine: id, name, recurrence, next/last fire time, and whether the last fire succeeded.',
-    parameters: objectSchema({}, [])
-  },
-  async execute(_args, ctx) {
-    if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
-    const all = ctx.scheduler.list()
-    if (all.length === 0) return 'No scheduled runs.'
-    return all
-      .map((s) => {
-        const last = s.lastFiredAt
-          ? `; last fired ${formatFireTime(s.lastFiredAt)}${
-              s.lastResult === 'error' ? ` (failed: ${s.lastError ?? 'unknown error'})` : ''
-            }`
-          : ''
-        return `- ${s.id}: "${s.name}" — ${s.spec}; next run ${formatFireTime(s.nextRunAt)}${last}`
-      })
-      .join('\n')
-  }
-}
-
-const cancelScheduledRun: ToolDef = {
-  // Removes standing config — a state change, approval-gated like the create.
-  kind: 'write',
-  summarize: (a) => `Cancel scheduled run ${str(a, 'id') || '?'}`,
-  schema: {
-    name: 'cancel_scheduled_run',
-    description:
-      'Cancel a scheduled background run by id (from list_scheduled_runs or the schedule_run confirmation). Already-started sessions are unaffected; the schedule simply stops firing.',
-    parameters: objectSchema(
-      {
-        id: { type: 'string', description: 'The schedule id to cancel.' }
-      },
-      ['id']
-    )
-  },
-  async execute(args, ctx) {
-    const id = str(args, 'id').trim()
-    if (!id) throw new Error('id is required.')
-    if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
-    return ctx.scheduler.cancel(id)
-      ? `Cancelled scheduled run ${id}.`
-      : `No scheduled run with id ${id} — it may already be cancelled. Use list_scheduled_runs to see current ids.`
-  }
-}
-
 const reviewChanges: ToolDef = {
   kind: 'read', // spawns read-only reviewer subagents + read-only git — no side effects, no approval
   summarize: (a) => `Review changes${str(a, 'base') ? ` vs ${str(a, 'base')}` : ''}`,
@@ -1644,11 +1526,6 @@ const reviewChanges: ToolDef = {
           enum: ['normal', 'high'],
           description:
             "Verification depth. 'high' verifies each finding with several independent skeptics and keeps only the majority-confirmed ones (more thorough, more model calls); 'normal' uses a single verifier. Default 'normal' — use 'high' for security-sensitive or high-stakes changes."
-        },
-        model: {
-          type: 'string',
-          description:
-            "Optional: run the reviewer and verifier subagents on a different model from the current provider (e.g. a cheaper sibling for a routine review). Must be one of the provider's configured model ids; omit to use the current model."
         }
       },
       []
@@ -1660,12 +1537,7 @@ const reviewChanges: ToolDef = {
       ? args.paths.filter((p): p is string => typeof p === 'string' && p.length > 0)
       : undefined
     const effort = str(args, 'effort') === 'high' ? 'high' : undefined
-    return ctx.dispatchReview(
-      str(args, 'base') || undefined,
-      paths,
-      effort,
-      str(args, 'model') || undefined
-    )
+    return ctx.dispatchReview(str(args, 'base') || undefined, paths, effort)
   }
 }
 
@@ -2661,9 +2533,6 @@ export const TOOLS: ToolDef[] = [
   dispatchAgent,
   dispatchWritableAgent,
   spawnSessionTool,
-  scheduleRun,
-  listScheduledRuns,
-  cancelScheduledRun,
   reviewChanges,
   gitStatus,
   gitDiff,

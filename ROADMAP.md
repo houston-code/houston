@@ -71,19 +71,19 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   so it's a cross-cutting change worth doing for all at once rather than per-tool.
   In practice the host-literal checks already stop the common cases.
 
-- **Per-destination forward proxy for shell egress.** Houston's own network tools
-  (`web_fetch`, `web_search`, `gh_*`) are now consented per destination, and shell
-  network is gated behind a one-time per-run consent so full-auto no longer implies
-  blanket egress. But once shell network is granted, a raw `curl` in `run_shell` can
-  still reach any host, because the sandbox's network switch is all-or-nothing at the
-  OS layer. Closing that wants routing shell egress through a loopback proxy Houston
-  controls (deny direct sockets in the sandbox profile, inject `HTTP(S)_PROXY`) so
-  each destination is allowlisted the same way the built-in tools are. *Why deferred:*
-  a real proxy with a per-platform sandbox-profile change is a large, cross-cutting
-  build, and even then HTTPS bodies stay opaque (only the CONNECT host is visible), so
-  it buys per-destination control but not body-level credential masking for shell. The
-  per-destination consent + egress masking shipped here bound the surface in the
-  meantime.
+- **Egress-allowlist follow-ups.** The per-domain forward proxy for shell egress has
+  shipped (macOS + Linux: direct sockets denied in the sandbox profile, granted network
+  routed through a loopback proxy that enforces the Settings allowlist — see
+  docs/sandboxing.md). What remains, deliberately deferred: **interactive per-host
+  grants** (a denied destination could offer a one-click "allow this domain for the
+  run" prompt instead of requiring a Settings edit — needs a mid-command consent UX
+  that doesn't hang the running process); **Linux shared-loopback proxied mode**
+  (proxied commands run in per-command network namespaces, so a sandboxed dev server
+  isn't reachable from the Preview panel or later commands; bridging inbound loopback
+  across namespaces wants a port-forwarding companion to the existing outbound
+  forwarder); and **body-level masking for shell egress** (HTTPS bodies stay opaque to
+  the proxy by design — only the CONNECT hostname is visible — so credential masking
+  covers Houston's own network tools, not raw shell traffic).
 
 - **Mid-run resume after a crash/restart.** Re-enter an interrupted tool loop
   exactly where it stopped. *Why deferred:* conversations already persist
@@ -101,49 +101,22 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   macOS is now code-signed (Developer ID) and notarized; **Windows Authenticode signing**
   is the remaining code-signing follow-up so the first-run SmartScreen warning goes away.
 
-- **Multi-agent orchestration beyond delegation.** Delegation itself has shipped
-  in stages. Subagents come in two tiers: `dispatch_agent` (and custom
-  `.houston/agents`) is read-only, while the opt-in `dispatch_writable_agent` (and
-  custom agents marked `write: true`) delegates a whole task to a nested agent
-  loop that can also edit files and run shell commands, all confined to the
-  project. The dispatch call itself is approval-gated (a write-kind tool, blocked
-  in plan mode): one consent covers the delegated task's local actions (see
-  [`subagent.ts`](src/main/agent/subagent.ts)). Calls that leave that envelope
-  propagate back to the user as their own approval prompts, each shown live in
-  the transcript: every network request (either tier may `web_fetch`/`web_search`,
-  gated per destination, mirroring the main loop's egress consent — a subagent's
-  shell commands stay offline), and, on a host with no OS sandbox, each shell
-  command, matching the main loop's invariant that an unconfined command never
-  runs without per-command consent. On top of that, dispatches stream live
-  turn-by-turn progress in every client; each subagent is resumable by id
-  (`resume` sends a follow-up into its retained context); a dispatch or review can
-  run on a cheaper sibling `model` (or a custom agent can pin one via
-  front-matter); subagents can fan out one level of nested read-only researchers;
-  `spawn_session` works on all three clients; and `schedule_run` gives
-  recurring/one-time background runs. *Still deferred:* a full **orchestration
-  runtime** — scripted multi-agent workflows (deterministic fan-out/join
-  pipelines), named agent teams with roles, and a manager view that supervises
-  many concurrent agents across sessions. *Why deferred:* those need a
-  first-class run-graph model, cross-session messaging, and their own
-  supervision/consent UX — a product-scale design, not an increment on the
-  dispatch tools.
-
-- **Interactive MCP elicitation, and server prompts as slash commands.** Remote
-  MCP support now covers OAuth sign-in, server-initiated notifications
-  (`list_changed` refreshes tools/resources/prompts live, progress keeps long
-  calls alive), and prompt discovery via the `mcp_list_prompts` /
-  `mcp_get_prompt` meta-tools. Two follow-ups remain. (1) *Elicitation:* when a
-  server asks the user a question mid-call (`elicitation/create`), Houston
-  currently declines it cleanly at the protocol level (JSON-RPC method-not-found,
-  so the server never hangs and can take its no-answer path) instead of showing
-  the user a prompt. Full support means declaring the capability and wiring a new
-  blocking agent event through all three clients (GUI dialog, TUI prompt,
-  headless auto-decline), per the client-parity rule. (2) *Prompts as commands:*
-  surfacing each server prompt as a first-class `/` slash command needs menu +
-  completion plumbing in both interactive clients; the meta-tools already give
-  the agent the same data. *Why deferred:* both are cross-client interaction
-  surfaces, not protocol work; shipping them half-wired would hang runs or drift
-  the clients apart.
+- **Write-capable / multi-agent delegation (write tier shipped, gaps remain).**
+  Subagents now come in two tiers. `dispatch_agent` (and custom `.houston/agents`)
+  stays read-only: the subagent reads/searches and reports back. The opt-in
+  `dispatch_writable_agent` (and custom agents marked `write: true`) delegates a
+  whole task to a nested agent loop that can also edit files and run shell
+  commands, all confined to the project with no network access. The dispatch call
+  itself is approval-gated (a write-kind tool, blocked in plan mode): one consent
+  covers the delegated task, which the subagent then carries out autonomously
+  without per-action prompts (see [`subagent.ts`](src/main/agent/subagent.ts)).
+  The one exception is unconfined shell: on a host with no OS sandbox, each shell
+  command the subagent runs is propagated back to the user as its own approval
+  prompt with the command's run and result shown live in the transcript, matching
+  the main loop's invariant that an unconfined command never runs without
+  per-command consent. Streaming a nested subagent's live status was already in
+  place via the `subagent` agent event. *Still deferred:* network access for
+  subagents; and nested delegation (a subagent dispatching its own subagents).
 
 - **Persistent code index / semantic (embeddings) search.** Houston searches the
   project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**

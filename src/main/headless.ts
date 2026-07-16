@@ -499,19 +499,11 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         // stdout stays the model's answer; --json already emitted the raw event.
         if (!opts.json) deps.err(`· ${e.message}\n`)
         break
-      case 'tool_progress':
-        // Live progress from a long-running tool (a 16-turn subagent dispatch, a
-        // multi-dimension review) — without it the run reads as a stall between
-        // tool_start and its result. stderr, like the other tool activity.
-        if (!opts.json && e.message.trim()) deps.err(`·   ${e.message.trim()}\n`)
-        break
-      case 'subagent':
-        // A nested subagent row (e.g. one review dimension) starting/finishing.
-        if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}\n`)
-        break
       // Internal/streaming events with no headless surface: the --json path above
       // already emits each verbatim, and the human output doesn't show them.
       case 'reasoning':
+      case 'subagent':
+      case 'tool_progress':
       case 'turn_start':
         break
       default:

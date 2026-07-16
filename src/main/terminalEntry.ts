@@ -15,12 +15,6 @@ import { killAllShells } from './agent/shells'
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
-import type { AgentEvent } from '@shared/agent'
-import { setSpawnBackend } from './agent/spawn'
-import { setSchedulerBackend } from './agent/scheduler'
-import { createSpawnBackend } from './spawnSession'
-import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
-import { createWorktree, removeWorktree } from './agent/worktree'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
@@ -48,8 +42,7 @@ import {
   listConversations,
   getConversation,
   searchConversations,
-  forkConversation,
-  setGeneratedTitle
+  forkConversation
 } from './conversations'
 
 /**
@@ -100,122 +93,6 @@ async function editInEditor(initial: string): Promise<string | null> {
   }
 }
 
-/**
- * Non-interactive resolution for a background session's blocking events — the
- * terminal hosts' counterpart of the GUI's approval cards and the foreground
- * TUI prompts, so a background run can never hang on a question nobody sees.
- * Approvals are DECLINED (never silently granted — the session already inherits
- * its parent's approval policy, so a full-auto parent still gets an autonomous
- * child), `ask_user` gets a "use your best judgment" answer, and a presented
- * plan is rejected. Exported for the blocking-interaction parity tests.
- */
-export function resolveBackgroundEvent(
-  e: AgentEvent,
-  r: {
-    resolveApproval: typeof resolveApproval
-    resolveQuestion: typeof resolveQuestion
-    resolvePlan: typeof resolvePlan
-  }
-): void {
-  switch (e.type) {
-    case 'tool_approval':
-      r.resolveApproval(e.runId, e.callId, 'deny')
-      break
-    case 'tool_question':
-      r.resolveQuestion(
-        e.runId,
-        e.callId,
-        '[No interactive user is available for this background session. Proceed using your best judgment.]'
-      )
-      break
-    case 'plan_ready':
-      r.resolvePlan(e.runId, e.callId, { kind: 'reject' })
-      break
-    default:
-      break // nothing renders in the background; the conversation persists via onMessages
-  }
-}
-
-/**
- * Wire `spawn_session` + the scheduler for a terminal host, so both work beyond
- * the desktop app. A spawned (or scheduled) session is a real persisted
- * conversation with a background run in THIS process — but a terminal host has
- * no window to answer its prompts, so the run resolves them non-interactively
- * and safely: approvals are DECLINED (never silently granted — the session
- * inherits the parent policy, so a full-auto parent still gets an autonomous
- * child), `ask_user` is answered with "use your best judgment", and a presented
- * plan is rejected. The conversation persists throughout, so the user can open
- * it afterwards with `/resume` (TUI) or `--resume <id>` (headless).
- *
- * Returns a handle for the headless entry, which must wait for still-running
- * background sessions before the one-shot process exits (the TUI is long-lived
- * and needs no wait; its `notify` prints a line when a session settles).
- */
-export function wireTerminalSessionBackends(opts: {
-  /** Surface a background session's completion (TUI prints a dim line; headless stderr). */
-  notify?: (message: string) => void
-  /** Start the scheduler's timers (TUI). The headless one-shot manages schedules without firing them. */
-  startScheduler: boolean
-}): {
-  pendingBackgroundSessions: () => number
-  waitForBackgroundSessions: () => Promise<void>
-} {
-  const liveSpawnedRuns = new Set<string>()
-  const pending = new Set<Promise<void>>()
-
-  const backgroundSend = (e: AgentEvent): void =>
-    resolveBackgroundEvent(e, { resolveApproval, resolveQuestion, resolvePlan })
-
-  const backend = createSpawnBackend({
-    createWorktree,
-    createConversation,
-    seedMessages: setMessages,
-    setTitle: (id, title) => {
-      setGeneratedTitle(id, title)
-    },
-    getTitle: (id) => getConversation(id)?.title,
-    // Terminal hosts keep no recent-workspace list (that's the GUI's welcome screen).
-    rememberWorkspace: () => {},
-    liveSpawnCount: () => liveSpawnedRuns.size,
-    removeWorktree: (wt) => removeWorktree(wt),
-    startBackgroundRun: (conversationId, req) => {
-      liveSpawnedRuns.add(conversationId)
-      const run = startRun(req, backgroundSend, (m) => setMessages(conversationId, m))
-        .catch((e) => {
-          log.warn(`background session ${conversationId} failed: ${String(e)}`)
-        })
-        .finally(() => {
-          liveSpawnedRuns.delete(conversationId)
-          const title = getConversation(conversationId)?.title ?? conversationId
-          opts.notify?.(`background session "${title}" finished — resume it to see the result (id ${conversationId})`)
-        })
-      pending.add(run)
-      void run.finally(() => pending.delete(run))
-    }
-  })
-  setSpawnBackend({
-    // Terminal hosts run spawned sessions non-interactively; say so in the tool
-    // result instead of the desktop's "answer an approval" affordance.
-    spawn: async (input) => ({
-      ...(await backend.spawn(input)),
-      note:
-        'In this terminal host the session runs non-interactively: anything needing an approval is declined automatically (it inherits your approval policy). Resume the conversation later to see its result.'
-    })
-  })
-
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn() })
-  setSchedulerBackend(scheduler)
-  if (opts.startScheduler) scheduler.start()
-
-  return {
-    pendingBackgroundSessions: () => pending.size,
-    waitForBackgroundSessions: async (): Promise<void> => {
-      // Settle everything, including sessions spawned by sessions while we wait.
-      while (pending.size > 0) await Promise.all([...pending])
-    }
-  }
-}
-
 /** Run the interactive terminal client to completion. Returns the exit code. */
 export async function runTuiEntry(tui: TuiOptions): Promise<number> {
   // Interactive mode needs a real terminal for the composer and inline
@@ -247,20 +124,6 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
       log.warn(`failed to persist TUI history: ${String(e)}`)
     }
   }
-
-  const paint = makePainter(tui.color)
-  const io = createTerminalIo({
-    paint,
-    history,
-    completer: makeCompleter((q) => findFiles(tui.cwd, q))
-  })
-
-  // spawn_session + scheduled runs work in the TUI too: background sessions run
-  // in-process (non-interactively) and schedules fire while the TUI is open.
-  const sessions = wireTerminalSessionBackends({
-    notify: (m) => io.out(paint(`\n· ${m}\n`, 'dim')),
-    startScheduler: true
-  })
 
   let code = 1
   try {
@@ -332,7 +195,11 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
       ...(canSetKey() ? { setKey: (id: string, key: string) => setProviderKey(id, key) } : {}),
       isMac: process.platform === 'darwin',
       settingsPath: () => join(getUserDataDir(), 'settings.json'),
-      io,
+      io: createTerminalIo({
+        paint: makePainter(tui.color),
+        history,
+        completer: makeCompleter((q) => findFiles(tui.cwd, q))
+      }),
       highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
       persist: {
         create: ({ workspace, providerId, model }) =>
@@ -364,18 +231,6 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
         }
       }
     })
-    // Exiting now would kill background sessions mid-run; finish them first (their
-    // conversations are what a later /resume opens). Ctrl-C still force-quits.
-    const outstanding = sessions.pendingBackgroundSessions()
-    if (outstanding > 0) {
-      io.out(
-        paint(
-          `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish (Ctrl-C to abandon)…\n`,
-          'dim'
-        )
-      )
-      await sessions.waitForBackgroundSessions()
-    }
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {
@@ -387,14 +242,6 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
 
 /** Run the one-shot headless client to completion. Returns the exit code. */
 export async function runHeadlessEntry(headless: HeadlessOptions): Promise<number> {
-  // spawn_session works headless too: children run concurrently in this process
-  // and are awaited below so the one-shot exit doesn't kill them mid-run. The
-  // scheduler backend is wired without starting timers — a headless run can
-  // create/list/cancel schedules, which then fire in a long-lived host (GUI/TUI).
-  const sessions = wireTerminalSessionBackends({
-    notify: (m) => process.stderr.write(`· ${m}\n`),
-    startScheduler: false
-  })
   let code = 1
   try {
     code = await runHeadless(headless, {
@@ -430,15 +277,6 @@ export async function runHeadlessEntry(headless: HeadlessOptions): Promise<numbe
         setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
       }
     })
-    // Don't let the one-shot exit tear down sessions the run spawned; their
-    // conversations persist, so a later --resume can pick each one up.
-    const outstanding = sessions.pendingBackgroundSessions()
-    if (outstanding > 0) {
-      process.stderr.write(
-        `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
-      )
-      await sessions.waitForBackgroundSessions()
-    }
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {

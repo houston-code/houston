@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { buildSeatbeltProfile, SeatbeltBackend } from './darwin'
+import { buildSeatbeltProfile, seatbeltNetworkMode, SeatbeltBackend } from './darwin'
 import { runWithBackend } from './shared'
 import type { SandboxRunOptions } from './contract'
 
@@ -26,6 +26,34 @@ describe('buildSeatbeltProfile', () => {
     const denied = buildSeatbeltProfile('/work', false)
     expect(denied).not.toContain('(allow network*)')
     expect(denied).toContain('; network denied')
+  })
+
+  it('loopback mode allows only loopback traffic (proxied egress), never network*', () => {
+    const p = buildSeatbeltProfile('/work', 'loopback')
+    expect(p).toContain('(allow network-outbound (remote ip "localhost:*"))')
+    expect(p).toContain('(allow network-bind (local ip "localhost:*"))')
+    expect(p).toContain('(allow network-inbound (local ip "localhost:*"))')
+    expect(p).not.toContain('(allow network*)')
+    // DNS is explicitly cut, not merely left un-opened: getaddrinfo resolves via
+    // the mDNSResponder mach service (outside the sandbox), which a socket-only
+    // restriction wouldn't gate — so we DENY the resolver services to close the
+    // DNS-tunnel exfil channel. The deny lands after the body's blanket
+    // (allow mach-lookup) (SBPL last-match-wins), scoping out only the resolver.
+    expect(p).toContain('(deny mach-lookup (global-name "com.apple.mDNSResponder")')
+    expect(p).toContain('(global-name "com.apple.dnssd.service"))')
+    const denyIdx = p.indexOf('(deny mach-lookup')
+    expect(denyIdx).toBeGreaterThan(p.indexOf('(allow mach-lookup)'))
+  })
+
+  it('no-network mode also denies the DNS resolver services', () => {
+    const p = buildSeatbeltProfile('/work', false)
+    expect(p).toContain('(deny mach-lookup (global-name "com.apple.mDNSResponder")')
+  })
+
+  it('full mode keeps DNS (unrestricted network implies resolution) — no resolver deny', () => {
+    const p = buildSeatbeltProfile('/work', true)
+    expect(p).toContain('(allow network*)')
+    expect(p).not.toContain('(deny mach-lookup')
   })
 
   it('drops empty roots and accepts a single string root', () => {
@@ -56,6 +84,51 @@ describe('SeatbeltBackend.buildLaunch', () => {
     expect(SeatbeltBackend.id).toBe('seatbelt')
     expect(SeatbeltBackend.sandboxed).toBe(true)
     expect(SeatbeltBackend.confinesNetwork).toBe(true)
+  })
+
+  it('switches to loopback-only + proxy env when network is granted with egress endpoints', () => {
+    const launch = SeatbeltBackend.buildLaunch({
+      command: 'curl https://registry.npmjs.org/',
+      roots: ['/work'],
+      allowNetwork: true,
+      egressProxy: { tcpPort: 9137 },
+      cwd: '/work'
+    })
+    expect(launch.args[1]).toContain('(allow network-outbound (remote ip "localhost:*"))')
+    expect(launch.args[1]).not.toContain('(allow network*)')
+    expect(launch.env?.HTTPS_PROXY).toBe('http://127.0.0.1:9137')
+    expect(launch.env?.http_proxy).toBe('http://127.0.0.1:9137')
+    expect(launch.env?.NO_PROXY).toContain('localhost')
+  })
+
+  it('granted network WITHOUT egress endpoints stays full (legacy mode-all), no proxy env', () => {
+    const launch = SeatbeltBackend.buildLaunch({
+      command: 'curl https://anything.example/',
+      roots: ['/work'],
+      allowNetwork: true,
+      cwd: '/work'
+    })
+    expect(launch.args[1]).toContain('(allow network*)')
+    expect(launch.env).toBeUndefined()
+  })
+
+  it('denied network ignores egress endpoints (no grant means no road out at all)', () => {
+    const launch = SeatbeltBackend.buildLaunch({
+      command: 'echo hi',
+      roots: ['/work'],
+      allowNetwork: false,
+      egressProxy: { tcpPort: 9137 },
+      cwd: '/work'
+    })
+    expect(launch.args[1]).toContain('; network denied')
+    expect(launch.env).toBeUndefined()
+  })
+
+  it('seatbeltNetworkMode maps the grant/endpoints combinations', () => {
+    expect(seatbeltNetworkMode(false, undefined)).toBe('none')
+    expect(seatbeltNetworkMode(false, { tcpPort: 1 })).toBe('none')
+    expect(seatbeltNetworkMode(true, undefined)).toBe('full')
+    expect(seatbeltNetworkMode(true, { tcpPort: 1 })).toBe('loopback')
   })
 })
 
