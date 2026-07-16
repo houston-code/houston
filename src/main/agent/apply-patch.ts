@@ -132,6 +132,9 @@ export function parsePatch(patch: string): PatchOp[] {
       let moveTo: string | undefined
       if (i < lines.length - 1 && lines[i].startsWith(MOVE)) {
         moveTo = lines[i].slice(MOVE.length).trim()
+        // An empty destination is silently treated as "no move" by the executor (falsy
+        // moveTo), so the requested rename would vanish while the tool reported success.
+        if (!moveTo) throw new Error('Move to: missing destination path.')
         i += 1
       }
       const hunkLines: string[] = []

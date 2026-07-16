@@ -119,14 +119,28 @@ function spansFor(body: string, oldString: string, strategy: EditStrategy): Span
     : blockAnchorSpans(body, oldLines, oldHadTrailingNewline)
 }
 
-function splice(body: string, spans: Span[], replacement: string): string {
+/**
+ * Splice `replacement` into the RAW string at spans expressed as offsets in the
+ * LF-normalized `body`, leaving every unmatched region byte-for-byte identical. Walks
+ * `raw` once, counting `\r\n` as the single `\n` it collapses to in `body`. This keeps
+ * a mixed line-ending file's untouched lines on their original terminators, instead of
+ * re-encoding the whole file (which flipped every bare LF to CRLF).
+ */
+function spliceRaw(raw: string, spans: Span[], replacement: string): string {
+  const sorted = spans.slice().sort((a, b) => a.start - b.start)
+  const step = (ri: number): number => (raw[ri] === '\r' && raw[ri + 1] === '\n' ? 2 : 1)
   let out = ''
-  let prev = 0
-  for (const s of spans.sort((a, b) => a.start - b.start)) {
-    out += body.slice(prev, s.start) + replacement
-    prev = s.end
+  let ri = 0 // raw offset
+  let bi = 0 // body (LF) offset
+  let prevRaw = 0
+  for (const s of sorted) {
+    while (bi < s.start) { ri += step(ri); bi++ }
+    const rawStart = ri
+    while (bi < s.end) { ri += step(ri); bi++ }
+    out += raw.slice(prevRaw, rawStart) + replacement
+    prevRaw = ri
   }
-  return out + body.slice(prev)
+  return out + raw.slice(prevRaw)
 }
 
 /**
@@ -148,12 +162,15 @@ export function resolveEdit(
 
   const hasBom = content.charCodeAt(0) === 0xfeff
   const raw = hasBom ? content.slice(1) : content
-  // Match and splice in normalized-LF space so CRLF separators are never split
-  // across a span boundary, then restore CRLF for the whole result.
+  // Match in normalized-LF space so CRLF separators are never split across a span
+  // boundary, but splice back into RAW so untouched lines keep their original endings.
   const crlf = raw.includes('\r\n')
   const body = crlf ? raw.replace(/\r\n/g, '\n') : raw
   const oldLf = crlf ? oldString.replace(/\r\n/g, '\n') : oldString
   const newLf = crlf ? newString.replace(/\r\n/g, '\n') : newString
+  // The replacement text takes the file's dominant style; the rest of the file is
+  // preserved verbatim (see spliceRaw), so a mixed-ending file isn't rewritten.
+  const encodedNew = crlf ? newLf.replace(/\n/g, '\r\n') : newLf
 
   for (const strategy of STRATEGIES) {
     const spans = spansFor(body, oldLf, strategy)
@@ -164,8 +181,7 @@ export function resolveEdit(
         `old_string occurs ${spans.length} times${via}; pass replace_all or provide more context.`
       )
     }
-    const spliced = splice(body, spans, newLf)
-    const next = crlf ? spliced.replace(/\n/g, '\r\n') : spliced
+    const next = spliceRaw(raw, spans, encodedNew)
     return {
       content: hasBom ? '\uFEFF' + next : next,
       strategy,

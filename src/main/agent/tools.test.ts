@@ -10,7 +10,8 @@ import {
   symlinkSync,
   mkdirSync,
   chmodSync,
-  statSync
+  statSync,
+  utimesSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -768,6 +769,26 @@ describe('apply_patch', () => {
     expect(await run('read_file', { path: 'b.ts' })).toBe('hello\nthere\n')
   })
 
+  it('rejects a patch that writes one file in two blocks (no silent edit loss)', async () => {
+    await run('write_file', { path: 'dup.ts', content: 'foo\nbar\n' })
+    await expect(
+      run('apply_patch', {
+        patch: patch(
+          '*** Update File: dup.ts',
+          '-foo',
+          '+FOO',
+          ' bar',
+          '*** Update File: dup.ts',
+          ' foo',
+          '-bar',
+          '+BAR'
+        )
+      })
+    ).rejects.toThrow(/more than one operation/)
+    // Rejected in the compute phase, so the file is untouched (no partial write).
+    expect(await run('read_file', { path: 'dup.ts' })).toBe('foo\nbar\n')
+  })
+
   it('is atomic: a failing op writes nothing', async () => {
     await run('write_file', { path: 'k.ts', content: 'value' })
     await expect(
@@ -955,6 +976,18 @@ describe('glob', () => {
 
   it('reports when nothing matches', async () => {
     expect(await run('glob', { pattern: '**/*.nope' })).toBe('No files found.')
+  })
+
+  it('returns matches most-recently-modified first (sorted across the whole set)', async () => {
+    await run('write_file', { path: 'old.ts', content: 'x' })
+    await run('write_file', { path: 'mid.ts', content: 'x' })
+    await run('write_file', { path: 'new.ts', content: 'x' })
+    // Explicit mtimes so ordering is deterministic and independent of creation order.
+    utimesSync(join(workspace, 'old.ts'), new Date(1_000), new Date(1_000))
+    utimesSync(join(workspace, 'mid.ts'), new Date(2_000), new Date(2_000))
+    utimesSync(join(workspace, 'new.ts'), new Date(3_000), new Date(3_000))
+    const out = (await run('glob', { pattern: '*.ts' })).split('\n')
+    expect(out).toEqual(['new.ts', 'mid.ts', 'old.ts'])
   })
 
   it('blocks globbing outside the workspace', async () => {

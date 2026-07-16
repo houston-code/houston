@@ -104,6 +104,14 @@ describe('resolveEdit — line endings & BOM', () => {
     expect(r.content).toBe('﻿hello there')
   })
 
+  it('does not rewrite untouched lines on a mixed line-ending file', () => {
+    // Line 2 uses a bare LF; the rest CRLF. Editing line 1 must leave line 2's LF as-is
+    // (the old blanket re-encode flipped every LF to CRLF, churning untouched lines).
+    const file = 'a\r\nb\nc\r\n'
+    const r = resolveEdit(file, 'a', 'A')
+    expect(r.content).toBe('A\r\nb\nc\r\n')
+  })
+
   it('keeps a trailing newline symmetric when old text ended in one', () => {
     const file = 'x\nfoo\ny\n'
     const r = resolveEdit(file, '  foo\n', 'bar\n')
