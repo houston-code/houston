@@ -457,6 +457,53 @@ export interface AgentQuestion {
   multiSelect?: boolean
 }
 
+/**
+ * One field an MCP server asks for in an elicitation request. The MCP spec
+ * restricts `requestedSchema` to a flat object of primitives, so a field is
+ * always one of these kinds; anything exotic degrades to a plain string input.
+ */
+export interface ElicitationField {
+  name: string
+  kind: 'string' | 'number' | 'integer' | 'boolean' | 'enum'
+  /** Display label, when the schema gave one (falls back to `name`). */
+  title?: string
+  description?: string
+  required?: boolean
+  /** Allowed values, for kind 'enum'. */
+  options?: string[]
+  /** Schema `format` hint (email, uri, date, date-time), pass-through for the UI. */
+  format?: string
+}
+
+/** The user's (or client's) answer to an MCP elicitation request. */
+export interface ElicitationResult {
+  action: 'accept' | 'decline' | 'cancel'
+  /** Field values, present only on accept. */
+  content?: Record<string, string | number | boolean>
+}
+
+/**
+ * Boundary guard for an elicitation result arriving over IPC: reject malformed
+ * shapes, keep only primitive values, and cap string lengths and field count so
+ * a compromised renderer can't smuggle an oversized or structured payload to an
+ * external MCP server. Returns null when the shape is not an elicitation result.
+ */
+export function sanitizeElicitationResult(v: unknown, maxValueLen = 4000): ElicitationResult | null {
+  if (!v || typeof v !== 'object') return null
+  const { action, content } = v as { action?: unknown; content?: unknown }
+  if (action !== 'accept' && action !== 'decline' && action !== 'cancel') return null
+  if (action !== 'accept') return { action }
+  const out: Record<string, string | number | boolean> = {}
+  if (content && typeof content === 'object' && !Array.isArray(content)) {
+    for (const [k, val] of Object.entries(content as Record<string, unknown>).slice(0, 50)) {
+      if (typeof val === 'string') out[k] = val.slice(0, maxValueLen)
+      else if (typeof val === 'number' && Number.isFinite(val)) out[k] = val
+      else if (typeof val === 'boolean') out[k] = val
+    }
+  }
+  return { action: 'accept', content: out }
+}
+
 /** Events streamed from a running agent to the renderer. */
 export type AgentEvent =
   | { runId: string; type: 'text'; delta: string }
@@ -545,6 +592,21 @@ export type AgentEvent =
       type: 'plan_ready'
       callId: string
       plan: PlanPayload
+    }
+  | {
+      // An MCP server asked the user for input mid-tool-call (MCP elicitation).
+      // The run blocks until resolved: accept (with the field values), decline, or
+      // cancel. Keyed by its own `elicitId` — one tool call can elicit repeatedly —
+      // with `callId` anchoring it under the in-flight tool row. Replayed on
+      // re-adopt like approvals/questions.
+      runId: string
+      type: 'elicitation'
+      callId: string
+      elicitId: string
+      /** The MCP server id asking (shown so the user knows who gets the answer). */
+      serverId: string
+      message: string
+      fields: ElicitationField[]
     }
   | {
       // Emitted by the main process when it auto-starts a follow-up turn from the

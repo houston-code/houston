@@ -7,6 +7,7 @@
 import type {
   AssistantItem,
   DisplayItem,
+  ElicitationItem,
   NoticeItem,
   PlanItem,
   QuestionItem,
@@ -126,6 +127,7 @@ export type RenderNode =
   | { kind: 'notice'; id: string; item: NoticeItem }
   | { kind: 'question'; id: string; item: QuestionItem }
   | { kind: 'plan'; id: string; item: PlanItem }
+  | { kind: 'elicitation'; id: string; item: ElicitationItem }
   | { kind: 'toolgroup'; id: string; items: ToolItem[] }
 
 /** Tool names that are pure navigation noise and never get their own row. */
@@ -164,6 +166,7 @@ export function groupItems(items: DisplayItem[]): RenderNode[] {
     else if (item.kind === 'notice') nodes.push({ kind: 'notice', id: item.id, item })
     else if (item.kind === 'question') nodes.push({ kind: 'question', id: item.id, item })
     else if (item.kind === 'plan') nodes.push({ kind: 'plan', id: item.id, item })
+    else if (item.kind === 'elicitation') nodes.push({ kind: 'elicitation', id: item.id, item })
   }
   flush()
   return nodes

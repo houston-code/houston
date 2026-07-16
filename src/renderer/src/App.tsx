@@ -1595,6 +1595,7 @@ export default function App(): JSX.Element {
             items={chat.items}
             onApprove={chat.approve}
             onAnswer={chat.answerQuestion}
+            onElicit={chat.answerElicitation}
             onOpenPlan={onOpenPlan}
           />
         )}

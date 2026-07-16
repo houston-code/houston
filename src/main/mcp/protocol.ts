@@ -45,6 +45,12 @@ export function kindOf(msg: JsonRpcIncoming): IncomingKind {
 
 export type McpListKind = 'tools' | 'resources' | 'prompts'
 
+/** The wire shape of an elicitation response (MCP `elicitation/create` result). */
+export interface ElicitationWireResult {
+  action: 'accept' | 'decline' | 'cancel'
+  content?: Record<string, unknown>
+}
+
 export interface ServerMessageHooks {
   /** Send a JSON-RPC payload back to the server. Best-effort; must not throw. */
   send(payload: unknown): void
@@ -52,6 +58,14 @@ export interface ServerMessageHooks {
   onListChanged(kind: McpListKind): void
   /** Restart the inactivity timeout of the in-flight request with this token. */
   touchProgress(token: number | string): void
+  /**
+   * Answer a server's `elicitation/create` request (the server is asking the
+   * user for input mid-call). Must always resolve — return a 'decline' when no
+   * user is reachable — so the server is never left awaiting a reply. When
+   * absent, elicitation requests get the -32601 decline like any other
+   * unsupported request (and the client must not declare the capability).
+   */
+  onElicit?(params: unknown): Promise<ElicitationWireResult>
 }
 
 const LIST_CHANGED: Record<string, McpListKind> = {
@@ -69,6 +83,13 @@ export function handleServerMessage(msg: JsonRpcIncoming, hooks: ServerMessageHo
   if (kind === 'request') {
     if (msg.method === 'ping') {
       hooks.send({ jsonrpc: '2.0', id: msg.id, result: {} })
+    } else if (msg.method === 'elicitation/create' && hooks.onElicit) {
+      // The user decides at their own pace; the responder always resolves (a
+      // failure maps to 'cancel'), so the server always gets its reply.
+      void hooks
+        .onElicit(msg.params)
+        .catch((): ElicitationWireResult => ({ action: 'cancel' }))
+        .then((result) => hooks.send({ jsonrpc: '2.0', id: msg.id, result }))
     } else {
       hooks.send({
         jsonrpc: '2.0',
@@ -196,6 +217,16 @@ export class PendingRequests {
     this.entries.get(id)?.settle({ error })
   }
 
+  /**
+   * Restart every pending request's inactivity clock. Used while an elicitation
+   * dialog is open: the server is waiting on the user (and may send no progress),
+   * so the in-flight call that triggered it must not time out underneath them.
+   * The absolute deadline still applies.
+   */
+  touchAll(): void {
+    for (const entry of this.entries.values()) entry.restartInactivity()
+  }
+
   /** Progress arrived for this token: the call is alive, restart its clock. */
   touch(id: number | string): void {
     this.entries.get(id)?.restartInactivity()
@@ -204,6 +235,25 @@ export class PendingRequests {
   /** Reject everything (stream died, process exited, client closed). */
   failAll(message: string): void {
     for (const entry of [...this.entries.values()]) entry.settle({ error: new Error(message) })
+  }
+}
+
+/**
+ * Run an elicitation responder while keeping every pending request's inactivity
+ * clock alive: the server is blocked on the user's answer, so the tool call that
+ * triggered the question must not time out while the dialog is open.
+ */
+export async function keepAliveDuring<T>(
+  pending: PendingRequests,
+  work: () => Promise<T>,
+  intervalMs = 30_000
+): Promise<T> {
+  pending.touchAll()
+  const timer = setInterval(() => pending.touchAll(), intervalMs)
+  try {
+    return await work()
+  } finally {
+    clearInterval(timer)
   }
 }
 

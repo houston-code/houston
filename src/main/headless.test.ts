@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent, ChatMessage, PlanDecision } from '@shared/agent'
+import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
 import {
   legalAcceptanceMessage,
@@ -217,6 +217,7 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
   const approvals: Array<[string, string, string]> = []
   const questions: Array<[string, string, string]> = []
   const plans: Array<[string, string, PlanDecision]> = []
+  const elicitations: Array<[string, string, ElicitationResult]> = []
   // Default profile has already accepted the current terms, so existing-behavior
   // tests aren't about the gate. Gate tests override getSettings.
   let accepted = 0
@@ -235,12 +236,13 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
     resolveApproval: (r, c, dec) => approvals.push([r, c, dec]),
     resolveQuestion: (r, c, ans) => questions.push([r, c, ans]),
     resolvePlan: (r, c, dec) => plans.push([r, c, dec]),
+    resolveElicitation: (r, e, res) => elicitations.push([r, e, res]),
     out: (s) => out.push(s),
     err: (s) => err.push(s),
     newId: () => 'run-1',
     ...extra
   }
-  return { d, out, err, approvals, questions, plans, accepted: () => accepted }
+  return { d, out, err, approvals, questions, plans, elicitations, accepted: () => accepted }
 }
 
 const baseOpts = {
@@ -291,6 +293,36 @@ describe('runHeadless', () => {
     // The run completing (not timing out) + the auto-answer reaching the agent
     // proves headless answered the question rather than hanging on it.
     expect(out.join('')).toContain('picked: [No interactive user is available in headless mode')
+  })
+
+  it('declines an MCP elicitation so a headless run cannot hang (even under --on-approval allow)', async () => {
+    // Mirror the real loop: emit an elicitation and BLOCK until it is resolved.
+    let resolveAnswered: (r: ElicitationResult) => void = () => {}
+    const answered = new Promise<ElicitationResult>((r) => (resolveAnswered = r))
+    const startRun: HeadlessDeps['startRun'] = async (req, send) => {
+      send({
+        runId: req.runId,
+        type: 'elicitation',
+        callId: 'm1',
+        elicitId: 'm1:e1',
+        serverId: 'srv',
+        message: 'token?',
+        fields: [{ name: 'token', kind: 'string', required: true }]
+      })
+      const result = await answered
+      send({ runId: req.runId, type: 'text', delta: `resolved: ${result.action}` })
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    const { d, out, err } = deps([], {
+      startRun,
+      resolveElicitation: (_r, _e, res) => resolveAnswered(res)
+    })
+    // --on-approval allow approves Houston's own tool calls; it must NOT fabricate
+    // field values for an external server's question.
+    const code = await runHeadless({ ...baseOpts, onApproval: 'allow' }, d)
+    expect(code).toBe(0)
+    expect(out.join('')).toContain('resolved: decline')
+    expect(err.join('')).toContain('declining input request from MCP server "srv"')
   })
 
   it('auto-approves tool approval prompts under --on-approval allow', async () => {

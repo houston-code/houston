@@ -23,6 +23,7 @@ import type {
   Conversation,
   ConversationMeta,
   DeleteConversationResult,
+  ElicitationResult,
   PlanDecision,
   RepoInfo,
   ToolApprovalDecision
@@ -228,6 +229,9 @@ const api = {
   /** Answer a pending `ask_user` question. */
   answerQuestion: (runId: string, callId: string, answer: string): Promise<void> =>
     ipcRenderer.invoke(IPC.agentRespondQuestion, runId, callId, answer),
+  /** Answer a pending MCP elicitation (accept with field values / decline / cancel). */
+  answerElicitation: (runId: string, elicitId: string, result: ElicitationResult): Promise<void> =>
+    ipcRenderer.invoke(IPC.agentRespondElicitation, runId, elicitId, result),
   /** Resolve a pending `present_plan` review (accept / suggest changes / reject). */
   resolvePlan: (runId: string, callId: string, decision: PlanDecision): Promise<void> =>
     ipcRenderer.invoke(IPC.agentResolvePlan, runId, callId, decision),

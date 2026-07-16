@@ -6,7 +6,9 @@ import {
   sanitizeServerId,
   flattenMcpContent,
   flattenMcpResourceContents,
-  parseHeaderLines
+  parseHeaderLines,
+  parseElicitationFields,
+  buildElicitationContent
 } from './mcp'
 
 describe('mcp tool naming', () => {
@@ -85,5 +87,74 @@ describe('flattenMcpResourceContents', () => {
     expect(flattenMcpResourceContents(null)).toBe('')
     expect(flattenMcpResourceContents({})).toBe('')
     expect(flattenMcpResourceContents({ contents: 'nope' })).toBe('')
+  })
+})
+
+describe('parseElicitationFields', () => {
+  it('parses the flat primitive schema into typed fields', () => {
+    const fields = parseElicitationFields({
+      type: 'object',
+      properties: {
+        name: { type: 'string', title: 'Full name', description: 'As registered' },
+        age: { type: 'integer' },
+        score: { type: 'number' },
+        admin: { type: 'boolean' },
+        color: { type: 'string', enum: ['red', 'blue'] },
+        email: { type: 'string', format: 'email' }
+      },
+      required: ['name', 'color']
+    })
+    expect(fields).toEqual([
+      { name: 'name', kind: 'string', title: 'Full name', description: 'As registered', required: true },
+      { name: 'age', kind: 'integer' },
+      { name: 'score', kind: 'number' },
+      { name: 'admin', kind: 'boolean' },
+      { name: 'color', kind: 'enum', required: true, options: ['red', 'blue'] },
+      { name: 'email', kind: 'string', format: 'email' }
+    ])
+  })
+
+  it('degrades exotic types to string inputs and tolerates junk schemas', () => {
+    expect(parseElicitationFields({ properties: { blob: { type: 'array' } } })).toEqual([
+      { name: 'blob', kind: 'string' }
+    ])
+    expect(parseElicitationFields(undefined)).toEqual([])
+    expect(parseElicitationFields('nope')).toEqual([])
+    expect(parseElicitationFields({ properties: 'nope' })).toEqual([])
+  })
+})
+
+describe('buildElicitationContent', () => {
+  const fields = parseElicitationFields({
+    properties: {
+      name: { type: 'string' },
+      age: { type: 'integer' },
+      admin: { type: 'boolean' },
+      color: { type: 'string', enum: ['Red', 'Blue'] }
+    },
+    required: ['name']
+  })
+
+  it('types values and omits blank optional fields', () => {
+    expect(
+      buildElicitationContent(fields, { name: 'Ada', age: '36', admin: 'yes', color: 'red' })
+    ).toEqual({ content: { name: 'Ada', age: 36, admin: true, color: 'Red' } })
+    expect(buildElicitationContent(fields, { name: 'Ada' })).toEqual({ content: { name: 'Ada' } })
+  })
+
+  it('rejects a blank required field, bad numbers, bad booleans, and unknown enum values', () => {
+    expect(buildElicitationContent(fields, {})).toEqual({ error: '"name" is required.' })
+    expect(buildElicitationContent(fields, { name: 'a', age: 'old' })).toEqual({
+      error: '"age" must be a number.'
+    })
+    expect(buildElicitationContent(fields, { name: 'a', age: '3.5' })).toEqual({
+      error: '"age" must be an integer.'
+    })
+    expect(buildElicitationContent(fields, { name: 'a', admin: 'maybe' })).toEqual({
+      error: '"admin" must be yes or no.'
+    })
+    expect(buildElicitationContent(fields, { name: 'a', color: 'green' })).toEqual({
+      error: '"color" must be one of: Red, Blue.'
+    })
   })
 })

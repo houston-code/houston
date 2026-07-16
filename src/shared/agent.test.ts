@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isPlanDecision } from './agent'
+import { isPlanDecision, sanitizeElicitationResult } from './agent'
 
 describe('isPlanDecision', () => {
   it('accepts a valid accept decision with a known mode', () => {
@@ -37,5 +37,31 @@ describe('isPlanDecision', () => {
     expect(isPlanDecision('accept')).toBe(false)
     expect(isPlanDecision(null)).toBe(false)
     expect(isPlanDecision(undefined)).toBe(false)
+  })
+})
+
+describe('sanitizeElicitationResult', () => {
+  it('passes a well-formed accept through, keeping only primitive values', () => {
+    expect(
+      sanitizeElicitationResult({
+        action: 'accept',
+        content: { a: 'x', n: 3, b: true, nested: { drop: 1 }, arr: [1], inf: Infinity }
+      })
+    ).toEqual({ action: 'accept', content: { a: 'x', n: 3, b: true } })
+  })
+
+  it('normalizes decline/cancel to a bare action', () => {
+    expect(sanitizeElicitationResult({ action: 'decline', content: { a: 'x' } })).toEqual({
+      action: 'decline'
+    })
+    expect(sanitizeElicitationResult({ action: 'cancel' })).toEqual({ action: 'cancel' })
+  })
+
+  it('rejects malformed shapes and caps oversized string values', () => {
+    expect(sanitizeElicitationResult(null)).toBeNull()
+    expect(sanitizeElicitationResult({ action: 'yolo' })).toBeNull()
+    expect(sanitizeElicitationResult('accept')).toBeNull()
+    const r = sanitizeElicitationResult({ action: 'accept', content: { big: 'x'.repeat(9000) } }, 100)
+    expect((r?.content?.big as string).length).toBe(100)
   })
 })
