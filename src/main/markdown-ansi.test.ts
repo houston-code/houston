@@ -94,6 +94,13 @@ describe('splitFinalizedBlocks', () => {
     expect(complete).toContain('```')
     expect(rest).toBe('next')
   })
+
+  it('does not close a ``` fence on an inner ~~~ line', () => {
+    // The ~~~ is content inside the ``` block (different fence char), so the following
+    // blank line must NOT split the buffer mid-code-block.
+    const { complete } = splitFinalizedBlocks('```\ncode\n~~~\n\nstill code')
+    expect(complete).toBe('')
+  })
 })
 
 describe('MarkdownStream', () => {
