@@ -109,6 +109,28 @@ bracketed-paste support.
 **History.** Messages are remembered per project folder and survive restarts,
 including multi-line ones.
 
+## Being told when it needs you
+
+A long run can block on an approval, a question, or a plan, and then it is just
+waiting. So the interactive terminal tells you:
+
+- **The tab title** always reflects the state: what it is doing, that it needs
+  approval, or that it is idle, with the project name so several sessions are
+  tellable apart. This is ambient, never interruptive.
+- **A bell and a notification** fire when a run needs you or finishes, but only
+  when you have switched away from the terminal (Houston asks the terminal to
+  report focus, so it can tell). If your terminal does not report focus, they
+  fire either way rather than staying silent.
+
+Only the moments that matter ring: needing approval, needing an answer, a plan
+awaiting a verdict, an error, a finished turn, and a pull request opened or
+merged. Ordinary progress is quiet. Stopping a run yourself never pings you (you
+are obviously there). Turning off notifications in Settings turns off the bell
+and notification here too; the title still updates.
+
+Notifications use the terminal's own channel, so they need no extra tools. Not
+every terminal supports them; the bell works everywhere.
+
 ## Version and updates
 
 The interactive terminal shows its version in the banner at startup, and

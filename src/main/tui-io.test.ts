@@ -630,3 +630,78 @@ describe('readComposer — hostile paste content', () => {
     await expect(read).resolves.toBe('context please review')
   })
 })
+
+/**
+ * A bell for something you are already watching is nuisance, and a nuisance bell
+ * is one people turn off — so the alert is gated on the terminal telling us it
+ * lost focus. The subtlety is terminals that never report at all.
+ */
+describe('signal (attention) — focus gating', () => {
+  function harness() {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80
+    })
+    return { io, stdin, text: () => written.join(''), clear: () => (written.length = 0) }
+  }
+  const alert = { title: 'Houston', body: 'Finished' }
+
+  it('always sets the title — it is ambient, not an interruption', () => {
+    const t = harness()
+    t.io.signal!({ title: 'working' })
+    expect(t.text()).toBe('\x1b]0;working\x07')
+  })
+
+  // A terminal with no focus reporting never tells us anything; reading that
+  // silence as "focused" would silently disable every signal on those terminals.
+  it('alerts when focus is unknown, rather than staying silent', () => {
+    const t = harness()
+    t.io.signal!({ alert })
+    expect(t.text()).toContain('\x07')
+    expect(t.text()).toContain(']9;')
+  })
+
+  it('stays quiet once the terminal reports the window IS focused', () => {
+    const t = harness()
+    t.io.startSpinner!('Working') // arms the watcher, which enables focus reporting
+    t.stdin.push('\x1b[I')
+    t.clear()
+    t.io.signal!({ alert })
+    expect(t.text()).not.toContain(']9;')
+  })
+
+  it('alerts once the terminal reports the window lost focus', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('\x1b[I')
+    t.stdin.push('\x1b[O')
+    t.clear()
+    t.io.signal!({ alert })
+    expect(t.text()).toContain(']9;')
+    expect(t.text()).toContain(']777;notify;')
+  })
+
+  it('asks the terminal to report focus while a turn runs, and stops asking after', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    expect(t.text()).toContain('[?1004h')
+    t.clear()
+    t.io.stopSpinner!()
+    expect(t.text()).toContain('[?1004l')
+  })
+
+  it('tracks focus reported while the user is at the composer', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b[O') // they switched away mid-draft
+    t.clear()
+    t.io.signal!({ alert })
+    expect(t.text()).toContain(']9;')
+    t.stdin.push('\r')
+    await read
+  })
+})
