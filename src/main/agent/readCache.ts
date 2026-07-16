@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs'
 import type { ImageAttachment } from '@shared/images'
 import type { DocumentAttachment } from '@shared/agent'
 import { ASK_USER_NAME, type ToolKind } from './tools'
@@ -21,6 +22,11 @@ import { ASK_USER_NAME, type ToolKind } from './tools'
  *     drops the entries that depend on that path (and every tree-spanning read,
  *     since a search/glob result depends on the whole tree); a `shell` call clears
  *     the cache wholesale, because an arbitrary command can change any file.
+ *   - REVALIDATED against the filesystem on every hit, because the agent is not the
+ *     only writer. A user editing a file in their editor mid-run, a rebase, or a
+ *     background build changes disk without any tool call for the cache to key off,
+ *     so invalidation alone would serve that user their own pre-edit content. See
+ *     {@link ReadCache.get}.
  * We deliberately prefer conservative invalidation (correctness) over hit-rate.
  *
  * Only genuinely pure reads are cached — an explicit allowlist of on-disk-state
@@ -115,38 +121,140 @@ export function cacheKey(name: string, args: Record<string, unknown>): string {
   return `${name} ${canonicalArgs(args)}`
 }
 
+/**
+ * A file's identity at a moment in time — what we compare to decide whether a
+ * cached read still reflects disk. `null` means the path did not exist, which is
+ * itself a meaningful state to compare (a `list_dir` of a since-deleted directory
+ * must not stay cached).
+ */
+export type PathStamp = { mtimeMs: number; size: number } | null
+
+/** Stat one canonical absolute path, resolving to `null` when it does not exist. */
+export type StatPath = (abs: string) => Promise<PathStamp>
+
+/**
+ * The real filesystem {@link StatPath}. Size is carried alongside mtime because
+ * mtime granularity is coarser than an edit can be: a filesystem that stamps whole
+ * seconds (or a tool that preserves mtime) can land a change the timestamp alone
+ * misses, and a differently-sized file is then still caught. Same-size, same-mtime
+ * rewrites remain undetectable by stat — hashing every read to close that is not
+ * worth what it costs on large files.
+ */
+export const statPath: StatPath = async (abs) => {
+  try {
+    const st = await fs.stat(abs)
+    return { mtimeMs: st.mtimeMs, size: st.size }
+  } catch {
+    // A missing path is a legitimate state, not an error: stamping it as `null` is
+    // what makes "file appeared" and "file vanished" register as staleness.
+    return null
+  }
+}
+
+/** Whether two stamps describe the same file state (both absent counts as same). */
+function sameStamp(a: PathStamp, b: PathStamp): boolean {
+  if (a === null || b === null) return a === b
+  return a.mtimeMs === b.mtimeMs && a.size === b.size
+}
+
+/**
+ * How long a tree-spanning read (`search_files`/`glob`/`ast_grep`) may be served
+ * from cache before it must re-run.
+ *
+ * Scoped reads revalidate exactly: one `stat` of the path they read is cheap and
+ * conclusive. A search has no such handle — its result depends on every file in the
+ * tree, including files that did NOT match (an external edit can create a match
+ * anywhere), so the only exact revalidation is a full tree walk, which costs about
+ * what re-running the search costs. Rather than pay that to save nothing, or pin a
+ * possibly-stale result for the whole run, tree reads get a bounded staleness
+ * window: long enough to absorb the same search repeated a turn or two later, short
+ * enough that an edit made in an editor is picked up while the user is still looking
+ * at it.
+ */
+export const TREE_READ_TTL_MS = 30_000
+
 interface Entry {
   result: CachedRead
   deps: ReadDeps
+  /** Stamp of each `deps.paths` entry when stored, positionally parallel to it. */
+  stamps: PathStamp[]
+  /** When this entry was stored, for the {@link TREE_READ_TTL_MS} window. */
+  storedAt: number
 }
 
 /**
  * A run-scoped read cache. One instance per `startRun`; passed to the tool-dispatch
  * sites which consult {@link get} before executing and {@link set} the result after,
  * and call {@link invalidatePaths} / {@link invalidateAll} when a mutation occurs.
+ *
+ * `stat` and `now` are injected so the cache stays a pure unit under test; the loop
+ * passes {@link statPath} and `Date.now`.
  */
 export class ReadCache {
   private readonly entries = new Map<string, Entry>()
+  private readonly stat: StatPath
+  private readonly now: () => number
+  private readonly treeTtlMs: number
 
-  /** A previously-cached result for this exact call, or undefined on a miss. */
-  get(name: string, args: Record<string, unknown>): CachedRead | undefined {
-    return this.entries.get(cacheKey(name, args))?.result
+  constructor(opts: { stat: StatPath; now?: () => number; treeTtlMs?: number }) {
+    this.stat = opts.stat
+    this.now = opts.now ?? Date.now
+    this.treeTtlMs = opts.treeTtlMs ?? TREE_READ_TTL_MS
+  }
+
+  /**
+   * A previously-cached result for this exact call, or undefined on a miss.
+   *
+   * Revalidates before serving: an entry whose files changed on disk since it was
+   * stored is dropped and reported as a miss, so the caller re-reads. This is what
+   * catches writers the cache never saw — the user editing in their editor, a git
+   * operation, a background build — as opposed to {@link invalidatePaths}, which
+   * only knows about the agent's own tool calls.
+   */
+  async get(name: string, args: Record<string, unknown>): Promise<CachedRead | undefined> {
+    const key = cacheKey(name, args)
+    const entry = this.entries.get(key)
+    if (!entry) return undefined
+    if (await this.isStale(entry)) {
+      this.entries.delete(key)
+      return undefined
+    }
+    return entry.result
+  }
+
+  /**
+   * Whether an entry no longer reflects disk. A tree-spanning read can't be checked
+   * exactly, so it expires on the {@link TREE_READ_TTL_MS} window instead; a scoped
+   * read is stale when any path it depends on has a different stamp than at store
+   * time (including having been created or deleted).
+   */
+  private async isStale(entry: Entry): Promise<boolean> {
+    if (entry.deps.wholeTree) return this.now() - entry.storedAt >= this.treeTtlMs
+    const fresh = await Promise.all(entry.deps.paths.map((p) => this.stat(p)))
+    return fresh.some((f, i) => !sameStamp(f, entry.stamps[i]))
   }
 
   /**
    * Memoize a read's result. `deps` records what the result depends on so a later
-   * write can invalidate it precisely. Failed reads (`ok:false`) are NOT cached —
-   * an error is often transient (a race with a concurrent write, a not-yet-created
-   * file) and re-reading is cheap and safer than pinning a stale failure.
+   * write can invalidate it precisely, and each dep path is stamped so a hit can be
+   * revalidated against disk. Failed reads (`ok:false`) are NOT cached — an error is
+   * often transient (a race with a concurrent write, a not-yet-created file) and
+   * re-reading is cheap and safer than pinning a stale failure.
+   *
+   * The stamp is taken AFTER the read returned, so a write landing mid-read stamps
+   * the post-write file against pre-write content. That entry would then look fresh.
+   * The window is sub-millisecond and the next mutation invalidates it anyway, but
+   * it is the reason stamping is not a substitute for {@link invalidatePaths}.
    */
-  set(
+  async set(
     name: string,
     args: Record<string, unknown>,
     result: CachedRead,
     deps: ReadDeps
-  ): void {
+  ): Promise<void> {
     if (!result.ok) return
-    this.entries.set(cacheKey(name, args), { result, deps })
+    const stamps = await Promise.all(deps.paths.map((p) => this.stat(p)))
+    this.entries.set(cacheKey(name, args), { result, deps, stamps, storedAt: this.now() })
   }
 
   /**

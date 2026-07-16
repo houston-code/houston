@@ -42,6 +42,7 @@ import {
   ReadCache,
   isCacheableRead,
   readDeps,
+  statPath,
   writePaths,
   writeTouchesUnknownPaths
 } from './readCache'
@@ -1198,8 +1199,10 @@ export async function startRun(
     // dropped when startRun returns (GC'd with the closure), so it never leaks across
     // runs. Correctness is preserved by invalidating on every mutation: a write drops
     // the entries depending on the touched path(s); a shell call clears the cache
-    // wholesale (a command can change any file). See readCache.ts.
-    const readCache = new ReadCache()
+    // wholesale (a command can change any file). Writers the loop never sees — the
+    // user editing in their editor, a git checkout — are caught instead by the stat
+    // revalidation every hit performs. See readCache.ts.
+    const readCache = new ReadCache({ stat: statPath })
     // Map a tool's `path` argument to a canonical absolute path the way the file
     // tools do, so cache dependencies and write-invalidation keys line up exactly.
     const resolvePath = (rel: string): string => resolveInRoots(roots, rel)
@@ -1849,7 +1852,7 @@ export async function startRun(
           // cacheable — only the pure, on-disk-deterministic ones (isCacheableRead).
           // A stateful read like read_shell_output runs here too and must NOT cache.
           const cacheable = isCacheableRead(call.name, lookupTool(call.name)!.kind)
-          const cached = cacheable ? readCache.get(call.name, call.arguments) : undefined
+          const cached = cacheable ? await readCache.get(call.name, call.arguments) : undefined
           if (cached) {
             return {
               call,
@@ -1877,7 +1880,7 @@ export async function startRun(
             ok = false
           }
           if (cacheable) {
-            readCache.set(
+            await readCache.set(
               call.name,
               call.arguments,
               { output, ok, images, documents },
@@ -2136,7 +2139,7 @@ export async function startRun(
               // and the key matches the parallel fast-path's.
               const cacheable = isCacheableRead(call.name, tool.kind)
               const useCache = cacheable && !hasMatchingHook(call.name)
-              const cached = useCache ? readCache.get(call.name, call.arguments) : undefined
+              const cached = useCache ? await readCache.get(call.name, call.arguments) : undefined
               if (cached) {
                 output = cached.output
                 ok = cached.ok
@@ -2157,7 +2160,7 @@ export async function startRun(
                   ok = false
                 }
                 if (useCache) {
-                  readCache.set(
+                  await readCache.set(
                     call.name,
                     call.arguments,
                     { output, ok, images: [...toolImages], documents: [...toolDocs] },
