@@ -34,6 +34,12 @@ describe('parsePatch', () => {
     expect(ops[0]).toMatchObject({ type: 'update', path: 'old.ts', moveTo: 'new.ts' })
   })
 
+  it('rejects an empty Move to destination (rather than silently dropping the rename)', () => {
+    expect(() =>
+      parsePatch(wrap('*** Update File: old.ts', '*** Move to:   ', ' a', '-b', '+B'))
+    ).toThrow(/Move to: missing destination/)
+  })
+
   it('splits multiple hunks on @@', () => {
     const ops = parsePatch(
       wrap('*** Update File: x.ts', '@@', ' a', '-b', '+B', '@@', ' c', '-d', '+D')

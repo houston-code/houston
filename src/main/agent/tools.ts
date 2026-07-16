@@ -764,6 +764,20 @@ const applyPatch: ToolDef = {
     let updated = 0
     let deleted = 0
 
+    // Every operation reads its base fresh from disk in Phase 1, so two ops writing the
+    // same final path would each start from the ORIGINAL file and the later write would
+    // silently discard the earlier edit — while the tool still reported success. Reject
+    // that instead of losing an edit; a single file's changes belong in one block.
+    const writeTargets = new Set<string>()
+    const claimWrite = (target: string, display: string): void => {
+      if (writeTargets.has(target)) {
+        throw new Error(
+          `apply_patch: ${display} is written by more than one operation in this patch. Each block reads the original file independently, so a later one would discard the earlier change — combine them into a single block.`
+        )
+      }
+      writeTargets.add(target)
+    }
+
     // Phase 1: validate and compute every change. Nothing is written yet, so a
     // failure on any op leaves the working tree untouched.
     for (const op of ops) {
@@ -773,6 +787,7 @@ const applyPatch: ToolDef = {
           throw new Error(
             `Add File: ${op.path} already exists. Use '*** Update File: ${op.path}' to modify it instead of adding it.`
           )
+        claimWrite(abs, op.path)
         staged.push({ abs, rel: op.path, content: op.content, verb: 'add' })
         added += 1
       } else if (op.type === 'delete') {
@@ -794,9 +809,11 @@ const applyPatch: ToolDef = {
               `Move to: ${op.moveTo} already exists. Pick a destination that does not exist, or edit that file directly.`
             )
           }
+          claimWrite(target, op.moveTo)
           staged.push({ abs, rel: op.path, content: null, verb: 'delete' })
           staged.push({ abs: target, rel: op.moveTo, content: data, verb: 'update' })
         } else {
+          claimWrite(abs, op.path)
           staged.push({ abs, rel: op.path, content: data, verb: 'update' })
         }
         updated += 1
@@ -963,10 +980,8 @@ async function collectGlob(
   dir: string,
   base: string,
   pattern: string,
-  out: { full: string; mtimeMs: number }[],
-  max: number
+  out: { full: string; mtimeMs: number }[]
 ): Promise<void> {
-  if (out.length >= max) return
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
@@ -974,12 +989,11 @@ async function collectGlob(
     return
   }
   for (const entry of entries) {
-    if (out.length >= max) return
     if (entry.name.startsWith('.')) continue // honour default glob dot:false
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue
-      await collectGlob(full, base, pattern, out, max)
+      await collectGlob(full, base, pattern, out)
     } else if (entry.isFile() && minimatch(relative(base, full), pattern)) {
       try {
         const st = await fs.stat(full)
@@ -1015,11 +1029,17 @@ const globTool: ToolDef = {
     if (!pattern) throw new Error('pattern is required.')
     const start = resolveInRoots(rootsOf(ctx), str(args, 'path') || '.')
     const found: { full: string; mtimeMs: number }[] = []
-    await collectGlob(start, start, pattern, found, MAX_GLOB_RESULTS)
+    // Collect ALL matches before sorting/capping: the cap must be applied to the
+    // mtime-sorted set so "most-recently-modified first" holds and the newest file is
+    // never dropped just because traversal reached it after an arbitrary 200 others.
+    await collectGlob(start, start, pattern, found)
     if (found.length === 0) return 'No files found.'
     found.sort((a, b) => b.mtimeMs - a.mtimeMs)
-    const lines = found.map((f) => relative(ctx.workspace, f.full)).join('\n')
-    return found.length >= MAX_GLOB_RESULTS ? `${lines}\n[truncated at ${MAX_GLOB_RESULTS} matches]` : lines
+    const shown = found.slice(0, MAX_GLOB_RESULTS)
+    const lines = shown.map((f) => relative(ctx.workspace, f.full)).join('\n')
+    return found.length > MAX_GLOB_RESULTS
+      ? `${lines}\n[truncated to ${MAX_GLOB_RESULTS} of ${found.length} matches]`
+      : lines
   }
 }
 
