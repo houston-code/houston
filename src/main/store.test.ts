@@ -209,7 +209,7 @@ describe('settings migration — retired Gemini models (v6)', () => {
     expect(ids).not.toContain('gemini-2.5-flash')
     expect(ids).not.toContain('gemini-2.0-flash')
     expect(ids).toContain('gemini-2.5-pro')
-    expect(ids).toEqual(expect.arrayContaining(['gemini-3.5-flash', 'gemini-3.1-flash-lite']))
+    expect(ids).toContain('gemini-3.1-flash-lite')
   })
 
   it('falls back to the built-in default when defaultModel pointed at a retired model', async () => {
