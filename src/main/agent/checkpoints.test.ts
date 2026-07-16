@@ -202,6 +202,37 @@ describe('checkpoints', () => {
       expect(checkpointFileCount('run-0')).toBe(0)
       expect(checkpointFileCount('run-50')).toBe(1)
     })
+
+    it('re-hydrates an evicted run from disk instead of clobbering its earlier snapshot', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'houston-cp-ud-'))
+      setUserDataDir(dir)
+      try {
+        // Run R snapshots file A, then that snapshot is flushed to disk.
+        writeFileSync(join(ws, 'a.txt'), 'A-original')
+        await recordOriginal('run-keep', [ws], 'a.txt')
+        await flushCheckpoints()
+
+        // Simulate the in-memory checkpoint being evicted while the disk snapshot lives
+        // on (clearCheckpoints clears memory only), as happens once other runs push the
+        // map past the cap.
+        clearCheckpoints()
+        expect(checkpointFileCount('run-keep')).toBe(0)
+
+        // R now snapshots a SECOND file B. It must re-hydrate A from disk, not start a
+        // fresh empty map and persist over A's snapshot.
+        writeFileSync(join(ws, 'b.txt'), 'B-original')
+        await recordOriginal('run-keep', [ws], 'b.txt')
+
+        writeFileSync(join(ws, 'a.txt'), 'A-modified')
+        writeFileSync(join(ws, 'b.txt'), 'B-modified')
+        // Reverting restores BOTH files — A survived the eviction.
+        expect(await restoreCheckpoint('run-keep')).toBe(2)
+        expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('A-original')
+        expect(readFileSync(join(ws, 'b.txt'), 'utf8')).toBe('B-original')
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
   })
 
   describe('getConversationCheckpoint (restore the revert/redo affordance on re-open)', () => {

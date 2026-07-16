@@ -65,7 +65,8 @@ import {
   recordOriginal,
   recordResult,
   noteConversationRun,
-  clearCheckpoints
+  clearCheckpoints,
+  flushCheckpoints
 } from './agent/checkpoints'
 import { setUserDataDir } from './userData'
 import { createConversation } from './conversations'
@@ -73,7 +74,8 @@ import { createConversation } from './conversations'
 // registerIpc wires the scheduler, whose store lives under the profile directory.
 // Production sets the userData seam before app.whenReady() (index.ts); mirror that
 // invariant here so registering handlers doesn't trip the unconfigured-seam guard.
-setUserDataDir(mkdtempSync(join(tmpdir(), 'houston-ipc-userdata-')))
+const MODULE_USER_DIR = mkdtempSync(join(tmpdir(), 'houston-ipc-userdata-'))
+setUserDataDir(MODULE_USER_DIR)
 
 /**
  * The delete-confirmation dialog used to be a two-button `window.confirm` whose
@@ -248,16 +250,25 @@ describe('checkpoint restore/reapply gating', () => {
   }
 
   let ws: string
+  let cpUserDir: string
 
   beforeEach(() => {
     ws = mkdtempSync(join(tmpdir(), 'houston-ipc-cp-'))
+    // A fresh persistence dir per test: recordOriginal now re-hydrates a run's snapshot
+    // from disk on an in-memory miss, so a shared checkpoints dir + reused runId would
+    // let one test's on-disk snapshot leak into the next (clearCheckpoints is memory-only).
+    cpUserDir = mkdtempSync(join(tmpdir(), 'houston-ipc-cp-ud-'))
+    setUserDataDir(cpUserDir)
     h.activeRun.mockReturnValue(null)
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     h.activeRun.mockReturnValue(null)
+    await flushCheckpoints() // let any queued disk write settle before clearing
     clearCheckpoints()
     rmSync(ws, { recursive: true, force: true })
+    rmSync(cpUserDir, { recursive: true, force: true })
+    setUserDataDir(MODULE_USER_DIR) // restore for later describes (createConversation)
   })
 
   /** Record one modified file as `runId`, the latest turn of `conversationId`. */
