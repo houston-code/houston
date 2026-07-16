@@ -22,6 +22,7 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   )
   // Default cleanup echoes its input; individual tests override to assert the tidy-up.
   const cleanupPermissionRules = vi.fn((rules: unknown) => Promise.resolve(rules))
+  const getMcpStatuses = vi.fn(() => Promise.resolve([]))
   const api = {
     saveSettings,
     setKey,
@@ -32,6 +33,7 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
     checkForUpdates,
     getIntegrations,
     cleanupPermissionRules,
+    getMcpStatuses,
     ...overrides
   }
   window.api = api as unknown as typeof window.api
@@ -538,6 +540,73 @@ describe('SettingsModal', () => {
     expect(servers).toHaveLength(1)
     // The new server row defaults to a stdio command field.
     expect(within(servers[0] as HTMLElement).getByPlaceholderText('command (e.g. npx)')).toBeInTheDocument()
+  })
+
+  it('signs a remote MCP server in via OAuth (saves first, then flips to Sign out)', async () => {
+    const remote = {
+      id: 'linear',
+      name: 'linear',
+      transport: 'http' as const,
+      command: '',
+      url: 'https://mcp.example.com/mcp',
+      enabled: true
+    }
+    const signedIn = makeSettings({ mcpServers: [{ ...remote, hasOAuth: true }] })
+    const mcpOAuthLogin = vi.fn(() => Promise.resolve({ ok: true, settings: signedIn }))
+    const api = installApi({ mcpOAuthLogin })
+    renderModal({ mcpServers: [remote] })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in (OAuth)' }))
+
+    // The flow reads the persisted URL, so the working copy is saved first.
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    await waitFor(() => expect(mcpOAuthLogin).toHaveBeenCalledWith('linear'))
+    // The fresh hasOAuth flag flips the affordance to signed-in + Sign out.
+    await waitFor(() => expect(screen.getByText('Signed in with OAuth')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+  })
+
+  it('signs a remote MCP server out (mcpOAuthLogout, flag cleared)', async () => {
+    const remote = {
+      id: 'linear',
+      name: 'linear',
+      transport: 'http' as const,
+      command: '',
+      url: 'https://mcp.example.com/mcp',
+      hasOAuth: true,
+      enabled: true
+    }
+    const signedOut = makeSettings({ mcpServers: [{ ...remote, hasOAuth: false }] })
+    const mcpOAuthLogout = vi.fn(() => Promise.resolve(signedOut))
+    installApi({ mcpOAuthLogout })
+    renderModal({ mcpServers: [remote] })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(mcpOAuthLogout).toHaveBeenCalledWith('linear'))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Sign in (OAuth)' })).toBeInTheDocument()
+    )
+  })
+
+  it('shows live MCP connection status from getMcpStatuses', async () => {
+    const remote = {
+      id: 'linear',
+      name: 'linear',
+      transport: 'http' as const,
+      command: '',
+      url: 'https://mcp.example.com/mcp',
+      enabled: true
+    }
+    installApi({
+      getMcpStatuses: vi.fn(() =>
+        Promise.resolve([{ id: 'linear', state: 'needs-auth', error: 'HTTP 401' }])
+      )
+    })
+    renderModal({ mcpServers: [remote] })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    await waitFor(() => expect(screen.getByText('Needs sign-in')).toBeInTheDocument())
   })
 
   it('adds an additional folder from the directory picker', async () => {

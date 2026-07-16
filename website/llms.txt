@@ -16,7 +16,7 @@
 - Structural code search with a bundled ripgrep and ast-grep (syntax-tree matching).
 - See its own localhost: start a dev server, screenshot the page, read the console, and iterate. A live preview panel docks beside the chat.
 - Subagents and adversarial multi-agent review of your diff for correctness, security, and quality.
-- Model Context Protocol (MCP) servers over stdio, HTTP, or SSE; custom read-only agents and on-demand skills defined in Markdown.
+- Model Context Protocol (MCP) servers over stdio, HTTP, or SSE, including OAuth sign-in for hosted servers; custom read-only agents and on-demand skills defined in Markdown.
 
 ## Links
 

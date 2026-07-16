@@ -130,9 +130,16 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   `houston-guide` skill, so Houston's self-knowledge stays accurate as features
   change.
 - **MCP servers.** Connect Model Context Protocol servers in Settings — a local
-  **stdio** process or a remote **HTTP** (streamable) or **SSE** endpoint (with
-  optional static bearer-token / custom auth headers). Their tools are offered to the agent namespaced as
-  `mcp__<id>__<tool>` and always require approval. Point Houston at the
+  **stdio** process (with optional working directory and encrypted env vars) or a
+  remote **HTTP** (streamable) or **SSE** endpoint. Remote servers authenticate
+  with a static bearer-token / custom header, or with **OAuth** for hosted
+  services that require a sign-in: Houston discovers the authorization server,
+  registers itself as a client, opens the browser to authorize, and stores +
+  auto-refreshes the tokens (Settings *Sign in*, or `/mcp login` in the
+  terminal). Their tools are offered to the agent namespaced as
+  `mcp__<id>__<tool>` and always require approval; servers exposing MCP
+  resources or prompt templates get discovery meta-tools, list changes are
+  picked up live, and oversized results are capped. Point Houston at the
   filesystem, git, a hosted MCP service, or any other server to extend what the
   agent can do. When a lot of MCP
   tools are connected, Houston **loads their schemas lazily**: above a threshold
@@ -610,12 +617,19 @@ Local providers (Ollama, LM Studio) need no key at all: point the CLI at the
 same machine and it just works.
 
 **Custom auth headers.** A provider or MCP server can carry custom HTTP headers
-(a gateway bearer token, attribution headers). Like keys, their values are kept
-in the OS keychain by the desktop app and can't be read outside it, so the CLI
-resolves them from `cli-headers.json` in the profile dir — a
-`{"provider:<id>"|"mcp:<id>": {"<Header>": "<value>"}}` map. Create it yourself
-and `chmod 600` it; same plaintext-by-design tradeoff and loose-permissions
-warning as the credentials file.
+(a gateway bearer token, attribution headers), and a stdio MCP server can carry
+env values. Like keys, their values are kept in the OS keychain by the desktop
+app and can't be read outside it, so the CLI resolves them from
+`cli-headers.json` in the profile dir, a
+`{"provider:<id>"|"mcp:<id>"|"mcp-env:<id>": {"<Header-or-VAR>": "<value>"}}`
+map. Create it yourself and `chmod 600` it; same plaintext-by-design tradeoff
+and loose-permissions warning as the credentials file.
+
+**MCP OAuth.** Remote MCP servers that require an OAuth sign-in work in the
+terminal too: run `/mcp login <n>` in an interactive session to open the
+browser flow. The CLI stores the minted tokens in `cli-mcp-oauth.json` in the
+profile dir (written `0600`) and refreshes them automatically; `/mcp logout <n>`
+forgets them.
 
 **One profile, shared.** The CLI reads and writes the same per-user profile as
 the desktop app (settings, conversations, terminal history), so on a machine

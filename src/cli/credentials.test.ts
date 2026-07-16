@@ -7,9 +7,11 @@ import {
   cliCollectSecrets,
   cliGetHeaders,
   cliGetKey,
+  cliGetMcpOAuth,
   cliHasKey,
   cliRemoveKey,
   cliSetKey,
+  cliSetMcpOAuth,
   envVarCandidates,
   genericEnvVar,
   resetCredentialWarnings
@@ -150,6 +152,51 @@ describe('headers file', () => {
     cliGetHeaders('provider:openai', deps)
     expect(warn).toHaveBeenCalledTimes(1)
     expect(String(warn.mock.calls[0][0])).toContain('chmod 600')
+  })
+})
+
+describe('MCP OAuth file', () => {
+  const tokens = {
+    access: 'mcp-access-1234',
+    refresh: 'mcp-refresh-1234',
+    expiresAt: 1_800_000_000_000,
+    clientId: 'cid',
+    clientSecret: 'shhh-secret-1',
+    tokenEndpoint: 'https://as.example.com/token',
+    resource: 'https://mcp.example.com/mcp'
+  }
+
+  it('round-trips a token set per server id and signs out with null', () => {
+    cliSetMcpOAuth('linear', tokens, { dataDir: dir })
+    expect(cliGetMcpOAuth('linear', { dataDir: dir })).toEqual({ ...tokens, scope: undefined })
+    expect(cliGetMcpOAuth('other', { dataDir: dir })).toBeNull()
+    cliSetMcpOAuth('linear', null, { dataDir: dir })
+    expect(cliGetMcpOAuth('linear', { dataDir: dir })).toBeNull()
+  })
+
+  it('writes the file owner-only (0600)', () => {
+    cliSetMcpOAuth('linear', tokens, { dataDir: dir })
+    if (process.platform !== 'win32') {
+      expect(statSync(join(dir, 'cli-mcp-oauth.json')).mode & 0o777).toBe(0o600)
+    }
+  })
+
+  it('signing out an unknown server creates no file', () => {
+    cliSetMcpOAuth('nobody', null, { dataDir: dir })
+    expect(() => statSync(join(dir, 'cli-mcp-oauth.json'))).toThrow()
+  })
+
+  it('rejects an entry missing what a refresh needs', () => {
+    writeFileSync(join(dir, 'cli-mcp-oauth.json'), JSON.stringify({ linear: { access: 'a' } }))
+    expect(cliGetMcpOAuth('linear', { dataDir: dir })).toBeNull()
+  })
+
+  it('contributes its tokens and client secret to cliCollectSecrets', () => {
+    cliSetMcpOAuth('linear', tokens, { dataDir: dir })
+    const values = cliCollectSecrets({ env: {}, dataDir: dir })
+    expect(values).toContain('mcp-access-1234')
+    expect(values).toContain('mcp-refresh-1234')
+    expect(values).toContain('shhh-secret-1')
   })
 })
 

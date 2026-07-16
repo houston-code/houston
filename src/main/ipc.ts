@@ -42,7 +42,10 @@ import {
   openWorkspacePath,
   revealInFileManager
 } from './openInEditor'
-import { setKey, deleteKey } from './secrets'
+import { setKey, deleteKey, setMcpOAuthTokens } from './secrets'
+import { runMcpOAuthFlow } from './mcp/oauth'
+import { getMcpStatuses } from './mcp/manager'
+import { openExternalSafely } from './safeExternal'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
 import {
@@ -479,6 +482,40 @@ export function registerIpc(): void {
     if (!provider?.baseUrl || provider.kind !== 'openai-compatible') return null
     return ollamaSupportsTools(provider.baseUrl, model)
   })
+
+  // MCP OAuth sign-in for a saved remote server: run the interactive browser flow
+  // (discovery, dynamic registration, PKCE, loopback redirect) in the main process
+  // and persist the minted tokens in the encrypted store. The renderer saves
+  // settings first — the flow reads the persisted server URL by id — and the fresh
+  // settings returned carry the updated derived `hasOAuth` flag.
+  ipcMain.handle(
+    IPC.mcpOAuthLogin,
+    async (_event, serverId: string): Promise<{ ok: boolean; error?: string; settings: AppSettings }> => {
+      const server = getSettings().mcpServers?.find((s) => s.id === serverId)
+      if (!server?.url) {
+        return { ok: false, error: 'Save the server (with its URL) before signing in.', settings: getSettings() }
+      }
+      try {
+        const tokens = await runMcpOAuthFlow(server.url, {
+          // The authorize URL opens in the user's real browser (scheme-allowlisted).
+          openUrl: (url) => openExternalSafely(url)
+        })
+        setMcpOAuthTokens(serverId, tokens)
+        return { ok: true, settings: getSettings() }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message, settings: getSettings() }
+      }
+    }
+  )
+
+  // Forget a server's stored OAuth token set (sign out).
+  ipcMain.handle(IPC.mcpOAuthLogout, (_event, serverId: string): AppSettings => {
+    setMcpOAuthTokens(serverId, null)
+    return getSettings()
+  })
+
+  // Live per-server connection status (connected / needs-auth / error) for Settings.
+  ipcMain.handle(IPC.mcpStatus, () => getMcpStatuses())
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
   ipcMain.handle(IPC.integrationsGet, () => getIntegrations())

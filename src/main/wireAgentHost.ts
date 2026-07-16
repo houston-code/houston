@@ -3,6 +3,7 @@ import {
   addPermissionRule,
   configureHasKey,
   configureHeaderSecrets,
+  configureMcpOAuthPresence,
   configureSetKey,
   getProvider,
   getSettings
@@ -11,10 +12,12 @@ import {
   collectSecretValues,
   deleteSecretHeaders,
   getKey,
+  getMcpOAuthTokens,
   getSecretHeaders,
   hasKey,
   hasStoredKey,
   setKey,
+  setMcpOAuthTokens,
   setSecretHeaders
 } from './secrets'
 import { configureLogRedactor } from './logger'
@@ -41,6 +44,8 @@ export function wireAgentHost(): void {
     return { shadowedByEnv: null }
   })
   configureHeaderSecrets({ get: getSecretHeaders, set: setSecretHeaders, remove: deleteSecretHeaders })
+  // The derived `hasOAuth` flag on MCP server configs (drives the Sign in/out UI).
+  configureMcpOAuthPresence((serverId) => getMcpOAuthTokens(serverId) !== null)
   // Scrub stored secrets (and token-shaped strings) from every log line.
   configureLogRedactor((message) => redactSecrets(message, collectSecretValues()))
   // Known-value source for redacting derived conversation titles.
@@ -52,6 +57,8 @@ export function wireAgentHost(): void {
     getKey,
     hasStoredKey,
     getSecretHeaders,
-    collectSecrets: collectSecretValues
+    collectSecrets: collectSecretValues,
+    getMcpOAuth: getMcpOAuthTokens,
+    setMcpOAuth: setMcpOAuthTokens
   })
 }

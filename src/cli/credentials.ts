@@ -1,5 +1,6 @@
 import { chmodSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { McpOAuthTokens } from '../main/mcp/oauth'
 import { getUserDataDir } from '../main/userData'
 import {
   allProviderKeyEnvVars,
@@ -220,7 +221,65 @@ export function cliCollectSecrets(deps: CredentialDeps = {}): string[] {
       if (typeof v === 'string') for (const tok of secretTokensFromHeader(v)) out.add(tok)
     }
   }
+
+  // cli-mcp-oauth.json: every token set's access/refresh tokens and client secret.
+  for (const entry of Object.values(readJsonObject(join(dataDir, MCP_OAUTH_FILE)))) {
+    const tokens = decodeMcpOAuthEntry(entry)
+    if (!tokens) continue
+    for (const v of [tokens.access, tokens.refresh, tokens.clientSecret]) {
+      if (v && v.length >= 8) out.add(v)
+    }
+  }
   return [...out]
+}
+
+// ---- MCP OAuth token sets ----
+//
+// Minted by the TUI's `/mcp login` (see main/mcp/oauth.ts) and read on every
+// connect. The desktop app keeps these in safeStorage, which the CLI can't unlock,
+// so the CLI persists them in its own `cli-mcp-oauth.json` — plaintext by design
+// like the other CLI credential files, always (re)written 0600.
+
+const MCP_OAUTH_FILE = 'cli-mcp-oauth.json'
+
+/** Parse one stored token-set entry; null when it lacks the fields a refresh needs. */
+function decodeMcpOAuthEntry(entry: unknown): McpOAuthTokens | null {
+  if (!entry || typeof entry !== 'object') return null
+  const t = entry as Record<string, unknown>
+  if (typeof t.access !== 'string' || typeof t.clientId !== 'string' || typeof t.tokenEndpoint !== 'string') {
+    return null
+  }
+  return {
+    access: t.access,
+    refresh: typeof t.refresh === 'string' && t.refresh ? t.refresh : undefined,
+    expiresAt: typeof t.expiresAt === 'number' ? t.expiresAt : undefined,
+    scope: typeof t.scope === 'string' ? t.scope : undefined,
+    clientId: t.clientId,
+    clientSecret: typeof t.clientSecret === 'string' ? t.clientSecret : undefined,
+    tokenEndpoint: t.tokenEndpoint,
+    resource: typeof t.resource === 'string' ? t.resource : undefined
+  }
+}
+
+/** Stored OAuth token set for an MCP server id, or null when never signed in. */
+export function cliGetMcpOAuth(serverId: string, deps: CredentialDeps = {}): McpOAuthTokens | null {
+  const dataDir = deps.dataDir ?? getUserDataDir()
+  return decodeMcpOAuthEntry(readJsonObject(join(dataDir, MCP_OAUTH_FILE))[serverId])
+}
+
+/** Persist (or, with `null`, remove) an MCP server's OAuth token set, 0600. */
+export function cliSetMcpOAuth(
+  serverId: string,
+  tokens: McpOAuthTokens | null,
+  deps: CredentialDeps = {}
+): void {
+  const dataDir = deps.dataDir ?? getUserDataDir()
+  const path = join(dataDir, MCP_OAUTH_FILE)
+  const current = readJsonObject(path)
+  if (tokens) current[serverId] = tokens
+  else if (serverId in current) delete current[serverId]
+  else return // nothing stored and nothing to store — don't create an empty file
+  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
 /** Resolve a credential: environment first, then cli-credentials.json. */

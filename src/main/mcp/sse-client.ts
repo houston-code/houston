@@ -1,11 +1,22 @@
-import { flattenMcpContent, flattenMcpResourceContents } from '@shared/mcp'
+import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import {
-  mcpResourcesCapable,
+  McpUnauthorizedError,
+  mcpCapable,
+  parseMcpPromptList,
   parseMcpResourceList,
   type McpConnection,
+  type McpPromptInfo,
   type McpResourceInfo,
   type McpToolInfo
 } from './client'
+import {
+  ListRefresher,
+  PendingRequests,
+  handleServerMessage,
+  kindOf,
+  parseIncoming,
+  type McpListKind
+} from './protocol'
 
 /**
  * A minimal MCP client over the **legacy HTTP+SSE** transport (MCP protocol
@@ -28,12 +39,6 @@ import {
 const PROTOCOL_VERSION = '2024-11-05'
 const INIT_TIMEOUT_MS = 20_000
 const CALL_TIMEOUT_MS = 120_000
-
-interface JsonRpcResponse {
-  id?: number
-  result?: unknown
-  error?: { message?: string }
-}
 
 /** One Server-Sent Event, as delivered by the stream seam. */
 export interface SseEvent {
@@ -65,11 +70,6 @@ export type SseConnectFn = (
 ) => SseStream | Promise<SseStream>
 
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>
-
-interface Pending {
-  resolve: (v: unknown) => void
-  reject: (e: Error) => void
-}
 
 /**
  * Parse a raw SSE event-stream chunk-buffer into discrete events. Returns the
@@ -111,6 +111,12 @@ export const openEventSourceStream: SseConnectFn = (url, headers, { onEvent, onE
         headers: { ...headers, accept: 'text/event-stream' },
         signal: controller.signal
       })
+      if (res.status === 401) {
+        throw new McpUnauthorizedError(
+          'SSE stream failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)',
+          res.headers.get('www-authenticate')
+        )
+      }
       if (!res.ok || !res.body) {
         throw new Error(`SSE stream failed: HTTP ${res.status}`)
       }
@@ -154,11 +160,19 @@ export class McpSseClient implements McpConnection {
   private stream?: SseStream
   private nextId = 1
   private closed = false
-  private readonly pending = new Map<number, Pending>()
+  private readonly pending = new PendingRequests()
+  /** Capabilities the server declared at initialize (gates list re-fetches). */
+  private capable: Record<McpListKind, boolean> = { tools: true, resources: false, prompts: false }
+  private readonly refresher = new ListRefresher({
+    isClosed: () => this.closed,
+    capable: (kind) => this.capable[kind],
+    fetch: (kind) => this.refreshList(kind)
+  })
   /** Resolves once the server's `endpoint` event has set `postUrl`. */
   private endpointReady?: Promise<void>
   tools: McpToolInfo[] = []
   resources: McpResourceInfo[] = []
+  prompts: McpPromptInfo[] = []
 
   constructor(
     private readonly connectStream: SseConnectFn = openEventSourceStream,
@@ -203,18 +217,29 @@ export class McpSseClient implements McpConnection {
     const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
     this.tools = Array.isArray(listed?.tools) ? listed.tools : []
 
-    // Only ask for resources when the server declared the capability.
-    if (mcpResourcesCapable(init)) {
+    // Only ask for resources/prompts when the server declared the capability.
+    this.capable.resources = mcpCapable(init, 'resources')
+    this.capable.prompts = mcpCapable(init, 'prompts')
+    if (this.capable.resources) {
       try {
         this.resources = parseMcpResourceList(await this.rpc('resources/list', {}, INIT_TIMEOUT_MS))
       } catch {
         this.resources = []
       }
     }
+    if (this.capable.prompts) {
+      try {
+        this.prompts = parseMcpPromptList(await this.rpc('prompts/list', {}, INIT_TIMEOUT_MS))
+      } catch {
+        this.prompts = []
+      }
+    }
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<string> {
-    const res = (await this.rpc('tools/call', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS)) as {
+    const res = (await this.rpc('tools/call', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, {
+      progress: true
+    })) as {
       content?: unknown
       isError?: boolean
     }
@@ -226,6 +251,24 @@ export class McpSseClient implements McpConnection {
   async readResource(uri: string): Promise<string> {
     const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS)
     return flattenMcpResourceContents(res) || '[no content]'
+  }
+
+  /** Fetch a prompt template by name, flattened to text. */
+  async getPrompt(name: string, args: Record<string, string>): Promise<string> {
+    const res = await this.rpc('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS)
+    return flattenMcpPromptMessages(res) || '[no content]'
+  }
+
+  /** Re-fetch one changed list in place (driven by the ListRefresher). */
+  private async refreshList(kind: McpListKind): Promise<void> {
+    if (kind === 'tools') {
+      const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
+      this.tools = Array.isArray(listed?.tools) ? listed.tools : this.tools
+    } else if (kind === 'resources') {
+      this.resources = parseMcpResourceList(await this.rpc('resources/list', {}, INIT_TIMEOUT_MS))
+    } else {
+      this.prompts = parseMcpPromptList(await this.rpc('prompts/list', {}, INIT_TIMEOUT_MS))
+    }
   }
 
   close(): void {
@@ -278,19 +321,26 @@ export class McpSseClient implements McpConnection {
       resolveEndpoint()
       return
     }
-    // Any other event (typically "message") carries a JSON-RPC response.
-    let msg: JsonRpcResponse
+    // Any other event (typically "message") carries a JSON-RPC message: a
+    // response to one of our requests, or a server-initiated request/notification.
+    let raw: unknown
     try {
-      msg = JSON.parse(e.data) as JsonRpcResponse
+      raw = JSON.parse(e.data)
     } catch {
       return // ignore non-JSON payloads
     }
-    if (typeof msg.id !== 'number') return // server-initiated request/notification — unsupported
-    const p = this.pending.get(msg.id)
-    if (!p) return
-    this.pending.delete(msg.id)
-    if (msg.error) p.reject(new Error(msg.error.message ?? 'MCP error'))
-    else p.resolve(msg.result)
+    const msg = parseIncoming(raw)
+    if (!msg) return
+    if (kindOf(msg) === 'response') {
+      this.pending.settle(msg.id as number | string, msg)
+      return
+    }
+    handleServerMessage(msg, {
+      // Replies (ping results, method-not-found) go out over the POST channel.
+      send: (payload) => void this.postMessage(payload).catch(() => {}),
+      onListChanged: (kind) => this.refresher.schedule(kind),
+      touchProgress: (token) => this.pending.touch(token)
+    })
   }
 
   private waitForEndpoint(timeoutMs: number): Promise<void> {
@@ -304,30 +354,24 @@ export class McpSseClient implements McpConnection {
     ])
   }
 
-  private async rpc(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  private async rpc(
+    method: string,
+    params: unknown,
+    timeoutMs: number,
+    opts: { progress?: boolean } = {}
+  ): Promise<unknown> {
     if (this.closed) throw new Error('MCP SSE client is closed')
     const id = this.nextId++
-    const result = new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error(`MCP ${method} timed out`))
-      }, timeoutMs)
-      this.pending.set(id, {
-        resolve: (v) => {
-          clearTimeout(timer)
-          resolve(v)
-        },
-        reject: (e) => {
-          clearTimeout(timer)
-          reject(e)
-        }
-      })
-    })
+    // Ask for progress on long calls: a server that reports it keeps the call's
+    // inactivity clock (see PendingRequests) from expiring mid-work.
+    const sent = opts.progress
+      ? { ...(params as Record<string, unknown>), _meta: { progressToken: id } }
+      : params
+    const result = this.pending.wait(id, method, timeoutMs)
     try {
-      await this.postMessage({ jsonrpc: '2.0', id, method, params })
+      await this.postMessage({ jsonrpc: '2.0', id, method, params: sent })
     } catch (e) {
-      this.pending.get(id)?.reject(e as Error)
-      this.pending.delete(id)
+      this.pending.reject(id, e as Error)
     }
     return result
   }
@@ -351,12 +395,17 @@ export class McpSseClient implements McpConnection {
     // The JSON-RPC response arrives over the SSE stream, not in this body. Drain
     // the (usually empty, 202) body so the connection can be reused.
     await res.text().catch(() => '')
+    if (res.status === 401) {
+      throw new McpUnauthorizedError(
+        'MCP POST failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)',
+        res.headers.get('www-authenticate')
+      )
+    }
     if (!res.ok) throw new Error(`MCP POST failed: HTTP ${res.status}`)
   }
 
   private failAll(message: string): void {
     this.closed = true
-    for (const p of this.pending.values()) p.reject(new Error(message))
-    this.pending.clear()
+    this.pending.failAll(message)
   }
 }

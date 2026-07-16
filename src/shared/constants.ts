@@ -67,6 +67,10 @@ export const IPC = {
   settingsListModels: 'settings:listModels',
   /** Whether a local (Ollama) model supports tool calling — true / false / null (unknown). */
   ollamaSupportsTools: 'ollama:supportsTools',
+  // MCP: remote-server OAuth sign-in/out + live connection status (Settings UI).
+  mcpOAuthLogin: 'mcp:oauthLogin',
+  mcpOAuthLogout: 'mcp:oauthLogout',
+  mcpStatus: 'mcp:status',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
   // "Open project in…" — launch an external editor / reveal in the file manager.

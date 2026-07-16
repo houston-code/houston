@@ -223,12 +223,37 @@ ignored.
 ## MCP servers
 
 Connect Model Context Protocol servers in Settings: a local **stdio** process or
-a remote **HTTP** (streamable) or **SSE** endpoint, with optional bearer-token or
-custom auth headers. Their tools are offered to the agent namespaced as
-`mcp__<id>__<tool>` and always require approval. When many MCP tools are
-connected, Houston loads their schemas lazily: above a threshold the agent gets a
-compact catalog plus a `find_tools` meta-tool and pulls in only the tool
-definitions it needs, instead of sending every schema on every request.
+a remote **HTTP** (streamable) or **SSE** endpoint. Their tools are offered to
+the agent namespaced as `mcp__<id>__<tool>` and always require approval. When
+many MCP tools are connected, Houston loads their schemas lazily: above a
+threshold the agent gets a compact catalog plus a `find_tools` meta-tool and
+pulls in only the tool definitions it needs, instead of sending every schema on
+every request.
+
+**Authentication.** Remote servers take custom headers (e.g. a static
+`Authorization: Bearer` token), or **OAuth** for servers that require a sign-in:
+click *Sign in (OAuth)* on the server in Settings (desktop) or run
+`/mcp login <n>` (terminal). Houston discovers the server's authorization
+server, registers itself as an OAuth client automatically, and opens the browser
+to authorize; tokens are stored encrypted, sent as the bearer on every
+connection, and refreshed automatically when they expire. *Sign out* (or
+`/mcp logout <n>`) forgets them. An explicit Authorization header, when set,
+takes precedence over OAuth tokens.
+
+**Local (stdio) servers** can be given a working directory and environment
+variables (Settings, or the `/mcp add` prompts). The spawned process gets a
+credential-stripped base environment, so a token the server needs must be listed
+explicitly; env values are secrets and are stored encrypted, like header values.
+
+**Resources and prompts.** When a server exposes MCP resources or prompt
+templates, the agent gets `mcp_list_resources`/`mcp_read_resource` and
+`mcp_list_prompts`/`mcp_get_prompt` meta-tools to discover and fetch them.
+Houston also honors server `list_changed` notifications (tools, resources, and
+prompts refresh live), keeps long tool calls alive while the server reports
+progress, and caps any single MCP result so a runaway server cannot flood the
+context window. `/mcp` in the terminal and the Settings panel show each server's
+live connection status: connected with a tool count, needs sign-in, or the
+connect error.
 
 ## Shell sandbox and network
 

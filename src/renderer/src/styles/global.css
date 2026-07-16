@@ -4243,6 +4243,22 @@ body.is-resizing .preview-dock__resizer::after {
   font-size: 13px;
   font-family: var(--mono);
 }
+.mcp-server__status {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mcp-server__status--ok {
+  color: var(--ok, #3fb950);
+}
+.mcp-server__status--warn {
+  color: var(--warn, #d29922);
+}
+.mcp-server__status--err {
+  color: var(--danger, #f85149);
+}
 .mcp-server__args:focus {
   outline: none;
   border-color: var(--accent);
