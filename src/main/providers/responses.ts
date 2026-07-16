@@ -1,6 +1,13 @@
 import type OpenAI from 'openai'
 import { randomUUID } from 'node:crypto'
-import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
+import type {
+  ChatMessage,
+  ChatRequest,
+  Provider,
+  ProviderStreamEvent,
+  ReasoningBlock,
+  StopReason
+} from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { openaiResponsesReasoning } from './reasoning'
 
@@ -18,8 +25,44 @@ import { openaiResponsesReasoning } from './reasoning'
 
 type InputItem = Record<string, unknown>
 
-/** Map internal chat messages to Responses API input items. */
-export function toResponsesInput(messages: ChatMessage[]): InputItem[] {
+/**
+ * Rebuild the `reasoning` input items for an assistant turn.
+ *
+ * Reasoning models keep their chain of thought in server-side state keyed to a
+ * response. Houston is stateless — it resends the whole conversation each turn and
+ * never uses `previous_response_id` — so the state has to travel with the request as
+ * `encrypted_content` (see `store: false` + `include` in `streamChat`). Without this,
+ * every tool call throws away the model's reasoning and it re-derives its plan from
+ * scratch on the next turn.
+ *
+ * Only blocks that actually carry `encryptedContent` are replayed: an `id` alone
+ * points at a response we asked OpenAI not to store, which is a 400. Returns [] when
+ * replay is off or the turn has no encrypted reasoning.
+ */
+function reasoningItems(m: ChatMessage, replay: boolean): InputItem[] {
+  if (!replay || !m.reasoning?.length) return []
+  const items: InputItem[] = []
+  for (const r of m.reasoning) {
+    if (!r.id || !r.encryptedContent) continue
+    items.push({
+      type: 'reasoning',
+      id: r.id,
+      encrypted_content: r.encryptedContent,
+      // Display-only metadata; `encrypted_content` is the authoritative state. Sent
+      // back so the item round-trips in the shape the API returned it.
+      summary: r.text ? [{ type: 'summary_text', text: r.text }] : []
+    })
+  }
+  return items
+}
+
+/**
+ * Map internal chat messages to Responses API input items.
+ *
+ * `replayReasoning` should track whether reasoning is enabled for *this* request:
+ * when the user switches to a non-reasoning model, its blocks must not be replayed.
+ */
+export function toResponsesInput(messages: ChatMessage[], replayReasoning = false): InputItem[] {
   const input: InputItem[] = []
   for (const m of messages) {
     if (m.role === 'user') {
@@ -30,6 +73,9 @@ export function toResponsesInput(messages: ChatMessage[]): InputItem[] {
       }
       input.push({ role: 'user', content: content.length ? content : [{ type: 'input_text', text: '' }] })
     } else if (m.role === 'assistant') {
+      // Reasoning leads the turn, mirroring the order the API emitted it: the
+      // reasoning item precedes the message and function calls it produced.
+      input.push(...reasoningItems(m, replayReasoning))
       if (m.content) {
         input.push({ role: 'assistant', content: [{ type: 'output_text', text: m.content }] })
       }
@@ -77,7 +123,16 @@ export function toResponsesTools(tools: ChatRequest['tools']): InputItem[] | und
 interface ResponsesEvent {
   type: string
   delta?: string
-  item?: { type?: string; call_id?: string; name?: string; arguments?: string }
+  item?: {
+    type?: string
+    call_id?: string
+    name?: string
+    arguments?: string
+    /** Reasoning items: `rs_...` id, encrypted state, and the display summary. */
+    id?: string
+    encrypted_content?: string | null
+    summary?: { text?: string }[]
+  }
   response?: {
     usage?: {
       input_tokens?: number
@@ -164,8 +219,17 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       const params = {
         model: req.model,
         ...(req.system ? { instructions: req.system } : {}),
-        input: toResponsesInput(req.messages),
+        input: toResponsesInput(req.messages, reasoning !== undefined),
         stream: true,
+        // Houston resends the whole conversation each turn and never reads a
+        // response back by id, so server-side storage buys nothing and would
+        // retain the conversation on OpenAI's side for no reason. Opting out
+        // makes the run stateless — which is exactly why reasoning state has to
+        // come back to us encrypted, below.
+        store: false,
+        // The counterpart to `store: false`: without this the reasoning items
+        // arrive with no `encrypted_content`, leaving nothing to replay.
+        ...(reasoning ? { include: ['reasoning.encrypted_content'] } : {}),
         // The Responses API spells the reply cap `max_output_tokens`; it covers
         // reasoning tokens as well as visible output, and the stream reports
         // hitting it as `incomplete_details.reason === 'max_output_tokens'`.
@@ -200,6 +264,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       let outputTokens: number | undefined
       let cacheReadTokens: number | undefined
       let stopReason: StopReason = 'end_turn'
+      const turnReasoning: ReasoningBlock[] = []
 
       for await (const event of stream) {
         const ev = event as unknown as ResponsesEvent
@@ -212,7 +277,18 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
             break
           case 'response.output_item.done': {
             const item = ev.item
-            if (item?.type === 'function_call') {
+            if (item?.type === 'reasoning') {
+              // Keep the item only if it carries replayable state; the summary is
+              // for display. An id with no encrypted_content can't be sent back
+              // (see `reasoningItems`), so there's nothing worth holding.
+              if (item.id && item.encrypted_content) {
+                turnReasoning.push({
+                  text: (item.summary ?? []).map((s) => s.text ?? '').join(''),
+                  id: item.id,
+                  encryptedContent: item.encrypted_content
+                })
+              }
+            } else if (item?.type === 'function_call') {
               hadToolCalls = true
               let args: Record<string, unknown>
               try {
@@ -263,7 +339,8 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
           inputTokens,
           outputTokens,
           ...(cacheReadTokens ? { cacheReadTokens } : {})
-        }
+        },
+        ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
       }
     }
   }
