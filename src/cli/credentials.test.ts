@@ -181,6 +181,17 @@ describe('MCP OAuth file', () => {
     }
   })
 
+  it('tightens a pre-existing group/world-readable token file to 0600', () => {
+    if (process.platform === 'win32') return
+    const path = join(dir, 'cli-mcp-oauth.json')
+    // A pre-existing loose-perm token file (writeFileSync's mode is a no-op on an
+    // existing file, so a raw write would leave these OAuth tokens 0644-readable).
+    writeFileSync(path, JSON.stringify({ existing: tokens }))
+    chmodSync(path, 0o644)
+    cliSetMcpOAuth('linear', tokens, { dataDir: dir })
+    expect(statSync(path).mode & 0o077).toBe(0) // owner-only, not left 0644
+  })
+
   it('signing out an unknown server creates no file', () => {
     cliSetMcpOAuth('nobody', null, { dataDir: dir })
     expect(() => statSync(join(dir, 'cli-mcp-oauth.json'))).toThrow()
