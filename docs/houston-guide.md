@@ -620,6 +620,18 @@ these run `gh` outside the shell sandbox, they reach the network on approval,
 unlike a raw `gh` in `run_shell`. If `gh` is not installed, these tools simply
 are not offered and everything else still works.
 
+## Remembering an instruction (#)
+
+Start a line with `#` to turn it into a standing instruction: `# always run the
+linter before committing`. Houston asks whether it applies to this project or to
+you everywhere, appends it to the rules file it already reads on every run
+(`AGENTS.md` in the project, or in `~/.claude`), and tells you which file it
+wrote.
+
+This is for the moment you notice "it should always do X" — the moment you are
+least likely to stop and open an editor. `#` alone is not a note, and a `#` in the
+middle of a line is ordinary text.
+
 ## Project rules
 
 Houston folds a small rules hierarchy into the system prompt each run: the global

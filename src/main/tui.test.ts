@@ -36,6 +36,7 @@ import {
   renderMcpTools,
   resolveTheme,
   THEMES,
+  parseMemoryCapture,
   nextPolicy,
   renderRecoveredOutput,
   toolResultsFrom,
@@ -3695,5 +3696,83 @@ describe('--continue / --resume at launch', () => {
     await runTui(opts, d)
     expect(t.text()).not.toContain('continuing')
     expect(rec.runs[0].messages).toHaveLength(1)
+  })
+})
+
+// Houston already reads AGENTS.md / CLAUDE.md on every run, so standing
+// instructions work. What was missing was a way to ADD one without leaving the
+// session — so the moment you notice "it should always do X" is exactly the moment
+// you are least likely to write it down.
+describe('# memory capture', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('recognizes a note, and only a real one', () => {
+    expect(parseMemoryCapture('# always run the linter')).toBe('always run the linter')
+    expect(parseMemoryCapture('#always run the linter')).toBe('always run the linter')
+    expect(parseMemoryCapture('#')).toBeNull()
+    expect(parseMemoryCapture('#   ')).toBeNull()
+    expect(parseMemoryCapture('not a # note')).toBeNull()
+  })
+
+  it('saves to the project when asked, and says where it went', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['# always run the linter', 'p', null])
+    d.io = t.io
+    const saved: Array<[string, string]> = []
+    d.saveMemory = async (scope, text) => {
+      saved.push([scope, text])
+      return '/w/AGENTS.md'
+    }
+    await runTui(opts, d)
+    expect(saved).toEqual([['project', 'always run the linter']])
+    expect(t.text()).toContain('remembered in /w/AGENTS.md')
+    expect(rec.runs).toHaveLength(0) // it is not a turn
+  })
+
+  it('saves globally when asked', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['# prefer tabs', 'e', null])
+    d.io = t.io
+    const saved: string[] = []
+    d.saveMemory = async (scope) => {
+      saved.push(scope)
+      return '~/.claude/AGENTS.md'
+    }
+    await runTui(opts, d)
+    expect(saved).toEqual(['global'])
+  })
+
+  it('does not save when the scope answer is not one', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['# something', 'huh', null])
+    d.io = t.io
+    let calls = 0
+    d.saveMemory = async () => {
+      calls++
+      return 'x'
+    }
+    await runTui(opts, d)
+    expect(calls).toBe(0)
+    expect(t.text()).toContain('not remembered')
+  })
+
+  it('reports a write failure rather than throwing', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['# note', 'p', null])
+    d.io = t.io
+    d.saveMemory = async () => {
+      throw new Error('EACCES')
+    }
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(t.text()).toContain("couldn't remember that")
+  })
+
+  it('says so when the capture is unavailable', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['# note', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('unavailable')
   })
 })

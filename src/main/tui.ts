@@ -1773,6 +1773,12 @@ export interface TuiDeps {
    */
   backgroundSessions?: () => BackgroundSession[]
   /**
+   * Append a standing instruction to the project's or the user's rules file (the
+   * `#` capture). Returns the path written, so the user can see where it went —
+   * a note that vanished into an unnamed file is worse than no note.
+   */
+  saveMemory?: (scope: MemoryScope, text: string) => Promise<string>
+  /**
    * Probe the environment for /doctor (binaries, sandbox backend, MCP state).
    * Absent ⇒ the command reports that diagnostics are unavailable.
    */
@@ -1868,6 +1874,27 @@ export function renderReasoningStatus(
   }
   return lines.join('\n')
 }
+
+/**
+ * A `#`-prefixed line: remember this instruction for next time.
+ *
+ * Houston already reads AGENTS.md / CLAUDE.md from the project and from ~/.claude
+ * on every run, so the mechanism for standing instructions exists and works. What
+ * was missing was any way to ADD one without leaving the session to open an
+ * editor — so the moment you notice "it should always do X" is exactly the moment
+ * you are least likely to write it down.
+ *
+ * Returns the instruction, or null when the line isn't one. `#` alone isn't a
+ * note, and neither is a markdown heading you are typing into a message.
+ */
+export function parseMemoryCapture(line: string): string | null {
+  if (!line.startsWith('#')) return null
+  const text = line.replace(/^#+/, '').trim()
+  return text || null
+}
+
+/** Where a remembered instruction goes. */
+export type MemoryScope = 'project' | 'global'
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
 export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
@@ -2293,6 +2320,47 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
     deps.persistHistory?.(text)
+
+    // `#note` — remember this for next time. Checked with the other prefixes, before
+    // the line is treated as something to say to the model.
+    const memory = parseMemoryCapture(text)
+    if (memory !== null) {
+      if (!deps.saveMemory) {
+        deps.io.out(paint('· remembering instructions is unavailable here\n', 'dim'))
+        continue
+      }
+      let scope: MemoryScope | null = null
+      if (deps.io.select) {
+        const r = await deps.io.select({
+          title: 'Remember this where?',
+          options: [
+            { label: 'This project', value: 'project', description: 'everyone working in this repo' },
+            { label: 'Everywhere', value: 'global', description: 'you, in every project' }
+          ]
+        })
+        if (r.kind === 'commit') scope = r.value as MemoryScope
+        else if (r.kind === 'cancel') scope = null
+      }
+      if (scope === null) {
+        const ans = await deps.io.readLine('Remember for [p]roject or [e]verywhere? ', {
+          discardPending: true
+        })
+        const a = (ans ?? '').trim().toLowerCase()
+        if (a === 'p' || a === 'project') scope = 'project'
+        else if (a === 'e' || a === 'everywhere' || a === 'g' || a === 'global') scope = 'global'
+        else {
+          deps.io.out(paint('· not remembered\n', 'dim'))
+          continue
+        }
+      }
+      try {
+        const where = await deps.saveMemory(scope, memory)
+        deps.io.out(paint(`· remembered in ${where}\n`, 'dim'))
+      } catch (e) {
+        deps.io.out(paint(`· couldn't remember that: ${(e as Error).message}\n`, 'yellow'))
+      }
+      continue
+    }
 
     // `!cmd` — the user's own shell, checked before slash commands so a `!` line is
     // never mistaken for prompt text. Between turns, so writing output is safe.
