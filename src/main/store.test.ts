@@ -155,7 +155,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(5)
+    expect(getSettings().schemaVersion).toBe(6)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -178,6 +178,84 @@ describe('settings migration — model backfill', () => {
     const { getSettings } = await loadStore()
     const anthropic = getSettings().providers.find((p) => p.id === 'anthropic')!
     expect(anthropic.models.find((m) => m.id === 'claude-opus-4-8')).toEqual({ id: 'claude-opus-4-8' })
+  })
+})
+
+describe('settings migration — retired Gemini models (v6)', () => {
+  function geminiProvider(modelIds: string[], defaultModel?: string): unknown {
+    return {
+      id: 'gemini',
+      kind: 'gemini',
+      label: 'Google (Gemini)',
+      models: modelIds.map((id) => ({ id })),
+      ...(defaultModel ? { defaultModel } : {}),
+      requiresKey: true,
+      hasKey: false,
+      builtIn: true
+    }
+  }
+
+  it('prunes the retired flash models and seeds the current 3.x line', async () => {
+    // Google retired gemini-2.5-flash / gemini-2.0-flash; they 404 on every call, so an
+    // upgraded install must not keep offering them.
+    writeSettings({
+      schemaVersion: 5,
+      providers: [geminiProvider(['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'])]
+    })
+    const { getSettings } = await loadStore()
+    const ids = getSettings()
+      .providers.find((p) => p.id === 'gemini')!
+      .models.map((m) => m.id)
+    expect(ids).not.toContain('gemini-2.5-flash')
+    expect(ids).not.toContain('gemini-2.0-flash')
+    expect(ids).toContain('gemini-2.5-pro')
+    expect(ids).toEqual(expect.arrayContaining(['gemini-3.5-flash', 'gemini-3.1-flash-lite']))
+  })
+
+  it('falls back to the built-in default when defaultModel pointed at a retired model', async () => {
+    // Otherwise every new conversation would open on a model the API refuses to serve.
+    writeSettings({
+      schemaVersion: 5,
+      providers: [geminiProvider(['gemini-2.5-pro', 'gemini-2.5-flash'], 'gemini-2.5-flash')]
+    })
+    const { getSettings } = await loadStore()
+    const gemini = getSettings().providers.find((p) => p.id === 'gemini')!
+    expect(gemini.defaultModel).toBe('gemini-2.5-pro')
+  })
+
+  it('leaves a same-named model on a custom endpoint alone', async () => {
+    // A user's own proxy may still serve gemini-2.5-flash; only built-in defaults are pruned.
+    writeSettings({
+      schemaVersion: 5,
+      providers: [
+        {
+          id: 'my-proxy',
+          kind: 'openai-compatible',
+          label: 'My proxy',
+          baseUrl: 'https://proxy.example/v1',
+          models: [{ id: 'gemini-2.5-flash' }],
+          requiresKey: false,
+          hasKey: false,
+          builtIn: false
+        }
+      ]
+    })
+    const { getSettings } = await loadStore()
+    const proxy = getSettings().providers.find((p) => p.id === 'my-proxy')!
+    expect(proxy.models.map((m) => m.id)).toEqual(['gemini-2.5-flash'])
+  })
+
+  it('does not re-add the retired models on a later load', async () => {
+    // The prune must stick: a v6 install reloading must not resurrect them.
+    writeSettings({
+      schemaVersion: 6,
+      providers: [geminiProvider(['gemini-2.5-pro'])]
+    })
+    const { getSettings } = await loadStore()
+    const ids = getSettings()
+      .providers.find((p) => p.id === 'gemini')!
+      .models.map((m) => m.id)
+    expect(ids).toEqual(['gemini-2.5-pro'])
   })
 })
 

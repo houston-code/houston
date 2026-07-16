@@ -5,6 +5,7 @@ import {
   backfillDefaultModels,
   defaultProviders,
   defaultSettings,
+  pruneDefaultModels,
   reconcileSelectedModel,
   resolveShellOutputBudget,
   stripBuiltInModelLabels
@@ -221,5 +222,62 @@ describe('reconcileSelectedModel', () => {
     const emptied = [provider({ id: 'anthropic', kind: 'anthropic', models: [] })]
     const sel = { providerId: 'anthropic', model: 'claude-opus-4-8' }
     expect(reconcileSelectedModel(emptied, sel)).toBeNull()
+  })
+})
+
+describe('pruneDefaultModels', () => {
+  it('removes retired ids from a built-in provider', () => {
+    const saved = [
+      provider({
+        id: 'gemini',
+        models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-2.5-flash' }, { id: 'gemini-2.0-flash' }]
+      })
+    ]
+    const ids = pruneDefaultModels(saved, ['gemini-2.5-flash', 'gemini-2.0-flash'])[0].models.map(
+      (m) => m.id
+    )
+    expect(ids).toEqual(['gemini-2.5-pro'])
+  })
+
+  it('leaves a same-named model on a non-default provider alone', () => {
+    // A custom endpoint may still serve the id; only built-in defaults are pruned.
+    const saved = [provider({ id: 'my-proxy', models: [{ id: 'gemini-2.5-flash' }] })]
+    const ids = pruneDefaultModels(saved, ['gemini-2.5-flash'])[0].models.map((m) => m.id)
+    expect(ids).toEqual(['gemini-2.5-flash'])
+  })
+
+  it('falls back to the built-in defaultModel when the stored one is pruned', () => {
+    const saved = [
+      provider({
+        id: 'gemini',
+        models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-2.5-flash' }],
+        defaultModel: 'gemini-2.5-flash'
+      })
+    ]
+    expect(pruneDefaultModels(saved, ['gemini-2.5-flash'])[0].defaultModel).toBe('gemini-2.5-pro')
+  })
+
+  it('keeps a defaultModel that was not pruned', () => {
+    const saved = [
+      provider({
+        id: 'gemini',
+        models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-2.5-flash' }],
+        defaultModel: 'gemini-2.5-pro'
+      })
+    ]
+    expect(pruneDefaultModels(saved, ['gemini-2.5-flash'])[0].defaultModel).toBe('gemini-2.5-pro')
+  })
+
+  it('returns the same object when nothing matches', () => {
+    const saved = [provider({ id: 'gemini', models: [{ id: 'gemini-2.5-pro' }] })]
+    expect(pruneDefaultModels(saved, ['gemini-2.5-flash'])[0]).toBe(saved[0])
+  })
+
+  it('no shipped default is a retired model', () => {
+    // Guards the actual bug: gemini-2.5-flash / gemini-2.0-flash were shipped defaults that
+    // 404 on every call. Nothing we ship may be on the retired list.
+    const retired = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite']
+    const shipped = defaultProviders().flatMap((p) => p.models.map((m) => m.id))
+    expect(shipped.filter((id) => retired.includes(id))).toEqual([])
   })
 })

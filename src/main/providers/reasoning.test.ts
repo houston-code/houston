@@ -177,4 +177,16 @@ describe('gemini thinking budget', () => {
     expect(geminiThinkingBudget('gemini-2.5-flash', 'low')).toBeGreaterThan(0)
     expect(geminiThinkingBudget('gemini-2.5-pro', 'off')).toBeUndefined()
   })
+
+  // The 2.5-only gate predated Gemini 3 and sent NO thinkingConfig to the 3.x line, so
+  // reasoning silently never happened on the models we now ship as defaults — no error,
+  // just a missing capability. Pin the shipped 3.x ids so that can't regress.
+  it('covers the shipped 3.x line', () => {
+    expect(geminiSupportsThinking('gemini-3.5-flash')).toBe(true)
+    expect(geminiSupportsThinking('gemini-3.1-flash-lite')).toBe(true)
+    expect(geminiSupportsThinking('gemini-3.1-pro-preview')).toBe(true)
+    expect(geminiThinkingBudget('gemini-3.5-flash', 'low')).toBeGreaterThan(0)
+    expect(geminiThinkingBudget('gemini-3.1-flash-lite', 'high')).toBeGreaterThan(0)
+    expect(geminiThinkingBudget('gemini-3.5-flash', 'off')).toBeUndefined()
+  })
 })

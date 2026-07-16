@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 5
+export const SETTINGS_SCHEMA_VERSION = 6
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -89,7 +89,18 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'gemini',
       kind: 'gemini',
       label: 'Google (Gemini)',
-      models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-2.5-flash' }, { id: 'gemini-2.0-flash' }],
+      // gemini-2.5-pro is the newest *stable* pro — the 3.x pro line is preview-only, and no
+      // provider here ships preview ids as defaults — paired with the current 3.x flash and
+      // lite tiers. gemini-2.5-flash and gemini-2.0-flash were removed: Google retired them
+      // ("no longer available to new users") and they now 404 on every call, so they were
+      // menu entries that could only fail. The v6 migration in store.ts prunes them from
+      // installs that already have them saved. Starting points only — the live list is a
+      // Fetch away, and the display name derives from the id.
+      //
+      // NB the live /models list is NOT a safe source of truth here: it still lists both
+      // retired ids even though calling them 404s. Only a real call proves a model works,
+      // which is what the gemini leg of provider-canary.yml does nightly.
+      models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-3.5-flash' }, { id: 'gemini-3.1-flash-lite' }],
       defaultModel: 'gemini-2.5-pro',
       requiresKey: true,
       hasKey: false,
@@ -146,6 +157,38 @@ export function backfillDefaultModels(
     const have = new Set(p.models.map((m) => m.id))
     const additions = def.models.filter((m) => !have.has(m.id) && (!only || only.has(m.id)))
     return additions.length ? { ...p, models: [...p.models, ...additions] } : p
+  })
+}
+
+/**
+ * Remove specific built-in default model ids from a saved provider list, matched by
+ * provider id — the counterpart to `backfillDefaultModels`, for models a provider has
+ * *retired*. This deliberately does NOT respect the "a model the user deletes stays
+ * deleted" symmetry that scopes the backfill: these ids cannot be made to work (the
+ * API 404s them), so keeping one only offers a menu entry that always fails. Only
+ * providers whose id matches a built-in default are touched, so a custom endpoint or
+ * proxy that happens to still serve the same model name is left exactly as it is.
+ *
+ * A `defaultModel` left dangling by the removal falls back to the built-in default;
+ * a dangling top-level `selected` is reconciled separately by the settings migration
+ * (`reconcileSelectedModel`).
+ */
+export function pruneDefaultModels(
+  saved: ProviderConfig[],
+  ids: readonly string[]
+): ProviderConfig[] {
+  const drop = new Set(ids)
+  const defaults = new Map(defaultProviders().map((p) => [p.id, p]))
+  return saved.map((p) => {
+    const def = defaults.get(p.id)
+    if (!def) return p
+    const models = p.models.filter((m) => !drop.has(m.id))
+    if (models.length === p.models.length) return p
+    const next: ProviderConfig = { ...p, models }
+    // A defaultModel pointing at a pruned (now-404) id would hand every new conversation
+    // a model that can't answer, so fall back to the built-in default for this provider.
+    if (next.defaultModel && drop.has(next.defaultModel)) next.defaultModel = def.defaultModel
+    return next
   })
 }
 
