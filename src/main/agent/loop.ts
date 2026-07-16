@@ -1005,16 +1005,67 @@ export async function startRun(
       const systemOverride = resumed ? resumed.systemOverride : agent?.systemPrompt
       const allowedTools = resumed ? resumed.tools : agent?.tools
 
-      // Per-command consent for UNCONFINED shell (writable tier on a host with no
-      // OS sandbox): the subagent's run_shell would otherwise be refused (it can't
-      // prompt from the background), so this gate propagates each such command to
-      // the user as a normal tool_approval on a minted callId under the dispatch.
-      // Deny rules still win without a prompt, the per-run unconfined-shell
-      // consent ("Allow for run") skips further prompts exactly as it does for the
-      // main loop, and the command's start/result are emitted so a command running
-      // unconfined on this machine is never invisible. Only consulted by
-      // runSubAgent when the host lacks an OS sandbox.
-      let gateSeq = 0
+      // Consent seams for a dispatched subagent's gated calls: UNCONFINED shell
+      // (writable tier on a host with no OS sandbox) and NETWORK egress (any tier).
+      // A background subagent can't prompt, so without these the calls are refused;
+      // with them, each is propagated to the user as a normal tool_approval on a
+      // minted callId under the dispatch. Deny rules still win without a prompt, an
+      // existing grant (the per-run unconfined-shell consent, a per-destination
+      // network grant, an allow rule) skips the prompt exactly as in the main loop,
+      // and every gated call's start/result is emitted so what runs unconfined — or
+      // leaves the machine — is never invisible.
+      const gateSeq = { shell: 0, net: 0 }
+      const promptGatedCall = async (input: {
+        subCallId: string
+        name: string
+        args: Record<string, unknown>
+        kind: ToolKind
+        mustApprove: boolean
+        unsandboxedShell: boolean
+        denyNote: string
+        runCall: () => Promise<string>
+      }): Promise<string> => {
+        const { subCallId, name, args, kind, mustApprove, unsandboxedShell, denyNote, runCall } = input
+        const summary = `Subagent: ${getTool(name)!.summarize(args)}`
+        if (mustApprove) {
+          // Track + emit like any approval so re-adopt replay and cancelRun
+          // (which resolves pending approvals as deny) cover this prompt too.
+          run.pendingApprovals.set(subCallId, {
+            name,
+            summary,
+            args,
+            kind,
+            ...(unsandboxedShell ? { sandboxed: false } : {})
+          })
+          emit({
+            type: 'tool_approval',
+            callId: subCallId,
+            name,
+            summary,
+            args,
+            kind,
+            ...(unsandboxedShell ? { sandboxed: false } : {})
+          })
+          const decision = await waitForApproval(run, subCallId)
+          run.pendingApprovals.delete(subCallId)
+          const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
+          if (!approved) {
+            emit({ type: 'tool_result', callId: subCallId, name, ok: false, output: 'Denied by the user.' })
+            return denyNote
+          }
+        }
+        emit({ type: 'tool_start', callId: subCallId, name, args, kind })
+        try {
+          const output = redact(await runCall())
+          emit({ type: 'tool_result', callId: subCallId, name, ok: true, output })
+          return output
+        } catch (e) {
+          const output = redact(`Error: ${(e as Error).message}`)
+          emit({ type: 'tool_result', callId: subCallId, name, ok: false, output })
+          return output
+        }
+      }
+      // Only consulted by runSubAgent when the host lacks an OS sandbox.
       const gateUnconfinedShell = async (
         gateArgs: Record<string, unknown>,
         runCommand: () => Promise<string>
@@ -1024,55 +1075,49 @@ export async function startRun(
         if (ruleAction === 'deny') {
           return 'Denied by a permission rule.'
         }
-        const subCallId = `${callId}.shell.${++gateSeq}`
-        const summary = `Subagent: ${getTool('run_shell')!.summarize(gateArgs)}`
-        // An `ask` rule (any tier) must still prompt even after the per-run
-        // unconfined-shell override, mirroring decideApproval: the override is consent
-        // to skip the default every-command prompt, not to bypass a rule that mandates
-        // one (managed/project `ask` rules are tighten-only and must never be silenced).
-        if (ruleAction === 'ask' || !run.shellUnsandboxedOverride) {
-          // Track + emit like any approval so re-adopt replay and cancelRun
-          // (which resolves pending approvals as deny) cover this prompt too.
-          run.pendingApprovals.set(subCallId, {
-            name: 'run_shell',
-            summary,
-            args: gateArgs,
-            kind: 'shell',
-            sandboxed: false
-          })
-          emit({
-            type: 'tool_approval',
-            callId: subCallId,
-            name: 'run_shell',
-            summary,
-            args: gateArgs,
-            kind: 'shell',
-            sandboxed: false
-          })
-          const decision = await waitForApproval(run, subCallId)
-          run.pendingApprovals.delete(subCallId)
-          const approved = applyApprovalDecision(decision, 'run_shell', gateArgs, 'shell', true)
-          if (!approved) {
-            emit({
-              type: 'tool_result',
-              callId: subCallId,
-              name: 'run_shell',
-              ok: false,
-              output: 'Denied by the user.'
-            })
-            return 'Denied by the user. Do not retry this command; work around it or note it in your report.'
-          }
-        }
-        emit({ type: 'tool_start', callId: subCallId, name: 'run_shell', args: gateArgs, kind: 'shell' })
-        try {
-          const output = redact(await runCommand())
-          emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: true, output })
-          return output
-        } catch (e) {
-          const output = redact(`Error: ${(e as Error).message}`)
-          emit({ type: 'tool_result', callId: subCallId, name: 'run_shell', ok: false, output })
-          return output
-        }
+        return promptGatedCall({
+          subCallId: `${callId}.shell.${++gateSeq.shell}`,
+          name: 'run_shell',
+          args: gateArgs,
+          kind: 'shell',
+          // An `ask` rule (any tier) must still prompt even after the per-run
+          // unconfined-shell override, mirroring decideApproval: the override is consent
+          // to skip the default every-command prompt, not to bypass a rule that mandates
+          // one (managed/project `ask` rules are tighten-only and must never be silenced).
+          mustApprove: ruleAction === 'ask' || !run.shellUnsandboxedOverride,
+          unsandboxedShell: true,
+          denyNote:
+            'Denied by the user. Do not retry this command; work around it or note it in your report.',
+          runCall: runCommand
+        })
+      }
+      // Per-destination consent for a subagent's network egress (every web call).
+      const gateNetwork = async (
+        name: string,
+        gateArgs: Record<string, unknown>,
+        runCall: () => Promise<string>
+      ): Promise<string> => {
+        const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
+        if (ruleAction === 'deny') return 'Denied by a permission rule.'
+        const { mustApprove } = decideApproval({
+          ruleAction,
+          policy: run.policy,
+          kind: 'network',
+          override: run.networkHosts.has(networkDestination(name, gateArgs)),
+          shellSandboxed: isSandboxed(),
+          shellUnsandboxedOverride: run.shellUnsandboxedOverride
+        })
+        return promptGatedCall({
+          subCallId: `${callId}.net.${++gateSeq.net}`,
+          name,
+          args: gateArgs,
+          kind: 'network',
+          mustApprove,
+          unsandboxedShell: false,
+          denyNote:
+            'Denied by the user. Do not retry this request; work without it or note it in your report.',
+          runCall
+        })
       }
 
       let subInput = 0
@@ -1106,6 +1151,16 @@ export async function startRun(
               gateUnconfinedShell
             }
           : {}),
+        // Web access for either tier, every call gated per destination (the
+        // subagent's shell stays offline regardless). getSecret/searchProvider let
+        // web_search resolve its key; collectSecrets masks credentials on egress —
+        // the same wiring makeToolContext gives the main agent's own web tools.
+        network: {
+          gate: gateNetwork,
+          getSecret: getKey,
+          searchProvider: settings.searchProvider,
+          collectSecrets: () => knownSecrets
+        },
         explicitCacheControl: needsExplicitCacheControl(model, modelCaps),
         // The subagent's tool outputs ship to the provider from ITS transcript,
         // which never passes flushResult — scrub them with the run-scoped redactor.

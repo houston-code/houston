@@ -99,24 +99,44 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   `.houston/agents`) is read-only, while the opt-in `dispatch_writable_agent` (and
   custom agents marked `write: true`) delegates a whole task to a nested agent
   loop that can also edit files and run shell commands, all confined to the
-  project with no network access. The dispatch call itself is approval-gated (a
-  write-kind tool, blocked in plan mode): one consent covers the delegated task
-  (see [`subagent.ts`](src/main/agent/subagent.ts)) — except unconfined shell: on
-  a host with no OS sandbox, each shell command the subagent runs is propagated
-  back to the user as its own approval prompt, matching the main loop's invariant
-  that an unconfined command never runs without per-command consent. On top of
-  that, dispatches stream live turn-by-turn progress in every client; each
-  subagent is resumable by id (`resume` sends a follow-up into its retained
-  context); a dispatch or review can run on a cheaper sibling `model` (or a custom
-  agent can pin one via front-matter); subagents can fan out one level of nested
-  read-only researchers; `spawn_session` works on all three clients; and
-  `schedule_run` gives recurring/one-time background runs. *Still deferred:*
-  network access for subagents, and a full **orchestration runtime** — scripted
-  multi-agent workflows (deterministic fan-out/join pipelines), named agent teams
-  with roles, and a manager view that supervises many concurrent agents across
-  sessions. *Why deferred:* those need a first-class run-graph model,
-  cross-session messaging, and their own supervision/consent UX — a product-scale
-  design, not an increment on the dispatch tools.
+  project. The dispatch call itself is approval-gated (a write-kind tool, blocked
+  in plan mode): one consent covers the delegated task's local actions (see
+  [`subagent.ts`](src/main/agent/subagent.ts)). Calls that leave that envelope
+  propagate back to the user as their own approval prompts, each shown live in
+  the transcript: every network request (either tier may `web_fetch`/`web_search`,
+  gated per destination, mirroring the main loop's egress consent — a subagent's
+  shell commands stay offline), and, on a host with no OS sandbox, each shell
+  command, matching the main loop's invariant that an unconfined command never
+  runs without per-command consent. On top of that, dispatches stream live
+  turn-by-turn progress in every client; each subagent is resumable by id
+  (`resume` sends a follow-up into its retained context); a dispatch or review can
+  run on a cheaper sibling `model` (or a custom agent can pin one via
+  front-matter); subagents can fan out one level of nested read-only researchers;
+  `spawn_session` works on all three clients; and `schedule_run` gives
+  recurring/one-time background runs. *Still deferred:* a full **orchestration
+  runtime** — scripted multi-agent workflows (deterministic fan-out/join
+  pipelines), named agent teams with roles, and a manager view that supervises
+  many concurrent agents across sessions. *Why deferred:* those need a
+  first-class run-graph model, cross-session messaging, and their own
+  supervision/consent UX — a product-scale design, not an increment on the
+  dispatch tools.
+
+- **Interactive MCP elicitation, and server prompts as slash commands.** Remote
+  MCP support now covers OAuth sign-in, server-initiated notifications
+  (`list_changed` refreshes tools/resources/prompts live, progress keeps long
+  calls alive), and prompt discovery via the `mcp_list_prompts` /
+  `mcp_get_prompt` meta-tools. Two follow-ups remain. (1) *Elicitation:* when a
+  server asks the user a question mid-call (`elicitation/create`), Houston
+  currently declines it cleanly at the protocol level (JSON-RPC method-not-found,
+  so the server never hangs and can take its no-answer path) instead of showing
+  the user a prompt. Full support means declaring the capability and wiring a new
+  blocking agent event through all three clients (GUI dialog, TUI prompt,
+  headless auto-decline), per the client-parity rule. (2) *Prompts as commands:*
+  surfacing each server prompt as a first-class `/` slash command needs menu +
+  completion plumbing in both interactive clients; the meta-tools already give
+  the agent the same data. *Why deferred:* both are cross-client interaction
+  surfaces, not protocol work; shipping them half-wired would hang runs or drift
+  the clients apart.
 
 - **Persistent code index / semantic (embeddings) search.** Houston searches the
   project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**
