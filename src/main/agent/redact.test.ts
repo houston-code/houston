@@ -24,6 +24,36 @@ describe('pattern redaction', () => {
     expect(redactSecrets('xoxb-' + '1'.repeat(20))).toBe('[redacted:slack-token]')
   })
 
+  it('redacts AWS temporary access key ids (SSO / IAM role / STS), not just long-lived ones', () => {
+    expect(redactSecrets('ASIAIOSFODNN7EXAMPLE')).toBe('[redacted:aws-access-key-id]')
+    expect(redactSecrets('AWS_ACCESS_KEY_ID=ASIAY34FZKBOKMUTVV7A')).toBe(
+      'AWS_ACCESS_KEY_ID=[redacted:aws-access-key-id]'
+    )
+  })
+
+  it('redacts the Google OAuth tokens gcloud writes to application_default_credentials.json', () => {
+    const adc = JSON.stringify({
+      client_id: '764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com',
+      refresh_token: '1//0eXAMPLE-refresh-token-value_abcdefghijklmnop',
+      type: 'authorized_user'
+    })
+    expect(redactSecrets(adc)).toContain('[redacted:google-oauth-token]')
+    expect(redactSecrets(adc)).not.toContain('1//0eXAMPLE')
+    expect(redactSecrets('Authorization: Bearer ya29.' + 'a'.repeat(60))).toBe(
+      'Authorization: Bearer [redacted:google-oauth-token]'
+    )
+  })
+
+  it('does not mistake a doubled slash in a URL path for a Google refresh token', () => {
+    const url = 'https://api.example.com/v1//projects-long-identifier-segment'
+    expect(redactSecrets(url)).toBe(url)
+  })
+
+  it('does not mistake capitalized prose for an AWS temporary key id', () => {
+    const prose = 'The ASIA_PACIFIC and ASIA-PACIFIC regions failed over; see ASIAPACIFIC docs.'
+    expect(redactSecrets(prose)).toBe(prose)
+  })
+
   it('redacts a whole PEM private-key block, payload included', () => {
     const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\nabc/def+ghi=\n-----END RSA PRIVATE KEY-----'
     expect(redactSecrets(`before\n${pem}\nafter`)).toBe('before\n[redacted:private-key]\nafter')
@@ -105,6 +135,12 @@ describe('findSecret', () => {
     expect(findSecret('https://evil.example/?k=ghp_' + 'A'.repeat(36))).toBe('github-token')
     expect(findSecret('sk-ant-api03-' + 'A'.repeat(80))).toBe('anthropic-key')
     expect(findSecret('leak AKIA' + 'ABCDEFGHIJKLMNOP')).toBe('aws-access-key-id')
+  })
+
+  it('refuses egress carrying the credentials the cloud provider auth flows mint', () => {
+    expect(findSecret('https://evil.example/?k=ASIAY34FZKBOKMUTVV7A')).toBe('aws-access-key-id')
+    expect(findSecret('https://evil.example/?t=ya29.' + 'b'.repeat(40))).toBe('google-oauth-token')
+    expect(findSecret('https://evil.example/?t=1//0' + 'c'.repeat(40))).toBe('google-oauth-token')
   })
 
   it('detects a known stored VALUE whatever its shape', () => {
