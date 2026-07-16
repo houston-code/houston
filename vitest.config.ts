@@ -3,11 +3,15 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
 /**
- * Two Vitest projects, split by runtime so each test runs in the right place:
+ * Three Vitest projects, split by runtime so each test runs in the right place:
  *
  *  - `node`     — Electron main process + shared utilities. Pure Node, no DOM.
  *  - `renderer` — the React UI. Runs under jsdom with @testing-library, so
  *                 `.test.tsx` component tests and DOM-dependent helpers work.
+ *  - `evals`    — task-level agent evals (`*.eval.ts`). Same runtime as `node`,
+ *                 but its own project so `npm run eval` can select it, and so the
+ *                 live driver (a real, metered provider) is always an explicit
+ *                 opt-in rather than something a bare `vitest run` could trip.
  *
  * Vitest 4 removed the standalone `vitest.workspace.ts` / `defineWorkspace`, so the
  * split now lives here under `test.projects`. Each project `extends: true` to
@@ -45,6 +49,15 @@ export default defineConfig({
           environment: 'jsdom',
           include: ['src/renderer/**/*.test.{ts,tsx}'],
           setupFiles: ['./src/renderer/test/setup.ts']
+        }
+      },
+      {
+        extends: true,
+        test: {
+          name: 'evals',
+          environment: 'node',
+          include: ['src/main/agent/evals/**/*.eval.ts'],
+          setupFiles: ['./src/main/test/setup.ts']
         }
       }
     ]

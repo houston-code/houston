@@ -20,7 +20,12 @@ export default tseslint.config(
       'website/**',
       '*.config.*',
       // Generated from docs/houston-guide.md by scripts/gen-guide.mjs.
-      'src/main/agent/guide-content.ts'
+      'src/main/agent/guide-content.ts',
+      // Eval fixture repos are test DATA, not project source: each one carries a
+      // deliberately seeded defect for the agent to fix, and they run as plain
+      // Node scripts in a throwaway workspace, never in this project's runtime.
+      // Linting them enforces this repo's rules on code that exists to be broken.
+      'src/main/agent/evals/tasks/*/repo/**'
     ]
   },
   js.configs.recommended,

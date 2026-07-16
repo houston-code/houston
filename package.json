@@ -33,6 +33,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "goldens:update": "vitest run src/main/agent/golden.test.ts -u",
+    "eval": "vitest run --project evals",
     "notices": "node scripts/generate-notices.mjs",
     "license-gate": "node scripts/license-gate.mjs",
     "test:e2e": "npm run build && playwright test",
