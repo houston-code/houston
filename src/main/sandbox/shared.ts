@@ -75,7 +75,10 @@ export function augmentPath(
  * actually succeed (and persists the cache across runs).
  */
 export function pkgCacheDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(env.TMPDIR ?? tmpdir(), 'houston-pkg-cache')
+  // `||`, not `??`: an empty-string TMPDIR must fall back to os.tmpdir() too, or
+  // join('', …) yields a RELATIVE path that package-manager cache env vars then resolve
+  // against the child's cwd (the workspace), polluting the repo and losing persistence.
+  return join(env.TMPDIR || tmpdir(), 'houston-pkg-cache')
 }
 
 /**
@@ -360,8 +363,16 @@ export function spawnWithBackend(
     windowsHide: launch.windowsHide
   })
   if (opts.signal) {
-    if (opts.signal.aborted) killProcessTree(child)
-    else opts.signal.addEventListener('abort', () => killProcessTree(child), { once: true })
+    const signal = opts.signal
+    if (signal.aborted) killProcessTree(child)
+    else {
+      const onAbort = (): void => killProcessTree(child)
+      signal.addEventListener('abort', onAbort, { once: true })
+      // Drop the listener once the child exits (as runWithBackend's cleanupAbort does),
+      // so a cancel arriving after exit can't SIGKILL a recycled process group, and
+      // listeners don't accumulate on the shared per-run signal across background shells.
+      child.once('exit', () => signal.removeEventListener('abort', onAbort))
+    }
   }
   return { child, sandboxed: backend.sandboxed }
 }
