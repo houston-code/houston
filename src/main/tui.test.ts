@@ -346,9 +346,12 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/theme', s)).toEqual({ kind: 'handled' })
   })
 
-  it('recognizes /image with a path', () => {
+  it('recognizes /image with a path, and bare /image as a paste', () => {
     expect(parseSlashCommand('/image shot.png', s)).toEqual({ kind: 'image', path: 'shot.png' })
-    expect(parseSlashCommand('/image', s)).toEqual({ kind: 'handled' }) // no path
+    // A bare /image means "attach what I just copied" — the common case. It used
+    // to print usage, which helped nobody who had already copied a screenshot.
+    expect(parseSlashCommand('/image', s)).toEqual({ kind: 'paste-image' })
+    expect(parseSlashCommand('/paste', s)).toEqual({ kind: 'paste-image' })
   })
 
   it('sets a valid approval policy, else stays informational', () => {
@@ -1623,12 +1626,14 @@ describe('runTui', () => {
     expect(rec.runs[0].messages.at(-1)!.images).toBeUndefined()
   })
 
-  it('bare /image (no path) shows usage instead of a silent no-op', async () => {
+  it('bare /image pastes, and still names the file form when it cannot', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const t = fakeIo(['/image', null])
     d.io = t.io
+    // No clipboardImage wired: it must not be a silent no-op, and must say what to
+    // do instead — which is what the old usage line was for.
     await runTui(opts, d)
-    expect(t.text()).toMatch(/usage: \/image <path>/)
+    expect(t.text()).toContain('/image <path>')
   })
 
   it('/clear drops a staged image so it does not ride into the fresh conversation', async () => {
@@ -3404,5 +3409,72 @@ describe('themes', () => {
     d.io = t.io
     const code = await runTui(opts, d)
     expect(code).toBe(0)
+  })
+})
+
+// The whole vision path already worked (/image <path> → attachment → provider);
+// only getting the bytes out of the clipboard was missing, and the desktop app has
+// had that via Electron forever.
+describe('/image paste', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const img = { mediaType: 'image/png', data: 'aGk=' }
+
+  it('a bare /image attaches what is on the clipboard', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/image', 'what is this?', null])
+    d.io = t.io
+    d.clipboardImage = () => ({ image: img })
+    await runTui(opts, d)
+    expect(t.text()).toContain('attached the image from your clipboard')
+    expect(rec.runs[0].messages.at(-1)?.images).toEqual([img])
+  })
+
+  it('says what to do when the clipboard has no image', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/image', null])
+    d.io = t.io
+    d.clipboardImage = () => ({ error: 'no image on the clipboard (install xclip…)' })
+    await runTui(opts, d)
+    expect(t.text()).toContain('no image on the clipboard')
+  })
+
+  it('/image <path> still reads a file', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/image shot.png', 'look', null])
+    d.io = t.io
+    d.loadImage = () => ({ image: img })
+    d.clipboardImage = () => ({ error: 'should not be called' })
+    await runTui(opts, d)
+    expect(rec.runs[0].messages.at(-1)?.images).toEqual([img])
+  })
+
+  it('/paste is the same as a bare /image', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/paste', null])
+    d.io = t.io
+    let calls = 0
+    d.clipboardImage = () => {
+      calls++
+      return { image: img }
+    }
+    await runTui(opts, d)
+    expect(calls).toBe(1)
+  })
+
+  it('respects the attachment cap', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([...Array(9).fill('/image'), null])
+    d.io = t.io
+    d.clipboardImage = () => ({ image: img })
+    await runTui(opts, d)
+    expect(t.text()).toContain('already have 8 images staged')
+  })
+
+  it('says so when pasting is unavailable', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/image', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('use /image <path>')
   })
 })

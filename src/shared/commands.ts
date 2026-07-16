@@ -141,7 +141,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'mcp', description: 'List MCP servers (add, remove, login, logout)', clients: ['tui'] },
   { name: 'hooks', description: 'List configured hooks', clients: ['tui'] },
   { name: 'theme', description: 'List or switch the color theme', clients: ['tui'] },
-  { name: 'image', description: 'Attach an image to your next message', clients: ['tui'] },
+  { name: 'image', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
   { name: 'cwd', description: 'Show the working directory', clients: ['tui'] },
   { name: 'help', description: 'List the available slash commands', clients: ['gui', 'tui'] },
   {

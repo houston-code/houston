@@ -137,6 +137,7 @@ bracketed-paste support.
 | `Ctrl-Y` | paste back what was just deleted |
 | `Ctrl-X Ctrl-E` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
 | `Ctrl-L` | repaint the screen |
+| `/image` | attach the image on your clipboard (also `/paste`) |
 | `Ctrl-C` | discard the draft (twice in a row to leave) |
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
 | `Ctrl-D` | leave (on an empty composer) |
