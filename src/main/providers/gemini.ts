@@ -21,9 +21,18 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
       }
       const last = out[out.length - 1]
       if (mergingToolResults && last?.parts) {
-        // Fold onto the tool-result user turn (empty content ⇒ nothing to add, but
-        // still drop it so it can't become a second consecutive `user` turn).
-        if (parts!.length) last.parts.push(...parts!)
+        // Fold onto the tool-result user turn, but ONLY text: a functionResponse part
+        // can't share a turn with inlineData (a Gemini 400), so any images get their
+        // own user turn, mirroring the tool-produced-image handling below. (Empty
+        // content ⇒ nothing to add, but still drop it so it can't become a second
+        // consecutive `user` turn.)
+        const textParts = parts!.filter((p) => 'text' in p)
+        const mediaParts = parts!.filter((p) => 'inlineData' in p)
+        if (textParts.length) last.parts.push(...textParts)
+        if (mediaParts.length) {
+          out.push({ role: 'user', parts: mediaParts })
+          mergingToolResults = false
+        }
         continue
       }
       mergingToolResults = false
@@ -112,19 +121,28 @@ export function createGeminiProvider(apiKey: string): Provider {
       let inputTokens: number | undefined
       let outputTokens: number | undefined
       let cacheReadTokens: number | undefined
+      let finishReason: string | undefined
       for await (const chunk of stream) {
         // usageMetadata is cumulative across the stream; keep the latest seen.
         const usage = chunk.usageMetadata
         if (usage) {
           inputTokens = usage.promptTokenCount
-          outputTokens = usage.candidatesTokenCount
+          // candidatesTokenCount EXCLUDES the model's "thoughts" (reasoning) tokens,
+          // which Gemini bills at the output rate; add them so the output count and
+          // cost aren't understated on 2.5 thinking requests (parity with the other
+          // adapters, whose output_tokens already include reasoning).
+          outputTokens = (usage.candidatesTokenCount ?? 0) + (usage.thoughtsTokenCount ?? 0)
           // Implicit-cache hits (Gemini 2.5+ caches automatically). A subset of
           // promptTokenCount, billed below the input rate; implicit writes are free.
           cacheReadTokens = usage.cachedContentTokenCount
         }
+        const cand = chunk.candidates?.[0]
+        // Keep the latest finishReason so a truncated response is reported as such
+        // instead of a clean end_turn (the loop's max-output handling depends on it).
+        if (cand?.finishReason) finishReason = cand.finishReason
         // Iterate parts so we can separate "thought" parts (reasoning) from the
         // answer text — chunk.text would merge them.
-        const parts = chunk.candidates?.[0]?.content?.parts ?? []
+        const parts = cand?.content?.parts ?? []
         for (const part of parts) {
           if (part.functionCall) {
             sawToolCall = true
@@ -144,7 +162,11 @@ export function createGeminiProvider(apiKey: string): Provider {
 
       yield {
         type: 'done',
-        stopReason: sawToolCall ? 'tool_use' : 'end_turn',
+        // A MAX_TOKENS cutoff means the reply was truncated at the output limit, which
+        // the loop surfaces specially; report it even when a (partial) tool call was
+        // seen. Otherwise a tool call means tool_use, and a plain finish is end_turn.
+        stopReason:
+          finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
         usage: {
           inputTokens,
           outputTokens,
