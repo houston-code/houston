@@ -91,6 +91,41 @@ export function regressions(verdicts: BaselineVerdict[]): Extract<BaselineVerdic
   return verdicts.filter((v) => v.kind === 'regressed')
 }
 
+/**
+ * Refuse to record a baseline that would gate nothing.
+ *
+ * A baseline of all zeros is a DEAD gate: `compareToBaseline` can never mark a
+ * task regressed below 0, so the nightly would pass forever while still looking
+ * like it was guarding quality — the exact false-green this suite exists to
+ * prevent. And "the model solved literally nothing" is virtually always a
+ * misconfiguration (an empty model id, a bad key, a provider outage) rather than
+ * a true score worth freezing.
+ *
+ * This is deliberately a second line of defense behind `resolveEvalConfig`'s
+ * validation: that one stops the known cause, this one stops the CONSEQUENCE of
+ * any cause, including ones not thought of yet. It really happened — a
+ * set-but-empty `HOUSTON_EVAL_MODEL` produced exactly this file.
+ */
+export function assertRecordable(scores: TaskScore[]): void {
+  if (scores.length === 0) {
+    throw new Error('Refusing to record a baseline with no tasks — nothing ran.')
+  }
+  if (scores.every((s) => s.passRate === 0)) {
+    throw new Error(
+      [
+        `Refusing to record a baseline where all ${scores.length} tasks scored 0.`,
+        '',
+        'Nothing passed, which is almost always a misconfiguration (empty/wrong model id,',
+        'bad or missing API key, provider outage) rather than a real score. Recording it',
+        'would produce a permanently dead gate: nothing can regress below zero, so the',
+        'nightly could never fail again.',
+        '',
+        'Check the per-task run errors in the scorecard above, fix the cause, and re-record.'
+      ].join('\n')
+    )
+  }
+}
+
 /** Build a baseline from a run's scores, ready to serialize and commit. */
 export function recordBaseline(
   provider: string,
@@ -114,6 +149,21 @@ export function recordBaseline(
 /** File name for a provider/model pair. Model ids can carry `/` on aggregator routes. */
 export function baselineFileName(provider: string, model: string): string {
   return `${provider}.${model.replace(/\//g, '_')}.json`
+}
+
+/**
+ * True when a baseline gates nothing: every task recorded at 0, so no future
+ * score can be marked regressed.
+ *
+ * Checked on LOAD as well as on record, because the two protect against different
+ * things. `assertRecordable` stops this suite from writing one; this stops an
+ * all-zero baseline that reached the repo some other way (committed by hand, or
+ * swept in by a `git add -A` from a bad local run) from silently disabling the
+ * only quality gate there is. A dead gate is worse than no gate: it reports green.
+ */
+export function isDeadBaseline(baseline: EvalBaseline): boolean {
+  const rates = Object.values(baseline.tasks)
+  return rates.length > 0 && rates.every((r) => r === 0)
 }
 
 /** Runtime shape check — a hand-edited baseline shouldn't fail as a mystery. */

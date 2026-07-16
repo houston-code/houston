@@ -64,6 +64,15 @@ Record a baseline with `npm run eval:baseline`, review the scores, and commit it
 a golden. The tolerance absorbs exactly one flaked attempt of the default three; a
 nightly that reds on model noise is one everyone learns to ignore.
 
+**An all-zero baseline is refused on both record and load** (`evals/baseline.ts`), and
+every env var is resolved through `evals/config.ts` where empty means unset. Both guards
+exist because of one incident: `HOUSTON_EVAL_MODEL ?? default` let a set-but-EMPTY env var
+through (`??` only catches null/undefined, and Actions' `env: ${{ inputs.x || '' }}` sets
+`''` on a cron run), so the model id was empty, every call failed, and the recorder wrote
+0 for all eight tasks. That file is shape-valid and completely inert: nothing can regress
+below zero, so it would have reported green forever. When touching this area, keep the rule
+that a misconfigured run must fail loudly rather than record or load a dead gate.
+
 Two invariants the suite asserts, both worth preserving: every task directory is
 registered exactly once, and every fixture's verify command **fails** before the
 agent touches it. The second is the load-bearing one — a verify that starts green

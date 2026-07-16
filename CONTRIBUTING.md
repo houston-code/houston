@@ -147,6 +147,14 @@ everyone learns to ignore. Two flakes is a real drop and fails. A task scoring
 *above* its baseline is reported as `improved`, which means the baseline is stale
 and worth re-recording.
 
+A baseline where **every** task scored 0 is refused, both when recording it and
+when loading it. Nothing passing is almost always a misconfiguration (an empty or
+wrong model id, a bad key, a provider outage) rather than a real score, and
+freezing it would produce a permanently dead gate: no score can regress below
+zero, so the nightly would report green forever while guarding nothing. If you hit
+that refusal, read the per-task run errors in the scorecard, fix the cause, and
+re-record.
+
 To add a task, create `src/main/agent/evals/tasks/<id>/` with a `repo/` fixture
 and a `task.ts`, then register it in `tasks/index.ts`. Keep fixtures dependency-free
 (plain `.mjs` that plain `node` can run: no install step), and make sure the verify

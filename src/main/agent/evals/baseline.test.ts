@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_TOLERANCE,
+  assertRecordable,
   baselineFileName,
   compareToBaseline,
+  isDeadBaseline,
   isEvalBaseline,
   recordBaseline,
   regressions,
@@ -79,6 +81,60 @@ describe('compareToBaseline', () => {
   it('defaults the tolerance to one flaked attempt out of three', () => {
     expect(DEFAULT_TOLERANCE).toBeGreaterThan(1 / 3)
     expect(DEFAULT_TOLERANCE).toBeLessThan(2 / 3)
+  })
+})
+
+describe('assertRecordable', () => {
+  /**
+   * REGRESSION (the all-zero baseline incident). A set-but-empty
+   * HOUSTON_EVAL_MODEL made every live call fail, and the recorder happily wrote
+   * 0 for all eight tasks. Committing that would have permanently disabled the
+   * quality gate: nothing can regress below zero.
+   */
+  it('refuses a baseline where every task scored 0', () => {
+    const allZero = ['a', 'b', 'c'].map((id) => score(id, 0))
+    expect(() => assertRecordable(allZero)).toThrow(/all 3 tasks scored 0/)
+  })
+
+  it('explains the likely cause rather than just failing', () => {
+    expect(() => assertRecordable([score('a', 0)])).toThrow(/misconfiguration/)
+  })
+
+  it('refuses an empty score set', () => {
+    expect(() => assertRecordable([])).toThrow(/no tasks/)
+  })
+
+  // A model that genuinely can't do some tasks is a real, recordable baseline —
+  // only "nothing worked at all" is treated as a misconfiguration.
+  it('allows a partial-zero baseline', () => {
+    expect(() => assertRecordable([score('a', 0), score('b', 1 / 3)])).not.toThrow()
+  })
+
+  it('allows a single barely-passing task', () => {
+    expect(() => assertRecordable([score('a', 1 / 3)])).not.toThrow()
+  })
+})
+
+describe('isDeadBaseline', () => {
+  // The file the incident actually produced: shape-valid, and completely inert.
+  it('flags an all-zero baseline as dead', () => {
+    expect(isDeadBaseline(baseline({ a: 0, b: 0, c: 0 }))).toBe(true)
+  })
+
+  it('does not flag a baseline with any passing task', () => {
+    expect(isDeadBaseline(baseline({ a: 0, b: 1 / 3 }))).toBe(false)
+  })
+
+  // An empty task map gates nothing either, but that's the registration check's
+  // problem; don't claim it's the "dead gate" failure.
+  it('does not flag an empty baseline', () => {
+    expect(isDeadBaseline(baseline({}))).toBe(false)
+  })
+
+  it('accepts the shape guard but still reads as dead', () => {
+    const b = baseline({ a: 0 })
+    expect(isEvalBaseline(b)).toBe(true)
+    expect(isDeadBaseline(b)).toBe(true)
   })
 })
 
