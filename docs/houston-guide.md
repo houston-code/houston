@@ -109,6 +109,9 @@ bracketed-paste support.
 **History.** Messages are remembered per project folder and survive restarts,
 including multi-line ones.
 
+**Running a shell command.** A line starting with `!` runs in your own shell — see
+"Running your own commands" below.
+
 ## Seeing what the tools did
 
 While a turn runs, each tool result collapses to one line: the transcript is a
@@ -168,6 +171,22 @@ It answers the questions that used to need source-reading or guesswork, notably
 "is my shell really sandboxed here?" and "why did setting my API key change
 nothing?" (an environment variable silently outranks a stored key; `/doctor`
 names it).
+
+## Running your own commands (!)
+
+Type `!` followed by a command to run it in your own shell, without leaving the
+session: `!git status`, `!npm test`. Output streams as it happens.
+
+What you ran and what it printed is also added to the conversation, so you can
+follow it with "now fix those failures" and the agent knows what you saw, with
+nothing to paste back. Long output is trimmed to its last lines (where errors
+usually are).
+
+This is **your** shell, not the agent's: it runs unsandboxed, in your project
+folder, with your environment, exactly as if you had typed it in another window.
+The sandbox exists to confine the agent, which can be steered by instructions
+hidden in the content it reads; a command you typed yourself is your own
+decision. `!` alone, or `!` in the middle of a line, is ordinary text.
 
 ## Approval modes and permissions
 

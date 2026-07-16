@@ -1532,6 +1532,17 @@ export interface TuiDeps {
    */
   version?: string
   /**
+   * Run a command in the USER's shell for `!cmd` — unsandboxed, in the workspace,
+   * with their environment. Streams output through `onOutput`; resolves the exit
+   * code. Absent ⇒ `!` reports that the shell escape is unavailable.
+   *
+   * Deliberately NOT the agent's sandboxed shell. The sandbox confines the AGENT,
+   * which may be prompt-injected; a command the user typed is their own intent —
+   * they could run it in another window — and confining it would only surprise
+   * them (`!git push` failing offline, `!npm i` unable to write).
+   */
+  runUserShell?: (command: string, onOutput: (chunk: string) => void) => Promise<number>
+  /**
    * Probe the environment for /doctor (binaries, sandbox backend, MCP state).
    * Absent ⇒ the command reports that diagnostics are unavailable.
    */
@@ -1548,6 +1559,42 @@ export interface TuiDeps {
    * dependency stays at the entry point and the driver + its tests need no hljs.
    */
   highlightHtml?: (lang: string, code: string) => string | null
+}
+
+/**
+ * A `!`-prefixed line: run it in the user's own shell, like the escape every
+ * terminal REPL has (psql, gdb, python). Returns the command, or null when the
+ * line isn't one.
+ *
+ * `!` alone is not a command, and neither is `! ` — those are a typo or the start
+ * of a sentence, and running an empty shell is pointless.
+ */
+export function parseShellEscape(line: string): string | null {
+  if (!line.startsWith('!')) return null
+  const cmd = line.slice(1).trim()
+  return cmd || null
+}
+
+/** How much `!cmd` output is handed to the model — enough to act on, not a flood. */
+export const SHELL_ESCAPE_MAX_LINES = 200
+
+/**
+ * What the model is told about a command the user ran themselves.
+ *
+ * Written as a plain user turn because that is what it is: the user reporting
+ * something they did. Without this the output would be on screen but invisible to
+ * the agent, so "now fix those failures" would mean pasting it back — and pasting
+ * it back is the thing the shell escape exists to avoid.
+ */
+export function renderShellEscapeRecord(command: string, output: string, exitCode: number): string {
+  const lines = output.split('\n')
+  const clipped = lines.length > SHELL_ESCAPE_MAX_LINES
+  const body = (clipped ? lines.slice(-SHELL_ESCAPE_MAX_LINES) : lines).join('\n').trim()
+  const head = `I ran this in my shell${exitCode === 0 ? '' : ` (it exited ${exitCode})`}:`
+  const note = clipped ? `\n[earlier output trimmed; showing the last ${SHELL_ESCAPE_MAX_LINES} lines]` : ''
+  return body
+    ? `${head}\n\n$ ${command}${note}\n\n${body}`
+    : `${head}\n\n$ ${command}\n\n(no output)`
 }
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
@@ -1918,6 +1965,36 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
     deps.persistHistory?.(text)
+
+    // `!cmd` — the user's own shell, checked before slash commands so a `!` line is
+    // never mistaken for prompt text. Between turns, so writing output is safe.
+    const shellCmd = parseShellEscape(text)
+    if (shellCmd !== null) {
+      if (!deps.runUserShell) {
+        deps.io.out(paint('· the shell escape (!) is unavailable here\n', 'dim'))
+        continue
+      }
+      deps.io.out(paint(`$ ${shellCmd}\n`, 'dim'))
+      let captured = ''
+      let code: number
+      try {
+        code = await deps.runUserShell(shellCmd, (chunk) => {
+          // Stream it: a build or a test run should look alive, not hung.
+          deps.io.out(chunk)
+          captured += chunk
+        })
+      } catch (e) {
+        deps.io.out(paint(`· couldn't run it: ${(e as Error).message}\n`, 'yellow'))
+        continue
+      }
+      if (code !== 0) deps.io.out(paint(`· exited ${code}\n`, 'yellow'))
+      // Record it in the conversation, so "now fix those failures" works without
+      // pasting the output back in — the whole reason to run it HERE rather than in
+      // another window. Capped: a chatty command must not eat the context window.
+      messages.push({ role: 'user', content: renderShellEscapeRecord(shellCmd, captured, code) })
+      persistMessages(messages)
+      continue
+    }
 
     if (text.startsWith('/')) {
       const result = parseSlashCommand(text, deps.getSettings(), templateCommands)

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { LEGAL_VERSION } from '@shared/legal'
 import type { McpServerConfig } from '@shared/types'
 import {
@@ -227,6 +227,39 @@ export function wireTerminalSessionBackends(opts: {
 }
 
 /**
+ * Run a command in the user's own shell for the composer's `!` escape.
+ *
+ * Unsandboxed on purpose. The sandbox exists to confine the AGENT, which can be
+ * steered by a prompt injection into running something the user never wanted. A
+ * command the user typed at their own prompt is not that: it is exactly as
+ * trusted as the shell they launched Houston from, and confining it would only
+ * break the obvious cases (`!git push` with no network, `!npm i` unable to write
+ * outside the workspace).
+ *
+ * `shell: true` is intended here — the string IS a shell command, typed by the
+ * person the shell belongs to. Their $SHELL is used so aliases-free but familiar
+ * syntax works; output is streamed so a build looks alive rather than hung.
+ */
+function runUserShell(
+  workspace: string,
+  command: string,
+  onOutput: (chunk: string) => void
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, {
+      cwd: workspace,
+      shell: process.platform === 'win32' ? true : (process.env.SHELL ?? '/bin/sh'),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    child.stdout?.on('data', (d: Buffer) => onOutput(d.toString()))
+    child.stderr?.on('data', (d: Buffer) => onOutput(d.toString()))
+    child.on('error', reject)
+    child.on('close', (code) => resolve(code ?? 0))
+  })
+}
+
+/**
  * Locate an external binary the agent shells out to. `which`/`where` is the same
  * lookup the shell itself does, so "found" here matches what a tool call sees.
  */
@@ -373,6 +406,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       // /doctor: probe on demand, reusing whatever the update check already found
       // rather than making the report wait on the network.
       doctor: async () => probeDoctor(tui.cwd, version, tui.color, latestUpdate),
+      runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),
       checkUpdate: async () => {
         const found = await checkForUpdate(version)
         latestUpdate = found ? { latest: found.latest, url: found.url } : null

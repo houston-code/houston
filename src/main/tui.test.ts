@@ -37,6 +37,8 @@ import {
   FAILURE_LINES,
   VERBOSE_LINES,
   OUTPUT_LINES,
+  parseShellEscape,
+  renderShellEscapeRecord,
   formatSessionCost,
   parseResumeSelection,
   formatRelativeTime,
@@ -3007,5 +3009,96 @@ describe('/verbose and /output', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('permission denied: /etc/hosts')
+  })
+})
+
+// The escape every terminal REPL has. Without it, checking `git status` or
+// rerunning a test meant leaving the session or asking the agent to do it for you.
+describe('! shell escape', () => {
+  it('recognizes a command, and only a real one', () => {
+    expect(parseShellEscape('!git status')).toBe('git status')
+    expect(parseShellEscape('!  npm test  ')).toBe('npm test')
+    expect(parseShellEscape('!')).toBeNull()
+    expect(parseShellEscape('!   ')).toBeNull()
+    expect(parseShellEscape('git status')).toBeNull()
+    expect(parseShellEscape('/help')).toBeNull()
+    // Mid-line `!` is prompt text, not an escape.
+    expect(parseShellEscape('fix the !important rule')).toBeNull()
+  })
+
+  it('runs the command and streams its output', async () => {
+    const { d, rec } = deps([])
+    const t = fakeIo(['!echo hi', null])
+    d.io = t.io
+    const ran: string[] = []
+    d.runUserShell = async (cmd, onOutput) => {
+      ran.push(cmd)
+      onOutput('hi\n')
+      return 0
+    }
+    await runTui(opts, d)
+    expect(ran).toEqual(['echo hi'])
+    expect(t.text()).toContain('$ echo hi')
+    expect(t.text()).toContain('hi')
+    expect(rec.runs).toHaveLength(0) // it is not a turn
+  })
+
+  it('reports a non-zero exit', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['!false', null])
+    d.io = t.io
+    d.runUserShell = async () => 1
+    await runTui(opts, d)
+    expect(t.text()).toContain('exited 1')
+  })
+
+  // The reason to run it HERE rather than in another window: the agent can act on
+  // what you just saw, without pasting it back.
+  it('records the command and output in the conversation for the next turn', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['!npm test', 'fix those failures', null])
+    d.io = t.io
+    d.runUserShell = async (_cmd, onOutput) => {
+      onOutput('2 tests failed\n')
+      return 1
+    }
+    await runTui(opts, d)
+    const sent = rec.runs[0].messages
+    expect(sent.some((m) => m.content.includes('$ npm test'))).toBe(true)
+    expect(sent.some((m) => m.content.includes('2 tests failed'))).toBe(true)
+    expect(sent.some((m) => m.content.includes('exited 1'))).toBe(true)
+    expect(sent.at(-1)?.content).toBe('fix those failures')
+  })
+
+  it('trims a chatty command so it cannot eat the context window', () => {
+    const many = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n')
+    const rec = renderShellEscapeRecord('yes', many, 0)
+    expect(rec).toContain('line 499') // the TAIL is what matters (errors land last)
+    expect(rec).not.toContain('line 0\n')
+    expect(rec).toContain('trimmed')
+  })
+
+  it('records a silent command honestly', () => {
+    expect(renderShellEscapeRecord('true', '', 0)).toContain('(no output)')
+  })
+
+  it('survives a shell that cannot start', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['!nope', null])
+    d.io = t.io
+    d.runUserShell = async () => {
+      throw new Error('spawn ENOENT')
+    }
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(t.text()).toContain("couldn't run it")
+  })
+
+  it('says so when the escape is unavailable', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['!ls', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('shell escape (!) is unavailable')
   })
 })
