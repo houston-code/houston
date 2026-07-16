@@ -10,7 +10,7 @@ import {
   exceedsImageSizeLimit,
   SUPPORTED_IMAGE_TYPES
 } from '@shared/images'
-import { startRun, resolveApproval, resolveQuestion, resolvePlan, cancelRun } from './agent/loop'
+import { startRun, resolveApproval, resolveQuestion, resolvePlan, resolveElicitation, cancelRun } from './agent/loop'
 import { killAllShells } from './agent/shells'
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
@@ -115,6 +115,7 @@ export function resolveBackgroundEvent(
     resolveApproval: typeof resolveApproval
     resolveQuestion: typeof resolveQuestion
     resolvePlan: typeof resolvePlan
+    resolveElicitation: typeof resolveElicitation
   }
 ): void {
   switch (e.type) {
@@ -130,6 +131,10 @@ export function resolveBackgroundEvent(
       break
     case 'plan_ready':
       r.resolvePlan(e.runId, e.callId, { kind: 'reject' })
+      break
+    case 'elicitation':
+      // An MCP server asked for input nobody can give — decline, never fabricate.
+      r.resolveElicitation(e.runId, e.elicitId, { action: 'decline' })
       break
     default:
       break // nothing renders in the background; the conversation persists via onMessages
@@ -164,7 +169,7 @@ export function wireTerminalSessionBackends(opts: {
   const pending = new Set<Promise<void>>()
 
   const backgroundSend = (e: AgentEvent): void =>
-    resolveBackgroundEvent(e, { resolveApproval, resolveQuestion, resolvePlan })
+    resolveBackgroundEvent(e, { resolveApproval, resolveQuestion, resolvePlan, resolveElicitation })
 
   const backend = createSpawnBackend({
     createWorktree,
@@ -276,6 +281,7 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
       resolveApproval,
       resolveQuestion,
       resolvePlan,
+      resolveElicitation,
       cancelRun,
       editText: (initial) => editInEditor(initial),
       persistHistory,
@@ -406,6 +412,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions): Promise<numbe
       resolveApproval,
       resolveQuestion,
       resolvePlan,
+      resolveElicitation,
       out: (s) => process.stdout.write(s),
       err: (s) => process.stderr.write(s),
       // Persist headless runs as conversations (shared with the TUI/GUI) so

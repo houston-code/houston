@@ -5,6 +5,8 @@
  * boundary is unambiguous.
  */
 
+import type { ElicitationField, ElicitationResult } from './agent'
+
 const MCP_PREFIX = 'mcp__'
 
 /** Namespaced tool name for an MCP server's tool. */
@@ -53,6 +55,79 @@ export function parseHeaderLines(text: string): Record<string, string> {
     if (key) out[key] = line.slice(idx + 1).trim()
   }
   return out
+}
+
+// ---- Elicitation (server asks the user for input mid-call) ----
+
+/**
+ * Parse an elicitation `requestedSchema` (the MCP spec's flat object-of-primitives
+ * subset of JSON Schema) into renderable field descriptors. Defensive at the trust
+ * boundary: a missing/foreign schema yields [] (a message-only confirmation), and
+ * an exotic property type degrades to a plain string input rather than failing.
+ */
+export function parseElicitationFields(schema: unknown): ElicitationField[] {
+  if (!schema || typeof schema !== 'object') return []
+  const props = (schema as { properties?: unknown }).properties
+  if (!props || typeof props !== 'object') return []
+  const required = (schema as { required?: unknown }).required
+  const requiredSet = new Set(Array.isArray(required) ? required.filter((r) => typeof r === 'string') : [])
+  const fields: ElicitationField[] = []
+  for (const [name, raw] of Object.entries(props as Record<string, unknown>)) {
+    const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    const enumValues = Array.isArray(p.enum) ? p.enum.filter((v) => typeof v === 'string') : []
+    const kind: ElicitationField['kind'] = enumValues.length
+      ? 'enum'
+      : p.type === 'number' || p.type === 'integer' || p.type === 'boolean'
+        ? p.type
+        : 'string'
+    fields.push({
+      name,
+      kind,
+      ...(typeof p.title === 'string' ? { title: p.title } : {}),
+      ...(typeof p.description === 'string' ? { description: p.description } : {}),
+      ...(requiredSet.has(name) ? { required: true } : {}),
+      ...(enumValues.length ? { options: enumValues } : {}),
+      ...(typeof p.format === 'string' ? { format: p.format } : {})
+    })
+  }
+  return fields
+}
+
+/**
+ * Turn raw per-field user input (strings, as a form/terminal collects them) into
+ * a typed elicitation `content` map, or a per-field error message. Booleans accept
+ * y/yes/true/1 and n/no/false/0; enums must match an allowed value; a blank
+ * optional field is omitted, a blank required field is an error.
+ */
+export function buildElicitationContent(
+  fields: ElicitationField[],
+  raw: Record<string, string>
+): { content: NonNullable<ElicitationResult['content']> } | { error: string } {
+  const content: NonNullable<ElicitationResult['content']> = {}
+  for (const f of fields) {
+    const value = (raw[f.name] ?? '').trim()
+    if (!value) {
+      if (f.required) return { error: `"${f.name}" is required.` }
+      continue
+    }
+    if (f.kind === 'number' || f.kind === 'integer') {
+      const n = Number(value)
+      if (!Number.isFinite(n)) return { error: `"${f.name}" must be a number.` }
+      if (f.kind === 'integer' && !Number.isInteger(n)) return { error: `"${f.name}" must be an integer.` }
+      content[f.name] = n
+    } else if (f.kind === 'boolean') {
+      if (/^(y|yes|true|1)$/i.test(value)) content[f.name] = true
+      else if (/^(n|no|false|0)$/i.test(value)) content[f.name] = false
+      else return { error: `"${f.name}" must be yes or no.` }
+    } else if (f.kind === 'enum') {
+      const match = f.options?.find((o) => o === value) ?? f.options?.find((o) => o.toLowerCase() === value.toLowerCase())
+      if (!match) return { error: `"${f.name}" must be one of: ${f.options?.join(', ')}.` }
+      content[f.name] = match
+    } else {
+      content[f.name] = value
+    }
+  }
+  return { content }
 }
 
 interface ContentBlock {

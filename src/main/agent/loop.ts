@@ -4,6 +4,8 @@ import type {
   AgentRunRequest,
   ChatMessage,
   DocumentAttachment,
+  ElicitationField,
+  ElicitationResult,
   PlanDecision,
   PlanPayload,
   Provider,
@@ -192,6 +194,20 @@ interface RunState {
   planDecisions: Map<string, (d: PlanDecision) => void>
   pendingPlans: Map<string, PlanPayload>
   /**
+   * Pending MCP elicitations (a server asking the user for input mid-tool-call),
+   * keyed by elicitId — one tool call can elicit repeatedly, so this is NOT the
+   * callId. `elicitations` resolves the blocked server request; `pendingElicitations`
+   * holds the event payload for replay on re-adopt. Kept in lockstep like
+   * approvals/questions; cancelRun resolves the remainder as 'cancel'.
+   */
+  elicitations: Map<string, (r: ElicitationResult) => void>
+  pendingElicitations: Map<
+    string,
+    { callId: string; serverId: string; message: string; fields: ElicitationField[] }
+  >
+  /** Monotonic counter minting unique elicitIds within the run. */
+  elicitSeq: number
+  /**
    * Tool KINDS the user granted "Allow for run" on. A call is auto-approved when its
    * kind is in this set — per-kind, so allowing a write never silently also allows
    * network/MCP. Seeded from the conversation's accumulated grants (so the consent
@@ -324,6 +340,10 @@ export function cancelRun(runId: string): void {
   for (const resolve of run.planDecisions.values()) resolve({ kind: 'reject' })
   run.planDecisions.clear()
   run.pendingPlans.clear()
+  // Unblock any pending MCP elicitation so the server gets its answer (a cancel).
+  for (const resolve of run.elicitations.values()) resolve({ action: 'cancel' })
+  run.elicitations.clear()
+  run.pendingElicitations.clear()
   run.abort.abort()
 }
 
@@ -345,6 +365,17 @@ export function resolveQuestion(runId: string, callId: string, answer: string): 
     run.questions.delete(callId)
     run.pendingQuestions.delete(callId)
     resolve(answer)
+  }
+}
+
+/** Deliver the user's answer to a pending MCP elicitation. */
+export function resolveElicitation(runId: string, elicitId: string, result: ElicitationResult): void {
+  const run = runs.get(runId)
+  const resolve = run?.elicitations.get(elicitId)
+  if (run && resolve) {
+    run.elicitations.delete(elicitId)
+    run.pendingElicitations.delete(elicitId)
+    resolve(result)
   }
 }
 
@@ -431,6 +462,17 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
   for (const [callId, plan] of run.pendingPlans) {
     events.push({ runId, type: 'plan_ready', callId, plan })
   }
+  for (const [elicitId, e] of run.pendingElicitations) {
+    events.push({
+      runId,
+      type: 'elicitation',
+      callId: e.callId,
+      elicitId,
+      serverId: e.serverId,
+      message: e.message,
+      fields: e.fields
+    })
+  }
   return events
 }
 
@@ -516,6 +558,9 @@ export async function startRun(
     pendingQuestions: new Map(),
     planDecisions: new Map(),
     pendingPlans: new Map(),
+    elicitations: new Map(),
+    pendingElicitations: new Map(),
+    elicitSeq: 0,
     override: seededOverride.kinds,
     networkHosts: seededOverride.networkHosts,
     shellUnsandboxedOverride: seededOverride.unsandboxedShell,
@@ -1153,6 +1198,24 @@ export async function startRun(
             question: q.question,
             options: q.options,
             ...(q.multiSelect ? { multiSelect: true } : {})
+          })
+        }),
+      // Route an MCP server's mid-call elicitation to this run's user and block
+      // until they answer. Keyed by a fresh elicitId (one call can elicit
+      // repeatedly); registered before emitting, like askUser; cancelRun resolves
+      // any still-pending elicitation as a cancel so the server gets its reply.
+      elicitMcp: (req) =>
+        new Promise<ElicitationResult>((resolve) => {
+          const elicitId = `${callId}:e${++run.elicitSeq}`
+          run.elicitations.set(elicitId, resolve)
+          run.pendingElicitations.set(elicitId, { callId, ...req })
+          emit({
+            type: 'elicitation',
+            callId,
+            elicitId,
+            serverId: req.serverId,
+            message: req.message,
+            fields: req.fields
           })
         }),
       // Present a finished plan and block until the user decides. Like askUser, the

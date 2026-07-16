@@ -5,6 +5,8 @@ import type {
   AgentQuestion,
   ChatMessage,
   DocumentAttachment,
+  ElicitationField,
+  ElicitationResult,
   JSONSchema,
   PlanPayload,
   QuestionOption,
@@ -143,6 +145,13 @@ export interface ToolContext {
   ghExec?: GhExec
   /** Ask the user a structured question and resolve with their answer (injected by the loop). */
   askUser?: (q: AgentQuestion) => Promise<string>
+  /**
+   * Route an MCP server's mid-call elicitation (the server asking the user for
+   * input) to this run's user and resolve with their answer (injected by the
+   * loop). Absent in contexts with no user to ask (subagents); the MCP manager
+   * then declines the request so the server never hangs.
+   */
+  elicitMcp?: (req: { serverId: string; message: string; fields: ElicitationField[] }) => Promise<ElicitationResult>
   /**
    * Present a finished plan for review and block until the user decides (injected by
    * the loop). Resolves with the tool-result text describing their decision — accept

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { COMPACTION_SUMMARY_PREFIX, type ToolApprovalDecision } from '@shared/agent'
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  type ElicitationResult,
+  type ToolApprovalDecision
+} from '@shared/agent'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import type { DisplayItem } from '../lib/items'
 import { groupItems } from '../lib/toolDisplay'
@@ -7,6 +11,7 @@ import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
 import { ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
+import { ElicitationCard } from './ElicitationCard'
 import { Markdown } from './Markdown'
 import { Icon } from './Icon'
 
@@ -161,11 +166,14 @@ export function Transcript({
   items,
   onApprove,
   onAnswer,
+  onElicit,
   onOpenPlan
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
   onAnswer: (callId: string, answer: string) => void
+  /** Resolve an MCP server's mid-call input request (accept/decline). */
+  onElicit: (elicitId: string, result: ElicitationResult) => void
   /** Re-open the review panel for a pending plan marker (clicked in the transcript). */
   onOpenPlan?: (callId: string) => void
 }): JSX.Element {
@@ -211,6 +219,8 @@ export function Transcript({
     if (last.kind === 'toolgroup' && last.items.some((i) => i.status === 'awaiting-approval'))
       return 'The agent is waiting for your approval.'
     if (last.kind === 'question') return 'The agent is asking a question.'
+    if (last.kind === 'elicitation' && !last.item.outcome)
+      return 'An MCP server is requesting input.'
     if (last.kind === 'assistant') return last.item.streaming ? 'The agent is responding…' : 'Response ready.'
     return ''
   }, [nodes])
@@ -246,6 +256,8 @@ export function Transcript({
                 return <ToolGroup key={node.id} items={node.items} onApprove={onApprove} />
               case 'question':
                 return <QuestionCard key={node.id} item={node.item} onAnswer={onAnswer} />
+              case 'elicitation':
+                return <ElicitationCard key={node.id} item={node.item} onResolve={onElicit} />
               case 'plan':
                 return (
                   <PlanMarker

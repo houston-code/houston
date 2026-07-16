@@ -4,7 +4,7 @@ import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shar
 import { missingKeyHint } from '@shared/provider-keys'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
-import type { AgentEvent, AgentRunRequest, ChatMessage, PlanDecision } from '@shared/agent'
+import type { AgentEvent, AgentRunRequest, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 
 /**
  * One-shot headless mode: run a single prompt through the agent loop without the
@@ -247,6 +247,7 @@ export interface HeadlessDeps {
   resolveApproval: (runId: string, callId: string, decision: 'allow' | 'deny' | 'always') => void
   resolveQuestion: (runId: string, callId: string, answer: string) => void
   resolvePlan: (runId: string, callId: string, decision: PlanDecision) => void
+  resolveElicitation: (runId: string, elicitId: string, result: ElicitationResult) => void
   out: (s: string) => void
   err: (s: string) => void
   newId?: () => string
@@ -508,6 +509,17 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
       case 'subagent':
         // A nested subagent row (e.g. one review dimension) starting/finishing.
         if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}\n`)
+        break
+      case 'elicitation':
+        // No interactive user in headless mode — decline, so the MCP server takes
+        // its documented no-answer path instead of hanging the run. Deliberately
+        // NOT governed by --on-approval: that flag approves Houston's own tool
+        // calls; auto-accepting would send fabricated field values to an external
+        // server as if the user typed them.
+        if (!opts.json) {
+          deps.err(`· declining input request from MCP server "${e.serverId}" (no interactive user in headless mode)\n`)
+        }
+        deps.resolveElicitation(e.runId, e.elicitId, { action: 'decline' })
         break
       // Internal/streaming events with no headless surface: the --json path above
       // already emits each verbatim, and the human output doesn't show them.

@@ -3,6 +3,7 @@ import {
   SYSTEM_NOTE_PREFIX,
   type AgentEvent,
   type ChatMessage,
+  type ElicitationField,
   type PlanPayload,
   type QuestionOption
 } from '@shared/agent'
@@ -81,6 +82,21 @@ export interface QuestionItem {
 }
 
 /**
+ * An MCP server's mid-call request for user input (MCP elicitation), shown as a
+ * small form card under the in-flight tool row. `outcome` is set when resolved
+ * (optimistically by the submit handler; any card still open when the run ends
+ * is marked cancelled — cancelRun answered the server with a cancel).
+ */
+export interface ElicitationItem {
+  kind: 'elicitation'
+  id: string // elicitId
+  serverId: string
+  message: string
+  fields: ElicitationField[]
+  outcome?: 'accepted' | 'declined' | 'cancelled'
+}
+
+/**
  * A plan presented via `present_plan`, shown as a compact "Plan ready" marker in the
  * transcript and (while `pending`) mirrored in the docked review panel. `pending` is
  * awaiting the user's decision; the others are its outcome.
@@ -93,7 +109,14 @@ export interface PlanItem {
   status: PlanStatus
 }
 
-export type DisplayItem = UserItem | AssistantItem | ToolItem | NoticeItem | QuestionItem | PlanItem
+export type DisplayItem =
+  | UserItem
+  | AssistantItem
+  | ToolItem
+  | NoticeItem
+  | QuestionItem
+  | PlanItem
+  | ElicitationItem
 
 /**
  * The text of the most recent real user turn, or undefined if there is none.
@@ -276,6 +299,27 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         }
       ]
     }
+    case 'elicitation': {
+      const finalized = finalizeStreaming(items)
+      // Upsert (see tool_question): a replay on re-adopt updates in place.
+      if (finalized.some((it) => it.kind === 'elicitation' && it.id === e.elicitId)) {
+        return finalized.map((it) =>
+          it.kind === 'elicitation' && it.id === e.elicitId
+            ? { ...it, serverId: e.serverId, message: e.message, fields: e.fields }
+            : it
+        )
+      }
+      return [
+        ...finalized,
+        {
+          kind: 'elicitation',
+          id: e.elicitId,
+          serverId: e.serverId,
+          message: e.message,
+          fields: e.fields
+        }
+      ]
+    }
     case 'plan_ready': {
       const finalized = finalizeStreaming(items)
       // Any still-pending plan is superseded by this one (e.g. a revision after the
@@ -388,7 +432,12 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       return [...finalized, { kind: 'notice', id: nextId(), text: e.message, tone: 'info' }]
     }
     case 'done': {
-      const finalized = finalizeStreaming(items)
+      // Any elicitation card still open when the run ends was answered for the
+      // server by cancelRun (a cancel) — reflect that so the form can't be
+      // submitted into a run that no longer exists.
+      const finalized = finalizeStreaming(items).map((it) =>
+        it.kind === 'elicitation' && !it.outcome ? { ...it, outcome: 'cancelled' as const } : it
+      )
       if (e.stopReason === 'aborted') {
         return [...finalized, { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }]
       }

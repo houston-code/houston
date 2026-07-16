@@ -13,8 +13,10 @@ import {
   ListRefresher,
   PendingRequests,
   handleServerMessage,
+  keepAliveDuring,
   kindOf,
   parseIncoming,
+  type ElicitationWireResult,
   type McpListKind
 } from './protocol'
 
@@ -170,6 +172,8 @@ export class McpSseClient implements McpConnection {
   })
   /** Resolves once the server's `endpoint` event has set `postUrl`. */
   private endpointReady?: Promise<void>
+  /** Answers `elicitation/create`; its presence declares the capability. */
+  private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   tools: McpToolInfo[] = []
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
@@ -184,9 +188,14 @@ export class McpSseClient implements McpConnection {
   }
 
   /** Open the SSE stream, perform the initialize handshake, and list tools. */
-  async connect(opts: { url: string; headers?: Record<string, string> }): Promise<void> {
+  async connect(opts: {
+    url: string
+    headers?: Record<string, string>
+    onElicit?: (params: unknown) => Promise<ElicitationWireResult>
+  }): Promise<void> {
     this.sseUrl = opts.url
     this.extraHeaders = opts.headers ?? {}
+    this.onElicit = opts.onElicit
 
     let resolveEndpoint!: () => void
     let rejectEndpoint!: (e: Error) => void
@@ -208,7 +217,9 @@ export class McpSseClient implements McpConnection {
       'initialize',
       {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
+        // Declare elicitation only when a responder is wired: declaring it and
+        // then -32601ing the request would be lying to the server.
+        capabilities: this.onElicit ? { elicitation: {} } : {},
         clientInfo: { name: 'Houston', version: '0.1.0' }
       },
       INIT_TIMEOUT_MS
@@ -336,10 +347,14 @@ export class McpSseClient implements McpConnection {
       return
     }
     handleServerMessage(msg, {
-      // Replies (ping results, method-not-found) go out over the POST channel.
+      // Replies (ping results, elicitation answers, method-not-found) go out
+      // over the POST channel.
       send: (payload) => void this.postMessage(payload).catch(() => {}),
       onListChanged: (kind) => this.refresher.schedule(kind),
-      touchProgress: (token) => this.pending.touch(token)
+      touchProgress: (token) => this.pending.touch(token),
+      ...(this.onElicit
+        ? { onElicit: (p: unknown) => keepAliveDuring(this.pending, () => this.onElicit!(p)) }
+        : {})
     })
   }
 

@@ -101,6 +101,8 @@ export const IPC = {
   agentCancel: 'agent:cancel',
   agentApprove: 'agent:approve',
   agentRespondQuestion: 'agent:respondQuestion',
+  /** Renderer → main: the user's answer to an MCP elicitation (accept/decline/cancel). */
+  agentRespondElicitation: 'agent:respondElicitation',
   /** Renderer → main: the user's decision on a present_plan review (accept / suggest / reject). */
   agentResolvePlan: 'agent:resolvePlan',
   agentSetPolicy: 'agent:setPolicy',

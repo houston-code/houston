@@ -92,6 +92,62 @@ function resourcefulSpawn(): SpawnFn {
   }) as unknown as SpawnFn
 }
 
+/**
+ * A fake stdio server whose one tool elicits mid-call: tools/call triggers a
+ * server-initiated `elicitation/create` (id 99), and the eventual tool result
+ * echoes back whatever elicitation answer the client sent. Also records the
+ * client's declared capabilities from initialize.
+ */
+function elicitingSpawn(seen: { initCapabilities?: unknown }): SpawnFn {
+  return (() => {
+    const stdout = new EventEmitter()
+    let pendingToolCallId: number | undefined
+    const emit = (obj: unknown): void =>
+      void queueMicrotask(() => stdout.emit('data', Buffer.from(`${JSON.stringify(obj)}\n`)))
+    const stdin = {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as {
+          id?: number
+          method?: string
+          params?: Record<string, unknown>
+          result?: unknown
+        }
+        // The client's answer to our elicitation: fold it into the tool result.
+        if (msg.id === 99 && msg.method === undefined) {
+          emit({
+            jsonrpc: '2.0',
+            id: pendingToolCallId,
+            result: { content: [{ type: 'text', text: JSON.stringify(msg.result) }] }
+          })
+          return true
+        }
+        if (msg.id === undefined) return true
+        if (msg.method === 'initialize') {
+          seen.initCapabilities = msg.params?.capabilities
+          emit({ jsonrpc: '2.0', id: msg.id, result: {} })
+        } else if (msg.method === 'tools/list') {
+          emit({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'ask' }] } })
+        } else if (msg.method === 'tools/call') {
+          pendingToolCallId = msg.id
+          emit({
+            jsonrpc: '2.0',
+            id: 99,
+            method: 'elicitation/create',
+            params: {
+              message: 'Which region?',
+              requestedSchema: { properties: { region: { type: 'string' } }, required: ['region'] }
+            }
+          })
+        } else {
+          emit({ jsonrpc: '2.0', id: msg.id, result: {} })
+        }
+        return true
+      }
+    }
+    return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+  }) as unknown as SpawnFn
+}
+
 /** A spawn whose process errors right after start, so connect() rejects fast. The
  * child is created per call (inside connect), so the error fires after connect's
  * 'error' listener is attached. */
@@ -384,6 +440,55 @@ describe('mcp manager OAuth', () => {
     expect((await getMcpToolDefs([webCfg()])).map((d) => d.schema.name)).toEqual([
       mcpToolName('web', 'remote')
     ])
+  })
+})
+
+describe('mcp manager elicitation', () => {
+  const noCtx = { workspace: '/tmp', allowNetwork: false } as ToolContext
+
+  it('declares the elicitation capability and routes a mid-call request to the run', async () => {
+    const seen: { initCapabilities?: unknown } = {}
+    useFactory(elicitingSpawn(seen))
+    const defs = await getMcpToolDefs([cfg()])
+    expect(seen.initCapabilities).toEqual({ elicitation: {} })
+
+    const requests: Array<{ serverId: string; message: string; fields: unknown }> = []
+    const ctx = {
+      ...noCtx,
+      elicitMcp: async (req: { serverId: string; message: string; fields: unknown }) => {
+        requests.push(req)
+        return { action: 'accept' as const, content: { region: 'eu-west' } }
+      }
+    } as ToolContext
+    const result = await defs.find((d) => d.schema.name === mcpToolName('srv', 'ask'))!.execute({}, ctx)
+    expect(requests).toEqual([
+      {
+        serverId: 'srv',
+        message: 'Which region?',
+        fields: [{ name: 'region', kind: 'string', required: true }]
+      }
+    ])
+    expect(JSON.parse(result)).toEqual({ action: 'accept', content: { region: 'eu-west' } })
+  })
+
+  it('declines when the calling context cannot ask a user (no elicitMcp)', async () => {
+    useFactory(elicitingSpawn({}))
+    const defs = await getMcpToolDefs([cfg()])
+    const result = await defs.find((d) => d.schema.name === mcpToolName('srv', 'ask'))!.execute({}, noCtx)
+    expect(JSON.parse(result)).toEqual({ action: 'decline' })
+  })
+
+  it('answers cancel when the responder rejects (run cancelled)', async () => {
+    useFactory(elicitingSpawn({}))
+    const defs = await getMcpToolDefs([cfg()])
+    const ctx = {
+      ...noCtx,
+      elicitMcp: async () => {
+        throw new Error('cancelled')
+      }
+    } as ToolContext
+    const result = await defs.find((d) => d.schema.name === mcpToolName('srv', 'ask'))!.execute({}, ctx)
+    expect(JSON.parse(result)).toEqual({ action: 'cancel' })
   })
 })
 

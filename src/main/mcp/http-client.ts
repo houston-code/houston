@@ -13,8 +13,10 @@ import {
   ListRefresher,
   PendingRequests,
   handleServerMessage,
+  keepAliveDuring,
   kindOf,
   parseIncoming,
+  type ElicitationWireResult,
   type JsonRpcIncoming,
   type McpListKind
 } from './protocol'
@@ -108,6 +110,8 @@ export class McpHttpClient implements McpConnection {
   })
   /** Aborts the standing GET notification stream on close. */
   private streamAbort?: AbortController
+  /** Answers `elicitation/create`; its presence declares the capability. */
+  private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   tools: McpToolInfo[] = []
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
@@ -119,14 +123,21 @@ export class McpHttpClient implements McpConnection {
   }
 
   /** Perform the initialize handshake against the endpoint and list its tools. */
-  async connect(opts: { url: string; headers?: Record<string, string> }): Promise<void> {
+  async connect(opts: {
+    url: string
+    headers?: Record<string, string>
+    onElicit?: (params: unknown) => Promise<ElicitationWireResult>
+  }): Promise<void> {
     this.url = opts.url
     this.extraHeaders = opts.headers ?? {}
+    this.onElicit = opts.onElicit
     const init = await this.rpc(
       'initialize',
       {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
+        // Declare elicitation only when a responder is wired: declaring it and
+        // then -32601ing the request would be lying to the server.
+        capabilities: this.onElicit ? { elicitation: {} } : {},
         clientInfo: { name: 'Houston', version: '0.1.0' }
       },
       INIT_TIMEOUT_MS
@@ -279,11 +290,14 @@ export class McpHttpClient implements McpConnection {
       return
     }
     handleServerMessage(msg, {
-      // Replies to server requests (ping, method-not-found) go out as their own
-      // POST; the server acknowledges with a body-less 202.
+      // Replies to server requests (ping, elicitation, method-not-found) go out
+      // as their own POST; the server acknowledges with a body-less 202.
       send: (payload) => void this.fireAndForget(payload),
       onListChanged: (kind) => this.refresher.schedule(kind),
-      touchProgress: (token) => this.pending.touch(token)
+      touchProgress: (token) => this.pending.touch(token),
+      ...(this.onElicit
+        ? { onElicit: (p: unknown) => keepAliveDuring(this.pending, () => this.onElicit!(p)) }
+        : {})
     })
   }
 

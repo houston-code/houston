@@ -2,14 +2,14 @@ import type { McpServerConfig, McpServerStatus } from '@shared/types'
 import { mcpEnvScope, mcpHeaderScope } from '@shared/types'
 
 export type { McpServerStatus }
-import { mcpToolName } from '@shared/mcp'
-import type { ToolDef } from '../agent/tools'
+import { mcpToolName, parseElicitationFields } from '@shared/mcp'
+import type { ToolContext, ToolDef } from '../agent/tools'
 import { getMcpOAuth, getSecretHeaders, setMcpOAuth } from '../agentHost'
 import { McpClient, McpUnauthorizedError, type McpConnection } from './client'
 import { McpHttpClient } from './http-client'
 import { McpSseClient } from './sse-client'
 import { canonicalResourceUri, refreshMcpOAuth, tokensNeedRefresh } from './oauth'
-import { capMcpOutput } from './protocol'
+import { capMcpOutput, type ElicitationWireResult } from './protocol'
 import { log } from '../logger'
 
 /**
@@ -44,6 +44,44 @@ export function getMcpStatuses(): McpServerStatus[] {
 
 /** The configs of the last reconcile, so a mid-run reconnect can re-resolve them. */
 let lastConfigs: McpServerConfig[] = []
+
+/**
+ * The elicitation responder of the tool call currently in flight per server —
+ * set by callLive from the run's ToolContext and cleared when the call settles.
+ * Connections outlive runs, so this is the bridge from a server's mid-call
+ * question to the user of the run that asked. A server that elicits with no
+ * call in flight (or from a context that can't ask, e.g. a subagent) gets a
+ * decline, never a hang.
+ */
+const elicitors = new Map<string, NonNullable<ToolContext['elicitMcp']>>()
+
+/**
+ * The `onElicit` responder wired into a server's connection: parse the request
+ * defensively (it crosses a trust boundary), route it to the in-flight call's
+ * responder, and map the answer to the wire shape. Always resolves.
+ */
+function serverElicit(serverId: string): (params: unknown) => Promise<ElicitationWireResult> {
+  return async (params) => {
+    const elicit = elicitors.get(serverId)
+    if (!elicit) return { action: 'decline' }
+    const p = params && typeof params === 'object' ? (params as Record<string, unknown>) : {}
+    const message = typeof p.message === 'string' ? p.message.trim() : ''
+    if (!message) return { action: 'decline' }
+    try {
+      const result = await elicit({
+        serverId,
+        message,
+        fields: parseElicitationFields(p.requestedSchema)
+      })
+      if (result.action === 'accept') return { action: 'accept', content: result.content ?? {} }
+      return { action: result.action }
+    } catch {
+      // The run was cancelled (or the responder failed): tell the server the
+      // user cancelled rather than leaving it waiting.
+      return { action: 'cancel' }
+    }
+  }
+}
 
 /** Test seam: how stdio MCP clients are constructed (overridable in tests). */
 let createClient: () => McpClient = () => new McpClient()
@@ -193,10 +231,11 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
     const connectOnce = async (): Promise<McpConnection> => {
       const client: McpConnection =
         transport === 'http' ? createHttpClient() : transport === 'sse' ? createSseClient() : createClient()
+      const onElicit = serverElicit(c.id)
       try {
-        if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers })
-        else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers })
-        else await (client as McpClient).connect({ command: c.command, args: c.args, env, cwd: c.cwd })
+        if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers, onElicit })
+        else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers, onElicit })
+        else await (client as McpClient).connect({ command: c.command, args: c.args, env, cwd: c.cwd, onElicit })
         return client
       } catch (e) {
         client.close()
@@ -258,7 +297,7 @@ export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Pr
         },
         // Resolve the live connection at call time so a reconnect (or removal)
         // between building the tool list and the call doesn't hit a stale client.
-        execute: (args) => callLive(serverId, (client) => client.callTool(original, args))
+        execute: (args, ctx) => callLive(serverId, ctx, (client) => client.callTool(original, args))
       })
     }
   }
@@ -281,10 +320,21 @@ export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Pr
  * turns out to have died (process exit, stream drop, expired HTTP session),
  * reconnect it now and tell the agent to retry, rather than silently re-running
  * a call that may already have executed server-side.
+ *
+ * While the call is in flight its run's elicitation responder (when the context
+ * has one) is registered for the server, so a server that asks the user for
+ * input mid-call reaches the right conversation. MCP-kind calls are sequential
+ * within a run, so one slot per server suffices.
  */
-async function callLive(serverId: string, fn: (client: McpConnection) => Promise<string>): Promise<string> {
+async function callLive(
+  serverId: string,
+  ctx: ToolContext | undefined,
+  fn: (client: McpConnection) => Promise<string>
+): Promise<string> {
   const live = connections.get(serverId)
   if (!live) return `[MCP server "${serverId}" is no longer connected]`
+  const elicit = ctx?.elicitMcp
+  if (elicit) elicitors.set(serverId, elicit)
   try {
     return capMcpOutput(await fn(live.client))
   } catch (e) {
@@ -296,6 +346,8 @@ async function callLive(serverId: string, fn: (client: McpConnection) => Promise
         ? ' The server has been reconnected; retry the call.'
         : ''
     return `[MCP server "${serverId}" connection was lost mid-call: ${(e as Error).message}.${hint}]`
+  } finally {
+    if (elicit && elicitors.get(serverId) === elicit) elicitors.delete(serverId)
   }
 }
 
@@ -340,11 +392,11 @@ function resourceMetaTools(): ToolDef[] {
           required: ['server', 'uri']
         }
       },
-      execute: (args) => {
+      execute: (args, ctx) => {
         const server = typeof args.server === 'string' ? args.server : ''
         const uri = typeof args.uri === 'string' ? args.uri : ''
         if (!server || !uri) return Promise.resolve('Both "server" and "uri" are required.')
-        return callLive(server, (client) => client.readResource(uri))
+        return callLive(server, ctx, (client) => client.readResource(uri))
       }
     }
   ]
@@ -398,7 +450,7 @@ function promptMetaTools(): ToolDef[] {
           required: ['server', 'name']
         }
       },
-      execute: (args) => {
+      execute: (args, ctx) => {
         const server = typeof args.server === 'string' ? args.server : ''
         const name = typeof args.name === 'string' ? args.name : ''
         if (!server || !name) return Promise.resolve('Both "server" and "name" are required.')
@@ -408,7 +460,7 @@ function promptMetaTools(): ToolDef[] {
             promptArgs[k] = typeof v === 'string' ? v : JSON.stringify(v)
           }
         }
-        return callLive(server, (client) => client.getPrompt(name, promptArgs))
+        return callLive(server, ctx, (client) => client.getPrompt(name, promptArgs))
       }
     }
   ]

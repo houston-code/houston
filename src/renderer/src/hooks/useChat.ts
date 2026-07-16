@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
-import type { AgentEvent, PlanDecision, PlanPayload, ToolApprovalDecision } from '@shared/agent'
+import type { AgentEvent, ElicitationResult, PlanDecision, PlanPayload, ToolApprovalDecision } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import type { SessionUsage } from '@shared/usage'
 import { reduceEvent, type DisplayItem, type PlanStatus } from '../lib/items'
@@ -51,6 +51,7 @@ export interface ChatController {
   approve: (callId: string, decision: ToolApprovalDecision) => void
   /** Answer a pending `ask_user` question from the in-flight run. */
   answerQuestion: (callId: string, answer: string) => void
+  answerElicitation: (elicitId: string, result: ElicitationResult) => void
   /** The plan the in-flight run is presenting for review, or null. Drives the panel. */
   pendingPlan: PendingPlan | null
   /** Resolve the pending `present_plan` review (accept / suggest changes / reject). */
@@ -231,6 +232,17 @@ export function useChat(conversationId: string | null = null): ChatController {
     if (runIdRef.current) void window.api.answerQuestion(runIdRef.current, callId, answer)
   }, [])
 
+  const answerElicitation = useCallback((elicitId: string, result: ElicitationResult) => {
+    if (!runIdRef.current) return
+    void window.api.answerElicitation(runIdRef.current, elicitId, result)
+    // Optimistic UI: collapse the form to its outcome immediately (there is no
+    // dedicated result event — the in-flight MCP tool call simply continues).
+    const outcome = result.action === 'accept' ? ('accepted' as const) : ('declined' as const)
+    setItems((prev) =>
+      prev.map((it) => (it.kind === 'elicitation' && it.id === elicitId ? { ...it, outcome } : it))
+    )
+  }, [])
+
   const resolvePlan = useCallback((callId: string, decision: PlanDecision) => {
     if (!runIdRef.current) return
     void window.api.resolvePlan(runIdRef.current, callId, decision)
@@ -327,6 +339,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     cancel,
     approve,
     answerQuestion,
+    answerElicitation,
     pendingPlan,
     resolvePlan,
     setPolicy,

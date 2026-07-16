@@ -30,11 +30,13 @@ import type {
   AgentEvent,
   AgentRunRequest,
   ChatMessage,
+  ElicitationResult,
   PlanAcceptMode,
   PlanDecision,
   PlanPayload,
   QuestionOption
 } from '@shared/agent'
+import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { contextWindowFor, contextPercent } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
@@ -1260,6 +1262,8 @@ export interface TuiDeps {
   resolveQuestion: (runId: string, callId: string, answer: string) => void
   /** Deliver the user's verdict on a `present_plan` review (accept / suggest / reject). */
   resolvePlan: (runId: string, callId: string, decision: PlanDecision) => void
+  /** Deliver the user's answer to an MCP server's mid-call input request. */
+  resolveElicitation: (runId: string, elicitId: string, result: ElicitationResult) => void
   cancelRun: (runId: string) => void
   io: TuiIo
   /**
@@ -1954,6 +1958,58 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               answer = resolveQuestionAnswer(ans ?? '', e.options, e.multiSelect ?? false)
             }
             deps.resolveQuestion(e.runId, e.callId, answer)
+          })
+          break
+        case 'elicitation':
+          // An MCP server asked for input mid-tool-call. Show who is asking (the
+          // values go to that external server), offer a decline, then collect one
+          // line per field, re-prompting on invalid values.
+          enqueue(async () => {
+            deps.io.out(
+              `\n${paint(`MCP server "${e.serverId}" requests input:`, 'cyan')} ${e.message}\n`
+            )
+            const proceed = await deps.io.readLine('Provide it? [y/N] ', { discardPending: true })
+            if (proceed === null || !/^y(es)?$/i.test(proceed.trim())) {
+              deps.resolveElicitation(e.runId, e.elicitId, {
+                action: proceed === null ? 'cancel' : 'decline'
+              })
+              deps.io.out(paint('· declined\n', 'dim'))
+              return
+            }
+            const raw: Record<string, string> = {}
+            for (const f of e.fields) {
+              if (f.description) deps.io.out(paint(`  ${f.name}: ${f.description}\n`, 'dim'))
+              for (;;) {
+                const hints = [
+                  f.kind === 'enum' ? (f.options ?? []).join(' | ') : f.kind !== 'string' ? f.kind : '',
+                  f.required ? 'required' : 'optional'
+                ]
+                  .filter(Boolean)
+                  .join('; ')
+                const ans = await deps.io.readLine(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}: `, {
+                  discardPending: true
+                })
+                if (ans === null) {
+                  deps.resolveElicitation(e.runId, e.elicitId, { action: 'cancel' })
+                  deps.io.out(paint('· cancelled\n', 'dim'))
+                  return
+                }
+                const check = buildElicitationContent([f], { [f.name]: ans })
+                if ('content' in check) {
+                  raw[f.name] = ans
+                  break
+                }
+                deps.io.out(paint(`· ${check.error}\n`, 'yellow'))
+              }
+            }
+            const built = buildElicitationContent(e.fields, raw)
+            if ('error' in built) {
+              // Per-field checks passed, so this is unreachable in practice; keep
+              // the safe fallback anyway.
+              deps.resolveElicitation(e.runId, e.elicitId, { action: 'decline' })
+              return
+            }
+            deps.resolveElicitation(e.runId, e.elicitId, { action: 'accept', content: built.content })
           })
           break
         case 'usage':

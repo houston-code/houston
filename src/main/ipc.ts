@@ -8,6 +8,7 @@ import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
   isPlanDecision,
   isToolApprovalDecision,
+  sanitizeElicitationResult,
   type AgentEvent,
   type AgentSendRequest,
   type ChatMessage,
@@ -51,6 +52,7 @@ import { ollamaSupportsTools } from './providers/ollama'
 import {
   cancelRun,
   resolveApproval,
+  resolveElicitation,
   resolveQuestion,
   resolvePlan,
   setRunPolicy,
@@ -871,6 +873,21 @@ export function registerIpc(): void {
       // Only the window that started the run may answer its ask_user prompts.
       if (!callerOwnsRun(event, runId)) return
       resolveQuestion(runId, callId, answer.slice(0, MAX_QUESTION_ANSWER_LEN))
+    }
+  )
+
+  // Deliver the user's answer to a pending MCP elicitation.
+  ipcMain.handle(
+    IPC.agentRespondElicitation,
+    (event, runId: string, elicitId: string, result: unknown) => {
+      // Validate + cap at the boundary: the content is forwarded verbatim to an
+      // external MCP server, so a malformed or oversized payload stops here.
+      const safe = sanitizeElicitationResult(result, MAX_QUESTION_ANSWER_LEN)
+      if (!safe) return
+      if (typeof elicitId !== 'string') return
+      // Only the window that started the run may answer its elicitations.
+      if (!callerOwnsRun(event, runId)) return
+      resolveElicitation(runId, elicitId, safe)
     }
   )
 

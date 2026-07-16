@@ -4,6 +4,7 @@ import {
   PendingRequests,
   capMcpOutput,
   handleServerMessage,
+  keepAliveDuring,
   kindOf,
   parseIncoming,
   type McpListKind
@@ -63,6 +64,36 @@ describe('handleServerMessage', () => {
     expect(reply.id).toBe('e1')
     expect(reply.error.code).toBe(-32601)
     expect(reply.error.message).toContain('elicitation/create')
+  })
+
+  it('routes elicitation/create to the responder and sends its answer', async () => {
+    const { sent, h } = hooks()
+    const seen: unknown[] = []
+    h.onElicit = async (params) => {
+      seen.push(params)
+      return { action: 'accept', content: { name: 'Ada' } }
+    }
+    handleServerMessage(
+      { id: 9, method: 'elicitation/create', params: { message: 'Who?', requestedSchema: {} } },
+      h
+    )
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    expect(seen).toEqual([{ message: 'Who?', requestedSchema: {} }])
+    expect(sent[0]).toEqual({
+      jsonrpc: '2.0',
+      id: 9,
+      result: { action: 'accept', content: { name: 'Ada' } }
+    })
+  })
+
+  it('answers with a cancel when the elicitation responder fails', async () => {
+    const { sent, h } = hooks()
+    h.onElicit = async () => {
+      throw new Error('run cancelled')
+    }
+    handleServerMessage({ id: 10, method: 'elicitation/create', params: { message: 'x' } }, h)
+    await vi.waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toEqual({ jsonrpc: '2.0', id: 10, result: { action: 'cancel' } })
   })
 
   it('routes list_changed notifications by kind', () => {
@@ -218,6 +249,31 @@ describe('ListRefresher', () => {
     r.schedule('tools')
     await new Promise((res) => setTimeout(res, 10))
     expect(calls).toEqual(['tools', 'tools'])
+  })
+})
+
+describe('keepAliveDuring', () => {
+  it('keeps every pending call alive while an elicitation dialog is open', async () => {
+    vi.useFakeTimers()
+    try {
+      const p = new PendingRequests()
+      // Attach the rejection handler up front: the timeout fires inside a timer
+      // advance, and an unhandled rejection there would flag the whole run.
+      const callOutcome = p.wait(1, 'tools/call', 100).catch((e: Error) => e.message)
+      let resolveUser: (v: string) => void = () => {}
+      const work = keepAliveDuring(p, () => new Promise<string>((r) => (resolveUser = r)), 60)
+      // Far past the call's inactivity timeout: the keep-alive interval must have
+      // been restarting its clock the whole time.
+      await vi.advanceTimersByTimeAsync(500)
+      expect(p.has(1)).toBe(true)
+      resolveUser('done')
+      await expect(work).resolves.toBe('done')
+      // With the dialog closed the inactivity clock runs down normally again.
+      await vi.advanceTimersByTimeAsync(101)
+      expect(await callOutcome).toMatch(/timed out/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

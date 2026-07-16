@@ -6,8 +6,10 @@ import {
   ListRefresher,
   PendingRequests,
   handleServerMessage,
+  keepAliveDuring,
   kindOf,
   parseIncoming,
+  type ElicitationWireResult,
   type McpListKind
 } from './protocol'
 
@@ -174,13 +176,18 @@ export class McpClient {
     return this.closed
   }
 
+  /** Answers `elicitation/create`; its presence declares the capability. */
+  private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
+
   /** Spawn the server, perform the initialize handshake, and list its tools. */
   async connect(opts: {
     command: string
     args?: string[]
     env?: NodeJS.ProcessEnv
     cwd?: string
+    onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   }): Promise<void> {
+    this.onElicit = opts.onElicit
     const child = this.spawnFn(opts.command, opts.args ?? [], {
       // Strip the launching shell's credential-bearing vars so a malicious or
       // compromised MCP server can't harvest ambient secrets (AWS keys, GH_TOKEN,
@@ -198,7 +205,9 @@ export class McpClient {
       'initialize',
       {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: {},
+        // Declare elicitation only when a responder is wired: declaring it and
+        // then -32601ing the request would be lying to the server.
+        capabilities: this.onElicit ? { elicitation: {} } : {},
         clientInfo: { name: 'Houston', version: '0.1.0' }
       },
       INIT_TIMEOUT_MS
@@ -297,7 +306,10 @@ export class McpClient {
         }
       },
       onListChanged: (kind) => this.refresher.schedule(kind),
-      touchProgress: (token) => this.pending.touch(token)
+      touchProgress: (token) => this.pending.touch(token),
+      ...(this.onElicit
+        ? { onElicit: (p: unknown) => keepAliveDuring(this.pending, () => this.onElicit!(p)) }
+        : {})
     })
   }
 

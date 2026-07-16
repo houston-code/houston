@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, PlanDecision } from '@shared/agent'
+import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
 import { resolveBackgroundEvent, wireTerminalSessionBackends } from './terminalEntry'
 import { setUserDataDir, resetUserDataDir } from './userData'
 import { resetSpawnBackend, isSpawnBackendConfigured, spawnSession } from './agent/spawn'
@@ -20,15 +20,19 @@ describe('resolveBackgroundEvent', () => {
     const approvals: Array<[string, string, string]> = []
     const questions: Array<[string, string, string]> = []
     const plans: Array<[string, string, PlanDecision]> = []
+    const elicitations: Array<[string, string, ElicitationResult]> = []
     return {
       approvals,
       questions,
       plans,
+      elicitations,
       r: {
         resolveApproval: (runId: string, callId: string, d: 'allow' | 'deny' | 'always' | 'rule-allow' | 'rule-deny') =>
           void approvals.push([runId, callId, d]),
         resolveQuestion: (runId: string, callId: string, a: string) => void questions.push([runId, callId, a]),
-        resolvePlan: (runId: string, callId: string, d: PlanDecision) => void plans.push([runId, callId, d])
+        resolvePlan: (runId: string, callId: string, d: PlanDecision) => void plans.push([runId, callId, d]),
+        resolveElicitation: (runId: string, elicitId: string, r2: ElicitationResult) =>
+          void elicitations.push([runId, elicitId, r2])
       }
     }
   }
@@ -61,20 +65,39 @@ describe('resolveBackgroundEvent', () => {
     expect(plans).toEqual([['r1', 'c1', { kind: 'reject' }]])
   })
 
+  it('declines an MCP elicitation rather than fabricating an answer', () => {
+    const { r, elicitations } = record()
+    resolveBackgroundEvent(
+      {
+        runId: 'r1',
+        type: 'elicitation',
+        callId: 'c1',
+        elicitId: 'c1:e1',
+        serverId: 'srv',
+        message: 'API key?',
+        fields: []
+      },
+      r
+    )
+    expect(elicitations).toEqual([['r1', 'c1:e1', { action: 'decline' }]])
+  })
+
   it('resolves EVERY blocking event variant (parity guard)', () => {
     // If a new blocking AgentEvent variant is added, extend resolveBackgroundEvent
     // and this list together — a background session must never wait on a human.
-    const blocking: AgentEvent['type'][] = ['tool_approval', 'tool_question', 'plan_ready']
+    const blocking: AgentEvent['type'][] = ['tool_approval', 'tool_question', 'plan_ready', 'elicitation']
     for (const type of blocking) {
-      const { r, approvals, questions, plans } = record()
+      const { r, approvals, questions, plans, elicitations } = record()
       const e =
         type === 'tool_approval'
           ? ({ runId: 'r', type, callId: 'c', name: 'n', summary: 's', kind: 'write' } as AgentEvent)
           : type === 'tool_question'
             ? ({ runId: 'r', type, callId: 'c', question: 'q', options: [] } as AgentEvent)
-            : ({ runId: 'r', type, callId: 'c', plan: { title: 't' } } as AgentEvent)
+            : type === 'elicitation'
+              ? ({ runId: 'r', type, callId: 'c', elicitId: 'e', serverId: 's', message: 'm', fields: [] } as AgentEvent)
+              : ({ runId: 'r', type, callId: 'c', plan: { title: 't' } } as AgentEvent)
       resolveBackgroundEvent(e, r)
-      expect(approvals.length + questions.length + plans.length, type).toBe(1)
+      expect(approvals.length + questions.length + plans.length + elicitations.length, type).toBe(1)
     }
   })
 })

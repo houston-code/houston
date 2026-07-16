@@ -1,6 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { COMPACTION_SUMMARY_PREFIX, type ToolApprovalDecision } from '@shared/agent'
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  type ElicitationResult,
+  type ToolApprovalDecision
+} from '@shared/agent'
 
 // The copy button delegates to copyText(); stub it so the copied state is
 // deterministic and we can assert on the success path without a real clipboard.
@@ -52,16 +56,24 @@ function renderTranscript(
   handlers: Partial<{
     onApprove: (callId: string, decision: ToolApprovalDecision) => void
     onAnswer: (callId: string, answer: string) => void
+    onElicit: (elicitId: string, result: ElicitationResult) => void
     onOpenPlan: (callId: string) => void
   }> = {}
 ) {
   const onApprove = handlers.onApprove ?? vi.fn()
   const onAnswer = handlers.onAnswer ?? vi.fn()
+  const onElicit = handlers.onElicit ?? vi.fn()
   const onOpenPlan = handlers.onOpenPlan ?? vi.fn()
   const result = render(
-    <Transcript items={items} onApprove={onApprove} onAnswer={onAnswer} onOpenPlan={onOpenPlan} />
+    <Transcript
+      items={items}
+      onApprove={onApprove}
+      onAnswer={onAnswer}
+      onElicit={onElicit}
+      onOpenPlan={onOpenPlan}
+    />
   )
-  return { ...result, onApprove, onAnswer, onOpenPlan }
+  return { ...result, onApprove, onAnswer, onElicit, onOpenPlan }
 }
 
 function planItem(over: Partial<PlanItem> = {}): PlanItem {
@@ -124,6 +136,7 @@ describe('Transcript', () => {
         items={[assistantItem({ text: 'partial', streaming: true })]}
         onApprove={vi.fn()}
         onAnswer={vi.fn()}
+        onElicit={vi.fn()}
       />
     )
     expect(screen.queryByTitle('Copy message')).not.toBeInTheDocument()
@@ -227,6 +240,7 @@ describe('Transcript', () => {
         items={[noticeItem({ id: 'n-err', text: 'boom failed', tone: 'error' })]}
         onApprove={vi.fn()}
         onAnswer={vi.fn()}
+        onElicit={vi.fn()}
       />
     )
     expect(container.querySelector('.notice--error')).toHaveTextContent('boom failed')

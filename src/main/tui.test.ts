@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
-import type { AgentEvent, ChatMessage, PlanDecision } from '@shared/agent'
+import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import {
@@ -697,6 +697,7 @@ interface Recorder {
   approvals: Array<[string, string, string]>
   questions: Array<[string, string, string]>
   plans: Array<[string, string, PlanDecision]>
+  elicitations: Array<[string, string, ElicitationResult]>
   cancels: string[]
   accepted: () => number
 }
@@ -711,6 +712,7 @@ function deps(
   const approvals: Recorder['approvals'] = []
   const questions: Recorder['questions'] = []
   const plans: Recorder['plans'] = []
+  const elicitations: Recorder['elicitations'] = []
   const cancels: string[] = []
   let accepted = 0
   const d: TuiDeps = {
@@ -732,11 +734,12 @@ function deps(
     resolveApproval: (r, c, dec) => approvals.push([r, c, dec]),
     resolveQuestion: (r, c, ans) => questions.push([r, c, ans]),
     resolvePlan: (r, c, dec) => plans.push([r, c, dec]),
+    resolveElicitation: (r, e, res) => elicitations.push([r, e, res]),
     cancelRun: (r) => cancels.push(r),
     io: undefined as unknown as TuiIo,
     newId: () => `run-${runs.length + 1}`
   }
-  return { d, rec: { runs, approvals, questions, plans, cancels, accepted: () => accepted } }
+  return { d, rec: { runs, approvals, questions, plans, elicitations, cancels, accepted: () => accepted } }
 }
 
 /** An in-memory conversation store standing in for conversations.ts. */
@@ -2037,13 +2040,47 @@ describe('runTui — plan review (present_plan)', () => {
       { runId: 'x', type: 'tool_approval', callId: 'a1', name: 'run_shell', summary: 'ls', kind: 'shell' },
       { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which?', options: [{ label: 'A' }] },
       { runId: 'x', type: 'plan_ready', callId: 'p1', plan: { title: 'Plan' } },
+      {
+        runId: 'x',
+        type: 'elicitation',
+        callId: 'm1',
+        elicitId: 'm1:e1',
+        serverId: 'srv',
+        message: 'Which region?',
+        fields: [{ name: 'region', kind: 'string', required: true }]
+      },
       { runId: 'x', type: 'done', stopReason: 'end_turn' }
     ])
-    d.io = fakeIo(['go', 'y', '1', 'r', null]).io
+    // go → approval y → question 1 → plan r → elicitation: provide? y → region value.
+    d.io = fakeIo(['go', 'y', '1', 'r', 'y', 'us-east', null]).io
     await runTui(opts, d)
     expect(rec.approvals).toHaveLength(1)
     expect(rec.questions).toHaveLength(1)
     expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
+    expect(rec.elicitations).toEqual([
+      ['run-1', 'm1:e1', { action: 'accept', content: { region: 'us-east' } }]
+    ])
+  })
+
+  it('declines an elicitation on "n" and cancels on end-of-input', async () => {
+    const elicit = (id: string): AgentEvent => ({
+      runId: 'x',
+      type: 'elicitation',
+      callId: 'm1',
+      elicitId: id,
+      serverId: 'srv',
+      message: 'Token?',
+      fields: [{ name: 'token', kind: 'string', required: true }]
+    })
+    const declined = deps([elicit('m1:e1'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    declined.d.io = fakeIo(['go', 'n', null]).io
+    await runTui(opts, declined.d)
+    expect(declined.rec.elicitations).toEqual([['run-1', 'm1:e1', { action: 'decline' }]])
+
+    const cancelled = deps([elicit('m1:e2'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    cancelled.d.io = fakeIo(['go', 'y', null]).io // EOF while awaiting the field value
+    await runTui(opts, cancelled.d)
+    expect(cancelled.rec.elicitations).toEqual([['run-1', 'm1:e2', { action: 'cancel' }]])
   })
 })
 

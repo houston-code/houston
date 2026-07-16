@@ -284,6 +284,15 @@ context window. `/mcp` in the terminal and the Settings panel show each server's
 live connection status: connected with a tool count, needs sign-in, or the
 connect error.
 
+**Server questions (elicitation).** A server can ask for input in the middle of
+a tool call (for example a region, a project name, or a confirmation). Houston
+shows the request as a small form naming the server, with typed fields and
+Submit / Decline: your answer goes to that MCP server, not to the model. In the
+terminal the same request becomes an inline prompt (decline with `n`); in a
+headless or background run it is declined automatically so nothing ever hangs
+waiting for a user who is not there, and the server proceeds along its
+no-answer path. Stopping the run cancels any open request.
+
 ## Shell sandbox and network
 
 Shell commands run under the host OS sandbox where one exists, confined to the
