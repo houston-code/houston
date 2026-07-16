@@ -25,6 +25,7 @@
 
 import { randomBytes } from 'node:crypto'
 import type { Provider } from '@shared/agent'
+import { providerStreamError, withProviderRetry } from './retry'
 
 /** Score at or above which content is treated as an injection attempt and isolated. */
 export const QUARANTINE_SCORE = 3
@@ -254,22 +255,31 @@ export async function runQuarantineExtraction(opts: {
   const timer = setTimeout(() => abort.abort(), QUARANTINE_TIMEOUT_MS)
 
   try {
-    let text = ''
-    for await (const ev of opts.provider.streamChat({
-      model: opts.model,
-      system: QUARANTINE_SYSTEM_PROMPT,
-      messages: buildQuarantineMessages({
-        content: opts.content,
-        source: opts.source,
-        nonce: untrustedNonce(),
-        query: opts.query
-      }),
-      maxTokens: QUARANTINE_MAX_TOKENS,
-      signal: abort.signal
-    })) {
-      if (ev.type === 'text') text += ev.text
-      else if (ev.type === 'error') throw new Error(ev.message)
-    }
+    // Retries stay inside the existing QUARANTINE_TIMEOUT_MS bound rather than adding a
+    // budget of their own: `abort.signal` already carries that deadline, so a transient
+    // blip gets whatever time is left and no more.
+    const text = await withProviderRetry(
+      async () => {
+        let acc = ''
+        for await (const ev of opts.provider.streamChat({
+          model: opts.model,
+          system: QUARANTINE_SYSTEM_PROMPT,
+          messages: buildQuarantineMessages({
+            content: opts.content,
+            source: opts.source,
+            nonce: untrustedNonce(),
+            query: opts.query
+          }),
+          maxTokens: QUARANTINE_MAX_TOKENS,
+          signal: abort.signal
+        })) {
+          if (ev.type === 'text') acc += ev.text
+          else if (ev.type === 'error') throw providerStreamError(ev)
+        }
+        return acc
+      },
+      { signal: abort.signal }
+    )
     const report = text.trim()
     if (!report) throw new Error('the isolated reader returned nothing')
     return report

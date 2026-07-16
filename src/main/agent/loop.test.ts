@@ -819,6 +819,29 @@ describe('startRun', () => {
     expect(types(r).at(-1)).toBe('error')
   })
 
+  it('retries an in-band failure on its status rather than its prose', async () => {
+    // How a Responses `response.failed` reads: nothing in the message says "transient".
+    // Before the status rode along on the event, the rethrow dropped it and the loop
+    // judged this by its wording alone — which meant never retrying it.
+    const turns: ProviderStreamEvent[][] = [
+      [{ type: 'error', message: 'The server had an error while processing your request.', status: 500 }],
+      [{ type: 'text', text: 'recovered' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    const r = await run({ turns })
+    expect(types(r)).toContain('retry')
+    expect(r.messages.find((m) => m.role === 'assistant')?.content).toBe('recovered')
+  }, 20_000)
+
+  it('does not retry that same prose when no status came with it', async () => {
+    // The counterpart: the status is what makes it retryable, so an adapter that can't
+    // tell still gets the conservative answer.
+    const r = await run({
+      turns: [[{ type: 'error', message: 'The server had an error while processing your request.' }]]
+    })
+    expect(types(r)).not.toContain('retry')
+    expect(types(r).at(-1)).toBe('error')
+  })
+
   it('replaces a "model does not support tools" error with actionable guidance', async () => {
     const r = await run({
       turns: [[{ type: 'error', message: 'registry.ollama.ai/library/llama2:latest does not support tools' }]]

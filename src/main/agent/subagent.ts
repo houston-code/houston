@@ -1,6 +1,7 @@
 import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
 import { getTool, type ToolContext } from './tools'
 import { runQuarantineExtraction } from './untrusted'
+import { providerStreamError, withProviderRetry } from './retry'
 import { recordOriginal, recordResult, writeTargets } from './checkpoints'
 import type { ShellSession } from './shell-session'
 import { isSandboxed } from '../sandbox'
@@ -360,23 +361,35 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     if (signal.aborted) return lastText.trim() || '[subagent aborted]'
 
     let text = ''
-    const calls: { id: string; name: string; arguments: Record<string, unknown> }[] = []
+    let calls: { id: string; name: string; arguments: Record<string, unknown> }[] = []
     try {
-      for await (const ev of provider.streamChat({
-        model,
-        system,
-        messages,
-        tools,
-        maxTokens: SUBAGENT_MAX_TOKENS,
-        ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
-        signal
-      })) {
-        if (ev.type === 'text') text += ev.text
-        else if (ev.type === 'tool_call') calls.push(ev.call)
-        else if (ev.type === 'done') {
-          if (ev.usage) opts.onUsage?.(ev.usage)
-        } else if (ev.type === 'error') return `[subagent error: ${ev.message}]`
-      }
+      // One turn of the subagent's own loop, retried on a transient failure. Retrying
+      // the whole turn is safe here even though the parent run streams: a subagent's
+      // text and tool calls are accumulated and only acted on once the stream ends, so
+      // a failed attempt has shown the user nothing to duplicate. Reset both
+      // accumulators per attempt or a retry would append to the dead one's remains.
+      await withProviderRetry(
+        async () => {
+          text = ''
+          calls = []
+          for await (const ev of provider.streamChat({
+            model,
+            system,
+            messages,
+            tools,
+            maxTokens: SUBAGENT_MAX_TOKENS,
+            ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
+            signal
+          })) {
+            if (ev.type === 'text') text += ev.text
+            else if (ev.type === 'tool_call') calls.push(ev.call)
+            else if (ev.type === 'done') {
+              if (ev.usage) opts.onUsage?.(ev.usage)
+            } else if (ev.type === 'error') throw providerStreamError(ev)
+          }
+        },
+        { signal }
+      )
     } catch (e) {
       if (signal.aborted) return lastText.trim() || '[subagent aborted]'
       return `[subagent error: ${(e as Error).message}]`

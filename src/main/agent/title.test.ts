@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { ChatMessage, Provider, ProviderStreamEvent } from '@shared/agent'
 import { sanitizeTitle, buildTitleMessages, generateTitle } from './title'
 
@@ -103,7 +103,53 @@ describe('generateTitle', () => {
   })
 
   it('throws when the provider streams an error', async () => {
-    const provider = scripted([{ type: 'error', message: 'rate limited' }])
-    await expect(generateTitle(provider, 'm', opening, signal)).rejects.toThrow('rate limited')
+    const provider = scripted([{ type: 'error', message: 'invalid api key' }])
+    await expect(generateTitle(provider, 'm', opening, signal)).rejects.toThrow('invalid api key')
+  })
+
+  it('rides out a transient blip and still produces a title', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const provider: Provider = {
+        async *streamChat() {
+          calls++
+          if (calls === 1) {
+            yield { type: 'error', message: 'overloaded' } as ProviderStreamEvent
+            return
+          }
+          yield { type: 'text', text: 'Add dark mode' } as ProviderStreamEvent
+          yield { type: 'done', stopReason: 'end_turn' } as ProviderStreamEvent
+        }
+      }
+      const p = generateTitle(provider, 'm', opening, signal)
+      await vi.runAllTimersAsync()
+      await expect(p).resolves.toBe('Add dark mode')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("gives up on a transient error well inside the caller's timeout", async () => {
+    // A title is cosmetic and bounded at TITLE_TIMEOUT_MS, so it takes a much smaller
+    // budget than a turn: spending the full one here could only ever exhaust the window
+    // on backoff and still leave the placeholder.
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const provider: Provider = {
+        async *streamChat() {
+          calls++
+          yield { type: 'error', message: 'rate limited' } as ProviderStreamEvent
+        }
+      }
+      const p = generateTitle(provider, 'm', opening, signal)
+      const settled = expect(p).rejects.toThrow('rate limited')
+      await vi.runAllTimersAsync()
+      await settled
+      expect(calls).toBe(3) // the initial attempt plus two retries
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
