@@ -17,8 +17,6 @@ import {
   DISABLE_BRACKETED_PASTE,
   ENABLE_FOCUS_REPORTING,
   DISABLE_FOCUS_REPORTING,
-  FOCUS_IN,
-  FOCUS_OUT,
   type DecoderState
 } from './tui-keys'
 import { bellSequence, notifySequence, titleSequence, type TerminalSignal } from './tui-notify'
@@ -195,7 +193,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   let cancelTimer: (() => void) | null = null
   const drawSpinner = (): void => {
     if (spinnerLabel === null) return
-    rawWrite(CLEAR_LINE + spinnerFrame(tick++, spinnerLabel, Math.floor((now() - spinnerStart) / 1000), paint))
+    rawWrite(
+      CLEAR_LINE +
+        spinnerFrame(tick++, spinnerLabel, Math.floor((now() - spinnerStart) / 1000), paint, {
+          ...(draft ? { draft } : {}),
+          ...(queued.length ? { queued: queued.length } : {})
+        })
+    )
   }
   const startTimer = (): void => {
     if (!cancelTimer && spinnerLabel !== null) cancelTimer = schedule(drawSpinner, 100)
@@ -222,17 +226,82 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // echo, no type-ahead into the next prompt). readLine and the picker detach it
   // and handle their own Ctrl-C (readline's 'SIGINT' / the picker's cancel key), so
   // exactly one consumer owns stdin at a time — the same discipline the picker uses.
+  // When paste bytes last arrived, so keys riding in on their tail are treated as
+  // clipboard content rather than keystrokes (see sanitizePastedKeys). Shared by
+  // the composer and the streaming watcher: it describes the byte stream, not
+  // whichever reader currently owns it.
+  let lastPasteAt = -Infinity
+
   let interruptHandler: (() => void) | null = null
   let watching = false
-  const onWatchKey = (
-    _s: string,
-    key: { ctrl?: boolean; name?: string; sequence?: string } | undefined
-  ): void => {
-    if (key?.ctrl && key.name === 'c') return void interruptHandler?.()
-    // Focus reports arrive as ordinary escape sequences here; readline's decoder
-    // has no name for them, so match the raw bytes.
-    if (key?.sequence === FOCUS_IN) return noteFocus(true)
-    if (key?.sequence === FOCUS_OUT) return noteFocus(false)
+  // Messages typed while the agent works, waiting for the turn to end. Kept here
+  // (not in the driver) because the driver is blocked awaiting the run.
+  let queued: string[] = []
+  // What the user is typing right now, rendered on the spinner line.
+  let draft = ''
+  let watchDec: DecoderState = initialDecoderState()
+
+  /**
+   * Every byte that arrives while a turn streams.
+   *
+   * This used to act on Ctrl-C and DROP everything else, which meant a thought you
+   * had while watching the agent work had to be held in your head until it
+   * finished — or forced through an interrupt that threw the turn away. Now the
+   * keystrokes accumulate into a draft on the spinner line, and Enter queues it for
+   * the moment the turn ends.
+   */
+  const onWatchData = (data: Buffer | string): void => {
+    const chunk = typeof data === 'string' ? data : data.toString('utf8')
+    const r = decodeInput(chunk, watchDec)
+    watchDec = r.state
+    // A paste here is as untrusted as one in the composer: its tail must not be
+    // able to submit or fire actions.
+    const g = sanitizePastedKeys(r.keys, lastPasteAt, now())
+    lastPasteAt = g.lastPasteAt
+    for (const key of g.keys) {
+      switch (key.type) {
+        case 'interrupt':
+          return void interruptHandler?.()
+        case 'escape':
+          // Esc with something typed clears it; Esc on an empty line stops the run.
+          // Both are "undo the thing in front of me", scaled to what is in front.
+          if (draft) {
+            draft = ''
+            drawSpinner()
+            return
+          }
+          return void interruptHandler?.()
+        case 'focus':
+          noteFocus(key.on)
+          break
+        case 'char':
+          draft += key.value
+          drawSpinner()
+          break
+        case 'paste':
+          // One line: the spinner row is a single line, and a queued follow-up is a
+          // sentence, not a document.
+          draft += key.value.replace(/\n/g, ' ')
+          drawSpinner()
+          break
+        case 'enter':
+          if (draft.trim()) queued.push(draft.trim())
+          draft = ''
+          drawSpinner()
+          break
+        case 'backspace':
+          draft = [...draft].slice(0, -1).join('')
+          drawSpinner()
+          break
+        case 'kill-to-start':
+        case 'kill-line':
+          draft = ''
+          drawSpinner()
+          break
+        default:
+          break // cursor keys, history, completion: not meaningful on one line
+      }
+    }
   }
   const startInterruptWatch = (): void => {
     if (watching || !stdin.isTTY || typeof stdin.setRawMode !== 'function') return
@@ -243,7 +312,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // Ask the terminal to report focus while the turn runs — the window in which
       // the user is most likely to wander off, and the only time we ping them.
       rawWrite(ENABLE_FOCUS_REPORTING)
-      stdin.on('keypress', onWatchKey)
+      stdin.on('data', onWatchData)
       watching = true
     } catch {
       /* no TTY / raw mode unavailable — Ctrl-C during streaming just won't fire */
@@ -254,7 +323,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     watching = false
     try {
       rawWrite(DISABLE_FOCUS_REPORTING)
-      stdin.removeListener('keypress', onWatchKey)
+      stdin.removeListener('data', onWatchData)
       stdin.pause()
     } catch {
       /* best-effort */
@@ -270,7 +339,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   if (stdin === process.stdin && stdin.isTTY && typeof stdin.setRawMode === 'function') {
     process.on('exit', () => {
       try {
-        stdin.removeListener('keypress', onWatchKey)
+        stdin.removeListener('data', onWatchData)
         // Focus reporting MUST go off with us: left on, the user's shell receives
         // a CSI I / CSI O burst every time they switch windows — visible garbage
         // in a terminal we no longer own.
@@ -459,9 +528,6 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
       let state: EditorState = initialEditorState(deps.history?.() ?? [])
       let dec: DecoderState = initialDecoderState()
-      // When paste bytes last arrived, so keys riding in on their tail can be
-      // treated as clipboard content rather than keystrokes (see sanitizePastedKeys).
-      let lastPasteAt = -Infinity
       let done = false
       let drawn = false
       let prevCursorRow = 0
@@ -682,6 +748,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
      * for something you are already watching is pure nuisance, and a nuisance bell
      * is one people turn off.
      */
+    /** Take (and clear) what the user typed while the agent was working. */
+    takeQueued: () => {
+      const out = queued
+      queued = []
+      draft = ''
+      return out
+    },
+    /** Drop anything queued — the follow-ups belonged to a turn being abandoned. */
+    clearQueued: () => {
+      queued = []
+      draft = ''
+    },
     signal: (sig: TerminalSignal) => {
       if (sig.title) rawWrite(titleSequence(sig.title))
       if (sig.alert && userIsAway()) rawWrite(bellSequence() + notifySequence(sig.alert))

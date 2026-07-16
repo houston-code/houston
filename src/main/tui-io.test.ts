@@ -724,3 +724,123 @@ describe('pickerPhysicalRows', () => {
     expect(pickerPhysicalRows(['ab', 'aaaaaa'], 0)).toBe(2)
   })
 })
+
+/**
+ * Typing while the agent works used to be dropped on the floor: a thought you had
+ * mid-run had to be held in your head until the turn ended, or forced through an
+ * interrupt that threw the turn away.
+ */
+describe('mid-run input', () => {
+  function harness() {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => clock,
+      schedule: () => () => {} // no timer: draw only when input arrives
+    })
+    return { io, stdin, text: () => written.join(''), tick: (ms = 500) => (clock += ms) }
+  }
+
+  it('queues what is typed while a turn runs, and hands it over at the end', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('also update the docs')
+    t.stdin.push('\r')
+    expect(t.io.takeQueued!()).toEqual(['also update the docs'])
+  })
+
+  it('queues several follow-ups in order', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('first\r')
+    t.stdin.push('second\r')
+    expect(t.io.takeQueued!()).toEqual(['first', 'second'])
+  })
+
+  it('shows the draft and the queue count on the spinner line', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('queued one\r')
+    t.stdin.push('typing')
+    const out = t.text()
+    expect(out).toContain('(1 queued)')
+    expect(out).toContain('typing')
+  })
+
+  it('edits the draft with backspace, and Ctrl-U clears it', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('abc')
+    t.stdin.push('\x7f') // backspace
+    t.stdin.push('\r')
+    expect(t.io.takeQueued!()).toEqual(['ab'])
+
+    t.io.startSpinner!('Working')
+    t.stdin.push('discard me')
+    t.stdin.push('\x15') // Ctrl-U
+    t.stdin.push('\r')
+    expect(t.io.takeQueued!()).toEqual([])
+  })
+
+  it('ignores an empty Enter', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('\r')
+    expect(t.io.takeQueued!()).toEqual([])
+  })
+
+  it('Esc clears a draft, and stops the run when there is nothing to clear', () => {
+    const t = harness()
+    let interrupts = 0
+    t.io.onInterrupt?.(() => interrupts++)
+    t.io.startSpinner!('Working')
+
+    t.stdin.push('half a thought')
+    t.stdin.push('\x1b')
+    expect(interrupts).toBe(0) // it cleared the draft, not the turn
+    t.stdin.push('\r')
+    expect(t.io.takeQueued!()).toEqual([])
+
+    t.stdin.push('\x1b') // now the line is empty: stop the run
+    expect(interrupts).toBe(1)
+  })
+
+  it('still interrupts on Ctrl-C', () => {
+    const t = harness()
+    let interrupts = 0
+    t.io.onInterrupt?.(() => interrupts++)
+    t.io.startSpinner!('Working')
+    t.stdin.push('\x03')
+    expect(interrupts).toBe(1)
+  })
+
+  it('clearQueued drops everything', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('doomed\r')
+    t.io.clearQueued!()
+    expect(t.io.takeQueued!()).toEqual([])
+  })
+
+  it('flattens a pasted block onto the one-line draft', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('\x1b[200~one\ntwo\x1b[201~')
+    t.tick()
+    t.stdin.push('\r')
+    expect(t.io.takeQueued!()).toEqual(['one two'])
+  })
+
+  // A paste is as untrusted here as in the composer: its tail must not submit.
+  it('does not let a hostile paste queue itself', () => {
+    const t = harness()
+    t.io.startSpinner!('Working')
+    t.stdin.push('\x1b[200~payload\x1b[201~\r\x1b[201~')
+    expect(t.io.takeQueued!()).toEqual([]) // the CR became part of the draft, not a submit
+  })
+})

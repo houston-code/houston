@@ -457,9 +457,26 @@ export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', 
  * scrolls or tears — the one and only in-place redraw in the TUI, kept minimal on
  * purpose to preserve the otherwise append-only (flicker-free) model.
  */
-export function spinnerFrame(tick: number, label: string, elapsedSec: number, paint: Painter): string {
+export function spinnerFrame(
+  tick: number,
+  label: string,
+  elapsedSec: number,
+  paint: Painter,
+  /**
+   * What the user is typing while the agent works, and how many messages they've
+   * already queued. The spinner line doubles as the mid-run composer: it is the
+   * one line already being redrawn, so showing the draft there costs no extra
+   * screen real estate and cannot tear the transcript.
+   */
+  opts: { draft?: string; queued?: number } = {}
+): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
-  return `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${elapsedSec}s`, 'dim')}`
+  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${elapsedSec}s`, 'dim')}`
+  const queued = opts.queued ? paint(`  (${opts.queued} queued)`, 'cyan') : ''
+  // The draft is shown verbatim so people can see what they typed; it is their own
+  // keystrokes, and the decoder never lets a control character into it.
+  const draft = opts.draft ? `  ${paint('›', 'green')} ${opts.draft}` : ''
+  return `${head}${queued}${draft}`
 }
 
 export interface StatusState {
@@ -1499,6 +1516,13 @@ export interface TuiIo {
    */
   signal?: (sig: TerminalSignal) => void
   /**
+   * Take (and clear) the messages typed while the agent was working, for dispatch
+   * as the next turn. Absent off-TTY / in tests, where nothing is queued.
+   */
+  takeQueued?: () => string[]
+  /** Drop anything queued (the run it followed was abandoned). */
+  clearQueued?: () => void
+  /**
    * Present an arrow-key selectable picker (for approvals / `ask_user`). Resolves
    * with the committed value, a request to fall back to typing, or a cancel.
    * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
@@ -1864,6 +1888,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Show each tool's full output as it runs (/verbose). Off by default: the
   // transcript is a conversation, and most results are noise until they aren't.
   let verbose = false
+  // Follow-ups typed while the agent was working, dispatched as the next turn.
+  let pendingQueued: string[] = []
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
@@ -1898,6 +1924,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
       deps.io.stopSpinner?.()
+      // Whatever was queued was a follow-up to the turn being thrown away; sending
+      // it into the wreckage would be worse than dropping it.
+      deps.io.clearQueued?.()
       // Show that the interrupt registered — otherwise an aborted turn just stops
       // with no feedback — then release any approval/question prompt blocked on
       // input so the aborted run doesn't leave the loop waiting on a dead read.
@@ -1995,7 +2024,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       composerInterrupt = null
       return flag
     }
-    if (deps.io.readComposer) {
+    if (pendingQueued.length) {
+      // Typed while the last turn ran. Dispatch it instead of prompting: waiting for
+      // an Enter they already pressed would be the exact tax queueing removes.
+      raw = pendingQueued.join('\n\n')
+      pendingQueued = []
+      deps.io.out(`${composerPrompt(policy, paint)}${raw}\n`)
+    } else if (deps.io.readComposer) {
       const text = await deps.io.readComposer(composerPrompt(policy, paint))
       if (text === null) {
         resetComposer = consumeInterrupt() === 'reset'
@@ -2706,6 +2741,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts
     activeRunId = null
+    // Anything typed while that turn ran becomes the next one.
+    pendingQueued = deps.io.takeQueued?.() ?? []
 
     // A plan-mode turn hands off to execution through the present_plan flow: the agent
     // calls present_plan, the plan_ready case above renders it and collects an

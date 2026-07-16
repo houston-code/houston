@@ -3203,3 +3203,66 @@ describe('/spawned — background fan-out', () => {
     expect(t.text()).toContain('No saved sessions')
   })
 })
+
+// A follow-up typed during a turn should just… happen next, with no second Enter.
+describe('queued follow-ups', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  function queueIo(inputs: Array<string | null>, queued: string[][]) {
+    const base = fakeIo(inputs)
+    let i = 0
+    base.io.takeQueued = () => queued[i++] ?? []
+    base.io.clearQueued = () => {}
+    return base
+  }
+
+  it('sends what was queued as the next turn, without prompting again', async () => {
+    const { d, rec } = deps(done)
+    // First turn from the composer; then a follow-up typed while it ran.
+    const t = queueIo(['first', null], [['now add tests']])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[0].messages.at(-1)?.content).toBe('first')
+    expect(rec.runs[1].messages.at(-1)?.content).toBe('now add tests')
+  })
+
+  it('echoes the queued message so the transcript shows what was sent', async () => {
+    const { d } = deps(done)
+    const t = queueIo(['first', null], [['queued thought']])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('queued thought')
+  })
+
+  it('combines several queued messages into one turn', async () => {
+    const { d, rec } = deps(done)
+    const t = queueIo(['first', null], [['one', 'two']])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[1].messages.at(-1)?.content).toBe('one\n\ntwo')
+  })
+
+  it('prompts normally when nothing was queued', async () => {
+    const { d, rec } = deps(done)
+    const t = queueIo(['only', null], [[]])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+  })
+
+  // The queue was a follow-up to work being thrown away.
+  it('drops the queue when the run is interrupted', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', null])
+    let cleared = 0
+    t.io.takeQueued = () => []
+    t.io.clearQueued = () => cleared++
+    d.io = t.io
+    d.startRun = async (_req, _send) => {
+      t.fireInterrupt() // Ctrl-C mid-run
+    }
+    await runTui(opts, d)
+    expect(cleared).toBe(1)
+  })
+})
