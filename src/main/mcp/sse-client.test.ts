@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   McpSseClient,
   parseSseEvents,
@@ -143,6 +143,47 @@ describe('McpSseClient', () => {
     const fetch: FetchFn = async () => new Response('', { status: 202 })
     const client = new McpSseClient(connect, fetch)
     await expect(client.connect({ url: 'https://x/sse' })).rejects.toThrow(/socket reset/)
+  })
+
+  it('rejects a call whose POST hangs, within the timeout, instead of hanging forever', async () => {
+    let emit: ((e: SseEvent) => void) | null = null
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    // Handshake POSTs answer normally; the tools/call POST hangs until its own
+    // AbortController fires (a server that accepts the POST but never responds).
+    const fetch: FetchFn = (_url, init) => {
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.method === 'tools/call') {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+      }
+      if (req.id !== undefined) {
+        const result = req.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : {}
+        queueMicrotask(() =>
+          emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) })
+        )
+      }
+      return Promise.resolve(new Response('', { status: 202 }))
+    }
+    const client = new McpSseClient(connect, fetch)
+    await client.connect({ url: 'https://x/sse' }) // handshake on real timers
+
+    vi.useFakeTimers()
+    try {
+      const settled = client.callTool('echo', {}).then(
+        () => 'resolved',
+        () => 'rejected'
+      )
+      // Advancing past the per-call timeout must abort the hung POST and reject the call.
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(await settled).toBe('rejected')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('answers a server ping over the POST channel and declines other requests', async () => {

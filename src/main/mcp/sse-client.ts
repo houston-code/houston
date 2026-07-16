@@ -383,8 +383,12 @@ export class McpSseClient implements McpConnection {
       ? { ...(params as Record<string, unknown>), _meta: { progressToken: id } }
       : params
     const result = this.pending.wait(id, method, timeoutMs)
+    // `result` can reject on its own timeout before this method returns it to the caller
+    // (when the POST below hangs to that same deadline); handle it on a side-chain so
+    // that brief window isn't reported as an unhandled rejection.
+    void result.catch(() => {})
     try {
-      await this.postMessage({ jsonrpc: '2.0', id, method, params: sent })
+      await this.postMessage({ jsonrpc: '2.0', id, method, params: sent }, timeoutMs)
     } catch (e) {
       this.pending.reject(id, e as Error)
     }
@@ -399,24 +403,38 @@ export class McpSseClient implements McpConnection {
     }
   }
 
-  /** POST a JSON-RPC payload to the server-advertised endpoint URL. */
-  private async postMessage(payload: unknown): Promise<void> {
+  /**
+   * POST a JSON-RPC payload to the server-advertised endpoint URL. Bounded by its own
+   * AbortController: without one, a server that accepts the connection but never
+   * responds (or trickles the 202 body) would hang the POST indefinitely — and since
+   * rpc awaits this before returning the timeout-guarded result promise, that hung the
+   * whole call past its per-call timeout. The timer stays live across the body drain so
+   * a stalled body can't slip past it either.
+   */
+  private async postMessage(payload: unknown, timeoutMs = CALL_TIMEOUT_MS): Promise<void> {
     if (!this.postUrl) throw new Error('MCP SSE endpoint not yet known')
-    const res = await this.fetchFn(this.postUrl, {
-      method: 'POST',
-      headers: this.postHeaders(),
-      body: JSON.stringify(payload)
-    })
-    // The JSON-RPC response arrives over the SSE stream, not in this body. Drain
-    // the (usually empty, 202) body so the connection can be reused.
-    await res.text().catch(() => '')
-    if (res.status === 401) {
-      throw new McpUnauthorizedError(
-        'MCP POST failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)',
-        res.headers.get('www-authenticate')
-      )
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await this.fetchFn(this.postUrl, {
+        method: 'POST',
+        headers: this.postHeaders(),
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      })
+      // The JSON-RPC response arrives over the SSE stream, not in this body. Drain
+      // the (usually empty, 202) body so the connection can be reused.
+      await res.text().catch(() => '')
+      if (res.status === 401) {
+        throw new McpUnauthorizedError(
+          'MCP POST failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)',
+          res.headers.get('www-authenticate')
+        )
+      }
+      if (!res.ok) throw new Error(`MCP POST failed: HTTP ${res.status}`)
+    } finally {
+      clearTimeout(timer)
     }
-    if (!res.ok) throw new Error(`MCP POST failed: HTTP ${res.status}`)
   }
 
   private failAll(message: string): void {
