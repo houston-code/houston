@@ -8,13 +8,42 @@ import { parsePatch } from './apply-patch'
  * tool-result eviction drops stale outputs — either can quietly lose the anchors a
  * long run must never forget: what the user originally asked for, the live task
  * list, and which files are currently in play. This module rebuilds that anchor
- * block from the full (persisted) message log on every turn and the loop prepends
- * it to the sent window, ahead of the summary, so it is never summarized or evicted
- * away.
+ * block from the persisted message log so it is never summarized or evicted away.
  *
  * Everything here is derived purely from `messages` — no separate mutable store to
  * keep in sync — which keeps the builder a pure function that is trivial to test
  * and immune to drift from the real transcript.
+ *
+ * WHERE THE BLOCK GOES, AND WHY IT MATTERS FOR COST
+ * ------------------------------------------------
+ * Provider prompt caching is *prefix* matching: a request reuses a cached prefix
+ * only up to the first byte that differs from the cached one. The loop's request
+ * assembly therefore has to keep the window APPEND-ONLY across the iterations of a
+ * turn — each request must extend the previous one rather than rewrite it — or the
+ * cache is missed and the whole conversation is re-billed at the full input rate.
+ *
+ * That makes this block's *volatility* the hazard, not its size. Its contents move
+ * as the run works (a new `read_file` reorders "files in play", a `todo_write`
+ * rewrites the list), so it must never sit ahead of the stable prefix: pinned at
+ * message zero, a single file read rewrote byte zero of the window and invalidated
+ * the provider cache for every message behind it, on every iteration.
+ *
+ * Two rules keep it cheap, and both are load-bearing:
+ *
+ *  1. The loop splices it in immediately BEFORE the final user turn (see
+ *     {@link lastUserTurnIndex}), not at the head — so everything earlier stays a
+ *     stable, cacheable prefix.
+ *  2. It is derived from the turns before that boundary, so it is FROZEN while the
+ *     turn only appends: the head it reads from cannot change underneath it. That
+ *     falls out of the argument the loop passes, which is why this module takes a
+ *     head rather than reaching for the whole log itself. (The loop does widen that
+ *     head as compaction folds turns away — but that is free, because advancing the
+ *     cut rewrites the window's head and drops the cache regardless.)
+ *
+ * Rule 2 is what makes rule 1 pay off — a block placed late but rebuilt on every
+ * iteration would still break the cache at that point on every tool call. Nothing
+ * is lost by reading only the head: the current turn's own messages are still in
+ * the window verbatim, and this block exists for what compaction took away.
  */
 
 /** Marker prefix on the synthetic pinned block, so the renderer/tests can spot it. */
@@ -130,10 +159,31 @@ export function buildPinnedMemory(messages: ChatMessage[]): string {
 }
 
 /**
+ * Index of the final user turn — the boundary the pinned block is spliced in front
+ * of, and the end of the head it is derived from. Returns -1 when the log has no
+ * user message (nothing to pin, and no turn to sit in front of).
+ *
+ * A user message always starts a turn, so this index is a clean seam: the message
+ * before it ends the previous turn, never a `tool_use` awaiting its result (the
+ * loop's intake repair guarantees that), so inserting a pair here cannot separate a
+ * call from its result.
+ */
+export function lastUserTurnIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return i
+  }
+  return -1
+}
+
+/**
  * The synthetic user/assistant pair carrying the pinned block, or [] when there's
  * nothing to pin. A *pair* (not a lone user message) keeps role alternation valid
- * when this is prepended ahead of the summary and the kept tail — mirroring how
- * `buildSummaryMessages` frames the compaction summary.
+ * where the loop splices it in — mirroring how `buildSummaryMessages` frames the
+ * compaction summary.
+ *
+ * Pass the HEAD of the log (the turns before the current one), not the whole log:
+ * that is what freezes the block for the duration of a turn and keeps the provider
+ * cache alive. See the note at the top of this module.
  */
 export function buildPinnedMessages(messages: ChatMessage[]): ChatMessage[] {
   const block = buildPinnedMemory(messages)

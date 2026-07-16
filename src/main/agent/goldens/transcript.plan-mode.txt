@@ -6,23 +6,19 @@ reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
 system: sha256:4f56217bbc6c (9774 chars)
 tools (40): read_file, write_file, edit_file, multi_edit, apply_patch, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, present_plan, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_run_list, gh_run_view
-messages (3):
-1. user: "Pinned working memory (kept verbatim across compaction):\n\nOriginal task:\nPlan a greeting feature"
-2. assistant: "Understood. I will keep the pinned task, todo list, and files in play in mind."
-3. user: "Plan a greeting feature"
+messages (1):
+1. user: "Plan a greeting feature"
 --- request 2 ---
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
 system: sha256:4f56217bbc6c (9774 chars)
 tools (40): read_file, write_file, edit_file, multi_edit, apply_patch, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, present_plan, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_run_list, gh_run_view
-messages (5):
-1. user: "Pinned working memory (kept verbatim across compaction):\n\nOriginal task:\nPlan a greeting feature"
-2. assistant: "Understood. I will keep the pinned task, todo list, and files in play in mind."
-3. user: "Plan a greeting feature"
-4. assistant: ""
+messages (3):
+1. user: "Plan a greeting feature"
+2. assistant: ""
      -> calls present_plan#c1 {"files":["src/util.ts","src/main.ts"],"plan":"## Plan\n1. Add greet() to util.ts\n2. Call it from main.ts","title":"Add greeting"}
-5. tool[present_plan#c1]: "The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. You will be asked to approve each edit."
+3. tool[present_plan#c1]: "The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. You will be asked to approve each edit."
 --- events ---
 usage {"cost":0.0042,"inputTokens":1200,"outputTokens":40}
 tool_start {"args":{"files":["src/util.ts","src/main.ts"],"plan":"## Plan\n1. Add greet() to util.ts\n2. Call it from main.ts","title":"Add greeting"},"callId":"c1","kind":"read","name":"present_plan"}

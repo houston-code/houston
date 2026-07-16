@@ -118,7 +118,7 @@ import {
   summarizationSystemPrompt
 } from './compaction'
 import { getConversation, setCompaction } from '../conversations'
-import { buildPinnedMessages } from './workingMemory'
+import { buildPinnedMessages, lastUserTurnIndex } from './workingMemory'
 import { StallDetector, resolveStallThresholds } from './stall'
 import { resolveBudgetLimits, shouldLand, landingReminder } from './budget'
 import {
@@ -1324,6 +1324,13 @@ export async function startRun(
     let cut = 0
     let summaryMsgs: ChatMessage[] = []
     let lastInputTokens = 0
+    // The boundary the pinned working-memory block is spliced in front of: the user
+    // turn this run is answering. Frozen here, after the intake repair and before the
+    // loop appends anything, because the loop pushes synthetic `user` messages of its
+    // own mid-run (a stall nudge, a Stop-hook continuation, verification feedback).
+    // Re-deriving the boundary per iteration would let any of those drag the block
+    // down the window and re-churn the prefix cache this placement exists to protect.
+    const pinnedAt = lastUserTurnIndex(messages)
     // Resume from compaction state persisted by an earlier run, so a follow-up
     // turn extends the existing summary instead of re-summarizing the whole head
     // again every turn (each run previously started from cut 0). Validated against
@@ -1462,24 +1469,50 @@ export async function startRun(
     // Assemble the window actually sent to the provider from the persisted log. Three
     // durable-context transforms layer on top of the summary + kept tail, and NONE of
     // them mutate `messages` — only this ephemeral copy:
-    //   1. Pinned working memory (original task, live todo list, files in play) is
-    //      prepended ahead of everything so it survives compaction/eviction losslessly.
-    //   2. summaryMsgs stands in for the compacted head (turns before `cut`).
-    //   3. Stale + large tool results in the kept tail are replaced by compact stubs
+    //   1. summaryMsgs stands in for the compacted head (turns before `cut`).
+    //   2. Stale + large tool results in the kept tail are replaced by compact stubs
     //      (recoverable via recall_history) — surgical, unlike whole-turn compaction.
+    //   3. Pinned working memory (original task, live todo list, files in play) is
+    //      spliced in so it survives compaction/eviction losslessly.
+    //
+    // Assembly is prompt-cache-aware, which dictates the order above. Caching matches
+    // a *prefix*, so the window must stay append-only across a turn's iterations: each
+    // request extends the last one, and only the new tail is billed at the full input
+    // rate. The pinned block is the one volatile part (a `read_file` reorders "files in
+    // play", a `todo_write` rewrites the todos), so it rides at the END of the stable
+    // prefix, immediately before the final user turn, instead of at the head where its
+    // churn invalidated the cache from message zero on every tool call. Deriving it
+    // from the head (the turns before that boundary) freezes it for the turn's
+    // duration, which is what keeps the prefix identical iteration to iteration. See
+    // workingMemory.ts for the full argument.
+    //
     // The final invariant, enforced at the one boundary every request passes through:
     // the provider must never receive a `tool_use` without its `tool_result`
-    // immediately after. The transforms above preserve pairing today, and the intake
+    // immediately after. The transforms above preserve pairing today (the splice lands
+    // on a user-turn boundary, never between a call and its result), and the intake
     // repair keeps the persisted log balanced — but any tool that blocks on the user
     // (present_plan, ask_user) or an approval can be interrupted mid-call, and future
     // transforms/hooks could slip. Normalizing here makes every request self-heal
     // regardless of how its messages were assembled. It's a no-op on a balanced window.
-    const buildWindow = (): ChatMessage[] =>
-      repairDanglingToolResults([
-        ...buildPinnedMessages(messages),
+    const buildWindow = (): ChatMessage[] => {
+      const tail = evictStaleToolResults(messages.slice(cut))
+      // The block is derived from, and sits at the end of, everything before the
+      // current turn: the frozen pre-run head, or whatever compaction has since folded
+      // away, whichever reaches further. So it stays byte-identical between
+      // compactions — and refreshing it AT one is free, because advancing the cut
+      // rewrites the head of the window and invalidates the cache regardless.
+      const headEnd = Math.max(pinnedAt, cut)
+      const pinned = headEnd > 0 ? buildPinnedMessages(messages.slice(0, headEnd)) : []
+      // Where the boundary falls inside the kept tail. Clamped: once the cut advances
+      // past the boundary the whole head is summary, and the block leads the tail.
+      const at = Math.min(Math.max(pinnedAt - cut, 0), tail.length)
+      return repairDanglingToolResults([
         ...summaryMsgs,
-        ...evictStaleToolResults(messages.slice(cut))
+        ...tail.slice(0, at),
+        ...pinned,
+        ...tail.slice(at)
       ])
+    }
 
     // SessionStart: once, before the first turn. A hook can inject extra context,
     // which we append to the system prompt for the whole run.

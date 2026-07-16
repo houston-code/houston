@@ -14,6 +14,7 @@ import type {
 import type { ApprovalPolicy, PermissionRule } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
+import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -1329,6 +1330,147 @@ describe('compaction persistence across runs', () => {
     expect(joined).not.toContain('STALE SUMMARY') // stale state discarded…
     expect(joined).toContain('answer 0') // …and the full history goes out verbatim
     expect(joined).toContain('answer 1')
+  })
+})
+
+describe('prompt-cache-aware window assembly', () => {
+  // `read_file` is what makes the pinned block volatile: every call rewrites its
+  // "files in play" list. That churn is the hazard these tests pin down — pinned at
+  // message zero, one file read rewrote byte zero of the window and cost the
+  // provider cache the entire conversation behind it, on every single iteration.
+  const probeReadFile = (): ToolDef => ({
+    kind: 'read',
+    summarize: () => 'probe read_file',
+    schema: {
+      name: 'read_file',
+      description: 'Read a file.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+        additionalProperties: false
+      }
+    },
+    execute: async (args) => `contents of ${String(args.path)}`
+  })
+
+  const readCall = (id: string, path: string): ProviderStreamEvent => ({
+    type: 'tool_call',
+    call: { id, name: 'read_file', arguments: { path } }
+  })
+
+  /** The window as the provider's prefix matcher sees it. */
+  const shape = (w: ChatMessage[]): string[] => w.map((m) => `${m.role}:${m.content}`)
+
+  /** One prior turn, so there is a head for the pinned block to be derived from. */
+  const history = (): ChatMessage[] => [
+    { role: 'user', content: 'first task' },
+    { role: 'assistant', content: 'first answer' },
+    { role: 'user', content: 'current question' }
+  ]
+
+  it('keeps the sent window append-only as a turn reads files', async () => {
+    h.probeTools = [probeReadFile()]
+    const turns: ProviderStreamEvent[][] = [
+      [readCall('a', 'a.ts'), { type: 'done', stopReason: 'tool_use' }],
+      [readCall('b', 'b.ts'), { type: 'done', stopReason: 'tool_use' }],
+      [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    const sends: ChatMessage[][] = []
+    let i = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        for (const e of turns[i++]) yield e
+      }
+    }
+    await run({ provider, messages: history(), policy: 'full-auto' })
+
+    expect(sends).toHaveLength(3)
+    // The cache-critical invariant: each request EXTENDS the previous one byte for
+    // byte. Prompt caching matches a prefix, so any rewrite behind the newest message
+    // silently re-bills the whole conversation at the full input rate.
+    for (let n = 1; n < sends.length; n++) {
+      const prev = shape(sends[n - 1])
+      expect(shape(sends[n]).slice(0, prev.length)).toEqual(prev)
+    }
+    // The reads really did happen — otherwise the check above passes vacuously.
+    expect(shape(sends[2]).join('\n')).toContain('contents of b.ts')
+  })
+
+  it('splices the pinned block in front of the final user turn, not at message zero', async () => {
+    const sends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, messages: history() })
+
+    const w = sends[0]
+    const at = w.findIndex((m) => m.content.includes(PINNED_MEMORY_PREFIX))
+    // The head rides ahead of the block, untouched, as a stable cacheable prefix.
+    expect(at).toBeGreaterThan(0)
+    expect(w.slice(0, at).map((m) => m.content)).toEqual(['first task', 'first answer'])
+    // Then the synthetic pair, then the turn it is pinned in front of.
+    expect(w[at].role).toBe('user')
+    expect(w[at + 1].role).toBe('assistant')
+    expect(w[at + 2]).toMatchObject({ role: 'user', content: 'current question' })
+  })
+
+  it('keeps a mid-run nudge from moving the block or breaking the prefix', async () => {
+    // The loop appends synthetic `user` messages of its own (a stall nudge here, plus
+    // Stop-hook continuations and verification feedback). None of them starts a real
+    // turn, so none may be mistaken for the boundary: re-deriving it per iteration
+    // dragged the block down the window and rewrote the prefix from behind.
+    const sends: ChatMessage[][] = []
+    const looping: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        // Re-issue an identical call every turn — trips the repeated-call stall.
+        yield { type: 'tool_call', call: { id: 'same', name: 'list_dir', arguments: { path: '.' } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const extra = { stallDetection: true, stallRepeatCallLimit: 2, maxIterations: 40 }
+    const saved = { ...h.settings }
+    Object.assign(h.settings, extra)
+    try {
+      await run({ provider: looping, messages: history(), policy: 'full-auto' })
+    } finally {
+      // Delete before restoring: these keys are absent by default, so assigning the
+      // snapshot back would leave them set and reshape every later test's stall gate.
+      for (const k of Object.keys(extra)) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+
+    const n = sends.findIndex((w) => w.some((m) => /repeating the same tool call/i.test(m.content)))
+    expect(n, 'no window carried the stall nudge').toBeGreaterThan(0)
+    // The block still sits in front of the real user turn, ahead of the nudge…
+    const w = sends[n]
+    const at = w.findIndex((m) => m.content.includes(PINNED_MEMORY_PREFIX))
+    expect(w.slice(0, at).map((m) => m.content)).toEqual(['first task', 'first answer'])
+    // …so the nudged window still extends the one before it.
+    const prev = shape(sends[n - 1])
+    expect(shape(w).slice(0, prev.length)).toEqual(prev)
+  })
+
+  it('pins nothing on the very first turn (nothing has been compacted away yet)', async () => {
+    const sends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, messages: [{ role: 'user', content: 'only task' }] })
+
+    // The turn's own messages are in the window verbatim, so a block restating them
+    // would be pure cost.
+    expect(sends[0].map((m) => m.content)).toEqual(['only task'])
   })
 })
 
