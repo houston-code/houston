@@ -106,6 +106,7 @@ bracketed-paste support.
 | `Ctrl-X Ctrl-E` | open the draft in `$VISUAL`/`$EDITOR` and come back with it |
 | `Ctrl-L` | repaint the screen |
 | `Ctrl-C` | discard the draft (twice in a row to leave) |
+| `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
 | `Ctrl-D` | leave (on an empty composer) |
 
 **History.** Messages are remembered per project folder and survive restarts,
@@ -128,6 +129,20 @@ conversation, not a log. Two ways to see more:
   always kept in the conversation, it just had no way out to the screen.
 
 Very long output is capped with a note saying how much was left out.
+
+## Typing while it works
+
+You do not have to wait for a turn to finish before saying the next thing. Type
+while the agent works: what you type appears on the status line, and `Enter`
+queues it. The line shows how many messages are waiting.
+
+When the turn ends, whatever you queued is sent as the next message
+automatically, with no second `Enter`. Several queued messages go together as one.
+
+- `Esc` clears what you have typed. On an empty line, `Esc` stops the run (so does
+  `Ctrl-C`).
+- Stopping a run also drops anything queued: those messages were follow-ups to
+  work you just threw away.
 
 ## Being told when it needs you
 
