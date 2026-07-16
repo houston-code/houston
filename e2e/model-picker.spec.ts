@@ -53,20 +53,24 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
     // The default model set fits without an internal scrollbar.
     expect(info.fitsWithoutScroll).toBe(true)
 
-    // Advanced-first ordering: gpt-5 ahead of gpt-4o, regardless of stored order.
-    // Seeded labels are the lowercase model id (so a curated model reads the same as
-    // one added via the provider's Fetch), e.g. "gpt-5", "claude-opus-4.8".
+    // Advanced-first ordering: the GPT-5 family ahead of the older o-series, regardless
+    // of stored order. Names are the lowercase model id (so a curated model reads the
+    // same as one added via the provider's Fetch), e.g. "gpt-5.6-sol", "claude-opus-4.8".
+    // Anchor on families rather than a single id — the curated seed is refreshed as the
+    // line moves, and a dropped id would read here as an ordering regression.
     const gpt5 = info.options.findIndex((o) => o.startsWith('gpt-5'))
-    const gpt4o = info.options.findIndex((o) => o.startsWith('gpt-4o'))
+    const oSeries = info.options.findIndex((o) => /^o\d/.test(o))
     expect(gpt5).toBeGreaterThanOrEqual(0)
-    expect(gpt5).toBeLessThan(gpt4o)
+    expect(oSeries).toBeGreaterThanOrEqual(0)
+    expect(gpt5).toBeLessThan(oSeries)
     // Same family grouped, newest version first: opus 4.8 immediately before 4.7.
     const opus48 = info.options.findIndex((o) => o.startsWith('claude-opus-4.8'))
     const opus47 = info.options.findIndex((o) => o.startsWith('claude-opus-4.7'))
     expect(opus48).toBeGreaterThanOrEqual(0)
     expect(opus47).toBe(opus48 + 1)
-    // Every model is annotated with its context window.
-    expect(info.options.find((o) => o.startsWith('gpt-5'))).toContain('400k')
+    // Every model is annotated with its context window ("200k", "1M") — asserted across
+    // the whole list, since any one model's number moves with the seed.
+    for (const o of info.options) expect(o).toMatch(/\b\d+(\.\d+)?[kM]\b/)
   } finally {
     await app.close()
     rmSync(userDataDir, { recursive: true, force: true })
