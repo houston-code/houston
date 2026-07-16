@@ -37,6 +37,14 @@ export interface CustomAgent {
    * dispatch_writable_agent honors this; dispatch_agent always runs read-only.
    */
   write?: boolean
+  /**
+   * Front-matter `model:` — the model this agent runs on instead of the parent
+   * run's, so routine delegated work can run on a cheaper/faster sibling model.
+   * Matched against the current provider's configured model ids at dispatch time;
+   * when it isn't one of them (the file is checked in, providers vary per machine)
+   * the dispatch falls back to the parent's model rather than failing.
+   */
+  model?: string
 }
 
 function firstLine(s: string): string {
@@ -84,12 +92,14 @@ export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
     if (!systemPrompt) continue
     const tools = parseTools(data.tools)
     const write = parseBool(data.write)
+    const model = data.model?.trim()
     agents.push({
       name,
       description: data.description || firstLine(systemPrompt) || name,
       systemPrompt,
       ...(tools ? { tools } : {}),
-      ...(write ? { write: true } : {})
+      ...(write ? { write: true } : {}),
+      ...(model ? { model } : {})
     })
   }
   agents.sort((a, b) => a.name.localeCompare(b.name))

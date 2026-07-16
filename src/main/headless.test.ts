@@ -665,3 +665,34 @@ describe('runHeadless', () => {
     expect(err.join('')).not.toContain('verifyOnStop is enabled')
   })
 })
+
+describe('live tool progress (text mode)', () => {
+  it('prints tool_progress and subagent lines to stderr so a long dispatch is not silent', async () => {
+    const { d, err } = deps([
+      { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'dispatch_agent', args: {} },
+      { runId: 'run-1', type: 'tool_progress', callId: 'c1', message: 'turn 3/16 · Read note.txt' },
+      { runId: 'run-1', type: 'subagent', parentCallId: 'c1', id: 'sec', label: 'Security', status: 'running' },
+      { runId: 'run-1', type: 'subagent', parentCallId: 'c1', id: 'sec', label: 'Security', status: 'done' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    const stderr = err.join('')
+    expect(stderr).toContain('turn 3/16 · Read note.txt')
+    expect(stderr).toContain('▷ Security')
+    expect(stderr).toContain('✓ Security')
+  })
+
+  it('keeps progress off stdout, and out of --json mode text output', async () => {
+    const events: AgentEvent[] = [
+      { runId: 'run-1', type: 'tool_progress', callId: 'c1', message: 'working' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ]
+    const { d, out } = deps(events)
+    await runHeadless(baseOpts, d)
+    expect(out.join('')).toBe('\n') // just the final newline — stdout stays clean
+    const { d: dj, err: errJson } = deps(events)
+    await runHeadless({ ...baseOpts, json: true }, dj)
+    // JSON mode already carries the raw event on stdout; no duplicate stderr line.
+    expect(errJson.join('')).not.toContain('working')
+  })
+})

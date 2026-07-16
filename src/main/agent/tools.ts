@@ -51,8 +51,24 @@ import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
 import { runReadGit } from './gitRead'
 import { SPAWN_SESSION_NAME, type SpawnSessionResult } from './spawn'
+import type { ScheduledRunInfo } from './scheduler'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
+
+/**
+ * What a dispatch tool hands the loop's subagent runner. `model` and `resume`
+ * are optional refinements: run on a sibling model, or continue a stored
+ * subagent (from a prior dispatch in this chat) with `prompt` as the follow-up.
+ */
+export interface DispatchAgentOptions {
+  prompt: string
+  /** Named custom agent (.houston/agents) to run as. */
+  agent?: string
+  /** Model override for this dispatch — one of the current provider's model ids. */
+  model?: string
+  /** Id of a stored subagent to resume (shown at the end of its earlier report). */
+  resume?: string
+}
 
 export interface ToolContext {
   /** Canonical (realpath'd) workspace root (the primary directory). */
@@ -85,7 +101,7 @@ export interface ToolContext {
   /** Active web-search provider id (selected in Settings; injected by the loop). */
   searchProvider?: string
   /** Run a read-only research subagent (injected by the loop, which has the provider). */
-  dispatchSubAgent?: (prompt: string, agent?: string) => Promise<string>
+  dispatchSubAgent?: (opts: DispatchAgentOptions) => Promise<string>
   /**
    * Run a WRITABLE subagent — edits files and runs shell commands, sandboxed to the
    * project with no network (injected by the loop). Gated by the approval on the
@@ -94,9 +110,25 @@ export interface ToolContext {
    * with no OS sandbox, each of its shell commands is instead propagated back to
    * the user as its own approval prompt (the loop's unconfined-shell gate).
    */
-  dispatchWritableSubAgent?: (prompt: string, agent?: string) => Promise<string>
+  dispatchWritableSubAgent?: (opts: DispatchAgentOptions) => Promise<string>
   /** Run an adversarial multi-agent review of the uncommitted changes (injected by the loop). */
-  dispatchReview?: (base?: string, paths?: string[], effort?: 'normal' | 'high') => Promise<string>
+  dispatchReview?: (
+    base?: string,
+    paths?: string[],
+    effort?: 'normal' | 'high',
+    model?: string
+  ) => Promise<string>
+  /**
+   * Manage scheduled background runs (injected by the loop when the host wired a
+   * scheduler backend; the loop fills in the run's provider, model, approval
+   * policy, and workspace on create). Backs schedule_run / list_scheduled_runs /
+   * cancel_scheduled_run; undefined on hosts with no scheduler.
+   */
+  scheduler?: {
+    create(input: { name: string; spec: string; prompt: string }): ScheduledRunInfo
+    list(): ScheduledRunInfo[]
+    cancel(id: string): boolean
+  }
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
   /** Attach a document (e.g. PDF) read by the agent to the tool result. */
@@ -1335,7 +1367,7 @@ const dispatchAgent: ToolDef = {
   schema: {
     name: 'dispatch_agent',
     description:
-      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report.',
+      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report. Each report ends with the subagent\'s id — pass it as `resume` (with your follow-up as `prompt`) to continue that agent with its context intact instead of re-dispatching from scratch.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },
@@ -1347,6 +1379,16 @@ const dispatchAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the name of a custom agent (from .houston/agents) to use. Omit for the default research agent.'
+        },
+        model: {
+          type: 'string',
+          description:
+            "Optional: run the subagent on a different model from the current provider (e.g. a cheaper/faster sibling for routine legwork). Must be one of the provider's configured model ids; omit to use the current model."
+        },
+        resume: {
+          type: 'string',
+          description:
+            'Optional: the id of a subagent from an earlier dispatch in this chat (shown at the end of its report, e.g. "ag1"). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session.'
         }
       },
       ['description', 'prompt']
@@ -1356,7 +1398,12 @@ const dispatchAgent: ToolDef = {
     const prompt = str(args, 'prompt')
     if (!prompt) throw new Error('prompt is required.')
     if (!ctx.dispatchSubAgent) throw new Error('Subagents are not available in this context.')
-    return ctx.dispatchSubAgent(prompt, str(args, 'agent') || undefined)
+    return ctx.dispatchSubAgent({
+      prompt,
+      agent: str(args, 'agent') || undefined,
+      model: str(args, 'model') || undefined,
+      resume: str(args, 'resume') || undefined
+    })
   }
 }
 
@@ -1386,6 +1433,16 @@ const dispatchWritableAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the name of a custom agent (from .houston/agents, marked `write: true`) to use. Omit for the default writable agent.'
+        },
+        model: {
+          type: 'string',
+          description:
+            "Optional: run the subagent on a different model from the current provider. Must be one of the provider's configured model ids; omit to use the current model."
+        },
+        resume: {
+          type: 'string',
+          description:
+            'Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session.'
         }
       },
       ['description', 'prompt']
@@ -1397,7 +1454,12 @@ const dispatchWritableAgent: ToolDef = {
     if (!ctx.dispatchWritableSubAgent) {
       throw new Error('Writable subagents are not available in this context.')
     }
-    return ctx.dispatchWritableSubAgent(prompt, str(args, 'agent') || undefined)
+    return ctx.dispatchWritableSubAgent({
+      prompt,
+      agent: str(args, 'agent') || undefined,
+      model: str(args, 'model') || undefined,
+      resume: str(args, 'resume') || undefined
+    })
   }
 }
 
@@ -1420,8 +1482,9 @@ function formatSpawnResult(r: SpawnSessionResult): string {
       : `Workspace: ${r.workspace}`
   )
   lines.push(
-    'It appears in the sidebar with a running indicator; the user can open it to watch, answer an approval, or take over. It runs independently and will not report back into this chat.'
+    'It is its own persisted conversation the user can open. It runs independently and will not report back into this chat.'
   )
+  if (r.note) lines.push(r.note)
   return lines.join('\n')
 }
 
@@ -1501,6 +1564,110 @@ const spawnSessionTool: ToolDef = {
   }
 }
 
+/** Local-time stamp for schedule confirmations/listings, or a note for a spent one-shot. */
+function formatFireTime(ms: number | null): string {
+  return ms === null ? 'never (already fired)' : new Date(ms).toLocaleString()
+}
+
+const scheduleRun: ToolDef = {
+  // Creates standing config that starts unattended background runs later — a
+  // consent-worthy state change, so it's gated like a write (and refused in
+  // read-only plan mode).
+  kind: 'write',
+  summarize: (a) => `Schedule run: ${str(a, 'name') || str(a, 'spec') || '?'}`,
+  schema: {
+    name: 'schedule_run',
+    description:
+      'Schedule a recurring (or one-time) background agent run. At each occurrence, a fresh session is started with the stored prompt — it appears alongside the other chats and runs autonomously under your current approval policy (never more permissive). Use it for routine, self-contained jobs the user wants repeated — e.g. "daily at 09:00, run the test suite and summarize any failures". The fired session sees ONLY the stored prompt, so make it self-contained. Schedules fire while Houston is running (this is an in-app scheduler, not OS cron) and persist across restarts; an occurrence missed while Houston was closed fires once at the next launch.',
+    parameters: objectSchema(
+      {
+        name: {
+          type: 'string',
+          description: "A short human name (a few words); becomes each fired session's title."
+        },
+        spec: {
+          type: 'string',
+          description:
+            'When to run: "every <N>m|h|d" (minimum 5 minutes), "daily at HH:MM", "weekdays at HH:MM", "weekly on <day> at HH:MM", or "once at YYYY-MM-DD HH:MM" — times are local, 24-hour.'
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'The full task each fired run starts with. Self-contained: the fired session sees nothing from this chat.'
+        }
+      },
+      ['name', 'spec', 'prompt']
+    )
+  },
+  async execute(args, ctx) {
+    const name = str(args, 'name').trim()
+    const spec = str(args, 'spec').trim()
+    const prompt = str(args, 'prompt').trim()
+    if (!name) throw new Error('name is required.')
+    if (!spec) throw new Error('spec is required.')
+    if (!prompt) throw new Error('prompt is required — each fired run starts with only this text.')
+    if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
+    const info = ctx.scheduler.create({ name, spec, prompt })
+    return (
+      `Scheduled "${info.name}" (id ${info.id}) — ${info.spec}; next run ${formatFireTime(info.nextRunAt)}.\n` +
+      `Each occurrence starts a fresh background session with the stored prompt (model ${info.model}, ` +
+      `"${info.approvalPolicy}" approvals). Schedules fire while Houston is running; cancel with ` +
+      `cancel_scheduled_run({ id: "${info.id}" }).`
+    )
+  }
+}
+
+const listScheduledRuns: ToolDef = {
+  kind: 'read',
+  summarize: () => 'List scheduled runs',
+  schema: {
+    name: 'list_scheduled_runs',
+    description:
+      'List the scheduled background runs configured on this machine: id, name, recurrence, next/last fire time, and whether the last fire succeeded.',
+    parameters: objectSchema({}, [])
+  },
+  async execute(_args, ctx) {
+    if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
+    const all = ctx.scheduler.list()
+    if (all.length === 0) return 'No scheduled runs.'
+    return all
+      .map((s) => {
+        const last = s.lastFiredAt
+          ? `; last fired ${formatFireTime(s.lastFiredAt)}${
+              s.lastResult === 'error' ? ` (failed: ${s.lastError ?? 'unknown error'})` : ''
+            }`
+          : ''
+        return `- ${s.id}: "${s.name}" — ${s.spec}; next run ${formatFireTime(s.nextRunAt)}${last}`
+      })
+      .join('\n')
+  }
+}
+
+const cancelScheduledRun: ToolDef = {
+  // Removes standing config — a state change, approval-gated like the create.
+  kind: 'write',
+  summarize: (a) => `Cancel scheduled run ${str(a, 'id') || '?'}`,
+  schema: {
+    name: 'cancel_scheduled_run',
+    description:
+      'Cancel a scheduled background run by id (from list_scheduled_runs or the schedule_run confirmation). Already-started sessions are unaffected; the schedule simply stops firing.',
+    parameters: objectSchema(
+      {
+        id: { type: 'string', description: 'The schedule id to cancel.' }
+      },
+      ['id']
+    )
+  },
+  async execute(args, ctx) {
+    const id = str(args, 'id').trim()
+    if (!id) throw new Error('id is required.')
+    if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
+    return ctx.scheduler.cancel(id)
+      ? `Cancelled scheduled run ${id}.`
+      : `No scheduled run with id ${id} — it may already be cancelled. Use list_scheduled_runs to see current ids.`
+  }
+}
+
 const reviewChanges: ToolDef = {
   kind: 'read', // spawns read-only reviewer subagents + read-only git — no side effects, no approval
   summarize: (a) => `Review changes${str(a, 'base') ? ` vs ${str(a, 'base')}` : ''}`,
@@ -1526,6 +1693,11 @@ const reviewChanges: ToolDef = {
           enum: ['normal', 'high'],
           description:
             "Verification depth. 'high' verifies each finding with several independent skeptics and keeps only the majority-confirmed ones (more thorough, more model calls); 'normal' uses a single verifier. Default 'normal' — use 'high' for security-sensitive or high-stakes changes."
+        },
+        model: {
+          type: 'string',
+          description:
+            "Optional: run the reviewer and verifier subagents on a different model from the current provider (e.g. a cheaper sibling for a routine review). Must be one of the provider's configured model ids; omit to use the current model."
         }
       },
       []
@@ -1537,7 +1709,12 @@ const reviewChanges: ToolDef = {
       ? args.paths.filter((p): p is string => typeof p === 'string' && p.length > 0)
       : undefined
     const effort = str(args, 'effort') === 'high' ? 'high' : undefined
-    return ctx.dispatchReview(str(args, 'base') || undefined, paths, effort)
+    return ctx.dispatchReview(
+      str(args, 'base') || undefined,
+      paths,
+      effort,
+      str(args, 'model') || undefined
+    )
   }
 }
 
@@ -2533,6 +2710,9 @@ export const TOOLS: ToolDef[] = [
   dispatchAgent,
   dispatchWritableAgent,
   spawnSessionTool,
+  scheduleRun,
+  listScheduledRuns,
+  cancelScheduledRun,
   reviewChanges,
   gitStatus,
   gitDiff,
