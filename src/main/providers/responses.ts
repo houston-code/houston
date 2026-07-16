@@ -110,6 +110,10 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         ...(req.system ? { instructions: req.system } : {}),
         input: toResponsesInput(req.messages),
         stream: true,
+        // The Responses API spells the reply cap `max_output_tokens`; it covers
+        // reasoning tokens as well as visible output, and the stream reports
+        // hitting it as `incomplete_details.reason === 'max_output_tokens'`.
+        ...(req.maxTokens ? { max_output_tokens: req.maxTokens } : {}),
         ...(tools ? { tools } : {}),
         ...(reasoning ? { reasoning } : {}),
         ...(req.verbosity ? { text: { verbosity: req.verbosity } } : {})

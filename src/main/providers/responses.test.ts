@@ -110,6 +110,32 @@ describe('openaiResponsesReasoning', () => {
   })
 })
 
+describe('responses max_output_tokens', () => {
+  beforeEach(() => h.create.mockReset())
+
+  /** Run one turn and return the params the adapter sent to the SDK. */
+  async function paramsFor(req: Partial<ChatRequest>): Promise<Record<string, unknown>> {
+    h.create.mockResolvedValue(streamOf([{ type: 'response.completed', response: {} }]))
+    const provider = createResponsesProvider('k')
+    for await (const _ of provider.streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      void _
+    }
+    return h.create.mock.calls[0][0] as Record<string, unknown>
+  }
+
+  it('sends the caller-requested reply cap as max_output_tokens', async () => {
+    expect(await paramsFor({ maxTokens: 32 })).toMatchObject({ max_output_tokens: 32 })
+  })
+
+  it('omits the cap when the caller sets none (server default applies)', async () => {
+    expect(await paramsFor({})).not.toHaveProperty('max_output_tokens')
+  })
+})
+
 describe('responses usage reporting', () => {
   beforeEach(() => h.create.mockReset())
 

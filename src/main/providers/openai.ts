@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
 import type { ModelCaps, ModelOption } from '@shared/types'
 import { imageDataUrl } from '@shared/images'
-import { openaiReasoningEffort } from './reasoning'
+import { openaiReasoningEffort, openaiSupportsReasoning } from './reasoning'
 import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
 
@@ -98,6 +98,24 @@ export function markOpenAICacheBreakpoints(messages: OpenAIMessage[]): void {
 }
 
 /**
+ * The reply-cap field for a Chat Completions request. `max_tokens` is the
+ * portable spelling every OpenAI-compatible server understands; OpenAI's own
+ * o-series/gpt-5 reject it and require `max_completion_tokens`.
+ *
+ * Gated on the bare-id heuristic rather than the host's `reasoningCapable`
+ * override (which `reasoning_effort` does use): the rename is an OpenAI-native
+ * quirk, not a property of reasoning models in general. An aggregator-routed
+ * reasoning model arrives as a prefixed id (`deepseek/deepseek-r1`,
+ * `openai/gpt-5`) that the anchored regex won't match, and those hosts speak
+ * plain `max_tokens` — which is exactly the behavior we want. Exported for testing.
+ */
+export function maxTokensField(model: string, maxTokens: number): Record<string, number> {
+  return openaiSupportsReasoning(model)
+    ? { max_completion_tokens: maxTokens }
+    : { max_tokens: maxTokens }
+}
+
+/**
  * Adapter for OpenAI and any OpenAI-compatible endpoint (Ollama, LM Studio,
  * vLLM, OpenRouter, etc.). Local endpoints often don't need a key — callers pass
  * a placeholder, which compatible servers ignore.
@@ -146,6 +164,7 @@ export function createOpenAIProvider(
           // Ask for a final usage-only chunk. Most OpenAI-compatible servers honour
           // this; those that don't simply never send it, which we handle gracefully.
           stream_options: { include_usage: true },
+          ...(req.maxTokens ? maxTokensField(req.model, req.maxTokens) : {}),
           ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
           ...(tools && tools.length ? { tools } : {})
         },

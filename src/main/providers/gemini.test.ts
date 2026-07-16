@@ -102,6 +102,37 @@ describe('toGeminiContents', () => {
   })
 })
 
+describe('gemini maxOutputTokens', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  /** Run one turn and return the `config` the adapter sent to the SDK. */
+  async function configFor(req: Partial<ChatRequest>): Promise<Record<string, unknown>> {
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield { candidates: [{ content: { parts: [{ text: 'ok' }] } }] }
+      })()
+    )
+    const provider = createGeminiProvider('k')
+    for await (const _ of provider.streamChat({
+      model: 'gemini-2.5-flash',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      void _
+    }
+    const arg = h.stream.mock.calls[0][0] as { config: Record<string, unknown> }
+    return arg.config
+  }
+
+  it('sends the caller-requested reply cap as maxOutputTokens', async () => {
+    expect(await configFor({ maxTokens: 32 })).toMatchObject({ maxOutputTokens: 32 })
+  })
+
+  it('omits the cap when the caller sets none (server default applies)', async () => {
+    expect(await configFor({})).not.toHaveProperty('maxOutputTokens')
+  })
+})
+
 describe('gemini usage reporting', () => {
   beforeEach(() => h.stream.mockReset())
 

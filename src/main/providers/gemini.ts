@@ -84,6 +84,7 @@ export function createGeminiProvider(apiKey: string): Provider {
       const ai = await getAi()
       const config: Record<string, unknown> = {}
       if (req.system) config.systemInstruction = req.system
+      if (req.maxTokens) config.maxOutputTokens = req.maxTokens
       const thinkingBudget = geminiThinkingBudget(req.model, req.reasoningEffort)
       if (thinkingBudget !== undefined) {
         config.thinkingConfig = { thinkingBudget, includeThoughts: true }
