@@ -352,6 +352,22 @@ jobs:
               exit 1
             fi
 
+            # Revert-guard: refuse a merge that would SILENTLY roll back content already on
+            # main. This is the #551 clobber's choke point — that PR was finalized with
+            # `git reset --soft origin/main` over a stale tree, so its merge recorded three
+            # freshly-landed PRs' files as ~3,200 deleted lines, and CI stayed green because
+            # the reverted features' tests were deleted in the same commit. The guard runs on
+            # the ACTUAL landing tree (the merge we just built), before the bump and the push,
+            # so a stale-tree clobber can never reach main. A deliberate removal sets the
+            # `intentional-revert` label to put the intent on the record. See
+            # CLAUDE.md > "Avoiding silent-clobber merges".
+            merge_tree=$(git write-tree)
+            if ! ALLOW_REVERT='${{ contains(github.event.pull_request.labels.*.name, 'intentional-revert') && '1' || '' }}' \
+                 node scripts/merge-revert-guard.mjs "$base" "$merge_tree"; then
+              git merge --abort || true
+              exit 1
+            fi
+
             # Exactly the required `test` job's checks, against the tree that will actually land.
             # Any failure exits non-zero (set -e) without committing or pushing, so main stays green.
             npm ci
