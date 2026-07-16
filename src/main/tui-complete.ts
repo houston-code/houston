@@ -5,7 +5,7 @@
  */
 import { builtinCommands } from '@shared/commands'
 
-/** A built-in slash command, for completion + the (future) command menu. */
+/** A slash command, for completion and the live menu. */
 export interface CommandSpec {
   name: string
   description: string
@@ -68,4 +68,46 @@ export function makeCompleter(finder: FileFinder, commands: CommandSpec[] = COMM
       .then((files) => callback(null, completeInput(line, files, commands)))
       .catch(() => callback(null, [[], line]))
   }
+}
+
+/** How many rows the menu shows before it stops listing. */
+export const MENU_LIMIT = 8
+
+/**
+ * The commands to offer for the line being typed, or null when the line is not a
+ * bare command word.
+ *
+ * The terminal had Tab completion that printed bare names (`/help /hooks`) with no
+ * descriptions, no argument hints, and — because the completer only ever knew the
+ * BUILT-IN list — no sign that a workspace's own `.houston/commands` existed at
+ * all. You had to know a command's name to discover it, which is the opposite of
+ * what a command menu is for.
+ */
+export function commandMenu(line: string, commands: CommandSpec[]): CommandSpec[] | null {
+  const q = commandQuery(line)
+  if (q === null) return null
+  const p = q.toLowerCase()
+  // Every match: the renderer caps the list, so it can say how many it left out.
+  return commands.filter((c) => c.name.toLowerCase().startsWith(p))
+}
+
+/**
+ * Render the menu rows shown under the composer. Pure; the adapter owns placement.
+ * The whole list is deliberately shown for a bare `/`, since that IS the "what can
+ * I do here?" gesture.
+ */
+export function renderCommandMenu(
+  matches: CommandSpec[],
+  paint: (s: string, ...styles: string[]) => string
+): string[] {
+  if (!matches.length) return [paint('  (no matching command)', 'dim')]
+  const shown = matches.slice(0, MENU_LIMIT)
+  const width = Math.max(...shown.map((c) => c.name.length))
+  const rows = shown.map(
+    (c) => `  ${paint(`/${c.name}`.padEnd(width + 1), 'cyan')}  ${paint(c.description, 'dim')}`
+  )
+  if (matches.length > shown.length) {
+    rows.push(paint(`  … ${matches.length - shown.length} more`, 'dim'))
+  }
+  return rows
 }

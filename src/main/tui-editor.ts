@@ -449,7 +449,18 @@ function splitToWidth(s: string, width: number): string[] {
  */
 export function renderEditor(
   s: EditorState,
-  opts: { prompt: string; width: number; paint: Painter; continuation?: string }
+  opts: {
+    prompt: string
+    width: number
+    paint: Painter
+    continuation?: string
+    /**
+     * Rows drawn UNDER the composer (the live command menu). They are part of the
+     * redraw region, so the adapter erases them with everything else; the cursor
+     * stays in the composer above them.
+     */
+    below?: string[]
+  }
 ): EditorView {
   const width = Math.max(8, opts.width)
   if (s.search) {
@@ -489,5 +500,7 @@ export function renderEditor(
 
   // Guarantee a row for a cursor that landed past the last rendered row.
   while (cursorRow >= rows.length) rows.push('')
+  // The menu goes after that guard: it must never be mistaken for a buffer line.
+  if (opts.below?.length) rows.push(...opts.below)
   return { rows, cursorRow, cursorCol }
 }
