@@ -105,6 +105,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'login', description: 'Set or update an API key (also: /providers)', clients: ['tui'] },
   { name: 'settings', description: 'Show a summary of your current settings', clients: ['tui'] },
   {
+    name: 'reasoning',
+    description: 'Show or set thinking effort (off | low | medium | high | xhigh)',
+    clients: ['tui']
+  },
+  {
     name: 'doctor',
     description: 'Check your setup: model, sandbox, tools, MCP, terminal',
     clients: ['tui']

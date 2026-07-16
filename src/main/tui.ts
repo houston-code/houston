@@ -42,10 +42,12 @@ import type {
   PlanDecision,
   PlanPayload,
   QuestionOption,
+  ReasoningEffort,
   ToolApprovalDecision
 } from '@shared/agent'
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
+import { isReasoningEffort, REASONING_EFFORTS } from '@shared/agent'
 import { contextWindowFor, contextPercent } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
@@ -897,6 +899,8 @@ export type SlashResult =
   | { kind: 'settings' }
   /** Environment diagnostics (/doctor). */
   | { kind: 'doctor' }
+  /** Show or set how hard the model thinks before answering (/reasoning). */
+  | { kind: 'reasoning'; effort?: ReasoningEffort }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
   /** Reprint a past tool result in full (/output [n]). */
@@ -949,6 +953,12 @@ export function parseSlashCommand(
       return { kind: 'settings' }
     case 'doctor':
       return { kind: 'doctor' }
+    case 'reasoning':
+    case 'think': {
+      const a = arg.trim().toLowerCase()
+      if (isReasoningEffort(a)) return { kind: 'reasoning', effort: a }
+      return { kind: 'reasoning' } // no/invalid arg → the driver reports the current one
+    }
     case 'verbose': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'verbose', on: true }
@@ -1052,6 +1062,7 @@ export const HELP_TEXT = [
   '  /skills /agents       list workspace skills / custom agents',
   '  /settings             settings overview + where to edit them',
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
+  '  /reasoning [effort]   show or set thinking effort (off | low | medium | high | xhigh)',
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
@@ -1801,6 +1812,36 @@ export function nextPolicy(current: ApprovalPolicy): ApprovalPolicy {
   return APPROVAL_POLICIES[(i + 1) % APPROVAL_POLICIES.length]
 }
 
+/**
+ * Whether the active model can reason at all: true / false from the host's
+ * capability metadata, or null when it says nothing either way.
+ *
+ * Worth knowing before promising an effort setting will do something. Turning
+ * thinking up on a model that cannot think is the kind of thing that looks like a
+ * bug in Houston rather than a fact about the model.
+ */
+function activeModelReasons(deps: TuiDeps, providerId: string | null, model: string | null): boolean | null {
+  if (!providerId || !model) return null
+  const p = deps.getSettings().providers.find((x) => x.id === providerId)
+  return p?.models.find((m) => m.id === model)?.caps?.reasoning ?? null
+}
+
+/** `/reasoning` with no argument: what it is now, and what it can be. */
+export function renderReasoningStatus(
+  current: ReasoningEffort,
+  modelReasons: boolean | null,
+  paint: Painter
+): string {
+  const lines = [
+    `${paint('thinking effort:', 'bold')} ${paint(current, 'cyan')}`,
+    paint(`  options: ${REASONING_EFFORTS.join(' | ')}   (usage: /reasoning <effort>)`, 'dim')
+  ]
+  if (modelReasons === false) {
+    lines.push(paint('  the active model does not support reasoning, so this has no effect on it', 'yellow'))
+  }
+  return lines.join('\n')
+}
+
 /** Prompt string shown for the composer, reflecting the live approval policy. */
 export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
   return `${paint(policy, 'dim')} ${paint('›', 'green')} `
@@ -2384,6 +2425,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'output') {
         deps.io.out(`${renderRecoveredOutput(toolResultsFrom(messages), result.index, paint)}\n`)
+        continue
+      }
+      if (result.kind === 'reasoning') {
+        const current = deps.getSettings().reasoningEffort ?? 'off'
+        if (!result.effort) {
+          deps.io.out(`${renderReasoningStatus(current, activeModelReasons(deps, providerId, model), paint)}\n`)
+          continue
+        }
+        if (!deps.updateSettings) {
+          deps.io.out(paint('· changing settings is unavailable here\n', 'dim'))
+          continue
+        }
+        deps.updateSettings({ reasoningEffort: result.effort })
+        deps.io.out(paint(`· thinking effort → ${result.effort}\n`, 'dim'))
+        // Say it plainly rather than let someone wonder why nothing changed.
+        if (result.effort !== 'off' && activeModelReasons(deps, providerId, model) === false) {
+          deps.io.out(
+            paint(`· note: ${model} does not support reasoning, so this has no effect on it\n`, 'yellow')
+          )
+        }
         continue
       }
       if (result.kind === 'doctor') {

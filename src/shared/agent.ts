@@ -21,7 +21,14 @@ export interface ToolCall {
  * `xhigh` is the maximum tier (OpenAI Responses on newer flagships); providers
  * without an xhigh tier clamp it to `high`.
  */
-export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh'
+export const REASONING_EFFORTS = ['off', 'low', 'medium', 'high', 'xhigh'] as const
+
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
+
+/** Runtime guard for an effort arriving from a command line / IPC. */
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return typeof v === 'string' && (REASONING_EFFORTS as readonly string[]).includes(v)
+}
 
 /** How the model's reasoning summary is requested (OpenAI Responses API). */
 export type ReasoningSummary = 'auto' | 'concise' | 'detailed' | 'none'
