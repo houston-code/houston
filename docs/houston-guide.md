@@ -132,6 +132,19 @@ network call, just that one destination), or **always allow / always deny**
 (saves a permission rule so the choice persists). File edits show an inline
 red/green diff before approval.
 
+**Denying with a reason.** A refusal can carry guidance, and the agent is told
+what it says, so "no, and here is what to do instead" lands in the same step
+instead of needing a follow-up message. In the desktop app, type it in the box
+under the approval buttons (Enter denies with that reason). In the terminal, pick
+"Deny with a reason…", or just type the reason at the approval prompt: anything
+that is not one of the shortcut keys is read as a denial plus that explanation.
+The terminal's approval keys are `y` allow, `n` deny, `a` allow for the run, `!`
+always allow, `x` always deny.
+
+Stopping a run while an approval is waiting is recorded as an interruption, not
+as a refusal, so the agent is not told the user rejected something they simply
+never answered.
+
 **Permission rules** (Settings) are finer-grained than the mode: `allow`,
 `deny`, or `ask`, matched on the tool plus a glob over its target, e.g. allow
 `run_shell` matching `git *`, deny anything matching `*rm -rf*`, always ask

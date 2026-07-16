@@ -388,6 +388,37 @@ export function isToolApprovalDecision(v: unknown): v is ToolApprovalDecision {
 }
 
 /**
+ * How much guidance a denial may carry back to the model. Long enough for a real
+ * instruction ("use the staging bucket, not prod"), short enough that a runaway
+ * paste can't be smuggled into the transcript through the approval channel.
+ */
+export const MAX_APPROVAL_NOTE = 2000
+
+/**
+ * The user's verdict plus, optionally, why — "no, and here's what to do instead".
+ *
+ * Without the note a denial is a dead end: the model is told only that it was
+ * refused, so it retries a variant, guesses, or gives up, and the user has to
+ * interrupt and re-explain in a separate turn. The note rides the SAME
+ * interaction, so the correction lands where the refusal did.
+ *
+ * Carried on every decision (not just `deny`): "allow, but prefer X next time" is
+ * as useful as a refusal, and `rule-deny` wants the reason recorded too.
+ */
+export interface ApprovalResolution {
+  decision: ToolApprovalDecision
+  /** Free-text guidance shown to the model with the tool result. Trimmed + capped. */
+  note?: string
+}
+
+/** Clamp user-supplied guidance to something safe to put in the transcript. */
+export function sanitizeApprovalNote(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined
+  const trimmed = v.trim().slice(0, MAX_APPROVAL_NOTE)
+  return trimmed || undefined
+}
+
+/**
  * A finished implementation plan the agent presents in Plan mode via the
  * `present_plan` tool. Rendered in full in the docked plan-review panel.
  *

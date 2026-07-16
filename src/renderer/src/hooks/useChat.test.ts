@@ -21,7 +21,7 @@ function installApi() {
     startAgent: vi.fn((_req: AgentSendRequest) => Promise.resolve()),
     retryAgent: vi.fn((_req: unknown) => Promise.resolve()),
     cancelAgent: vi.fn((_runId: string) => Promise.resolve()),
-    approveTool: vi.fn((_runId: string, _callId: string, _decision: ToolApprovalDecision) =>
+    approveTool: vi.fn((_runId: string, _callId: string, _decision: ToolApprovalDecision, _note?: string) =>
       Promise.resolve()
     ),
     setAgentPolicy: vi.fn((_runId: string, _policy: string) => Promise.resolve()),
@@ -224,7 +224,7 @@ describe('useChat', () => {
     const runId = await sendAndGetRunId(result, api)
 
     act(() => result.current.approve('call-1', 'always'))
-    expect(api.approveTool).toHaveBeenCalledWith(runId, 'call-1', 'always')
+    expect(api.approveTool).toHaveBeenCalledWith(runId, 'call-1', 'always', undefined)
 
     act(() => result.current.setPolicy('full-auto'))
     expect(api.setAgentPolicy).toHaveBeenCalledWith(runId, 'full-auto')
@@ -359,7 +359,7 @@ describe('useChat', () => {
 
     // Answering the replayed prompt routes to the adopted run.
     act(() => result.current.approve('w1', 'allow'))
-    expect(api.approveTool).toHaveBeenCalledWith('live-run', 'w1', 'allow')
+    expect(api.approveTool).toHaveBeenCalledWith('live-run', 'w1', 'allow', undefined)
   })
 
   it('replays the live transcript on adopt so mid-turn streamed output is restored', async () => {

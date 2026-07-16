@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '@shared/constants'
+import { MAX_APPROVAL_NOTE } from '@shared/agent'
 
 // Hoisted holders the mocks close over, so each test can steer run ownership and
 // observe the loop resolvers the handlers call.
@@ -139,7 +140,23 @@ describe('run-control IPC ownership', () => {
   describe('agentApprove', () => {
     it('resolves the approval when the owning window calls', () => {
       handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'allow')
-      expect(h.resolveApproval).toHaveBeenCalledWith(RUN, CALL, 'allow')
+      expect(h.resolveApproval).toHaveBeenCalledWith(RUN, CALL, 'allow', undefined)
+    })
+
+    it('passes the denial guidance through to the loop', () => {
+      handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'deny', '  use staging  ')
+      expect(h.resolveApproval).toHaveBeenCalledWith(RUN, CALL, 'deny', 'use staging')
+    })
+
+    it('caps a huge note at the boundary rather than trusting the renderer', () => {
+      handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'deny', 'x'.repeat(9000))
+      const note = h.resolveApproval.mock.calls.at(-1)?.[3] as string
+      expect(note.length).toBe(MAX_APPROVAL_NOTE)
+    })
+
+    it('ignores a non-string note', () => {
+      handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'deny', { evil: true })
+      expect(h.resolveApproval).toHaveBeenCalledWith(RUN, CALL, 'deny', undefined)
     })
 
     it('rejects a mismatched-sender approve — the run is untouched', () => {

@@ -271,7 +271,10 @@ describe('Transcript', () => {
 
     fireEvent.click(screen.getByRole('button', { name: label }))
     expect(onApprove).toHaveBeenCalledTimes(1)
-    expect(onApprove).toHaveBeenCalledWith('call-42', decision)
+    // A deny also passes the reason box's contents (empty here, so undefined); the
+    // allow verdicts pass no note at all. Assert the parts that identify the verdict.
+    expect(onApprove.mock.calls[0][0]).toBe('call-42')
+    expect(onApprove.mock.calls[0][1]).toBe(decision)
   })
 
   it('does not show approval controls for a finished tool', () => {

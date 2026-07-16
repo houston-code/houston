@@ -1966,6 +1966,26 @@ h6.md-h {
   font-size: 0.85em;
   color: var(--text-muted, #888);
 }
+/* The optional "why not" that rides along with a denial, so the agent is told what
+   to do instead. Full-width under the verdict buttons. */
+.tool-row__approval-reason {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 0.9em;
+  color: var(--text, #eee);
+  background: var(--bg-input, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 6px;
+}
+.tool-row__approval-reason::placeholder {
+  color: var(--text-muted, #888);
+}
+.tool-row__approval-reason:focus-visible {
+  outline: 2px solid var(--accent, #6aa9ff);
+  outline-offset: 1px;
+}
 .tool-row__images {
   display: flex;
   flex-wrap: wrap;
