@@ -121,6 +121,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   { name: 'approval', description: 'Show or set the approval policy', clients: ['tui'] },
   { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['tui'] },
+  {
+    name: 'spawned',
+    description: 'List the background sessions the agent started, and open one',
+    clients: ['tui']
+  },
   { name: 'fork', description: 'Branch the current session into a copy', clients: ['tui'] },
   { name: 'cost', description: 'Session token and cost totals', clients: ['tui'] },
   {

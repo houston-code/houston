@@ -35,7 +35,7 @@ import {
 } from './store'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
-import { runTui, makePainter, mediaTypeForImagePath, type TuiOptions } from './tui'
+import { runTui, makePainter, mediaTypeForImagePath, type BackgroundSession, type TuiOptions } from './tui'
 import type { DoctorFacts } from './tui-doctor'
 import { checkForUpdate } from './update-check'
 import { activeBackendId, isSandboxed } from './sandbox'
@@ -169,8 +169,17 @@ export function wireTerminalSessionBackends(opts: {
 }): {
   pendingBackgroundSessions: () => number
   waitForBackgroundSessions: () => Promise<void>
+  /**
+   * The background sessions spawned this session, running ones first. The set was
+   * always tracked (to bound the fan-out); it was just never exposed, so a
+   * terminal user could start parallel work and then had no way to see it.
+   */
+  backgroundSessions: () => BackgroundSession[]
 } {
   const liveSpawnedRuns = new Set<string>()
+  // Everything spawned this session, so a finished one is still listable (and
+  // openable) rather than vanishing the moment its run ends.
+  const spawned: { id: string; startedAt: number }[] = []
   const pending = new Set<Promise<void>>()
 
   const backgroundSend = (e: AgentEvent): void =>
@@ -190,6 +199,7 @@ export function wireTerminalSessionBackends(opts: {
     removeWorktree: (wt) => removeWorktree(wt),
     startBackgroundRun: (conversationId, req) => {
       liveSpawnedRuns.add(conversationId)
+      spawned.push({ id: conversationId, startedAt: Date.now() })
       const run = startRun(req, backgroundSend, (m) => setMessages(conversationId, m))
         .catch((e) => {
           log.warn(`background session ${conversationId} failed: ${String(e)}`)
@@ -222,7 +232,20 @@ export function wireTerminalSessionBackends(opts: {
     waitForBackgroundSessions: async (): Promise<void> => {
       // Settle everything, including sessions spawned by sessions while we wait.
       while (pending.size > 0) await Promise.all([...pending])
-    }
+    },
+    backgroundSessions: () =>
+      spawned.map((s) => {
+        const conv = getConversation(s.id)
+        return {
+          id: s.id,
+          title: conv?.title ?? '(untitled)',
+          running: liveSpawnedRuns.has(s.id),
+          startedAt: s.startedAt,
+          // The worktree is the point of a fan-out: it says which branch this
+          // session is actually working on.
+          ...(conv?.worktree?.branch ? { branch: conv.worktree.branch } : {})
+        }
+      })
   }
 }
 
@@ -411,6 +434,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       // rather than making the report wait on the network.
       doctor: async () => probeDoctor(tui.cwd, version, tui.color, latestUpdate),
       runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),
+      backgroundSessions: () => sessions.backgroundSessions(),
       checkUpdate: async () => {
         const found = await checkForUpdate(version)
         latestUpdate = found ? { latest: found.latest, url: found.url } : null

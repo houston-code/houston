@@ -67,6 +67,8 @@ The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
 `/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/fork`, `/cost`,
 `/mcp`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
+`/settings`, `/doctor`, `/resume`, `/spawned`, `/fork`, `/cost`, `/mcp`,
+`/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
 
 **Custom commands.** Any Markdown file in `.houston/commands/<name>.md` becomes a
 `/name` command. The file body is a prompt template: `$ARGUMENTS` is replaced
@@ -302,6 +304,20 @@ non-interactively (anything needing an approval is declined automatically) and
 persist as ordinary conversations you can open later with `/resume` or
 `--resume <id>`; a one-shot headless run waits for its spawned sessions before
 exiting.
+
+## Watching work you sent off (/spawned)
+
+When the agent hands a task to a separate session (see "Spawn separate sessions"),
+that session runs in the background, often on its own branch and worktree.
+`/spawned` lists what this chat started: which are still running, which finished,
+and what branch each one is on. Pick a number to open one.
+
+Opening a session that is still running is fine, and does not stop it: you see its
+work so far while it keeps going. That is how you check on parallel work without
+interrupting it.
+
+(`/resume` is the different one: it reopens any saved chat in this folder,
+whether or not this session started it.)
 
 ## Scheduled runs
 
