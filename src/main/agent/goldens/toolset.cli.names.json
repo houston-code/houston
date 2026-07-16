@@ -4,6 +4,7 @@
   "edit_file",
   "multi_edit",
   "apply_patch",
+  "notebook_edit",
   "list_dir",
   "glob",
   "search_files",

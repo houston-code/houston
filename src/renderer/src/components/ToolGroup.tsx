@@ -22,6 +22,7 @@ const TOOL_ICON: Record<string, string> = {
   search_files: '⌕',
   write_file: '◆',
   edit_file: '◆',
+  notebook_edit: '◈',
   run_shell: '›_',
   read_shell_output: '›_',
   kill_shell: '›_',

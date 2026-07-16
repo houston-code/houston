@@ -74,6 +74,7 @@ describe('tool registry', () => {
       'list_dir',
       'list_scheduled_runs',
       'multi_edit',
+      'notebook_edit',
       'pr_sweep',
       'present_plan',
       'read_file',
@@ -377,6 +378,120 @@ describe('write/read/edit', () => {
     )
     await run('edit_file', { path: 'x.txt', old_string: 'a', new_string: 'b', replace_all: true })
     expect(await run('read_file', { path: 'x.txt' })).toBe('b b b')
+  })
+})
+
+describe('read_file on binary', () => {
+  it('says a file is binary instead of returning decoded mojibake', async () => {
+    // Reading these as UTF-8 does not throw — it silently yields replacement
+    // characters — so the old behavior handed the model a wall of garbage.
+    writeFileSync(join(workspace, 'db.sqlite'), Buffer.from([0x53, 0x51, 0x00, 0x4c, 0xff, 0xfe]))
+    const out = await run('read_file', { path: 'db.sqlite' })
+    expect(out).toContain('[binary file: db.sqlite')
+    expect(out).toContain('run_shell')
+    expect(out).not.toContain('�')
+  })
+
+  it('catches a binary whose extension claims it is text', async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+    writeFileSync(join(workspace, 'screenshot.txt'), png)
+    expect(await run('read_file', { path: 'screenshot.txt' })).toContain('[binary file: screenshot.txt')
+  })
+
+  it('still reads ordinary text, including unicode', async () => {
+    await run('write_file', { path: 'u.txt', content: 'héllo 世界' })
+    expect(await run('read_file', { path: 'u.txt' })).toBe('héllo 世界')
+  })
+})
+
+describe('notebook_edit', () => {
+  const NB = {
+    cells: [
+      { cell_type: 'markdown', metadata: {}, source: ['# Title'] },
+      {
+        cell_type: 'code',
+        metadata: {},
+        source: ['x = 1'],
+        outputs: [{ output_type: 'stream', name: 'stdout', text: ['1\n'] }],
+        execution_count: 4
+      }
+    ],
+    metadata: { kernelspec: { name: 'python3' } },
+    nbformat: 4,
+    nbformat_minor: 5
+  }
+  const writeNb = (name = 'a.ipynb'): void => {
+    writeFileSync(join(workspace, name), JSON.stringify(NB, null, 2))
+  }
+  const readNb = (name = 'a.ipynb'): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(workspace, name), 'utf8'))
+
+  it('renders a notebook as numbered cells rather than raw JSON', async () => {
+    writeNb()
+    const out = await run('read_file', { path: 'a.ipynb' })
+    expect(out).toContain('[1] markdown\n# Title')
+    expect(out).toContain('[2] code (executed 4)\nx = 1')
+    expect(out).toContain('| stdout: 1')
+    // The JSON scaffolding the agent would otherwise have to read past is gone.
+    expect(out).not.toContain('"cell_type"')
+    expect(out).not.toContain('nbformat_minor": 5')
+  })
+
+  it('replaces a cell by the number read_file showed', async () => {
+    writeNb()
+    const msg = await run('notebook_edit', { path: 'a.ipynb', cell: 2, source: 'x = 42' })
+    expect(msg).toContain('Replaced the source of cell 2')
+    const after = readNb()
+    const cells = after.cells as Record<string, unknown>[]
+    expect(cells[1].source).toEqual(['x = 42'])
+    // The stale output and execution count went with the code that produced them.
+    expect(cells[1].outputs).toEqual([])
+    expect(cells[1].execution_count).toBeNull()
+    // Everything the edit did not concern survived.
+    expect(cells[0].source).toEqual(['# Title'])
+    expect(after.metadata).toEqual({ kernelspec: { name: 'python3' } })
+    expect(after.nbformat_minor).toBe(5)
+  })
+
+  it('inserts and deletes cells', async () => {
+    writeNb()
+    await run('notebook_edit', { path: 'a.ipynb', cell: 3, mode: 'insert', source: 'z = 3', cell_type: 'code' })
+    expect((readNb().cells as unknown[]).length).toBe(3)
+    expect(await run('read_file', { path: 'a.ipynb' })).toContain('[3] code (unexecuted)\nz = 3')
+
+    await run('notebook_edit', { path: 'a.ipynb', cell: 1, mode: 'delete' })
+    const cells = readNb().cells as Record<string, unknown>[]
+    expect(cells).toHaveLength(2)
+    expect(cells[0].source).toEqual(['x = 1'])
+  })
+
+  it('leaves the file untouched when the edit is rejected', async () => {
+    writeNb()
+    const before = readFileSync(join(workspace, 'a.ipynb'), 'utf8')
+    await expect(run('notebook_edit', { path: 'a.ipynb', cell: 9, source: 'x' })).rejects.toThrow(
+      /Cell 9 does not exist/
+    )
+    expect(readFileSync(join(workspace, 'a.ipynb'), 'utf8')).toBe(before)
+  })
+
+  it('refuses a non-notebook and points at the right tool', async () => {
+    await run('write_file', { path: 'a.py', content: 'x = 1' })
+    await expect(run('notebook_edit', { path: 'a.py', cell: 1, source: 'x' })).rejects.toThrow(/edit_file/)
+  })
+
+  it('reports a corrupt notebook instead of writing over it', async () => {
+    writeFileSync(join(workspace, 'bad.ipynb'), '{not json')
+    await expect(run('read_file', { path: 'bad.ipynb' })).rejects.toThrow(/not valid JSON/i)
+    await expect(run('notebook_edit', { path: 'bad.ipynb', cell: 1, source: 'x' })).rejects.toThrow(
+      /not valid JSON/i
+    )
+  })
+
+  it('errors on a missing notebook rather than creating a broken one', async () => {
+    await expect(run('notebook_edit', { path: 'nope.ipynb', cell: 1, source: 'x' })).rejects.toThrow(
+      /does not exist/
+    )
+    expect(existsSync(join(workspace, 'nope.ipynb'))).toBe(false)
   })
 })
 

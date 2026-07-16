@@ -1,7 +1,7 @@
 [
   {
     "name": "read_file",
-    "description": "Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly.",
+    "description": "Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit. Files that are not text are reported as binary rather than returned as garbled bytes.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -134,6 +134,50 @@
       },
       "required": [
         "patch"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "notebook_edit",
+    "description": "Edit one cell of a Jupyter notebook (.ipynb) by cell number, as shown by read_file. Use this rather than edit_file/write_file for notebooks: it edits the cell's source directly instead of the JSON-escaped text inside the document, and leaves other cells, their outputs, and notebook metadata untouched. Replacing a code cell clears its stale outputs. Cell numbers are 1-based.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the .ipynb file, relative to the project root."
+        },
+        "cell": {
+          "type": "number",
+          "description": "Which cell (1-based), as numbered by read_file. For insert, the new cell takes this position, so one past the last cell appends."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "replace",
+            "insert",
+            "delete"
+          ],
+          "description": "Replace the cell's source (default), insert a new cell at this position, or delete the cell."
+        },
+        "source": {
+          "type": "string",
+          "description": "The cell's new source, as plain text. Required for replace and insert."
+        },
+        "cell_type": {
+          "type": "string",
+          "enum": [
+            "code",
+            "markdown",
+            "raw"
+          ],
+          "description": "Cell kind. For insert, defaults to the kind of the cell currently at this position. For replace, pass it only to convert the cell to a different kind."
+        }
+      },
+      "required": [
+        "path",
+        "cell"
       ],
       "additionalProperties": false
     }

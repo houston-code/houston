@@ -28,10 +28,10 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   screenshot) reach any vision-capable model, on Anthropic, OpenAI, and Gemini
   alike. (PDFs are Anthropic-only; elsewhere they fall back to a text placeholder.)
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
-  `multi_edit`, `apply_patch`, `list_dir`, `glob`, `search_files`, `ast_grep`,
-  `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
+  `multi_edit`, `apply_patch`, `notebook_edit`, `list_dir`, `glob`, `search_files`,
+  `ast_grep`, `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
   `gh_pr_*` (pull requests), `todo_write`, `pr_sweep`, and `ask_user` to actually
-  do the work — not just describe it. When a turn is all
+  do the work, not just describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
   **resiliently** — if the model's snippet drifts from the file by indentation or
@@ -39,6 +39,14 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   `search_files` ships with a bundled **ripgrep**, so fast content search works
   out of the box without anything installed on your PATH (it falls back to a
   built-in scan if the binary is ever unavailable).
+- **Jupyter notebooks.** `read_file` on an `.ipynb` shows it as **numbered
+  cells**, with each cell's source and a summary of its output (a plot is named,
+  not dumped as base64), instead of the raw JSON a notebook is stored as.
+  `notebook_edit` then edits a cell by that same number, so the rest of the
+  document (other cells, their outputs, kernel metadata) is left exactly as it
+  was, and replacing a code cell clears the now-stale output it used to produce.
+  Files that turn out to be binary are reported as such rather than being decoded
+  into pages of nonsense.
 - **Structural code search.** `ast_grep` matches code by its **syntax tree**
   rather than text, using a bundled [ast-grep](https://ast-grep.github.io)
   binary. Meta-variables make it precise — `console.log($A)`,
