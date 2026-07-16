@@ -39,6 +39,9 @@ import {
   OUTPUT_LINES,
   parseShellEscape,
   renderShellEscapeRecord,
+  renderBackgroundSessions,
+  parseSessionSelection,
+  type BackgroundSession,
   formatSessionCost,
   parseResumeSelection,
   formatRelativeTime,
@@ -3117,5 +3120,86 @@ describe('! shell escape', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('shell escape (!) is unavailable')
+  })
+})
+
+// The agent could always fan work out from the terminal (spawn_session), but the
+// only sign of it was one line when a session FINISHED — so parallel work was
+// invisible exactly while it was running.
+describe('/spawned — background fan-out', () => {
+  const paintNo = makePainter(false)
+  const NOW = 1_000_000
+  const sessions: BackgroundSession[] = [
+    { id: 'c-old', title: 'Docs pass', running: false, startedAt: NOW - 600_000 },
+    { id: 'c-live', title: 'Refactor auth', running: true, startedAt: NOW - 60_000, branch: 'feat/auth' }
+  ]
+
+  it('lists running sessions first, with their branch', () => {
+    const out = renderBackgroundSessions(sessions, NOW, paintNo)
+    expect(out.indexOf('Refactor auth')).toBeLessThan(out.indexOf('Docs pass'))
+    expect(out).toContain('running')
+    expect(out).toContain('feat/auth')
+    expect(out).toContain('finished')
+  })
+
+  it('says so when nothing has been spawned', () => {
+    expect(renderBackgroundSessions([], NOW, paintNo)).toContain('No background sessions')
+  })
+
+  it('selects by the displayed order, not insertion order', () => {
+    expect(parseSessionSelection('1', sessions)).toBe('c-live') // running is listed first
+    expect(parseSessionSelection('2', sessions)).toBe('c-old')
+    expect(parseSessionSelection('9', sessions)).toBeNull()
+    expect(parseSessionSelection('no', sessions)).toBeNull()
+  })
+
+  it('opens a finished session into the current chat', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/spawned', '2', null])
+    d.io = t.io
+    d.now = () => NOW
+    d.backgroundSessions = () => sessions
+    d.persist = {
+      ...(d.persist as TuiPersist),
+      get: () => ({ messages: [{ role: 'user', content: 'seeded' }] })
+    } as TuiPersist
+    await runTui(opts, d)
+    expect(t.text()).toContain('opened: 1 message(s)')
+  })
+
+  // Checking on parallel work must not stop it.
+  it('opening a still-running session says it keeps going', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/spawned', '1', null])
+    d.io = t.io
+    d.now = () => NOW
+    d.backgroundSessions = () => sessions
+    d.persist = {
+      ...(d.persist as TuiPersist),
+      get: () => ({ messages: [{ role: 'user', content: 'go' }] })
+    } as TuiPersist
+    await runTui(opts, d)
+    expect(t.text()).toContain('keeps going in the background')
+  })
+
+  it('says so when fan-out is unavailable', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/spawned', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('background sessions are unavailable')
+  })
+
+  it('/resume still reopens saved chats', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/resume', null])
+    d.io = t.io
+    d.persist = {
+      ...(d.persist as TuiPersist),
+      list: () => [],
+      get: () => null
+    } as TuiPersist
+    await runTui(opts, d)
+    expect(t.text()).toContain('No saved sessions')
   })
 })

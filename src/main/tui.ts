@@ -552,6 +552,55 @@ export interface TuiPersist {
   fork: (id: string) => { id: string } | null
 }
 
+/**
+ * A chat the agent spawned to run alongside this one (`spawn_session`), usually
+ * on its own git branch and worktree.
+ */
+export interface BackgroundSession {
+  id: string
+  title: string
+  running: boolean
+  startedAt: number
+  /** The branch it is working on, when it was given its own worktree. */
+  branch?: string
+}
+
+/**
+ * Render the background sessions this session started.
+ *
+ * The agent could always fan work out from the terminal, but the only sign of it
+ * was one line when a session FINISHED — so parallel work was invisible while it
+ * mattered, and there was no way to see what branch it was on or to open it.
+ */
+export function renderBackgroundSessions(
+  sessions: BackgroundSession[],
+  now: number,
+  paint: Painter
+): string {
+  if (!sessions.length) {
+    return paint('No background sessions started from this chat yet.', 'dim')
+  }
+  // Running first: they're the ones you might want to watch or wait for.
+  const ordered = [...sessions].sort((a, b) => Number(b.running) - Number(a.running) || b.startedAt - a.startedAt)
+  const lines = [paint('Background sessions:', 'bold')]
+  ordered.forEach((s, i) => {
+    const state = s.running ? paint('● running', 'cyan') : paint('✓ finished', 'green')
+    const branch = s.branch ? paint(`  ${s.branch}`, 'magenta') : ''
+    const when = paint(formatRelativeTime(s.startedAt, now), 'dim')
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${state}  ${s.title}${branch}  ${when}`)
+  })
+  lines.push(paint('  Enter a number to open one, or anything else to cancel', 'dim'))
+  return lines.join('\n')
+}
+
+/** Map a `/sessions` selection to a conversation id, or null to cancel. */
+export function parseSessionSelection(answer: string, sessions: BackgroundSession[]): string | null {
+  const ordered = [...sessions].sort((a, b) => Number(b.running) - Number(a.running) || b.startedAt - a.startedAt)
+  const n = Number(answer.trim())
+  if (Number.isInteger(n) && n >= 1 && n <= ordered.length) return ordered[n - 1].id
+  return null
+}
+
 /** Render a numbered picker of recent conversations for `/resume`. */
 export function renderConversationList(convs: ResumeEntry[], now: number, paint: Painter): string {
   if (!convs.length) return paint('No saved sessions in this folder yet.', 'dim')
@@ -788,6 +837,8 @@ export type SlashResult =
   | { kind: 'verbose'; on?: boolean }
   /** Reprint a past tool result in full (/output [n]). */
   | { kind: 'output'; index: number }
+  /** List (and open) the background sessions the agent spawned (/spawned). */
+  | { kind: 'spawned' }
   /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
   | { kind: 'hooks'; action: SettingsAction }
   /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
@@ -823,6 +874,8 @@ export function parseSlashCommand(
     case 'resume':
     case 'sessions':
       return { kind: 'resume', query: arg }
+    case 'spawned':
+      return { kind: 'spawned' }
     case 'fork':
       return { kind: 'fork' }
     case 'skills':
@@ -924,6 +977,7 @@ export const HELP_TEXT = [
   '  /compact              summarize older turns to free up context now',
   '  /review               adversarial review of your uncommitted changes',
   '  /resume [query]       list (or search) and reopen a saved session',
+  '  /spawned              list the background sessions the agent started; open one',
   '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
   '  /skills /agents       list workspace skills / custom agents',
@@ -1550,6 +1604,12 @@ export interface TuiDeps {
    */
   runUserShell?: (command: string, onOutput: (chunk: string) => void) => Promise<number>
   /**
+   * The background sessions the agent spawned from this chat (`spawn_session`),
+   * so `/spawned` can list and open them. Absent ⇒ the command says fan-out
+   * isn't available here.
+   */
+  backgroundSessions?: () => BackgroundSession[]
+  /**
    * Probe the environment for /doctor (binaries, sandbox backend, MCP state).
    * Absent ⇒ the command reports that diagnostics are unavailable.
    */
@@ -2107,6 +2167,52 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             verbose
               ? '· verbose: showing each tool\'s output as it runs (/output reprints one in full)\n'
               : '· verbose off: tool output collapses to one line again\n',
+            'dim'
+          )
+        )
+        continue
+      }
+      if (result.kind === 'spawned') {
+        if (!deps.backgroundSessions) {
+          deps.io.out(paint('· background sessions are unavailable here\n', 'dim'))
+          continue
+        }
+        const list = deps.backgroundSessions()
+        deps.io.out(`${renderBackgroundSessions(list, nowFn(), paint)}\n`)
+        if (!list.length) continue
+        const ans = await deps.io.readLine('> ', { discardPending: true })
+        const id = ans === null ? null : parseSessionSelection(ans, list)
+        if (!id) {
+          deps.io.out(paint('· cancelled\n', 'dim'))
+          continue
+        }
+        if (!deps.persist) {
+          deps.io.out(paint('· opening a session needs a session store\n', 'dim'))
+          continue
+        }
+        let conv: { messages: ChatMessage[] } | null
+        try {
+          conv = deps.persist.get(id)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't open that session: ${(e as Error).message}\n`, 'dim'))
+          continue
+        }
+        if (!conv) {
+          deps.io.out(paint('· that session could not be opened\n', 'dim'))
+          continue
+        }
+        // Opening a still-running session is deliberately allowed: you see its work
+        // so far while its own run keeps going and keeps persisting. That is how you
+        // check on parallel work without stopping it.
+        const stillRunning = list.find((x) => x.id === id)?.running
+        conversationId = id
+        messages = conv.messages
+        persistedProviderId = persistedModel = null
+        deps.io.out(
+          paint(
+            stillRunning
+              ? `· opened a running session (${messages.length} message(s) so far); it keeps going in the background\n`
+              : `· opened: ${messages.length} message(s)\n`,
             'dim'
           )
         )
