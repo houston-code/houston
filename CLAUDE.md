@@ -99,16 +99,26 @@ provider parameter, so injection depends on this file's `vi.mock` + deferred
 Houston answers questions about its own features (slash commands, skills, hooks,
 MCP, permissions, plan mode, sandboxing, settings, etc.) from `docs/houston-guide.md`.
 That file is the single source of truth: `scripts/gen-guide.mjs` inlines it into
-`src/main/agent/guide-content.ts` (which runs automatically before `build` and
-`build:cli`), and it is served to the agent as the built-in `houston-guide` skill
-(`BUILTIN_SKILLS` in `src/main/agent/skills.ts`, merged in at the run seam in
-`loop.ts`). The system prompt points the agent at that skill.
+`src/main/agent/guide-content.ts`, and it is served to the agent as the built-in
+`houston-guide` skill (`BUILTIN_SKILLS` in `src/main/agent/skills.ts`, merged in at
+the run seam in `loop.ts`). The system prompt points the agent at that skill.
+
+**`guide-content.ts` is generated and must never be committed** (it's in
+`.gitignore`). Every consumer regenerates it first — `postinstall`, `pretypecheck`,
+`prelint`, `build`, `build:cli`, and Vitest's `globalSetup`
+(`scripts/vitest-global-setup.mjs`, which covers `npx vitest` on a single file too) —
+so you never run `npm run gen:guide` by hand and the constant can't go stale. It was
+committed until 2026-07, and because `JSON.stringify` puts the entire guide on one
+~37KB line, every pair of concurrent PRs that touched the guide conflicted there.
+That conflict has no hunk granularity, so resolving it by picking a side silently
+drops the other PR's docs — the failure mode in "Avoiding silent-clobber merges"
+below. If you ever need the constant on disk without running a script, run
+`npm run gen:guide`; don't re-add it to git.
 
 When you add or change a user-facing feature, update `docs/houston-guide.md` in the
-same change and run `npm run gen:guide`. A test in `src/main/agent/skills.test.ts`
-fails if the doc and the generated constant drift, so a stale guide is caught in CI.
-The built-in slash commands it documents come from `BUILTIN_COMMAND_CATALOG` in
-`src/shared/commands.ts` (the one source both clients derive their menus from).
+same change; that's the whole workflow. The built-in slash commands it documents come
+from `BUILTIN_COMMAND_CATALOG` in `src/shared/commands.ts` (the one source both
+clients derive their menus from).
 
 ## Competitor mentions
 
