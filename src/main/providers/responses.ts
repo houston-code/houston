@@ -39,11 +39,15 @@ type InputItem = Record<string, unknown>
  * points at a response we asked OpenAI not to store, which is a 400. Returns [] when
  * replay is off or the turn has no encrypted reasoning.
  */
-function reasoningItems(m: ChatMessage, replay: boolean): InputItem[] {
+function reasoningItems(m: ChatMessage, replay: boolean, model: string): InputItem[] {
   if (!replay || !m.reasoning?.length) return []
   const items: InputItem[] = []
   for (const r of m.reasoning) {
     if (!r.id || !r.encryptedContent) continue
+    // Encrypted state is only meaningful to the model that issued it — after a
+    // fallback hop or a manual model switch it's an opaque blob the new model
+    // rejects. Blocks with no recorded origin predate the tag; replay those.
+    if (r.model && r.model !== model) continue
     items.push({
       type: 'reasoning',
       id: r.id,
@@ -62,7 +66,7 @@ function reasoningItems(m: ChatMessage, replay: boolean): InputItem[] {
  * `replayReasoning` should track whether reasoning is enabled for *this* request:
  * when the user switches to a non-reasoning model, its blocks must not be replayed.
  */
-export function toResponsesInput(messages: ChatMessage[], replayReasoning = false): InputItem[] {
+export function toResponsesInput(messages: ChatMessage[], replayReasoning = false, model = ''): InputItem[] {
   const input: InputItem[] = []
   for (const m of messages) {
     if (m.role === 'user') {
@@ -75,7 +79,7 @@ export function toResponsesInput(messages: ChatMessage[], replayReasoning = fals
     } else if (m.role === 'assistant') {
       // Reasoning leads the turn, mirroring the order the API emitted it: the
       // reasoning item precedes the message and function calls it produced.
-      input.push(...reasoningItems(m, replayReasoning))
+      input.push(...reasoningItems(m, replayReasoning, model))
       if (m.content) {
         input.push({ role: 'assistant', content: [{ type: 'output_text', text: m.content }] })
       }
@@ -219,7 +223,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       const params = {
         model: req.model,
         ...(req.system ? { instructions: req.system } : {}),
-        input: toResponsesInput(req.messages, reasoning !== undefined),
+        input: toResponsesInput(req.messages, reasoning !== undefined, req.model),
         stream: true,
         // Houston resends the whole conversation each turn and never reads a
         // response back by id, so server-side storage buys nothing and would
@@ -284,6 +288,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
               if (item.id && item.encrypted_content) {
                 turnReasoning.push({
                   text: (item.summary ?? []).map((s) => s.text ?? '').join(''),
+                  model: req.model,
                   id: item.id,
                   encryptedContent: item.encrypted_content
                 })

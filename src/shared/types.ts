@@ -354,6 +354,17 @@ export interface AppSettings {
   schemaVersion: number
   providers: ProviderConfig[]
   selected: SelectedModel | null
+  /**
+   * Next-choice models, tried in order when `selected` can't serve a turn — the
+   * provider is overloaded or rate-limiting past the retry budget, or the request
+   * doesn't fit the model's context window even after compaction.
+   *
+   * Only consulted when nothing has streamed yet, so a hop can never duplicate
+   * output the user already saw. Entries may name any provider; one that no longer
+   * resolves (removed provider, missing key) is skipped rather than failing the run.
+   * Unset or empty means a failing model ends the turn, as before.
+   */
+  fallbackModels?: SelectedModel[]
   approvalPolicy: ApprovalPolicy
   recentWorkspaces: string[]
   /**

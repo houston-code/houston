@@ -160,6 +160,27 @@ describe('toResponsesInput: reasoning replay', () => {
     expect(toResponsesInput(msgs, true).some((i) => i.type === 'reasoning')).toBe(false)
   })
 
+  it('drops a block produced by a different model — its encrypted state is meaningless here', () => {
+    // The case a fallback hop (or a manual model switch) creates: state encrypted
+    // for gpt-5 is an opaque blob to o3, so it must not ride along.
+    const msgs: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: 'x',
+        reasoning: [{ text: 'plan', model: 'gpt-5', id: 'rs_1', encryptedContent: 'ENC1' }]
+      }
+    ]
+    expect(toResponsesInput(msgs, true, 'o3').some((i) => i.type === 'reasoning')).toBe(false)
+    expect(toResponsesInput(msgs, true, 'gpt-5').some((i) => i.type === 'reasoning')).toBe(true)
+  })
+
+  it('replays an untagged block, so conversations saved before the tag still work', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'assistant', content: 'x', reasoning: [{ text: 'plan', id: 'rs_1', encryptedContent: 'E' }] }
+    ]
+    expect(toResponsesInput(msgs, true, 'gpt-5').some((i) => i.type === 'reasoning')).toBe(true)
+  })
+
   it('sends an empty summary when the turn requested no reasoning summary', () => {
     const msgs: ChatMessage[] = [
       { role: 'assistant', content: 'x', reasoning: [{ text: '', id: 'rs_3', encryptedContent: 'ENC3' }] }
@@ -206,7 +227,14 @@ describe('responses reasoning capture', () => {
       encrypted_content: 'ENC1',
       summary: [{ text: 'first ' }, { text: 'second' }]
     })
-    expect(reasoning).toEqual([{ text: 'first second', id: 'rs_1', encryptedContent: 'ENC1' }])
+    expect(reasoning).toEqual([
+      { text: 'first second', model: 'gpt-5', id: 'rs_1', encryptedContent: 'ENC1' }
+    ])
+  })
+
+  it('tags the block with the model that produced it, so a later model cannot replay it', async () => {
+    const { reasoning } = await captureTurn({ type: 'reasoning', id: 'rs_1', encrypted_content: 'E' })
+    expect((reasoning as { model: string }[])[0].model).toBe('gpt-5')
   })
 
   it('drops a reasoning item with no encrypted_content — there is no state to carry', async () => {

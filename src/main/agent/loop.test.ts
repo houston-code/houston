@@ -36,6 +36,15 @@ import {
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
   provider: null as Provider | null,
+  // Extra providers keyed by id, for fallback-chain tests that need more than one
+  // model to exist. Empty (the default) keeps every id resolving to the single
+  // `provider` above, so existing tests are unaffected.
+  //   config   — what getProvider(id) returns; absent id falls back to the default.
+  //   client   — what createProvider(cfg) returns for that id.
+  //   unusable — ids that throw on createProvider, simulating a missing key.
+  extraConfigs: {} as Record<string, Record<string, unknown>>,
+  extraClients: {} as Record<string, Provider>,
+  unusable: [] as string[],
   mcpDefs: [] as ToolDef[],
   // Probe tools installed under real builtin names via the `./tools` getTool mock,
   // so a test can exercise the loop with a counting stand-in for e.g. `read_file`.
@@ -82,15 +91,16 @@ vi.mock('../agentHost', () => ({
   addPermissionRule: (rule: unknown) => {
     h.addedRules.push(rule)
   },
-  getProvider: () => ({
-    id: 'anthropic',
-    kind: 'anthropic',
-    label: 'A',
-    models: h.providerModels,
-    requiresKey: false,
-    hasKey: true,
-    builtIn: true
-  }),
+  getProvider: (id: string) =>
+    h.extraConfigs[id] ?? {
+      id: 'anthropic',
+      kind: 'anthropic',
+      label: 'A',
+      models: h.providerModels,
+      requiresKey: false,
+      hasKey: true,
+      builtIn: true
+    },
   getKey: () => null,
   collectSecrets: () => h.secrets
 }))
@@ -99,7 +109,21 @@ vi.mock('../agentHost', () => ({
 vi.mock('./managedPolicy', () => ({
   loadManagedPolicy: async () => ({ permissionRules: h.managedRules })
 }))
-vi.mock('../providers', () => ({ createProvider: () => h.provider }))
+vi.mock('../providers', () => ({
+  createProvider: (cfg: { id: string }) => {
+    if (h.unusable.includes(cfg.id)) throw new Error(`No API key set for ${cfg.id}.`)
+    return h.extraClients[cfg.id] ?? h.provider
+  }
+}))
+// Real retry *policy* (which errors retry, and how many times), but no wall-clock
+// backoff. The fallback-chain tests have to burn the whole MAX_PROVIDER_RETRIES budget
+// to reach the hop, and the real curve would park each one behind 20-40s of sleeping.
+// Only the loop's own delay is stubbed: `withProviderRetry` calls `retryDelayMs`
+// module-internally, so the summarizer's retries keep their real timing.
+vi.mock('./retry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./retry')>()),
+  retryDelayMs: () => 0
+}))
 vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
 // Partial mock of the tool registry so a test can install a *counting* probe under a
 // real builtin name (e.g. `read_file`, which the read cache's allowlist accepts) and
@@ -202,6 +226,10 @@ beforeEach(() => {
   h.managedRules = []
   h.sandboxed = null
   h.providerModels = []
+  h.extraConfigs = {}
+  h.extraClients = {}
+  h.unusable = []
+  delete h.settings.fallbackModels
 })
 afterEach(() => {
   rmSync(ws, { recursive: true, force: true })
@@ -840,6 +868,107 @@ describe('startRun', () => {
     })
     expect(types(r)).not.toContain('retry')
     expect(types(r).at(-1)).toBe('error')
+  })
+
+  describe('fallback-model chains', () => {
+    /** Every attempt fails as an overload, so the primary burns its whole budget. */
+    const alwaysOverloaded = (): Provider =>
+      scripted(Array.from({ length: 9 }, () => [{ type: 'error' as const, message: 'Overloaded' }]))
+
+    /** Register a usable second model at `fb/m2`, served by `client`. */
+    function registerFallback(client: Provider): void {
+      h.extraConfigs.fb = {
+        id: 'fb',
+        kind: 'anthropic',
+        label: 'Backup',
+        models: [{ id: 'm2' }],
+        requiresKey: false,
+        hasKey: true,
+        builtIn: false
+      }
+      h.extraClients.fb = client
+      h.settings.fallbackModels = [{ providerId: 'fb', model: 'm2' }]
+    }
+
+    /** A backup that answers on the first try. */
+    const backupReplies = (): Provider =>
+      scripted([[{ type: 'text', text: 'from backup' }, { type: 'done', stopReason: 'end_turn' }]])
+
+    it('hops to the next model once the primary exhausts its retry budget', async () => {
+      registerFallback(backupReplies())
+      const r = await run({ provider: alwaysOverloaded() })
+
+      expect(types(r)).toContain('retry') // exhausts the primary before hopping
+      const hop = r.events.find((e) => e.type === 'model_fallback') as
+        | { from: string; to: string; reason: string }
+        | undefined
+      expect(hop).toBeDefined()
+      expect(hop?.to).toContain('Backup')
+      expect(hop?.reason).toContain('Overloaded')
+      expect(types(r).at(-1)).toBe('done')
+      expect(r.messages.find((m) => m.role === 'assistant')?.content).toBe('from backup')
+    }, 30_000)
+
+    it('does not hop on a non-transient error — the next model would fail identically', async () => {
+      registerFallback(backupReplies())
+      const r = await run({ turns: [[{ type: 'error', message: 'invalid api key' }]] })
+      expect(types(r)).not.toContain('model_fallback')
+      expect(types(r).at(-1)).toBe('error')
+    })
+
+    it('does not hop once output has streamed, so a reply can never be spliced', async () => {
+      registerFallback(backupReplies())
+      const r = await run({
+        turns: [[{ type: 'text', text: 'partial…' }, { type: 'error', message: 'Overloaded' }]]
+      })
+      expect(types(r)).not.toContain('model_fallback')
+      expect(types(r).at(-1)).toBe('error')
+    })
+
+    it('reports the primary failure when the chain is empty', async () => {
+      const r = await run({ turns: [[{ type: 'error', message: 'invalid api key' }]] })
+      expect(types(r)).not.toContain('model_fallback')
+      expect((r.events.at(-1) as { message: string }).message).toContain('invalid api key')
+    })
+
+    it('skips an unusable chain entry rather than failing the run', async () => {
+      // `dead` has no key; `fb` does. The hop should land on `fb`.
+      h.extraConfigs.dead = {
+        id: 'dead',
+        kind: 'anthropic',
+        label: 'Dead',
+        models: [{ id: 'm9' }],
+        requiresKey: true,
+        hasKey: false,
+        builtIn: false
+      }
+      h.unusable = ['dead']
+      registerFallback(backupReplies())
+      h.settings.fallbackModels = [
+        { providerId: 'dead', model: 'm9' },
+        { providerId: 'fb', model: 'm2' }
+      ]
+
+      const r = await run({ provider: alwaysOverloaded() })
+      const hops = r.events.filter((e) => e.type === 'model_fallback') as { to: string }[]
+      expect(hops).toHaveLength(1)
+      expect(hops[0].to).toContain('Backup')
+      expect(types(r).at(-1)).toBe('done')
+    }, 30_000)
+
+    it('sends the turn to the fallback model, not the primary model id', async () => {
+      const seen: string[] = []
+      const backup: Provider = {
+        async *streamChat(req) {
+          seen.push(req.model)
+          yield { type: 'text', text: 'ok' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      registerFallback(backup)
+      await run({ provider: alwaysOverloaded() })
+      expect(seen).toEqual(['m2'])
+    }, 30_000)
   })
 
   it('replaces a "model does not support tools" error with actionable guidance', async () => {

@@ -441,6 +441,9 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
       case 'retry':
         if (!opts.json) deps.err(`· retrying (${e.attempt}/${e.max})… ${e.message}\n`)
         break
+      case 'model_fallback':
+        if (!opts.json) deps.err(`· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`)
+        break
       case 'usage':
         inTok += e.inputTokens
         outTok += e.outputTokens

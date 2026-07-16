@@ -49,6 +49,29 @@ by the OS keychain and never touch the renderer. The selection is shared across
 clients: picking a model in the desktop app or switching with `/model` in the
 terminal saves it as the default for future sessions.
 
+### Fallback models
+
+You can name next-choice models that Houston tries when your selected model
+cannot serve a turn: the provider is overloaded or rate-limiting after Houston
+has already retried, or the conversation no longer fits the model's context
+window even after compacting. Set them as an ordered list in settings.json:
+
+```json
+"fallbackModels": [
+  { "providerId": "openai", "model": "gpt-5" },
+  { "providerId": "ollama", "model": "qwen2.5-coder" }
+]
+```
+
+Entries are tried in order and may name any provider you have configured. One
+that no longer resolves (you removed the provider, or its key is missing) is
+skipped rather than failing the run. Houston only switches before any of the
+reply has appeared, so a fallback never splices two models' output together, and
+it tells you in the transcript when a reply came from a fallback. A request that
+failed for its own reasons (a bad key, a malformed request) is not retried on
+another model, since it would fail there too. Leave the list unset to have a
+failing model simply end the turn.
+
 ## Slash commands
 
 Type `/` in the composer for the command menu. In the terminal it appears under
