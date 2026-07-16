@@ -57,19 +57,20 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   when several are open) — cross-component plumbing beyond the current attachment
   set.
 
-- **SSRF hardening: pin resolved IPs (DNS-rebinding).** The network-egress
-  surfaces (`web_fetch`, `view_localhost`, and the live Preview panel) validate the
-  URL's *host literal* — `web_fetch` blocks private/loopback/metadata IPs and
-  re-checks on each redirect hop; `view_localhost` and the Preview panel allow only
-  loopback, pin the top frame to loopback across redirects, and additionally block
-  subresource requests to private/LAN/metadata hosts (they share one guard). A
-  hostname that *resolves* to a private or metadata IP (e.g. `169.254.169.254`), or
-  one that re-resolves between the check and the connect (classic DNS-rebinding), is
-  not yet caught. *Why deferred:* needs resolving the host up front and pinning the
-  connection to the vetted IP across redirects — different plumbing for Node's
-  `fetch` (`web_fetch`) vs Electron's network stack (`view_localhost` / Preview) —
-  so it's a cross-cutting change worth doing for all at once rather than per-tool.
-  In practice the host-literal checks already stop the common cases.
+- **SSRF hardening: pin resolved IPs on the Electron surfaces (DNS-rebinding).**
+  `web_fetch` is done: it resolves the host up front, vets every answer, and connects
+  to exactly those addresses (`resolveAndPin` + `pinnedTransport` in
+  `src/main/agent/webfetch.ts`), re-vetting and re-pinning on each redirect hop, so
+  the address that was checked is the address that's connected to and there's no
+  second resolution to poison. `view_localhost` and the live Preview panel still
+  validate the URL's *host literal* only: they allow loopback, pin the top frame to
+  loopback across redirects, and block subresource requests to private/LAN/metadata
+  hosts (they share one guard), but a name that re-resolves between the check and the
+  connect isn't caught. *Why deferred:* they run on Electron's network stack rather
+  than Node's, so the pin needs different plumbing than `web_fetch`'s custom `lookup`,
+  and it wants real manual testing against a live dev server. The exposure is also
+  much smaller: both accept loopback only, so there's no attacker-supplied public host
+  to rebind in the first place.
 
 - **Per-destination forward proxy for shell egress.** Houston's own network tools
   (`web_fetch`, `web_search`, `gh_*`) are now consented per destination, and shell
