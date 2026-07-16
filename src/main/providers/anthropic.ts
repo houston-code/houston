@@ -25,10 +25,14 @@ const INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14'
  * assistant turn when extended thinking is enabled. Returns [] when thinking is
  * off or the turn has no (signed) reasoning to replay.
  */
-function thinkingBlocks(m: ChatMessage, thinkingEnabled: boolean): unknown[] {
+function thinkingBlocks(m: ChatMessage, thinkingEnabled: boolean, model: string): unknown[] {
   if (!thinkingEnabled || !m.reasoning?.length) return []
   const blocks: unknown[] = []
   for (const r of m.reasoning) {
+    // A signature authenticates the block to the model that issued it, so after a
+    // fallback hop or a manual model switch it can't be replayed. Blocks with no
+    // recorded origin predate the tag; replay those, as before.
+    if (r.model && r.model !== model) continue
     if (r.redactedData) {
       blocks.push({ type: 'redacted_thinking', data: r.redactedData })
     } else if (r.signature) {
@@ -40,7 +44,8 @@ function thinkingBlocks(m: ChatMessage, thinkingEnabled: boolean): unknown[] {
 
 export function toAnthropicMessages(
   messages: ChatMessage[],
-  thinkingEnabled: boolean
+  thinkingEnabled: boolean,
+  model = ''
 ): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = []
   let mergingToolResults = false
@@ -112,7 +117,7 @@ export function toAnthropicMessages(
     } else if (m.role === 'assistant') {
       mergingToolResults = false
       // Thinking blocks must come first, before text and tool_use.
-      const content: unknown[] = [...thinkingBlocks(m, thinkingEnabled)]
+      const content: unknown[] = [...thinkingBlocks(m, thinkingEnabled, model)]
       if (m.content) content.push({ type: 'text', text: m.content })
       for (const tc of m.toolCalls ?? []) {
         content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments })
@@ -158,14 +163,18 @@ export function markMessagesCacheBreakpoint(messages: Anthropic.MessageParam[]):
   }
 }
 
-/** Extract reasoning blocks (with signatures) from a completed message, for replay. */
-function reasoningFromMessage(content: Anthropic.ContentBlock[]): ReasoningBlock[] {
+/**
+ * Extract reasoning blocks (with signatures) from a completed message, for replay.
+ * Each is tagged with the model that produced it so a later turn on a different
+ * model doesn't try to replay state that only this one can authenticate.
+ */
+function reasoningFromMessage(content: Anthropic.ContentBlock[], model: string): ReasoningBlock[] {
   const blocks: ReasoningBlock[] = []
   for (const b of content) {
     if (b.type === 'thinking') {
-      blocks.push({ text: b.thinking, signature: b.signature })
+      blocks.push({ text: b.thinking, model, signature: b.signature })
     } else if (b.type === 'redacted_thinking') {
-      blocks.push({ text: '', redactedData: b.data })
+      blocks.push({ text: '', model, redactedData: b.data })
     }
   }
   return blocks
@@ -206,7 +215,7 @@ export function createAnthropicProvider(
         : undefined
 
       const thinking = anthropicThinking(req.model, req.reasoningEffort)
-      const messages = toAnthropicMessages(req.messages, thinking !== null)
+      const messages = toAnthropicMessages(req.messages, thinking !== null, req.model)
       markMessagesCacheBreakpoint(messages)
 
       // Thinking dictates max_tokens: legacy budget thinking needs room above the
@@ -276,7 +285,7 @@ export function createAnthropicProvider(
       }
 
       const final = await stream.finalMessage()
-      const reasoning = reasoningFromMessage(final.content)
+      const reasoning = reasoningFromMessage(final.content, req.model)
       // With caching, input_tokens counts only the *uncached* prefix; add the
       // cached reads/writes back so the reported context size stays accurate.
       // Surface the split too: cache reads bill at ~10% and cache writes at ~125%

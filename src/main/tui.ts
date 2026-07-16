@@ -2561,6 +2561,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.setSpinnerLabel?.('Retrying')
           deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
           break
+        case 'model_fallback':
+          deps.io.setSpinnerLabel?.('Switching model')
+          deps.io.out(paint(`\n· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`, 'yellow'))
+          break
         case 'tool_approval':
           enqueue(async () => {
             // Context (name, kind, unsandboxed warning) + the diff for a write.

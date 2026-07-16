@@ -52,6 +52,15 @@ export interface ReasoningBlock {
   text: string
   signature?: string
   redactedData?: string
+  /**
+   * The model that produced this block. Reasoning state is model-bound — an
+   * Anthropic signature and an OpenAI `encrypted_content` only mean anything to
+   * the model that issued them — so an adapter replays a block only when it
+   * matches the request's model, and drops it after a fallback hop or a manual
+   * model switch. Absent on blocks persisted before this was recorded; those are
+   * replayed as before rather than silently dropped.
+   */
+  model?: string
   /** OpenAI Responses: the reasoning item's id (`rs_...`). */
   id?: string
   /**
@@ -706,6 +715,18 @@ export type AgentEvent =
     }
   | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
+  | {
+      // The turn gave up on one model and moved to the next entry in the user's
+      // fallback chain (see `AppSettings.fallbackModels`). Emitted only before any
+      // output has streamed, so it always precedes the reply the user actually sees.
+      // `from`/`to` are display labels, not ids — the run's model is reported
+      // separately via usage/cost.
+      runId: string
+      type: 'model_fallback'
+      from: string
+      to: string
+      reason: string
+    }
   | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' | 'stalled' }
   | {
       // The run's end-of-turn verification gate (opt-in) ran the user's configured

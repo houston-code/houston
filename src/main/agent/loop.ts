@@ -19,7 +19,15 @@ import type {
 } from '@shared/agent'
 import { SYSTEM_NOTE_PREFIX, sanitizeApprovalNote } from '@shared/agent'
 import type { FileDiffPreview } from '@shared/diff'
-import { folderTrustState, isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
+import {
+  folderTrustState,
+  isApprovalPolicy,
+  type ApprovalPolicy,
+  type ModelCaps,
+  type PermissionRule,
+  type SelectedModel
+} from '@shared/types'
+import { modelDisplayName } from '@shared/models'
 import type { ImageAttachment } from '@shared/images'
 import { resolveShellOutputBudget } from '@shared/defaults'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
@@ -146,6 +154,23 @@ import {
 const MAX_STOP_CONTINUATIONS = 3
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
 const MAX_STREAM_RETRIES = MAX_PROVIDER_RETRIES
+
+/**
+ * The model currently serving the run, plus everything derived from it.
+ *
+ * These travel as a unit because they go stale as a unit: the caps drive the
+ * reasoning param, the prompt-cache gating, and cost attribution, so updating the
+ * model without them would send a reasoning param the new model rejects, or bill
+ * the wrong rate. A fallback hop replaces the whole record (see `resolveRoute`).
+ */
+interface Route extends SelectedModel {
+  /** Human-readable "Provider / Model", for the fallback notice. */
+  label: string
+  provider: Provider
+  caps: ModelCaps | undefined
+  reasoningCapable: boolean | undefined
+  explicitCacheControl: boolean
+}
 
 /**
  * Ask the provider to summarize a slice of the conversation. Returns the summary
@@ -662,24 +687,86 @@ export async function startRun(
       emit({ type: 'error', message: `Unknown provider: ${req.providerId}` })
       return
     }
-    // Host-listed capability metadata for the selected model. `reasoning` overrides
-    // the adapter's id-based heuristic so host-routed reasoning models still get a
-    // reasoning param; the pricing fields make cost estimates exact for models the
-    // name-heuristics don't know. Undefined when the model carries no metadata.
-    const selectedModelCaps = providerConfig.models.find((m) => m.id === req.model)?.caps
-    const reasoningCapable = selectedModelCaps?.reasoning
-    // Opt explicit-caching routes (Claude/Qwen/Gemini via an aggregator host) into
-    // prompt caching on the iterative loops. One-shot calls (title, compaction)
-    // stay opted out: a cache write is a surcharge that only pays off when the
-    // next turn reads it back.
-    const explicitCacheControl = needsExplicitCacheControl(req.model, selectedModelCaps)
+    // Everything about "which model is serving this run" travels together: swap one
+    // field and the rest go stale (caps drive the reasoning param, the cache gating,
+    // and cost attribution). Bundling them keeps a fallback hop from half-updating
+    // the route — the failure mode would be silent and provider-specific.
+    const resolveRoute = (providerId: string, model: string): Route | null => {
+      const cfg = getProvider(providerId)
+      if (!cfg) return null
+      let provider: Provider
+      try {
+        provider = createProvider(cfg)
+      } catch {
+        // No usable key for this provider. Fatal for the primary (reported by the
+        // caller below), but for a fallback entry it just means "skip this one".
+        return null
+      }
+      // Host-listed capability metadata for the model. `reasoning` overrides the
+      // adapter's id-based heuristic so host-routed reasoning models still get a
+      // reasoning param; the pricing fields make cost estimates exact for models the
+      // name-heuristics don't know. Undefined when the model carries no metadata.
+      const caps = cfg.models.find((m) => m.id === model)?.caps
+      return {
+        providerId,
+        model,
+        label: `${cfg.label} / ${modelDisplayName(cfg.kind, model)}`,
+        provider,
+        caps,
+        reasoningCapable: caps?.reasoning,
+        // Opt explicit-caching routes (Claude/Qwen/Gemini via an aggregator host)
+        // into prompt caching on the iterative loops. One-shot calls (title,
+        // compaction) stay opted out: a cache write is a surcharge that only pays
+        // off when the next turn reads it back.
+        explicitCacheControl: needsExplicitCacheControl(model, caps)
+      }
+    }
 
-    let provider
-    try {
-      provider = createProvider(providerConfig)
-    } catch (e) {
-      emit({ type: 'error', message: (e as Error).message })
+    const primaryRoute = resolveRoute(req.providerId, req.model)
+    if (!primaryRoute) {
+      // Reproduce the specific key error rather than the generic skip above.
+      try {
+        createProvider(providerConfig)
+        emit({ type: 'error', message: `Unknown provider: ${req.providerId}` })
+      } catch (e) {
+        emit({ type: 'error', message: (e as Error).message })
+      }
       return
+    }
+    // Reassigned by `hopToFallback`; every read below must go through it rather than
+    // caching a field, or a hop leaves the caller on the old model.
+    let route: Route = primaryRoute
+    const selectedModelCaps = primaryRoute.caps
+
+    /**
+     * The user's next-choice models, minus any that can't serve (provider removed,
+     * key missing/unreadable) and minus the primary itself. Snapshotted at run start
+     * like the rest of the run's settings, so a mid-run edit can't reshape the chain
+     * underneath an in-flight turn.
+     */
+    const fallbackQueue: SelectedModel[] = (getSettings().fallbackModels ?? []).filter(
+      (f) => !(f.providerId === req.providerId && f.model === req.model)
+    )
+
+    /**
+     * Move to the next usable model in the chain. Returns false when the chain is
+     * exhausted, which leaves the caller to report the original failure — a hop is a
+     * recovery attempt, so its absence must not mask why the primary failed.
+     *
+     * Only ever called with nothing streamed this attempt: swapping models after the
+     * user has seen partial output would duplicate or splice it (the same invariant
+     * the transient-retry path enforces).
+     */
+    const hopToFallback = (reason: string): boolean => {
+      while (fallbackQueue.length) {
+        const next = fallbackQueue.shift() as SelectedModel
+        const resolved = resolveRoute(next.providerId, next.model)
+        if (!resolved) continue // unusable entry — try the one after it
+        emit({ type: 'model_fallback', from: route.label, to: resolved.label, reason })
+        route = resolved
+        return true
+      }
+      return false
     }
 
     const settings = getSettings()
@@ -1181,7 +1268,11 @@ export async function startRun(
       const progressPrefix = depth > 1 ? '↳ ' : ''
       let storedId: string | undefined
       const result = await runSubAgent({
-        provider,
+        // Pinned to the run's configured provider, not the fallback route: a
+        // dispatch's `model` override is validated against `req.providerId`'s
+        // model list (see resolveDispatchModel), so re-pointing the provider
+        // alone would pair one provider's client with another's model ids.
+        provider: primaryRoute.provider,
         model,
         workspace,
         prompt: opts.prompt,
@@ -1319,10 +1410,12 @@ export async function startRun(
       searchProvider: settings.searchProvider,
       // Reads flagged web content on the run's own model, but with no tools and no
       // history — so the page has nothing to act through and nothing to override.
+      // Follows the fallback route (provider and model move together here, like the
+      // summarizer): extracting through a model we've just seen fail would be futile.
       quarantineExtract: ({ content, source, query }) =>
         runQuarantineExtraction({
-          provider,
-          model: req.model,
+          provider: route.provider,
+          model: route.model,
           content,
           source,
           query,
@@ -1411,7 +1504,9 @@ export async function startRun(
         let reviewCacheRead = 0
         let reviewCacheWrite = 0
         return reviewWorkspaceChanges({
-          provider,
+          // Pinned to the run's configured provider, not the fallback route: the
+          // review's model is validated against `req.providerId`'s model list.
+          provider: primaryRoute.provider,
           model: reviewModel,
           workspace,
           base,
@@ -1646,9 +1741,11 @@ export async function startRun(
         ? [{ role: 'user', content: redact(preCompact.additionalContext) }, ...toSummarize]
         : toSummarize
       try {
+        // Follows the fallback route: provider and model move together here, so
+        // summarizing through a model we've just seen fail would be pointless.
         const summary = await summarize(
-          provider,
-          req.model,
+          route.provider,
+          route.model,
           buildSummaryRequestMessages(summaryMsgs, material),
           abort.signal,
           // Report a retry in here the same way the turn loop does. Compaction can be
@@ -1859,16 +1956,16 @@ export async function startRun(
         turnReasoning = []
         let emitted = false
         try {
-          for await (const ev of provider.streamChat({
-            model: req.model,
+          for await (const ev of route.provider.streamChat({
+            model: route.model,
             system,
             messages: sendMessages,
             tools,
             reasoningEffort,
-            reasoningCapable,
+            reasoningCapable: route.reasoningCapable,
             reasoningSummary,
             verbosity,
-            explicitCacheControl,
+            explicitCacheControl: route.explicitCacheControl,
             signal: abort.signal
           })) {
             if (ev.type === 'text') {
@@ -1921,7 +2018,14 @@ export async function startRun(
               attempt = -1 // reset the transient-retry budget for the smaller request
               continue streaming
             }
-            // Even the latest turn alone won't fit — no compaction can save it.
+            // Even the latest turn alone won't fit. No compaction can save it, but a
+            // model with a bigger window might — that's exactly what the chain is for,
+            // and it's the advice the error below would otherwise give the user.
+            if (hopToFallback("the conversation exceeded the model's context window")) {
+              sendMessages = buildWindow()
+              attempt = -1 // fresh transient-retry budget for the new model
+              continue streaming
+            }
             emit({
               type: 'error',
               message:
@@ -1938,13 +2042,23 @@ export async function startRun(
             emit({
               type: 'error',
               message:
-                `The selected model "${req.model}" doesn't support tool calling, which this agent ` +
+                `The selected model "${route.model}" doesn't support tool calling, which this agent ` +
                 'requires. Pick a tool-capable model (e.g. qwen2.5-coder, llama3.1, mistral-nemo).'
             })
             return
           }
           // Can't safely retry once output has streamed, or if it's not transient.
           if (emitted || attempt >= MAX_STREAM_RETRIES || !isRetryableError(e)) {
+            // This model is done for. Before failing the turn, try the next one in
+            // the chain — but only for a transient failure the model itself couldn't
+            // shake off (overloaded, rate-limited, 5xx). A non-retryable error is a
+            // property of the *request* (malformed body, bad auth), so re-sending it
+            // to another model would fail the same way and just burn the chain.
+            if (!emitted && isRetryableError(e) && hopToFallback((e as Error).message)) {
+              sendMessages = buildWindow()
+              attempt = -1 // fresh transient-retry budget for the new model
+              continue streaming
+            }
             emit({ type: 'error', message: (e as Error).message })
             return
           }
@@ -1971,12 +2085,14 @@ export async function startRun(
       }
 
       if (turnInput || turnOutput) {
+        // Priced against the model that actually served the turn, not the one the
+        // user picked — after a hop they differ, and the rates usually do too.
         const turnCost = turnCostUsd(
-          req.model,
+          route.model,
           turnInput,
           turnOutput,
           { readTokens: turnCacheRead, writeTokens: turnCacheWrite },
-          selectedModelCaps
+          route.caps
         )
         // Accumulate for the adaptive-budget cost ceiling (the landing trigger).
         cumulativeCostUsd += turnCost

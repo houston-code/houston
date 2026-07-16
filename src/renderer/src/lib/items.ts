@@ -425,6 +425,18 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         }
       ]
     }
+    case 'model_fallback': {
+      const finalized = finalizeStreaming(items)
+      return [
+        ...finalized,
+        {
+          kind: 'notice',
+          id: nextId(),
+          text: `⇄ ${e.from} was unavailable, so this reply came from ${e.to}. ${e.reason}`,
+          tone: 'info'
+        }
+      ]
+    }
     case 'limit': {
       const finalized = finalizeStreaming(items)
       const text =
