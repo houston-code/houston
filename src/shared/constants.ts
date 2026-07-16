@@ -56,6 +56,10 @@ export const IPC = {
   gitInitDismissed: 'git:initDismissed',
   /** Persist "don't ask again" for the first-write git-init prompt (per folder). */
   gitInitDismiss: 'git:initDismiss',
+  /** Trust state + elevating-config counts for a workspace (drives the trust banner). */
+  folderTrustStatus: 'folderTrust:status',
+  /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
+  folderTrustDecide: 'folderTrust:decide',
   workingTreeChanges: 'workingTree:changes',
   // Settings
   settingsGet: 'settings:get',

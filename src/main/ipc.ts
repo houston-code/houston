@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow, clipboard, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
-import type { AppSettings, PermissionRule } from '@shared/types'
+import type { AppSettings, FolderTrustStatus, PermissionRule } from '@shared/types'
 import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
@@ -35,8 +35,11 @@ import {
   rememberWorkspace,
   getProvider,
   isGitInitDismissed,
-  dismissGitInit
+  dismissGitInit,
+  folderTrustFor,
+  setFolderTrust
 } from './store'
+import { loadProjectConfig } from './agent/projectConfig'
 import { getIntegrations } from './integrations'
 import {
   detectEditors,
@@ -428,6 +431,31 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.gitInitDismiss, (_event, workspace: string) =>
     dismissGitInit(typeof workspace === 'string' ? workspace : '')
   )
+
+  // Trusted folders: whether this workspace's project config elevates anything
+  // (allow rules / hooks / MCP servers), and where the user's consent stands.
+  ipcMain.handle(IPC.folderTrustStatus, async (_event, workspace: string): Promise<FolderTrustStatus> => {
+    if (typeof workspace !== 'string' || !workspace) return { state: 'none' }
+    const cfg = await loadProjectConfig(workspace)
+    if (!cfg.elevatedHash) return { state: 'none' }
+    return {
+      state: folderTrustFor(workspace, cfg.elevatedHash),
+      counts: {
+        allowRules: cfg.elevated.allowRules.length,
+        hooks: cfg.elevated.hooks.length,
+        mcpServers: cfg.elevated.mcpServers.length
+      }
+    }
+  })
+  // Persist a trust decision. The fingerprint is recomputed here from the file on
+  // disk — never accepted from the renderer — so consent is always bound to what
+  // the project actually elevates at decision time.
+  ipcMain.handle(IPC.folderTrustDecide, async (_event, workspace: string, decision: unknown) => {
+    if (typeof workspace !== 'string' || !workspace) return getSettings()
+    if (decision !== 'trusted' && decision !== 'never') return getSettings()
+    const cfg = await loadProjectConfig(workspace)
+    return setFolderTrust(workspace, decision, cfg.elevatedHash)
+  })
 
   // Custom slash commands from the workspace's .houston/commands directory.
   ipcMain.handle(IPC.commandsList, async (_event, workspace: string) => {

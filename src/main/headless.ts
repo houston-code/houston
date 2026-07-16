@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import { isApprovalPolicy, type AppSettings, type ApprovalPolicy, type ProviderConfig } from '@shared/types'
+import { realpathSync } from 'node:fs'
+import {
+  folderTrustState,
+  isApprovalPolicy,
+  type AppSettings,
+  type ApprovalPolicy,
+  type ProviderConfig
+} from '@shared/types'
+import { loadProjectConfig } from './agent/projectConfig'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import { missingKeyHint } from '@shared/provider-keys'
 import { pickDefaultModel } from '@shared/models'
@@ -359,6 +367,30 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
       'warning: verifyOnStop is enabled but this headless run is read-only (plan mode); ' +
         'pass --full-auto to run end-of-run verification.\n'
     )
+  }
+
+  // Trusted folders: a headless run never prompts, so an undecided (or drifted)
+  // folder's elevating project config (allow rules / hooks / MCP servers) is
+  // simply left off — the loop enforces that; this just says so once. Trust the
+  // folder from the desktop app or an interactive `houston -i` session.
+  try {
+    const projectCfg = await loadProjectConfig(opts.cwd)
+    if (projectCfg.elevatedHash) {
+      let path = opts.cwd
+      try {
+        path = realpathSync(opts.cwd)
+      } catch {
+        // keep the raw path — the loop normalizes identically
+      }
+      const state = folderTrustState(settings.trustedFolders, path, projectCfg.elevatedHash)
+      if (state !== 'trusted' && !opts.json) {
+        deps.err(
+          "· ignoring this project's allow rules / hooks / MCP servers (folder not trusted; decide in the desktop app or houston -i)\n"
+        )
+      }
+    }
+  } catch {
+    // Advisory only — never block a headless run on the trust note.
   }
 
   const runId = (deps.newId ?? randomUUID)()

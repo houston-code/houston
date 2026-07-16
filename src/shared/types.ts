@@ -209,6 +209,15 @@ export interface McpServerConfig {
    * server (http/sse). Derived like `ProviderConfig.hasKey`, never persisted.
    */
   hasOAuth?: boolean
+  /**
+   * Where the config came from. 'project' marks a trusted folder's
+   * `.houston/settings.json` server, merged in at the run seam under a `proj-`
+   * id prefix: its header/env VALUES are read from the config verbatim (they are
+   * already plaintext in the repo by its author's choice) instead of the user's
+   * secret store, and it is never persisted into the user's settings. Absent
+   * means a user-configured server.
+   */
+  origin?: 'project'
   enabled: boolean
 }
 
@@ -239,6 +248,76 @@ export interface Hook {
   event: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'PreCompact'
   matcher: string
   command: string
+}
+
+/** The valid hook events, in display order — the one list validators and UIs share. */
+export const HOOK_EVENTS: Hook['event'][] = [
+  'PreToolUse',
+  'PostToolUse',
+  'UserPromptSubmit',
+  'SessionStart',
+  'Stop',
+  'PreCompact'
+]
+
+/**
+ * A per-folder decision about honoring that project's ELEVATING config — the
+ * `allow` rules, hooks, and MCP servers a `.houston/settings.json` may define
+ * but which are ignored until the user trusts the folder (they auto-approve
+ * actions or run processes, so an untrusted clone must not get them).
+ *
+ * `hash` fingerprints the elevating subset the decision covered: when a trusted
+ * folder's project file later changes that subset, the trust no longer applies
+ * and the user is asked again ("changed"). `never` permanently suppresses both
+ * the elevation and the prompt for this folder.
+ */
+export interface FolderTrust {
+  /** Realpath-normalized workspace path. */
+  path: string
+  decision: 'trusted' | 'never'
+  /** Fingerprint of the elevating config the decision covered (see projectConfig.ts). */
+  hash: string
+  /** Epoch ms of the decision. */
+  decidedAt: number
+}
+
+/** Where a folder stands: honored, refused, awaiting a decision, or drifted since trust. */
+export type FolderTrustState = 'trusted' | 'untrusted' | 'undecided' | 'changed'
+
+/**
+ * What the trust-consent UI needs to render for a workspace: 'none' when the
+ * project elevates nothing (no prompt at all), else the trust state plus how
+ * many of each elevating item the project defines (shown so the user consents
+ * to something concrete).
+ */
+export interface FolderTrustStatus {
+  state: FolderTrustState | 'none'
+  counts?: { allowRules: number; hooks: number; mcpServers: number }
+}
+
+/**
+ * Resolve a folder's trust state for the elevating config currently on disk.
+ * `path` must already be realpath-normalized by the caller (the same discipline
+ * as `gitInitDismissed`), and `hash` is the CURRENT elevated-config fingerprint.
+ * Pure so every client resolves trust identically.
+ */
+export function folderTrustState(
+  records: FolderTrust[] | undefined,
+  path: string,
+  hash: string
+): FolderTrustState {
+  const rec = records?.find((r) => r.path === path)
+  if (!rec) return 'undecided'
+  if (rec.decision === 'never') return 'untrusted'
+  return rec.hash === hash ? 'trusted' : 'changed'
+}
+
+/** Upsert a folder's trust decision (immutable; keyed by realpath-normalized path). */
+export function upsertFolderTrust(
+  records: FolderTrust[] | undefined,
+  entry: FolderTrust
+): FolderTrust[] {
+  return [...(records ?? []).filter((r) => r.path !== entry.path), entry]
 }
 
 /**
@@ -283,6 +362,12 @@ export interface AppSettings {
    * Checked before showing the banner; appended to on opt-out.
    */
   gitInitDismissed?: string[]
+  /**
+   * Per-folder decisions on honoring project elevating config (`allow` rules,
+   * hooks, MCP servers from `.houston/settings.json`) — see {@link FolderTrust}.
+   * Lives in the user's own settings, never in the project file it governs.
+   */
+  trustedFolders?: FolderTrust[]
   /** Optional extra instructions appended to the system prompt. */
   systemPromptExtra?: string
   /**

@@ -59,6 +59,7 @@ import { Transcript } from './components/Transcript'
 import { PlanPanel } from './components/PlanPanel'
 import { Composer } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
+import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { LegalGate } from './components/LegalGate'
 import { isAnyPopoverOpen } from './components/Popover'
@@ -345,6 +346,11 @@ export default function App(): JSX.Element {
   )
   const onGitInitNotNow = useCallback(() => {
     if (workspace) setGitInitNotNow((s) => new Set(s).add(workspace))
+  }, [workspace])
+  // Session-only "Not now" for the trusted-folders consent banner (per workspace).
+  const [trustNotNow, setTrustNotNow] = useState<ReadonlySet<string>>(() => new Set())
+  const onTrustNotNow = useCallback(() => {
+    if (workspace) setTrustNotNow((s) => new Set(s).add(workspace))
   }, [workspace])
   // Nudge the git-init banner to re-check repo state when the Changes panel closes —
   // the user may have initialized the repo from there, which no window-focus event
@@ -1599,6 +1605,16 @@ export default function App(): JSX.Element {
             onOpenPlan={onOpenPlan}
           />
         )}
+
+        <TrustFolderBanner
+          // Re-evaluate cleanly per workspace: a new folder gets its own banner state.
+          key={`trust-${workspace ?? 'none'}`}
+          workspace={workspace}
+          running={chat.running}
+          sessionDismissed={workspace ? trustNotNow.has(workspace) : false}
+          onNotNow={onTrustNotNow}
+          onDecided={setSettings}
+        />
 
         <GitInitBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.

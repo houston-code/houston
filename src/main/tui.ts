@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import {
+  HOOK_EVENTS,
+  folderTrustState,
   isApprovalPolicy,
+  upsertFolderTrust,
   type AppSettings,
   type ApprovalPolicy,
   type Hook,
   type McpServerConfig,
   type ProviderConfig
 } from '@shared/types'
+import { loadProjectConfig } from './agent/projectConfig'
 import {
   catalogForPlatform,
   catalogEntryToProvider,
@@ -764,15 +769,9 @@ export const HELP_TEXT = [
 // desktop app's job (the CLI can't persist header secrets — see store.ts), so the
 // terminal add flow builds header-free stdio configs only.
 
-/** Lifecycle events a hook can bind to (mirrors the Hook.event union in types.ts). */
-export const HOOK_EVENTS: Hook['event'][] = [
-  'PreToolUse',
-  'PostToolUse',
-  'UserPromptSubmit',
-  'SessionStart',
-  'Stop',
-  'PreCompact'
-]
+// Lifecycle events a hook can bind to: re-exported from @shared/types (the one
+// list validators and UIs share) so existing terminal imports keep working.
+export { HOOK_EVENTS }
 
 /** What the user asked /hooks or /mcp to do. Indexed ops carry a 1-based index. */
 export type SettingsAction =
@@ -1343,6 +1342,73 @@ export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
  * the run loop's `onMessages` callback; runs are started without a conversation
  * id (like headless), so nothing is persisted and turns can't collide.
  */
+/** Pluralized summary of a project's elevating config, e.g. "2 hooks, 1 MCP server". */
+export function summarizeElevated(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[] }): string {
+  return [
+    c.allowRules.length ? `${c.allowRules.length} allow rule${c.allowRules.length === 1 ? '' : 's'}` : '',
+    c.hooks.length ? `${c.hooks.length} hook${c.hooks.length === 1 ? '' : 's'}` : '',
+    c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : ''
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
+/**
+ * The terminal counterpart of the desktop's trusted-folders banner: if the
+ * workspace's `.houston/settings.json` elevates (allow rules, hooks, MCP
+ * servers) and the folder is undecided — or its elevating config changed since
+ * it was trusted — ask before the session starts. `y` trusts (bound to the
+ * current config fingerprint), `never` persistently refuses, anything else
+ * leaves it off and asks again next session. No-op when nothing elevates, the
+ * decision already stands, or this host can't persist settings.
+ */
+export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Painter): Promise<void> {
+  if (!deps.updateSettings) return
+  const cfg = await loadProjectConfig(cwd)
+  if (!cfg.elevatedHash) return
+  let path = cwd
+  try {
+    path = realpathSync(cwd)
+  } catch {
+    // Keep the raw path; the loop normalizes the same way, so they still match.
+  }
+  const settings = deps.getSettings()
+  const state = folderTrustState(settings.trustedFolders, path, cfg.elevatedHash)
+  if (state === 'trusted' || state === 'untrusted') return
+
+  deps.io.out(
+    `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
+      `  Its .houston/settings.json defines ${summarizeElevated(cfg.elevated)}.\n` +
+      paint(
+        '  Hooks and MCP servers run as you, and allow rules auto-approve matching actions.\n' +
+          '  Only trust folders whose authors you trust; until then Houston ignores them.\n',
+        'dim'
+      )
+  )
+  const answer = (await deps.io.readLine('Trust this folder? [y/N/never] ', { discardPending: true }))?.trim().toLowerCase()
+  const decision = answer === 'y' || answer === 'yes' ? 'trusted' : answer === 'never' ? 'never' : null
+  if (!decision) {
+    deps.io.out(paint('· leaving the extra permissions off (will ask again next session)\n', 'dim'))
+    return
+  }
+  deps.updateSettings({
+    trustedFolders: upsertFolderTrust(settings.trustedFolders, {
+      path,
+      decision,
+      hash: cfg.elevatedHash,
+      decidedAt: Date.now()
+    })
+  })
+  deps.io.out(
+    paint(
+      decision === 'trusted'
+        ? '· folder trusted: its allow rules, hooks, and MCP servers now apply\n'
+        : '· never trusting this folder: its extra permissions stay off\n',
+      'dim'
+    )
+  )
+}
+
 export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Reassigned by /theme (takes effect from the next output); the spinner keeps
   // the initial theme since its painter lives in the terminal adapter.
@@ -1367,6 +1433,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.recordLegalAcceptance()
     deps.io.out(paint('· Houston terms accepted (recorded for future runs)\n', 'dim'))
   }
+
+  // Trusted-folders gate: if this project's .houston/settings.json ELEVATES
+  // (allow rules / hooks / MCP servers) and the folder is undecided (or its
+  // elevating config changed since it was trusted), ask now — this is the
+  // terminal counterpart of the desktop's trust banner. Declining just leaves
+  // the elevation off; the session proceeds either way.
+  await promptFolderTrust(opts.cwd, deps, paint)
 
   // Mutable session state. providerId/model may be null until a provider is set up:
   // an interactive session never ejects for a missing key (see below).

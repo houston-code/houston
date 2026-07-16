@@ -4,6 +4,7 @@ import { IPC } from '@shared/constants'
 import type {
   AppSettings,
   ApprovalPolicy,
+  FolderTrustStatus,
   IntegrationsInfo,
   McpServerStatus,
   ModelOption,
@@ -84,6 +85,12 @@ const api = {
   /** Persist "don't ask again" for the first-write git-init prompt (per folder). */
   dismissGitInit: (workspace: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.gitInitDismiss, workspace),
+  /** Trust state + elevating-config counts for a workspace (drives the trust banner). */
+  getFolderTrustStatus: (workspace: string): Promise<FolderTrustStatus> =>
+    ipcRenderer.invoke(IPC.folderTrustStatus, workspace),
+  /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
+  decideFolderTrust: (workspace: string, decision: 'trusted' | 'never'): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.folderTrustDecide, workspace, decision),
 
   // Settings
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.settingsGet),

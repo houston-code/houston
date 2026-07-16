@@ -34,6 +34,7 @@ export type IconName =
   | 'terminal'
   | 'tasks'
   | 'gitBranch'
+  | 'shield'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Funnel.
@@ -190,6 +191,13 @@ const PATHS: Record<IconName, ReactNode> = {
       <circle cx="4.3" cy="11.6" r="1.9" />
       <circle cx="11.7" cy="4.4" r="1.9" />
       <path d="M11.7 6.3a5.4 5.4 0 0 1-5.4 5.3" />
+    </>
+  ),
+  // A shield — trust / protection (the trusted-folders consent banner).
+  shield: (
+    <>
+      <path d="M8 1.8 13 3.7v4.1c0 3.1-2.1 5.4-5 6.4-2.9-1-5-3.3-5-6.4V3.7L8 1.8z" />
+      <path d="m5.8 7.8 1.6 1.6 2.8-3" />
     </>
   )
 }

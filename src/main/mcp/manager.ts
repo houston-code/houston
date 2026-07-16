@@ -117,8 +117,11 @@ function transportOf(c: McpServerConfig): Transport {
 // The real header values live in the encrypted secrets store, not on the config
 // (which carries masked values). Resolve them for both the change-detection signature
 // and the actual connect, so editing a header value still triggers a reconnect.
+// A trusted folder's project server is the exception: its config IS the source of
+// truth (the values are plaintext in the repo by its author's choice), and its id
+// must never read the user's secret scopes.
 function resolveHeaders(c: McpServerConfig): Record<string, string> {
-  return getSecretHeaders(mcpHeaderScope(c.id))
+  return c.origin === 'project' ? { ...(c.headers ?? {}) } : getSecretHeaders(mcpHeaderScope(c.id))
 }
 
 /** Whether the user configured an explicit Authorization header (any casing). */
@@ -172,9 +175,10 @@ async function oauthBearer(c: McpServerConfig, force = false): Promise<Record<st
   return { authorization: `Bearer ${tokens.access}` }
 }
 
-// Like headers, stdio env VALUES live in the secrets store (scope mcp-env:<id>).
+// Like headers, stdio env VALUES live in the secrets store (scope mcp-env:<id>) —
+// except for a project server, whose config carries them verbatim (see above).
 function resolveEnv(c: McpServerConfig): Record<string, string> {
-  return getSecretHeaders(mcpEnvScope(c.id))
+  return c.origin === 'project' ? { ...(c.env ?? {}) } : getSecretHeaders(mcpEnvScope(c.id))
 }
 
 function configKey(

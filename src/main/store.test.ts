@@ -412,6 +412,54 @@ describe('git-init dismissal — "don\'t ask again for this folder"', () => {
   })
 })
 
+describe('trusted folders — consent for project elevating config', () => {
+  it('round-trips a trust decision bound to the elevating-config hash', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'ws-tf-'))
+    try {
+      const { folderTrustFor, setFolderTrust, getSettings } = await loadStore()
+      expect(folderTrustFor(ws, 'hash-1')).toBe('undecided')
+      setFolderTrust(ws, 'trusted', 'hash-1')
+      expect(folderTrustFor(ws, 'hash-1')).toBe('trusted')
+      // The elevating config drifted (new hash): trust no longer applies.
+      expect(folderTrustFor(ws, 'hash-2')).toBe('changed')
+      // Re-trusting the new fingerprint replaces the record (no duplicates).
+      setFolderTrust(ws, 'trusted', 'hash-2')
+      expect(folderTrustFor(ws, 'hash-2')).toBe('trusted')
+      expect(getSettings().trustedFolders).toHaveLength(1)
+      expect(getSettings().trustedFolders![0].path).toBe(realpathSync(ws))
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('a persisted "never" refuses regardless of config drift', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'ws-tf-'))
+    try {
+      const { folderTrustFor, setFolderTrust } = await loadStore()
+      setFolderTrust(ws, 'never', 'hash-1')
+      expect(folderTrustFor(ws, 'hash-1')).toBe('untrusted')
+      expect(folderTrustFor(ws, 'hash-2')).toBe('untrusted')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('normalizes symlinked paths like the other per-folder records', async () => {
+    const real = mkdtempSync(join(tmpdir(), 'ws-tf-real-'))
+    const link = join(mkdtempSync(join(tmpdir(), 'ws-tf-link-')), 'alias')
+    try {
+      symlinkSync(real, link)
+      const { folderTrustFor, setFolderTrust } = await loadStore()
+      setFolderTrust(link, 'trusted', 'h')
+      expect(folderTrustFor(real, 'h')).toBe('trusted')
+      expect(folderTrustFor(link, 'h')).toBe('trusted')
+    } finally {
+      rmSync(real, { recursive: true, force: true })
+      rmSync(link, { force: true })
+    }
+  })
+})
+
 describe('settings.json file permissions', () => {
   it('writes settings.json 0o600 (owner read/write only)', async () => {
     const { updateSettings } = await loadStore()

@@ -102,9 +102,21 @@ before `write_file` under `src/secret/**`. Rules are checked before the mode and
 the first match wins.
 
 **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
-`deny` / `ask` rules, checked before the user's global rules. A project file can
-only *tighten*: it cannot add `allow` rules, hooks, or MCP servers, so cloning an
-untrusted repo can never auto-approve actions.
+`deny` / `ask` rules, checked before the user's global rules. Those guardrails
+always apply and can only *tighten*, so cloning an untrusted repo can never
+auto-approve actions.
+
+**Trusted folders.** The same project file may also define `allow` rules,
+`hooks`, and `mcpServers`. Those ELEVATE (they auto-approve matching actions or
+run processes as you), so Houston ignores them until you explicitly trust the
+folder: the desktop app shows a banner above the composer, and the interactive
+terminal asks at session start (Trust / Not now / Never). Your decision is bound
+to a fingerprint of that elevating config; if it later changes (say a pull adds
+a hook), the folder drops back to untrusted and Houston asks again. Headless
+runs never prompt and simply note when an untrusted folder's extra config is
+being ignored. Trusted project `allow` rules sit BELOW your own rules (they fill
+gaps, never override you), project hooks run after yours, and project MCP
+servers appear namespaced as `mcp__proj-<id>__<tool>`.
 
 **Managed policy.** On a managed device an administrator can ship a machine-wide
 `managed-settings.json` with `deny` / `ask` rules that outrank both project

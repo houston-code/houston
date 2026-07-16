@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AppSettings } from '@shared/types'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 import { LEGAL_VERSION } from '@shared/legal'
+import { loadProjectConfig } from './agent/projectConfig'
 import {
   legalAcceptanceMessage,
   parseHeadlessArgs,
@@ -323,6 +327,39 @@ describe('runHeadless', () => {
     expect(code).toBe(0)
     expect(out.join('')).toContain('resolved: decline')
     expect(err.join('')).toContain('declining input request from MCP server "srv"')
+  })
+
+  it('notes ignored project elevating config (untrusted folder) and honors a trusted one silently', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'houston-hl-trust-'))
+    try {
+      mkdirSync(join(ws, '.houston'), { recursive: true })
+      writeFileSync(
+        join(ws, '.houston/settings.json'),
+        JSON.stringify({ hooks: [{ event: 'Stop', matcher: '*', command: 'echo done' }] })
+      )
+      const done: AgentEvent[] = [{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }]
+
+      const untrusted = deps(done)
+      await runHeadless({ ...baseOpts, cwd: ws }, untrusted.d)
+      expect(untrusted.err.join('')).toContain('ignoring this project')
+
+      // Trust the folder under the CURRENT fingerprint: the note disappears.
+      const cfg = await loadProjectConfig(ws)
+      const trusted = deps(done, {
+        getSettings: () =>
+          settings({
+            selected: { providerId: 'anthropic', model: 'claude' },
+            legalAcceptedVersion: LEGAL_VERSION,
+            trustedFolders: [
+              { path: realpathSync(ws), decision: 'trusted', hash: cfg.elevatedHash, decidedAt: 1 }
+            ]
+          })
+      })
+      await runHeadless({ ...baseOpts, cwd: ws }, trusted.d)
+      expect(trusted.err.join('')).not.toContain('ignoring this project')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
   })
 
   it('auto-approves tool approval prompts under --on-approval allow', async () => {
