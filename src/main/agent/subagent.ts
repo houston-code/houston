@@ -388,7 +388,12 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
             } else if (ev.type === 'error') throw providerStreamError(ev)
           }
         },
-        { signal }
+        {
+          signal,
+          // Otherwise a subagent riding out a blip is indistinguishable from a hung one:
+          // its only channel to the user is this progress line.
+          onRetry: (n) => opts.onProgress?.(`turn ${iter + 1}/${MAX_SUBAGENT_ITERATIONS} · retrying (${n})`)
+        }
       )
     } catch (e) {
       if (signal.aborted) return lastText.trim() || '[subagent aborted]'

@@ -161,7 +161,8 @@ async function summarize(
   provider: Provider,
   model: string,
   messages: ChatMessage[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  onRetry?: (attempt: number, err: unknown) => void
 ): Promise<string> {
   return withProviderRetry(
     async () => {
@@ -178,7 +179,7 @@ async function summarize(
       }
       return text.trim()
     },
-    { signal }
+    { signal, onRetry }
   )
 }
 
@@ -1649,7 +1650,17 @@ export async function startRun(
           provider,
           req.model,
           buildSummaryRequestMessages(summaryMsgs, material),
-          abort.signal
+          abort.signal,
+          // Report a retry in here the same way the turn loop does. Compaction can be
+          // forced mid-turn, so without this a summary riding out a blip is just a run
+          // sitting silent for the length of the backoff.
+          (attempt, err) =>
+            emit({
+              type: 'retry',
+              attempt,
+              max: MAX_PROVIDER_RETRIES,
+              message: (err as Error).message
+            })
         )
         if (!summary) return 'failed'
         // Messages folded into the summary *this round* (a count, which is what the

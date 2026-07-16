@@ -905,6 +905,54 @@ describe('startRun', () => {
     expect(joined(mainSends[1])).toContain('Pinned working memory')
   })
 
+  it('rides out a transient failure during a forced compaction, and says so', async () => {
+    // The nastiest shape of the original bug: the overflow path *forces* a compaction
+    // mid-turn, so a blip on the summary call failed a turn that was otherwise
+    // recoverable. It must also be visible — a silent retry in here is a run that
+    // looks hung for the length of the backoff.
+    const history: ChatMessage[] = []
+    for (let t = 0; t < 4; t++) {
+      history.push({ role: 'user', content: `old question ${t}` })
+      history.push({ role: 'assistant', content: `old answer ${t}` })
+    }
+    history.push({ role: 'user', content: 'current question' })
+
+    let summaryAttempts = 0
+    let mainSends = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (req.maxTokens != null) {
+          // Fails once, then succeeds. The prose deliberately matches none of the
+          // message rules, so only the status can rescue this — it covers the
+          // in-band-status plumbing and the summary retry in one shot.
+          summaryAttempts++
+          if (summaryAttempts === 1) {
+            yield { type: 'error', message: 'The server had an error.', status: 503 }
+            return
+          }
+          yield { type: 'text', text: 'COMPACTED SUMMARY' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        mainSends++
+        if (mainSends === 1) {
+          yield { type: 'error', message: 'prompt is too long: 212129 tokens > 200000 maximum' }
+          return
+        }
+        yield { type: 'text', text: 'recovered' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+
+    const r = await run({ provider, messages: history })
+
+    expect(summaryAttempts).toBe(2) // the failed summary was retried, not surfaced
+    expect(types(r)).toContain('retry') // and the user was told it was happening
+    expect(types(r)).toContain('compaction')
+    expect(types(r).at(-1)).toBe('done')
+    expect(r.messages.find((m) => m.role === 'assistant' && m.content === 'recovered')).toBeTruthy()
+  }, 20_000)
+
   it('surfaces a clear error when even the latest turn overflows the window', async () => {
     // A single user turn — nothing older to compact away. The overflow can't be
     // recovered, so the run should fail with a friendly, actionable message.
