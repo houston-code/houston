@@ -743,9 +743,14 @@ src/
 │   ├── agent/         tool definitions + the tool-calling loop + system prompt
 │   │                  (incl. compaction.ts — summarize old turns to fit context;
 │   │                   rules.ts — load project AGENTS.md / CLAUDE.md)
+│   ├── mcp/           MCP transports (stdio / streamable HTTP / SSE) + the
+│   │                  OAuth sign-in client for hosted servers (discovery,
+│   │                  dynamic registration, PKCE, refresh)
 │   ├── sandbox.ts     macOS Seatbelt profile + sandboxed command runner
-│   ├── secrets.ts     Keychain-encrypted credential storage (API-key + OAuth)
-│   ├── oauth.ts       OAuth device-code/PKCE flow (stub — awaits client IDs)
+│   ├── secrets.ts     Keychain-encrypted credential storage (API keys, OAuth
+│   │                  token sets, custom header/env secrets)
+│   ├── oauth.ts       provider-account OAuth (stub; MCP-server OAuth is real
+│   │                  and lives in mcp/oauth.ts)
 │   ├── store.ts       settings persistence
 │   ├── conversations.ts  conversation persistence (one JSON per chat)
 │   └── ipc.ts         all IPC handlers

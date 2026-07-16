@@ -118,6 +118,23 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   place via the `subagent` agent event. *Still deferred:* network access for
   subagents; and nested delegation (a subagent dispatching its own subagents).
 
+- **Interactive MCP elicitation, and server prompts as slash commands.** Remote
+  MCP support now covers OAuth sign-in, server-initiated notifications
+  (`list_changed` refreshes tools/resources/prompts live, progress keeps long
+  calls alive), and prompt discovery via the `mcp_list_prompts` /
+  `mcp_get_prompt` meta-tools. Two follow-ups remain. (1) *Elicitation:* when a
+  server asks the user a question mid-call (`elicitation/create`), Houston
+  currently declines it cleanly at the protocol level (JSON-RPC method-not-found,
+  so the server never hangs and can take its no-answer path) instead of showing
+  the user a prompt. Full support means declaring the capability and wiring a new
+  blocking agent event through all three clients (GUI dialog, TUI prompt,
+  headless auto-decline), per the client-parity rule. (2) *Prompts as commands:*
+  surfacing each server prompt as a first-class `/` slash command needs menu +
+  completion plumbing in both interactive clients; the meta-tools already give
+  the agent the same data. *Why deferred:* both are cross-client interaction
+  surfaces, not protocol work; shipping them half-wired would hang runs or drift
+  the clients apart.
+
 - **Persistent code index / semantic (embeddings) search.** Houston searches the
   project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**
   (`ast_grep`) for structural/AST queries, plus `glob` and the model's own
