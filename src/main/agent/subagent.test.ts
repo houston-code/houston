@@ -667,6 +667,106 @@ describe('progress, resume, and nesting', () => {
     expect(prior).toHaveLength(2)
   })
 
+  describe('network access', () => {
+    it('offers the web tools only when the network seam is wired', async () => {
+      const wired = { tools: [] as string[] }
+      await runSubAgent({
+        provider: capturingProvider(wired),
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal,
+        network: { gate: async (_n, _a, run) => run() }
+      })
+      expect(wired.tools).toContain('web_fetch')
+      expect(wired.tools).toContain('web_search')
+
+      const without = { tools: [] as string[] }
+      await runSubAgent({
+        provider: capturingProvider(without),
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal
+      })
+      expect(without.tools).not.toContain('web_fetch')
+      expect(without.tools).not.toContain('web_search')
+    })
+
+    it('routes a network call through the gate and returns its resolution', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [
+          [
+            {
+              type: 'tool_call',
+              call: { id: 'n1', name: 'web_fetch', arguments: { url: 'https://docs.example/api' } }
+            },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [
+            { type: 'text', text: 'Summarized.' },
+            { type: 'done', stopReason: 'end_turn' }
+          ]
+        ],
+        sink
+      )
+      const gated: Array<{ name: string; url: unknown }> = []
+      const report = await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'read the docs',
+        signal: new AbortController().signal,
+        network: {
+          // Resolves with canned text WITHOUT invoking the thunk — proving the
+          // subagent never reaches the network unless the gate runs the call.
+          gate: async (name, args) => {
+            gated.push({ name, url: args.url })
+            return 'GATED-BODY'
+          }
+        }
+      })
+      expect(report).toContain('Summarized.')
+      expect(gated).toEqual([{ name: 'web_fetch', url: 'https://docs.example/api' }])
+      // The gate's resolution is the tool result verbatim…
+      const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 'n1')
+      expect(toolMsg?.content).toBe('GATED-BODY')
+      // …and the system prompt states the per-request approval contract.
+      expect(sink.system).toContain('EACH network request first asks the user for approval')
+    })
+
+    it('a declared allow-list can exclude the web tools', async () => {
+      const seen = { tools: [] as string[] }
+      await runSubAgent({
+        provider: capturingProvider(seen),
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal,
+        network: { gate: async (_n, _a, run) => run() },
+        tools: ['read_file', 'glob']
+      })
+      expect(seen.tools).toEqual(['read_file', 'glob'])
+    })
+
+    it('tells a local-only subagent it has no network access', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]],
+        sink
+      )
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal
+      })
+      expect(sink.system).toContain('You have no network access.')
+    })
+  })
+
   it('offers dispatch_agent only when a nested dispatcher is injected', async () => {
     const withNested = { tools: [] as string[] }
     await runSubAgent({

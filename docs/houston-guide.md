@@ -141,13 +141,16 @@ context and reports back, keeping the main thread clean. An optional front-matte
 `tools:` list narrows which tools it may use, and an optional `model:` pins the
 agent to a (usually cheaper) sibling model from the current provider — unknown
 ids fall back to the chat's model. By default a subagent is read-only (it cannot
-edit, run commands, or reach the network); a subagent marked `write: true` gets a
-writable tier and is dispatched with `dispatch_writable_agent`, which is
-approval-gated because it grants write access: one approval covers the whole
-delegated task, confined to the project with no network. On a host without an
-OS-enforced sandbox (e.g. Windows), each shell command a writable subagent runs
-would run unconfined, so it asks for its own approval first, exactly like an
-unconfined command from the main agent. Tokens a subagent spends roll into the
+edit files or run commands); a subagent marked `write: true` gets a writable tier
+and is dispatched with `dispatch_writable_agent`, which is approval-gated because
+it grants write access: one approval covers the whole delegated task's local
+actions, confined to the project. Either tier can also reach the web with
+`web_fetch` and `web_search`, and every network request first asks you for
+approval, per destination, exactly like the main agent's own network calls (a
+denial comes back to the subagent as its tool result). A subagent's shell
+commands never get network access. On a host without an OS-enforced sandbox
+(e.g. Windows), each shell command a writable subagent runs would run unconfined,
+so it asks for its own approval first too. Tokens a subagent spends roll into the
 conversation's usage meter, priced at the model the subagent actually ran on.
 
 While a subagent works, its dispatch row shows live progress (turn counter plus

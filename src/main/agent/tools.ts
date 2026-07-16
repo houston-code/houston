@@ -1376,7 +1376,7 @@ const dispatchAgent: ToolDef = {
   schema: {
     name: 'dispatch_agent',
     description:
-      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project (it cannot edit, run commands, or use the network) and returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report. Each report ends with the subagent\'s id — pass it as `resume` (with your follow-up as `prompt`) to continue that agent with its context intact instead of re-dispatching from scratch.',
+      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project, and can fetch public URLs and search the web (each network request asks the user for approval first); it cannot edit files or run commands. It returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report. Each report ends with the subagent\'s id — pass it as `resume` (with your follow-up as `prompt`) to continue that agent with its context intact instead of re-dispatching from scratch.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },
@@ -1429,7 +1429,7 @@ const dispatchWritableAgent: ToolDef = {
   schema: {
     name: 'dispatch_writable_agent',
     description:
-      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Everything it does is confined to the project with no network access. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; the one exception is a host without an OS sandbox (e.g. Windows), where each shell command the subagent runs asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
+      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Edits and commands are confined to the project, and its shell commands have no network; it can also fetch public URLs and search the web, with each network request asking the user for approval first. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; on a host without an OS sandbox (e.g. Windows), each shell command it runs also asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },
