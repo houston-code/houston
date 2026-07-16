@@ -17,6 +17,24 @@ export function stripAnsi(s: string): string {
 }
 
 /**
+ * Strip every control character, for text that came from somewhere we don't
+ * control (a release note, an MCP server's error) and is about to be written to
+ * the terminal.
+ *
+ * The terminal executes what it's handed. Text from a remote source can carry an
+ * OSC 52 to write the user's clipboard, cursor moves that rewrite the transcript
+ * above it, or a hyperlink whose visible text lies about its target — all without
+ * the user doing anything but reading. `stripAnsi` is not enough: it removes only
+ * SGR, and it is for measuring OUR OWN colored output, where the escapes are
+ * intentional. This removes C0, DEL, and C1 (the 8-bit CSI/OSC/DCS introducers),
+ * keeping tabs out too since a display string has no use for one.
+ */
+export function stripControlChars(s: string): string {
+  // eslint-disable-next-line no-control-regex -- removing control characters is the point
+  return s.replace(/[\x00-\x1f\x7f-\x9f]/g, '')
+}
+
+/**
  * Display columns a single code point occupies: 0 for combining/zero-width marks,
  * 2 for East-Asian wide + fullwidth glyphs and astral emoji, 1 otherwise. A
  * pragmatic wcwidth (not exhaustive) so CJK / emoji don't miscount and overflow

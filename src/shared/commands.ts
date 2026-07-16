@@ -104,6 +104,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'model', description: 'List or switch the active model', clients: ['tui'] },
   { name: 'login', description: 'Set or update an API key (also: /providers)', clients: ['tui'] },
   { name: 'settings', description: 'Show a summary of your current settings', clients: ['tui'] },
+  {
+    name: 'doctor',
+    description: 'Check your setup: model, sandbox, tools, MCP, terminal',
+    clients: ['tui']
+  },
   { name: 'approval', description: 'Show or set the approval policy', clients: ['tui'] },
   { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['tui'] },
   { name: 'fork', description: 'Branch the current session into a copy', clients: ['tui'] },

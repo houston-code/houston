@@ -36,6 +36,10 @@ import {
 import { getUserDataDir } from './userData'
 import { log } from './logger'
 import { runTui, makePainter, mediaTypeForImagePath, type TuiOptions } from './tui'
+import type { DoctorFacts } from './tui-doctor'
+import { checkForUpdate } from './update-check'
+import { activeBackendId, isSandboxed } from './sandbox'
+import { providerKeyEnvVars } from '@shared/provider-keys'
 import { runHeadless, type HeadlessOptions } from './headless'
 import { createTerminalIo, resolveColor } from './tui-io'
 import { makeCompleter } from './tui-complete'
@@ -222,8 +226,91 @@ export function wireTerminalSessionBackends(opts: {
   }
 }
 
-/** Run the interactive terminal client to completion. Returns the exit code. */
-export async function runTuiEntry(tui: TuiOptions): Promise<number> {
+/**
+ * Locate an external binary the agent shells out to. `which`/`where` is the same
+ * lookup the shell itself does, so "found" here matches what a tool call sees.
+ */
+function findBinary(name: string): string | null {
+  try {
+    // Absolute on Windows: a bare `where` can resolve from the CWD before PATH, and
+    // the CWD is the user's (possibly untrusted) workspace — /doctor must not run a
+    // where.exe someone dropped in a cloned repo.
+    const cmd =
+      process.platform === 'win32'
+        ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe')
+        : 'which'
+    const res = spawnSync(cmd, [name], { encoding: 'utf8' })
+    const first = (res.stdout ?? '').split('\n')[0]?.trim()
+    return res.status === 0 && first ? first : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Probe the environment for `/doctor`. All of this was already knowable, but only
+ * by reading source or guessing; the grading and rendering live in tui-doctor.ts,
+ * so this stays a fact-gatherer.
+ */
+function probeDoctor(
+  cwd: string,
+  version: string,
+  color: boolean,
+  update: { latest: string; url: string } | null
+): DoctorFacts {
+  const s = getSettings()
+  const env = process.env
+  return {
+    version,
+    nodeVersion: process.version,
+    platform: `${process.platform} ${process.arch}`,
+    cwd,
+    settingsPath: join(getUserDataDir(), 'settings.json'),
+    sandbox: { backend: activeBackendId(), enforced: isSandboxed() },
+    providers: s.providers.map((p) => {
+      // The cause of "I set my key and nothing changed": an env var silently
+      // outranks the stored one.
+      const shadow = providerKeyEnvVars(p.id).find((v) => env[v])
+      return {
+        id: p.id,
+        requiresKey: Boolean(p.requiresKey),
+        hasKey: Boolean(p.hasKey),
+        ...(shadow ? { shadowedByEnv: shadow } : {})
+      }
+    }),
+    active: s.selected ? { providerId: s.selected.providerId, model: s.selected.model } : null,
+    mcp: getMcpStatuses().map((m) => ({
+      id: m.id,
+      state: m.state,
+      ...(m.state === 'connected'
+        ? { detail: `connected, ${m.tools ?? 0} tool${m.tools === 1 ? '' : 's'}` }
+        : m.error
+          ? { detail: m.error }
+          : {})
+    })),
+    binaries: [
+      { name: 'git', path: findBinary('git'), purpose: 'the git tools and worktrees' },
+      { name: 'gh', path: findBinary('gh'), purpose: 'the GitHub tools' },
+      { name: 'rg', path: findBinary('rg'), purpose: 'faster search_files' }
+    ],
+    terminal: {
+      tty: Boolean(process.stdin.isTTY),
+      color,
+      columns: process.stdout.columns || 80,
+      term: env.TERM ?? ''
+    },
+    update
+  }
+}
+
+/**
+ * Run the interactive terminal client to completion. Returns the exit code.
+ *
+ * `version` is supplied by the host (the CLI bundle has it defined at build time,
+ * the desktop app gets it from Electron), since this module is shared by both and
+ * neither can read the other's source of truth.
+ */
+export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = {}): Promise<number> {
   // Interactive mode needs a real terminal for the composer and inline
   // approval prompts. In a pipe/CI there's no TTY to read from — point the
   // user at headless (`-p`) rather than hanging on a dead stdin.
@@ -254,6 +341,11 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
     }
   }
 
+  const version = host.version ?? 'dev'
+  // Remembered from the background update check so /doctor can report it without
+  // a second network round trip.
+  let latestUpdate: { latest: string; url: string } | null = null
+
   const paint = makePainter(tui.color)
   const io = createTerminalIo({
     paint,
@@ -277,6 +369,15 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
   try {
     code = await runTui(tui, {
       getSettings,
+      version,
+      // /doctor: probe on demand, reusing whatever the update check already found
+      // rather than making the report wait on the network.
+      doctor: async () => probeDoctor(tui.cwd, version, tui.color, latestUpdate),
+      checkUpdate: async () => {
+        const found = await checkForUpdate(version)
+        latestUpdate = found ? { latest: found.latest, url: found.url } : null
+        return found
+      },
       // Real terminal width (re-read each turn) so status-line truncation and
       // markdown wrapping track the actual terminal, not a hardcoded 80 columns.
       columns: () => process.stdout.columns || 80,

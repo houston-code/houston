@@ -2700,3 +2700,97 @@ describe('readComposer seam', () => {
     expect(rec.runs).toHaveLength(1)
   })
 })
+
+describe('version, update check, and /doctor', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('shows the running version in the banner', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    d.version = '1.2.3'
+    await runTui(opts, d)
+    expect(t.text()).toContain('v1.2.3')
+  })
+
+  it('surfaces an available update between turns, once', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    d.version = '0.2.141'
+    d.checkUpdate = async () => ({ latest: '0.3.0', url: 'https://x/releases', headline: 'Faster' })
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('update available: 0.3.0')
+    expect(out).toContain('https://x/releases')
+    expect(out).toContain('Faster')
+    // One nudge per session, not one per prompt.
+    expect(out.match(/update available/g)).toHaveLength(1)
+  })
+
+  it('says nothing when there is no update, and never blocks on the check', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    d.checkUpdate = async () => null
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('update available')
+  })
+
+  // A failed check is a non-event: it must not surface, and must not break the REPL.
+  it('ignores a failing update check', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['still works', null])
+    d.io = t.io
+    d.checkUpdate = async () => {
+      throw new Error('offline')
+    }
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(rec.runs).toHaveLength(1)
+    expect(t.text()).not.toContain('update available')
+  })
+
+  it('/doctor renders the report', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/doctor', null])
+    d.io = t.io
+    d.doctor = async () => ({
+      version: '0.2.141',
+      nodeVersion: 'v22.11.0',
+      platform: 'darwin arm64',
+      cwd: '/w',
+      settingsPath: '/s.json',
+      sandbox: { backend: 'seatbelt', enforced: true },
+      providers: [{ id: 'anthropic', requiresKey: true, hasKey: true }],
+      active: { providerId: 'anthropic', model: 'claude' },
+      mcp: [],
+      binaries: [{ name: 'git', path: '/usr/bin/git', purpose: 'git' }],
+      terminal: { tty: true, color: false, columns: 80, term: 'xterm' },
+      update: null
+    })
+    await runTui(opts, d)
+    expect(t.text()).toContain('Everything looks healthy.')
+    expect(t.text()).toContain('seatbelt')
+  })
+
+  it('/doctor reports rather than throws when the probe fails', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/doctor', null])
+    d.io = t.io
+    d.doctor = async () => {
+      throw new Error('probe exploded')
+    }
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(t.text()).toContain("couldn't run diagnostics")
+  })
+
+  it('/doctor says so when diagnostics are unavailable', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/doctor', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('diagnostics are unavailable')
+  })
+})

@@ -65,8 +65,8 @@ client, but the common built-ins are:
 
 The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
-`/settings`, `/resume`, `/fork`, `/cost`, `/mcp`, `/hooks`, `/theme`, `/image`,
-`/cwd`, and `/exit`.
+`/settings`, `/doctor`, `/resume`, `/fork`, `/cost`, `/mcp`, `/hooks`, `/theme`,
+`/image`, `/cwd`, and `/exit`.
 
 **Custom commands.** Any Markdown file in `.houston/commands/<name>.md` becomes a
 `/name` command. The file body is a prompt template: `$ARGUMENTS` is replaced
@@ -108,6 +108,29 @@ bracketed-paste support.
 
 **History.** Messages are remembered per project folder and survive restarts,
 including multi-line ones.
+
+## Version and updates
+
+The interactive terminal shows its version in the banner at startup, and
+`houston -v` prints it. Once a day it quietly checks whether a newer release
+exists and, if so, prints one line with the link the next time it draws a prompt.
+It never blocks startup, and a failed check is silent. To turn the check off, set
+`HOUSTON_NO_UPDATE_CHECK=1` (or `NO_UPDATE_NOTIFIER`). The desktop app updates
+itself separately.
+
+## Checking your setup (/doctor)
+
+`/doctor` reports what Houston can see: the version (and whether a newer one is
+out), Node and platform, the active model and every provider's key status,
+whether the shell sandbox is actually enforced on this host, which external tools
+(`git`, `gh`, `rg`) are on PATH, each MCP server's connection state, and the
+terminal's size and color support. Each row is marked healthy, worth knowing, or
+broken, and anything not healthy comes with what to do about it.
+
+It answers the questions that used to need source-reading or guesswork, notably
+"is my shell really sandboxed here?" and "why did setting my API key change
+nothing?" (an environment variable silently outranks a stored key; `/doctor`
+names it).
 
 ## Approval modes and permissions
 
