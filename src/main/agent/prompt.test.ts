@@ -83,27 +83,6 @@ describe('buildSystemPrompt', () => {
     expect(noSpawn).toContain('- dispatch_agent:')
   })
 
-  it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
-    expect(buildSystemPrompt('/tmp/x')).toContain('schedule_run')
-    const noScheduler = buildSystemPrompt(
-      '/tmp/x',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false
-    )
-    expect(noScheduler).not.toContain('schedule_run')
-    // The neighbouring tool bullets must survive the removal.
-    expect(noScheduler).toContain('- dispatch_agent:')
-    expect(noScheduler).toContain('spawn_session')
-  })
-
   describe('per-model addendum', () => {
     const base = buildSystemPrompt('/tmp/x')
 

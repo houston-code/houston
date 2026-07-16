@@ -14,6 +14,8 @@ import {
   formatRunList,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
+  egressBlockHint,
+  EGRESS_BLOCKED_HINT,
   sandboxWriteBlockHint,
   SANDBOX_WRITE_BLOCKED_HINT,
   sandboxOpDeniedHint,
@@ -48,7 +50,6 @@ describe('tool registry', () => {
       'apply_patch',
       'ask_user',
       'ast_grep',
-      'cancel_scheduled_run',
       'dispatch_agent',
       'dispatch_writable_agent',
       'edit_file',
@@ -70,7 +71,6 @@ describe('tool registry', () => {
       'glob',
       'kill_shell',
       'list_dir',
-      'list_scheduled_runs',
       'multi_edit',
       'pr_sweep',
       'present_plan',
@@ -79,7 +79,6 @@ describe('tool registry', () => {
       'recall_history',
       'review_changes',
       'run_shell',
-      'schedule_run',
       'search_files',
       'skill',
       'spawn_session',
@@ -1239,6 +1238,33 @@ describe('networkBlockHint', () => {
     expect(networkBlockHint(false, { exitCode: null }, 'dial tcp: lookup api: no route to host')).toBe(
       NETWORK_BLOCKED_HINT
     )
+  })
+})
+
+describe('egressBlockHint', () => {
+  const failed = { exitCode: 56 as number | null }
+  const curlConnect =
+    'curl: (56) CONNECT tunnel failed, response 403\nfatal: unable to access repo'
+  const gitLibcurl = 'fatal: unable to access: Received HTTP code 403 from proxy after CONNECT'
+  const denyBody = 'EGRESS_BLOCKED: the sandbox egress policy does not allow network access to "x.example"'
+
+  it('hints when a proxied command was refused by the egress allowlist', () => {
+    expect(egressBlockHint(true, true, failed, curlConnect)).toBe(EGRESS_BLOCKED_HINT)
+    expect(egressBlockHint(true, true, failed, gitLibcurl)).toBe(EGRESS_BLOCKED_HINT)
+    expect(egressBlockHint(true, true, failed, denyBody)).toBe(EGRESS_BLOCKED_HINT)
+  })
+
+  it('only fires in proxied mode with network granted (disjoint from networkBlockHint)', () => {
+    expect(egressBlockHint(false, true, failed, curlConnect)).toBe('')
+    expect(egressBlockHint(true, false, failed, curlConnect)).toBe('')
+  })
+
+  it('stays silent on success and on unrelated failures', () => {
+    expect(egressBlockHint(true, true, { exitCode: 0 }, curlConnect)).toBe('')
+    expect(egressBlockHint(true, true, failed, 'error: test "foo" failed')).toBe('')
+    // A plain upstream 403 (no proxy involvement in the message) is the server's
+    // own answer, not the allowlist.
+    expect(egressBlockHint(true, true, failed, 'HTTP/1.1 403 Forbidden from origin')).toBe('')
   })
 })
 

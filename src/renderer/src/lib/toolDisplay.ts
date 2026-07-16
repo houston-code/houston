@@ -85,16 +85,8 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Search web', target: str(a.query) ?? '', mono: false }
     case 'dispatch_agent':
       return { verb: 'Subagent', target: str(a.description) ?? 'research task', mono: false }
-    case 'dispatch_writable_agent':
-      return { verb: 'Writable subagent', target: str(a.description) ?? 'task', mono: false }
     case 'spawn_session':
       return { verb: 'Spawn session', target: str(a.title) ?? str(a.prompt) ?? '', mono: false }
-    case 'schedule_run':
-      return { verb: 'Schedule', target: str(a.name) ?? str(a.spec) ?? '', mono: false }
-    case 'list_scheduled_runs':
-      return { verb: 'List schedules', target: '', mono: false }
-    case 'cancel_scheduled_run':
-      return { verb: 'Cancel schedule', target: str(a.id) ?? '', mono: true }
     case 'review_changes': {
       const base = str(a.base)
       return { verb: 'Review', target: base ? `changes vs ${base}` : 'uncommitted changes', mono: false }

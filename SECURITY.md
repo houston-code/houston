@@ -75,11 +75,14 @@ the sandbox can read your whole filesystem: network egress is granted **per dest
 (not all-or-nothing), the first shell command takes a **one-time network consent** so
 blanket outbound access is never automatic (a decline runs commands offline), and
 Houston's own network tools (`web_fetch` / `web_search`) **refuse to send** a URL or query
-that carries a recognized credential. These bound the exfiltration surface; they do not
-eliminate it. A raw `curl` in `run_shell`, once shell network is granted for the run, can
-still reach an arbitrary approved-for-the-run destination, and egress bodies over TLS are
-not inspected. Closing that fully wants a per-destination forward proxy for shell egress,
-tracked on the roadmap.
+that carries a recognized credential. Granted shell network is additionally confined to a
+**per-domain egress allowlist** on macOS and Linux: the OS sandbox blocks direct sockets
+and routes shell egress through a Houston-controlled loopback proxy, which allows only
+package registries, VCS hosts, and domains you add in Settings (see
+[docs/sandboxing.md](docs/sandboxing.md)). These bound the exfiltration surface; they do
+not eliminate it. Egress bodies over TLS are not inspected (the proxy sees hostnames, not
+content), an allowlisted collaborative host still accepts authenticated writes, and on
+Windows (no OS sandbox) the allowlist cannot be enforced.
 
 Reports that demonstrate a way to **bypass** a control that is supposed to hold (for
 example, escaping the shell sandbox, writing outside the workspace without approval,

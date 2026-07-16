@@ -7,7 +7,8 @@ const h = vi.hoisted(() => ({
   available: true,
   sandboxed: true,
   timedOut: false,
-  lastOpts: undefined as { timeoutMs?: number } | undefined
+  lastOpts: undefined as { timeoutMs?: number; egressProxy?: { tcpPort: number } } | undefined,
+  lastSpawnOpts: undefined as { egressProxy?: { tcpPort: number } } | undefined
 }))
 
 vi.mock('../sandbox', async (importOriginal) => {
@@ -26,7 +27,8 @@ vi.mock('../sandbox', async (importOriginal) => {
         sandboxed: h.sandboxed
       }
     },
-    spawnSandboxed: () => {
+    spawnSandboxed: (opts: { egressProxy?: { tcpPort: number } }) => {
+      h.lastSpawnOpts = opts
       const child: any = new EventEmitter()
       child.pid = 1234
       child.stdout = new EventEmitter()
@@ -103,5 +105,28 @@ describe('run_shell foreground timeout', () => {
     expect(out).toContain('timeout_seconds')
     expect(out).toContain('background:true')
     h.timedOut = false
+  })
+})
+
+describe('run_shell threads the egress-proxy endpoints into the sandbox', () => {
+  const proxyCtx: ToolContext = {
+    workspace: '/ws',
+    allowNetwork: true,
+    egressProxy: { tcpPort: 9137 }
+  }
+
+  it('foreground commands carry ctx.egressProxy to the runner', async () => {
+    await getTool('run_shell')!.execute({ command: 'curl https://x/' }, proxyCtx)
+    expect(h.lastOpts?.egressProxy).toEqual({ tcpPort: 9137 })
+  })
+
+  it('background shells carry ctx.egressProxy to the spawner', async () => {
+    await getTool('run_shell')!.execute({ command: 'npm run dev', background: true }, proxyCtx)
+    expect(h.lastSpawnOpts?.egressProxy).toEqual({ tcpPort: 9137 })
+  })
+
+  it('an absent egressProxy (mode "all") threads as undefined — legacy full network', async () => {
+    await runShell({ command: 'echo hi' })
+    expect(h.lastOpts?.egressProxy).toBeUndefined()
   })
 })

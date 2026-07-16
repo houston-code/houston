@@ -126,55 +126,24 @@ Drop a Markdown file in `.houston/agents/<name>.md` to define a specialized
 subagent: front-matter `description` plus a system-prompt body. The main agent
 dispatches it by name with `dispatch_agent`, and it works in its own fresh
 context and reports back, keeping the main thread clean. An optional front-matter
-`tools:` list narrows which tools it may use, and an optional `model:` pins the
-agent to a (usually cheaper) sibling model from the current provider — unknown
-ids fall back to the chat's model. By default a subagent is read-only (it cannot
-edit files or run commands); a subagent marked `write: true` gets a writable tier
-and is dispatched with `dispatch_writable_agent`, which is approval-gated because
-it grants write access: one approval covers the whole delegated task's local
-actions, confined to the project. Either tier can also reach the web with
-`web_fetch` and `web_search`, and every network request first asks you for
-approval, per destination, exactly like the main agent's own network calls (a
-denial comes back to the subagent as its tool result). A subagent's shell
-commands never get network access. On a host without an OS-enforced sandbox
-(e.g. Windows), each shell command a writable subagent runs would run unconfined,
-so it asks for its own approval first too. Tokens a subagent spends roll into the
-conversation's usage meter, priced at the model the subagent actually ran on.
+`tools:` list narrows which tools it may use. By default a subagent is read-only
+(it cannot edit, run commands, or reach the network); a subagent marked
+`write: true` gets a writable tier and is dispatched with `dispatch_writable_agent`,
+which is approval-gated because it grants write access: one approval covers the
+whole delegated task, confined to the project with no network. On a host without
+an OS-enforced sandbox (e.g. Windows), each shell command a writable subagent runs
+would run unconfined, so it asks for its own approval first, exactly like an
+unconfined command from the main agent. Tokens a subagent spends roll into the
+conversation's usage meter.
 
-While a subagent works, its dispatch row shows live progress (turn counter plus
-what it is doing), in every client. Each report ends with an id like `ag1`: the
-main agent can pass it back as `resume` to send a follow-up into that subagent's
-context instead of re-dispatching from scratch (ids last for the app session). A
-dispatch can also pass `model` to run one-off legwork on a cheaper sibling model.
-Subagents can fan out one level themselves: a dispatched agent may dispatch its
-own nested read-only researchers (never writable, and no deeper).
-
-## Spawn separate sessions
+## Spawn separate sessions (desktop)
 
 Where a subagent reports back into the current turn, `spawn_session` spins off a
 *separate* chat: the agent hands it a task, optionally on its own git branch and
 worktree, and sets it running in the background. It appears in the sidebar with a
 live indicator, seeded with the handed-off context. A spawned session inherits
 the current approval policy, so it is never more permissive than the chat that
-spawned it. In the TUI and headless CLI, spawned sessions run too — they execute
-non-interactively (anything needing an approval is declined automatically) and
-persist as ordinary conversations you can open later with `/resume` or
-`--resume <id>`; a one-shot headless run waits for its spawned sessions before
-exiting.
-
-## Scheduled runs
-
-The agent can schedule recurring (or one-time) background runs with
-`schedule_run` — say "every morning at 9, run the tests and summarize failures"
-and it stores a schedule; at each occurrence a fresh session starts with the
-stored prompt, under the approval policy of the chat that created it. Specs:
-`every <N>m|h|d` (minimum 5 minutes), `daily at HH:MM`, `weekdays at HH:MM`,
-`weekly on <day> at HH:MM`, or `once at YYYY-MM-DD HH:MM` (local time).
-`list_scheduled_runs` shows what's configured (with next/last fire times);
-`cancel_scheduled_run` removes one. Creating or cancelling a schedule is
-approval-gated. Schedules persist across restarts and fire while Houston (the
-desktop app or the TUI) is running — this is an in-app scheduler, not OS cron;
-an occurrence missed while Houston was closed fires once at the next launch.
+spawned it.
 
 ## Review and multi-step tools
 
@@ -183,9 +152,8 @@ an occurrence missed while Houston was closed fires once at the next launch.
   per dimension, each in a fresh context, then a skeptical verifier that
   re-checks every candidate against the real code and drops false positives, and
   reports the confirmed findings. Scope it to a `base` branch or specific
-  `paths`, raise `effort` to `high` to verify each finding with several
-  independent skeptics, or pass `model` to run the reviewers and verifiers on a
-  cheaper sibling model.
+  `paths`, and raise `effort` to `high` to verify each finding with several
+  independent skeptics.
 - **`todo_write`** keeps a task list for multi-step work, rendered live in the
   transcript.
 - **`pr_sweep`** tracks batch pull-request work (author new PRs from a task list,
@@ -311,6 +279,25 @@ declining runs the command offline instead of blocking it. Package-manager cache
 installs need no cache workaround once network is on. **Additional folders**
 (Settings) can be added to the file tools' allowed roots and the shell sandbox to
 work across more than one repo.
+
+**Egress allowlist.** Granted shell network is not unrestricted: on macOS and
+Linux it is routed through a local proxy Houston controls, and the OS sandbox
+blocks any direct connection, so the proxy is the only road out. The proxy
+allows a destination only if its domain is on the egress allowlist: a built-in
+set of development infrastructure (package registries such as npm, PyPI,
+crates.io, RubyGems, Maven, Go; VCS hosts such as GitHub, GitLab, Bitbucket)
+plus any domains added in Settings under **Sandbox egress**. Each entry also
+covers its subdomains, a deny list wins over every allow, and edits apply
+immediately, mid run. A refused destination fails with an `EGRESS_BLOCKED`
+message naming the domain: that is policy, not an outage. Only HTTP(S) flows
+through the proxy, so other protocols (for example SSH) are blocked under the
+allowlist; use HTTPS remotes inside the sandbox, or switch the egress mode to
+"All domains" (Settings) to restore unrestricted granted network. On Windows,
+where no OS sandbox exists, the allowlist cannot be enforced. One Linux note:
+under the allowlist each command runs in its own network namespace, so a dev
+server started inside the sandbox is reachable only from that same command, not
+from the Preview panel or later commands; "All domains" restores the shared
+network there.
 
 **Credential masking on egress.** Houston's own network tools refuse to *send* a
 credential: before a `web_fetch` or `web_search` leaves the machine, its URL or

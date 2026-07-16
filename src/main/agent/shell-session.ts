@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
+import type { EgressProxyEndpoints, SandboxRunOptions, SandboxRunResult } from '../sandbox'
 
 /**
  * Persistent shell state for a single agent run.
@@ -98,6 +98,7 @@ export async function runInSession(opts: {
   workspace: string
   roots?: string[]
   allowNetwork: boolean
+  egressProxy?: EgressProxyEndpoints
   timeoutMs?: number
   signal?: AbortSignal
   run: SandboxRunner
@@ -128,6 +129,7 @@ export async function runInSession(opts: {
     workspace: opts.workspace,
     roots: opts.roots,
     allowNetwork: opts.allowNetwork,
+    egressProxy: opts.egressProxy,
     timeoutMs: opts.timeoutMs,
     signal: opts.signal
   })

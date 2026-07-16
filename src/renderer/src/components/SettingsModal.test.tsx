@@ -623,6 +623,52 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(screen.getByText('/picked/dir')).toBeInTheDocument())
   })
 
+  describe('sandbox egress', () => {
+    it('defaults to allowlist mode with editable allow/deny domain lists', () => {
+      installApi()
+      renderModal()
+      fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+
+      expect(screen.getByRole('heading', { name: 'Sandbox egress' })).toBeInTheDocument()
+      const mode = screen.getByLabelText(/^Mode/) as HTMLSelectElement
+      expect(mode.value).toBe('allowlist')
+      expect(screen.getByLabelText(/Additional allowed domains/)).toBeInTheDocument()
+      expect(screen.getByLabelText(/Denied domains/)).toBeInTheDocument()
+    })
+
+    it('edits the allow list (one domain per line, normalized on blur) and saves it', async () => {
+      const api = installApi()
+      renderModal({ sandboxEgress: { allow: ['corp.example'] } })
+      fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+
+      const allow = screen.getByLabelText(/Additional allowed domains/) as HTMLTextAreaElement
+      expect(allow.value).toBe('corp.example')
+      fireEvent.focus(allow)
+      fireEvent.change(allow, { target: { value: 'corp.example\n  other.example  \n\n' } })
+      fireEvent.blur(allow)
+      expect(allow.value).toBe('corp.example\nother.example')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+      expect(saved.sandboxEgress?.allow).toEqual(['corp.example', 'other.example'])
+    })
+
+    it("switching to 'All domains' hides the lists and persists the explicit escape hatch", async () => {
+      const api = installApi()
+      renderModal()
+      fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+
+      fireEvent.change(screen.getByLabelText(/^Mode/), { target: { value: 'all' } })
+      expect(screen.queryByLabelText(/Additional allowed domains/)).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+      expect(saved.sandboxEgress?.mode).toBe('all')
+    })
+  })
+
   describe('appearance theme preview', () => {
     // The preview writes data-theme onto the shared document root; reset between
     // cases so one test's selection can't leak into the next.

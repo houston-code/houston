@@ -19,6 +19,27 @@ import type { ChildProcess, spawn } from 'node:child_process'
  * unconfined execution is never silently treated as if it were sandboxed.
  */
 
+/**
+ * Where the running egress proxy listens (see egress-proxy.ts). When a run has
+ * `allowNetwork: true` AND carries these endpoints, backends that can confine
+ * egress switch to *proxied* network: the OS sandbox blocks direct egress and the
+ * command reaches the network only through the proxy, which enforces the
+ * per-domain allow/deny policy. `allowNetwork: true` without endpoints remains
+ * legacy full network (the user chose egress mode 'all').
+ */
+export interface EgressProxyEndpoints {
+  /** Loopback TCP port the proxy listens on (used directly by Seatbelt's loopback-only profile). */
+  tcpPort: number
+  /**
+   * Unix-socket listener + in-namespace forwarder script, for backends whose
+   * network isolation also hides the host's loopback (Linux bubblewrap): the
+   * forwarder runs inside the network namespace and bridges a fixed inner
+   * loopback port to this socket, which crosses the namespace via the filesystem.
+   */
+  unixSocketPath?: string
+  forwarderPath?: string
+}
+
 export interface SandboxRunOptions {
   command: string
   cwd: string
@@ -26,6 +47,8 @@ export interface SandboxRunOptions {
   /** Extra writable roots beyond the workspace (e.g. added directories). */
   roots?: string[]
   allowNetwork: boolean
+  /** Egress-proxy endpoints; with allowNetwork:true, switches capable backends to proxied network. */
+  egressProxy?: EgressProxyEndpoints
   timeoutMs?: number
   signal?: AbortSignal
   env?: NodeJS.ProcessEnv
@@ -50,6 +73,8 @@ export interface SandboxSpawnOptions {
   workspace: string
   roots?: string[]
   allowNetwork: boolean
+  /** Egress-proxy endpoints; with allowNetwork:true, switches capable backends to proxied network. */
+  egressProxy?: EgressProxyEndpoints
   env?: NodeJS.ProcessEnv
   signal?: AbortSignal
 }
@@ -94,6 +119,13 @@ export interface ShellLaunch {
    * POSIX prelude can't run — callers route around the session then.
    */
   supportsSession: boolean
+  /**
+   * Launch-specific environment overrides, merged OVER the shared `sandboxEnv`
+   * by the runner. Backends use this to steer a proxied launch: the proxy env
+   * vars (HTTP_PROXY/HTTPS_PROXY/…, whose proxy URL differs per backend) and, on
+   * Linux, ELECTRON_RUN_AS_NODE for the in-namespace forwarder.
+   */
+  env?: NodeJS.ProcessEnv
 }
 
 /**
@@ -119,6 +151,8 @@ export interface SandboxBackend {
     command: string
     roots: string[]
     allowNetwork: boolean
+    /** Egress-proxy endpoints — only meaningful with allowNetwork:true (see {@link EgressProxyEndpoints}). */
+    egressProxy?: EgressProxyEndpoints
     cwd: string
   }): ShellLaunch
 }

@@ -154,36 +154,3 @@ describe('buildCapabilities', () => {
     expect(text).toContain('skill({')
   })
 })
-
-describe('agent front-matter model', () => {
-  it('parses a front-matter model into the agent', async () => {
-    writeAgent('scout', '---\ndescription: cheap scout\nmodel: haiku-mini\n---\nYou scout.')
-    const [a] = await loadAgents(ws)
-    expect(a.model).toBe('haiku-mini')
-  })
-
-  it('leaves model undefined when absent or blank', async () => {
-    writeAgent('plain', '---\ndescription: d\n---\nBody.')
-    writeAgent('blank', '---\nmodel:   \n---\nBody.')
-    const agents = await loadAgents(ws)
-    for (const a of agents) expect(a.model).toBeUndefined()
-  })
-})
-
-describe('buildCapabilities: dispatch models', () => {
-  it('advertises the provider model ids for dispatch overrides (only when there is a choice)', () => {
-    const text = buildCapabilities([], [], ['claude-test', 'cheap-model'])
-    expect(text).toContain('claude-test, cheap-model')
-    expect(text).toContain('`model` override')
-    // A single-model provider offers no choice, so the section is dropped.
-    expect(buildCapabilities([], [], ['claude-test'])).toBe('')
-    expect(buildCapabilities([], [])).toBe('')
-  })
-
-  it("tags an agent that pins its own model in the agent listing", async () => {
-    writeAgent('scout', '---\ndescription: cheap scout\nmodel: haiku-mini\n---\nYou scout.')
-    const agents = await loadAgents(ws)
-    const text = buildCapabilities(agents, [])
-    expect(text).toContain('[runs on haiku-mini]')
-  })
-})

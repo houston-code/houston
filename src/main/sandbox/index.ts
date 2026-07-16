@@ -22,8 +22,21 @@ export type {
   SandboxSpawnOptions,
   RunSandboxedDeps,
   SandboxBackend,
-  ShellLaunch
+  ShellLaunch,
+  EgressProxyEndpoints
 } from './contract'
+export {
+  startEgressProxy,
+  egressProxyEnv,
+  EGRESS_BLOCKED_MARKER,
+  EGRESS_PROXY_INNER_PORT
+} from './egress-proxy'
+export type {
+  EgressCheck,
+  EgressLogEvent,
+  EgressProxyHandle,
+  StartEgressProxyOptions
+} from './egress-proxy'
 export {
   CappedOutput,
   clampToolResult,

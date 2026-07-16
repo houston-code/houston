@@ -93,6 +93,47 @@ describe('buildBwrapArgs', () => {
   it('propagates the chosen shell', () => {
     expect(buildBwrapArgs(base({ shell: '/bin/sh' })).slice(-3)).toEqual(['/bin/sh', '-c', 'npm test'])
   })
+
+  const proxy = { tcpPort: 9137, unixSocketPath: '/tmp/he/proxy.sock', forwarderPath: '/tmp/he/forwarder.cjs' }
+
+  it('proxied mode KEEPS the empty network namespace — the forwarder is the only road out', () => {
+    const a = buildBwrapArgs(base({ allowNetwork: true, egressProxy: proxy, nodeBin: '/usr/bin/node' }))
+    expect(a).toContain('--unshare-net')
+  })
+
+  it('proxied mode makes the forwarder the entrypoint, command as verbatim child argv', () => {
+    const command = 'curl https://registry.npmjs.org/ && echo "done; ok"'
+    const a = buildBwrapArgs(
+      base({ allowNetwork: true, egressProxy: proxy, nodeBin: '/usr/bin/node', command })
+    )
+    const tail = a.slice(a.indexOf('/usr/bin/node'))
+    expect(tail).toEqual([
+      '/usr/bin/node',
+      '/tmp/he/forwarder.cjs',
+      '/tmp/he/proxy.sock',
+      '24127',
+      '--',
+      '/bin/bash',
+      '-c',
+      command
+    ])
+  })
+
+  it('egress endpoints without a network grant stay fully denied (no forwarder)', () => {
+    const a = buildBwrapArgs(base({ allowNetwork: false, egressProxy: proxy, nodeBin: '/usr/bin/node' }))
+    expect(a).toContain('--unshare-net')
+    expect(a).not.toContain('/tmp/he/forwarder.cjs')
+    expect(a.slice(-3)).toEqual(['/bin/bash', '-c', 'npm test'])
+  })
+
+  it('a TCP-only endpoint set (no unix socket) cannot be proxied — falls back to full share, not a broken launch', () => {
+    // Defensive: the loop always passes unix endpoints on Linux; if it ever
+    // didn't, silently launching a forwarder pointing nowhere would break every
+    // command. Full share matches the legacy allowNetwork:true meaning.
+    const a = buildBwrapArgs(base({ allowNetwork: true, egressProxy: { tcpPort: 9137 } }))
+    expect(a).not.toContain('--unshare-net')
+    expect(a.slice(-3)).toEqual(['/bin/bash', '-c', 'npm test'])
+  })
 })
 
 describe('dedupeExisting', () => {
@@ -180,5 +221,34 @@ describe('BubblewrapBackend', () => {
     expect(launch.args.slice(-2)).toEqual(['-c', 'echo hi'])
     expect(BubblewrapBackend.sandboxed).toBe(true)
     expect(BubblewrapBackend.confinesNetwork).toBe(true)
+  })
+
+  it('proxied launch carries the forwarder env (RUN_AS_NODE + inner-port proxy vars)', () => {
+    const launch = BubblewrapBackend.buildLaunch({
+      command: 'curl https://registry.npmjs.org/',
+      roots: ['/'],
+      allowNetwork: true,
+      egressProxy: {
+        tcpPort: 9137,
+        unixSocketPath: '/tmp/he/proxy.sock',
+        forwarderPath: '/tmp/he/forwarder.cjs'
+      },
+      cwd: '/'
+    })
+    expect(launch.args).toContain('--unshare-net')
+    expect(launch.args).toContain('/tmp/he/forwarder.cjs')
+    expect(launch.env?.ELECTRON_RUN_AS_NODE).toBe('1')
+    expect(launch.env?.HTTPS_PROXY).toBe('http://127.0.0.1:24127')
+    expect(launch.env?.NO_PROXY).toContain('localhost')
+  })
+
+  it('unproxied launches carry no env overrides', () => {
+    const launch = BubblewrapBackend.buildLaunch({
+      command: 'echo hi',
+      roots: ['/'],
+      allowNetwork: true,
+      cwd: '/'
+    })
+    expect(launch.env).toBeUndefined()
   })
 })

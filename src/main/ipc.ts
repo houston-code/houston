@@ -104,8 +104,6 @@ import {
 } from './conversations'
 import { createSpawnBackend } from './spawnSession'
 import { setSpawnBackend } from './agent/spawn'
-import { setSchedulerBackend } from './agent/scheduler'
-import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 
 /**
  * Translate a delete-confirmation dialog button index into what should happen.
@@ -277,13 +275,6 @@ function callerOwnsRun(event: { sender: WebContents }, runId: string): boolean {
 export function registerIpc(): void {
   // Bind the agent's spawn_session tool to the real shell capabilities (once).
   wireSpawnSession()
-
-  // Scheduled runs: persist under userData, fire through the spawn backend just
-  // wired above (a fired occurrence is an ordinary background session in the
-  // sidebar). start() also catches up occurrences missed while the app was closed.
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn() })
-  setSchedulerBackend(scheduler)
-  scheduler.start()
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
