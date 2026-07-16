@@ -20,6 +20,8 @@ ships as a desktop app and as terminal clients.
 
 - **Desktop app.** The full GUI: chat sidebar, diffs, preview panel, settings.
 - **Interactive terminal (`houston -i`).** A stay-resident REPL in the terminal.
+  `--continue` reopens this folder's most recent chat at launch, `--resume <id>` a
+  specific one.
   Conversation streams live, approvals and questions are answered inline, and
   slash commands switch settings mid-session. See "The terminal composer" below
   for how to type, paste, and edit a message.

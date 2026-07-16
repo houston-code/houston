@@ -3619,3 +3619,81 @@ describe('/reasoning', () => {
     expect(patches).toContainEqual({ reasoningEffort: 'low' })
   })
 })
+
+// Headless has had --continue/--resume since it existed. The terminal had neither,
+// so picking up where you left off meant launching and then running /resume — one
+// extra step, every time, for the most ordinary thing you do.
+describe('--continue / --resume at launch', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const entries = [
+    { id: 'newest', title: 'Refactor auth', updatedAt: 200 },
+    { id: 'older', title: 'Docs pass', updatedAt: 100 }
+  ]
+
+  function persistWith(convs: Record<string, ChatMessage[]>): TuiPersist {
+    return {
+      create: () => ({ id: 'new' }),
+      setMessages: () => {},
+      setModel: () => {},
+      list: () => entries,
+      search: () => entries,
+      fork: () => null,
+      get: (id) => (convs[id] ? { messages: convs[id] } : null)
+    }
+  }
+
+  it('parses the flags', () => {
+    expect(parseTuiArgs(['-i', '--continue'], '/w')).toMatchObject({ continueSession: true })
+    expect(parseTuiArgs(['-i', '--resume', 'abc'], '/w')).toMatchObject({ resumeId: 'abc' })
+    expect(parseTuiArgs(['-i'], '/w')?.continueSession).toBeUndefined()
+  })
+
+  it('--continue reopens the most recent chat before the first prompt', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['keep going', null])
+    d.io = t.io
+    d.persist = persistWith({ newest: [{ role: 'user', content: 'earlier' }] })
+    await runTui({ ...opts, continueSession: true }, d)
+    expect(t.text()).toContain('continuing "Refactor auth"')
+    // The prior turn is really in context, not just announced.
+    expect(rec.runs[0].messages[0].content).toBe('earlier')
+  })
+
+  it('--resume opens the named chat, not the newest', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    d.persist = persistWith({ older: [{ role: 'user', content: 'from the docs pass' }] })
+    await runTui({ ...opts, resumeId: 'older' }, d)
+    expect(t.text()).toContain('continuing "Docs pass"')
+    expect(rec.runs[0].messages[0].content).toBe('from the docs pass')
+  })
+
+  // A named session that isn't there is a mistake worth saying out loud; nothing
+  // to continue is just a fresh start.
+  it('names a --resume miss, and shrugs at an empty --continue', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    d.persist = persistWith({})
+    await runTui({ ...opts, resumeId: 'nope' }, d)
+    expect(t.text()).toContain('no saved session "nope"')
+
+    const second = deps(done)
+    const t2 = fakeIo([null])
+    second.d.io = t2.io
+    second.d.persist = { ...persistWith({}), list: () => [] }
+    await runTui({ ...opts, continueSession: true }, second.d)
+    expect(t2.text()).toContain('starting fresh')
+  })
+
+  it('starts fresh with neither flag', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    d.persist = persistWith({ newest: [{ role: 'user', content: 'earlier' }] })
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('continuing')
+    expect(rec.runs[0].messages).toHaveLength(1)
+  })
+})
