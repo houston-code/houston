@@ -55,6 +55,17 @@ export function PlanPanel({
     rootRef.current?.focus()
   }, [])
 
+  // When a revised plan arrives (e.g. after "suggest changes"), discard any hand-edit
+  // and editor state carried over from the previous plan. The panel is not remounted
+  // across the swap, so without this reset `effectiveBody` would render — and accept
+  // would submit — the stale edit over the new plan. Keyed on `plan` identity: the
+  // parent passes a fresh payload for each presented plan.
+  useEffect(() => {
+    setEditedBody(null)
+    setEditing(false)
+    setDraft('')
+  }, [plan])
+
   const accept = (): void =>
     onResolve({ kind: 'accept', mode: editMode, ...(editedBody !== null ? { editedBody } : {}) })
   const reject = (): void => onResolve({ kind: 'reject' })
