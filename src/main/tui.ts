@@ -282,7 +282,11 @@ export function renderPreviewDiff(preview: FileDiffPreview[]): string | null {
       const tag = f.created ? ' (new file)' : f.deleted ? ' (deleted)' : ''
       const from = f.renamedFrom ?? f.path
       const body = f.diff
-        .map((l) => `${l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' '}${l.text}`)
+        .map((l) =>
+          // A `skip` marks unchanged lines folded away; it is a note, not a line of
+          // the file, so it must not render with a diff sign.
+          l.type === 'skip' ? `⋯ ${l.text}` : `${l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' '}${l.text}`
+        )
         .join('\n')
       const more = f.truncated ? '\n… diff shortened; the change continues past this point' : ''
       return `--- ${from}\n+++ ${f.path}${tag}\n${body}${more}`

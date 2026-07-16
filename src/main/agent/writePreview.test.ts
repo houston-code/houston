@@ -258,3 +258,27 @@ describe('previewWrite: bounds and safety', () => {
     expect(readFileSync(join(workspace, 'a.ts'), 'utf8')).toBe('original\n')
   })
 })
+
+// End-to-end guard for the bug: the preview must contain the change, whatever the
+// file's size. Previously the line budget was spent on untouched context and the
+// approval card showed a diff with nothing in it.
+describe('previewWrite — a change late in a long file', () => {
+  it('shows the edit, not 400 lines of context', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-preview-late-'))
+    const file = join(dir, 'long.ts')
+    const before = Array.from({ length: 600 }, (_, i) => `line ${i}`).join('\n')
+    writeFileSync(file, before)
+
+    const preview = await previewWrite(
+      'edit_file',
+      { path: file, old_string: 'line 500', new_string: 'line 500 CHANGED' },
+      [dir]
+    )
+    expect(preview).not.toBeNull()
+    const diff = preview![0].diff
+    const changes = diff.filter((l) => l.type === 'add' || l.type === 'del')
+    expect(changes.some((l) => l.text.includes('CHANGED'))).toBe(true)
+    expect(preview![0].truncated).toBeFalsy() // it fits now: the file was folded away
+    expect(diff.some((l) => l.type === 'skip')).toBe(true)
+  })
+})
