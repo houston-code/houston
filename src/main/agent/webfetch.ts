@@ -304,11 +304,50 @@ export interface FetchOptions {
 }
 
 /**
- * Fetch a URL and return a readable text summary (status line + body). HTML is
- * converted to text; other text/JSON bodies are returned as-is. Redirects are
- * followed manually so each hop's target is re-validated against the SSRF guard.
+ * Clamp an origin-chosen header string to short printable ASCII.
+ *
+ * `statusText` (the HTTP reason phrase) and `contentType` are free text the server
+ * picks, but unlike the body they get rendered *outside* the untrusted-content fence,
+ * in the slot the agent reads as our framing. A server is entitled to a reason phrase,
+ * not to several lines of prose in that position — Node will hand us a reason phrase
+ * of many KB if one is sent. Applied where the document is built, so no caller has to
+ * remember to do it.
  */
-export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Promise<string> {
+export function sanitizeHeaderText(s: string, max = 120): string {
+  const clean = s.replace(/[^ -~]/g, '').trim()
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean
+}
+
+/** A fetched page, split so callers can treat the body as the untrusted part it is. */
+export interface FetchedDocument {
+  status: number
+  statusText: string
+  contentType: string
+  /** The URL actually fetched, after redirects. */
+  url: string
+  /** The body as text (HTML converted). Attacker-controlled — see untrusted.ts. */
+  text: string
+  truncated: boolean
+  /** How many bytes the body was capped at, when {@link truncated}. */
+  maxBytes: number
+}
+
+/** Render a document the way `web_fetch` has always returned it: status line, then body. */
+export function documentAsText(doc: FetchedDocument): string {
+  const header = `HTTP ${doc.status} ${doc.statusText} · ${doc.contentType || 'unknown type'} · ${doc.url}`
+  const tail = doc.truncated ? `\n[truncated at ${doc.maxBytes} bytes]` : ''
+  return `${header}\n\n${doc.text}${tail}`
+}
+
+/**
+ * Fetch a URL and return its status, type, and body text. HTML is converted to text;
+ * other text/JSON bodies are returned as-is. Redirects are followed manually so each
+ * hop's target is re-validated and re-pinned against the SSRF guard.
+ */
+export async function fetchUrlAsDocument(
+  raw: string,
+  opts: FetchOptions = {}
+): Promise<FetchedDocument> {
   const transport = opts.transport ?? pinnedTransport
   const resolveHost = opts.resolveHost ?? defaultResolveHost
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
@@ -350,9 +389,15 @@ export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Prom
       const truncated = res.body.length > maxBytes
       const body = res.body.subarray(0, maxBytes).toString('utf8')
       const isHtml = /text\/html|application\/xhtml/i.test(contentType)
-      const text = isHtml ? htmlToText(body) : body
-      const header = `HTTP ${res.status} ${res.statusText} · ${contentType || 'unknown type'} · ${current.toString()}`
-      return `${header}\n\n${text}${truncated ? `\n[truncated at ${maxBytes} bytes]` : ''}`
+      return {
+        status: res.status,
+        statusText: sanitizeHeaderText(res.statusText),
+        contentType: sanitizeHeaderText(contentType),
+        url: current.toString(),
+        text: isHtml ? htmlToText(body) : body,
+        truncated,
+        maxBytes
+      }
     }
     throw new Error('Too many redirects.')
   } catch (e) {
@@ -362,4 +407,9 @@ export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Prom
     clearTimeout(timer)
     if (opts.signal) opts.signal.removeEventListener('abort', onAbort)
   }
+}
+
+/** Fetch a URL and render it as a readable text summary (status line + body). */
+export async function fetchUrlAsText(raw: string, opts: FetchOptions = {}): Promise<string> {
+  return documentAsText(await fetchUrlAsDocument(raw, opts))
 }

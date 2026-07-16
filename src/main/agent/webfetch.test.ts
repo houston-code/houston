@@ -8,6 +8,7 @@ import {
   isPrivateHost,
   pinnedTransport,
   resolveAndPin,
+  sanitizeHeaderText,
   validateFetchUrl
 } from './webfetch'
 
@@ -247,6 +248,25 @@ describe('fetchUrlAsText', () => {
     await expect(
       fetchUrlAsText('https://empty.example/', { transport, resolveHost: async () => [] })
     ).rejects.toThrow(/resolves to no addresses/)
+  })
+})
+
+describe('sanitizeHeaderText', () => {
+  it('keeps an ordinary reason phrase and content type intact', () => {
+    expect(sanitizeHeaderText('OK')).toBe('OK')
+    expect(sanitizeHeaderText('text/html; charset=utf-8')).toBe('text/html; charset=utf-8')
+  })
+
+  it('strips control and non-ASCII characters', () => {
+    expect(sanitizeHeaderText('OK\r\nX-Evil: 1')).toBe('OKX-Evil: 1')
+    expect(sanitizeHeaderText('OK ')).toBe('OK')
+  })
+
+  it('caps a server that sends prose instead of a reason phrase', () => {
+    // Node accepts a multi-KB reason phrase; it renders outside the untrusted fence.
+    const out = sanitizeHeaderText('A'.repeat(5000))
+    expect(out.length).toBeLessThanOrEqual(121)
+    expect(out.endsWith('…')).toBe(true)
   })
 })
 

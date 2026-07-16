@@ -64,6 +64,22 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   much smaller: both accept loopback only, so there's no attacker-supplied public host
   to rebind in the first place.
 
+- **Extend untrusted-content handling past `web_fetch`.** Fetched pages are fenced,
+  scored for injection signals, and isolated when they look like an attempt (see
+  `src/main/agent/untrusted.ts`). The system prompt says the same rule covers file
+  contents, MCP results, and other tool output, but those still arrive unfenced and
+  unscored — so for them the posture remains advisory. MCP results are the sharpest
+  gap: a third-party server is as attacker-controlled as a web page, and its output
+  crosses the same trust boundary. *Why deferred:* the fence is cheap to apply
+  anywhere, but the quarantine path needs a per-source judgment about what a "report"
+  even means (a fenced JSON tool result is not prose to summarize), and blanket
+  fencing of every file read would add noise to the common path for little gain,
+  since the file contents mostly come from the user's own repo. Wants a per-source
+  trust model rather than one flag. Two known limits of what shipped: the classifier
+  is a heuristic that anyone who reads this repo can word around, and the isolated
+  reader can still be induced to write a misleading report (it just has no tools to
+  act with).
+
 - **Egress-allowlist follow-ups.** The per-domain forward proxy for shell egress has
   shipped (macOS + Linux: direct sockets denied in the sandbox profile, granted network
   routed through a loopback proxy that enforces the Settings allowlist — see

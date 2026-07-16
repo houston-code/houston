@@ -820,6 +820,14 @@ the agent loop and UI never depend on a specific provider.
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach
   private/LAN/metadata hosts (public CDNs are still allowed so pages render).
+- **Fetched web pages are data, not instructions.** `web_fetch` resolves each
+  host once, checks every address, and connects to exactly those addresses, so a
+  name can't resolve public for the check and private for the connect (DNS
+  rebinding); redirect hops are re-checked and re-pinned. Page text then arrives
+  inside a nonce-tagged untrusted-content fence, and a page that scores as an
+  injection attempt is never inlined at all: a model call with no tools and no
+  history reads it in isolation and only its report reaches the agent. Ordinary
+  pages are unaffected and stay byte-exact.
 - **Keys at rest** are encrypted via the OS Keychain; only ciphertext is written
   to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
 

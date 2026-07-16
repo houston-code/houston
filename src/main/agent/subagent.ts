@@ -1,5 +1,6 @@
 import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
 import { getTool, type ToolContext } from './tools'
+import { runQuarantineExtraction } from './untrusted'
 import { recordOriginal, recordResult, writeTargets } from './checkpoints'
 import type { ShellSession } from './shell-session'
 import { isSandboxed } from '../sandbox'
@@ -302,7 +303,31 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     // only meaningful when the network tools are offered at all.
     ...(opts.network?.getSecret ? { getSecret: opts.network.getSecret } : {}),
     ...(opts.network?.searchProvider ? { searchProvider: opts.network.searchProvider } : {}),
-    ...(opts.network?.collectSecrets ? { collectSecrets: opts.network.collectSecrets } : {})
+    ...(opts.network?.collectSecrets ? { collectSecrets: opts.network.collectSecrets } : {}),
+    // A subagent fetches the same untrusted web as the main loop, so it isolates
+    // flagged pages the same way, on its own provider/model. Without this it would
+    // silently fall back to fencing alone — the weaker path — while holding tools.
+    ...(opts.network
+      ? {
+          quarantineExtract: ({
+            content,
+            source,
+            query
+          }: {
+            content: string
+            source: string
+            query?: string
+          }) =>
+            runQuarantineExtraction({
+              provider: opts.provider,
+              model: opts.model,
+              content,
+              source,
+              query,
+              signal
+            })
+        }
+      : {})
   }
   // A resumed agent continues its prior transcript; the new prompt is the next
   // user turn. Copied so the caller's stored transcript isn't mutated mid-run.
