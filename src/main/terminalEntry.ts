@@ -35,6 +35,12 @@ import { loadAgents } from './agent/agents'
 import { loadCommands } from './agent/commands'
 import { compactConversationNow } from './agent/compact'
 import {
+  getConversationCheckpoint,
+  restoreCheckpoint,
+  reapplyCheckpoint
+} from './agent/checkpoints'
+import { collectWorkingTreeChanges } from './agent/workingTree'
+import {
   canPersistHeaderSecrets,
   canSetKey,
   getSettings,
@@ -511,6 +517,28 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       version,
       // /doctor: probe on demand, reusing whatever the update check already found
       // rather than making the report wait on the network.
+      // Roll a turn's writes back: the snapshots exist for every write already,
+      // the terminal just had no way to reach them.
+      checkpoint: {
+        info: (conversationId) => getConversationCheckpoint(conversationId),
+        undo: (runId) => restoreCheckpoint(runId),
+        redo: (runId) => reapplyCheckpoint(runId)
+      },
+      workingTree: async () => {
+        const c = await collectWorkingTreeChanges(tui.cwd)
+        return {
+          isRepo: c.isRepo,
+          branch: c.branch,
+          files: c.files.map((f) => ({
+            path: f.path,
+            status: f.status,
+            added: f.added,
+            removed: f.removed
+          })),
+          added: c.added,
+          removed: c.removed
+        }
+      },
       doctor: async () => probeDoctor(tui.cwd, version, tui.color, latestUpdate),
       runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),

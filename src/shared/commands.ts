@@ -115,6 +115,13 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'model', description: 'List or switch the active model', clients: ['tui'] },
   { name: 'login', description: 'Set or update an API key (also: /providers)', clients: ['tui'] },
   { name: 'settings', description: 'Show a summary of your current settings', clients: ['tui'] },
+  { name: 'undo', description: "Revert the files the last turn changed", clients: ['tui'] },
+  { name: 'redo', description: 'Put back what /undo reverted', clients: ['tui'] },
+  {
+    name: 'changes',
+    description: 'What is different in the working tree (also /diff)',
+    clients: ['tui']
+  },
   {
     name: 'reasoning',
     description: 'Show or set thinking effort (off | low | medium | high | xhigh)',

@@ -40,6 +40,9 @@ import {
   nextPolicy,
   addModelUsage,
   renderCostReport,
+  renderCheckpoint,
+  renderUndoResult,
+  renderWorkingTree,
   renderRecoveredOutput,
   toolResultsFrom,
   FAILURE_LINES,
@@ -3895,5 +3898,130 @@ describe('/vim', () => {
     d.updateSettings = undefined
     await runTui(opts, d)
     expect(t.text()).toContain('unavailable')
+  })
+})
+
+// Houston has snapshotted every write since forever, and the desktop can roll a
+// turn back with a click. From the terminal there was no way in — so under
+// auto-edit or full-auto, "that was wrong, put it back" meant reverting by hand.
+describe('/undo, /redo and /changes', () => {
+  const paintNo = makePainter(false)
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('describes what undo would act on', () => {
+    expect(renderCheckpoint(null, paintNo)).toContain('no changes from this chat to undo')
+    expect(renderCheckpoint({ runId: 'r', files: 3, reverted: false }, paintNo)).toContain('revert 3 file(s)')
+    expect(renderCheckpoint({ runId: 'r', files: 3, reverted: true }, paintNo)).toContain('already undone')
+  })
+
+  it('reports what undo did, and points at redo', () => {
+    expect(renderUndoResult(2, paintNo)).toContain('2 files')
+    expect(renderUndoResult(2, paintNo)).toContain('/redo')
+    expect(renderUndoResult(0, paintNo)).toContain('changed no files')
+  })
+
+  it('undoes the last turn through the checkpoint the run already wrote', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', '/undo', null])
+    d.io = t.io
+    const undone: string[] = []
+    d.checkpoint = {
+      info: async () => ({ runId: 'run-1', files: 2, reverted: false }),
+      undo: async (runId) => {
+        undone.push(runId)
+        return 2
+      },
+      redo: async () => 0
+    }
+    await runTui(opts, d)
+    expect(undone).toEqual(['run-1'])
+    expect(t.text()).toContain("undid the last turn's changes (2 files)")
+  })
+
+  it('/redo puts them back', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', '/redo', null])
+    d.io = t.io
+    const redone: string[] = []
+    d.checkpoint = {
+      info: async () => ({ runId: 'run-1', files: 2, reverted: true }),
+      undo: async () => 0,
+      redo: async (runId) => {
+        redone.push(runId)
+        return 2
+      }
+    }
+    await runTui(opts, d)
+    expect(redone).toEqual(['run-1'])
+    expect(t.text()).toContain('put back 2 file(s)')
+  })
+
+  it('says so when there is no checkpoint, without calling undo', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/undo', null]) // no turn has run, so there is no run to undo
+    d.io = t.io
+    let undoCalls = 0
+    d.checkpoint = {
+      info: async () => null,
+      undo: async () => {
+        undoCalls++
+        return 0
+      },
+      redo: async () => 0
+    }
+    await runTui(opts, d)
+    expect(undoCalls).toBe(0)
+    expect(t.text()).toContain('no changes from this chat to undo')
+  })
+
+  it('/undo before any turn says so rather than throwing', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/undo', null])
+    d.io = t.io
+    d.checkpoint = { info: async () => null, undo: async () => 0, redo: async () => 0 }
+    const code = await runTui(opts, d)
+    expect(code).toBe(0)
+    expect(t.text()).toContain('no changes from this chat to undo')
+  })
+
+  it('renders the working tree as a summary', () => {
+    const out = renderWorkingTree(
+      {
+        isRepo: true,
+        branch: 'feat/x',
+        files: [
+          { path: 'src/a.ts', status: 'modified', added: 3, removed: 1 },
+          { path: 'src/b.ts', status: 'added', added: 10, removed: 0 }
+        ],
+        added: 13,
+        removed: 1
+      },
+      paintNo
+    )
+    expect(out).toContain('Changes on feat/x')
+    expect(out).toContain('M src/a.ts')
+    expect(out).toContain('A src/b.ts')
+    expect(out).toContain('2 files, +13 -1')
+  })
+
+  it('handles a clean tree and a non-repo', () => {
+    const clean = { isRepo: true, branch: 'main', files: [], added: 0, removed: 0 }
+    expect(renderWorkingTree(clean, paintNo)).toContain('no changes')
+    expect(renderWorkingTree({ ...clean, isRepo: false }, paintNo)).toContain('not a git repository')
+  })
+
+  it('/changes prints the summary', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/changes', null])
+    d.io = t.io
+    d.workingTree = async () => ({
+      isRepo: true,
+      branch: 'main',
+      files: [{ path: 'x.ts', status: 'modified', added: 1, removed: 1 }],
+      added: 1,
+      removed: 1
+    })
+    await runTui(opts, d)
+    expect(t.text()).toContain('M x.ts')
   })
 })

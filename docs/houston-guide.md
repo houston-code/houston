@@ -234,6 +234,19 @@ automatically, with no second `Enter`. Several queued messages go together as on
 - Stopping a run also drops anything queued: those messages were follow-ups to
   work you just threw away.
 
+## Undoing a turn, and seeing what changed
+
+- **`/undo`** puts back the files the last turn changed; **`/redo`** re-applies
+  them. Houston snapshots every write before it happens, so this needs nothing set
+  up. It is most useful under auto-approve modes, where edits land without a
+  prompt: "that was wrong, put it back" is one word rather than a hand revert.
+- **`/changes`** (also `/diff`) summarizes everything different in the working
+  tree: each file with its status and how many lines it gained and lost, plus a
+  total. The natural question after a long autonomous run.
+
+`/undo` covers the last turn's file writes only. It does not undo shell commands,
+and it does not touch git history.
+
 ## Being told when it needs you
 
 A long run can block on an approval, a question, or a plan, and then it is just

@@ -764,6 +764,67 @@ export function parseSessionSelection(answer: string, sessions: BackgroundSessio
   return null
 }
 
+/** What the last turn changed on disk, and whether it has been undone already. */
+export interface CheckpointInfo {
+  runId: string
+  files: number
+  reverted: boolean
+}
+
+/**
+ * `/undo`: put the files the last turn touched back the way they were.
+ *
+ * Houston has snapshotted every write since forever (agent/checkpoints.ts) and the
+ * desktop app can roll a turn back with a click. From the terminal there was no way
+ * to reach it — so under auto-edit or full-auto, where edits land without a prompt,
+ * "that was wrong, put it back" meant reverting by hand or asking the agent to undo
+ * its own work. The snapshots were right there the whole time.
+ */
+export function renderUndoResult(files: number, paint: Painter): string {
+  return files
+    ? paint(`· undid the last turn's changes (${files} file${files === 1 ? '' : 's'}); /redo puts them back`, 'dim')
+    : paint('· nothing to undo: the last turn changed no files', 'dim')
+}
+
+/** Describe what `/undo` would act on, before doing it. */
+export function renderCheckpoint(cp: CheckpointInfo | null, paint: Painter): string {
+  if (!cp) return paint('· no changes from this chat to undo yet', 'dim')
+  return cp.reverted
+    ? paint(`· the last turn's ${cp.files} file change(s) are already undone (/redo puts them back)`, 'dim')
+    : paint(`· /undo would revert ${cp.files} file(s) changed by the last turn`, 'dim')
+}
+
+/**
+ * `/changes`: everything different in the working tree, as one summary.
+ *
+ * Answers the question you actually have after a long autonomous run — "what did
+ * it do to my repo?" — which was otherwise a shell-out to `git status` (and, before
+ * the `!` escape, leaving the session to find out).
+ */
+export function renderWorkingTree(
+  changes: { isRepo: boolean; branch: string | null; files: { path: string; status: string; added: number; removed: number }[]; added: number; removed: number },
+  paint: Painter
+): string {
+  if (!changes.isRepo) return paint('· not a git repository, so there is nothing to compare against', 'dim')
+  if (!changes.files.length) return paint('· no changes in the working tree', 'dim')
+  const head = paint(`Changes${changes.branch ? ` on ${changes.branch}` : ''}:`, 'bold')
+  const width = Math.max(...changes.files.map((f) => f.path.length))
+  const rows = changes.files.map((f) => {
+    const mark =
+      f.status === 'added' ? paint('A', 'green')
+        : f.status === 'deleted' ? paint('D', 'red')
+          : f.status === 'renamed' ? paint('R', 'magenta')
+            : paint('M', 'yellow')
+    const stat = `${paint(`+${f.added}`, 'green')} ${paint(`-${f.removed}`, 'red')}`
+    return `  ${mark} ${f.path.padEnd(width)}  ${stat}`
+  })
+  const total = paint(
+    `  ${changes.files.length} file${changes.files.length === 1 ? '' : 's'}, +${changes.added} -${changes.removed}`,
+    'dim'
+  )
+  return [head, ...rows, total].join('\n')
+}
+
 /** Render a numbered picker of recent conversations for `/resume`. */
 export function renderConversationList(convs: ResumeEntry[], now: number, paint: Painter): string {
   if (!convs.length) return paint('No saved sessions in this folder yet.', 'dim')
@@ -1002,6 +1063,10 @@ export type SlashResult =
   | { kind: 'reasoning'; effort?: ReasoningEffort }
   /** Turn vim keys in the composer on or off (/vim). */
   | { kind: 'vim'; on?: boolean }
+  /** Revert (or restore) the files the last turn changed (/undo, /redo). */
+  | { kind: 'undo'; redo: boolean }
+  /** Summarize everything different in the working tree (/changes). */
+  | { kind: 'changes' }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
   /** Reprint a past tool result in full (/output [n]). */
@@ -1066,6 +1131,13 @@ export function parseSlashCommand(
       if (a === 'off') return { kind: 'vim', on: false }
       return { kind: 'vim' } // bare /vim toggles
     }
+    case 'undo':
+      return { kind: 'undo', redo: false }
+    case 'redo':
+      return { kind: 'undo', redo: true }
+    case 'changes':
+    case 'diff':
+      return { kind: 'changes' }
     case 'verbose': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'verbose', on: true }
@@ -1171,6 +1243,8 @@ export const HELP_TEXT = [
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set thinking effort (off | low | medium | high | xhigh)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
+  '  /undo, /redo          revert (or restore) the files the last turn changed',
+  '  /changes              what is different in the working tree (also /diff)',
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
@@ -1860,6 +1934,23 @@ export interface TuiDeps {
    */
   saveMemory?: (scope: MemoryScope, text: string) => Promise<string>
   /**
+   * Roll the last turn's file writes back (or forward again). Houston snapshots
+   * every write already; this is the terminal's way in. Absent ⇒ /undo says so.
+   */
+  checkpoint?: {
+    info: (conversationId: string) => Promise<CheckpointInfo | null>
+    undo: (runId: string) => Promise<number>
+    redo: (runId: string) => Promise<number>
+  }
+  /** Everything different in the working tree, for /changes. */
+  workingTree?: () => Promise<{
+    isRepo: boolean
+    branch: string | null
+    files: { path: string; status: string; added: number; removed: number }[]
+    added: number
+    removed: number
+  }>
+  /**
    * Probe the environment for /doctor (binaries, sandbox backend, MCP state).
    * Absent ⇒ the command reports that diagnostics are unavailable.
    */
@@ -2125,6 +2216,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let policy = opts.approvalPolicy
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
+  // The last turn's run id. Checkpoints are keyed by run, so this is what /undo
+  // needs; the conversation lookup is only a way to find it across restarts.
+  let lastRunId: string | null = null
   // The persisted conversation backing this session, created lazily on the first
   // turn (so merely opening and closing the REPL doesn't litter history). Null
   // until then, or after `/clear` starts a fresh one.
@@ -2672,6 +2766,38 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         continue
       }
+      if (result.kind === 'undo') {
+        if (!deps.checkpoint) {
+          deps.io.out(paint('· undo is unavailable here\n', 'dim'))
+          continue
+        }
+        // Prefer the stored checkpoint (it survives a restart), but fall back to
+        // this session's last run: an ephemeral session has no conversation to look
+        // up, and its writes are just as undoable.
+        const cp = conversationId ? await deps.checkpoint.info(conversationId) : null
+        const runId = cp?.runId ?? lastRunId
+        if (!runId) {
+          deps.io.out(`${renderCheckpoint(null, paint)}\n`)
+          continue
+        }
+        const files = result.redo
+          ? await deps.checkpoint.redo(runId)
+          : await deps.checkpoint.undo(runId)
+        deps.io.out(
+          result.redo
+            ? paint(`· put back ${files} file(s) the last turn had changed\n`, 'dim')
+            : `${renderUndoResult(files, paint)}\n`
+        )
+        continue
+      }
+      if (result.kind === 'changes') {
+        if (!deps.workingTree) {
+          deps.io.out(paint('· working-tree changes are unavailable here\n', 'dim'))
+          continue
+        }
+        deps.io.out(`${renderWorkingTree(await deps.workingTree(), paint)}\n`)
+        continue
+      }
       if (result.kind === 'doctor') {
         if (!deps.doctor) {
           deps.io.out(paint('· diagnostics are unavailable here\n', 'dim'))
@@ -2860,6 +2986,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     syncPersistedModel()
     const runId = newId()
     activeRunId = runId
+    lastRunId = runId
     const req: AgentRunRequest = {
       runId,
       ...(conversationId ? { conversationId } : {}),
