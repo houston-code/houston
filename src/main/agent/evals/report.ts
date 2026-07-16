@@ -72,6 +72,41 @@ function firstLine(s: string): string {
   return line ? line.trim().slice(0, 120) : '(verify produced no output)'
 }
 
+/**
+ * The distinct causes behind the failing tasks, most common first.
+ *
+ * So a failure message can STAND ALONE. "Check the per-task errors in the
+ * scorecard above" is useless advice when the scorecard is a hundred lines up a
+ * CI log, or when the reader is pasting the tail into a chat — the one line that
+ * identifies the problem (`401 invalid x-api-key`, `model not found`) belongs in
+ * the error itself. Deduplicated because eight identical provider errors say
+ * exactly as much as one, and the count is the useful part.
+ */
+export function failureCauses(reports: TaskReport[]): string[] {
+  const counts = new Map<string, number>()
+  for (const r of reports) {
+    if (r.passRate === 1) continue
+    const cause = normalizeCause(r.sample.error ?? firstLine(r.sample.verifyOutput))
+    counts.set(cause, (counts.get(cause) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([cause, n]) => (n > 1 ? `${cause}  (x${n} tasks)` : cause))
+}
+
+/**
+ * Collapse volatile ids so identical failures actually group.
+ *
+ * Every provider error carries a unique request id, so eight copies of one 401
+ * dedupe to eight distinct strings and the "cause" list becomes the wall of noise
+ * it was meant to replace. 16+ char runs of bare alphanumerics are ids, not prose
+ * (the longest word in a typical error, "authentication", is 14, and underscores
+ * split `request_id` into short pieces), so this is safe to apply bluntly.
+ */
+function normalizeCause(s: string): string {
+  return s.replace(/[A-Za-z0-9]{16,}/g, '…')
+}
+
 /** A fixed-width scorecard: one row per task, then a totals line. */
 export function formatReport(header: ReportHeader, reports: TaskReport[]): string {
   const { solved, total, costUsd, durationMs } = summarize(reports)
