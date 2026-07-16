@@ -171,13 +171,27 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
       await new Promise<void>((done) => target.close(() => done()))
     })
 
+    // Each probe spawns a real sandboxed subprocess and waits on a DNS lookup or a proxy
+    // round trip, so the command gets a generous 30s budget. The Vitest timeout must clear
+    // that budget: on the 5s default the test is killed while its command is still
+    // legitimately running, and under the full parallel suite on a busy machine these
+    // probes do cross 5s (observed ~5.0s deaths) even though each passes comfortably in
+    // isolation. With headroom over the command budget, only a real hang fails here — and
+    // it fails as a command timeout, with the assertion's own diagnosis intact.
+    const PROXIED_COMMAND_TIMEOUT = 30_000
+    const PROXIED_TEST_TIMEOUT = 45_000
+
     const proxied = (command: string) =>
-      run(command, { allowNetwork: true, egressProxy: proxy!.endpoints, timeoutMs: 30_000 })
+      run(command, {
+        allowNetwork: true,
+        egressProxy: proxy!.endpoints,
+        timeoutMs: PROXIED_COMMAND_TIMEOUT
+      })
 
     itEnforced('C8a direct egress stays denied in proxied mode', async () => {
       const r = await proxied('exec 3<>/dev/tcp/192.0.2.1/80')
       expect(r.stderr).toMatch(NETWORK_DENIED_RE)
-    })
+    }, PROXIED_TEST_TIMEOUT)
 
     itEnforced('C8a2 DNS resolution of an external name is denied in proxied mode', async () => {
       // The DNS-tunnel exfil channel: getaddrinfo() must NOT resolve an external
@@ -192,14 +206,14 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
       )
       expect(r.stdout + r.stderr).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/) // no resolved A record
       expect(r.stdout + r.stderr).toMatch(/LOOKUP_FAILED|gaierror|not known|Name or service|Temporary failure/i)
-    })
+    }, PROXIED_TEST_TIMEOUT)
 
     itEnforced('C8a3 loopback name resolution still works (dev servers, proxy host)', async () => {
       // localhost must resolve via /etc/hosts / the numeric path (no resolver
       // daemon), so the proxy and dev servers stay reachable under the deny.
       const r = await proxied('getent hosts localhost 2>/dev/null || python3 -c "import socket; print(socket.getaddrinfo(\'localhost\',80)[0][4][0])"')
       expect(r.stdout).toMatch(/127\.0\.0\.1|::1/)
-    })
+    }, PROXIED_TEST_TIMEOUT)
 
     itProxied('C8b an allowed destination is reachable through the proxy', async () => {
       // $HTTP_PROXY is injected by the backend launch (host port on macOS, the
@@ -211,7 +225,7 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
       )
       expect(r.stdout).toContain('TARGET_REACHED')
       expect(r.exitCode).toBe(0)
-    })
+    }, PROXIED_TEST_TIMEOUT)
 
     itProxied('C8c a denied destination gets the EGRESS_BLOCKED refusal, not a connection', async () => {
       const r = await proxied(
@@ -219,13 +233,13 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
       )
       expect(r.stdout).toContain('EGRESS_BLOCKED')
       expect(r.stdout).toContain('denied.invalid')
-    })
+    }, PROXIED_TEST_TIMEOUT)
 
     itProxied('C8d a denied CONNECT (https-style) fails with the proxy 403', async () => {
       const r = await proxied(
         `curl -sS --proxy "$HTTP_PROXY" --noproxy '' https://denied.invalid/ 2>&1; exit 0`
       )
       expect(`${r.stdout}\n${r.stderr}`).toMatch(/403/)
-    })
+    }, PROXIED_TEST_TIMEOUT)
   })
 })
