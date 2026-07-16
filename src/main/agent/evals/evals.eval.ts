@@ -58,7 +58,7 @@ import {
 } from './baseline'
 import { resolveEvalConfig } from './config'
 import { materializeTask, runVerify, taskDirNames } from './fixtures'
-import { formatReport, type TaskReport } from './report'
+import { failureCauses, formatReport, type TaskReport } from './report'
 import { TASKS } from './tasks'
 import type { EvalResult, EvalTask } from './types'
 
@@ -366,7 +366,18 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
       attempts: r.attempts
     }))
     // Never write a baseline that would gate nothing — see assertRecordable.
-    assertRecordable(scores)
+    // Fold the actual per-task causes into the message: the scorecard is already
+    // on stdout, but it scrolls away in a CI log and gets cropped when someone
+    // pastes the tail, and the cause is the only part that identifies the fix.
+    try {
+      assertRecordable(scores)
+    } catch (e) {
+      const causes = failureCauses(reports)
+      throw new Error(
+        [(e as Error).message, '', 'The failures were:', ...causes.map((c) => `  - ${c}`)].join('\n'),
+        { cause: e }
+      )
+    }
     mkdirSync(BASELINES_DIR, { recursive: true })
     const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date())
     writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
