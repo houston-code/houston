@@ -81,6 +81,20 @@ describe('searchContents (JS fallback)', () => {
       })
     ).rejects.toThrow(/Search path not found/i)
   })
+
+  it('searches a single-file path, not only a directory', async () => {
+    // jsWalk would readdir() a file path and hit ENOTDIR (silently "no matches"); the
+    // ripgrep backend searches a file argument, so the JS fallback must match it.
+    const out = await searchContents({
+      pattern: 'answer',
+      workspace,
+      searchRel: 'src/app.ts',
+      startAbs: join(workspace, 'src', 'app.ts'),
+      rgPath: null,
+      max: 100
+    })
+    expect(out).toContain('src/app.ts:1:')
+  })
 })
 
 describe('searchContents options (JS fallback)', () => {
@@ -132,6 +146,15 @@ describe('searchContents options (JS fallback)', () => {
     expect(out).toContain('src/app.ts:1- line1') // context before (dash separator)
     expect(out).toContain('src/app.ts:2: NEEDLE here') // match (colon separator)
     expect(out).toContain('src/app.ts:3- line3') // context after
+  })
+
+  it('labels a match as a match even when it falls inside another match context window', async () => {
+    // Matches on lines 1 and 3; with context 2, line 3 also appears in line 1's window.
+    // It must still read as a match (':'), not context ('-'), as ripgrep does.
+    writeFileSync(join(workspace, 'src', 'close.ts'), 'MATCH one\nfiller\nMATCH two\nfiller2\n')
+    const out = await search('MATCH', { context: 2 })
+    expect(out).toContain('src/close.ts:1: MATCH one')
+    expect(out).toContain('src/close.ts:3: MATCH two')
   })
 })
 

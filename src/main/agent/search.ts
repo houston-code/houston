@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { promises as fs, existsSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { promises as fs, existsSync, statSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import { withExeSuffix } from '../binaries'
 
@@ -140,6 +140,60 @@ export function runRipgrep(
   })
 }
 
+/** Scan one file's contents into `out`. Shared by the directory walk and the
+ *  single-file search path so both honour the glob filter, context, and cap. */
+async function scanFile(
+  full: string,
+  workspace: string,
+  regex: RegExp,
+  out: string[],
+  max: number,
+  opts: MatchOptions
+): Promise<void> {
+  // Normalize to forward slashes so a path-scoped glob matches on Windows too, where
+  // relative() yields backslashes that minimatch would treat as escape characters.
+  const rel = relative(workspace, full).split(sep).join('/')
+  // matchBase mirrors ripgrep's gitignore-style globs: a slash-less pattern
+  // like "*.ts" matches files at any depth, while "src/**/*.ts" matches by path.
+  if (opts.glob && !minimatch(rel, opts.glob, { matchBase: true })) return
+  let content: string
+  try {
+    content = await fs.readFile(full, 'utf8')
+  } catch {
+    return
+  }
+  if (content.includes(String.fromCharCode(0))) return // skip binary files
+  const lines = content.split('\n')
+  const matchedLines: number[] = []
+  for (let i = 0; i < lines.length; i++) {
+    if (regex.test(lines[i])) matchedLines.push(i)
+  }
+  if (matchedLines.length === 0) return
+
+  if (opts.filesWithMatches) {
+    out.push(rel)
+    return
+  }
+
+  // Label a line as a match (':') by membership in the matched set, not by whether it
+  // is the anchor of the current window — a real match that first surfaces inside an
+  // earlier match's context window must still read as a match, matching ripgrep.
+  const matchedSet = new Set(matchedLines)
+  const ctx = opts.context && opts.context > 0 ? opts.context : 0
+  const emitted = new Set<number>()
+  for (const m of matchedLines) {
+    const from = Math.max(0, m - ctx)
+    const to = Math.min(lines.length - 1, m + ctx)
+    for (let i = from; i <= to; i++) {
+      if (emitted.has(i)) continue
+      emitted.add(i)
+      const marker = matchedSet.has(i) ? ':' : '-'
+      out.push(`${rel}:${i + 1}${marker} ${lines[i].trim().slice(0, 200)}`)
+      if (out.length >= max) return
+    }
+  }
+}
+
 /** Pure-JS recursive content search used when ripgrep is unavailable. */
 async function jsWalk(
   dir: string,
@@ -164,43 +218,7 @@ async function jsWalk(
       if (SKIP_DIRS.has(entry.name)) continue
       await jsWalk(full, workspace, regex, out, max, opts)
     } else if (entry.isFile()) {
-      const rel = relative(workspace, full)
-      // matchBase mirrors ripgrep's gitignore-style globs: a slash-less pattern
-      // like "*.ts" matches files at any depth, while "src/**/*.ts" matches by path.
-      if (opts.glob && !minimatch(rel, opts.glob, { matchBase: true })) continue
-      let content: string
-      try {
-        content = await fs.readFile(full, 'utf8')
-      } catch {
-        continue
-      }
-      if (content.includes(String.fromCharCode(0))) continue // skip binary files
-      const lines = content.split('\n')
-      const matchedLines: number[] = []
-      for (let i = 0; i < lines.length; i++) {
-        if (regex.test(lines[i])) matchedLines.push(i)
-      }
-      if (matchedLines.length === 0) continue
-
-      if (opts.filesWithMatches) {
-        out.push(rel)
-        if (out.length >= max) return
-        continue
-      }
-
-      const ctx = opts.context && opts.context > 0 ? opts.context : 0
-      const emitted = new Set<number>()
-      for (const m of matchedLines) {
-        const from = Math.max(0, m - ctx)
-        const to = Math.min(lines.length - 1, m + ctx)
-        for (let i = from; i <= to; i++) {
-          if (emitted.has(i)) continue
-          emitted.add(i)
-          const sep = i === m ? ':' : '-'
-          out.push(`${rel}:${i + 1}${sep} ${lines[i].trim().slice(0, 200)}`)
-          if (out.length >= max) return
-        }
-      }
+      await scanFile(full, workspace, regex, out, max, opts)
     }
   }
 }
@@ -259,6 +277,13 @@ export async function searchContents(o: SearchOptions): Promise<string> {
     throw new Error(`Invalid regular expression: ${(e as Error).message}`, { cause: e })
   }
   const out: string[] = []
-  await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
+  // A single-file search path: scan just that file. jsWalk would readdir() it and hit
+  // ENOTDIR, silently returning no matches — but ripgrep searches a file argument, so
+  // the JS fallback must too, or the backends disagree.
+  if (statSync(o.startAbs).isFile()) {
+    await scanFile(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
+  } else {
+    await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
+  }
   return out.length ? out.join('\n') : 'No matches found.'
 }
