@@ -32,6 +32,8 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  parseAgentInvocation,
+  agentInvocationPrompt,
   renderReasoningStatus,
   renderMcpTools,
   resolveTheme,
@@ -4103,5 +4105,64 @@ describe('todo list rendering', () => {
     await runTui(opts, d)
     expect(t.text()).toContain('read_file')
     expect(t.text()).toContain('contents')
+  })
+})
+
+// .houston/agents lets a project define specialized agents, and the MODEL could
+// dispatch them. The user could not: /agents listed them and that was the whole
+// surface, so using one you had written meant describing it in prose and hoping.
+describe('/agent', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('parses a name and its task', () => {
+    expect(parseAgentInvocation('reviewer check the diff')).toEqual({
+      name: 'reviewer',
+      task: 'check the diff'
+    })
+    expect(parseAgentInvocation('reviewer')).toEqual({ name: 'reviewer', task: '' })
+    expect(parseAgentInvocation('  spacing-agent   do a thing  ')).toEqual({
+      name: 'spacing-agent',
+      task: 'do a thing'
+    })
+  })
+
+  it('rejects a name that could not be an agent file', () => {
+    expect(parseAgentInvocation('')).toBeNull()
+    expect(parseAgentInvocation('   ')).toBeNull()
+    // A path is not an agent name; agents are `.houston/agents/<name>.md`.
+    expect(parseAgentInvocation('../etc/passwd')).toBeNull()
+    expect(parseAgentInvocation('../etc/passwd do the thing')).toBeNull()
+    expect(parseAgentInvocation('a/b run')).toBeNull()
+  })
+
+  it('sends a turn that dispatches the named agent', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/agent reviewer check the auth diff', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    const sent = rec.runs[0].messages.at(-1)?.content ?? ''
+    expect(sent).toContain('`reviewer` subagent')
+    expect(sent).toContain('check the auth diff')
+  })
+
+  it('still runs the agent when no task is given', () => {
+    expect(agentInvocationPrompt('reviewer', '')).toContain('Use your judgment')
+  })
+
+  // Typing `/agent` alone is someone asking what agents exist.
+  it('falls back to listing when no name is given', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/agent', null])
+    d.io = t.io
+    d.capabilities = async () => ({
+      skills: [],
+      agents: [{ name: 'reviewer', detail: 'reviews diffs' }],
+      mcp: [],
+      hooks: []
+    })
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(0)
+    expect(t.text()).toContain('reviewer')
   })
 })
