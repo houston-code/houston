@@ -37,6 +37,25 @@ describe('modelDisplayName', () => {
     expect(modelDisplayName('anthropic', 'claude-opus-4-6')).toBe('claude-opus-4.6')
   })
 
+  it("strips Bedrock's vendor prefix", () => {
+    expect(modelDisplayName('bedrock', 'anthropic.claude-opus-4-8')).toBe('claude-opus-4.8')
+    expect(modelDisplayName('bedrock', 'anthropic.claude-haiku-4-5')).toBe('claude-haiku-4.5')
+  })
+
+  it("normalizes Vertex's @-dated snapshots", () => {
+    expect(modelDisplayName('vertex', 'claude-opus-4-5@20251101')).toBe('claude-opus-4.5')
+    expect(modelDisplayName('vertex', 'claude-sonnet-4@20250514')).toBe('claude-sonnet-4')
+    expect(modelDisplayName('vertex', 'claude-opus-4-8')).toBe('claude-opus-4.8')
+  })
+
+  it('names one model identically whichever host serves it', () => {
+    // The point of stripping host addressing: the picker shouldn't read like three
+    // different models when Anthropic, Bedrock and Vertex all serve Opus 4.8.
+    const first = modelDisplayName('anthropic', 'claude-opus-4-8')
+    expect(modelDisplayName('bedrock', 'anthropic.claude-opus-4-8')).toBe(first)
+    expect(modelDisplayName('vertex', 'claude-opus-4-8@20260101')).toBe(first)
+  })
+
   it('returns other providers ids unchanged (already the fetched form)', () => {
     expect(modelDisplayName('openai', 'gpt-5.1')).toBe('gpt-5.1')
     expect(modelDisplayName('openai', 'gpt-5-mini')).toBe('gpt-5-mini')

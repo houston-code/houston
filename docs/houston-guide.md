@@ -51,6 +51,35 @@ by the OS keychain and never touch the renderer. The selection is shared across
 clients: picking a model in the desktop app or switching with `/model` in the
 terminal saves it as the default for future sessions.
 
+### Claude through your cloud account
+
+If your Claude access runs through a cloud account rather than an Anthropic API
+key, add "Amazon Bedrock (AWS credentials)" or "Google Vertex AI" from the
+provider picker in Settings. Both behave like the Anthropic provider once added:
+the same streaming, extended thinking, and prompt caching.
+
+Neither one asks you for an API key, because neither uses one. They sign requests
+with the credentials already on your machine:
+
+- **Bedrock** uses the standard AWS credential chain, so an `~/.aws/credentials`
+  profile, an SSO login, or an instance role all work as-is. Set the region in
+  Settings (or export `AWS_REGION`). If you have an Amazon Bedrock API key
+  instead, you can enter it as an optional key, and it takes precedence over your
+  AWS credentials. There is also a separate "Amazon Bedrock (API key)" provider
+  for that case alone.
+- **Vertex** uses Google Application Default Credentials: run
+  `gcloud auth application-default login` if you have not already. Set the region
+  in Settings (or export `CLOUD_ML_REGION`). The project is usually inferred from
+  your credentials, so leave it blank unless you need a specific one.
+
+Each host addresses models its own way: Bedrock prefixes the vendor
+(`anthropic.claude-opus-4-8`) and Vertex takes the plain id, optionally with a
+dated snapshot (`claude-opus-4-5@20251101`). The model picker shows them under
+one name either way. Neither host publishes a model list, so Houston ships a
+curated one and "Fetch" restores it rather than calling out to the network. If
+your account has access to a model that is not listed, add its id to the list by
+hand.
+
 ### Fallback models
 
 You can name next-choice models that Houston tries when your selected model

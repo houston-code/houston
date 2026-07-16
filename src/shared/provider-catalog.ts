@@ -1,10 +1,14 @@
 /**
  * Catalog of known model hosts the user can add to their providers with one click.
  *
- * Every entry is just an `openai-compatible` preset. Houston already routes any
+ * Most entries are just an `openai-compatible` preset. Houston already routes any
  * OpenAI-compatible endpoint through a single adapter (see
- * `src/main/providers/openai.ts`), so "adding a host" is data, not a new provider
- * kind — that keeps the host list from turning into a combinatorial set of adapters.
+ * `src/main/providers/openai.ts`), so "adding a host" is usually data, not a new
+ * provider kind — that keeps the host list from turning into a combinatorial set of
+ * adapters. An entry only sets `kind` when the host genuinely can't be reached that
+ * way: the cloud-hosted Claude backends sign requests with the cloud's own
+ * credentials rather than a bearer token, which no base URL can express. They still
+ * share the Anthropic adapter's streaming logic (see `src/main/providers/anthropic.ts`).
  *
  * The catalog is the *add menu* surfaced in Settings; it is deliberately NOT
  * auto-seeded into a user's provider list (that stays minimal — see
@@ -12,7 +16,34 @@
  * not services it bundles. Ollama and LM Studio are omitted because they ship as
  * built-in providers already.
  */
-import type { ProviderConfig } from './types'
+import type { ProviderConfig, ProviderKind } from './types'
+
+/**
+ * Claude models on Bedrock, addressed with Bedrock's `anthropic.` vendor prefix.
+ * Bedrock exposes no Models API, so this curated list is both what an added provider
+ * starts with and what "Fetch" returns (see `listModels` in main/providers/index.ts).
+ * A starting point like every other seeded model list: which of them an account can
+ * actually invoke depends on its region and model access, so the user edits it.
+ */
+export const BEDROCK_MODELS: string[] = [
+  'anthropic.claude-opus-4-8',
+  'anthropic.claude-sonnet-4-6',
+  'anthropic.claude-haiku-4-5',
+  'anthropic.claude-opus-4-7'
+]
+
+/**
+ * Claude models on Vertex AI, addressed with the bare id. Vertex also accepts a dated
+ * snapshot with an `@` separator (`claude-opus-4-5@20251101`), which the id
+ * heuristics handle. Like Bedrock, Vertex has no Models API — same curated-list
+ * contract as {@link BEDROCK_MODELS}.
+ */
+export const VERTEX_MODELS: string[] = [
+  'claude-opus-4-8',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5',
+  'claude-opus-4-7'
+]
 
 export interface CatalogEntry {
   /**
@@ -23,9 +54,31 @@ export interface CatalogEntry {
    */
   id: string
   label: string
-  /** Default OpenAI-compatible base URL (the user can edit it after adding). */
-  baseUrl: string
-  /** Cloud aggregators need an API key; local/self-hosted servers usually don't. */
+  /**
+   * The adapter this host needs. Defaults to `openai-compatible` — set it only for a
+   * host that can't be reached over an OpenAI-compatible base URL.
+   */
+  kind?: ProviderKind
+  /**
+   * Default OpenAI-compatible base URL (the user can edit it after adding). Absent
+   * for native kinds, which derive their endpoint from the region instead.
+   */
+  baseUrl?: string
+  /**
+   * Default cloud region, for kinds that address models by region rather than URL.
+   * Pre-filled on add so the provider works without a trip to the docs.
+   */
+  region?: string
+  /**
+   * Models an added provider starts with, for hosts that serve a fixed Claude lineup
+   * and have no Models API. Absent elsewhere: the user fetches the live list.
+   */
+  models?: string[]
+  /**
+   * Whether a Houston-stored API key is required. Cloud aggregators need one; local
+   * servers don't, and neither do the cloud-hosted Claude kinds, which resolve
+   * ambient credentials (an AWS profile, gcloud ADC) on their own.
+   */
   requiresKey: boolean
   /** Where the host runs — used to group the picker. */
   category: 'cloud' | 'local'
@@ -101,15 +154,44 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     // Bedrock's recommended OpenAI-compatible endpoint (bedrock-mantle) accepts an
     // Amazon Bedrock API key as a bearer token, so it rides the openai-compatible
     // path with no AWS SigV4 — the cheap cloud win. Region is in the host; the user
-    // edits it. (IAM/SigV4 access is the separate Tier-2 work, not this preset.)
+    // edits it. `bedrock-aws` below is the SigV4/IAM counterpart; this entry keeps
+    // its id (and so its stored key) untouched for anyone already on it.
     id: 'bedrock',
-    label: 'Amazon Bedrock',
+    label: 'Amazon Bedrock (API key)',
     baseUrl: 'https://bedrock-mantle.us-east-1.api.aws/v1',
     requiresKey: true,
     category: 'cloud',
     blurb: 'AWS-hosted models via a Bedrock API key. Edit the region in the URL.',
     docsUrl:
       'https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html'
+  },
+  {
+    // Claude on Bedrock through the AWS credential chain — the IAM/SigV4 path the
+    // preset above can't reach, since a bearer token is the only thing a base URL can
+    // carry. A distinct id: `bedrock` is taken, and reusing it would silently
+    // re-point an existing user's stored key at a different adapter.
+    id: 'bedrock-aws',
+    kind: 'bedrock',
+    label: 'Amazon Bedrock (AWS credentials)',
+    region: 'us-east-1',
+    models: BEDROCK_MODELS,
+    requiresKey: false,
+    category: 'cloud',
+    blurb: 'Claude on Bedrock, signed with your AWS credentials (profile, SSO, or IAM role).',
+    docsUrl: 'https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html'
+  },
+  {
+    id: 'vertex',
+    kind: 'vertex',
+    label: 'Google Vertex AI',
+    // Claude on Vertex is regional; us-east5 has the broadest model coverage, and the
+    // user switches it in Settings.
+    region: 'us-east5',
+    models: VERTEX_MODELS,
+    requiresKey: false,
+    category: 'cloud',
+    blurb: 'Claude on Vertex AI, authenticated with your Google Cloud credentials.',
+    docsUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude'
   },
   {
     id: 'omlx',
@@ -148,16 +230,21 @@ export function catalogForPlatform(isMac: boolean): CatalogEntry[] {
 
 /**
  * Turn a catalog entry into a fresh provider config ready to append to settings.
- * Always an `openai-compatible` provider with no key and an empty model list (the
- * user fetches or types models after adding).
+ * An `openai-compatible` provider with no key and an empty model list unless the
+ * entry says otherwise (the user fetches or types models after adding); a native
+ * kind carries its adapter, region and curated model list through instead.
+ *
+ * Optional fields are omitted rather than set to `undefined`, so the config
+ * round-trips through settings.json without gaining empty keys.
  */
 export function catalogEntryToProvider(entry: CatalogEntry): ProviderConfig {
   return {
     id: entry.id,
-    kind: 'openai-compatible',
+    kind: entry.kind ?? 'openai-compatible',
     label: entry.label,
-    baseUrl: entry.baseUrl,
-    models: [],
+    ...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
+    ...(entry.region !== undefined ? { region: entry.region } : {}),
+    models: (entry.models ?? []).map((id) => ({ id })),
     requiresKey: entry.requiresKey,
     hasKey: false,
     builtIn: false

@@ -83,6 +83,87 @@ function renderModal(over: Partial<AppSettings> = {}, props: Partial<React.Compo
   return { onClose, onSaved, ...utils }
 }
 
+/**
+ * The cloud-hosted Claude kinds are configured by region (and project), not by a
+ * base URL or a key. Before they existed, the provider block gated every optional
+ * field on `openai-compatible`, so a Bedrock/Vertex provider rendered with nothing
+ * to configure at all.
+ */
+describe('SettingsModal cloud-hosted Claude providers', () => {
+  const bedrockAws: ProviderConfig = {
+    id: 'bedrock-aws',
+    kind: 'bedrock',
+    label: 'Amazon Bedrock (AWS credentials)',
+    region: 'us-east-1',
+    models: [{ id: 'anthropic.claude-opus-4-8' }],
+    requiresKey: false,
+    hasKey: false,
+    builtIn: false
+  }
+  const vertex: ProviderConfig = {
+    id: 'vertex',
+    kind: 'vertex',
+    label: 'Google Vertex AI',
+    region: 'us-east5',
+    models: [{ id: 'claude-opus-4-8' }],
+    requiresKey: false,
+    hasKey: false,
+    builtIn: false
+  }
+
+  it('shows a region field for Bedrock, and no project field', () => {
+    installApi()
+    renderModal({ providers: [bedrockAws] })
+    expect(screen.getByLabelText('Region')).toHaveValue('us-east-1')
+    expect(screen.queryByLabelText('Project ID')).not.toBeInTheDocument()
+  })
+
+  it('shows region and project fields for Vertex', () => {
+    installApi()
+    renderModal({ providers: [vertex] })
+    expect(screen.getByLabelText('Region')).toHaveValue('us-east5')
+    expect(screen.getByLabelText('Project ID')).toBeInTheDocument()
+  })
+
+  it('offers an optional API key for Bedrock but none for Vertex', () => {
+    installApi()
+    const { unmount } = renderModal({ providers: [bedrockAws] })
+    // Bedrock accepts a bearer token that overrides the AWS credential chain.
+    expect(screen.getByLabelText('API key')).toBeInTheDocument()
+    unmount()
+
+    // Vertex has no API key concept at all, so offering the field would invite a
+    // key that is silently ignored.
+    installApi()
+    renderModal({ providers: [vertex] })
+    expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
+  })
+
+  it('saves an edited region', async () => {
+    const api = installApi()
+    renderModal({ providers: [bedrockAws] })
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'eu-west-1' } })
+    // Scoped to the footer: the API key row has a "Save" button of its own.
+    const foot = document.querySelector('.modal__foot') as HTMLElement
+    fireEvent.click(within(foot).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+    expect(saved.providers[0].region).toBe('eu-west-1')
+  })
+
+  it('leaves the base URL field hidden until one is set as an override', () => {
+    installApi()
+    const { unmount } = renderModal({ providers: [bedrockAws] })
+    // The endpoint is derived from the region, so there is nothing to fill in.
+    expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument()
+    unmount()
+
+    installApi()
+    renderModal({ providers: [{ ...bedrockAws, baseUrl: 'https://gw.internal/anthropic' }] })
+    expect(screen.getByLabelText('Base URL')).toHaveValue('https://gw.internal/anthropic')
+  })
+})
+
 describe('SettingsModal', () => {
   it('renders as a labelled modal dialog showing the Models tab and current providers', async () => {
     installApi()

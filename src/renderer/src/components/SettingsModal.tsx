@@ -923,41 +923,90 @@ export function SettingsModal({
                         </>
                       )}
 
-                      <label className="field">
-                        <span>API key</span>
-                        <div className="field__row">
-                          <input
-                            type="password"
-                            placeholder={
-                              p.hasKey
-                                ? '•••••••• (stored)'
-                                : p.requiresKey
-                                  ? 'Required'
-                                  : 'Optional'
-                            }
-                            value={keyInputs[p.id] ?? ''}
-                            onChange={(e) =>
-                              setKeyInputs((k) => ({ ...k, [p.id]: e.target.value }))
-                            }
-                          />
-                          <button
-                            className="btn btn--sm"
-                            disabled={busy === p.id}
-                            onClick={() => saveKey(p.id)}
-                          >
-                            Save
-                          </button>
-                          {p.hasKey && (
-                            <button
-                              className="btn btn--sm btn--danger"
-                              disabled={busy === p.id}
-                              onClick={() => removeKey(p.id)}
-                            >
-                              Remove
-                            </button>
+                      {(p.kind === 'bedrock' || p.kind === 'vertex') && (
+                        <>
+                          <label className="field">
+                            <span>Region</span>
+                            <input
+                              value={p.region ?? ''}
+                              placeholder={p.kind === 'bedrock' ? 'us-east-1' : 'us-east5'}
+                              onChange={(e) => patchProvider(p.id, { region: e.target.value })}
+                            />
+                          </label>
+
+                          {p.kind === 'vertex' && (
+                            <label className="field">
+                              <span>Project ID</span>
+                              <input
+                                value={p.projectId ?? ''}
+                                placeholder="Optional, inferred from your credentials"
+                                onChange={(e) =>
+                                  patchProvider(p.id, { projectId: e.target.value })
+                                }
+                              />
+                            </label>
                           )}
-                        </div>
-                      </label>
+
+                          <p className="field__hint">
+                            {p.kind === 'bedrock' ? (
+                              <>
+                                Signs requests with your AWS credentials: a{' '}
+                                <code>~/.aws/credentials</code> profile, SSO, or an IAM role. A
+                                Bedrock API key below is optional and takes precedence over them.
+                              </>
+                            ) : (
+                              <>
+                                Authenticates with your Google Cloud credentials. Run{' '}
+                                <code>gcloud auth application-default login</code> if you have not
+                                already.
+                              </>
+                            )}
+                          </p>
+                        </>
+                      )}
+
+                      {/*
+                        Vertex takes no API key at all (its SDK omits the option and
+                        uses Google ADC), so offering the field would only invite a key
+                        that is silently ignored.
+                      */}
+                      {p.kind !== 'vertex' && (
+                        <label className="field">
+                          <span>API key</span>
+                          <div className="field__row">
+                            <input
+                              type="password"
+                              placeholder={
+                                p.hasKey
+                                  ? '•••••••• (stored)'
+                                  : p.requiresKey
+                                    ? 'Required'
+                                    : 'Optional'
+                              }
+                              value={keyInputs[p.id] ?? ''}
+                              onChange={(e) =>
+                                setKeyInputs((k) => ({ ...k, [p.id]: e.target.value }))
+                              }
+                            />
+                            <button
+                              className="btn btn--sm"
+                              disabled={busy === p.id}
+                              onClick={() => saveKey(p.id)}
+                            >
+                              Save
+                            </button>
+                            {p.hasKey && (
+                              <button
+                                className="btn btn--sm btn--danger"
+                                disabled={busy === p.id}
+                                onClick={() => removeKey(p.id)}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        </label>
+                      )}
 
                       <ModelsField
                         models={p.models}
