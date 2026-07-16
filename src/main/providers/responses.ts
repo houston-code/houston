@@ -90,6 +90,31 @@ interface ResponsesEvent {
   message?: string
 }
 
+/**
+ * True for the specific 400 OpenAI returns when an *unverified organization* asks for
+ * reasoning summaries: `param: 'reasoning.summary'`, `code: 'unsupported_value'`.
+ *
+ * Deliberately narrow. We only want to recover from "this org may not have summaries",
+ * never from a genuinely malformed request — swallowing a broader class of 400 would
+ * hide exactly the parameter drift the provider canary exists to catch.
+ */
+export function isSummaryUnsupportedError(err: unknown): boolean {
+  const e = err as { status?: number; error?: { param?: string; code?: string } } | null
+  return (
+    !!e &&
+    e.status === 400 &&
+    e.error?.param === 'reasoning.summary' &&
+    e.error?.code === 'unsupported_value'
+  )
+}
+
+type ResponsesReasoning = NonNullable<ReturnType<typeof openaiResponsesReasoning>>
+
+/** Drop `summary` from a reasoning config, keeping the effort that actually drives reasoning. */
+function withoutSummary(reasoning: ResponsesReasoning): { effort: ResponsesReasoning['effort'] } {
+  return { effort: reasoning.effort }
+}
+
 export function createResponsesProvider(apiKey: string | null, baseURL?: string): Provider {
   // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
   // turn first runs. Providers the user never selects never pull their SDK in.
@@ -99,10 +124,16 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       (m) => new m.default({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
     ))
 
+  // Sticky for this provider instance once OpenAI tells us this org can't have reasoning
+  // summaries, so we send the request right the first time on later turns instead of
+  // paying a rejected round-trip each one.
+  let summaryUnsupported = false
+
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
       const client = await getClient()
-      const reasoning = openaiResponsesReasoning(req.model, req.reasoningEffort, req.reasoningSummary)
+      const configured = openaiResponsesReasoning(req.model, req.reasoningEffort, req.reasoningSummary)
+      const reasoning = configured && summaryUnsupported ? withoutSummary(configured) : configured
       const tools = toResponsesTools(req.tools)
 
       const params = {
@@ -119,10 +150,25 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         ...(req.verbosity ? { text: { verbosity: req.verbosity } } : {})
       }
 
-      const stream = await client.responses.create(
-        params as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
-        { signal: req.signal }
-      )
+      // Reasoning summaries are gated on organization verification, and that's a property of
+      // the USER's org, not ours — an unverified org gets a hard 400 on every reasoning call
+      // (o3 is the model that surfaced this). The effort is what actually drives reasoning;
+      // the summary only makes it visible. So on exactly that error, retry once without the
+      // summary: the user still gets a working turn, minus the streamed thinking, instead of
+      // a dead model. Any other failure propagates untouched.
+      const create = (p: Record<string, unknown>): Promise<AsyncIterable<unknown>> =>
+        client.responses.create(p as unknown as OpenAI.Responses.ResponseCreateParamsStreaming, {
+          signal: req.signal
+        }) as unknown as Promise<AsyncIterable<unknown>>
+
+      let stream: AsyncIterable<unknown>
+      try {
+        stream = await create(params)
+      } catch (err) {
+        if (!reasoning || !isSummaryUnsupportedError(err)) throw err
+        summaryUnsupported = true
+        stream = await create({ ...params, reasoning: withoutSummary(reasoning) })
+      }
 
       let hadToolCalls = false
       let inputTokens: number | undefined

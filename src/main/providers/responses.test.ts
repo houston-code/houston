@@ -1,6 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
-import { createResponsesProvider, toResponsesInput, toResponsesTools } from './responses'
+import {
+  createResponsesProvider,
+  isSummaryUnsupportedError,
+  toResponsesInput,
+  toResponsesTools
+} from './responses'
 import { openaiResponsesReasoning } from './reasoning'
 
 // Mock the lazily-imported SDK so we can feed a synthetic Responses event stream
@@ -169,5 +174,94 @@ describe('responses usage reporting', () => {
   it('omits the cache field when no split is reported', async () => {
     const usage = await drainDoneUsage({ input_tokens: 1_000, output_tokens: 10 })
     expect(usage).toEqual({ inputTokens: 1_000, outputTokens: 10 })
+  })
+})
+
+describe('reasoning-summary org gate', () => {
+  beforeEach(() => h.create.mockReset())
+
+  /** The exact 400 OpenAI returns to an unverified org asking for reasoning summaries. */
+  function summaryGateError(): unknown {
+    return {
+      status: 400,
+      error: {
+        message: 'Your organization must be verified to generate reasoning summaries.',
+        type: 'invalid_request_error',
+        param: 'reasoning.summary',
+        code: 'unsupported_value'
+      }
+    }
+  }
+
+  const req: ChatRequest = {
+    model: 'o3',
+    messages: [{ role: 'user', content: 'hi' }],
+    reasoningEffort: 'low'
+  }
+
+  async function drain(gen: AsyncGenerator<ProviderStreamEvent>): Promise<ProviderStreamEvent[]> {
+    const out: ProviderStreamEvent[] = []
+    for await (const e of gen) out.push(e)
+    return out
+  }
+
+  it('identifies the summary gate error and nothing broader', () => {
+    expect(isSummaryUnsupportedError(summaryGateError())).toBe(true)
+    // A different 400 must NOT be treated as the gate — swallowing those would hide the
+    // parameter drift the provider canary exists to catch.
+    expect(
+      isSummaryUnsupportedError({ status: 400, error: { param: 'model', code: 'unsupported_value' } })
+    ).toBe(false)
+    expect(
+      isSummaryUnsupportedError({ status: 400, error: { param: 'reasoning.summary', code: 'other' } })
+    ).toBe(false)
+    expect(isSummaryUnsupportedError({ status: 500 })).toBe(false)
+    expect(isSummaryUnsupportedError(null)).toBe(false)
+  })
+
+  it('retries without the summary so an unverified org still gets a working turn', async () => {
+    h.create
+      .mockRejectedValueOnce(summaryGateError())
+      .mockResolvedValueOnce(streamOf([{ type: 'response.output_text.delta', delta: 'pong' }]))
+    const provider = createResponsesProvider('k')
+    const events = await drain(provider.streamChat(req))
+
+    expect(h.create).toHaveBeenCalledTimes(2)
+    // First attempt asks for the summary; the retry keeps the effort but drops the summary.
+    expect(h.create.mock.calls[0][0].reasoning).toEqual({ effort: 'low', summary: 'auto' })
+    expect(h.create.mock.calls[1][0].reasoning).toEqual({ effort: 'low' })
+    expect(events).toContainEqual({ type: 'text', text: 'pong' })
+  })
+
+  it('remembers the gate so later turns skip the rejected round-trip', async () => {
+    h.create
+      .mockRejectedValueOnce(summaryGateError())
+      .mockResolvedValueOnce(streamOf([]))
+      .mockResolvedValueOnce(streamOf([]))
+    const provider = createResponsesProvider('k')
+    await drain(provider.streamChat(req))
+    await drain(provider.streamChat(req))
+
+    // 2 for the first turn (reject + retry), 1 for the second — not another reject.
+    expect(h.create).toHaveBeenCalledTimes(3)
+    expect(h.create.mock.calls[2][0].reasoning).toEqual({ effort: 'low' })
+  })
+
+  it('propagates any other error untouched', async () => {
+    const boom = { status: 400, error: { param: 'model', code: 'model_not_found' } }
+    h.create.mockRejectedValueOnce(boom)
+    const provider = createResponsesProvider('k')
+    await expect(drain(provider.streamChat(req))).rejects.toBe(boom)
+    expect(h.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry when reasoning was never requested', async () => {
+    h.create.mockRejectedValueOnce(summaryGateError())
+    const provider = createResponsesProvider('k')
+    // gpt-4o is not a reasoning model, so no `reasoning` is sent and there is nothing to drop.
+    await expect(
+      drain(provider.streamChat({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hi' }] }))
+    ).rejects.toBeDefined()
+    expect(h.create).toHaveBeenCalledTimes(1)
   })
 })
