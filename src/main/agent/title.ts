@@ -2,6 +2,7 @@ import type { ChatMessage, Provider } from '@shared/agent'
 import { getProvider } from '../agentHost'
 import { createProvider } from '../providers'
 import { getConversation, needsGeneratedTitle, setGeneratedTitle } from '../conversations'
+import { providerStreamError, withProviderRetry } from './retry'
 
 /**
  * Auto-titling. A fresh chat shows the truncated first message as an instant
@@ -24,6 +25,14 @@ const SOURCE_CHAR_BUDGET = 1000
 
 /** How long to let the title call run before abandoning it (keeps the placeholder). */
 const TITLE_TIMEOUT_MS = 20_000
+
+/**
+ * Far fewer retries than a turn gets. A title is cosmetic and already bounded by
+ * TITLE_TIMEOUT_MS, so the default budget couldn't finish inside the window anyway — it
+ * would just spend it on backoff and still produce nothing. Two quick retries cover the
+ * blip this is actually worth defending against; past that, the placeholder is fine.
+ */
+const TITLE_RETRIES = 2
 
 /** System prompt for the title call: prose only, short, no decoration. */
 export const titleSystemPrompt = `You write a short, specific title for a coding-assistant conversation from its opening exchange. Reply with ONLY the title — no quotes, no markdown, no trailing punctuation, no preamble or explanation. Use 3 to 6 words in Title Case that name the concrete task or topic (for example: "Fix flaky auth test", "Add dark mode toggle", "Explain the build pipeline"). Never exceed 60 characters.`
@@ -84,17 +93,23 @@ export async function generateTitle(
 ): Promise<string | null> {
   const built = buildTitleMessages(messages)
   if (!built) return null
-  let text = ''
-  for await (const ev of provider.streamChat({
-    model,
-    system: titleSystemPrompt,
-    messages: built,
-    maxTokens: TITLE_MAX_TOKENS,
-    signal
-  })) {
-    if (ev.type === 'text') text += ev.text
-    else if (ev.type === 'error') throw new Error(ev.message)
-  }
+  const text = await withProviderRetry(
+    async () => {
+      let acc = ''
+      for await (const ev of provider.streamChat({
+        model,
+        system: titleSystemPrompt,
+        messages: built,
+        maxTokens: TITLE_MAX_TOKENS,
+        signal
+      })) {
+        if (ev.type === 'text') acc += ev.text
+        else if (ev.type === 'error') throw providerStreamError(ev)
+      }
+      return acc
+    },
+    { signal, maxRetries: TITLE_RETRIES }
+  )
   return sanitizeTitle(text)
 }
 

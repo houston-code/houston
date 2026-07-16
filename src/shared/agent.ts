@@ -114,7 +114,22 @@ export type ProviderStreamEvent =
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; call: ToolCall }
   | { type: 'done'; stopReason: StopReason; usage?: TokenUsage; reasoning?: ReasoningBlock[] }
-  | { type: 'error'; message: string }
+  | {
+      type: 'error'
+      message: string
+      /**
+       * The HTTP status this failure corresponds to, when the adapter can tell. An
+       * in-band error has none on the wire — the response was already a 200 when the
+       * stream broke — so the adapter derives it (e.g. from the API's error `code`).
+       * Consumers rethrow via `providerStreamError` to keep it attached, which is what
+       * lets the retry classifier treat this like a thrown SDK error instead of
+       * guessing from the message text. Absent when the adapter can't tell, which
+       * (correctly) reads as non-retryable.
+       */
+      status?: number
+      /** The server's requested wait before a retry, in ms, when it named one. */
+      retryAfterMs?: number
+    }
 
 export interface ChatRequest {
   model: string

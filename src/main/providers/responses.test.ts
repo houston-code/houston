@@ -3,6 +3,7 @@ import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agen
 import {
   createResponsesProvider,
   isSummaryUnsupportedError,
+  responsesErrorStatus,
   toResponsesInput,
   toResponsesTools
 } from './responses'
@@ -263,5 +264,79 @@ describe('reasoning-summary org gate', () => {
       drain(provider.streamChat({ model: 'gpt-4o', messages: [{ role: 'user', content: 'hi' }] }))
     ).rejects.toBeDefined()
     expect(h.create).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('responsesErrorStatus', () => {
+  it('maps the always-transient codes onto retryable statuses', () => {
+    expect(responsesErrorStatus('rate_limit_exceeded')).toBe(429)
+    expect(responsesErrorStatus('server_error')).toBe(500)
+  })
+
+  it('leaves a request-level rejection unmapped, so it is not retried', () => {
+    expect(responsesErrorStatus('invalid_prompt')).toBeUndefined()
+    expect(responsesErrorStatus('context_length_exceeded')).toBeUndefined()
+    expect(responsesErrorStatus(undefined)).toBeUndefined()
+  })
+})
+
+describe('responses in-band failures', () => {
+  /** Run one turn over a synthetic stream and return the error event it produced. */
+  async function errorFor(events: unknown[]): Promise<{ message: string; status?: number }> {
+    h.create.mockResolvedValue(streamOf(events))
+    const provider = createResponsesProvider('k')
+    for await (const ev of provider.streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      if (ev.type === 'error') return ev
+    }
+    throw new Error('the adapter produced no error event')
+  }
+
+  it('reports the reason a response.failed nests under response.error', async () => {
+    // The regression: the adapter read only the top-level `ev.message`, which
+    // response.failed does not carry — so every failed response surfaced as the
+    // generic fallback string with no status, and was never retried.
+    const ev = await errorFor([
+      {
+        type: 'response.failed',
+        response: { error: { code: 'server_error', message: 'The model is overloaded.' } }
+      }
+    ])
+    expect(ev.message).toBe('The model is overloaded.')
+    expect(ev.status).toBe(500)
+  })
+
+  it('reports a rate limit as a 429 so the retry budget applies', async () => {
+    const ev = await errorFor([
+      {
+        type: 'response.failed',
+        response: { error: { code: 'rate_limit_exceeded', message: 'Rate limit reached.' } }
+      }
+    ])
+    expect(ev.status).toBe(429)
+  })
+
+  it('reads the inline fields of a top-level error event', async () => {
+    const ev = await errorFor([{ type: 'error', code: 'server_error', message: 'stream broke' }])
+    expect(ev).toMatchObject({ message: 'stream broke', status: 500 })
+  })
+
+  it('leaves a request-level failure statusless rather than guessing', async () => {
+    const ev = await errorFor([
+      {
+        type: 'response.failed',
+        response: { error: { code: 'invalid_prompt', message: 'Your prompt was rejected.' } }
+      }
+    ])
+    expect(ev.message).toBe('Your prompt was rejected.')
+    expect(ev.status).toBeUndefined()
+  })
+
+  it('still yields something usable when the failure carries no detail at all', async () => {
+    const ev = await errorFor([{ type: 'response.failed', response: {} }])
+    expect(ev.message).toBe('OpenAI Responses API error')
+    expect(ev.status).toBeUndefined()
   })
 })

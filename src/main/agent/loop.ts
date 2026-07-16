@@ -58,7 +58,15 @@ import { getMcpToolDefs } from '../mcp/manager'
 import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
 import { isParallelizableRead, partitionCalls } from './scheduling'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
-import { abortableSleep, backoffDelayMs, isRetryableError, isToolsUnsupportedError } from './retry'
+import {
+  abortableSleep,
+  isRetryableError,
+  isToolsUnsupportedError,
+  MAX_PROVIDER_RETRIES,
+  providerStreamError,
+  retryDelayMs,
+  withProviderRetry
+} from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
 import { repairDanglingToolResults } from './repair'
 import {
@@ -137,30 +145,42 @@ import {
 /** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
 const MAX_STOP_CONTINUATIONS = 3
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
-const MAX_STREAM_RETRIES = 3
+const MAX_STREAM_RETRIES = MAX_PROVIDER_RETRIES
 
 /**
  * Ask the provider to summarize a slice of the conversation. Returns the summary
  * text; tools are intentionally omitted so the model can only reply with prose.
+ *
+ * Retried on a transient failure like any other provider call, and safely retried in
+ * full because the summary is accumulated rather than streamed. This one matters more
+ * than it looks: the streaming loop calls it to *force* a compaction when a request
+ * overflows the window, so before this a 503 here failed a turn that was otherwise
+ * recoverable.
  */
 async function summarize(
   provider: Provider,
   model: string,
   messages: ChatMessage[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  onRetry?: (attempt: number, err: unknown) => void
 ): Promise<string> {
-  let text = ''
-  for await (const ev of provider.streamChat({
-    model,
-    system: summarizationSystemPrompt,
-    messages,
-    maxTokens: SUMMARY_MAX_TOKENS,
-    signal
-  })) {
-    if (ev.type === 'text') text += ev.text
-    else if (ev.type === 'error') throw new Error(ev.message)
-  }
-  return text.trim()
+  return withProviderRetry(
+    async () => {
+      let text = ''
+      for await (const ev of provider.streamChat({
+        model,
+        system: summarizationSystemPrompt,
+        messages,
+        maxTokens: SUMMARY_MAX_TOKENS,
+        signal
+      })) {
+        if (ev.type === 'text') text += ev.text
+        else if (ev.type === 'error') throw providerStreamError(ev)
+      }
+      return text.trim()
+    },
+    { signal, onRetry }
+  )
 }
 
 interface RunState {
@@ -1630,7 +1650,17 @@ export async function startRun(
           provider,
           req.model,
           buildSummaryRequestMessages(summaryMsgs, material),
-          abort.signal
+          abort.signal,
+          // Report a retry in here the same way the turn loop does. Compaction can be
+          // forced mid-turn, so without this a summary riding out a blip is just a run
+          // sitting silent for the length of the backoff.
+          (attempt, err) =>
+            emit({
+              type: 'retry',
+              attempt,
+              max: MAX_PROVIDER_RETRIES,
+              message: (err as Error).message
+            })
         )
         if (!summary) return 'failed'
         // Messages folded into the summary *this round* (a count, which is what the
@@ -1862,7 +1892,10 @@ export async function startRun(
               turnCacheWrite = ev.usage?.cacheWriteTokens ?? 0
               if (ev.reasoning?.length) turnReasoning = ev.reasoning
             } else if (ev.type === 'error') {
-              throw new Error(ev.message)
+              // Rethrown with its status intact — a bare `new Error(ev.message)` would
+              // leave the classifier below reading prose, which is how an in-band
+              // overload became permanently fatal.
+              throw providerStreamError(ev)
             }
           }
           break streaming // turn completed successfully
@@ -1921,7 +1954,7 @@ export async function startRun(
             max: MAX_STREAM_RETRIES,
             message: (e as Error).message
           })
-          await abortableSleep(backoffDelayMs(attempt + 1), abort.signal)
+          await abortableSleep(retryDelayMs(e, attempt + 1), abort.signal)
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
             return

@@ -86,8 +86,33 @@ interface ResponsesEvent {
       input_tokens_details?: { cached_tokens?: number }
     }
     incomplete_details?: { reason?: string } | null
+    /** Set on `response.failed`; the top-level `error` event carries these inline instead. */
+    error?: { code?: string; message?: string }
   }
+  code?: string
   message?: string
+}
+
+/**
+ * Map a Responses error `code` onto the HTTP status it would have carried. The stream
+ * reports failures in-band — the response was a 200 by the time it broke — so there's no
+ * status on the wire, and without one the retry classifier has only prose to go on and
+ * treats a transient overload as permanent.
+ *
+ * Deliberately narrow: only codes that are *always* transient map to a retryable status.
+ * Anything else stays unmapped and so non-retryable, which is right — re-sending a
+ * request the API rejected on its merits (`invalid_prompt`, `context_length_exceeded`)
+ * just fails the same way.
+ */
+export function responsesErrorStatus(code: string | undefined): number | undefined {
+  switch (code) {
+    case 'rate_limit_exceeded':
+      return 429
+    case 'server_error':
+      return 500
+    default:
+      return undefined
+  }
 }
 
 /**
@@ -213,9 +238,21 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
             break
           }
           case 'response.failed':
-          case 'error':
-            yield { type: 'error', message: ev.message ?? 'OpenAI Responses API error' }
+          case 'error': {
+            // `response.failed` nests its error under `response.error`; the top-level
+            // `error` event carries the same fields inline. Reading only `ev.message`
+            // saw neither on the former, so every failed response degraded to the
+            // generic fallback below — losing the reason *and* the code that says
+            // whether it's worth retrying.
+            const failure = ev.response?.error ?? { code: ev.code, message: ev.message }
+            const status = responsesErrorStatus(failure.code)
+            yield {
+              type: 'error',
+              message: failure.message ?? 'OpenAI Responses API error',
+              ...(status !== undefined ? { status } : {})
+            }
             return
+          }
         }
       }
 

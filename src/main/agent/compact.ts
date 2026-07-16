@@ -3,6 +3,7 @@ import { resolveContextWindow } from '@shared/usage'
 import { createProvider } from '../providers'
 import { getProvider } from '../agentHost'
 import { getConversation, setCompaction, setMessages } from '../conversations'
+import { providerStreamError, withProviderRetry } from './retry'
 import {
   KEEP_RECENT_USER_TURNS,
   SUMMARY_MAX_TOKENS,
@@ -103,16 +104,23 @@ export async function compactConversationNow(
   try {
     while (cut < target) {
       const next = findSummaryChunkCut(conv.messages, cut, target, budget)
-      let text = ''
-      for await (const ev of provider.streamChat({
-        model,
-        system: summarizationSystemPrompt,
-        messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next)),
-        maxTokens: SUMMARY_MAX_TOKENS
-      })) {
-        if (ev.type === 'text') text += ev.text
-        else if (ev.type === 'error') throw new Error(ev.message)
-      }
+      // Each chunk is retried on its own: they fold into a running summary, so losing
+      // the whole compaction to a transient blip on the last of them would throw away
+      // every chunk before it. Safe to retry in full — the text is accumulated here,
+      // not streamed to anyone.
+      const text = await withProviderRetry(async () => {
+        let acc = ''
+        for await (const ev of provider.streamChat({
+          model,
+          system: summarizationSystemPrompt,
+          messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next)),
+          maxTokens: SUMMARY_MAX_TOKENS
+        })) {
+          if (ev.type === 'text') acc += ev.text
+          else if (ev.type === 'error') throw providerStreamError(ev)
+        }
+        return acc
+      })
       const summary = text.trim()
       if (!summary) return { ok: false, summarized: 0, error: 'The model returned an empty summary.' }
       summaryMsgs = buildSummaryMessages(summary)
