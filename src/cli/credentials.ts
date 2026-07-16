@@ -279,7 +279,10 @@ export function cliSetMcpOAuth(
   if (tokens) current[serverId] = tokens
   else if (serverId in current) delete current[serverId]
   else return // nothing stored and nothing to store — don't create an empty file
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  // Use the shared owner-only writer: `writeFileSync`'s mode is ignored when the file
+  // already exists, so an explicit chmod is needed to tighten a pre-existing loose-perm
+  // file that now holds OAuth access/refresh tokens.
+  writeSecretsFile(path, current)
 }
 
 /** Resolve a credential: environment first, then cli-credentials.json. */
