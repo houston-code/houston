@@ -1,4 +1,4 @@
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getUserDataDir } from '../main/userData'
 import {
@@ -237,6 +237,14 @@ export function cliHasKey(id: string, deps: CredentialDeps = {}): boolean {
   return cliGetKey(id, deps) !== null
 }
 
+/** Write a JSON map to `path` owner-only. `writeFileSync`'s `mode` applies only when
+ *  the file is created, so an explicit chmod is needed to tighten a pre-existing
+ *  group/world-readable file. */
+function writeSecretsFile(path: string, contents: Record<string, unknown>): void {
+  writeFileSync(path, `${JSON.stringify(contents, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  if (process.platform !== 'win32') chmodSync(path, 0o600)
+}
+
 /**
  * Persist a key for `id` into `cli-credentials.json` (the CLI's writable key store;
  * the desktop app's safeStorage isn't reachable here). Reads-merges-writes the flat
@@ -255,7 +263,7 @@ export function cliSetKey(
   const path = join(dataDir, 'cli-credentials.json')
   const current = readJsonObject(path)
   current[id] = key
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  writeSecretsFile(path, current)
   const envName = envVarCandidates(id).find((name) => env[name])
   return { shadowedByEnv: envName ?? null }
 }
@@ -271,6 +279,6 @@ export function cliRemoveKey(id: string, deps: CredentialDeps = {}): boolean {
   const current = readJsonObject(path)
   if (!(id in current)) return false
   delete current[id]
-  writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  writeSecretsFile(path, current)
   return true
 }

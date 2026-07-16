@@ -209,6 +209,20 @@ describe('cliSetKey / cliRemoveKey', () => {
     }
   })
 
+  it('tightens a pre-existing group/world-readable file to 0600 on rewrite', () => {
+    // writeFileSync's `mode` only applies at creation, so a loose existing file
+    // needs an explicit chmod — this pins that both rewrite paths do it.
+    if (process.platform === 'win32') return
+    writeCreds({ openrouter: 'old' }, 0o644)
+    cliSetKey('openrouter', 'or-secret', { dataDir: dir, env: {} })
+    const path = join(dir, 'cli-credentials.json')
+    expect(statSync(path).mode & 0o077).toBe(0)
+
+    chmodSync(path, 0o644)
+    expect(cliRemoveKey('openrouter', { dataDir: dir })).toBe(true)
+    expect(statSync(path).mode & 0o077).toBe(0)
+  })
+
   it('merges into an existing file without clobbering other keys', () => {
     cliSetKey('openrouter', 'or-secret', { dataDir: dir, env: {} })
     cliSetKey('groq', 'groq-secret', { dataDir: dir, env: {} })
