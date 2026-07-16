@@ -8,7 +8,7 @@ export const task: EvalTask = {
   id: 'todo-driven-refactor',
   title: 'Extend validate() with email and age rules',
   prompt:
-    "validate() in validate.mjs only checks the name. Add the two missing rules: a missing email returns 'email required', and an age that isn't positive returns 'age must be positive'. Track the work as a todo list, and make test.mjs pass.",
+    "`node test.mjs` fails in this project. Work out what the code should be doing and update it so the test passes. Treat test.mjs as the spec: it defines the expected behaviour, so do not change it.",
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(

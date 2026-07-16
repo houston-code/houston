@@ -8,7 +8,7 @@ export const task: EvalTask = {
   id: 'apply-patch-multi-file',
   title: 'Change the greeting across two modules',
   prompt:
-    "The greeting should read 'hello, <name>' — the constant in a.mjs needs to be 'hello', and greet() in b.mjs should join with a comma. Apply both changes so test.mjs passes.",
+    "`node test.mjs` fails in this project. Work out what the code should be doing and update it so the test passes. Treat test.mjs as the spec: it defines the expected behaviour, so do not change it.",
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(

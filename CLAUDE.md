@@ -73,10 +73,20 @@ through (`??` only catches null/undefined, and Actions' `env: ${{ inputs.x || ''
 below zero, so it would have reported green forever. When touching this area, keep the rule
 that a misconfigured run must fail loudly rather than record or load a dead gate.
 
-Two invariants the suite asserts, both worth preserving: every task directory is
-registered exactly once, and every fixture's verify command **fails** before the
-agent touches it. The second is the load-bearing one — a verify that starts green
-grades every future regression as a pass.
+Three invariants the suite asserts, all worth preserving: every task directory is
+registered exactly once; every fixture's verify command **fails** before the agent
+touches it (a verify that starts green grades every future regression as a pass);
+and a run whose only work was rewriting the test grades as a FAILURE, because the
+test is restored from the pristine fixture before grading.
+
+That last one pairs with a rule for authoring tasks: **the prompt states the
+symptom, never the fix.** Say the test fails; don't say why, which file, or what to
+change. A prompt that dictates the edit measures transcription, every model scores
+1.0, the baseline saturates, and the live gate can no longer see anything short of
+total breakage. The test file is the spec the agent reads (as in SWE-bench), so a
+symptom-only prompt stays solvable — and it's *why* the test must be restored before
+grading: once the prompt doesn't say what to fix, deleting the failing assertion is
+the shortest path to green.
 
 Adding a task: drop `tasks/<id>/` with a `repo/` fixture and a `task.ts`, register it
 in `tasks/index.ts`. Keep fixtures dependency-free (plain `.mjs`, no install step), and

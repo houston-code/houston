@@ -5,7 +5,7 @@ export const task: EvalTask = {
   id: 'fix-null-deref',
   title: 'Fix a null dereference in sum()',
   prompt:
-    'sum() in sum.mjs throws when the list contains a null hole. Skip null entries instead of crashing, then make sure test.mjs passes.',
+    "`node test.mjs` fails in this project. Work out why and fix the source so it passes. Treat test.mjs as the spec: it defines the expected behaviour, so do not change it.",
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(callTool('c1', 'read_file', { path: 'sum.mjs' })),

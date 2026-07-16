@@ -9,7 +9,7 @@ export const task: EvalTask = {
   id: 'run-tests-then-fix',
   title: 'Run the failing test, then fix parsePort()',
   prompt:
-    'Run test.mjs to see how it fails, then fix parsePort() in port.mjs so a port arriving as a string comes back as a number. Re-run the test to confirm.',
+    "Run `node test.mjs` to see how it fails, then fix the source and re-run it to confirm it passes. Treat test.mjs as the spec: it defines the expected behaviour, so do not change it.",
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(callTool('c1', 'run_shell', { command: 'node test.mjs' })),

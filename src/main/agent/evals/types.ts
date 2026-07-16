@@ -53,6 +53,18 @@ export interface EvalTask {
    */
   verify: EvalVerify
   /**
+   * Files restored from the pristine fixture before grading. Defaults to
+   * `['test.mjs']`.
+   *
+   * The test is the SPEC, and the prompts deliberately don't say what the fix is
+   * — so the cheapest way to make `node test.mjs` exit 0 is to edit test.mjs. A
+   * live model that deletes the failing assertion would otherwise grade as having
+   * solved the task. Restoring the test before running it makes tampering
+   * pointless rather than merely forbidden, which is the only version that holds
+   * against a model doing its best to satisfy the letter of the request.
+   */
+  verifyFiles?: string[]
+  /**
    * Scripted model turns for the deterministic driver. Ignored in live mode.
    * When the script runs out the provider ends the turn, so the final `endTurn()`
    * is only needed where the agent should speak before stopping.

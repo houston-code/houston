@@ -155,12 +155,29 @@ zero, so the nightly would report green forever while guarding nothing. If you h
 that refusal, read the per-task run errors in the scorecard, fix the cause, and
 re-record.
 
+#### Writing a task
+
 To add a task, create `src/main/agent/evals/tasks/<id>/` with a `repo/` fixture
 and a `task.ts`, then register it in `tasks/index.ts`. Keep fixtures dependency-free
 (plain `.mjs` that plain `node` can run: no install step), and make sure the verify
 command **fails** on the untouched fixture. The suite asserts both the registration
 and that starting-red precheck, since a task whose verify is already green would
 grade every future regression as a pass.
+
+**Write the prompt as a symptom, never as an instruction.** Say that the test
+fails; do not say why, which file is at fault, or what the fix is. A prompt like
+"rename the `timeout` option to `timeoutMs` in config.mjs, including the
+`describe()` output" measures transcription, not problem-solving, and every model
+scores 1.0 on it: the baseline saturates and the live gate loses its ability to
+detect anything short of total breakage. The test file is the spec the agent reads
+to learn the contract (exactly how SWE-bench works), so a symptom-only prompt is
+still fully solvable.
+
+This is also why the tests are restored from the pristine fixture before grading:
+once the prompt no longer says what to fix, the shortest path to a green
+`node test.mjs` is to delete the failing assertion. Restoring makes that pointless
+rather than merely forbidden. Set `verifyFiles` if a task's spec is spread over
+more than the default `test.mjs`.
 
 There's also an end-to-end smoke test in [`e2e/`](e2e/) that launches the real
 Electron app with Playwright and checks the UI mounts. `npm run test:e2e` builds
