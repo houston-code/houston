@@ -502,7 +502,9 @@ templates, the agent gets `mcp_list_resources`/`mcp_read_resource` and
 Houston also honors server `list_changed` notifications (tools, resources, and
 prompts refresh live), keeps long tool calls alive while the server reports
 progress, and caps any single MCP result so a runaway server cannot flood the
-context window. `/mcp` in the terminal and the Settings panel show each server's
+context window. `/mcp tools <n>` lists exactly which tools a server exposes — a count tells you it
+works, the names tell you what you just handed the agent. `/mcp` in the terminal
+and the Settings panel show each server's
 live connection status: connected with a tool count, needs sign-in, or the
 connect error.
 

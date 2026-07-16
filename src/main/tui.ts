@@ -1055,7 +1055,7 @@ export const HELP_TEXT = [
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
-  '  /mcp [verb n]         list MCP servers; add (stdio) · remove · login · logout <n>',
+  '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
   '  /theme [name]         list or switch color theme (default | bright | mono)',
   '  /image [path]         attach an image — from your clipboard, or a file',
   '  /cwd                  show the working directory',
@@ -1081,6 +1081,8 @@ export type SettingsAction =
   | { op: 'list' }
   | { op: 'add' }
   | { op: 'remove'; index: number }
+  /** List a server's tools (/mcp tools <n>). /mcp only. */
+  | { op: 'tools'; index: number }
   /** OAuth sign-in for a remote MCP server (/mcp login <n>). /mcp only. */
   | { op: 'login'; index: number }
   /** Forget a remote MCP server's OAuth tokens (/mcp logout <n>). /mcp only. */
@@ -1092,11 +1094,12 @@ export function parseSettingsAction(arg: string): SettingsAction {
   const [verb, ...rest] = arg.trim().split(/\s+/).filter(Boolean)
   if (!verb) return { op: 'list' }
   if (verb === 'add') return { op: 'add' }
-  const indexed = (op: 'remove' | 'login' | 'logout'): SettingsAction => {
+  const indexed = (op: 'remove' | 'login' | 'logout' | 'tools'): SettingsAction => {
     const n = Number.parseInt(rest[0] ?? '', 10)
     if (Number.isInteger(n) && n >= 1) return { op, index: n }
     return { op: 'usage' }
   }
+  if (verb === 'tools') return indexed('tools')
   if (verb === 'remove' || verb === 'rm' || verb === 'delete') return indexed('remove')
   if (verb === 'login' || verb === 'signin') return indexed('login')
   if (verb === 'logout' || verb === 'signout') return indexed('logout')
@@ -1211,6 +1214,28 @@ export function renderMcpList(
       return `  ${paint(`${i + 1}.`, 'dim')} ${paint(s.name ?? s.id, 'cyan')}${off}${auth}  ${paint(`[${transport}]`, 'dim')}  ${detail}${badge}`
     })
     .join('\n')
+}
+
+/**
+ * A server's tools, by name.
+ *
+ * `/mcp` could tell you a server was connected and how MANY tools it had, never
+ * which — so "what did I just give the agent?" had no answer short of reading the
+ * server's own docs. That is the question that decides whether you trust it.
+ */
+export function renderMcpTools(name: string, status: McpServerStatus | undefined, paint: Painter): string {
+  if (!status) return paint(`· "${name}" has not connected yet; its tools are unknown until it does`, 'dim')
+  if (status.state === 'needs-auth') return paint(`· "${name}" needs sign-in first (/mcp login)`, 'yellow')
+  if (status.state === 'error') {
+    return paint(`· "${name}" failed to connect: ${stripControlChars(status.error ?? 'unknown error')}`, 'red')
+  }
+  const names = status.toolNames ?? []
+  if (!names.length) return paint(`· "${name}" is connected but exposes no tools`, 'dim')
+  const lines = [paint(`${name} — ${names.length} tool${names.length === 1 ? '' : 's'}:`, 'bold')]
+  // Namespaced as the agent sees them, so what is listed here is what appears in
+  // an approval prompt.
+  for (const t of names) lines.push(`  ${paint(stripControlChars(t), 'cyan')}`)
+  return lines.join('\n')
 }
 
 /** The "where the file is / changes need a restart" footer shared by the settings commands. */
@@ -2991,8 +3016,13 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
   const hooks = deps.getSettings().hooks ?? []
   const path = deps.settingsPath?.() ?? '(unknown)'
 
-  if (action.op === 'usage' || action.op === 'login' || action.op === 'logout') {
-    // login/logout are /mcp verbs; on /hooks they just fall to usage.
+  if (
+    action.op === 'usage' ||
+    action.op === 'login' ||
+    action.op === 'logout' ||
+    action.op === 'tools'
+  ) {
+    // login/logout/tools are /mcp verbs; on /hooks they just fall to usage.
     deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
     return
   }
@@ -3048,7 +3078,10 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
 
   if (action.op === 'usage') {
     deps.io.out(
-      paint('usage: /mcp   ·   /mcp add   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n', 'yellow')
+      paint(
+        'usage: /mcp   ·   /mcp add   ·   /mcp tools <n>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n',
+        'yellow'
+      )
     )
     return
   }
@@ -3057,6 +3090,22 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     deps.io.out(
       paint('Remote (URL) servers: add them in the desktop app, then sign in with /mcp login <n> if needed.\n', 'dim')
     )
+    return
+  }
+
+  if (action.op === 'tools') {
+    const server = servers[action.index - 1]
+    if (!server) {
+      deps.io.out(
+        paint(
+          `· no MCP server #${action.index} (there ${servers.length === 1 ? 'is 1' : `are ${servers.length}`})\n`,
+          'yellow'
+        )
+      )
+      return
+    }
+    const st = (deps.mcpStatuses?.() ?? []).find((x) => x.id === server.id)
+    deps.io.out(`${renderMcpTools(server.name ?? server.id, st, paint)}\n`)
     return
   }
 

@@ -227,7 +227,12 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
     // changed (including a refreshed/removed OAuth token) or the cached client has
     // since died (so calls don't hang on it).
     if (existing && existing.key === key && !existing.client.isClosed) {
-      statuses.set(c.id, { id: c.id, state: 'connected', tools: existing.client.tools.length })
+      statuses.set(c.id, {
+        id: c.id,
+        state: 'connected',
+        tools: existing.client.tools.length,
+        toolNames: existing.client.tools.map((t) => t.name)
+      })
       continue
     }
     if (existing) existing.client.close()
@@ -260,7 +265,12 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
         client = await connectOnce()
       }
       connections.set(c.id, { key, client })
-      statuses.set(c.id, { id: c.id, state: 'connected', tools: client.tools.length })
+      statuses.set(c.id, {
+        id: c.id,
+        state: 'connected',
+        tools: client.tools.length,
+        toolNames: client.tools.map((t) => t.name)
+      })
     } catch (e) {
       connections.delete(c.id)
       if (e instanceof McpUnauthorizedError && transport !== 'stdio') {
