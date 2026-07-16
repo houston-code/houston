@@ -399,7 +399,10 @@ export async function recordOriginal(runId: string, roots: string[], relPath: st
   const abs = resolveOrNull(roots, relPath)
   if (!abs) return
 
-  let cp = checkpoints.get(runId)
+  // Re-hydrate from disk on an in-memory miss (as every other mutator does): if this
+  // run was evicted after snapshotting earlier files, a fresh empty Map would be
+  // persisted over its on-disk snapshot and a revert would silently drop those files.
+  let cp = checkpoints.get(runId) ?? (await loadRunIntoMemory(runId))
   const isNewCheckpoint = !cp
   if (!cp) {
     evictForNewCheckpoint()
