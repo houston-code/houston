@@ -156,6 +156,19 @@ const h = vi.hoisted(() => {
   }
 })
 
+/**
+ * This factory REPLACES the whole module, so it must cover every name the engine
+ * imports from agentHost — a missing one is `undefined` at the call site, not a
+ * compile error. `createProvider` alone needs three (`getKey`, `getSecretHeaders`,
+ * `hasStoredKey`), and omitting `getSecretHeaders` once made every live task fail
+ * before it reached the model, which the recorder then wrote out as a baseline of
+ * all zeros. The 'constructs the real provider' test below exercises this surface
+ * on every PR so the next gap fails there instead of in the nightly.
+ *
+ * Deliberately NOT `importActual`-spread: the real agentHost reaches the settings
+ * store and the OS keychain, which is exactly the machine state an eval must not
+ * depend on.
+ */
 vi.mock('../../agentHost', () => ({
   getSettings: () => h.settings,
   addPermissionRule: () => {},
@@ -170,6 +183,11 @@ vi.mock('../../agentHost', () => ({
     builtIn: true
   }),
   getKey: () => h.key,
+  // No custom headers in an eval: a real lookup would hit the secrets store.
+  getSecretHeaders: () => ({}),
+  // Only consulted on the missing-key error path (getProvider reports requiresKey:
+  // false), but it must exist or createProvider throws on the way past.
+  hasStoredKey: () => false,
   collectSecrets: () => []
 }))
 // The one seam that differs by driver: scripted gets the fake, live gets the real
@@ -304,6 +322,25 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
 describe('eval fixtures', () => {
   it('registers every task directory exactly once', () => {
     expect(TASKS.map((t) => t.id).sort()).toEqual(taskDirNames())
+  })
+
+  /**
+   * The live driver's ONLY unshared seam is `createProvider`: the scripted driver
+   * returns its fake without ever calling it, so nothing else here touches the
+   * real adapter construction path. That gap shipped a live driver in which every
+   * task failed instantly — the agentHost mock was missing `getSecretHeaders`,
+   * which createProvider calls on every build.
+   *
+   * This runs under the SCRIPTED driver, on every PR, with a dummy key and no
+   * network (createProvider only assembles the SDK client). So a missing mock
+   * export now reds the PR that introduces it rather than the next nightly.
+   */
+  it('constructs the real provider the live driver would use', async () => {
+    const actual = await vi.importActual<typeof import('../../providers')>('../../providers')
+    h.key = 'test-key-not-used-for-any-request'
+    for (const cfg of defaultProviders().filter((p) => p.kind === 'anthropic' || p.kind === 'openai')) {
+      expect(() => actual.createProvider(cfg), `createProvider failed for "${cfg.id}"`).not.toThrow()
+    }
   })
 
   // A verify command that is already green grades every future regression as a
