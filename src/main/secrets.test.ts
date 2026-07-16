@@ -40,12 +40,15 @@ import {
   deleteSecretHeaders,
   getCredential,
   getKey,
+  getMcpOAuthTokens,
   getSecretHeaders,
   hasKey,
   hasStoredKey,
   isWeakEncryptionBackend,
+  mcpOAuthKeyId,
   setCredential,
   setKey,
+  setMcpOAuthTokens,
   setSecretHeaders
 } from './secrets'
 
@@ -147,6 +150,56 @@ describe('secrets store', () => {
   it('setKey writes a credential that getCredential reads back as api-key', () => {
     setKey('openai', 'sk-y')
     expect(getCredential('openai')).toEqual({ type: 'api-key', key: 'sk-y' })
+  })
+})
+
+describe('MCP OAuth token store', () => {
+  const tokens = {
+    access: 'mcp-access-token',
+    refresh: 'mcp-refresh-token',
+    expiresAt: 1_800_000_000_000,
+    scope: 'mcp:read',
+    clientId: 'dyn-client-1',
+    clientSecret: 'dyn-secret-1',
+    tokenEndpoint: 'https://auth.example.com/token',
+    resource: 'https://mcp.example.com/mcp'
+  }
+
+  it('round-trips a token set per server id', () => {
+    setMcpOAuthTokens('linear', tokens)
+    expect(getMcpOAuthTokens('linear')).toEqual(tokens)
+    expect(getMcpOAuthTokens('other')).toBeNull()
+  })
+
+  it('normalizes an absent refresh token to undefined', () => {
+    setMcpOAuthTokens('linear', { ...tokens, refresh: undefined })
+    expect(getMcpOAuthTokens('linear')!.refresh).toBeUndefined()
+  })
+
+  it('signs out with null', () => {
+    setMcpOAuthTokens('linear', tokens)
+    setMcpOAuthTokens('linear', null)
+    expect(getMcpOAuthTokens('linear')).toBeNull()
+  })
+
+  it('never collides with a provider credential of the same bare id', () => {
+    setKey('linear', 'sk-provider')
+    setMcpOAuthTokens('linear', tokens)
+    expect(getKey('linear')).toBe('sk-provider')
+    expect(getMcpOAuthTokens('linear')!.access).toBe('mcp-access-token')
+  })
+
+  it('reports null for a blob missing what a refresh needs', () => {
+    setCredential(mcpOAuthKeyId('linear'), { type: 'oauth', access: 'a', refresh: 'r' })
+    expect(getMcpOAuthTokens('linear')).toBeNull()
+  })
+
+  it('feeds the client secret and tokens into collectSecretValues', () => {
+    setMcpOAuthTokens('linear', tokens)
+    const values = collectSecretValues()
+    expect(values).toContain('mcp-access-token')
+    expect(values).toContain('mcp-refresh-token')
+    expect(values).toContain('dyn-secret-1')
   })
 })
 

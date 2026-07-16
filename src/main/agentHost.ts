@@ -1,4 +1,5 @@
 import type { AppSettings, PermissionRule, ProviderConfig } from '@shared/types'
+import type { McpOAuthTokens } from './mcp/oauth'
 
 /**
  * Injection seam between the agent engine (`agent/`, `providers/`, `mcp/`,
@@ -40,6 +41,15 @@ export interface AgentHost {
    * Optional: a host that can't enumerate its secrets just gets pattern-only redaction.
    */
   collectSecrets?(): string[]
+  /**
+   * Stored OAuth token set for a remote MCP server (minted by `mcp/oauth.ts`), or
+   * null when the server has never been signed in. Optional: a host without a
+   * writable secret store simply has no MCP OAuth (connections fall back to any
+   * static headers).
+   */
+  getMcpOAuth?(serverId: string): McpOAuthTokens | null
+  /** Persist an MCP server's OAuth token set; `null` signs the server out. */
+  setMcpOAuth?(serverId: string, tokens: McpOAuthTokens | null): void
 }
 
 let host: AgentHost | null = null
@@ -90,4 +100,19 @@ export function getSecretHeaders(scope: string): Record<string, string> {
 /** All plaintext secret values for redaction, or `[]` if the host can't enumerate them. */
 export function collectSecrets(): string[] {
   return requireHost().collectSecrets?.() ?? []
+}
+
+/** Stored MCP OAuth token set for a server, or null (also when the host has no store). */
+export function getMcpOAuth(serverId: string): McpOAuthTokens | null {
+  return requireHost().getMcpOAuth?.(serverId) ?? null
+}
+
+/** Whether this host can persist MCP OAuth tokens (i.e. sign-in is available). */
+export function canStoreMcpOAuth(): boolean {
+  return typeof requireHost().setMcpOAuth === 'function'
+}
+
+/** Persist an MCP server's OAuth tokens (no-op on hosts without a secret store). */
+export function setMcpOAuth(serverId: string, tokens: McpOAuthTokens | null): void {
+  requireHost().setMcpOAuth?.(serverId, tokens)
 }

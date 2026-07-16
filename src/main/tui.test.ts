@@ -1815,8 +1815,8 @@ describe('runTui', () => {
     const saved: Array<Partial<AppSettings>> = []
     d.updateSettings = (p) => saved.push(p)
     d.settingsPath = () => '/p/s.json'
-    // command line, then: name, command, args, confirm, EOF
-    const t = fakeIo(['/mcp add', 'files', 'npx', '-y @scope/fs .', 'y', null])
+    // command line, then: name, command, args, cwd, env, confirm, EOF
+    const t = fakeIo(['/mcp add', 'files', 'npx', '-y @scope/fs .', '', '', 'y', null])
     d.io = t.io
     await runTui(opts, d)
     expect(saved).toHaveLength(1)
@@ -1832,6 +1832,123 @@ describe('runTui', () => {
     expect(server).not.toHaveProperty('url')
     expect(server).not.toHaveProperty('headers')
     expect(t.text()).toContain('MCP server added')
+  })
+
+  it('/mcp add accepts a working directory and env pairs (values become secrets)', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    d.settingsPath = () => '/p/s.json'
+    d.canStoreHeaderSecrets = false // the standalone CLI case: values need cli-headers.json
+    const t = fakeIo(['/mcp add', 'gh', 'npx', '-y @scope/gh', '/srv/dir', 'GH_TOKEN=tok123', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved[0].mcpServers![0]).toMatchObject({
+      id: 'gh',
+      cwd: '/srv/dir',
+      env: { GH_TOKEN: 'tok123' }
+    })
+    // On a host that can't persist secret values, the flow says where they go.
+    expect(t.text()).toContain('mcp-env:gh')
+  })
+
+  it('/mcp login runs the OAuth flow for a remote server and reports success', async () => {
+    const remote: McpServerConfig = {
+      id: 'linear',
+      name: 'linear',
+      transport: 'http',
+      command: '',
+      url: 'https://mcp.example.com/mcp',
+      enabled: true
+    }
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      mcpServers: [remote]
+    })
+    const logins: string[] = []
+    d.mcpOAuth = {
+      login: async (server, onStatus) => {
+        logins.push(server.id)
+        onStatus('Opening the browser')
+      },
+      logout: () => {}
+    }
+    const t = fakeIo(['/mcp login 1', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(logins).toEqual(['linear'])
+    expect(t.text()).toContain('Opening the browser')
+    expect(t.text()).toContain('signed in to "linear"')
+  })
+
+  it('/mcp login refuses a stdio server and surfaces flow failures', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      mcpServers: [
+        { id: 'local', name: 'local', command: 'npx', enabled: true },
+        { id: 'web', name: 'web', transport: 'http', command: '', url: 'https://x/mcp', enabled: true }
+      ]
+    })
+    d.mcpOAuth = {
+      login: async () => {
+        throw new Error('registration rejected')
+      },
+      logout: () => {}
+    }
+    const t = fakeIo(['/mcp login 1', '/mcp login 2', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('local stdio server')
+    expect(t.text()).toContain('sign-in failed: registration rejected')
+  })
+
+  it('/mcp logout forgets stored tokens for a signed-in server', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      mcpServers: [
+        {
+          id: 'linear',
+          name: 'linear',
+          transport: 'http',
+          command: '',
+          url: 'https://x/mcp',
+          hasOAuth: true,
+          enabled: true
+        }
+      ]
+    })
+    const outs: string[] = []
+    d.mcpOAuth = { login: async () => {}, logout: (id) => outs.push(id) }
+    const t = fakeIo(['/mcp logout 1', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(outs).toEqual(['linear'])
+    expect(t.text()).toContain('signed out of "linear"')
+  })
+
+  it('/mcp list shows live connection status and sign-in badges', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      mcpServers: [
+        {
+          id: 'linear',
+          name: 'linear',
+          transport: 'http',
+          command: '',
+          url: 'https://x/mcp',
+          hasOAuth: true,
+          enabled: true
+        },
+        { id: 'gh', name: 'gh', transport: 'http', command: '', url: 'https://y/mcp', enabled: true }
+      ]
+    })
+    d.settingsPath = () => '/p/s.json'
+    d.mcpStatuses = () => [
+      { id: 'linear', state: 'connected', tools: 7 },
+      { id: 'gh', state: 'needs-auth', error: 'HTTP 401' }
+    ]
+    const t = fakeIo(['/mcp', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('signed in')
+    expect(t.text()).toContain('connected, 7 tools')
+    expect(t.text()).toContain('needs sign-in (/mcp login 2)')
   })
 
   it('/mcp lists servers without leaking header secrets and points to the desktop app', async () => {

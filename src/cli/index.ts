@@ -7,6 +7,7 @@ import {
   addPermissionRule,
   configureHasKey,
   configureHeaderSecrets,
+  configureMcpOAuthPresence,
   configureSetKey,
   getProvider,
   getSettings,
@@ -21,9 +22,11 @@ import {
   cliCollectSecrets,
   cliGetHeaders,
   cliGetKey,
+  cliGetMcpOAuth,
   cliHasKey,
   cliRemoveKey,
-  cliSetKey
+  cliSetKey,
+  cliSetMcpOAuth
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
 
@@ -105,6 +108,9 @@ Credentials (checked in this order):
 Custom provider/MCP auth headers (optional):
   <profile>/cli-headers.json: {"provider:<id>"|"mcp:<id>": {"<Header>": "<value>"}} with 0600 perms
 
+MCP OAuth (remote servers that require sign-in):
+  run /mcp login <n> in an interactive session; tokens land in <profile>/cli-mcp-oauth.json (0600)
+
 Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 `
 
@@ -124,8 +130,11 @@ export function wireCliHost(): void {
   configureHeaderSecrets({
     get: (scope) => cliGetHeaders(scope),
     set: () => {},
-    remove: () => {}
+    remove: () => {},
+    writable: false
   })
+  // The derived `hasOAuth` flag on MCP server configs (drives /mcp's sign-in hints).
+  configureMcpOAuthPresence((serverId) => cliGetMcpOAuth(serverId) !== null)
   configureAgentHost({
     getProvider,
     getSettings,
@@ -133,7 +142,9 @@ export function wireCliHost(): void {
     getKey: (id) => cliGetKey(id),
     hasStoredKey: (id) => cliHasKey(id),
     getSecretHeaders: (scope) => cliGetHeaders(scope),
-    collectSecrets: () => cliCollectSecrets()
+    collectSecrets: () => cliCollectSecrets(),
+    getMcpOAuth: (serverId) => cliGetMcpOAuth(serverId),
+    setMcpOAuth: (serverId, tokens) => cliSetMcpOAuth(serverId, tokens)
   })
 }
 

@@ -144,4 +144,77 @@ describe('McpSseClient', () => {
     const client = new McpSseClient(connect, fetch)
     await expect(client.connect({ url: 'https://x/sse' })).rejects.toThrow(/socket reset/)
   })
+
+  it('answers a server ping over the POST channel and declines other requests', async () => {
+    let emit: ((e: SseEvent) => void) | null = null
+    const posts: Array<Record<string, unknown>> = []
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    const fetch: FetchFn = async (_url, init) => {
+      const req = JSON.parse(init.body as string) as { id?: number; method?: string }
+      posts.push(req as Record<string, unknown>)
+      if (req.id !== undefined && req.method !== undefined) {
+        const result = req.method === 'tools/list' ? { tools: [] } : {}
+        queueMicrotask(() =>
+          emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) })
+        )
+      }
+      return new Response('', { status: 202 })
+    }
+    const client = new McpSseClient(connect, fetch)
+    await client.connect({ url: 'https://x/sse' })
+
+    emit!({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: 'p1', method: 'ping' }) })
+    emit!({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: 'e1', method: 'sampling/createMessage' }) })
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(posts.some((p) => p.id === 'p1' && 'result' in p)).toBe(true)
+    const decline = posts.find((p) => p.id === 'e1')!
+    expect((decline.error as { code: number }).code).toBe(-32601)
+    client.close()
+  })
+
+  it('re-fetches the tool list on notifications/tools/list_changed', async () => {
+    let emit: ((e: SseEvent) => void) | null = null
+    let toolset = [{ name: 'one' }]
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    const fetch: FetchFn = async (_url, init) => {
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.id !== undefined) {
+        const result = req.method === 'tools/list' ? { tools: toolset } : {}
+        queueMicrotask(() =>
+          emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) })
+        )
+      }
+      return new Response('', { status: 202 })
+    }
+    const client = new McpSseClient(connect, fetch)
+    await client.connect({ url: 'https://x/sse' })
+    expect(client.tools.map((t) => t.name)).toEqual(['one'])
+
+    toolset = [{ name: 'one' }, { name: 'two' }]
+    emit!({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' }) })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
+    client.close()
+  })
+
+  it('throws the typed unauthorized error when a POST gets a 401', async () => {
+    let emit: ((e: SseEvent) => void) | null = null
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    const fetch: FetchFn = async () => new Response('', { status: 401 })
+    const client = new McpSseClient(connect, fetch)
+    await expect(client.connect({ url: 'https://x/sse' })).rejects.toThrow(/401/)
+  })
 })

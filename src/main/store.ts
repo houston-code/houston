@@ -13,6 +13,7 @@ import type { AppSettings, McpServerConfig, PermissionRule, ProviderConfig } fro
 import {
   REDACTED_HEADER_VALUE,
   isRedactedHeaderValue,
+  mcpEnvScope,
   mcpHeaderScope,
   providerHeaderScope
 } from '@shared/types'
@@ -80,6 +81,19 @@ export function canSetKey(): boolean {
   return setKeyFn !== null
 }
 
+/**
+ * Injected "is an MCP OAuth token set stored for this server?" check, used to
+ * attach the derived `hasOAuth` flag on MCP server configs. A seam for the same
+ * reason as {@link configureHasKey}. Optional: hosts without an MCP OAuth store
+ * simply report false everywhere.
+ */
+let mcpOAuthPresenceFn: (serverId: string) => boolean = () => false
+
+/** Bind the MCP OAuth presence check. Call once during startup. */
+export function configureMcpOAuthPresence(fn: (serverId: string) => boolean): void {
+  mcpOAuthPresenceFn = fn
+}
+
 /** Persist an API key for `id`. Throws if no writer was wired — guard with {@link canSetKey}. */
 export function setProviderKey(id: string, key: string): { shadowedByEnv: string | null } {
   if (!setKeyFn) {
@@ -99,6 +113,13 @@ export interface HeaderSecretStore {
   get(scope: string): Record<string, string>
   set(scope: string, headers: Record<string, string>): void
   remove(scope: string): void
+  /**
+   * Whether `set` actually persists values. The standalone CLI wires a no-op
+   * writer (its values come from cli-headers.json), so UIs collecting secret
+   * values (headers / stdio env) can warn instead of silently dropping them.
+   * Absent means writable.
+   */
+  writable?: boolean
 }
 let headerSecrets: HeaderSecretStore | null = null
 
@@ -114,6 +135,11 @@ function requireHeaderSecrets(): HeaderSecretStore {
     )
   }
   return headerSecrets
+}
+
+/** True when settings saves persist secret VALUES (headers / stdio env). */
+export function canPersistHeaderSecrets(): boolean {
+  return headerSecrets?.writable !== false
 }
 
 let cache: AppSettings | null = null
@@ -271,7 +297,9 @@ function extractHeaderSecrets(settings: AppSettings): { settings: AppSettings; m
   }))
   const mcpServers: McpServerConfig[] | undefined = settings.mcpServers?.map((s) => ({
     ...s,
-    headers: take(mcpHeaderScope(s.id), s.headers)
+    headers: take(mcpHeaderScope(s.id), s.headers),
+    // stdio env values get the same secret treatment as header values.
+    env: take(mcpEnvScope(s.id), s.env)
   }))
   return {
     settings: { ...settings, providers, mcpServers: mcpServers ?? settings.mcpServers },
@@ -290,7 +318,12 @@ function persist(settings: AppSettings): void {
   const toWrite: AppSettings = {
     ...settings,
     providers: settings.providers.map((p) => ({ ...p, hasKey: false, headers: redactHeaders(p.headers) })),
-    mcpServers: settings.mcpServers?.map((s) => ({ ...s, headers: redactHeaders(s.headers) })),
+    mcpServers: settings.mcpServers?.map((s) => ({
+      ...s,
+      headers: redactHeaders(s.headers),
+      env: redactHeaders(s.env),
+      hasOAuth: undefined // derived, recomputed on read
+    })),
     searchKeyStatus: undefined // derived, recomputed on read
   }
   // 0600 — owner read/write only. Matches secrets.json: even with header secrets moved
@@ -312,7 +345,12 @@ function withKeyFlags(settings: AppSettings): AppSettings {
       hasKey: hasKey(p.id),
       headers: maskHeaders(p.headers)
     })),
-    mcpServers: settings.mcpServers?.map((s) => ({ ...s, headers: maskHeaders(s.headers) })),
+    mcpServers: settings.mcpServers?.map((s) => ({
+      ...s,
+      headers: maskHeaders(s.headers),
+      env: maskHeaders(s.env),
+      hasOAuth: mcpOAuthPresenceFn(s.id)
+    })),
     searchKeyStatus: Object.fromEntries(SEARCH_PROVIDERS.map((p) => [p.id, hasKey(p.keyId)]))
   }
 }

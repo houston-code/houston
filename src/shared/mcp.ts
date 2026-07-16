@@ -80,6 +80,27 @@ export function flattenMcpContent(content: unknown): string {
 }
 
 /**
+ * Flatten an MCP `prompts/get` result into plain text for the agent: the prompt
+ * description (when present) followed by each message as `role: text`. Non-text
+ * message content is noted by type, mirroring {@link flattenMcpContent}.
+ */
+export function flattenMcpPromptMessages(result: unknown): string {
+  if (!result || typeof result !== 'object') return ''
+  const { description, messages } = result as { description?: unknown; messages?: unknown }
+  const parts: string[] = []
+  if (typeof description === 'string' && description.trim()) parts.push(description.trim())
+  if (Array.isArray(messages)) {
+    for (const m of messages) {
+      if (!m || typeof m !== 'object') continue
+      const { role, content } = m as { role?: unknown; content?: unknown }
+      const text = flattenMcpContent(Array.isArray(content) ? content : [content])
+      if (text) parts.push(`${typeof role === 'string' ? role : 'user'}: ${text}`)
+    }
+  }
+  return parts.join('\n\n').trim()
+}
+
+/**
  * Flatten an MCP `resources/read` result's `contents` array into plain text.
  * Text contents are concatenated; a binary (base64 `blob`) content is noted with
  * its uri/mime rather than dumped, so a large binary can't flood the context.

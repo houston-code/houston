@@ -5,6 +5,7 @@ import type {
   AppSettings,
   ApprovalPolicy,
   IntegrationsInfo,
+  McpServerStatus,
   ModelOption,
   PermissionRule
 } from '@shared/types'
@@ -101,6 +102,18 @@ const api = {
     ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),
   /** Status of optional integrations (gh CLI, formatters) for the Settings hint. */
   getIntegrations: (): Promise<IntegrationsInfo> => ipcRenderer.invoke(IPC.integrationsGet),
+  /**
+   * OAuth sign-in for a saved remote MCP server: opens the browser flow and
+   * stores the tokens. Resolves once the flow completes (or fails); the returned
+   * settings carry the fresh `hasOAuth` flag.
+   */
+  mcpOAuthLogin: (serverId: string): Promise<{ ok: boolean; error?: string; settings: AppSettings }> =>
+    ipcRenderer.invoke(IPC.mcpOAuthLogin, serverId),
+  /** Forget a remote MCP server's stored OAuth tokens (sign out). */
+  mcpOAuthLogout: (serverId: string): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.mcpOAuthLogout, serverId),
+  /** Live per-server MCP connection status (connected / needs-auth / error). */
+  getMcpStatuses: (): Promise<McpServerStatus[]> => ipcRenderer.invoke(IPC.mcpStatus),
 
   // "Open project in…" (a user gesture; launches an external editor / file manager)
   /** Which supported editors can be launched on this machine, for the "Open in…" menu. */

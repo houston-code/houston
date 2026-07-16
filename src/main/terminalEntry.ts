@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { LEGAL_VERSION } from '@shared/legal'
+import type { McpServerConfig } from '@shared/types'
 import {
   isSupportedImageType,
   exceedsImageSizeLimit,
@@ -11,13 +12,21 @@ import {
 } from '@shared/images'
 import { startRun, resolveApproval, resolveQuestion, resolvePlan, cancelRun } from './agent/loop'
 import { killAllShells } from './agent/shells'
-import { disconnectAllMcp } from './mcp/manager'
+import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
+import { runMcpOAuthFlow } from './mcp/oauth'
+import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
 import { loadCommands } from './agent/commands'
 import { compactConversationNow } from './agent/compact'
-import { canSetKey, getSettings, setProviderKey, updateSettings } from './store'
+import {
+  canPersistHeaderSecrets,
+  canSetKey,
+  getSettings,
+  setProviderKey,
+  updateSettings
+} from './store'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
 import { runTui, makePainter, mediaTypeForImagePath, type TuiOptions } from './tui'
@@ -164,6 +173,22 @@ export async function runTuiEntry(tui: TuiOptions): Promise<number> {
       updateSettings: (patch) => {
         updateSettings(patch)
       },
+      // Live connection badges + OAuth sign-in/out for /mcp. Sign-in runs the full
+      // interactive flow (discovery, registration, browser, exchange) and persists
+      // the tokens through the wired host store.
+      mcpStatuses: () => getMcpStatuses(),
+      ...(canStoreMcpOAuth()
+        ? {
+            mcpOAuth: {
+              login: async (server: McpServerConfig, onStatus: (m: string) => void) => {
+                const tokens = await runMcpOAuthFlow(server.url ?? '', { onStatus })
+                setMcpOAuth(server.id, tokens)
+              },
+              logout: (serverId: string) => setMcpOAuth(serverId, null)
+            }
+          }
+        : {}),
+      canStoreHeaderSecrets: canPersistHeaderSecrets(),
       // In-session API-key entry for /login. Writes through the host's key store
       // (safeStorage on the desktop, cli-credentials.json on the CLI); absent only
       // if no writable store was wired, which disables /login gracefully.

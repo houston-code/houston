@@ -47,6 +47,11 @@ export function mcpHeaderScope(serverId: string): string {
   return `mcp:${serverId}`
 }
 
+/** Secrets-store scope key for an MCP server's stdio environment variables. */
+export function mcpEnvScope(serverId: string): string {
+  return `mcp-env:${serverId}`
+}
+
 /**
  * How a provider authenticates.
  * - api-key: a static secret the user pastes in (the only flow wired up today).
@@ -175,6 +180,16 @@ export interface McpServerConfig {
   command: string
   /** Arguments (e.g. ["-y", "@modelcontextprotocol/server-filesystem", "."]). stdio only. */
   args?: string[]
+  /** Working directory for the spawned process. stdio only. */
+  cwd?: string
+  /**
+   * Environment variables for the spawned process (e.g. an API token the server
+   * needs). stdio only. The spawned server gets a credential-stripped base
+   * environment, so anything it needs must be listed here explicitly. VALUES are
+   * treated like header values: they live only in the encrypted secrets store
+   * (scope `mcp-env:<id>`) and are masked on any config that leaves the main process.
+   */
+  env?: Record<string, string>
   /** Endpoint URL for the "http" (streamable) or "sse" transport (e.g. "https://host/mcp"). */
   url?: string
   /**
@@ -188,7 +203,26 @@ export interface McpServerConfig {
    * process the values are masked to `REDACTED_HEADER_VALUE`; only the keys are shown.
    */
   headers?: Record<string, string>
+  /**
+   * True when an OAuth token set from the interactive sign-in is stored for this
+   * server (http/sse). Derived like `ProviderConfig.hasKey`, never persisted.
+   */
+  hasOAuth?: boolean
   enabled: boolean
+}
+
+/**
+ * Live connection status of a configured MCP server, as reported by the MCP
+ * manager after its last connect attempt: for the settings UI and the TUI's /mcp
+ * list. `needs-auth` means the server answered 401 and wants an OAuth sign-in.
+ */
+export interface McpServerStatus {
+  id: string
+  state: 'connected' | 'needs-auth' | 'error'
+  /** Tool count, when connected. */
+  tools?: number
+  /** Failure detail, when not connected. */
+  error?: string
 }
 
 /**

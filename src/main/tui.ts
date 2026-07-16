@@ -24,6 +24,7 @@ import {
   type Command
 } from '@shared/commands'
 import type { CompactResult } from './agent/compact'
+import type { McpServerStatus } from './mcp/manager'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import type {
   AgentEvent,
@@ -744,7 +745,7 @@ export const HELP_TEXT = [
   '  /skills /agents       list workspace skills / custom agents',
   '  /settings             settings overview + where to edit them',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
-  '  /mcp [add|remove n]   list or edit MCP servers (terminal adds stdio only)',
+  '  /mcp [verb n]         list MCP servers; add (stdio) · remove · login · logout <n>',
   '  /theme [name]         list or switch color theme (default | bright | mono)',
   '  /image <path>         attach an image to your next message',
   '  /cwd                  show the working directory',
@@ -771,11 +772,15 @@ export const HOOK_EVENTS: Hook['event'][] = [
   'PreCompact'
 ]
 
-/** What the user asked /hooks or /mcp to do. `remove` carries a 1-based index. */
+/** What the user asked /hooks or /mcp to do. Indexed ops carry a 1-based index. */
 export type SettingsAction =
   | { op: 'list' }
   | { op: 'add' }
   | { op: 'remove'; index: number }
+  /** OAuth sign-in for a remote MCP server (/mcp login <n>). /mcp only. */
+  | { op: 'login'; index: number }
+  /** Forget a remote MCP server's OAuth tokens (/mcp logout <n>). /mcp only. */
+  | { op: 'logout'; index: number }
   | { op: 'usage' }
 
 /** Parse the argument of /hooks or /mcp into an action. Bare command → list. */
@@ -783,11 +788,14 @@ export function parseSettingsAction(arg: string): SettingsAction {
   const [verb, ...rest] = arg.trim().split(/\s+/).filter(Boolean)
   if (!verb) return { op: 'list' }
   if (verb === 'add') return { op: 'add' }
-  if (verb === 'remove' || verb === 'rm' || verb === 'delete') {
+  const indexed = (op: 'remove' | 'login' | 'logout'): SettingsAction => {
     const n = Number.parseInt(rest[0] ?? '', 10)
-    if (Number.isInteger(n) && n >= 1) return { op: 'remove', index: n }
+    if (Number.isInteger(n) && n >= 1) return { op, index: n }
     return { op: 'usage' }
   }
+  if (verb === 'remove' || verb === 'rm' || verb === 'delete') return indexed('remove')
+  if (verb === 'login' || verb === 'signin') return indexed('login')
+  if (verb === 'logout' || verb === 'signout') return indexed('logout')
   return { op: 'usage' }
 }
 
@@ -811,14 +819,18 @@ export function buildHook(event: string, matcher: string, command: string): Hook
 
 /**
  * Validate raw field input into a *stdio* MCP server config, or return an error.
- * No url/headers/env by construction: remote transports and header secrets are the
- * desktop app's domain, so a terminal-added server is always a local process.
+ * No url/headers by construction: remote transports are the desktop app's domain
+ * (or `/mcp login` for OAuth), so a terminal-added server is always a local
+ * process. `envStr` is space-separated KEY=value pairs; values are secrets, moved
+ * into the secret store by the settings save (see store.ts).
  */
 export function buildStdioMcpServer(
   existingIds: string[],
   name: string,
   command: string,
-  argsStr: string
+  argsStr: string,
+  cwdStr = '',
+  envStr = ''
 ): McpServerConfig | { error: string } {
   const id = name.trim()
   if (!/^[\w-]+$/.test(id)) {
@@ -828,7 +840,26 @@ export function buildStdioMcpServer(
   const cmd = command.trim()
   if (!cmd) return { error: 'a command to spawn is required (e.g. npx)' }
   const args = argsStr.trim() ? argsStr.trim().split(/\s+/) : undefined
-  return { id, name: id, transport: 'stdio', command: cmd, ...(args ? { args } : {}), enabled: true }
+  const env: Record<string, string> = {}
+  for (const pair of envStr.trim() ? envStr.trim().split(/\s+/) : []) {
+    const eq = pair.indexOf('=')
+    const key = eq > 0 ? pair.slice(0, eq) : ''
+    if (!/^[A-Za-z_]\w*$/.test(key)) {
+      return { error: `env must be KEY=value pairs separated by spaces (got "${pair}")` }
+    }
+    env[key] = pair.slice(eq + 1)
+  }
+  const cwd = cwdStr.trim()
+  return {
+    id,
+    name: id,
+    transport: 'stdio',
+    command: cmd,
+    ...(args ? { args } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(Object.keys(env).length ? { env } : {}),
+    enabled: true
+  }
 }
 
 /** Numbered list of hooks, or a "none" note. */
@@ -844,20 +875,36 @@ export function renderHookList(hooks: Hook[], paint: Painter): string {
 
 /**
  * Numbered list of MCP servers. Only the transport summary is shown — never the
- * `headers` map, whose values are secrets (masked on read, but we don't print them
- * at all).
+ * `headers`/`env` maps, whose values are secrets (masked on read, but we don't
+ * print them at all). `statuses` (from the manager) adds a live connection badge:
+ * connected tool count, needs-sign-in, or the connect error.
  */
-export function renderMcpList(servers: McpServerConfig[], paint: Painter): string {
+export function renderMcpList(
+  servers: McpServerConfig[],
+  paint: Painter,
+  statuses: McpServerStatus[] = []
+): string {
   if (!servers.length) return paint('No MCP servers configured.', 'dim')
+  const statusById = new Map(statuses.map((s) => [s.id, s]))
   return servers
     .map((s, i) => {
-      const transport = s.transport ?? 'stdio'
+      const transport = s.transport ?? (s.url && !s.command ? 'http' : 'stdio')
       const detail =
         transport === 'stdio'
           ? `${s.command}${s.args?.length ? ` ${s.args.join(' ')}` : ''}`
           : (s.url ?? '')
       const off = s.enabled === false ? paint(' (disabled)', 'dim') : ''
-      return `  ${paint(`${i + 1}.`, 'dim')} ${paint(s.name ?? s.id, 'cyan')}${off}  ${paint(`[${transport}]`, 'dim')}  ${detail}`
+      const auth = transport !== 'stdio' && s.hasOAuth ? paint(' (signed in)', 'green') : ''
+      const st = statusById.get(s.id)
+      const badge =
+        st?.state === 'connected'
+          ? paint(`  ✓ connected, ${st.tools ?? 0} tool${st.tools === 1 ? '' : 's'}`, 'green')
+          : st?.state === 'needs-auth'
+            ? paint(`  ! needs sign-in (/mcp login ${i + 1})`, 'yellow')
+            : st?.state === 'error'
+              ? paint(`  ✗ ${st.error ?? 'failed to connect'}`, 'red')
+              : ''
+      return `  ${paint(`${i + 1}.`, 'dim')} ${paint(s.name ?? s.id, 'cyan')}${off}${auth}  ${paint(`[${transport}]`, 'dim')}  ${detail}${badge}`
     })
     .join('\n')
 }
@@ -1236,6 +1283,24 @@ export interface TuiDeps {
   compact?: (id: string, providerId: string, model: string) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
   updateSettings?: (patch: Partial<AppSettings>) => void
+  /**
+   * OAuth sign-in/out for remote MCP servers (the `/mcp login|logout <n>` verbs).
+   * `login` runs the interactive browser flow for the server and persists the
+   * minted tokens; `onStatus` receives user-facing progress lines (including the
+   * authorize URL fallback). Absent ⇒ the verbs report sign-in as unavailable.
+   */
+  mcpOAuth?: {
+    login: (server: McpServerConfig, onStatus: (message: string) => void) => Promise<void>
+    logout: (serverId: string) => void
+  }
+  /** Live per-server connection status for `/mcp` (from the MCP manager). */
+  mcpStatuses?: () => McpServerStatus[]
+  /**
+   * Whether this host persists secret VALUES (headers / stdio env) from settings
+   * saves. False on the standalone CLI, whose store keeps only the keys — the
+   * /mcp add flow then tells the user where the values actually go.
+   */
+  canStoreHeaderSecrets?: boolean
   /**
    * Persist an API key for a provider (the `/login` flow). Returns the env var
    * currently shadowing the id, if any, so the driver can warn. Absent ⇒ no
@@ -2079,7 +2144,7 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     '  authenticated MCP servers, hooks, and more.',
     '  From the terminal you can edit a safe subset:',
     `    ${paint('/hooks', 'cyan')}   list, or  /hooks add  ·  /hooks remove <n>`,
-    `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (local stdio servers)  ·  /mcp remove <n>`,
+    `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
     '',
     paint('  Changes are picked up on restart.', 'dim')
   ]
@@ -2091,7 +2156,8 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
   const hooks = deps.getSettings().hooks ?? []
   const path = deps.settingsPath?.() ?? '(unknown)'
 
-  if (action.op === 'usage') {
+  if (action.op === 'usage' || action.op === 'login' || action.op === 'logout') {
+    // login/logout are /mcp verbs; on /hooks they just fall to usage.
     deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
     return
   }
@@ -2135,24 +2201,62 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
 }
 
 /**
- * /mcp: list, add (guided, stdio only), or remove an MCP server. Persists via
- * deps.updateSettings. The add flow never collects a URL or auth headers, so it
- * can't touch the header-secret path the CLI intentionally doesn't write; remote or
- * authenticated servers are directed to the desktop app.
+ * /mcp: list (with live connection status), add (guided, stdio only), remove, or
+ * OAuth sign-in/out for a remote server. Persists via deps.updateSettings. The
+ * add flow never collects a URL or auth headers; remote servers are added in the
+ * desktop app and authenticated here with `/mcp login <n>`.
  */
 async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
   const servers = deps.getSettings().mcpServers ?? []
   const path = deps.settingsPath?.() ?? '(unknown)'
 
   if (action.op === 'usage') {
-    deps.io.out(paint('usage: /mcp   ·   /mcp add   ·   /mcp remove <n>\n', 'yellow'))
+    deps.io.out(
+      paint('usage: /mcp   ·   /mcp add   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n', 'yellow')
+    )
     return
   }
   if (action.op === 'list') {
-    deps.io.out(`${renderMcpList(servers, paint)}\n${renderSettingsFooter(path, paint)}\n`)
-    deps.io.out(paint('Remote (URL) or authenticated servers: add them in the desktop app.\n', 'dim'))
+    deps.io.out(`${renderMcpList(servers, paint, deps.mcpStatuses?.() ?? [])}\n${renderSettingsFooter(path, paint)}\n`)
+    deps.io.out(
+      paint('Remote (URL) servers: add them in the desktop app, then sign in with /mcp login <n> if needed.\n', 'dim')
+    )
     return
   }
+
+  if (action.op === 'login' || action.op === 'logout') {
+    const server = servers[action.index - 1]
+    if (!server) {
+      deps.io.out(paint(`· no MCP server #${action.index} (there ${servers.length === 1 ? 'is 1' : `are ${servers.length}`})\n`, 'yellow'))
+      return
+    }
+    const transport = server.transport ?? (server.url && !server.command ? 'http' : 'stdio')
+    if (transport === 'stdio' || !server.url) {
+      deps.io.out(paint(`· "${server.name ?? server.id}" is a local stdio server; OAuth sign-in applies to remote (http/sse) servers\n`, 'yellow'))
+      return
+    }
+    if (!deps.mcpOAuth) {
+      deps.io.out(paint('· OAuth sign-in is unavailable in this client\n', 'dim'))
+      return
+    }
+    if (action.op === 'logout') {
+      if (!server.hasOAuth) {
+        deps.io.out(paint(`· "${server.name ?? server.id}" has no stored sign-in\n`, 'dim'))
+        return
+      }
+      deps.mcpOAuth.logout(server.id)
+      deps.io.out(paint(`· signed out of "${server.name ?? server.id}". Applies on your next message.\n`, 'dim'))
+      return
+    }
+    try {
+      await deps.mcpOAuth.login(server, (message) => deps.io.out(paint(`· ${message}\n`, 'dim')))
+      deps.io.out(paint(`· signed in to "${server.name ?? server.id}". Applies on your next message.\n`, 'green'))
+    } catch (e) {
+      deps.io.out(paint(`· sign-in failed: ${(e as Error).message}\n`, 'yellow'))
+    }
+    return
+  }
+
   if (!deps.updateSettings) {
     deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
     return
@@ -2169,22 +2273,35 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
   }
 
   // op === 'add' — local stdio servers only.
-  deps.io.out(paint('Add a local (stdio) MCP server. For remote or authenticated servers, use the desktop app.\n', 'dim'))
+  deps.io.out(paint('Add a local (stdio) MCP server. For remote servers, use the desktop app (then /mcp login here if needed).\n', 'dim'))
   const nameAns = await deps.io.readLine('name (letters, numbers, - or _): ')
   if (nameAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
   const cmdAns = await deps.io.readLine('command to spawn (e.g. npx): ')
   if (cmdAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
   const argsAns = await deps.io.readLine('args (space-separated, optional): ')
   if (argsAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const cwdAns = await deps.io.readLine('working directory (optional): ')
+  if (cwdAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const envAns = await deps.io.readLine('env (KEY=value pairs, space-separated, optional): ')
+  if (envAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
 
-  const built = buildStdioMcpServer(servers.map((s) => s.id), nameAns, cmdAns, argsAns)
+  const built = buildStdioMcpServer(servers.map((s) => s.id), nameAns, cmdAns, argsAns, cwdAns, envAns)
   if ('error' in built) return void deps.io.out(paint(`· ${built.error}\n`, 'yellow'))
 
+  const envNote = built.env ? `  env: ${Object.keys(built.env).join(', ')}` : ''
   deps.io.out(
-    `\n${paint('server:', 'dim')} ${built.name}  [stdio]  ${built.command}${built.args?.length ? ` ${built.args.join(' ')}` : ''}\n`
+    `\n${paint('server:', 'dim')} ${built.name}  [stdio]  ${built.command}${built.args?.length ? ` ${built.args.join(' ')}` : ''}${built.cwd ? `  (cwd: ${built.cwd})` : ''}${envNote}\n`
   )
   const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
   if (parseApprovalAnswer(ok ?? '') !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
   deps.updateSettings({ mcpServers: [...servers, built] })
   deps.io.out(paint('· MCP server added. Applies on restart.\n', 'dim'))
+  if (built.env && deps.canStoreHeaderSecrets === false) {
+    deps.io.out(
+      paint(
+        `· this terminal cannot store env values; put them in cli-headers.json under the scope "mcp-env:${built.id}"\n`,
+        'yellow'
+      )
+    )
+  }
 }

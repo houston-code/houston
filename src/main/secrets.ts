@@ -1,6 +1,7 @@
 import { safeStorage } from 'electron'
 import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import type { McpOAuthTokens } from './mcp/oauth'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
 
@@ -24,8 +25,9 @@ export interface ApiKeyCredential {
 /**
  * An OAuth token set obtained via an interactive flow. `expiresAt` is epoch
  * milliseconds for the access token; a missing/zero value means "unknown / never
- * checked". The live flow that mints these is not implemented yet — see
- * `src/main/oauth.ts`.
+ * checked". MCP-server token sets (minted by `src/main/mcp/oauth.ts`) also carry
+ * their client registration and token endpoint so a refresh needs no re-discovery;
+ * the provider OAuth flow is still a stub — see `src/main/oauth.ts`.
  */
 export interface OAuthCredential {
   type: 'oauth'
@@ -33,6 +35,16 @@ export interface OAuthCredential {
   refresh: string
   /** Epoch ms when `access` expires, if known. */
   expiresAt?: number
+  /** Registered OAuth client id (MCP dynamic registration). */
+  clientId?: string
+  /** Client secret, when registration issued one. Secret — redacted like tokens. */
+  clientSecret?: string
+  /** Token endpoint the set was minted at, reused for refresh. */
+  tokenEndpoint?: string
+  /** RFC 8707 resource indicator the tokens are bound to. */
+  resource?: string
+  /** Space-separated granted scopes, when reported. */
+  scope?: string
 }
 
 export type StoredCredential = ApiKeyCredential | OAuthCredential
@@ -204,6 +216,56 @@ export function getKey(providerId: string): string | null {
   return cred.type === 'api-key' ? cred.key : cred.access
 }
 
+// ---- MCP-server OAuth token sets ----
+//
+// Stored in the same encrypted `keys` map as provider credentials, under a
+// namespaced id ("mcp-oauth:<serverId>") that can never collide with a provider id
+// (provider ids carry no colon). Reusing the credential blob means enumeration,
+// redaction, and the atomic-persist path all cover these tokens for free.
+
+/** Secrets-store id under which an MCP server's OAuth token set is kept. */
+export function mcpOAuthKeyId(serverId: string): string {
+  return `mcp-oauth:${serverId}`
+}
+
+/** Main-process only. The stored MCP OAuth token set, or null if none/unusable. */
+export function getMcpOAuthTokens(serverId: string): McpOAuthTokens | null {
+  const cred = getCredential(mcpOAuthKeyId(serverId))
+  if (!cred || cred.type !== 'oauth') return null
+  // A refresh needs the client id + token endpoint; a blob without them (or without
+  // an access token) can't be used, so report "not signed in".
+  if (!cred.access || !cred.clientId || !cred.tokenEndpoint) return null
+  return {
+    access: cred.access,
+    refresh: cred.refresh || undefined,
+    expiresAt: cred.expiresAt,
+    scope: cred.scope,
+    clientId: cred.clientId,
+    clientSecret: cred.clientSecret,
+    tokenEndpoint: cred.tokenEndpoint,
+    resource: cred.resource
+  }
+}
+
+/** Encrypt and persist an MCP OAuth token set; `null` signs the server out. */
+export function setMcpOAuthTokens(serverId: string, tokens: McpOAuthTokens | null): void {
+  if (!tokens) {
+    deleteKey(mcpOAuthKeyId(serverId))
+    return
+  }
+  setCredential(mcpOAuthKeyId(serverId), {
+    type: 'oauth',
+    access: tokens.access,
+    refresh: tokens.refresh ?? '',
+    expiresAt: tokens.expiresAt,
+    scope: tokens.scope,
+    clientId: tokens.clientId,
+    clientSecret: tokens.clientSecret,
+    tokenEndpoint: tokens.tokenEndpoint,
+    resource: tokens.resource
+  })
+}
+
 // ---- Custom-header secrets (provider / MCP server auth headers) ----
 //
 // A header map is stored as a single encrypted JSON blob per `scope`
@@ -296,7 +358,8 @@ export function collectSecretValues(): string[] {
     for (const providerId of Object.keys(data.keys)) {
       const cred = getCredential(providerId)
       if (!cred) continue
-      const values = cred.type === 'api-key' ? [cred.key] : [cred.access, cred.refresh]
+      const values =
+        cred.type === 'api-key' ? [cred.key] : [cred.access, cred.refresh, cred.clientSecret ?? '']
       for (const v of values) {
         if (v && v.length >= MIN_CREDENTIAL_LEN) out.add(v)
       }

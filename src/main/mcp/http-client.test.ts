@@ -131,4 +131,120 @@ describe('McpHttpClient', () => {
     const client = new McpHttpClient(fetch)
     await expect(client.connect({ url: 'https://x/mcp' })).rejects.toThrow(/nope/)
   })
+
+  const sse = (events: unknown[]): Response =>
+    new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), {
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/event-stream' })
+    })
+
+  it('acts on notifications interleaved in an SSE response body', async () => {
+    let toolset = [{ name: 'one' }]
+    const fetch: FetchFn = async (_u, init) => {
+      if (init.method === 'GET') return new Response('', { status: 405 })
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.id === undefined) return new Response('', { status: 202 })
+      if (req.method === 'tools/list')
+        return sse([{ jsonrpc: '2.0', id: req.id, result: { tools: toolset } }])
+      if (req.method === 'tools/call') {
+        toolset = [{ name: 'one' }, { name: 'two' }]
+        // The call's own stream carries a list_changed before the response.
+        return sse([
+          { jsonrpc: '2.0', method: 'notifications/tools/list_changed' },
+          { jsonrpc: '2.0', id: req.id, result: { content: [{ type: 'text', text: 'ok' }] } }
+        ])
+      }
+      return sse([{ jsonrpc: '2.0', id: req.id, result: {} }])
+    }
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    expect(client.tools.map((t) => t.name)).toEqual(['one'])
+    expect(await client.callTool('one', {})).toBe('ok')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
+    client.close()
+  })
+
+  it('replies to a server request embedded in a response stream via its own POST', async () => {
+    const posts: Array<Record<string, unknown>> = []
+    const fetch: FetchFn = async (_u, init) => {
+      if (init.method === 'GET') return new Response('', { status: 405 })
+      const req = JSON.parse(init.body as string) as { id?: number; method?: string }
+      posts.push(req as Record<string, unknown>)
+      if (req.id === undefined || req.method === undefined) return new Response('', { status: 202 })
+      if (req.method === 'tools/list')
+        return sse([
+          { jsonrpc: '2.0', id: 'srv-ping', method: 'ping' },
+          { jsonrpc: '2.0', id: req.id, result: { tools: [] } }
+        ])
+      return sse([{ jsonrpc: '2.0', id: req.id, result: {} }])
+    }
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(posts.some((p) => p.id === 'srv-ping' && 'result' in p)).toBe(true)
+    client.close()
+  })
+
+  it('receives server notifications over the standing GET stream', async () => {
+    let toolset = [{ name: 'one' }]
+    let emitOnStream!: (e: unknown) => void
+    const fetch: FetchFn = async (_u, init) => {
+      if (init.method === 'GET') {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            emitOnStream = (e) =>
+              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`))
+          }
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/event-stream' })
+        })
+      }
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.id === undefined) return new Response('', { status: 202 })
+      const result = req.method === 'tools/list' ? { tools: toolset } : {}
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' })
+      })
+    }
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    await new Promise((r) => setTimeout(r, 10)) // let the GET stream open
+    toolset = [{ name: 'one' }, { name: 'two' }]
+    emitOnStream({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
+    client.close()
+  })
+
+  it('marks itself closed when the server expires the session (404)', async () => {
+    const fetch: FetchFn = async (_u, init) => {
+      if (init.method === 'GET') return new Response('', { status: 405 })
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.id === undefined) return new Response('', { status: 202 })
+      if (req.method === 'tools/call') return new Response('', { status: 404 })
+      const result = req.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : {}
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
+        status: 200,
+        headers: new Headers({
+          'content-type': 'application/json',
+          ...(req.method === 'initialize' ? { 'mcp-session-id': 'sess-1' } : {})
+        })
+      })
+    }
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    await expect(client.callTool('echo', {})).rejects.toThrow(/session/)
+    expect(client.isClosed).toBe(true)
+  })
+
+  it('throws the typed unauthorized error on a 401', async () => {
+    const fetch: FetchFn = async () =>
+      new Response('', { status: 401, headers: new Headers({ 'www-authenticate': 'Bearer realm="mcp"' }) })
+    const client = new McpHttpClient(fetch)
+    await expect(client.connect({ url: 'https://x/mcp' })).rejects.toThrow(/401/)
+  })
 })
