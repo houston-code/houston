@@ -82,3 +82,19 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npx vitest run --project node src/main/providers/anthropic.integration.test.ts
+
+  # Tell a human when the canary breaks — GitHub's own failure notification for a scheduled
+  # run goes to github-actions[bot]. A provider retiring a param is exactly the drift this
+  # canary exists to catch, so a silent red one defeats the point. Scheduled runs only; a
+  # hand-dispatched run already notifies whoever started it. See alert-on-failure.yml.
+  alert:
+    needs: [anthropic]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: Provider canary
+      failed: ${{ contains(needs.*.result, 'failure') }}
