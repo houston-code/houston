@@ -427,6 +427,53 @@ describe('openai adapter: explicit cache_control breakpoints', () => {
   })
 })
 
+describe('openai adapter: reply-cap enforcement', () => {
+  beforeEach(() => {
+    h.create.mockReset()
+    h.ctor.mockReset()
+  })
+
+  /** Run one turn against `model` and return the body passed to chat.completions.create. */
+  async function createBody(model: string, req: Partial<ChatRequest>): Promise<Record<string, unknown>> {
+    h.create.mockResolvedValue(streamOf([stopChunk()]))
+    const provider = createOpenAIProvider('k', 'https://example.test/v1')
+    for await (const _e of provider.streamChat({
+      model,
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    })) {
+      void _e
+    }
+    return h.create.mock.calls[0][0] as Record<string, unknown>
+  }
+
+  it('sends the caller-requested reply cap as max_tokens', async () => {
+    const body = await createBody('llama-3.1-70b', { maxTokens: 32 })
+    expect(body.max_tokens).toBe(32)
+  })
+
+  it('omits the cap when the caller sets none (server default applies)', async () => {
+    const body = await createBody('llama-3.1-70b', {})
+    expect(body).not.toHaveProperty('max_tokens')
+    expect(body).not.toHaveProperty('max_completion_tokens')
+  })
+
+  it('uses max_completion_tokens for an OpenAI reasoning model, which rejects max_tokens', async () => {
+    const body = await createBody('o3', { maxTokens: 2048 })
+    expect(body.max_completion_tokens).toBe(2048)
+    expect(body).not.toHaveProperty('max_tokens')
+  })
+
+  it('keeps max_tokens for an aggregator-routed reasoning model, which speaks plain Chat Completions', async () => {
+    // The host says this model reasons, but the rename is an OpenAI-native quirk —
+    // OpenRouter et al. still expect `max_tokens`, so `reasoningCapable` must not
+    // pull the field name over the way it does for `reasoning_effort`.
+    const body = await createBody('deepseek/deepseek-r1', { maxTokens: 2048, reasoningCapable: true })
+    expect(body.max_tokens).toBe(2048)
+    expect(body).not.toHaveProperty('max_completion_tokens')
+  })
+})
+
 describe('openai adapter: reasoning_effort gating', () => {
   beforeEach(() => {
     h.create.mockReset()
