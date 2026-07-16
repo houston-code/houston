@@ -65,10 +65,20 @@ const PATTERNS: SecretPattern[] = [
   { label: 'github-token', re: /gh[oprsu]_[A-Za-z0-9]{20,}/g },
   // GitHub fine-grained personal access tokens.
   { label: 'github-token', re: /github_pat_[A-Za-z0-9_]{20,}/g },
-  // AWS access key id.
-  { label: 'aws-access-key-id', re: /\bAKIA[0-9A-Z]{16}\b/g },
+  // AWS access key ids: `AKIA` long-lived, `ASIA` temporary — the shape SSO, IAM roles,
+  // and STS mint, so it is what an assumed-role session leaves in the environment. The
+  // AWS *secret* access key is 40 unprefixed base64 chars with no distinguishing shape;
+  // patterning it would match ordinary code and prose, so it is deliberately left out.
+  { label: 'aws-access-key-id', re: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
   // Google API key.
   { label: 'google-api-key', re: /AIza[0-9A-Za-z_-]{35}/g },
+  // Google OAuth tokens: the `ya29.` access token and the `1//` refresh token, both of
+  // which `gcloud auth application-default login` writes to
+  // ~/.config/gcloud/application_default_credentials.json. The `\b` on the refresh rule
+  // is load-bearing: without it a doubled slash in a URL path (`…/v1//some-long-segment`)
+  // would match.
+  { label: 'google-oauth-token', re: /\bya29\.[A-Za-z0-9_-]{20,}/g },
+  { label: 'google-oauth-token', re: /\b1\/\/[A-Za-z0-9_-]{20,}/g },
   // Slack tokens (`xoxb-`/`xoxp-`/`xoxa-`/…).
   { label: 'slack-token', re: /xox[aboprs]-[A-Za-z0-9-]{10,}/g },
   // PEM private-key blocks of any type (RSA/EC/OPENSSH/…), including the payload.
