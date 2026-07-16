@@ -215,13 +215,28 @@ describe('gitDiff', () => {
     const exec = async (args: string[]): Promise<string> => {
       if (args[0] === 'rev-parse') return 'true\n'
       if (args[0] === 'diff') return '@@ a.ts @@\n+changed\n'
-      if (args[0] === 'ls-files') return 'new.ts\nother.ts\n'
+      if (args[0] === 'ls-files') return 'new.ts\0other.ts\0' // -z: NUL-separated
       return ''
     }
     const d = await gitDiff('/ws', 'HEAD', [], exec)
     expect(d.isRepo).toBe(true)
     expect(d.diff).toContain('+changed')
     expect(d.untracked).toEqual(['new.ts', 'other.ts'])
+  })
+
+  it('does not mangle untracked filenames with spaces or non-ASCII (uses -z)', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') return 'true\n'
+      if (args[0] === 'diff') return ''
+      if (args[0] === 'ls-files') {
+        expect(args).toContain('-z') // asked for NUL-separated, unquoted output
+        return 'café.txt\0 leading space.txt\0'
+      }
+      return ''
+    }
+    const d = await gitDiff('/ws', 'HEAD', [], exec)
+    // The leading space and non-ASCII survive (the old newline-split + .trim() lost them).
+    expect(d.untracked).toEqual(['café.txt', ' leading space.txt'])
   })
 
   it('reports not-a-repo when rev-parse fails', async () => {
@@ -236,7 +251,7 @@ describe('gitDiff', () => {
     const exec = async (args: string[]): Promise<string> => {
       if (args[0] === 'rev-parse') return 'true\n'
       if (args[0] === 'diff') throw new Error('bad revision HEAD')
-      if (args[0] === 'ls-files') return 'first.ts\n'
+      if (args[0] === 'ls-files') return 'first.ts\0' // -z: NUL-separated
       return ''
     }
     const d = await gitDiff('/ws', 'HEAD', [], exec)

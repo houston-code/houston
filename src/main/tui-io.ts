@@ -1,5 +1,6 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { spinnerFrame, type TuiIo, type Painter } from './tui'
+import { visibleWidth } from './tui-wrap'
 import {
   initialPickerState,
   reducePicker,
@@ -754,6 +755,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
  * to `type`/`cancel`, so the driver falls back to the tested typed prompt (and an
  * approval cancel is a safe deny).
  */
+/**
+ * How many PHYSICAL terminal rows `lines` occupy at width `cols` (0 = no wrapping known,
+ * fall back to the logical line count). A rendered line wider than the terminal wraps to
+ * `ceil(width / cols)` rows; the picker's in-place redraw must move the cursor up by this
+ * total, not the logical line count, or it desyncs when any line wraps.
+ */
+export function pickerPhysicalRows(lines: string[], cols: number): number {
+  return cols > 0
+    ? lines.reduce((n, l) => n + Math.max(1, Math.ceil(visibleWidth(l) / cols)), 0)
+    : lines.length
+}
+
 function runPicker(
   spec: PickerSpec,
   rl: ReadlineLike,
@@ -766,13 +779,16 @@ function runPicker(
 
   return new Promise<PickerOutcome>((resolve) => {
     let state = initialPickerState(spec)
-    let prevCount = 0
+    let prevRows = 0
     let done = false
 
     const draw = (first: boolean): void => {
-      if (!first && prevCount > 0) write(`\x1b[${prevCount}A\x1b[0J`) // up N lines, erase to end
+      if (!first && prevRows > 0) write(`\x1b[${prevRows}A\x1b[0J`) // up N physical rows, erase to end
       const lines = renderPicker(state, paint)
-      prevCount = lines.length
+      // Count PHYSICAL rows, not logical lines: a rendered line wider than the terminal
+      // wraps to several rows, so moving up by the logical count would under-count and
+      // the picker would walk down the screen, leaving duplicated rows on each keypress.
+      prevRows = pickerPhysicalRows(lines, process.stdout.columns || 0)
       write(`${lines.join('\n')}\n`)
     }
     const finish = (outcome: PickerOutcome): void => {

@@ -189,8 +189,11 @@ export async function gitDiff(
   }
   let untracked: string[] = []
   try {
-    const out = await exec(['ls-files', '--others', '--exclude-standard', ...pathspec], workspace)
-    untracked = out.split('\n').map((l) => l.trim()).filter(Boolean)
+    // -z: NUL-separated and NOT quoted, so a filename with non-ASCII (core.quotePath)
+    // or leading/trailing whitespace comes through verbatim instead of mangled by the
+    // per-line .trim()/quoting the newline-split path applied.
+    const out = await exec(['ls-files', '--others', '--exclude-standard', '-z', ...pathspec], workspace)
+    untracked = out.split('\0').filter(Boolean)
   } catch {
     // ignore — untracked listing is best-effort
   }
