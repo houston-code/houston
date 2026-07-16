@@ -99,3 +99,38 @@ This applies even
 when the request is a feature comparison, parity table, "how does this compare to X",
 or anything similar: describe the capability or feature on its own terms without naming
 the competitor.
+
+## Avoiding silent-clobber merges
+
+A PR whose branch is based on an out-of-date `main` can, when finalized wrong, **silently
+revert other PRs that merged while it was open** — deleting their files and reverting their
+code as if intended. This happened once (#551 reverted #548/#549/#550: ~3,200 lines, 8
+files) and CI did not catch it, because the reverted features' *tests were removed in the
+same commit*, so nothing failed. The main branch stays green while shipping a regression.
+
+The root cause is finalizing a branch by capturing a **stale working tree** on top of the
+current `main` — most easily via `git reset --soft origin/main && git commit` when the tree
+predates recent merges. Git records the absence of everything newer as intentional deletions.
+
+Rules to prevent it:
+
+- **Finalize by rebasing, never by resetting a stale tree.** Before the final push, `git
+  fetch origin` and `git rebase origin/main`. A rebase replays your commits onto the real
+  current `main`, so files it does not touch are preserved; a `reset --soft` + commit of a
+  stale tree drops them. Never `git reset --soft origin/main` to squash unless the tree
+  already contains everything on `main`.
+- **Diff against the pre-merge tip, not CI.** Before pushing, `git diff --stat origin/main`
+  and confirm every deletion and large removal is one you intend. Green CI is not proof —
+  co-reverted tests hide the regression.
+- **A rebase can re-introduce the bug.** When you rebase a fix onto a `main` that changed
+  the same lines, `git rerere` may auto-replay an old resolution that re-reverts newer work.
+  Disable it for the operation (`git config rerere.enabled false`) or inspect every
+  auto-resolved hunk; prefer a fresh 3-way cherry-pick onto current `main` over replaying a
+  hand-resolved commit.
+
+**Automated backstop.** The `auto-merge` CI job runs `scripts/merge-revert-guard.mjs` on the
+real landing tree before pushing: it fails the merge if it would delete a file that still
+exists on `main`, or roll back a large chunk of a file `main` touched recently. A *deliberate*
+removal (dead code, a real revert) is acknowledged with the `intentional-revert` label, which
+sets `ALLOW_REVERT=1`. Keep the guard's logic and unit tests
+(`scripts/merge-revert-guard.test.mjs`) in sync if you change the merge flow.
