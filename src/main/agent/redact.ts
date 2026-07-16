@@ -124,3 +124,30 @@ export function redactSecrets(text: string, knownValues: readonly string[] = [])
   if (!text) return text
   return createSecretRedactor(knownValues)(text)
 }
+
+/**
+ * Detect — rather than mask — a secret in `text`, returning the first match's label
+ * (e.g. `anthropic-key`, or `secret` for a known stored value) or null when clean.
+ * Uses the SAME two layers as {@link createSecretRedactor}: well-known token FORMATS
+ * first (so a third-party key we hold no copy of is still caught), then this install's
+ * own stored values.
+ *
+ * This powers egress-side credential masking: before Houston sends an agent-authored
+ * string OUT over the network (a `web_fetch` URL, a `web_search` query), the caller
+ * refuses the call when a credential is present, so a compromised or prompt-injected
+ * agent can't exfiltrate a key by pasting it into a request. Redaction protects the
+ * INBOUND direction (tool results → model/UI/disk); this protects the OUTBOUND one.
+ */
+export function findSecret(text: string, knownValues: readonly string[] = []): string | null {
+  if (!text) return null
+  for (const { label, re } of PATTERNS) {
+    // These module-level regexes carry the `g` flag, so `test` advances `lastIndex`;
+    // reset it first so a prior call's leftover position can't skip an early match.
+    re.lastIndex = 0
+    if (re.test(text)) return label
+  }
+  for (const v of prepareKnownValues(knownValues)) {
+    if (text.includes(v)) return 'secret'
+  }
+  return null
+}

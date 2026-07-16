@@ -402,6 +402,22 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         cost += e.cost
         break
       case 'tool_approval':
+        // The full-auto shell-network consent gates only the sandbox's network, not the
+        // command (it runs either way), so it's not a permission wall — resolve it per
+        // --on-approval without ever flipping the failure flag. 'allow' lets shell reach
+        // the network this run; otherwise shell runs offline.
+        if (e.shellNetwork) {
+          const grant = opts.onApproval === 'allow'
+          if (!opts.json) {
+            deps.err(
+              grant
+                ? '· allowing shell network access for this run\n'
+                : '· shell commands will run offline (pass --on-approval allow to permit network)\n'
+            )
+          }
+          deps.resolveApproval(e.runId, e.callId, grant ? 'allow' : 'deny')
+          break
+        }
         // No human to answer the prompt: resolve per --on-approval. 'allow'
         // approves the call; 'deny'/'fail' refuse it, so the policy's gates hold
         // in unattended runs instead of being rubber-stamped ('fail' also flips

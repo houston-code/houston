@@ -192,7 +192,23 @@ function ToolRow({
         </div>
       )}
 
-      {awaiting && (
+      {awaiting && item.shellNetwork && (
+        <div className="tool-row__approval">
+          <p className="tool-row__approval-note">
+            Shell commands this run will be able to reach the network. They already run in
+            a sandbox that can read your files, so this bounds where that data could go.
+            Declining runs commands offline.
+          </p>
+          <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'always')}>
+            Allow network for run
+          </button>
+          <button className="btn btn--sm btn--danger" onClick={() => onApprove(item.id, 'deny')}>
+            No network
+          </button>
+        </div>
+      )}
+
+      {awaiting && !item.shellNetwork && (
         <div className="tool-row__approval">
           <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'allow')}>
             Allow

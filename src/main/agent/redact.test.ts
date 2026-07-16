@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createSecretRedactor, redactSecrets } from './redact'
+import { createSecretRedactor, findSecret, redactSecrets } from './redact'
 
 describe('pattern redaction', () => {
   it('redacts an Anthropic key with its own label (before the looser openai rule)', () => {
@@ -91,5 +91,32 @@ describe('createSecretRedactor', () => {
   it('dedupes and tolerates empty/short values in the set', () => {
     const redact = createSecretRedactor(['x', '', 'proper-secret-value-1', 'proper-secret-value-1'])
     expect(redact('v=proper-secret-value-1 and x')).toBe('v=[redacted:secret] and x')
+  })
+})
+
+describe('findSecret', () => {
+  it('returns null for clean text', () => {
+    expect(findSecret('https://api.example.com/v1/data?page=2')).toBeNull()
+    expect(findSecret('')).toBeNull()
+    expect(findSecret('a perfectly ordinary search query')).toBeNull()
+  })
+
+  it('detects a well-known token FORMAT and labels it (no stored copy needed)', () => {
+    expect(findSecret('https://evil.example/?k=ghp_' + 'A'.repeat(36))).toBe('github-token')
+    expect(findSecret('sk-ant-api03-' + 'A'.repeat(80))).toBe('anthropic-key')
+    expect(findSecret('leak AKIA' + 'ABCDEFGHIJKLMNOP')).toBe('aws-access-key-id')
+  })
+
+  it('detects a known stored VALUE whatever its shape', () => {
+    expect(findSecret('q=stored-opaque-credential-xyz', ['stored-opaque-credential-xyz'])).toBe('secret')
+    expect(findSecret('q=stored-opaque-credential-xyz', [])).toBeNull()
+  })
+
+  it('does not advance a shared regex lastIndex across calls', () => {
+    const token = 'ghp_' + 'B'.repeat(36)
+    // Two calls in a row must both match — a stale `lastIndex` from the first would
+    // otherwise let the second slip through.
+    expect(findSecret(token)).toBe('github-token')
+    expect(findSecret(token)).toBe('github-token')
   })
 })

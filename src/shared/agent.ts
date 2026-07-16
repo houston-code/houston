@@ -511,6 +511,13 @@ export type AgentEvent =
        * that the command runs unconfined. Absent on confining hosts (e.g. macOS).
        */
       sandboxed?: boolean
+      /**
+       * Present and `true` only on the one-time full-auto shell-network consent: the
+       * decision governs whether the sandbox lets shell commands reach the network for
+       * the rest of the run, NOT whether this command runs (it runs either way — a
+       * decline just runs it offline). Lets the UI frame the prompt as a network grant.
+       */
+      shellNetwork?: boolean
     }
   | {
       runId: string

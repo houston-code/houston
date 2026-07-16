@@ -195,6 +195,16 @@ export function renderApprovalPrompt(
   ev: Extract<AgentEvent, { type: 'tool_approval' }>,
   paint: Painter
 ): string {
+  // The one-time full-auto shell-network consent gates the sandbox's network, not the
+  // command — frame it as a network grant so "deny" reads as "run offline", not "block".
+  if (ev.shellNetwork) {
+    const head = paint('Allow shell commands to reach the network this run?', 'bold')
+    const note = paint(
+      '  Shell runs in a sandbox that can read your files; declining runs commands offline.',
+      'dim'
+    )
+    return `\n${head}\n  ${ev.summary}\n${note}\n${paint('  [y] allow network   [n] no network   [a] allow for run', 'dim')}`
+  }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
       ? `\n${paint('⚠ runs UNSANDBOXED (no OS confinement on this host)', 'yellow', 'bold')}`
