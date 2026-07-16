@@ -159,16 +159,51 @@ export const THEMES = {
     red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m',
     blue: '\x1b[34m', magenta: '\x1b[35m', cyan: '\x1b[36m'
   },
-  bright: {
+  /** High-intensity foregrounds: readable on a DARK background. */
+  dark: {
     reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
     red: '\x1b[91m', green: '\x1b[92m', yellow: '\x1b[93m',
     blue: '\x1b[94m', magenta: '\x1b[95m', cyan: '\x1b[96m'
+  },
+  /**
+   * Standard (darker) foregrounds for a LIGHT background. Yellow especially is
+   * unreadable on white in its high-intensity form, and blue/cyan wash out.
+   */
+  light: {
+    reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+    red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m',
+    blue: '\x1b[34m', magenta: '\x1b[35m', cyan: '\x1b[36m'
+  },
+  /**
+   * Colorblind-safe: red/green carry most of the meaning in a diff, and that is
+   * the single most common form of color blindness. This maps them to blue and
+   * yellow — distinguishable under deuteranopia and protanopia — rather than
+   * dropping color entirely the way `mono` does.
+   */
+  colorblind: {
+    reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+    red: '\x1b[38;5;208m', green: '\x1b[38;5;33m', yellow: '\x1b[38;5;178m',
+    blue: '\x1b[38;5;33m', magenta: '\x1b[38;5;171m', cyan: '\x1b[38;5;37m'
   },
   mono: {
     reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
     red: '', green: '', yellow: '', blue: '', magenta: '', cyan: ''
   }
 } as const
+
+/**
+ * `bright` was the old name for what is now `dark`. Kept as an alias so a saved
+ * setting (or muscle memory) doesn't break — a theme name that used to work and
+ * now errors is a worse experience than one extra line here.
+ */
+const THEME_ALIASES: Record<string, ThemeName> = { bright: 'dark' }
+
+/** Resolve a theme name, honoring the aliases. */
+export function resolveTheme(name: string): ThemeName | null {
+  const n = name.trim().toLowerCase()
+  if (isThemeName(n)) return n
+  return THEME_ALIASES[n] ?? null
+}
 
 export type ThemeName = keyof typeof THEMES
 export type Painter = (s: string, ...styles: Array<keyof (typeof THEMES)['default']>) => string
@@ -931,7 +966,8 @@ export function parseSlashCommand(
     case 'providers':
       return { kind: 'login' }
     case 'theme': {
-      if (isThemeName(arg)) return { kind: 'set-theme', theme: arg }
+      const t = resolveTheme(arg)
+      if (t) return { kind: 'set-theme', theme: t }
       return { kind: 'handled' } // no/invalid arg → driver lists themes
     }
     case 'image':
@@ -1808,8 +1844,10 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
 export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Reassigned by /theme (takes effect from the next output); the spinner keeps
   // the initial theme since its painter lives in the terminal adapter.
-  let paint = makePainter(opts.color)
   const settings = deps.getSettings()
+  // Reassigned by /theme (takes effect from the next output); the spinner keeps the
+  // initial theme since its painter lives in the terminal adapter.
+  let paint = makePainter(opts.color, resolveTheme(settings.tuiTheme ?? '') ?? 'default')
   const newId = deps.newId ?? randomUUID
 
   // Legal gate — interactive, so we can ask right here instead of forcing a flag
@@ -2380,6 +2418,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'set-theme') {
         paint = makePainter(opts.color, result.theme)
+        // Persist it: a theme you have to re-pick on every launch is not a setting,
+        // it is a party trick.
+        deps.updateSettings?.({ tuiTheme: result.theme })
         deps.io.out(paint(`· theme → ${result.theme}\n`, 'dim'))
         continue
       }
