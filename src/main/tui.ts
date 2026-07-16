@@ -888,6 +888,8 @@ export type SlashResult =
   | { kind: 'capability'; which: 'skills' | 'agents' }
   | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'image'; path: string }
+  /** Attach the image on the clipboard (/image with no path, /paste). */
+  | { kind: 'paste-image' }
   | { kind: 'set-approval'; policy: ApprovalPolicy }
   | { kind: 'set-model'; providerId: string; model: string }
   | { kind: 'compact' }
@@ -971,7 +973,11 @@ export function parseSlashCommand(
       return { kind: 'handled' } // no/invalid arg → driver lists themes
     }
     case 'image':
-      return arg ? { kind: 'image', path: arg } : { kind: 'handled' }
+      // A bare /image means "paste what I just copied" — the overwhelmingly common
+      // reason to attach an image mid-conversation. It used to print usage.
+      return arg ? { kind: 'image', path: arg } : { kind: 'paste-image' }
+    case 'paste':
+      return { kind: 'paste-image' }
     case 'approval': {
       if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
@@ -1051,7 +1057,7 @@ export const HELP_TEXT = [
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /mcp [verb n]         list MCP servers; add (stdio) · remove · login · logout <n>',
   '  /theme [name]         list or switch color theme (default | bright | mono)',
-  '  /image <path>         attach an image to your next message',
+  '  /image [path]         attach an image — from your clipboard, or a file',
   '  /cwd                  show the working directory',
   '  /<name>               run a custom command from .houston/commands',
   '  /exit, /quit          leave (or press Ctrl-D)',
@@ -1667,6 +1673,13 @@ export interface TuiDeps {
   settingsPath?: () => string
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
   loadImage?: (path: string) => { image: ImageAttachment } | { error: string }
+  /**
+   * The image on the system clipboard, for a bare `/image`. The desktop app has
+   * had this forever through Electron; the terminal shells out to whatever the
+   * platform ships, since the whole vision path already works and only the bytes
+   * were missing. Absent ⇒ the command says to use `/image <path>`.
+   */
+  clipboardImage?: () => { image: ImageAttachment } | { error: string }
   /**
    * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
    * result (null if no editor is configured or the edit was aborted). Used by the
@@ -2380,6 +2393,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           providerId = setup.providerId
           model = setup.model
         }
+        continue
+      }
+      if (result.kind === 'paste-image') {
+        if (!deps.clipboardImage) {
+          deps.io.out(paint('· pasting images is unavailable here; use /image <path>\n', 'dim'))
+          continue
+        }
+        if (pendingImages.length >= 8) {
+          deps.io.out(paint('· already have 8 images staged (the max)\n', 'yellow'))
+          continue
+        }
+        const img = deps.clipboardImage()
+        if ('error' in img) {
+          deps.io.out(paint(`· ${img.error}\n`, 'dim'))
+          continue
+        }
+        pendingImages.push(img.image)
+        deps.io.out(paint(`· attached the image from your clipboard (${pendingImages.length} staged)\n`, 'dim'))
         continue
       }
       if (result.kind === 'image') {

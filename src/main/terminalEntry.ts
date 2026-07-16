@@ -46,6 +46,7 @@ import { log } from './logger'
 import { runTui, makePainter, mediaTypeForImagePath, type BackgroundSession, type TuiOptions } from './tui'
 import type { DoctorFacts } from './tui-doctor'
 import { checkForUpdate } from './update-check'
+import { readClipboardImage, noClipboardHint } from './clipboard-image'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { providerKeyEnvVars } from '@shared/provider-keys'
 import { runHeadless, type HeadlessOptions } from './headless'
@@ -490,6 +491,12 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       setRunPolicy,
       editText: (initial) => editInEditor(initial),
       persistHistory,
+      clipboardImage: () => {
+        const img = readClipboardImage()
+        if (!img) return { error: `no image on the clipboard (${noClipboardHint(process.platform)})` }
+        if (exceedsImageSizeLimit(img.data)) return { error: 'that image is too large' }
+        return { image: { mediaType: img.mediaType, data: img.data } }
+      },
       loadImage: (p) => {
         const mediaType = mediaTypeForImagePath(p)
         if (!mediaType || !isSupportedImageType(mediaType)) {
