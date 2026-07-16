@@ -48,11 +48,12 @@ import type { ImageAttachment } from '@shared/images'
 import { contextWindowFor, contextPercent } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
-import { truncateVisible } from './tui-wrap'
+import { truncateVisible, stripControlChars } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
 import { ComposerBuffer } from './tui-composer'
+import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 
 /**
@@ -684,6 +685,8 @@ export type SlashResult =
   | { kind: 'compact' }
   /** The settings overview hub (/settings). */
   | { kind: 'settings' }
+  /** Environment diagnostics (/doctor). */
+  | { kind: 'doctor' }
   /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
   | { kind: 'hooks'; action: SettingsAction }
   /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
@@ -726,6 +729,8 @@ export function parseSlashCommand(
       return { kind: 'capability', which: name }
     case 'settings':
       return { kind: 'settings' }
+    case 'doctor':
+      return { kind: 'doctor' }
     case 'hooks':
       return { kind: 'hooks', action: parseSettingsAction(arg) }
     case 'mcp':
@@ -811,6 +816,7 @@ export const HELP_TEXT = [
   '  /cost                 show session token + cost totals',
   '  /skills /agents       list workspace skills / custom agents',
   '  /settings             settings overview + where to edit them',
+  '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /mcp [verb n]         list MCP servers; add (stdio) · remove · login · logout <n>',
   '  /theme [name]         list or switch color theme (default | bright | mono)',
@@ -963,7 +969,7 @@ export function renderMcpList(
           : st?.state === 'needs-auth'
             ? paint(`  ! needs sign-in (/mcp login ${i + 1})`, 'yellow')
             : st?.state === 'error'
-              ? paint(`  ✗ ${st.error ?? 'failed to connect'}`, 'red')
+              ? paint(`  ✗ ${stripControlChars(st.error ?? 'failed to connect')}`, 'red')
               : ''
       return `  ${paint(`${i + 1}.`, 'dim')} ${paint(s.name ?? s.id, 'cyan')}${off}${auth}  ${paint(`[${transport}]`, 'dim')}  ${detail}${badge}`
     })
@@ -1405,6 +1411,23 @@ export interface TuiDeps {
    */
   editText?: (initial: string) => Promise<string | null>
   /**
+   * The running version, shown in the banner and by /doctor. A terminal user
+   * otherwise has no way to tell which build they are on — which matters most
+   * exactly when something is broken and they are reporting it.
+   */
+  version?: string
+  /**
+   * Probe the environment for /doctor (binaries, sandbox backend, MCP state).
+   * Absent ⇒ the command reports that diagnostics are unavailable.
+   */
+  doctor?: () => Promise<DoctorFacts>
+  /**
+   * Look for a newer release, or null. Never awaited before the prompt: the
+   * result is surfaced at the next composer draw, so a slow feed can't delay
+   * startup and a write can't land in the middle of the composer's region.
+   */
+  checkUpdate?: () => Promise<{ latest: string; url: string; headline?: string } | null>
+  /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
    * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
    * dependency stays at the entry point and the driver + its tests need no hljs.
@@ -1663,8 +1686,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.cancelRead?.() // settle the outstanding composer read so the loop reacts
   })
 
+  // Kick the update check off now, but never await it: the answer is printed at
+  // the next composer draw (see updateNotice), where a write is safe.
+  let updateNotice: string | null = null
+  if (deps.checkUpdate) {
+    void deps.checkUpdate()
+      .then((u) => {
+        if (!u) return
+        const head = u.headline ? ` — ${u.headline}` : ''
+        updateNotice =
+          paint(`· update available: ${u.latest} (you have ${deps.version ?? 'this build'})${head}`, 'yellow') +
+          paint(`\n  ${u.url}`, 'dim')
+      })
+      .catch(() => {
+        /* a failed update check is a non-event */
+      })
+  }
+
   deps.io.out(
-    `${paint('Houston', 'bold', 'cyan')} (interactive)\n` +
+    `${paint('Houston', 'bold', 'cyan')} ${paint(deps.version ? `v${deps.version}` : '', 'dim')} ${paint('(interactive)', 'dim')}\n` +
       `${paint(`  cwd:      ${opts.cwd}`, 'dim')}\n` +
       `${paint(
         providerId && model
@@ -1677,6 +1717,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   )
 
   for (;;) {
+    // The update check resolves whenever it resolves; print it HERE, between turns,
+    // where nothing else owns the screen. Writing it from the promise would land in
+    // the middle of the composer's redraw region (or a streaming turn) and corrupt it.
+    if (updateNotice) {
+      deps.io.out(`${updateNotice}\n`)
+      updateNotice = null // one nudge per session, not per prompt
+    }
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
@@ -1842,6 +1889,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'settings') {
         renderSettingsOverview(deps, paint)
+        continue
+      }
+      if (result.kind === 'doctor') {
+        if (!deps.doctor) {
+          deps.io.out(paint('· diagnostics are unavailable here\n', 'dim'))
+          continue
+        }
+        deps.io.out(paint('· checking…\n', 'dim'))
+        try {
+          const facts = await deps.doctor()
+          deps.io.out(`${renderDoctor(buildDoctorReport(facts), paint)}\n`)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't run diagnostics: ${(e as Error).message}\n`, 'yellow'))
+        }
         continue
       }
       if (result.kind === 'hooks') {

@@ -229,7 +229,7 @@ if (tui) {
   // The full client wiring lives in terminalEntry.ts, shared verbatim with the
   // standalone CLI (src/cli) — only the exit call is Electron's.
   app.whenReady().then(async () => {
-    app.exit(await runTuiEntry(tui))
+    app.exit(await runTuiEntry(tui, { version: app.getVersion() }))
   })
 } else if (headless) {
   app.whenReady().then(async () => {

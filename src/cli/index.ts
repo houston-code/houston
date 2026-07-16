@@ -177,7 +177,7 @@ async function main(): Promise<number> {
   }
 
   const mode = selectRunMode(argv, process.cwd(), Boolean(process.stdin.isTTY))
-  if (mode.kind === 'tui') return runTuiEntry(mode.options)
+  if (mode.kind === 'tui') return runTuiEntry(mode.options, { version: VERSION })
   if (mode.kind === 'headless') return runHeadlessEntry(mode.options)
 
   process.stderr.write(USAGE)
