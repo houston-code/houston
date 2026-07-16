@@ -41,6 +41,11 @@ export const SUBAGENT_WRITE_TOOLS = [
  * *narrow* that base — any name outside it is dropped, and an absent/empty list
  * falls back to the full base. So a read-only agent can never gain write tools, and
  * a writable agent can restrict itself but not reach past the sandboxed set.
+ *
+ * A declared list that names something but nothing in the tier's base (e.g. only
+ * unrecognized names) fails CLOSED to the read-only tools — never back to the full
+ * write+shell base — so a typo'd or stale `tools:` list can't silently grant MORE
+ * privilege than it named, the opposite of the author's narrowing intent.
  */
 function resolveSubAgentTools(allowed: string[] | undefined, writable: boolean): readonly string[] {
   const base: readonly string[] = writable
@@ -48,7 +53,7 @@ function resolveSubAgentTools(allowed: string[] | undefined, writable: boolean):
     : SUBAGENT_TOOLS
   if (!allowed?.length) return base
   const narrowed = base.filter((t) => allowed.includes(t))
-  return narrowed.length ? narrowed : base
+  return narrowed.length ? narrowed : SUBAGENT_TOOLS
 }
 
 const MAX_SUBAGENT_ITERATIONS = 16

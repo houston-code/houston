@@ -2611,6 +2611,43 @@ describe('writable subagent unconfined-shell gate', () => {
       h.settings.permissionRules = []
     }
   })
+
+  it('an `ask` rule still prompts even after the unconfined-shell override is granted', async () => {
+    // H1 regression: the gate used to skip the prompt whenever shellUnsandboxedOverride
+    // was set, silently bypassing a tighten-only `ask` rule. It must mirror the main
+    // loop's decideApproval and prompt when a matching rule says `ask`.
+    h.sandboxed = false
+    h.settings.permissionRules = [{ action: 'ask', tool: 'run_shell', match: 'echo second-cmd*' }]
+    try {
+      const r = await run({
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'two commands', prompt: 'run both' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo first-cmd' } } },
+            { type: 'tool_call', call: { id: 's2', name: 'run_shell', arguments: { command: 'echo second-cmd' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'sub done' }, { type: 'done', stopReason: 'end_turn' }],
+          [{ type: 'text', text: 'main done' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        policy: 'ask',
+        // 'always' on the first shell prompt sets the per-run unconfined-shell override.
+        onApproval: (id, decide) => decide(id.includes('.shell.') ? 'always' : 'allow')
+      })
+      // Both commands prompted: the override covered the DEFAULT unconfined prompt, but
+      // the second command's `ask` rule forces a prompt regardless. Pre-fix, only the
+      // first prompted and `echo second-cmd` ran unprompted.
+      const shellApprovals = r.events.filter(
+        (e) => e.type === 'tool_approval' && 'name' in e && e.name === 'run_shell'
+      ) as Array<Extract<AgentEvent, { type: 'tool_approval' }>>
+      expect(shellApprovals.map((e) => e.callId)).toEqual(['d1.shell.1', 'd1.shell.2'])
+    } finally {
+      h.settings.permissionRules = []
+    }
+  })
 })
 
 describe('present_plan (Plan mode review)', () => {

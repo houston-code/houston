@@ -96,6 +96,27 @@ function absoluteTarget(seg: string): string | null {
   return null
 }
 
+/** Strip one matching pair of surrounding single/double quotes from a segment. */
+function stripSurroundingQuotes(seg: string): string {
+  if (seg.length >= 2) {
+    const q = seg[0]
+    if ((q === '"' || q === "'") && seg[seg.length - 1] === q) return seg.slice(1, -1)
+  }
+  return seg
+}
+
+/**
+ * Peel a leading shell redirection operator off a token, returning the path glued to
+ * it, or `null` when the token is not a glued redirection. Handles `>`, `>>`, `<`,
+ * `<<`, `<<<`, `<>`, `>|`, `>&`, `&>` with an optional leading fd (`2>`, `1>>`), so a
+ * target written without a space (`>/etc/x`, `<~/.ssh/id_rsa`, `2>/abs/log`) is still
+ * analysed. The spaced form is already a separate token and handled directly.
+ */
+function stripRedirection(token: string): string | null {
+  const m = /^\d*(?:>>|<<<|<<|<>|>\||>&|&>|>|<)(.+)$/.exec(token)
+  return m ? m[1]! : null
+}
+
 /**
  * Whether `target` resolves inside one of the workspace `roots`. Lexical only — `.`
  * and `..` are normalized, but symlinks are not walked (that is the sandbox's job).
@@ -121,6 +142,11 @@ function isWithinRoots(target: string, roots: string[]): boolean {
  *   the roots. A relative path that climbs then returns (`a/../b`) stays inside.
  */
 function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
+  if (!seg) return false
+  // A quoted path (`"/etc/shadow"`, `'~/f'`) keeps its quotes when it is glued to a
+  // flag/redirection or sits after `=`, since the tokenizer only strips quotes that
+  // wrap the whole token. Peel a surrounding pair so the value is analysed.
+  seg = stripSurroundingQuotes(seg)
   if (!seg) return false
   const abs = absoluteTarget(seg)
   if (abs !== null) return !isWithinRoots(abs, roots)
@@ -156,6 +182,10 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
 export function shellReferencesExternalPath(command: string, roots: string[]): boolean {
   for (const token of tokenizeShellCommand(command)) {
     if (segmentEscapesWorkspace(token, roots)) return true
+    // A redirection glued to its target (`>/etc/cron.d/evil`, `<~/.ssh/id_rsa`,
+    // `2>/abs/log`) keeps the operator inside the token; peel it so the path is seen.
+    const redir = stripRedirection(token)
+    if (redir !== null && segmentEscapesWorkspace(redir, roots)) return true
     // `KEY=value` / `--flag=value`: the path may sit after the first `=`.
     const eq = token.indexOf('=')
     if (eq >= 0 && segmentEscapesWorkspace(token.slice(eq + 1), roots)) return true
@@ -202,6 +232,33 @@ function escapeRegExp(s: string): string {
 function globMatches(pattern: string, subject: string): boolean {
   const re = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}$`)
   return re.test(subject)
+}
+
+/**
+ * Whether two patterns in the `*`-only glob language (where `*` matches any run of
+ * characters, including empty) share at least one common matching string. Symmetric.
+ * Used by rule cleanup to detect when a generalized allow would overlap a deny's
+ * command-set — a check a one-directional literal match can't make. O(|a|·|b|) via
+ * memoized alignment: at each position, a `*` on either side either matches nothing
+ * (advance past it) or absorbs the character the other side contributes (advance the
+ * other); two literals must be equal and advance together.
+ */
+function globsIntersect(a: string, b: string): boolean {
+  const memo = new Map<number, boolean>()
+  const solve = (i: number, j: number): boolean => {
+    if (i === a.length && j === b.length) return true
+    if (i === a.length) return b[j] === '*' && solve(i, j + 1)
+    if (j === b.length) return a[i] === '*' && solve(i + 1, j)
+    const memoKey = i * (b.length + 1) + j
+    const cached = memo.get(memoKey)
+    if (cached !== undefined) return cached
+    let result: boolean
+    if (a[i] === '*' || b[j] === '*') result = solve(i + 1, j) || solve(i, j + 1)
+    else result = a[i] === b[j] && solve(i + 1, j + 1)
+    memo.set(memoKey, result)
+    return result
+  }
+  return solve(0, 0)
 }
 
 function patternMatches(pattern: string, subject: string): boolean {
@@ -427,6 +484,29 @@ const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/
 const SUBCOMMAND_VERB = /^[a-z][a-z0-9:._-]*$/i
 
 /**
+ * Command wrappers whose second token is itself a program, not a sub-command verb.
+ * Generalizing `<wrapper> <program>` to a two-token prefix would broaden a specific
+ * "Always allow" into a blanket pass — e.g. `sudo rm -rf /tmp/build` collapsing to a
+ * `sudo rm` rule that then auto-approves `sudo rm -rf /`. These stay verbatim.
+ */
+const COMMAND_WRAPPERS = new Set([
+  'sudo',
+  'doas',
+  'env',
+  'xargs',
+  'nohup',
+  'timeout',
+  'time',
+  'nice',
+  'ionice',
+  'stdbuf',
+  'setsid',
+  'command',
+  'exec',
+  'watch'
+])
+
+/**
  * The permission-rule pattern(s) to persist when the user picks "Always allow" on a
  * `run_shell` call. Storing the exact command bakes in one-off arguments (and the
  * `cd <dir> &&` prelude agents habitually prepend), so every near-identical command
@@ -441,9 +521,11 @@ const SUBCOMMAND_VERB = /^[a-z][a-z0-9:._-]*$/i
  * - A sub-command shaped `<program> <verb> …` where `<verb>` is a bare word (e.g.
  *   `git status`, `npm install`) generalizes to that two-token prefix, so repeated
  *   invocations with different trailing arguments collapse onto one rule.
- * - Anything else — a lone program, a program whose next token is a flag/path, or an
- *   env-prefixed command — is kept verbatim, so raw operations like `cat x` or
- *   `rm -rf y` are NOT silently broadened to `cat`/`rm`.
+ * - Anything else — a lone program, a program whose next token is a flag/path, an
+ *   env-prefixed command, or a command wrapper (`sudo`/`env`/`xargs`/… — see
+ *   {@link COMMAND_WRAPPERS}) whose second token is another program — is kept verbatim,
+ *   so raw operations like `cat x`, `rm -rf y`, or `sudo rm -rf z` are NOT silently
+ *   broadened to `cat`/`rm`/`sudo rm`.
  *
  * Used only for the ALLOW case; a deny is always stored exactly (a broadened deny is
  * dangerous). Never returns an empty list.
@@ -456,7 +538,7 @@ export function shellRulePatterns(command: string): string[] {
     const prog = tokens[0]
     if (!prog || CWD_BUILTINS.has(prog)) continue
     const verb = tokens[1]
-    if (!ENV_ASSIGN.test(prog) && verb && SUBCOMMAND_VERB.test(verb)) {
+    if (!ENV_ASSIGN.test(prog) && !COMMAND_WRAPPERS.has(prog) && verb && SUBCOMMAND_VERB.test(verb)) {
       patterns.add(`${prog} ${verb}`)
     } else {
       patterns.add(norm)
@@ -497,9 +579,17 @@ export function alreadyAllowedAsRule(
 export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[] {
   const denies = rules.filter((r) => r.action === 'deny')
   const wouldShadowDeny = (pattern: string): boolean =>
-    denies.some(
-      (d) => (!d.tool || d.tool === '*' || d.tool === 'run_shell') && shellCommandMatches(pattern, d.match ?? '')
-    )
+    denies.some((d) => {
+      if (d.tool && d.tool !== '*' && d.tool !== 'run_shell') return false
+      const deny = (d.match ?? '').trim()
+      if (!deny) return false
+      // A generalized allow covers `pattern` AND `pattern <args…>`. Keep the rule exact
+      // if a deny's command-set overlaps EITHER, so broadening an allow can never open a
+      // hole a narrower deny was guarding. A one-directional literal test (does the
+      // allow-prefix match the deny's text) misses wildcard denies like `* --force*`,
+      // which overlap the prefix `git push` only on the extended `git push --force …`.
+      return globsIntersect(deny, pattern) || globsIntersect(deny, `${pattern} *`)
+    })
   const out: PermissionRule[] = []
   const seen = new Set<string>()
   const key = (r: PermissionRule): string => `${r.action} ${r.tool} ${r.match}`

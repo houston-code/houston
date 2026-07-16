@@ -137,6 +137,31 @@ describe('shellReferencesExternalPath', () => {
     // A backslash path that stays inside does not escape.
     expect(ext('type sub\\file.txt')).toBe(false)
   })
+
+  it('flags a redirection glued to an external target', () => {
+    // The operator stays inside the token (no space), so the path must be peeled.
+    expect(ext('cat <~/.ssh/id_rsa')).toBe(true)
+    expect(ext('echo pwn >/etc/cron.d/evil')).toBe(true)
+    expect(ext('cat </etc/passwd')).toBe(true)
+    expect(ext('cat >>~/.bashrc')).toBe(true)
+    // A leading fd on the operator (`2>`, `1>>`) is still peeled.
+    expect(ext('run 2>/var/log/x')).toBe(true)
+    expect(ext('run 1>>$HOME/out')).toBe(true)
+    // A redirection into / relative to the workspace is not an escape.
+    expect(ext('echo ok >/work/project/out.txt')).toBe(false)
+    expect(ext('echo ok >out.txt')).toBe(false)
+  })
+
+  it('flags a quoted external path glued to a flag/env prefix', () => {
+    // The tokenizer only strips quotes wrapping a whole token, so a quote glued after
+    // `=` survives and must be peeled before the path is recognised.
+    expect(ext('grep secret --file="/etc/shadow"')).toBe(true)
+    expect(ext("grep secret --file='/etc/hosts'")).toBe(true)
+    expect(ext('SECRET="/etc/passwd" cat x')).toBe(true)
+    expect(ext('cat >"/etc/x"')).toBe(true)
+    // A quoted `=` value pointing into the workspace is not an escape.
+    expect(ext('--project="/work/project/tsconfig.json" tsc')).toBe(false)
+  })
 })
 
 describe('matchRule', () => {
@@ -342,6 +367,17 @@ describe('shellRulePatterns', () => {
     expect(shellRulePatterns('FOO=1 npm run build')).toEqual(['FOO=1 npm run build'])
   })
 
+  it('keeps command-wrapper-prefixed commands exact (never broadens to `sudo rm`)', () => {
+    // A wrapper's second token is a program, not a sub-command verb — generalizing
+    // `sudo rm -rf /tmp/build` to `sudo rm` would then auto-approve `sudo rm -rf /`.
+    expect(shellRulePatterns('sudo rm -rf /tmp/build')).toEqual(['sudo rm -rf /tmp/build'])
+    expect(shellRulePatterns('sudo apt install foo')).toEqual(['sudo apt install foo'])
+    expect(shellRulePatterns('xargs rm')).toEqual(['xargs rm'])
+    expect(shellRulePatterns('nohup npm run dev')).toEqual(['nohup npm run dev'])
+    // A non-wrapper program still generalizes to <program> <verb> (no regression).
+    expect(shellRulePatterns('git status -s')).toEqual(['git status'])
+  })
+
   it('emits one prefix per non-cd sub-command of a compound command', () => {
     expect(shellRulePatterns('cd /r && npm ci && npm run build')).toEqual(['npm ci', 'npm run'])
   })
@@ -420,6 +456,25 @@ describe('cleanupPermissionRules', () => {
       allow('run_shell', 'cd /r && git push origin main')
     ])
     expect(matchRule(cleanupPermissionRules(rules), 'run_shell', 'git push --force')).toBe('deny')
+  })
+
+  it('does NOT generalize an allow when a WILDCARD deny would be shadowed', () => {
+    // The one-directional literal shadow check missed this: generalizing
+    // `git push --force origin main` to `git push` overlaps `* --force*` only on the
+    // extended `git push --force …`, so the allow must be kept exact.
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'git push --force origin main'),
+      deny('run_shell', '* --force*')
+    ]
+    const cleaned = cleanupPermissionRules(rules)
+    expect(cleaned).toEqual([
+      allow('run_shell', 'git push --force origin main'),
+      deny('run_shell', '* --force*')
+    ])
+    // A DIFFERENT force-push (not covered by the exact allow) is still denied — proof the
+    // generalization did not open a hole. A benign `git status` was never allowed here.
+    expect(matchRule(cleaned, 'run_shell', 'git push --force some-other-remote')).toBe('deny')
+    expect(matchRule(cleaned, 'run_shell', 'git commit --force')).toBe('deny')
   })
 
   it('drops an allow already covered by an earlier broader allow', () => {

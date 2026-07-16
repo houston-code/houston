@@ -996,12 +996,17 @@ export async function startRun(
         runCommand: () => Promise<string>
       ): Promise<string> => {
         const subject = permissionSubject('run_shell', gateArgs)
-        if (matchRule(permissionRules, 'run_shell', subject, roots) === 'deny') {
+        const ruleAction = matchRule(permissionRules, 'run_shell', subject, roots)
+        if (ruleAction === 'deny') {
           return 'Denied by a permission rule.'
         }
         const subCallId = `${callId}.shell.${++gateSeq}`
         const summary = `Subagent: ${getTool('run_shell')!.summarize(gateArgs)}`
-        if (!run.shellUnsandboxedOverride) {
+        // An `ask` rule (any tier) must still prompt even after the per-run
+        // unconfined-shell override, mirroring decideApproval: the override is consent
+        // to skip the default every-command prompt, not to bypass a rule that mandates
+        // one (managed/project `ask` rules are tighten-only and must never be silenced).
+        if (ruleAction === 'ask' || !run.shellUnsandboxedOverride) {
           // Track + emit like any approval so re-adopt replay and cancelRun
           // (which resolves pending approvals as deny) cover this prompt too.
           run.pendingApprovals.set(subCallId, {
