@@ -21,7 +21,8 @@ import {
   noteConversationRun,
   clearCheckpoints,
   flushCheckpoints,
-  writeTargets
+  writeTargets,
+  conversationForLatestRun
 } from './checkpoints'
 import { setUserDataDir, resetUserDataDir } from '../userData'
 
@@ -265,6 +266,20 @@ describe('checkpoints', () => {
     })
   })
 
+  describe('conversationForLatestRun (the IPC gate helper)', () => {
+    it('returns the conversation while the run is its latest, null once superseded', async () => {
+      noteConversationRun('conv1', 'run-a')
+      expect(await conversationForLatestRun('run-a')).toBe('conv1')
+      noteConversationRun('conv1', 'run-b')
+      expect(await conversationForLatestRun('run-a')).toBeNull()
+      expect(await conversationForLatestRun('run-b')).toBe('conv1')
+    })
+
+    it('returns null for an unknown runId', async () => {
+      expect(await conversationForLatestRun('nope')).toBeNull()
+    })
+  })
+
   describe('writeTargets (which files a write-kind call touches)', () => {
     it('maps single-file tools to their path argument', () => {
       expect(writeTargets('write_file', { path: 'a.txt', content: 'x' })).toEqual([
@@ -470,6 +485,21 @@ describe('checkpoints', () => {
       )
       expect(files.length).toBeLessThanOrEqual(50)
       expect(files).toContain('run-50.json')
+    })
+
+    it('conversationForLatestRun answers from the disk index after a restart', async () => {
+      await recordOneChange()
+      clearCheckpoints() // simulate the app restarting
+
+      expect(await conversationForLatestRun('run-a')).toBe('conv1')
+      expect(await conversationForLatestRun('run-unknown')).toBeNull()
+    })
+
+    it('conversationForLatestRun rejects a run superseded in memory but not yet on disk', async () => {
+      await recordOneChange()
+      // A newer run replaces the entry in memory; its index write may still be queued.
+      noteConversationRun('conv1', 'run-b')
+      expect(await conversationForLatestRun('run-a')).toBeNull()
     })
 
     it('stays memory-only when no user-data directory is wired', async () => {

@@ -63,7 +63,12 @@ import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queu
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { version as APP_VERSION } from '../../package.json'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
-import { restoreCheckpoint, reapplyCheckpoint, getConversationCheckpoint } from './agent/checkpoints'
+import {
+  restoreCheckpoint,
+  reapplyCheckpoint,
+  getConversationCheckpoint,
+  conversationForLatestRun
+} from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
 import { setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
@@ -915,14 +920,29 @@ export function registerIpc(): void {
     }
   })
 
+  // Authorize a checkpoint restore/reapply. Unlike the live run-control calls
+  // gated by callerOwnsRun above, a checkpoint deliberately outlives its run (it
+  // is persisted so it survives a restart), so there is no owner to compare the
+  // caller against. Instead the runId must still be what the UI legitimately
+  // offers: the LATEST turn of some conversation — an arbitrary historical runId
+  // among the persisted snapshots is refused, since restoring one would clobber
+  // newer work with stale content — and that conversation must not be mid-run,
+  // where a revert would fight the live turn's writes (the renderer clears the
+  // affordance when a new run starts, so no legitimate call arrives then).
+  const checkpointCallAllowed = async (runId: string): Promise<boolean> => {
+    if (typeof runId !== 'string') return false
+    const conversationId = await conversationForLatestRun(runId)
+    return conversationId !== null && activeRunForConversation(conversationId) === null
+  }
+
   // Revert the file changes a run made (restore each touched file to its pre-turn state).
-  ipcMain.handle(IPC.checkpointRestore, (_event, runId: string): Promise<number> =>
-    restoreCheckpoint(runId)
+  ipcMain.handle(IPC.checkpointRestore, async (_event, runId: string): Promise<number> =>
+    (await checkpointCallAllowed(runId)) ? restoreCheckpoint(runId) : 0
   )
 
   // Re-apply a reverted run's file changes (restore each touched file to its post-turn state).
-  ipcMain.handle(IPC.checkpointReapply, (_event, runId: string): Promise<number> =>
-    reapplyCheckpoint(runId)
+  ipcMain.handle(IPC.checkpointReapply, async (_event, runId: string): Promise<number> =>
+    (await checkpointCallAllowed(runId)) ? reapplyCheckpoint(runId) : 0
   )
 
   // The revertable checkpoint for a conversation's latest run (or null). The renderer

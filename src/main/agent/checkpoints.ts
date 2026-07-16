@@ -319,6 +319,32 @@ async function runIdFromDiskIndex(conversationId: string): Promise<string | null
   return typeof runId === 'string' && RUN_ID_RE.test(runId) ? runId : null
 }
 
+/**
+ * The conversation whose LATEST run this is, or null when the runId isn't any
+ * conversation's most recent turn (unknown, or already superseded by a newer run).
+ * Checks memory first, then the on-disk index (after a restart nothing is in
+ * memory until a checkpoint is first fetched). The IPC layer uses this to refuse
+ * restore/reapply of an arbitrary historical runId among the persisted snapshots:
+ * only the latest turn — the one the UI actually offers to revert — qualifies.
+ */
+export async function conversationForLatestRun(runId: string): Promise<string | null> {
+  for (const [conversationId, r] of lastRunByConversation) {
+    if (r === runId) return conversationId
+  }
+  const dir = checkpointsDirOrNull()
+  if (!dir || !RUN_ID_RE.test(runId)) return null
+  const conversations = await readIndexConversations(dir)
+  for (const [conversationId, r] of Object.entries(conversations)) {
+    // Memory wins over a stale on-disk entry: if this process already knows a
+    // newer run for the conversation (its index write may still be queued), the
+    // queried run is superseded, not latest.
+    if (r === runId && (lastRunByConversation.get(conversationId) ?? runId) === runId) {
+      return conversationId
+    }
+  }
+  return null
+}
+
 // ---- Recording ----
 
 /** A file a write-kind tool call will touch, and whether it is expected to end up deleted. */

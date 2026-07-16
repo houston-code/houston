@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IPC } from '@shared/constants'
@@ -14,7 +14,9 @@ const h = vi.hoisted(() => ({
   resolveQuestion: vi.fn(),
   setRunPolicy: vi.fn(),
   // Configured per test to return the WebContents id that "owns" a run.
-  runOwner: vi.fn<(runId: string) => number | undefined>()
+  runOwner: vi.fn<(runId: string) => number | undefined>(),
+  // Steerable "is a run live on this conversation" — the checkpoint gate reads it.
+  activeRun: vi.fn<(conversationId: string) => string | null>(() => null)
 }))
 
 // Mock electron so registerIpc can register (and we can capture) its handlers
@@ -40,13 +42,20 @@ vi.mock('./agent/loop', () => ({
   resolveQuestion: h.resolveQuestion,
   setRunPolicy: h.setRunPolicy,
   runOwner: h.runOwner,
-  activeRunForConversation: vi.fn(() => null),
+  activeRunForConversation: h.activeRun,
   pendingPromptsForConversation: vi.fn(() => []),
   runningConversationIds: vi.fn(() => []),
   onActiveRunsChanged: vi.fn(() => () => {})
 }))
 
 import { MAX_QUESTION_ANSWER_LEN, registerIpc, resolveDeleteAction } from './ipc'
+// The real checkpoints module (not mocked): the gating tests drive actual snapshots.
+import {
+  recordOriginal,
+  recordResult,
+  noteConversationRun,
+  clearCheckpoints
+} from './agent/checkpoints'
 
 /**
  * The delete-confirmation dialog used to be a two-button `window.confirm` whose
@@ -184,6 +193,80 @@ describe('run-control IPC ownership', () => {
     h.runOwner.mockReturnValue(undefined)
     handler(IPC.agentCancel)(from(OTHER), RUN)
     expect(h.cancelRun).toHaveBeenCalledWith(RUN)
+  })
+})
+
+/**
+ * Checkpoint restore/reapply cannot be gated on a run owner — a checkpoint
+ * deliberately outlives its run (persisted across restarts), so by the time the
+ * revert button is clicked there is no owner left to compare. The gate instead
+ * requires the runId to be some conversation's LATEST turn (what the UI offers)
+ * on a conversation with no live run. These drive the real checkpoints module
+ * through the registered handlers.
+ */
+describe('checkpoint restore/reapply gating', () => {
+  registerIpc()
+  const from = (senderId: number) => ({ sender: { id: senderId } })
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+
+  let ws: string
+
+  beforeEach(() => {
+    ws = mkdtempSync(join(tmpdir(), 'houston-ipc-cp-'))
+    h.activeRun.mockReturnValue(null)
+  })
+
+  afterEach(() => {
+    h.activeRun.mockReturnValue(null)
+    clearCheckpoints()
+    rmSync(ws, { recursive: true, force: true })
+  })
+
+  /** Record one modified file as `runId`, the latest turn of `conversationId`. */
+  async function recordTurn(conversationId: string, runId: string): Promise<string> {
+    const f = join(ws, 'a.txt')
+    writeFileSync(f, 'original')
+    noteConversationRun(conversationId, runId)
+    await recordOriginal(runId, [ws], 'a.txt')
+    writeFileSync(f, 'modified')
+    await recordResult(runId, [ws], 'a.txt')
+    return f
+  }
+
+  it('restores the latest turn of an idle conversation', async () => {
+    const f = await recordTurn('conv-cp', 'run-cp')
+    expect(await handler(IPC.checkpointRestore)(from(1), 'run-cp')).toBe(1)
+    expect(readFileSync(f, 'utf8')).toBe('original')
+  })
+
+  it('refuses a runId that is no longer the conversation latest turn', async () => {
+    const f = await recordTurn('conv-cp', 'run-old')
+    noteConversationRun('conv-cp', 'run-new') // a newer turn replaced it
+    expect(await handler(IPC.checkpointRestore)(from(1), 'run-old')).toBe(0)
+    expect(readFileSync(f, 'utf8')).toBe('modified') // files untouched
+  })
+
+  it('refuses a restore while the conversation is mid-run', async () => {
+    const f = await recordTurn('conv-cp', 'run-cp')
+    h.activeRun.mockReturnValue('run-live')
+    expect(await handler(IPC.checkpointRestore)(from(1), 'run-cp')).toBe(0)
+    expect(readFileSync(f, 'utf8')).toBe('modified')
+  })
+
+  it('refuses an unknown runId', async () => {
+    expect(await handler(IPC.checkpointRestore)(from(1), 'run-unknown')).toBe(0)
+  })
+
+  it('gates reapply the same way', async () => {
+    const f = await recordTurn('conv-cp', 'run-cp')
+    expect(await handler(IPC.checkpointRestore)(from(1), 'run-cp')).toBe(1) // allowed
+    noteConversationRun('conv-cp', 'run-new') // then a newer turn supersedes it
+    expect(await handler(IPC.checkpointReapply)(from(1), 'run-cp')).toBe(0)
+    expect(readFileSync(f, 'utf8')).toBe('original') // still reverted
   })
 })
 
