@@ -191,13 +191,16 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   }
   // v6: Google retired gemini-2.5-flash and gemini-2.0-flash ("no longer available to new
   // users") — they 404 on every call, so an install that still lists them offers models that
-  // can only fail. Prune exactly those two and seed the current 3.x line in their place. The
+  // can only fail. Prune exactly those two and seed the current 3.x line in their place. (No
+  // release ever shipped schemaVersion 6, so this list is corrected in place rather than via a
+  // v7 prune — no install has run it. gemini-3.5-flash was briefly seeded here and dropped: see
+  // the note in defaults.ts.) The
   // prune is NOT scoped by the "stays deleted" rule the backfills follow: that rule protects a
   // user's deliberate choice, and no one can deliberately choose a model the API refuses to
   // serve. A selection left dangling by the prune is reconciled below.
   if (fromVersion < 6) {
     providers = pruneDefaultModels(providers, ['gemini-2.5-flash', 'gemini-2.0-flash'])
-    providers = backfillDefaultModels(providers, ['gemini-3.5-flash', 'gemini-3.1-flash-lite'])
+    providers = backfillDefaultModels(providers, ['gemini-3.1-flash-lite'])
   }
   const merged: AppSettings = {
     ...base,

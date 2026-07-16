@@ -100,7 +100,12 @@ export function defaultProviders(): ProviderConfig[] {
       // NB the live /models list is NOT a safe source of truth here: it still lists both
       // retired ids even though calling them 404s. Only a real call proves a model works,
       // which is what the gemini leg of provider-canary.yml does nightly.
-      models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-3.5-flash' }, { id: 'gemini-3.1-flash-lite' }],
+      // gemini-3.5-flash is deliberately NOT here: it is real and callable, but it could not
+      // actually serve a trivial request on two consecutive live runs (a 60s hang, then a 503
+      // "experiencing high demand"), while these two answered in under 4s every time. A default
+      // that stalls or 503s is worse than one fewer choice, and the live list can't tell you
+      // this — only repeated real calls can. Worth revisiting when its capacity settles.
+      models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-3.1-flash-lite' }],
       defaultModel: 'gemini-2.5-pro',
       requiresKey: true,
       hasKey: false,
