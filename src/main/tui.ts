@@ -49,6 +49,7 @@ import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS } from '@shared/agent'
 import { contextWindowFor, contextPercent } from '@shared/usage'
+import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { truncateVisible, stripControlChars } from './tui-wrap'
@@ -248,6 +249,32 @@ export function makePainter(color: boolean, theme: ThemeName = 'default'): Paint
     const codes = styles.map((k) => palette[k]).filter(Boolean).join('')
     return codes ? `${codes}${s}${palette.reset}` : s
   }
+}
+
+/** Status marks for a todo list, matching the desktop app's. */
+const TODO_MARK: Record<Todo['status'], string> = { pending: '○', in_progress: '◐', completed: '●' }
+
+/**
+ * The agent's todo list, as a checklist.
+ *
+ * `todo_write` is how the agent shows its plan for a long task, and the desktop
+ * app renders it as a live checklist. The terminal collapsed it to the tool's
+ * one-line summary — "Updated todo list: 5 items (2 completed, 1 in progress)" —
+ * so the one thing the tool exists to communicate was the one thing you could not
+ * see. The list is already in the call's arguments; this just draws it.
+ */
+export function renderTodoList(todos: Todo[], paint: Painter): string {
+  if (!todos.length) return paint('  ☰ todo list cleared', 'dim')
+  const lines = [`${paint('☰', 'cyan')} ${paint('todo', 'cyan')}`]
+  for (const t of todos) {
+    const tone = t.status === 'completed' ? 'dim' : t.status === 'in_progress' ? 'cyan' : 'dim'
+    const mark = paint(TODO_MARK[t.status], t.status === 'completed' ? 'green' : tone)
+    // The in-progress item is what the agent is doing right now, so it is the one
+    // worth being able to find at a glance.
+    const text = t.status === 'in_progress' ? paint(t.content, 'bold') : paint(t.content, tone)
+    lines.push(`    ${mark} ${text}`)
+  }
+  return lines.join('\n')
 }
 
 /** One-line summary of a tool starting, e.g. "· read_file  src/x.ts". */
@@ -3005,6 +3032,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
     const toolArgs = new Map<string, Record<string, unknown>>()
+    // todo_write calls whose list we already drew, so their summary line is dropped.
+    const todoCalls = new Set<string>()
     // Per-turn token/cost tally. The loop emits a `usage` event per model round
     // (and per subagent), which would be noisy to print each time — the live
     // session total already sits in the status line above the composer. So we sum
@@ -3048,12 +3077,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.setSpinnerLabel?.('Thinking')
           deps.io.out(paint(e.delta, 'dim'))
           break
-        case 'tool_start':
+        case 'tool_start': {
           deps.io.setSpinnerLabel?.(e.name)
           toolArgs.set(e.callId, e.args)
+          // A todo update IS its list; showing "· todo_write" and then a count of
+          // what changed tells you nothing about the plan.
+          const todos = e.name === 'todo_write' ? parseTodosSafe(e.args.todos) : []
+          if (e.name === 'todo_write') {
+            deps.io.out(`\n${renderTodoList(todos, paint)}\n`)
+            todoCalls.add(e.callId)
+            break
+          }
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
+        }
         case 'tool_result': {
+          // The list was just drawn from the call's args; its result is only the
+          // model-facing summary of what we already showed.
+          if (todoCalls.delete(e.callId) && e.ok) {
+            toolArgs.delete(e.callId)
+            break
+          }
           const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose })
           if (line) deps.io.out(`${line}\n`)
           toolArgs.delete(e.callId)

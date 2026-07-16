@@ -43,6 +43,7 @@ import {
   renderCheckpoint,
   renderUndoResult,
   renderWorkingTree,
+  renderTodoList,
   renderRecoveredOutput,
   toolResultsFrom,
   FAILURE_LINES,
@@ -4023,5 +4024,84 @@ describe('/undo, /redo and /changes', () => {
     })
     await runTui(opts, d)
     expect(t.text()).toContain('M x.ts')
+  })
+})
+
+// todo_write is how the agent shows its plan for a long task, and the desktop app
+// draws it as a live checklist. The terminal showed only the tool's own summary
+// line — a count — so the one thing the tool exists to communicate was invisible.
+describe('todo list rendering', () => {
+  const paintNo = makePainter(false)
+  const todos = [
+    { content: 'Read the config loader', status: 'completed' as const },
+    { content: 'Add the missing validation', status: 'in_progress' as const },
+    { content: 'Update the tests', status: 'pending' as const }
+  ]
+
+  it('renders every item with its state', () => {
+    const out = renderTodoList(todos, paintNo)
+    expect(out).toContain('● Read the config loader')
+    expect(out).toContain('◐ Add the missing validation')
+    expect(out).toContain('○ Update the tests')
+  })
+
+  it('says so when the list is cleared', () => {
+    expect(renderTodoList([], paintNo)).toContain('cleared')
+  })
+
+  it('draws the checklist instead of a count', async () => {
+    const { d } = deps([
+      {
+        runId: 'x',
+        type: 'tool_start',
+        callId: 't1',
+        name: 'todo_write',
+        args: { todos },
+        kind: 'write'
+      },
+      {
+        runId: 'x',
+        type: 'tool_result',
+        callId: 't1',
+        name: 'todo_write',
+        ok: true,
+        output: 'Updated todo list: 3 items (1 completed, 1 in progress).'
+      },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('Add the missing validation')
+    expect(out).toContain('Update the tests')
+    // The summary is what the model reads; showing it too would just repeat a
+    // worse version of what is on screen.
+    expect(out).not.toContain('Updated todo list: 3 items')
+  })
+
+  it('still reports a todo_write that FAILED, rather than swallowing it', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 't1', name: 'todo_write', args: { todos }, kind: 'write' },
+      { runId: 'x', type: 'tool_result', callId: 't1', name: 'todo_write', ok: false, output: 'bad todo shape' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('bad todo shape')
+  })
+
+  it('leaves other tools alone', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'r1', name: 'read_file', args: { path: 'a.ts' }, kind: 'read' },
+      { runId: 'x', type: 'tool_result', callId: 'r1', name: 'read_file', ok: true, output: 'contents' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('read_file')
+    expect(t.text()).toContain('contents')
   })
 })
