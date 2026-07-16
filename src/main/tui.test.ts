@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
@@ -40,6 +43,8 @@ import {
   mediaTypeForImagePath,
   runTui,
   HOOK_EVENTS,
+  promptFolderTrust,
+  summarizeElevated,
   parseSettingsAction,
   resolveHookEventInput,
   buildHook,
@@ -2390,5 +2395,126 @@ describe('runTui — /login & keyless start', () => {
     expect(code).toBe(0)
     expect(setKeyCalls).toEqual([['anthropic', 'sk-ant']])
     expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+  })
+})
+
+describe('promptFolderTrust', () => {
+  const elevatingProject = {
+    permissionRules: [{ action: 'allow', tool: 'run_shell', match: 'npm test*' }],
+    hooks: [{ event: 'PostToolUse', matcher: 'write_file', command: 'npm run fmt' }],
+    mcpServers: [{ id: 'docs', command: 'npx' }]
+  }
+
+  function makeWorkspace(project?: unknown): string {
+    const ws = mkdtempSync(join(tmpdir(), 'houston-trust-'))
+    if (project !== undefined) {
+      mkdirSync(join(ws, '.houston'), { recursive: true })
+      writeFileSync(join(ws, '.houston/settings.json'), JSON.stringify(project))
+    }
+    return ws
+  }
+
+  function trustDeps(
+    answers: Array<string | null>,
+    over: Partial<AppSettings> = {}
+  ): { d: TuiDeps; patches: Partial<AppSettings>[]; text: () => string } {
+    const { d } = deps([], over)
+    const io = fakeIo(answers)
+    d.io = io.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (patch) => patches.push(patch)
+    return { d, patches, text: io.text }
+  }
+
+  it('no-ops when the project elevates nothing (no prompt, no write)', async () => {
+    const ws = makeWorkspace({ permissionRules: [{ action: 'deny', tool: 'run_shell', match: '*' }] })
+    try {
+      const { d, patches, text } = trustDeps(['y'])
+      await promptFolderTrust(ws, d, makePainter(false))
+      expect(patches).toEqual([])
+      expect(text()).not.toContain('Trust this folder?')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('persists a trusted decision bound to the current fingerprint on y', async () => {
+    const ws = makeWorkspace(elevatingProject)
+    try {
+      const { d, patches, text } = trustDeps(['y'])
+      await promptFolderTrust(ws, d, makePainter(false))
+      expect(text()).toContain('1 allow rule, 1 hook, 1 MCP server')
+      expect(patches).toHaveLength(1)
+      const rec = patches[0].trustedFolders![0]
+      expect(rec.decision).toBe('trusted')
+      expect(rec.path).toBe(realpathSync(ws))
+      expect(rec.hash).toMatch(/^[0-9a-f]{64}$/)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('persists never, leaves undecided on anything else, and skips when already decided', async () => {
+    const ws = makeWorkspace(elevatingProject)
+    try {
+      const never = trustDeps(['never'])
+      await promptFolderTrust(ws, never.d, makePainter(false))
+      expect(never.patches[0].trustedFolders![0].decision).toBe('never')
+
+      const later = trustDeps([''])
+      await promptFolderTrust(ws, later.d, makePainter(false))
+      expect(later.patches).toEqual([])
+      expect(later.text()).toContain('ask again next session')
+
+      // Already decided (same fingerprint): no prompt at all.
+      const decidedSettings = never.patches[0]
+      const again = trustDeps(['y'], decidedSettings)
+      await promptFolderTrust(ws, again.d, makePainter(false))
+      expect(again.patches).toEqual([])
+      expect(again.text()).not.toContain('Trust this folder?')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('re-prompts (as changed) when the elevating config drifted since trust', async () => {
+    const ws = makeWorkspace(elevatingProject)
+    try {
+      const first = trustDeps(['y'])
+      await promptFolderTrust(ws, first.d, makePainter(false))
+      // The project gains a new hook after the user trusted it.
+      writeFileSync(
+        join(ws, '.houston/settings.json'),
+        JSON.stringify({ ...elevatingProject, hooks: [{ event: 'Stop', matcher: '*', command: 'curl x' }] })
+      )
+      const second = trustDeps(['y'], first.patches[0])
+      await promptFolderTrust(ws, second.d, makePainter(false))
+      expect(second.text()).toContain('trusted configuration changed')
+      expect(second.patches).toHaveLength(1) // re-trusted under the new fingerprint
+      expect(second.patches[0].trustedFolders![0].hash).not.toBe(first.patches[0].trustedFolders![0].hash)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('does nothing when the host cannot persist settings', async () => {
+    const ws = makeWorkspace(elevatingProject)
+    try {
+      const { d, text } = trustDeps(['y'])
+      d.updateSettings = undefined
+      await promptFolderTrust(ws, d, makePainter(false))
+      expect(text()).toBe('')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('summarizeElevated', () => {
+  it('pluralizes and joins only the present kinds', () => {
+    expect(summarizeElevated({ allowRules: [1, 2], hooks: [], mcpServers: [1] })).toBe(
+      '2 allow rules, 1 MCP server'
+    )
+    expect(summarizeElevated({ allowRules: [], hooks: [1], mcpServers: [] })).toBe('1 hook')
   })
 })

@@ -216,10 +216,18 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   an inline red/green **diff** so you can review exactly what changes before
   approving.
 - **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
-  *deny* / *ask* permission rules (checked before your global ones) — e.g. always
-  ask before touching `infra/**`. For safety a project file can only *tighten*:
-  `allow` rules, hooks, and MCP servers stay in your own global Settings, so
-  cloning an untrusted repo can't auto-approve actions or run commands.
+  *deny* / *ask* permission rules (checked before your global ones), e.g. always
+  ask before touching `infra/**`. Guardrails always apply and can only *tighten*,
+  so cloning an untrusted repo can't auto-approve actions or run commands.
+- **Trusted folders.** The same project file may also define `allow` rules, hooks,
+  and MCP servers. Because those elevate (auto-approve matching actions, run
+  processes as you), Houston ignores them until you explicitly trust the folder:
+  the desktop app shows a consent banner (Trust / Not now / Never), the terminal
+  asks at session start, and headless runs just note what's being ignored. The
+  decision is bound to a fingerprint of the elevating config, so if the project
+  later changes it (a pull adds a hook, say), trust drops and Houston asks again.
+  Trusted `allow` rules sit below your own rules, project hooks run after yours,
+  and project MCP servers get a `proj-` namespace prefix.
 - **Managed policy (admin-locked).** On a managed device an administrator can ship a
   machine-wide `managed-settings.json` (macOS `/Library/Application Support/Houston/`,
   Windows `%PROGRAMDATA%\Houston\`, Linux `/etc/houston/`) with *deny* / *ask*

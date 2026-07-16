@@ -9,13 +9,22 @@ import {
 } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { getUserDataDir } from './userData'
-import type { AppSettings, McpServerConfig, PermissionRule, ProviderConfig } from '@shared/types'
+import type {
+  AppSettings,
+  FolderTrust,
+  FolderTrustState,
+  McpServerConfig,
+  PermissionRule,
+  ProviderConfig
+} from '@shared/types'
 import {
   REDACTED_HEADER_VALUE,
+  folderTrustState,
   isRedactedHeaderValue,
   mcpEnvScope,
   mcpHeaderScope,
-  providerHeaderScope
+  providerHeaderScope,
+  upsertFolderTrust
 } from '@shared/types'
 import {
   backfillDefaultModels,
@@ -465,6 +474,37 @@ export function dismissGitInit(workspace: string): AppSettings {
   const current = getSettings().gitInitDismissed ?? []
   if (current.includes(target)) return getSettings()
   return updateSettings({ gitInitDismissed: [...current, target] })
+}
+
+/**
+ * A workspace's trust state for its project's elevating config, given the
+ * CURRENT elevated-config fingerprint (see projectConfig.elevatedConfigHash).
+ * Realpath-normalized like the other per-workspace records.
+ */
+export function folderTrustFor(workspace: string, elevatedHash: string): FolderTrustState {
+  if (!workspace) return 'undecided'
+  return folderTrustState(getSettings().trustedFolders, normalizeWorkspacePath(workspace), elevatedHash)
+}
+
+/**
+ * Record the user's trust decision for a workspace, bound to the elevating
+ * config's current fingerprint. 'trusted' honors the project's allow rules,
+ * hooks, and MCP servers until that subset changes; 'never' permanently ignores
+ * them (and suppresses the prompt) until the user changes their mind here.
+ */
+export function setFolderTrust(
+  workspace: string,
+  decision: FolderTrust['decision'],
+  elevatedHash: string
+): AppSettings {
+  if (!workspace) return getSettings()
+  const entry: FolderTrust = {
+    path: normalizeWorkspacePath(workspace),
+    decision,
+    hash: elevatedHash,
+    decidedAt: Date.now()
+  }
+  return updateSettings({ trustedFolders: upsertFolderTrust(getSettings().trustedFolders, entry) })
 }
 
 /**

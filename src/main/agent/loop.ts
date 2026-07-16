@@ -17,7 +17,7 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
+import { folderTrustState, isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
 import { resolveShellOutputBudget } from '@shared/defaults'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
@@ -27,7 +27,7 @@ import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt } from './prompt'
 import { loadProjectRules } from './rules'
-import { loadProjectConfig } from './projectConfig'
+import { loadProjectConfig, mergeProjectMcpServers } from './projectConfig'
 import { loadManagedPolicy } from './managedPolicy'
 import {
   ASK_USER_NAME,
@@ -642,11 +642,21 @@ export async function startRun(
     //   1. Admin managed policy — org-distributed, root-owned; deny/ask only.
     //   2. Project guardrails    — .houston/settings.json; deny/ask only.
     //   3. The user's own rules  — global Settings; allow/deny/ask.
+    //   4. Project allow rules   — ONLY when the user trusted the folder.
     // Tiers 1 and 2 can only *tighten*: neither can add an `allow`, so a managed
     // policy or an untrusted repo can restrict the user but never auto-approve on
-    // their behalf. See managedPolicy.ts / projectConfig.ts.
+    // their behalf. A TRUSTED folder's `allow` rules join at the LOWEST tier: they
+    // fill gaps the user hasn't decided, but can never shadow a user (or guardrail)
+    // rule for the same target. See managedPolicy.ts / projectConfig.ts.
     const managedPolicy = await loadManagedPolicy()
     const projectConfig = await loadProjectConfig(workspace)
+    // Whether this folder's ELEVATING project config (allow rules, hooks, MCP
+    // servers) is honored: only after the user's explicit trust consent, and only
+    // while the elevating subset still matches the fingerprint they consented to —
+    // a drift (e.g. a pull that adds a hook) drops back to untrusted.
+    const projectTrusted =
+      projectConfig.elevatedHash !== '' &&
+      folderTrustState(settings.trustedFolders, workspace, projectConfig.elevatedHash) === 'trusted'
     // The two guardrail tiers that outrank the user. A mid-run "Always allow/deny"
     // is spliced in just BELOW their count so live consent can never shadow an admin
     // or project rule (see the splice near the approval handler). The slice is also
@@ -654,7 +664,15 @@ export async function startRun(
     // a user-tier one — only the latter can be skipped by a hook's `approve`.
     const guardrailRules = [...managedPolicy.permissionRules, ...projectConfig.permissionRules]
     const guardrailRuleCount = guardrailRules.length
-    const permissionRules = [...guardrailRules, ...(settings.permissionRules ?? [])]
+    const permissionRules = [
+      ...guardrailRules,
+      ...(settings.permissionRules ?? []),
+      ...(projectTrusted ? projectConfig.elevated.allowRules : [])
+    ]
+    // Hooks likewise: a trusted folder's project hooks run after the user's own.
+    const hooks = projectTrusted
+      ? [...(settings.hooks ?? []), ...projectConfig.elevated.hooks]
+      : (settings.hooks ?? [])
     // The system prompt is built once and can't change mid-run, so plan-mode
     // *guidance* is a snapshot of the starting policy. The runtime plan-mode
     // *block* below reads `run.policy`, so toggling plan on/off mid-run still
@@ -709,7 +727,13 @@ export async function startRun(
     // may never touch. Above a threshold we defer them: the model gets a compact
     // catalog via a `find_tools` meta-tool and loads only what it needs, which
     // then rides along on later turns. At/below the threshold nothing changes.
-    const mcpToolDefs = await getMcpToolDefs(settings.mcpServers)
+    // A trusted folder's project MCP servers join the user's own under a `proj-`
+    // id prefix (user servers win collisions); untrusted folders contribute none.
+    const mcpToolDefs = await getMcpToolDefs(
+      projectTrusted
+        ? mergeProjectMcpServers(settings.mcpServers, projectConfig.elevated.mcpServers)
+        : settings.mcpServers
+    )
     const lazyMcp = mcpToolDefs.length > MCP_LAZY_THRESHOLD
     const revealedMcp = new Set<string>()
     const findTools = lazyMcp ? makeFindToolsDef(mcpToolDefs, revealedMcp) : null
@@ -720,8 +744,8 @@ export async function startRun(
     // Whether any Pre/PostToolUse hook matches this tool. A hook implies ordering or
     // an observed side-effect, so the read cache must not short-circuit such a call.
     const hasMatchingHook = (name: string): boolean =>
-      matchingHooks(settings.hooks, 'PreToolUse', name).length > 0 ||
-      matchingHooks(settings.hooks, 'PostToolUse', name).length > 0
+      matchingHooks(hooks, 'PreToolUse', name).length > 0 ||
+      matchingHooks(hooks, 'PostToolUse', name).length > 0
     // The schemas advertised to the model this turn: built-ins, plus either every
     // MCP schema (small setups) or just find_tools + already-revealed MCP tools
     // (lazy). Recomputed each turn so tools revealed via find_tools then appear.
@@ -1492,7 +1516,7 @@ export async function startRun(
       // summarized so it carries into the summary. Best-effort and non-blocking —
       // compaction must proceed to keep the turn within the context window.
       const preCompact = await runHooks(
-        settings.hooks,
+        hooks,
         'PreCompact',
         { tool: 'PreCompact', input: {} },
         workspace,
@@ -1585,7 +1609,7 @@ export async function startRun(
     // SessionStart: once, before the first turn. A hook can inject extra context,
     // which we append to the system prompt for the whole run.
     const sessionStart = await runHooks(
-      settings.hooks,
+      hooks,
       'SessionStart',
       { tool: 'SessionStart', input: {} },
       workspace,
@@ -1601,7 +1625,7 @@ export async function startRun(
     const lastUser = [...messages].reverse().find((m) => m.role === 'user')
     const promptText = typeof lastUser?.content === 'string' ? lastUser.content : ''
     const promptSubmit = await runHooks(
-      settings.hooks,
+      hooks,
       'UserPromptSubmit',
       { tool: 'UserPromptSubmit', input: {}, prompt: promptText },
       workspace,
@@ -1858,7 +1882,7 @@ export async function startRun(
         // isn't really ending yet, so there's nothing to verify.
         if (stopReason === 'end_turn' && stopContinuations < MAX_STOP_CONTINUATIONS) {
           const stop = await runHooks(
-            settings.hooks,
+            hooks,
             'Stop',
             { tool: 'Stop', input: {} },
             workspace,
@@ -2208,7 +2232,7 @@ export async function startRun(
           // execArgs drive the approval decision, snapshot, execution, and post-write
           // steps; the logged tool_use keeps the model's original arguments.
           const pre = await runHooks(
-            settings.hooks,
+            hooks,
             'PreToolUse',
             { tool: call.name, input: call.arguments },
             workspace,
@@ -2421,7 +2445,7 @@ export async function startRun(
               }
               // PostToolUse hooks run after the tool; their output is shown to the agent.
               const post = await runHooks(
-                settings.hooks,
+                hooks,
                 'PostToolUse',
                 { tool: call.name, input: execArgs, result: output },
                 workspace,
