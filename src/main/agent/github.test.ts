@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { delimiter } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { resolveGh, runGh, githubContext } from './github'
 
 describe('resolveGh', () => {
@@ -28,6 +28,16 @@ describe('resolveGh', () => {
 
   it('returns null when gh is nowhere', () => {
     expect(resolveGh({ env: { PATH: '/nowhere' }, exists: () => false })).toBeNull()
+  })
+
+  it('looks for gh.exe on PATH on Windows', () => {
+    const dir = 'C:\\tools'
+    const got = resolveGh({
+      platform: 'win32',
+      env: { PATH: dir },
+      exists: has([join(dir, 'gh.exe')])
+    })
+    expect(got).toBe(join(dir, 'gh.exe'))
   })
 })
 

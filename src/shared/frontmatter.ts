@@ -15,7 +15,10 @@ export function parseFrontmatter(text: string): ParsedFrontmatter {
   const normalised = text.replace(/\r\n/g, '\n')
   if (!normalised.startsWith('---\n')) return { data: {}, body: text.trim() }
 
-  const end = normalised.indexOf('\n---', 4)
+  // Search from index 3 (the opening line's newline), not 4: an EMPTY block ("---\n---")
+  // has its closing "\n---" starting at index 3, so starting at 4 skipped it and leaked
+  // the delimiters into the body. For a non-empty block index 4 isn't "-", so unchanged.
+  const end = normalised.indexOf('\n---', 3)
   if (end === -1) return { data: {}, body: text.trim() }
 
   const block = normalised.slice(4, end)

@@ -24,6 +24,9 @@ export async function loadCommands(workspace: string): Promise<Command[]> {
   } catch {
     return [] // no commands dir — fine
   }
+  // Sort BEFORE the MAX_COMMANDS cap so which commands survive truncation is
+  // deterministic across platforms (fs.readdir order isn't), matching plugins.ts.
+  entries.sort((a, b) => a.name.localeCompare(b.name))
 
   const commands: Command[] = []
   for (const e of entries) {

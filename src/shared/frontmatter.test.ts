@@ -25,6 +25,12 @@ describe('parseFrontmatter', () => {
     expect(body).toBe('hello')
   })
 
+  it('handles an empty front-matter block without leaking the --- delimiters', () => {
+    const { data, body } = parseFrontmatter('---\n---\nbody here')
+    expect(data).toEqual({})
+    expect(body).toBe('body here')
+  })
+
   it('treats an unterminated front-matter as plain body', () => {
     const { data, body } = parseFrontmatter('---\nname: X\nno closing fence')
     expect(data).toEqual({})
