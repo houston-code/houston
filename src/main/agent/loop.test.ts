@@ -3630,6 +3630,119 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
     const result = r.events.find((e) => e.type === 'tool_result')
     expect(result?.type === 'tool_result' && result.output).toContain('outer report')
   })
+
+  describe('network access (per-destination consent)', () => {
+    // A network-kind stand-in registered under the real web_fetch name (the getTool
+    // mock covers the subagent loop too), so no test touches the network — we only
+    // exercise the consent flow around it.
+    let fetches = 0
+    const probeNetTool = (): ToolDef => ({
+      kind: 'network',
+      summarize: (a) => `Fetch ${String((a as { url?: string }).url ?? '')}`,
+      schema: {
+        name: 'web_fetch',
+        description: 'probe fetch',
+        parameters: {
+          type: 'object',
+          properties: { url: { type: 'string' } },
+          required: ['url'],
+          additionalProperties: false
+        }
+      },
+      execute: async () => {
+        fetches++
+        return 'fetched-body'
+      }
+    })
+    beforeEach(() => {
+      fetches = 0
+      h.probeTools = [probeNetTool()]
+    })
+
+    const subFetch = (id: string, url: string): ProviderStreamEvent[] => [
+      { type: 'tool_call', call: { id, name: 'web_fetch', arguments: { url } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ]
+    /** Dispatch a researcher that fetches `urls`, reports, then the main turn ends. */
+    const netTurns = (...urls: string[]): ProviderStreamEvent[][] => [
+      dispatchCall({ description: 'research', prompt: 'look it up' }),
+      urls.length === 1
+        ? subFetch('f1', urls[0])
+        : [
+            ...urls.flatMap((u, i) => [
+              { type: 'tool_call' as const, call: { id: `f${i + 1}`, name: 'web_fetch', arguments: { url: u } } }
+            ]),
+            { type: 'done' as const, stopReason: 'tool_use' as const }
+          ],
+      finalText('sub report'),
+      finalText('main done')
+    ]
+
+    it("propagates a subagent's fetch as a network approval and runs it on allow", async () => {
+      const r = await run({
+        turns: netTurns('https://docs.example/api'),
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('allow')
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval') as Array<
+        Extract<AgentEvent, { type: 'tool_approval' }>
+      >
+      // dispatch_agent is a read tool, so the subagent's fetch is the ONLY prompt:
+      // minted under the dispatch call and labeled as the subagent's.
+      expect(approvals).toHaveLength(1)
+      expect(approvals[0].callId).toMatch(/\.net\.1$/)
+      expect(approvals[0].name).toBe('web_fetch')
+      expect(approvals[0].kind).toBe('network')
+      expect(approvals[0].summary).toBe('Subagent: Fetch https://docs.example/api')
+      // It surfaced as a live row with its output, and actually ran.
+      const netResult = r.events.find(
+        (e) => e.type === 'tool_result' && e.callId === approvals[0].callId
+      ) as Extract<AgentEvent, { type: 'tool_result' }> | undefined
+      expect(netResult?.ok).toBe(true)
+      expect(netResult?.output).toBe('fetched-body')
+      expect(fetches).toBe(1)
+    })
+
+    it('a denied fetch never executes and comes back as a refusal', async () => {
+      const r = await run({
+        turns: netTurns('https://evil.example/exfil'),
+        policy: 'full-auto',
+        onApproval: (id, decide) => decide(id.includes('.net.') ? 'deny' : 'allow')
+      })
+      expect(fetches).toBe(0)
+      const netStart = r.events.find((e) => e.type === 'tool_start' && e.callId.includes('.net.'))
+      expect(netStart).toBeUndefined()
+      const netResult = r.events.find(
+        (e) => e.type === 'tool_result' && e.callId.includes('.net.')
+      ) as Extract<AgentEvent, { type: 'tool_result' }> | undefined
+      expect(netResult?.ok).toBe(false)
+      expect(netResult?.output).toBe('Denied by the user.')
+    })
+
+    it("'always' on a subagent fetch grants THAT host only — a new host re-prompts", async () => {
+      const r = await run({
+        turns: netTurns('https://a.example/x', 'https://a.example/y', 'https://b.example/z'),
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always')
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval')
+      // The first a.example fetch prompts and grants the host; the second rides that
+      // grant; b.example is a NEW destination, so it prompts again.
+      expect(approvals).toHaveLength(2)
+      expect(fetches).toBe(3)
+    })
+
+    it('a deny permission rule refuses the fetch without prompting', async () => {
+      h.settings.permissionRules = [{ action: 'deny', tool: 'web_fetch', match: '*' }]
+      try {
+        const r = await run({ turns: netTurns('https://blocked.example/x'), policy: 'full-auto' })
+        expect(r.events.some((e) => e.type === 'tool_approval')).toBe(false)
+        expect(fetches).toBe(0)
+      } finally {
+        h.settings.permissionRules = []
+      }
+    })
+  })
 })
 
 describe('scheduled runs (loop wiring)', () => {

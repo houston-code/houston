@@ -87,11 +87,14 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   and searches the project and reports back, keeping the main agent's context
   clean. `dispatch_writable_agent` delegates a whole implementation task to a
   subagent that can also edit files and run shell commands, confined to the
-  project with no network access; that dispatch is approval-gated, so one consent
-  covers the delegated task. On a host without an OS-enforced sandbox, each shell
-  command the subagent runs would be unconfined, so it is routed back to you as
-  its own approval prompt (and shown in the transcript), exactly like an
-  unconfined command from the main agent. While a subagent works, its row shows
+  project; that dispatch is approval-gated, so one consent covers the delegated
+  task's local actions. Either tier can also fetch public URLs and search the
+  web, with every network request routed back to you as its own per-destination
+  approval prompt (and shown live in the transcript) — a subagent's shell
+  commands never get network access. On a host without an OS-enforced sandbox,
+  each shell command the subagent runs would be unconfined, so it too is routed
+  back to you as its own approval prompt, exactly like an unconfined command
+  from the main agent. While a subagent works, its row shows
   live turn-by-turn progress in every client. Each report ends with an id the
   agent can `resume` to send a follow-up into that subagent's context; a dispatch
   can pass `model` to run routine legwork on a cheaper sibling model, and a
@@ -136,8 +139,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   main agent can dispatch it by name. Agents are read-only by default; mark one
   `write: true` to make it dispatchable via the approval-gated
   `dispatch_writable_agent`. An optional front-matter `tools:` list narrows which
-  tools that agent may use (it can only restrict its tier's set, never widen
-  it, and never grants network access), and `model:` pins the agent to a
+  tools that agent may use (it can only restrict its tier's set, never widen it;
+  network requests always stay behind the per-destination approval prompts), and
+  `model:` pins the agent to a
   (usually cheaper) sibling model from the current provider. Add a
   `.houston/skills/<name>/SKILL.md` to register a skill: its description is
   surfaced to the agent, which reads the full instructions on demand.
