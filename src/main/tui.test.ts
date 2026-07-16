@@ -1190,6 +1190,18 @@ describe('runTui', () => {
     expect(rec.runs[0]).toMatchObject({ providerId: 'ollama', model: 'llama' })
   })
 
+  it('gives feedback on an unresolvable /model, /approval, or /theme arg', async () => {
+    const { d, rec } = deps([])
+    const t = fakeIo(['/model nope-9', '/approval fullautoo', '/theme bright-nope', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('unknown model: nope-9')
+    expect(out).toContain('unknown policy: fullautoo')
+    expect(out).toContain('unknown theme: bright-nope')
+    expect(rec.runs).toHaveLength(0) // none of them started a turn
+  })
+
   it('/model persists the switch as the saved selection (like the GUI picker)', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const saved: Array<Partial<AppSettings>> = []
@@ -2339,9 +2351,14 @@ describe('/login helpers', () => {
   })
 
   it('renderNoModelStatus points at /login', () => {
-    const out = renderNoModelStatus('ask', '/proj', makePainter(false))
+    const out = renderNoModelStatus('ask', '/proj', 80, makePainter(false))
     expect(out).toContain('/login')
     expect(out).toContain('ask')
+  })
+
+  it('renderNoModelStatus truncates a long line to the width', () => {
+    const out = renderNoModelStatus('ask', '/a/very/long/path/that/exceeds', 20, makePainter(false))
+    expect(out.length).toBeLessThanOrEqual(20)
   })
 
   it('parseSlashCommand routes /login and /providers to the login flow', () => {
