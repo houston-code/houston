@@ -498,12 +498,19 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
 }
 
 /** The status line shown before any provider is set up: no model, just the /login nudge. */
-export function renderNoModelStatus(policy: ApprovalPolicy, cwd: string, paint: Painter): string {
-  return [
+export function renderNoModelStatus(
+  policy: ApprovalPolicy,
+  cwd: string,
+  width: number,
+  paint: Painter
+): string {
+  const line = [
     paint('no model (run /login)', 'yellow'),
     paint(policy, 'dim'),
     paint(shortCwd(cwd), 'dim')
   ].join(paint(' · ', 'dim'))
+  // Truncate like renderStatusLine so a long cwd can't wrap the single-line footer.
+  return truncateVisible(line, Math.max(0, width))
 }
 
 /** A tiny 10-cell context-fill bar like `▓▓▓░░░░░░░`. */
@@ -1860,7 +1867,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               columns(),
               paint
             )
-          : renderNoModelStatus(policy, opts.cwd, paint)
+          : renderNoModelStatus(policy, opts.cwd, columns(), paint)
       }\n`
     )
     // Read a message. On a real terminal this is the raw-mode editor, which takes a
@@ -2541,7 +2548,9 @@ function handleInfoCommand(
   paint: Painter,
   customCommands: Command[] = []
 ): void {
-  const name = nameOf(line.slice(1).trim().split(/\s+/)[0])
+  const parts = line.slice(1).trim().split(/\s+/)
+  const name = nameOf(parts[0])
+  const arg = parts.slice(1).join(' ') // present only when the user passed an (invalid) arg
   if (name === 'help') {
     deps.io.out(`${HELP_TEXT}\n`)
     if (customCommands.length) {
@@ -2559,6 +2568,9 @@ function handleInfoCommand(
     return
   }
   if (name === 'theme') {
+    // A present-but-unrecognized arg reached here (a valid one would have set the
+    // theme); say so instead of silently just re-listing.
+    if (arg) deps.io.out(paint(`· unknown theme: ${arg}\n`, 'yellow'))
     deps.io.out(paint(`themes: ${Object.keys(THEMES).join(', ')}  (usage: /theme <name>)\n`, 'dim'))
     return
   }
@@ -2568,6 +2580,7 @@ function handleInfoCommand(
     return
   }
   if (name === 'approval') {
+    if (arg) deps.io.out(paint(`· unknown policy: ${arg}\n`, 'yellow'))
     deps.io.out(
       paint(`approval: ${state.policy}  (plan | ask | auto-edit | full-auto)\n`, 'dim')
     )
@@ -2575,6 +2588,8 @@ function handleInfoCommand(
   }
   if (name === 'model' || name === 'model?') {
     const settings = deps.getSettings()
+    // A present arg reached here only because it didn't resolve to a known model.
+    if (arg && name === 'model') deps.io.out(paint(`· unknown model: ${arg}\n`, 'yellow'))
     const current =
       state.providerId && state.model ? `${state.providerId} / ${state.model}` : '(none, run /login)'
     deps.io.out(paint(`current: ${current}\n`, 'dim'))

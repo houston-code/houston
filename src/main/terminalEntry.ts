@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { LEGAL_VERSION } from '@shared/legal'
@@ -335,7 +335,11 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
     history = appendHistory(line, history)
     try {
       mkdirSync(histDir, { recursive: true })
-      writeFileSync(histFile, serializeHistory(history), { mode: 0o600 })
+      // Write-then-rename so a concurrent session (or a crash mid-write) can't leave
+      // a truncated/interleaved history file — rename is atomic on the same filesystem.
+      const tmp = `${histFile}.${process.pid}.tmp`
+      writeFileSync(tmp, serializeHistory(history), { mode: 0o600 })
+      renameSync(tmp, histFile)
     } catch (e) {
       log.warn(`failed to persist TUI history: ${String(e)}`)
     }
@@ -398,7 +402,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
           return { error: `unsupported image type (use ${SUPPORTED_IMAGE_TYPES.join(', ')})` }
         }
         try {
-          const data = readFileSync(join(tui.cwd, p)).toString('base64')
+          const data = readFileSync(isAbsolute(p) ? p : join(tui.cwd, p)).toString('base64')
           if (exceedsImageSizeLimit(data)) return { error: 'image is too large' }
           return { image: { mediaType, data } }
         } catch {
