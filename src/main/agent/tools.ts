@@ -28,8 +28,18 @@ import {
   MAX_PDF_BYTES,
   humanSize,
   imageMediaTypeForPath,
-  isPdfPath
+  isPdfPath,
+  looksBinary
 } from './attachments'
+import {
+  CELL_TYPES,
+  editNotebook,
+  isNotebookPath,
+  parseNotebook,
+  renderNotebook,
+  serializeNotebook,
+  type NotebookEditMode
+} from './notebook'
 import {
   backendSupportsSession,
   clampToolResult,
@@ -336,7 +346,7 @@ const readFile: ToolDef = {
   schema: {
     name: 'read_file',
     description:
-      'Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly.',
+      'Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit. Files that are not text are reported as binary rather than returned as garbled bytes.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
@@ -382,7 +392,24 @@ const readFile: ToolDef = {
       return `[pdf: ${rel} (${humanSize(buf.byteLength)}) — attached below for viewing]`
     }
 
-    const data = await fs.readFile(abs, 'utf8')
+    // Everything else is read as bytes first so a non-text file can be recognized
+    // before it is decoded. Decoding binary as UTF-8 does not fail — it silently
+    // yields replacement characters — so without this check the model would be
+    // handed a wall of mojibake and left to infer that the file was never text.
+    const buf = await fs.readFile(abs)
+    if (looksBinary(buf)) {
+      return `[binary file: ${rel} (${humanSize(buf.byteLength)}) — not text, so there is nothing to show. Inspect it with run_shell (e.g. file, xxd, strings).]`
+    }
+
+    // A notebook is JSON, so it would "read" fine as text — as a wall of escaped
+    // source split across line arrays and interleaved with base64 outputs. Render
+    // it as numbered cells instead; notebook_edit takes those same numbers. The
+    // rendering substitutes for the file's text and then slices/truncates exactly
+    // like any other file, so offset/limit keep working on a large notebook.
+    const data = isNotebookPath(rel)
+      ? renderNotebook(parseNotebook(buf.toString('utf8')), { path: rel })
+      : buf.toString('utf8')
+
     const offset = num(args, 'offset')
     const limit = num(args, 'limit')
 
@@ -533,6 +560,81 @@ const multiEdit: ToolDef = {
 }
 
 /** A staged file mutation computed before anything is written, for atomic apply. */
+const notebookEdit: ToolDef = {
+  kind: 'write',
+  summarize: (a) => {
+    const mode = str(a, 'mode') || 'replace'
+    const cell = num(a, 'cell')
+    const verb = mode === 'insert' ? 'Insert cell at' : mode === 'delete' ? 'Delete cell' : 'Edit cell'
+    return `${verb} ${cell ?? '?'} in ${str(a, 'path')}`
+  },
+  schema: {
+    name: 'notebook_edit',
+    description:
+      'Edit one cell of a Jupyter notebook (.ipynb) by cell number, as shown by read_file. Use this rather than edit_file/write_file for notebooks: it edits the cell\'s source directly instead of the JSON-escaped text inside the document, and leaves other cells, their outputs, and notebook metadata untouched. Replacing a code cell clears its stale outputs. Cell numbers are 1-based.',
+    parameters: objectSchema(
+      {
+        path: { type: 'string', description: 'Path to the .ipynb file, relative to the project root.' },
+        cell: {
+          type: 'number',
+          description:
+            'Which cell (1-based), as numbered by read_file. For insert, the new cell takes this position, so one past the last cell appends.'
+        },
+        mode: {
+          type: 'string',
+          enum: ['replace', 'insert', 'delete'],
+          description: 'Replace the cell\'s source (default), insert a new cell at this position, or delete the cell.'
+        },
+        source: {
+          type: 'string',
+          description: 'The cell\'s new source, as plain text. Required for replace and insert.'
+        },
+        cell_type: {
+          type: 'string',
+          enum: CELL_TYPES,
+          description:
+            'Cell kind. For insert, defaults to the kind of the cell currently at this position. For replace, pass it only to convert the cell to a different kind.'
+        }
+      },
+      ['path', 'cell']
+    )
+  },
+  async execute(args, ctx) {
+    const rel = str(args, 'path')
+    if (!isNotebookPath(rel)) {
+      throw new Error(`notebook_edit only works on .ipynb files; ${rel} is not one. Use edit_file instead.`)
+    }
+    const abs = resolveInRoots(rootsOf(ctx), rel)
+    const mode = (str(args, 'mode') || 'replace') as NotebookEditMode
+    if (!['replace', 'insert', 'delete'].includes(mode)) {
+      throw new Error(`Unknown mode "${mode}": expected replace, insert, or delete.`)
+    }
+    let raw: string
+    try {
+      raw = await fs.readFile(abs, 'utf8')
+    } catch {
+      throw new Error(`${rel} does not exist. Create a notebook with write_file before editing its cells.`)
+    }
+    const nb = parseNotebook(raw)
+    const cell = num(args, 'cell')
+    if (cell === undefined) throw new Error('notebook_edit requires a "cell" number.')
+    const updated = editNotebook(nb, {
+      cell,
+      mode,
+      source: typeof args.source === 'string' ? args.source : undefined,
+      cellType: typeof args.cell_type === 'string' ? args.cell_type : undefined
+    })
+    await fs.writeFile(abs, serializeNotebook(updated), 'utf8')
+    const what =
+      mode === 'insert'
+        ? `Inserted a ${updated.cells[cell - 1].cell_type} cell at ${cell}`
+        : mode === 'delete'
+          ? `Deleted cell ${cell}`
+          : `Replaced the source of cell ${cell}`
+    return `${what} in ${rel}. The notebook now has ${updated.cells.length} cell${updated.cells.length === 1 ? '' : 's'}.`
+  }
+}
+
 interface StagedChange {
   abs: string
   /** null = delete the file; string = write this content. */
@@ -2700,6 +2802,7 @@ export const TOOLS: ToolDef[] = [
   editFile,
   multiEdit,
   applyPatch,
+  notebookEdit,
   listDir,
   globTool,
   searchTool,

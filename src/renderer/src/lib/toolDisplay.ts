@@ -58,6 +58,13 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Write', target: path ? shortenPath(path) : '', mono: true }
     case 'edit_file':
       return { verb: 'Edit', target: path ? shortenPath(path) : '', mono: true }
+    case 'notebook_edit': {
+      const cell = typeof a.cell === 'number' ? a.cell : undefined
+      const mode = str(a.mode) ?? 'replace'
+      const verb = mode === 'insert' ? 'Insert cell' : mode === 'delete' ? 'Delete cell' : 'Edit cell'
+      const where = path ? shortenPath(path) : ''
+      return { verb, target: cell !== undefined ? `${cell} in ${where}` : where, mono: true }
+    }
     case 'list_dir':
       return { verb: 'List', target: path ? shortenPath(path) : '.', mono: true }
     case 'glob':
