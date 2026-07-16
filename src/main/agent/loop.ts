@@ -17,8 +17,8 @@ import type {
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { isApprovalPolicy, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import type { ImageAttachment } from '@shared/images'
-import { DEFAULT_COMPACTION_THRESHOLD, resolveShellOutputBudget } from '@shared/defaults'
-import { turnCostUsd } from '@shared/usage'
+import { resolveShellOutputBudget } from '@shared/defaults'
+import { resolveContextWindow, turnCostUsd } from '@shared/usage'
 import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
 import { createSecretRedactor } from './redact'
 import { createProvider } from '../providers'
@@ -91,8 +91,11 @@ import {
   findCompactionCut,
   findForcedCompactionCut,
   isContextOverflowError,
+  isValidCompactionState,
+  resolveCompactionThreshold,
   summarizationSystemPrompt
 } from './compaction'
+import { getConversation, setCompaction } from '../conversations'
 import { buildPinnedMessages } from './workingMemory'
 import { StallDetector, resolveStallThresholds } from './stall'
 import { resolveBudgetLimits, shouldLand, landingReminder } from './budget'
@@ -1073,11 +1076,34 @@ export async function startRun(
 
     // Context compaction state. `messages` is always the full, persisted log; what
     // we actually send the provider is `summaryMsgs` (a synthetic summary of the
-    // turns before `cut`) followed by `messages.slice(cut)`.
-    const threshold = settings.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD
+    // turns before `cut`) followed by `messages.slice(cut)`. The threshold scales
+    // to the model's context window (host-listed caps first, then the family
+    // heuristic); an explicit setting overrides it, and the fixed default covers
+    // models whose window is unknown.
+    const threshold = resolveCompactionThreshold(
+      settings.compactionThreshold,
+      resolveContextWindow(req.model, selectedModelCaps)
+    )
     let cut = 0
     let summaryMsgs: ChatMessage[] = []
     let lastInputTokens = 0
+    // Resume from compaction state persisted by an earlier run, so a follow-up
+    // turn extends the existing summary instead of re-summarizing the whole head
+    // again every turn (each run previously started from cut 0). Validated against
+    // the current log — a rewritten log (`/compact`, import) or a cut shifted by
+    // the intake repair above fails the boundary check and re-summarizes fresh.
+    // Guarded like every store touch from the loop: persistence must never kill a run.
+    if (conversationId) {
+      try {
+        const persisted = getConversation(conversationId)?.compaction
+        if (persisted && isValidCompactionState(persisted, messages)) {
+          cut = persisted.cut
+          summaryMsgs = buildSummaryMessages(persisted.summary)
+        }
+      } catch {
+        // Store unavailable (unwired host) — run with in-memory compaction only.
+      }
+    }
 
     // Run-scoped content-addressed cache for repeated read-only tool calls. Created
     // here so it lives exactly as long as this run — an identical `read_file`/`glob`/
@@ -1177,6 +1203,16 @@ export async function startRun(
         summaryMsgs = buildSummaryMessages(summary)
         cut = newCut
         lastInputTokens = 0
+        // Persist so the next run resumes from this summary instead of paying a
+        // fresh summarization of the same head. Guarded: a store failure only
+        // costs that resume, never the in-flight compaction.
+        if (conversationId) {
+          try {
+            setCompaction(conversationId, { cut: newCut, summary })
+          } catch {
+            // Store unavailable — the run continues with in-memory state.
+          }
+        }
         emit({ type: 'compaction', summarized: compactedNow })
         return 'ok'
       } catch {

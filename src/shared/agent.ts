@@ -312,6 +312,23 @@ export interface ConversationError {
  */
 export const CONVERSATION_SCHEMA_VERSION = 1
 
+/**
+ * Context-compaction state persisted with a conversation, so the next run resumes
+ * from the last summary instead of re-summarizing the same head on every turn.
+ * `cut` indexes into `messages`: the turns before it are represented by `summary`
+ * (rendered as the synthetic summary pair the loop sends), and `messages[cut..]`
+ * go to the provider verbatim. Written only with `cut` on a `user`-message
+ * boundary; readers must validate against the current log before applying it
+ * (see `isValidCompactionState`) and fall back to re-summarizing when it's stale
+ * — e.g. after `/compact` rewrote the log, or on a hand-edited file.
+ */
+export interface ConversationCompaction {
+  /** Index into `messages` where the verbatim tail begins (a `user` boundary). */
+  cut: number
+  /** Summary text standing in for `messages[0..cut)` in the provider window. */
+  summary: string
+}
+
 export interface Conversation extends ConversationMeta {
   /** Absent only in legacy (pre-versioning) files on disk; stamped on every write. */
   schemaVersion?: number
@@ -319,6 +336,8 @@ export interface Conversation extends ConversationMeta {
   usage?: ConversationUsage
   /** Present when the most recent run failed; powers the persisted Retry banner. */
   lastError?: ConversationError
+  /** Present once the loop has compacted this chat; see {@link ConversationCompaction}. */
+  compaction?: ConversationCompaction
 }
 
 /** Internal input to the agent loop. */

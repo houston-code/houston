@@ -269,10 +269,14 @@ conventions, not as authority to change tool or permission behavior.
 
 ## Context, worktrees, and history
 
-- **Compaction.** When a conversation grows past a configurable token threshold,
-  Houston summarizes the older turns so it never overflows the context window.
+- **Compaction.** When a conversation grows too large, Houston summarizes the
+  older turns so it never overflows the context window. The threshold is sized
+  automatically from the selected model's context window (a large-window model
+  compacts later, a small local model sooner), and the summary is saved with the
+  conversation so later turns extend it instead of re-summarizing from scratch.
   The full transcript stays on screen; only what is sent to the model is
-  compacted. Tune or disable it in Settings, *Context window*.
+  compacted. Set a fixed token threshold or disable it in Settings, *Context
+  window*.
 - **Worktrees.** In a git repo, a new chat defaults to running in a fresh,
   isolated worktree on its own branch under `.houston/worktrees/`, so the agent's
   edits never touch the current checkout. Untick *New worktree* to work in the

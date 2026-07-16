@@ -155,7 +155,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(4)
+    expect(getSettings().schemaVersion).toBe(5)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -178,6 +178,55 @@ describe('settings migration — model backfill', () => {
     const { getSettings } = await loadStore()
     const anthropic = getSettings().providers.find((p) => p.id === 'anthropic')!
     expect(anthropic.models.find((m) => m.id === 'claude-opus-4-8')).toEqual({ id: 'claude-opus-4-8' })
+  })
+})
+
+describe('settings migration — window-relative compaction threshold (v5)', () => {
+  it('drops the old stamped fixed default so upgraded installs get automatic sizing', async () => {
+    // Pre-v5 versions wrote compactionThreshold: 100_000 into every settings.json,
+    // indistinguishable from a user choice. The v5 bump removes exactly that value.
+    writeSettings({
+      schemaVersion: 4,
+      providers: [openaiProvider(['gpt-4o'])],
+      compactionThreshold: 100_000
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().compactionThreshold).toBeUndefined()
+  })
+
+  it('keeps any other stored value as a deliberate override', async () => {
+    writeSettings({
+      schemaVersion: 4,
+      providers: [openaiProvider(['gpt-4o'])],
+      compactionThreshold: 30_000
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().compactionThreshold).toBe(30_000)
+  })
+
+  it('keeps 0 (compaction disabled) across the bump', async () => {
+    writeSettings({
+      schemaVersion: 4,
+      providers: [openaiProvider(['gpt-4o'])],
+      compactionThreshold: 0
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().compactionThreshold).toBe(0)
+  })
+
+  it('does not touch an explicit 100k stored by a v5+ install', async () => {
+    writeSettings({
+      schemaVersion: 5,
+      providers: [openaiProvider(['gpt-4o'])],
+      compactionThreshold: 100_000
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().compactionThreshold).toBe(100_000)
+  })
+
+  it('seeds fresh installs with no stored threshold (automatic)', async () => {
+    const { getSettings } = await loadStore()
+    expect(getSettings().compactionThreshold).toBeUndefined()
   })
 })
 

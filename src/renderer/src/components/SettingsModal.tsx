@@ -22,11 +22,7 @@ import type {
   ProviderConfig
 } from '@shared/types'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
-import {
-  DEFAULT_COMPACTION_THRESHOLD,
-  DEFAULT_SHELL_OUTPUT_MAX_BYTES,
-  DEFAULT_MAX_ITERATIONS
-} from '@shared/defaults'
+import { DEFAULT_SHELL_OUTPUT_MAX_BYTES, DEFAULT_MAX_ITERATIONS } from '@shared/defaults'
 import {
   SEARCH_PROVIDERS,
   DEFAULT_SEARCH_PROVIDER_ID,
@@ -943,20 +939,30 @@ export function SettingsModal({
                 >
                   <label className="field">
                     <span>
-                      Compact the conversation when it grows past this many tokens (0 to disable).
-                      Lower it for small-context local models.
+                      Compact the conversation when it grows past this many tokens. Leave empty
+                      for automatic sizing from the selected model&apos;s context window; set 0 to
+                      disable compaction.
                     </span>
                     <input
                       type="number"
                       min={0}
                       step={1000}
-                      value={settings.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD}
-                      onChange={(e) =>
-                        setSettings((s) => ({
-                          ...s,
-                          compactionThreshold: Math.max(0, Math.floor(Number(e.target.value) || 0))
-                        }))
-                      }
+                      placeholder="Automatic"
+                      value={settings.compactionThreshold ?? ''}
+                      onChange={(e) => {
+                        const raw = e.target.value
+                        setSettings((s) => {
+                          // Empty input = automatic: store no override at all rather than a number.
+                          if (raw.trim() === '') {
+                            const { compactionThreshold: _threshold, ...rest } = s
+                            return rest
+                          }
+                          return {
+                            ...s,
+                            compactionThreshold: Math.max(0, Math.floor(Number(raw) || 0))
+                          }
+                        })
+                      }}
                     />
                   </label>
                   <label className="field">

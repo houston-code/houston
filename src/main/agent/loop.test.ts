@@ -21,6 +21,8 @@ import {
   clearCheckpoints
 } from './checkpoints'
 import { toAnthropicMessages } from '../providers/anthropic'
+import { resetUserDataDir, setUserDataDir } from '../userData'
+import { createConversation, getConversation, setCompaction, setMessages } from '../conversations'
 
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
@@ -1160,6 +1162,122 @@ describe('startRun', () => {
     } finally {
       h.settings = original
     }
+  })
+})
+
+describe('compaction persistence across runs', () => {
+  // These tests exercise the real conversation store (loop.test doesn't mock
+  // '../conversations'), so point the userData seam at a temp dir per test.
+  let userData: string
+
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
+    setUserDataDir(userData)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(userData, { recursive: true, force: true })
+  })
+
+  /** `turns` user/assistant pairs (padded to ~`pad` chars each) plus a final user turn. */
+  function historyOf(turns: number, pad = 0): ChatMessage[] {
+    const filler = pad > 0 ? ` ${'x'.repeat(pad)}` : ''
+    const msgs: ChatMessage[] = []
+    for (let t = 0; t < turns; t++) {
+      msgs.push({ role: 'user', content: `question ${t}${filler}` })
+      msgs.push({ role: 'assistant', content: `answer ${t}` })
+    }
+    msgs.push({ role: 'user', content: 'current question' })
+    return msgs
+  }
+
+  it('persists the cut and summary with the conversation when the loop compacts', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const history = historyOf(5, 1200)
+    setMessages(conv.id, history)
+
+    const original = h.settings
+    h.settings = { ...original, compactionThreshold: 500 } // force proactive compaction
+    try {
+      const provider: Provider = {
+        async *streamChat(req) {
+          // Summarization calls are the only ones that set maxTokens.
+          if (req.maxTokens != null) {
+            yield { type: 'text', text: 'PERSISTED SUMMARY' }
+            yield { type: 'done', stopReason: 'end_turn' }
+            return
+          }
+          yield { type: 'text', text: 'ok' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      const r = await run({ provider, messages: history, conversationId: conv.id })
+      expect(types(r)).toContain('compaction')
+    } finally {
+      h.settings = original
+    }
+
+    const stored = getConversation(conv.id)!.compaction!
+    expect(stored.summary).toBe('PERSISTED SUMMARY')
+    expect(stored.cut).toBeGreaterThan(0)
+    expect(history[stored.cut].role).toBe('user') // always lands on a turn boundary
+  })
+
+  it('resumes from persisted state instead of re-summarizing the head again', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const history = historyOf(5) // user turns at 0,2,4,6,8; current question at 10
+    setMessages(conv.id, history)
+    // State as a previous run's compaction would have written it: a user boundary.
+    setCompaction(conv.id, { cut: 8, summary: 'PRIOR SUMMARY' })
+
+    let summarizations = 0
+    const sends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (req.maxTokens != null) {
+          summarizations++
+          yield { type: 'text', text: 'should not happen' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        sends.push(req.messages)
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    // compactionThreshold stays 0 (disabled): the resumed state alone shapes the window.
+    const r = await run({ provider, messages: history, conversationId: conv.id })
+
+    expect(summarizations).toBe(0)
+    expect(types(r)).not.toContain('compaction')
+    const joined = sends[0].map((m) => m.content).join('\n')
+    expect(joined).toContain('PRIOR SUMMARY')
+    expect(joined).toContain('question 4') // the kept tail (from the cut) rides verbatim
+    // Head turns before the cut are folded away. (question 0 itself is quoted by the
+    // pinned working-memory block as the original task, so assert on a later turn.)
+    expect(joined).not.toContain('answer 1')
+  })
+
+  it('ignores persisted state that no longer matches the log and re-sends verbatim', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const history = historyOf(2) // 5 messages; index 3 is an assistant turn
+    setMessages(conv.id, history)
+    setCompaction(conv.id, { cut: 3, summary: 'STALE SUMMARY' }) // not a user boundary
+
+    const sends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, messages: history, conversationId: conv.id })
+
+    const joined = sends[0].map((m) => m.content).join('\n')
+    expect(joined).not.toContain('STALE SUMMARY') // stale state discarded…
+    expect(joined).toContain('answer 0') // …and the full history goes out verbatim
+    expect(joined).toContain('answer 1')
   })
 })
 

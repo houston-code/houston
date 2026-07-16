@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@shared/agent'
+import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 import {
   COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_WINDOW_FRACTION,
   DOCUMENT_TOKENS_ESTIMATE,
   IMAGE_TOKENS_ESTIMATE,
   EVICT_KEEP_RECENT_TURNS,
@@ -15,7 +17,9 @@ import {
   findCompactionCutByBudget,
   findForcedCompactionCut,
   findSummaryChunkCut,
-  isContextOverflowError
+  isContextOverflowError,
+  isValidCompactionState,
+  resolveCompactionThreshold
 } from './compaction'
 
 /** A conversation of `turns` complete turns: user → assistant(tool) → tool → assistant. */
@@ -59,6 +63,70 @@ describe('estimateTokens', () => {
     const withDoc = estimateTokens('', [{ ...base, documents: [{ mediaType: 'application/pdf', data: 'z' }] }])
     expect(withImages).toBe(plain + 2 * IMAGE_TOKENS_ESTIMATE)
     expect(withDoc).toBe(plain + DOCUMENT_TOKENS_ESTIMATE)
+  })
+})
+
+describe('resolveCompactionThreshold', () => {
+  it('scales to the model context window when no explicit setting is given', () => {
+    expect(resolveCompactionThreshold(undefined, 200_000)).toBe(
+      Math.floor(200_000 * COMPACTION_WINDOW_FRACTION)
+    )
+    expect(resolveCompactionThreshold(undefined, 1_000_000)).toBe(
+      Math.floor(1_000_000 * COMPACTION_WINDOW_FRACTION)
+    )
+    // A small local model compacts far below the old fixed default.
+    expect(resolveCompactionThreshold(undefined, 16_385)).toBeLessThan(16_385)
+  })
+
+  it('falls back to the fixed default when the window is unknown', () => {
+    expect(resolveCompactionThreshold(undefined, null)).toBe(DEFAULT_COMPACTION_THRESHOLD)
+    expect(resolveCompactionThreshold(undefined, 0)).toBe(DEFAULT_COMPACTION_THRESHOLD)
+  })
+
+  it('lets an explicit setting override the window-relative sizing', () => {
+    expect(resolveCompactionThreshold(50_000, 1_000_000)).toBe(50_000)
+    expect(resolveCompactionThreshold(50_000, null)).toBe(50_000)
+  })
+
+  it('keeps 0 meaning "compaction disabled", window or not', () => {
+    expect(resolveCompactionThreshold(0, 200_000)).toBe(0)
+    expect(resolveCompactionThreshold(0, null)).toBe(0)
+    expect(resolveCompactionThreshold(-5, 200_000)).toBe(0) // clamp junk to disabled
+  })
+
+  it('ignores a non-finite explicit value', () => {
+    expect(resolveCompactionThreshold(Number.NaN, 200_000)).toBe(
+      Math.floor(200_000 * COMPACTION_WINDOW_FRACTION)
+    )
+  })
+})
+
+describe('isValidCompactionState', () => {
+  const log = conversation(3) // 12 messages; user turns at 0, 4, 8
+
+  it('accepts a cut on a user-turn boundary with a non-empty summary', () => {
+    expect(isValidCompactionState({ cut: 4, summary: 'S' }, log)).toBe(true)
+    expect(isValidCompactionState({ cut: 8, summary: 'S' }, log)).toBe(true)
+  })
+
+  it('rejects a cut that does not land on a user message', () => {
+    expect(isValidCompactionState({ cut: 1, summary: 'S' }, log)).toBe(false)
+    expect(isValidCompactionState({ cut: 2, summary: 'S' }, log)).toBe(false)
+  })
+
+  it('rejects a cut outside the log (e.g. the log was rewritten shorter)', () => {
+    expect(isValidCompactionState({ cut: 12, summary: 'S' }, log)).toBe(false)
+    expect(isValidCompactionState({ cut: 99, summary: 'S' }, log)).toBe(false)
+  })
+
+  it('rejects the no-op cut 0 and malformed values', () => {
+    expect(isValidCompactionState({ cut: 0, summary: 'S' }, log)).toBe(false)
+    expect(isValidCompactionState({ cut: 4.5, summary: 'S' }, log)).toBe(false)
+    expect(isValidCompactionState({ cut: 4, summary: '   ' }, log)).toBe(false)
+    // A hand-edited file can carry anything — type-check at runtime too.
+    expect(
+      isValidCompactionState({ cut: 4, summary: 7 as unknown as string }, log)
+    ).toBe(false)
   })
 })
 

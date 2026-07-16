@@ -1,4 +1,9 @@
-import { COMPACTION_SUMMARY_PREFIX, type ChatMessage } from '@shared/agent'
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  type ChatMessage,
+  type ConversationCompaction
+} from '@shared/agent'
+import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 
 // Re-exported from shared so existing main-process imports/tests keep their path.
 export { COMPACTION_SUMMARY_PREFIX }
@@ -16,6 +21,58 @@ export { COMPACTION_SUMMARY_PREFIX }
 
 /** Keep this many of the most recent user turns verbatim when compacting. */
 export const KEEP_RECENT_USER_TURNS = 3
+
+/**
+ * Fraction of the model's context window at which proactive compaction kicks in.
+ * The remaining fifth is headroom for the next turn's growth (tool results, the
+ * model's output, attachments) and for the slack in the ~4-chars-per-token
+ * estimate, so a turn that lands right at the threshold still fits comfortably.
+ */
+export const COMPACTION_WINDOW_FRACTION = 0.8
+
+/**
+ * The effective compaction threshold in tokens. An explicit setting always wins
+ * (0 disables compaction, matching the documented semantics); otherwise the
+ * threshold scales to the selected model's context window — a fixed count is
+ * mis-sized in both directions for a bring-your-own-model product (far too eager
+ * on a 1M-token model, far too late on a 16k local one). When the window is
+ * unknown (a custom/local model with no capability metadata) fall back to the
+ * fixed default.
+ */
+export function resolveCompactionThreshold(
+  explicit: number | undefined,
+  contextWindow: number | null
+): number {
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) {
+    return explicit > 0 ? Math.floor(explicit) : 0
+  }
+  if (typeof contextWindow === 'number' && contextWindow > 0) {
+    return Math.floor(contextWindow * COMPACTION_WINDOW_FRACTION)
+  }
+  return DEFAULT_COMPACTION_THRESHOLD
+}
+
+/**
+ * Whether persisted compaction state still applies to this message log. The state
+ * was written with `cut` on a `user`-turn boundary of the log as it stood; a log
+ * that has since been rewritten (`/compact`, an import, a hand-edited file) or
+ * shifted by intake repair breaks that invariant, and applying a stale cut would
+ * silently drop messages the summary never covered. Checked at run start; an
+ * invalid state is simply ignored (worst case: one fresh re-summarization).
+ */
+export function isValidCompactionState(
+  state: ConversationCompaction,
+  messages: ChatMessage[]
+): boolean {
+  return (
+    Number.isInteger(state.cut) &&
+    state.cut > 0 &&
+    state.cut < messages.length &&
+    typeof state.summary === 'string' &&
+    state.summary.trim() !== '' &&
+    messages[state.cut].role === 'user'
+  )
+}
 
 /** Tokens to allow the summary itself to consume. */
 export const SUMMARY_MAX_TOKENS = 2048
