@@ -637,9 +637,89 @@ const notebookEdit: ToolDef = {
 
 interface StagedChange {
   abs: string
+  /** The path as the patch named it, for error messages the model can act on. */
+  rel: string
   /** null = delete the file; string = write this content. */
   content: string | null
   verb: 'add' | 'update' | 'delete'
+}
+
+/**
+ * A file's contents and mode before `apply_patch` touched it, kept so a failure
+ * partway through the commit can put it back.
+ *
+ * Bytes, not text: a patch's own edits are text, but a `Delete File` can name
+ * anything in the tree, and restoring a binary through a utf8 round-trip would
+ * corrupt it. The mode rides along because restoring a deleted file by writing it
+ * afresh would otherwise silently drop its permissions (an executable script would
+ * come back as 0644).
+ */
+interface FileSnapshot {
+  /** Original bytes, or null when the path did not exist. */
+  data: Buffer | null
+  mode?: number
+}
+
+/**
+ * Capture every path a patch will touch, before any of it is written.
+ *
+ * Held in memory rather than copied to backup files: it leaves no litter to clean
+ * up (or to strand if the process dies mid-patch), and a patch's targets are source
+ * files. The cost is holding those bytes for the duration of the commit.
+ */
+async function snapshotForRollback(paths: string[]): Promise<Map<string, FileSnapshot>> {
+  const snaps = new Map<string, FileSnapshot>()
+  for (const abs of paths) {
+    if (snaps.has(abs)) continue // a move stages its source twice
+    try {
+      const [data, st] = await Promise.all([fs.readFile(abs), fs.stat(abs)])
+      snaps.set(abs, { data, mode: st.mode })
+    } catch {
+      // Absent is a state worth recording: rolling back means deleting it again.
+      snaps.set(abs, { data: null })
+    }
+  }
+  return snaps
+}
+
+/**
+ * Put every snapshotted path back as it was, returning a description of any path
+ * that could NOT be restored.
+ *
+ * Rollback is itself IO and can itself fail (the disk that filled mid-patch is
+ * still full). When it does, the tree really is half-patched, and the only honest
+ * thing is to say so — silently swallowing it would report "nothing was changed"
+ * over a working tree that had in fact been changed.
+ */
+async function rollbackTo(
+  snaps: Map<string, FileSnapshot>,
+  createdDirs: string[]
+): Promise<string[]> {
+  const failures: string[] = []
+  for (const [abs, snap] of snaps) {
+    try {
+      if (snap.data === null) {
+        await fs.rm(abs, { force: true })
+      } else {
+        await fs.mkdir(dirname(abs), { recursive: true })
+        await fs.writeFile(abs, snap.data)
+        if (snap.mode !== undefined) await fs.chmod(abs, snap.mode)
+      }
+    } catch (e) {
+      failures.push(`${abs} (${(e as Error).message})`)
+    }
+  }
+  // Directories this call brought into being hold nothing but files it just wrote
+  // and has now removed, so they go too — otherwise a rolled-back patch would leave
+  // a scaffold of empty directories behind. Deepest first, and best-effort.
+  for (const dir of [...createdDirs].sort((a, b) => b.length - a.length)) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true })
+    } catch {
+      // An empty directory left behind is untidy, not incorrect; never fail on it.
+    }
+  }
+  return failures
 }
 
 const applyPatch: ToolDef = {
@@ -679,11 +759,11 @@ const applyPatch: ToolDef = {
           throw new Error(
             `Add File: ${op.path} already exists. Use '*** Update File: ${op.path}' to modify it instead of adding it.`
           )
-        staged.push({ abs, content: op.content, verb: 'add' })
+        staged.push({ abs, rel: op.path, content: op.content, verb: 'add' })
         added += 1
       } else if (op.type === 'delete') {
         if (!(await exists(abs))) throw new Error(`Delete File: ${op.path} does not exist.`)
-        staged.push({ abs, content: null, verb: 'delete' })
+        staged.push({ abs, rel: op.path, content: null, verb: 'delete' })
         deleted += 1
       } else {
         let data: string
@@ -700,23 +780,58 @@ const applyPatch: ToolDef = {
               `Move to: ${op.moveTo} already exists. Pick a destination that does not exist, or edit that file directly.`
             )
           }
-          staged.push({ abs, content: null, verb: 'delete' })
-          staged.push({ abs: target, content: data, verb: 'update' })
+          staged.push({ abs, rel: op.path, content: null, verb: 'delete' })
+          staged.push({ abs: target, rel: op.moveTo, content: data, verb: 'update' })
         } else {
-          staged.push({ abs, content: data, verb: 'update' })
+          staged.push({ abs, rel: op.path, content: data, verb: 'update' })
         }
         updated += 1
       }
     }
 
-    // Phase 2: commit. Deletes first so a Move's delete can't clobber its target.
-    for (const change of staged.filter((c) => c.content === null)) {
-      await fs.rm(change.abs, { force: true })
+    // Phase 1 guarantees the changes are all COMPUTABLE, which is not the same as
+    // all being WRITABLE: a read-only file, a full disk, or a path that has become
+    // a directory fails here in phase 2, after earlier files are already committed.
+    // Validation alone therefore never delivered the "either every change applies or
+    // none does" this tool advertises. So snapshot first and undo on failure.
+    const snaps = await snapshotForRollback(staged.map((c) => c.abs))
+    const createdDirs: string[] = []
+    // Which file the commit was on when it threw, so the error names the path the
+    // model should look at rather than only what the OS said.
+    let failing: StagedChange | undefined
+
+    try {
+      // Phase 2: commit. Deletes first so a Move's delete can't clobber its target.
+      for (const change of staged.filter((c) => c.content === null)) {
+        failing = change
+        await fs.rm(change.abs, { force: true })
+      }
+      for (const change of staged.filter((c) => c.content !== null)) {
+        failing = change
+        // mkdir reports the topmost directory it had to create, which is exactly what
+        // a rollback needs to remove; undefined means they all already existed.
+        const created = await fs.mkdir(dirname(change.abs), { recursive: true })
+        if (created) createdDirs.push(created)
+        await fs.writeFile(change.abs, change.content as string, 'utf8')
+      }
+    } catch (e) {
+      const where = failing ? ` on ${failing.rel}` : ''
+      const relOf = new Map(staged.map((c) => [c.abs, c.rel]))
+      const restoreFailures = (await rollbackTo(snaps, createdDirs)).map(
+        (f) => f.replace(/^(\S+)/, (abs) => relOf.get(abs) ?? abs)
+      )
+      if (restoreFailures.length > 0) {
+        throw new Error(
+          `Apply patch failed${where}: ${(e as Error).message}. Rolling back also failed for ${restoreFailures.join(', ')}, so the working tree is PARTIALLY PATCHED — inspect those files before retrying.`,
+          { cause: e }
+        )
+      }
+      throw new Error(
+        `Apply patch failed${where}: ${(e as Error).message}. No changes were made; the patch was rolled back.`,
+        { cause: e }
+      )
     }
-    for (const change of staged.filter((c) => c.content !== null)) {
-      await fs.mkdir(dirname(change.abs), { recursive: true })
-      await fs.writeFile(change.abs, change.content as string, 'utf8')
-    }
+
     return `Applied patch: ${ops.length} file${ops.length === 1 ? '' : 's'} (${added} added, ${updated} updated, ${deleted} deleted).`
   }
 }
