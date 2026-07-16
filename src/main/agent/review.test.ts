@@ -360,6 +360,35 @@ describe('isSafeReviewPath', () => {
   })
 })
 
+describe('runReview redaction', () => {
+  const redact = (t: string): string => t.split('sekret-value').join('[redacted:secret]')
+
+  it('threads redact into every nested subagent and scrubs the diff in their prompts', async () => {
+    const { fn, calls } = fakeAgent((o) => {
+      if (isVerifier(o)) return 'No confirmed issues.'
+      // One finding so the verifier pass runs too (its prompt embeds the diff).
+      return dimensionOf(o) === 'CORRECTNESS'
+        ? '- [SEVERITY: high] a.ts:1 — bug'
+        : 'No issues found.'
+    })
+    await runReview(
+      base({
+        runAgent: fn,
+        redact,
+        diff: 'Diff of changes to tracked files (git diff):\n\n+API_KEY=sekret-value'
+      })
+    )
+    expect(calls.length).toBe(4) // three reviewers + the verifier
+    for (const c of calls) {
+      // Each nested subagent scrubs its own tool outputs with the caller's redactor…
+      expect(c.redact).toBe(redact)
+      // …and no prompt (reviewer diff or verifier diff-context) carries the plaintext.
+      expect(c.prompt).not.toContain('sekret-value')
+    }
+    expect(calls.find((c) => !isVerifier(c))?.prompt).toContain('[redacted:secret]')
+  })
+})
+
 describe('reviewWorkspaceChanges', () => {
   const gitExecOf =
     (map: Record<string, string | Error>): GitExec =>
@@ -430,6 +459,25 @@ describe('reviewWorkspaceChanges', () => {
     })
     expect(calls.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toContain('no issues found across')
+  })
+
+  it('threads redact from the workspace entry point into the nested reviewers', async () => {
+    const { fn, calls } = fakeAgent(() => 'No issues found.')
+    const redact = (t: string): string => t.split('sekret-value').join('[redacted:secret]')
+    await reviewWorkspaceChanges({
+      provider: base().provider,
+      model: 'm',
+      workspace: '/ws',
+      signal: new AbortController().signal,
+      gitExec: gitExecOf({ 'rev-parse': 'true', diff: '@@ a.ts @@\n+KEY=sekret-value', 'ls-files': '' }),
+      runAgent: fn,
+      redact
+    })
+    expect(calls.length).toBeGreaterThan(0)
+    for (const c of calls) {
+      expect(c.redact).toBe(redact)
+      expect(c.prompt).not.toContain('sekret-value')
+    }
   })
 
   it('rejects an unsafe review path before touching git', async () => {

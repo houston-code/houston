@@ -146,6 +146,14 @@ export interface SubAgentOptions {
   shellSession?: ShellSession
   /** Cap on a single shell command's output kept in a tool result. */
   shellOutputMaxBytes?: number
+  /**
+   * Scrub secrets from each tool output before it enters the subagent's transcript
+   * (which ships to the provider on the next iteration) — the same seam the main
+   * loop's flushResult covers for its own tool results. Because the model never
+   * receives the plaintext, the subagent's report is transitively clean too. The
+   * loop wires its run-scoped redactor (see redact.ts) here; defaults to identity.
+   */
+  redact?: (text: string) => string
   /** Called with each turn's token usage, so callers (e.g. a review) can total cost. */
   onUsage?: (usage: TokenUsage) => void
   /**
@@ -167,6 +175,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   // consent per command; without the gate, run_shell is refused below (fail closed).
   const shellSandboxed = opts.shellSandboxed ?? isSandboxed()
   const shellGated = !shellSandboxed && opts.gateUnconfinedShell !== undefined
+  const redact = opts.redact ?? ((t: string): string => t)
   const allowedTools = resolveSubAgentTools(opts.tools, writable)
   const allowedToolSet = new Set<string>(allowedTools)
   const tools = allowedTools.map((name) => getTool(name)!.schema)
@@ -268,7 +277,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           output = `Error: ${(e as Error).message}`
         }
       }
-      messages.push({ role: 'tool', content: output, toolCallId: call.id, toolName: call.name })
+      // Strip secrets here at the single choke point every tool output passes through
+      // (execution results, errors, and refusal notes alike) — mirroring the main
+      // loop's flushResult — so the provider never sees the plaintext.
+      messages.push({ role: 'tool', content: redact(output), toolCallId: call.id, toolName: call.name })
     }
   }
 

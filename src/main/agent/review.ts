@@ -332,6 +332,13 @@ export interface RunReviewOptions {
   onUsage?: (usage: TokenUsage) => void
   /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
   explicitCacheControl?: boolean
+  /**
+   * Scrub secrets from the review inputs (the diff embeds working-tree content, which
+   * can contain a stored credential) and from every nested subagent's tool outputs
+   * before they reach the provider (see SubAgentOptions.redact). The loop wires its
+   * run-scoped redactor here; defaults to identity.
+   */
+  redact?: (text: string) => string
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
 }
@@ -349,6 +356,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const dimensions = opts.dimensions ?? REVIEW_DIMENSIONS
   const progress = opts.onProgress ?? ((): void => {})
   const sub = opts.onSubAgent ?? ((): void => {})
+  const redact = opts.redact ?? ((t: string): string => t)
 
   // Wrap the runner to count model calls and total token usage for a cost summary.
   let modelCalls = 0
@@ -358,6 +366,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     modelCalls++
     return baseRunAgent({
       ...o,
+      redact, // each nested subagent scrubs its own tool outputs (see SubAgentOptions)
       ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
       onUsage: (u) => {
         inputTokens += u.inputTokens ?? 0
@@ -373,8 +382,15 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   /** Assemble a report, dropping empty sections (notes/cost may be absent). */
   const assemble = (...parts: (string | null)[]): string => parts.filter(Boolean).join('\n\n')
 
-  // Accept either pre-chunked input or a single diff string (back-compat).
-  const inputs = (opts.chunks ?? (opts.diff !== undefined ? [opts.diff] : [])).filter((s) => s.trim())
+  // Accept either pre-chunked input or a single diff string (back-compat). Scrub the
+  // inputs before they're embedded in any prompt: the diff carries working-tree
+  // content, which can contain a stored secret (e.g. a key in a changed config), and
+  // a reviewer's prompt ships to the provider without passing any other redaction
+  // seam. With the inputs and every tool output scrubbed, the reports fed back into
+  // verifier/skeptic prompts are transitively clean too.
+  const inputs = (opts.chunks ?? (opts.diff !== undefined ? [opts.diff] : []))
+    .filter((s) => s.trim())
+    .map(redact)
   if (inputs.length === 0) return 'No changes to review.'
   if (signal.aborted) return '[review aborted]'
 
@@ -514,6 +530,8 @@ export interface ReviewWorkspaceOptions {
   onUsage?: (usage: TokenUsage) => void
   /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
   explicitCacheControl?: boolean
+  /** Scrub secrets from the diff and the nested subagents' tool outputs (see RunReviewOptions). */
+  redact?: (text: string) => string
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -556,6 +574,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     onSubAgent: opts.onSubAgent,
     onUsage: opts.onUsage,
     explicitCacheControl: opts.explicitCacheControl,
+    redact: opts.redact,
     signal: opts.signal,
     runAgent: opts.runAgent
   })

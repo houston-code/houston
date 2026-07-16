@@ -833,6 +833,9 @@ export async function startRun(
           systemOverride: agent?.systemPrompt,
           tools: agent?.tools,
           explicitCacheControl,
+          // The subagent's tool outputs ship to the provider from ITS transcript, which
+          // never passes flushResult — scrub them with the same run-scoped redactor.
+          redact,
           onUsage: (u) => {
             subInput += u.inputTokens ?? 0
             subOutput += u.outputTokens ?? 0
@@ -955,6 +958,9 @@ export async function startRun(
           systemOverride: agent?.systemPrompt,
           tools: agent?.tools,
           explicitCacheControl,
+          // Same as dispatchSubAgent: subagent tool outputs bypass flushResult, so
+          // scrub them with the run-scoped redactor before they reach the provider.
+          redact,
           onUsage: (u) => {
             subInput += u.inputTokens ?? 0
             subOutput += u.outputTokens ?? 0
@@ -995,6 +1001,10 @@ export async function startRun(
           paths,
           effort,
           explicitCacheControl,
+          // The reviewers are nested subagents whose transcripts (and diff-bearing
+          // prompts) ship to the provider without passing flushResult — scrub them
+          // with the same run-scoped redactor.
+          redact,
           onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
           onSubAgent: (ev) =>
             emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
