@@ -203,5 +203,42 @@ describe('PlanPanel', () => {
       renderPanel({ plan: legacyPlan })
       expect(screen.queryByRole('button', { name: 'Edit the plan' })).toBeNull()
     })
+
+    it('discards a prior plan hand-edit when a revised plan arrives (no stale editedBody)', () => {
+      // The panel is NOT remounted across a "suggest changes" revision, so its edit
+      // state must reset when the plan prop changes — otherwise the stale edit renders
+      // and, on accept, is submitted over the agent's new plan.
+      const revised: PlanPayload = {
+        title: 'Revised plan',
+        body: '## Revised\n\nThe agent reworked it.',
+        files: ['b.ts']
+      }
+      const { onResolve, rerender } = renderPanel()
+      // Hand-edit the first plan.
+      fireEvent.click(screen.getByRole('button', { name: 'Edit the plan' }))
+      fireEvent.change(screen.getByLabelText('Edit the plan (markdown)'), {
+        target: { value: 'STALE EDIT of plan A' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+      expect(screen.getByText('Edited')).toBeTruthy()
+
+      // A revised plan is presented into the SAME panel instance (no remount).
+      rerender(
+        <PlanPanel
+          plan={revised}
+          revising={false}
+          onResolve={onResolve}
+          onClose={vi.fn()}
+          onResizeMouseDown={vi.fn()}
+        />
+      )
+      // The stale edit and its "Edited" badge are gone; the new plan's body shows.
+      expect(screen.queryByText('Edited')).toBeNull()
+      expect(screen.getByText('The agent reworked it.')).toBeTruthy()
+      expect(screen.queryByText('STALE EDIT of plan A')).toBeNull()
+      // Accepting submits the new plan (no editedBody), not the discarded edit.
+      fireEvent.click(screen.getByRole('button', { name: /Accept & run/ }))
+      expect(onResolve).toHaveBeenCalledWith({ kind: 'accept', mode: 'auto-edit' })
+    })
   })
 })
