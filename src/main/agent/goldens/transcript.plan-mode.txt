@@ -20,10 +20,10 @@ messages (3):
      -> calls present_plan#c1 {"files":["src/util.ts","src/main.ts"],"plan":"## Plan\n1. Add greet() to util.ts\n2. Call it from main.ts","title":"Add greeting"}
 3. tool[present_plan#c1]: "The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. You will be asked to approve each edit."
 --- events ---
-usage {"cost":0.0042,"inputTokens":1200,"outputTokens":40}
+usage {"cost":0.0042,"inputTokens":1200,"model":"claude-sonnet-5","outputTokens":40}
 tool_start {"args":{"files":["src/util.ts","src/main.ts"],"plan":"## Plan\n1. Add greet() to util.ts\n2. Call it from main.ts","title":"Add greeting"},"callId":"c1","kind":"read","name":"present_plan"}
 plan_ready {"callId":"c1","plan":{"body":"## Plan\n1. Add greet() to util.ts\n2. Call it from main.ts","files":["src/util.ts","src/main.ts"],"title":"Add greeting"}}
 tool_result {"callId":"c1","name":"present_plan","ok":true,"output":"The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. You will be asked to approve each edit."}
 text {"delta":"Starting on step 1."}
-usage {"cost":0.00408,"inputTokens":1300,"outputTokens":12}
+usage {"cost":0.00408,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
 done {"stopReason":"end_turn"}

@@ -34,13 +34,13 @@ messages (5):
      -> calls write_file#c2 {"content":"B\n","path":"b.txt"}
 5. tool[write_file#c2]: "Denied by the user."
 --- events ---
-usage {"cost":0.0042,"inputTokens":1200,"outputTokens":40}
+usage {"cost":0.0042,"inputTokens":1200,"model":"claude-sonnet-5","outputTokens":40}
 tool_approval {"args":{"content":"A\n","path":"a.txt"},"callId":"c1","kind":"write","name":"write_file","preview":[{"created":true,"diff":[{"text":"A","type":"add"},{"text":"","type":"add"}],"path":"a.txt"}],"summary":"Write a.txt"}
 tool_start {"args":{"content":"A\n","path":"a.txt"},"callId":"c1","kind":"write","name":"write_file","preview":[{"created":true,"diff":[{"text":"A","type":"add"},{"text":"","type":"add"}],"path":"a.txt"}]}
 tool_result {"callId":"c1","name":"write_file","ok":true,"output":"Wrote 2 bytes to a.txt."}
-usage {"cost":0.00435,"inputTokens":1250,"outputTokens":40}
+usage {"cost":0.00435,"inputTokens":1250,"model":"claude-sonnet-5","outputTokens":40}
 tool_approval {"args":{"content":"B\n","path":"b.txt"},"callId":"c2","kind":"write","name":"write_file","preview":[{"created":true,"diff":[{"text":"B","type":"add"},{"text":"","type":"add"}],"path":"b.txt"}],"summary":"Write b.txt"}
 tool_result {"callId":"c2","name":"write_file","ok":false,"output":"Denied by the user."}
 text {"delta":"Created a.txt; b.txt was declined."}
-usage {"cost":0.00408,"inputTokens":1300,"outputTokens":12}
+usage {"cost":0.00408,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
 done {"stopReason":"end_turn"}

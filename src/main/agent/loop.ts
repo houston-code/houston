@@ -1370,7 +1370,11 @@ export async function startRun(
               subOutput,
               { readTokens: subCacheRead, writeTokens: subCacheWrite },
               modelCaps
-            )
+            ),
+            // A subagent can run on its own (often cheaper) model; attribute it there.
+            model,
+            ...(subCacheRead ? { cacheReadTokens: subCacheRead } : {}),
+            ...(subCacheWrite ? { cacheWriteTokens: subCacheWrite } : {})
           })
         }
       })
@@ -1539,7 +1543,12 @@ export async function startRun(
                 reviewOutput,
                 { readTokens: reviewCacheRead, writeTokens: reviewCacheWrite },
                 reviewCaps
-              )
+              ),
+              // Its own model: a review can run on a different (often cheaper) one,
+              // and lumping it into the main model's total hides that entirely.
+              model: reviewModel,
+              ...(reviewCacheRead ? { cacheReadTokens: reviewCacheRead } : {}),
+              ...(reviewCacheWrite ? { cacheWriteTokens: reviewCacheWrite } : {})
             })
           }
         })
@@ -2100,7 +2109,10 @@ export async function startRun(
           type: 'usage',
           inputTokens: turnInput,
           outputTokens: turnOutput,
-          cost: turnCost
+          cost: turnCost,
+          model: req.model,
+          ...(turnCacheRead ? { cacheReadTokens: turnCacheRead } : {}),
+          ...(turnCacheWrite ? { cacheWriteTokens: turnCacheWrite } : {})
         })
       }
 

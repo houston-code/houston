@@ -224,6 +224,18 @@ silently does nothing looks like a bug rather than a fact about the model.
 More thinking costs more tokens and takes longer, which is why it is off by
 default.
 
+## What a session cost (/cost)
+
+`/cost` breaks the session down by model: tokens in and out, how many of the
+input tokens were served from the prompt cache, and the dollar cost, with a total
+when more than one model billed. Subagents and reviews often run on a different
+(cheaper) model, and they are listed separately rather than folded into the main
+one.
+
+The cached count is worth watching on a long session: those tokens are real
+context, but they bill far below the base input rate, so a big number there is
+why a long conversation costs less than its token count suggests.
+
 ## Version and updates
 
 The interactive terminal shows its version in the banner at startup, and

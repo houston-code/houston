@@ -20,10 +20,10 @@ messages (3):
      -> calls read_file#c1 {"path":"notes.txt"}
 3. tool[read_file#c1]: "remember the milk\n"
 --- events ---
-usage {"cost":0.0042,"inputTokens":1200,"outputTokens":40}
+usage {"cost":0.0042,"inputTokens":1200,"model":"claude-sonnet-5","outputTokens":40}
 tool_start {"args":{"path":"notes.txt"},"callId":"c1","kind":"read","name":"read_file"}
 tool_result {"callId":"c1","name":"read_file","ok":true,"output":"remember the milk\n"}
 text {"delta":"The notes say: "}
 text {"delta":"remember the milk."}
-usage {"cost":0.00408,"inputTokens":1300,"outputTokens":12}
+usage {"cost":0.00408,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
 done {"stopReason":"end_turn"}
