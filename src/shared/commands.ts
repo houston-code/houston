@@ -31,8 +31,19 @@ export function parseSlashCommand(text: string): { name: string; args: string } 
  * occurrence); if the template has no placeholder, non-empty args are appended.
  */
 export function expandTemplate(template: string, args: string): string {
-  if (template.includes('$ARGUMENTS')) return template.split('$ARGUMENTS').join(args)
-  return args ? `${template.trimEnd()}\n\n${args}` : template
+  // Positional placeholders first: `/deploy staging v2` → $1=staging, $2=v2. A
+  // command that wants "the second word" had to make the user re-type it in the
+  // right shape, or parse $ARGUMENTS in prose and hope.
+  const words = args.split(/\s+/).filter(Boolean)
+  let out = template
+  if (/\$\d/.test(out)) {
+    out = out.replace(/\$(\d)/g, (_m, d: string) => words[Number(d) - 1] ?? '')
+  }
+  if (out.includes('$ARGUMENTS')) return out.split('$ARGUMENTS').join(args)
+  // A template that consumed positionals has already used the args; appending them
+  // again would repeat them.
+  if (out !== template) return out
+  return args ? `${out.trimEnd()}\n\n${args}` : out
 }
 
 /** Commands whose name starts with the typed prefix (case-insensitive). */
