@@ -50,6 +50,7 @@ import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { truncateVisible, stripControlChars } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
+import { renderPreviewView } from './tui-diff'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
@@ -2521,10 +2522,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // whole file, and a multi_edit has a diff at all. Fall back to deriving
               // one from the args (`tool_start` is emitted only AFTER approval
               // resolves, so `toolArgs` is still empty here for a write).
-              const diff =
-                (e.preview ? renderPreviewDiff(e.preview) : null) ??
-                extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
-              if (diff) deps.io.out(`${colorizeDiff(diff, paint)}\n`)
+              // The preview is diffed against the files' real contents and already
+              // folded to the change; render it with numbers + word marks. Only fall
+              // back to deriving a diff from the args when there is no preview.
+              const view =
+                (e.preview ? renderPreviewView(e.preview, paint, deps.highlightHtml ? highlight : undefined) : null) ??
+                (() => {
+                  const raw = extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
+                  return raw ? colorizeDiff(raw, paint) : null
+                })()
+              if (view) deps.io.out(`${view}\n`)
             }
             let decision: ToolApprovalDecision | null = null
             let note: string | undefined
