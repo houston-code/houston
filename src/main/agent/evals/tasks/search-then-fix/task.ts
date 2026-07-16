@@ -5,7 +5,7 @@ export const task: EvalTask = {
   id: 'search-then-fix',
   title: 'Find titleCase() and make it empty-string safe',
   prompt:
-    'Something in this repo defines titleCase(), and it throws on an empty string. Find it, make it return an empty string instead, and make sure test.mjs passes.',
+    "`node test.mjs` fails in this project. Track down the code responsible and fix it so the test passes. Treat test.mjs as the spec: it defines the expected behaviour, so do not change it.",
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(callTool('c1', 'search_files', { pattern: 'function titleCase', files_with_matches: true })),

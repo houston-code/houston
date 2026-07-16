@@ -44,6 +44,22 @@ export function materializeTask(task: EvalTask, tmpRoot: string): string {
   return ws
 }
 
+/**
+ * Restore a task's test files from the pristine fixture, overwriting whatever the
+ * agent left behind. Call immediately before grading.
+ *
+ * The prompts state the symptom, not the fix, so the test file is the spec the
+ * agent reads to learn the contract — and also the shortest path to a green
+ * verify, by deleting the assertion that fails. Grading a tampered test would
+ * score that as a solve. This makes the edit pointless instead of forbidden:
+ * whatever the agent did to the test, the graded one is the original.
+ */
+export function restoreVerifyFiles(task: EvalTask, ws: string): void {
+  for (const rel of task.verifyFiles ?? ['test.mjs']) {
+    cpSync(join(repoDirFor(task.id), rel), join(ws, rel), { recursive: true })
+  }
+}
+
 /** Outcome of a verify command. */
 export interface VerifyOutcome {
   ok: boolean

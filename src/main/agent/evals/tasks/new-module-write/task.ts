@@ -5,7 +5,7 @@ export const task: EvalTask = {
   id: 'new-module-write',
   title: 'Write the missing slug module',
   prompt:
-    'index.mjs re-exports slugify from ./slug.mjs, but that module does not exist. Write it so test.mjs passes.',
+    "`node test.mjs` fails in this project. Work out what is missing and add it so the test passes. Treat test.mjs as the spec: it defines the expected behaviour, so do not change it.",
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(callTool('c1', 'read_file', { path: 'test.mjs' })),

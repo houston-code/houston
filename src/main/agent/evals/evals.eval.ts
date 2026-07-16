@@ -57,10 +57,10 @@ import {
   type TaskScore
 } from './baseline'
 import { resolveEvalConfig } from './config'
-import { materializeTask, runVerify, taskDirNames } from './fixtures'
+import { materializeTask, restoreVerifyFiles, runVerify, taskDirNames } from './fixtures'
 import { failureCauses, formatReport, type TaskReport } from './report'
 import { TASKS } from './tasks'
-import type { EvalResult, EvalTask } from './types'
+import { callTool, turn, type EvalResult, type EvalTask } from './types'
 
 // ---- driver selection ----
 
@@ -302,6 +302,10 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
   )
   const durationMs = Date.now() - started
 
+  // Grade against the ORIGINAL test, whatever the agent left in the workspace.
+  // The prompt says only that the test fails, so editing the test is the cheapest
+  // way to make it pass; this makes that pointless rather than forbidden.
+  restoreVerifyFiles(task, ws)
   const verdict = runVerify(task.verify, ws)
   const errored = events.find((e) => e.type === 'error')
   const limited = events.find((e) => e.type === 'limit')
@@ -348,6 +352,46 @@ describe('eval fixtures', () => {
   it.each(TASKS.map((t) => [t.id, t] as const))('%s fails before the agent runs', (_id, task) => {
     const ws = materializeTask(task, tmpRoot)
     expect(runVerify(task.verify, ws).ok).toBe(false)
+  })
+
+  /**
+   * The prompts state the symptom, not the fix, so the shortest path to a green
+   * `node test.mjs` is to delete the assertion that fails. Nothing stops a live
+   * model from taking it, and a tampered test grades as a solve. The first half
+   * of this test shows the hole is real; the second shows the restore closes it.
+   */
+  it.each(TASKS.map((t) => [t.id, t] as const))(
+    '%s cannot be passed by rewriting its test',
+    (_id, task) => {
+      const ws = materializeTask(task, tmpRoot)
+      // The laziest possible "fix": a test that asserts nothing.
+      writeFileSync(join(ws, 'test.mjs'), 'process.exit(0)\n')
+      expect(runVerify(task.verify, ws).ok, 'tampering should pass an ungraded workspace').toBe(true)
+
+      restoreVerifyFiles(task, ws)
+      expect(runVerify(task.verify, ws).ok, 'the pristine test must still fail').toBe(false)
+    }
+  )
+})
+
+/**
+ * The tests above prove `restoreVerifyFiles` works; this proves the GRADER uses
+ * it. Drive the real loop with a script whose only action is to blank the test,
+ * and the run must still grade as a failure. Delete the restore call from
+ * runTask and this is the test that reds.
+ *
+ * Scripted only: in live mode this would spend a real model on a task designed
+ * to fail.
+ */
+describe.skipIf(LIVE)('grading integrity', () => {
+  it('fails a run whose only work was rewriting the test', async () => {
+    const cheat: EvalTask = {
+      ...TASKS[0],
+      script: [turn(callTool('cheat', 'write_file', { path: 'test.mjs', content: 'process.exit(0)\n' }))]
+    }
+    const r = await runTask(cheat)
+    expect(r.toolsUsed, 'the cheat should have actually run').toContain('write_file')
+    expect(r.passed, 'a blanked test must not grade as a solve').toBe(false)
   })
 })
 

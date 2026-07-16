@@ -5,7 +5,7 @@ export const task: EvalTask = {
   id: 'multi-edit-rename',
   title: 'Rename the timeout option to timeoutMs',
   prompt:
-    "makeConfig() in config.mjs takes a `timeout` option. Rename it to `timeoutMs` throughout — the option, the returned field, and the describe() output — so test.mjs passes.",
+    "`node test.mjs` fails in this project. Work out what the code should be doing and update it so the test passes. Treat test.mjs as the spec: it defines the expected behaviour, so do not change it.",
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(callTool('c1', 'read_file', { path: 'config.mjs' })),
