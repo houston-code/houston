@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, realpathSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  realpathSync,
+  writeFileSync,
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  symlinkSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -300,15 +309,26 @@ describe('git tools', () => {
   const gitAvailable = spawnSync('git', ['--version'], { stdio: 'ignore' }).status === 0
   const maybe = gitAvailable ? it : it.skip
 
+  // This hook once flaked with "Hook timed out in 10000ms" under full-suite parallel
+  // load. Cause: subprocess spawns are far more expensive inside the loaded worker
+  // pool than in isolation (~350ms each in situ vs ~35ms standalone), and hook cost
+  // scales linearly with spawn count. Six spawns measured p50 2.4s / max 6.5s in a
+  // real `npm test` run, leaving only ~1.5x margin under the 10s default — hence the
+  // flake. So keep the spawn count down: `--template=` skips copying the hook samples
+  // (which no test here needs), and the identity is written straight into .git/config
+  // rather than shelling out to `git config` three more times. That alone took the
+  // measured tail to 4.2s; the explicit timeout covers the rest. A later `git config`
+  // (see the diff.external test below) still merges cleanly with this block.
   beforeEach(() => {
-    git('init', '-q')
-    git('config', 'user.email', 't@t.test')
-    git('config', 'user.name', 'T')
-    git('config', 'commit.gpgsign', 'false')
+    git('init', '-q', '--template=')
+    appendFileSync(
+      join(workspace, '.git', 'config'),
+      '[user]\n\temail = t@t.test\n\tname = T\n[commit]\n\tgpgsign = false\n'
+    )
     writeFileSync(join(workspace, 'a.txt'), 'one\n')
     git('add', 'a.txt')
     git('commit', '-qm', 'init')
-  })
+  }, 30_000)
 
   maybe('git_status reports a modified and an untracked file', async () => {
     writeFileSync(join(workspace, 'a.txt'), 'one\ntwo\n')
