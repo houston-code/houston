@@ -1,0 +1,98 @@
+name: Alert on failure
+
+# Reusable alert: file one GitHub issue per scheduled-workflow outage, assigned to the repo
+# owner, and close it when that workflow next goes green. Called from nightly-build, eval-live,
+# and provider-canary.
+#
+# WHY THIS EXISTS AT ALL — a scheduled run notifies nobody. GitHub sends Actions failure
+# notifications to the run's *triggering actor*, and for a `schedule` event that actor is the
+# account behind the workflow file on the default branch. Every commit reaches main through the
+# label-gated auto-merge job (`gh pr merge`), so that account is github-actions[bot] on every
+# run — a bot with no inbox. The failure mail is addressed to nobody, and no personal
+# notification setting can redirect it: the problem is the actor, not the inbox.
+#
+# This is not theoretical. The nightly's macOS packaged-app e2e went red for four days
+# (2026-07-13 → 07-16) with nobody told, and Jul 4 / 5 / 8 failed silently before that. Since
+# per-PR CI packages Linux only, the macOS packaged-app e2e runs *here and nowhere else* — so a
+# silent nightly means that whole surface is unguarded until someone happens to look.
+#
+# Assignment is what makes this land: GitHub always notifies an assignee, regardless of the
+# repo's watch settings. One open issue per workflow, reused for the length of an outage, so a
+# week of failures is one thread rather than seven.
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: Display name of the calling workflow, e.g. "Nightly build". Keys the issue.
+        required: true
+        type: string
+      failed:
+        description: Whether the caller's real jobs failed. False closes any open issue.
+        required: true
+        type: boolean
+
+jobs:
+  alert:
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    # Narrower than the callers' `contents: read`: this job only ever touches issues, and can't
+    # read the tree or reach any build/publish credential.
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: scheduled-failure
+      # TITLE keys the issue (one per workflow); WORKFLOW is the bare name, for prose.
+      TITLE: ${{ inputs.workflow }} is failing
+      WORKFLOW: ${{ inputs.workflow }}
+      FAILED: ${{ inputs.failed }}
+      OWNER: ${{ github.repository_owner }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: File, update, or resolve the failure issue
+        run: |
+          set -eo pipefail
+
+          # --label on `issue create` fails if the label doesn't exist yet; --force is idempotent
+          # so this both bootstraps it and is a no-op on every later run.
+          gh label create "$LABEL" --color B60205 \
+            --description 'A scheduled workflow is red' --force > /dev/null
+
+          # Match on the exact title so each scheduled workflow keeps its own issue and a red
+          # nightly can't be mistaken for (or close) a red canary. --arg keeps the title out of
+          # the jq program itself, so quoting in a workflow name can't break the filter.
+          existing=$(gh issue list --label "$LABEL" --state open --limit 100 --json number,title \
+            | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // ""')
+
+          if [ "$FAILED" != 'true' ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --comment "Green again as of $RUN_URL — closing."
+              echo "Closed #$existing: $WORKFLOW is green."
+            else
+              echo "$WORKFLOW is green and no issue is open. Nothing to do."
+            fi
+            exit 0
+          fi
+
+          if [ -n "$existing" ]; then
+            # Comment rather than open a second issue: an outage lasting a week should read as
+            # one thread with a run per day, not seven duplicates.
+            gh issue comment "$existing" --body "Still failing — $RUN_URL"
+            echo "Commented on #$existing: $WORKFLOW still red."
+            exit 0
+          fi
+
+          # Assign the owner: assignment notifies unconditionally, which is the entire point —
+          # the run's own failure notification went to github-actions[bot].
+          gh issue create --label "$LABEL" --assignee "$OWNER" --title "$TITLE" --body \
+          "**$WORKFLOW is failing.** First failing run: $RUN_URL
+
+          This issue was opened by the workflow itself, because GitHub's own failure
+          notification for a scheduled run goes to its triggering actor — \`github-actions[bot]\`
+          — which has no inbox. See \`.github/workflows/alert-on-failure.yml\` for why.
+
+          It picks up a comment on each further failure, and closes itself when *$WORKFLOW*
+          next goes green, so there's no need to close it by hand."
+          echo "Opened a new issue: $WORKFLOW is red."

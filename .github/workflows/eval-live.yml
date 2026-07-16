@@ -113,3 +113,18 @@ jobs:
           HOUSTON_EVAL_ATTEMPTS: ${{ inputs.attempts }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npm run eval
+
+  # Tell a human when the nightly eval breaks — GitHub's own failure notification for a
+  # scheduled run goes to github-actions[bot]. Scheduled runs only; a hand-dispatched run
+  # already notifies whoever started it. See alert-on-failure.yml.
+  alert:
+    needs: [evals]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: Task evals (live)
+      failed: ${{ contains(needs.*.result, 'failure') }}

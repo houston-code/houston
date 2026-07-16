@@ -126,3 +126,25 @@ jobs:
             release/*.deb
             release/latest*.yml
           if-no-files-found: error
+
+  # Tell a human when the nightly breaks. GitHub won't: this run's actor is
+  # github-actions[bot], and that's who its failure notification goes to. See
+  # alert-on-failure.yml — a red nightly went unnoticed for four days.
+  alert:
+    needs: [sbom-conformance, build]
+    # Scheduled runs only: they're the ones GitHub can't notify anyone about. A
+    # workflow_dispatch run has a human actor, so its failure mail already reaches the
+    # person who started it — alerting there would just file issues for hand-run
+    # experiments. always() so a green run can also close a stale issue. Never on a
+    # cancellation: the concurrency group cancels a stacked nightly as a matter of course,
+    # and that says nothing about the build — filing on it would train everyone to ignore
+    # the issue, and resolving on it would close an outage that is still broken.
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: Nightly build
+      failed: ${{ contains(needs.*.result, 'failure') }}
