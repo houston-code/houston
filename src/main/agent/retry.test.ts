@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { isRetryableError, isToolsUnsupportedError, backoffDelayMs, abortableSleep } from './retry'
 
 describe('isToolsUnsupportedError', () => {
@@ -50,6 +50,31 @@ describe('isRetryableError', () => {
   it('does not retry a generic error', () => {
     expect(isRetryableError(new Error('invalid api key'))).toBe(false)
     expect(isRetryableError(new Error('old_string was not found'))).toBe(false)
+  })
+
+  it('does not retry a permanent error that merely contains a bare 5xx number', () => {
+    // No status field, so the message regex runs; "550"/"512" here are token counts.
+    expect(isRetryableError(new Error('Requested 550 completions exceeds the maximum'))).toBe(false)
+    expect(isRetryableError(new Error('maximum context length is 512 tokens'))).toBe(false)
+    // A 5xx presented as an HTTP status still retries via the message.
+    expect(isRetryableError(new Error('server responded with HTTP 503'))).toBe(true)
+    expect(isRetryableError(new Error('status 500 internal error'))).toBe(true)
+  })
+})
+
+describe('abortableSleep', () => {
+  it('removes its abort listener on the normal timeout path (no leak)', async () => {
+    vi.useFakeTimers()
+    try {
+      const ac = new AbortController()
+      const removeSpy = vi.spyOn(ac.signal, 'removeEventListener')
+      const p = abortableSleep(50, ac.signal)
+      await vi.advanceTimersByTimeAsync(50)
+      await p
+      expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

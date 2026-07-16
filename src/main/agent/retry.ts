@@ -14,7 +14,11 @@ export function isRetryableError(err: unknown): boolean {
     return status === 408 || status === 409 || status === 429 || status >= 500
   }
   const msg = String((err as { message?: unknown })?.message ?? err).toLowerCase()
-  return /overloaded|rate.?limit|too many requests|timeout|timed out|econnreset|etimedout|enotfound|eai_again|socket hang up|network|fetch failed|temporarily|unavailable|connection (error|reset|closed|refused)|stream (closed|error|interrupted)|\b5\d\d\b|\b529\b/.test(
+  // The 5xx alternative is anchored to a status/http/code context so a bare 3-digit
+  // number in a *permanent* error's text (e.g. "Requested 550 completions") isn't
+  // mistaken for a retryable server error. (5xx status codes still go through the
+  // numeric `status` branch above; this only covers messages that embed the status.)
+  return /overloaded|rate.?limit|too many requests|timeout|timed out|econnreset|etimedout|enotfound|eai_again|socket hang up|network|fetch failed|temporarily|unavailable|connection (error|reset|closed|refused)|stream (closed|error|interrupted)|(?:status|http|code)[^0-9]{0,6}5\d\d\b/.test(
     msg
   )
 }
@@ -49,14 +53,17 @@ export function backoffDelayMs(
 export function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve()
-    const t = setTimeout(resolve, ms)
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t)
-        resolve()
-      },
-      { once: true }
-    )
+    const onAbort = (): void => {
+      clearTimeout(t)
+      resolve()
+    }
+    // Remove the listener on the normal timeout path too: `{ once: true }` only drops it
+    // when 'abort' actually fires, so without this each completed sleep leaks a listener
+    // on the run-scoped signal (retries share one), tripping Node's max-listeners warning.
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal.addEventListener('abort', onAbort, { once: true })
   })
 }

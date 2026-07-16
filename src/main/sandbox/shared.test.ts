@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { join, sep } from 'node:path'
+import { join, sep, isAbsolute } from 'node:path'
+import { tmpdir } from 'node:os'
 import { EventEmitter } from 'node:events'
 import {
   augmentPath,
@@ -9,12 +10,13 @@ import {
   planKill,
   resolvePosixShell,
   runWithBackend,
+  spawnWithBackend,
   sandboxEnv,
   signalProcessTree,
   windowsKillCommands
 } from './shared'
 import { win32 } from 'node:path'
-import type { SandboxBackend, SandboxRunOptions } from './contract'
+import type { SandboxBackend, SandboxRunOptions, SandboxSpawnOptions } from './contract'
 
 describe('augmentPath', () => {
   // Pin the platform so these assertions are deterministic on every CI leg (incl. Windows).
@@ -120,6 +122,16 @@ describe('CappedOutput', () => {
     expect(out.startsWith('HEAD')).toBe(true)
     expect(out.endsWith('TAIL')).toBe(true)
     expect(cap.droppedBytes).toBe(20)
+  })
+})
+
+describe('pkgCacheDir', () => {
+  it('falls back to os.tmpdir() when TMPDIR is empty (absolute, not relative)', () => {
+    const cache = pkgCacheDir({ TMPDIR: '' } as NodeJS.ProcessEnv)
+    // `??` would keep the empty string and yield a relative "houston-pkg-cache" that
+    // resolves against the child's cwd (the workspace); `||` falls back to tmpdir().
+    expect(isAbsolute(cache)).toBe(true)
+    expect(cache).toBe(join(tmpdir(), 'houston-pkg-cache'))
   })
 })
 
@@ -475,5 +487,38 @@ describe('signalProcessTree', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('spawnWithBackend — abort listener cleanup', () => {
+  it('removes its abort listener once the child exits', async () => {
+    const ac = new AbortController()
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener')
+    const backend: SandboxBackend = {
+      id: 'none',
+      sandboxed: false,
+      confinesNetwork: false,
+      supportsSession: true,
+      // A real, immediately-exiting process (spawnWithBackend uses the real spawn).
+      buildLaunch: () => ({
+        file: process.execPath,
+        args: ['-e', '0'],
+        detached: false,
+        windowsHide: false,
+        supportsSession: true
+      })
+    }
+    const opts: SandboxSpawnOptions = {
+      command: 'noop',
+      cwd: process.cwd(),
+      workspace: process.cwd(),
+      allowNetwork: false,
+      signal: ac.signal
+    }
+    const { child } = spawnWithBackend(backend, opts)
+    await new Promise<void>((resolve) => child.once('exit', () => resolve()))
+    // The internal exit handler (which removes the listener) is also on 'exit'; let it run.
+    await new Promise((r) => setImmediate(r))
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function))
   })
 })
