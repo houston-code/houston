@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.2.129",
+  "version": "0.2.130",
   "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "Houston developers",
@@ -33,6 +33,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "goldens:update": "vitest run src/main/agent/golden.test.ts -u",
+    "eval": "vitest run --project evals",
     "notices": "node scripts/generate-notices.mjs",
     "license-gate": "node scripts/license-gate.mjs",
     "test:e2e": "npm run build && playwright test",

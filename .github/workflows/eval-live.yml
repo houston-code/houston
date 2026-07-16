@@ -1,0 +1,93 @@
+name: Task evals (live)
+
+# Scheduled live-model run of the task-level eval suite (src/main/agent/evals).
+#
+# WHAT THIS ADDS OVER THE PR GATE. Every PR runs the SAME fixtures through `npm test`, but with the
+# scripted driver: a fake provider replays a canned plan, so a green run means "the harness carried a
+# correct plan to a green test". By construction that says nothing about whether a real model can
+# solve the task at all — the plan was handed to it. This job runs the identical fixtures against a
+# real model with the script ignored, which is the only way to see per-model task success move.
+#
+# WHY IT NEVER GATES A PR. The result is non-deterministic (a model can fail a task it passed
+# yesterday) and metered. A flaky, billed gate on every PR would train everyone to re-run it until
+# green, which is worse than no signal. So this is a scorecard, not a gate: read the summary in the
+# job log. A task that regresses HERE and passes scripted is a model-capability signal; a task that
+# fails SCRIPTED is a harness regression and reds the PR that caused it.
+#
+# THIS WORKFLOW NEVER PUBLISHES ANYTHING: `permissions: contents: read`, no build/dist/release step,
+# and the only secret in scope is the model API key (step-scoped, never at job level). It is a
+# separate file from nightly-build.yml for the same reason provider-canary.yml is — that workflow's
+# packaging matrix guarantees "no live API credential in scope", and folding an eval leg into it
+# would erode the posture.
+#
+# SHELL POSTURE. The eval driver auto-approves every tool call, including an unsandboxed shell (the
+# ubuntu runner has no Seatbelt and may have no bubblewrap, and `full-auto` deliberately cannot
+# auto-approve an unconfined shell on its own). So a live model here really can run shell commands
+# unconfined. That is contained by the runner, not by Houston: the job is an ephemeral VM, the token
+# is read-only, and no publish credential is in scope. Do not add one.
+
+on:
+  schedule:
+    # 09:00 UTC daily — an hour after provider-canary.yml (08:00) and two after nightly-build.yml
+    # (07:00), so the three nightlies don't contend. Cron has no timezone; this is fixed UTC.
+    - cron: '0 9 * * *'
+  # On-demand run, e.g. to score a new model the day it ships without waiting for the nightly slot.
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model id to score (default: the provider default model)'
+        required: false
+        type: string
+      provider:
+        description: 'Provider id'
+        required: false
+        default: 'anthropic'
+        type: string
+
+permissions:
+  contents: read
+
+# Don't stack a manual run on top of a scheduled one — keep the latest.
+concurrency:
+  group: eval-live
+  cancel-in-progress: true
+
+env:
+  # No Electron runtime and no packaged browser are exercised here; skip the large browser download
+  # @playwright/test's postinstall would otherwise run during `npm ci`.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  evals:
+    # Eight tasks of real model latency over several turns each, plus install. The suite's own
+    # per-task cap is 5 min, so this bounds a pathological run rather than a normal one.
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      # The suite itself throws on a missing key rather than skipping, so this can't go green
+      # empty-handed. Assert it here anyway so a misconfigured secret reds the job at an obvious
+      # step instead of surfacing as eight identical provider errors that read like a regression.
+      - name: Require the model API key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY is empty/unset — the live eval suite cannot run. Set the repo secret."
+            exit 1
+          fi
+      # Drives the real model against every fixture and prints the scorecard (per-task PASS/FAIL,
+      # the tools each run reached for, wall-clock, and estimated spend) to the job log.
+      - name: Score the task evals
+        env:
+          HOUSTON_EVAL_LIVE: '1'
+          HOUSTON_EVAL_PROVIDER: ${{ inputs.provider || 'anthropic' }}
+          HOUSTON_EVAL_MODEL: ${{ inputs.model || '' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npm run eval
