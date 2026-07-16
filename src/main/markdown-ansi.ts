@@ -159,14 +159,22 @@ function indentLines(s: string, n: number): string {
  */
 export function splitFinalizedBlocks(buf: string): { complete: string; rest: string } {
   const lines = buf.split('\n')
-  let inFence = false
+  // Track the OPEN fence's marker char + length: a closing fence must use the same
+  // char and be at least as long (CommonMark). Toggling on any fence marker let a
+  // `~~~` line inside a ``` block close the fence, splitting the buffer mid-code-block.
+  let fence: { char: string; len: number } | null = null
   let lastBoundary = -1 // index of the last blank line outside a fence
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    if (/^\s{0,3}(`{3,}|~{3,})/.test(line)) inFence = !inFence
+    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1]
+    if (marker) {
+      if (!fence) fence = { char: marker[0], len: marker.length }
+      else if (marker[0] === fence.char && marker.length >= fence.len) fence = null
+      // else: a different-char or shorter fence inside a code block is just content.
+    }
     // A boundary is a blank line *between* content. The final split element is the
     // still-incomplete current line (the trailing "\n" artifact), never a boundary.
-    else if (!inFence && line.trim() === '' && i < lines.length - 1) lastBoundary = i
+    else if (!fence && line.trim() === '' && i < lines.length - 1) lastBoundary = i
   }
   if (lastBoundary < 0) return { complete: '', rest: buf }
   return {

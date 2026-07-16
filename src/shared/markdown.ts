@@ -212,7 +212,11 @@ function parseList(lines: string[], start: number): ListParse {
     const itemMatch = line.match(OL_RE) ?? line.match(UL_RE)
     if (itemMatch && itemMatch[1].length <= baseIndent + 1 && sameListType(line, ordered)) {
       const content: string[] = [itemMatch[itemMatch.length - 1]]
-      const contentIndent = itemMatch[1].length + itemMatch[2].length + 1
+      // The column the item's content starts at = whole line minus the content group.
+      // (The prior `marker.length + 1` under-counted ordered lists by the delimiter char
+      // — OL_RE captures only the digits, not the `.`/`)` — so nested/continuation lines
+      // were sliced one column short and kept a spurious leading space.)
+      const contentIndent = itemMatch[0].length - itemMatch[itemMatch.length - 1].length
       i++
       // Gather continuation + nested lines (indented, or lazy paragraph continuations).
       while (i < lines.length) {
@@ -438,18 +442,27 @@ function isAlnum(ch: string | undefined): boolean {
 }
 
 function stripTrailingPunct(url: string): string {
+  // Count parens once so the closing-paren balance check is O(1) per trailing char.
+  // The old check re-sliced and re-counted the whole prefix per ')', which turned a
+  // URL followed by a long run of ')' into an O(n^2) main-thread freeze.
+  let opens = 0
+  let closes = 0
+  for (let i = 0; i < url.length; i++) {
+    if (url[i] === '(') opens++
+    else if (url[i] === ')') closes++
+  }
   let end = url.length
   while (end > 0 && /[.,;:!?'")\]}]/.test(url[end - 1])) {
-    // Keep a closing paren if the URL contains a matching opening one (e.g. wiki links).
-    if (url[end - 1] === ')' && countChar(url.slice(0, end), '(') > countChar(url.slice(0, end), ')') - 1) break
+    // Keep a closing paren that has a matching opener (e.g. wiki links): stop stripping
+    // once the prefix holds at least as many '(' as ')'. '(' is never trailing punct,
+    // so only ')' removals change the running counts.
+    if (url[end - 1] === ')') {
+      if (opens >= closes) break
+      closes--
+    }
     end--
   }
   return url.slice(0, end)
-}
-function countChar(s: string, ch: string): number {
-  let n = 0
-  for (const c of s) if (c === ch) n++
-  return n
 }
 
 /** Match a backtick code span starting at `start`. Returns its literal value and end index. */

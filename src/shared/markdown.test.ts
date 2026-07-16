@@ -85,6 +85,17 @@ describe('parseInline', () => {
     expect(inlineStr(parseInline('not \\*italic\\*'))).toBe('not *italic*')
   })
 
+  it('keeps a balanced closing paren but strips unmatched ones in linear time', () => {
+    // A matched paren is part of the URL (wiki-link style).
+    expect(inlineStr(parseInline('http://x.com/foo_(bar)'))).toBe(
+      '[http://x.com/foo_(bar)](http://x.com/foo_(bar))'
+    )
+    // A long run of unmatched trailing ')' is stripped without the old O(n^2) scan —
+    // under the quadratic version this input froze for ~a minute (test would time out).
+    const out = inlineStr(parseInline('http://a.com' + ')'.repeat(100_000)))
+    expect(out.startsWith('[http://a.com](http://a.com)')).toBe(true)
+  })
+
   it('keeps a code span with double backticks containing a backtick', () => {
     expect(parseInline('`` a`b ``')[0]).toEqual({ type: 'code', value: 'a`b' })
   })
@@ -144,6 +155,18 @@ describe('parseMarkdown blocks', () => {
     const nested = list.items[0].blocks.find((b) => b.type === 'list')
     expect(nested).toBeDefined()
     expect((nested as Extract<Block, { type: 'list' }>).items).toHaveLength(2)
+  })
+
+  it('slices ordered-list nested content at the delimiter-aware column', () => {
+    // The fenced block sits at the content column of "1. " (column 3). The old indent
+    // (marker digits + 1, missing the "." delimiter) sliced one column short, leaving a
+    // spurious leading space on every code line.
+    const blocks = parseMarkdown('1. Run this:\n\n   ```\n   npm test\n   ```')
+    const list = blocks[0] as Extract<Block, { type: 'list' }>
+    const code = list.items[0].blocks.find((b) => b.type === 'code') as
+      | Extract<Block, { type: 'code' }>
+      | undefined
+    expect(code?.value).toBe('npm test')
   })
 
   it('parses a blockquote with nested markdown', () => {
