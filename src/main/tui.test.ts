@@ -32,6 +32,7 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  nextPolicy,
   renderRecoveredOutput,
   toolResultsFrom,
   FAILURE_LINES,
@@ -2712,7 +2713,7 @@ describe('readComposer seam', () => {
       clearLine: () => {},
       readLine: async () => null,
       readComposer: async (prompt) => {
-        prompts.push(prompt)
+        prompts.push(typeof prompt === 'string' ? prompt : prompt())
         const next = idx < inputs.length ? inputs[idx++] : null
         if (next === CTRLC) {
           interrupts.forEach((h) => h())
@@ -3264,5 +3265,85 @@ describe('queued follow-ups', () => {
     }
     await runTui(opts, d)
     expect(cleared).toBe(1)
+  })
+})
+
+// The approval mode was invisible while a turn ran (the composer's status line is
+// gone), and could only be changed for the NEXT turn — so loosening it to get past
+// a wall meant interrupting the work you were trying to unblock.
+describe('approval mode cycling', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('cycles least- to most-permissive and wraps back to the safest', () => {
+    expect(nextPolicy('plan')).toBe('ask')
+    expect(nextPolicy('ask')).toBe('auto-edit')
+    expect(nextPolicy('auto-edit')).toBe('full-auto')
+    expect(nextPolicy('full-auto')).toBe('plan') // wraps to the most restrictive
+  })
+
+  it('shows the mode on the spinner line', () => {
+    const paintNo = makePainter(false)
+    expect(spinnerFrame(0, 'Working', 3, paintNo, { mode: 'full-auto' })).toContain('[full-auto]')
+    expect(spinnerFrame(0, 'Working', 3, paintNo)).not.toContain('[')
+  })
+
+  function cycleIo(inputs: Array<string | null>) {
+    const base = fakeIo(inputs)
+    const cyclers: Array<() => void> = []
+    const modes: string[] = []
+    base.io.onCycleMode = (h) => cyclers.push(h)
+    base.io.setMode = (m) => modes.push(m)
+    return { ...base, cycle: () => cyclers.forEach((h) => h()), modes }
+  }
+
+  it('reports the mode at startup and on every change', async () => {
+    const { d } = deps(done)
+    const t = cycleIo(['/approval full-auto', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.modes[0]).toBe('ask') // the starting policy
+    expect(t.modes).toContain('full-auto')
+  })
+
+  it('Shift-Tab changes the policy the next turn runs under', async () => {
+    const { d, rec } = deps(done)
+    const t = cycleIo(['first', 'second', null])
+    d.io = t.io
+    const start = d.startRun
+    let turns = 0
+    d.startRun = async (req, send, onMessages) => {
+      await start(req, send, onMessages)
+      if (++turns === 1) t.cycle() // ask -> auto-edit, between the two turns
+    }
+    await runTui(opts, d)
+    expect(rec.runs[0].policy).toBe('ask')
+    expect(rec.runs[1].policy).toBe('auto-edit')
+  })
+
+  // The point: unblock the work without killing it.
+  it('Shift-Tab mid-run retargets the LIVE run', async () => {
+    const { d } = deps(done)
+    const t = cycleIo(['go', null])
+    d.io = t.io
+    const retargeted: Array<[string, string]> = []
+    d.setRunPolicy = (runId, policy) => retargeted.push([runId, policy])
+    d.startRun = async () => {
+      t.cycle() // mid-run
+    }
+    await runTui(opts, d)
+    expect(retargeted).toEqual([['run-1', 'auto-edit']])
+    expect(t.text()).toContain('this run too')
+  })
+
+  it('does not claim to retarget when no run is in flight', async () => {
+    const { d } = deps(done)
+    const t = cycleIo([null])
+    d.io = t.io
+    let calls = 0
+    d.setRunPolicy = () => calls++
+    t.cycle()
+    await runTui(opts, d)
+    expect(calls).toBe(0)
+    expect(t.text()).not.toContain('this run too')
   })
 })

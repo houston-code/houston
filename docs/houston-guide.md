@@ -108,6 +108,7 @@ bracketed-paste support.
 | `Ctrl-C` | discard the draft (twice in a row to leave) |
 | `Esc` | *while the agent works:* clear what you typed, or stop the run if nothing is typed |
 | `Ctrl-D` | leave (on an empty composer) |
+| `Shift-Tab` | switch approval mode (plan → ask → auto-edit → full auto → plan) |
 
 **History.** Messages are remembered per project folder and survive restarts,
 including multi-line ones.
@@ -245,6 +246,14 @@ always allow, `x` always deny.
 Stopping a run while an approval is waiting is recorded as an interruption, not
 as a refusal, so the agent is not told the user rejected something they simply
 never answered.
+
+**Switching mode.** In the terminal, `Shift-Tab` steps through the modes, from
+most restrictive to least and back around to plan. It works while the agent is
+working too, and applies to the run in progress: if a turn stops for an approval
+you would rather not keep answering, loosen the mode and the same turn carries on
+under it, rather than having to interrupt the work you were trying to unblock. The
+mode is shown next to the spinner while a turn runs, and on the status line above
+the composer the rest of the time. `/approval <mode>` sets one directly.
 
 **Permission rules** (Settings) are finer-grained than the mode: `allow`,
 `deny`, or `ask`, matched on the tool plus a glob over its target, e.g. allow

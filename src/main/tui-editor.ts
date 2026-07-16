@@ -66,6 +66,8 @@ export type EditorOutcome =
   | { kind: 'external-edit'; text: string }
   /** Ctrl-L: the adapter clears the screen and repaints. */
   | { kind: 'clear-screen' }
+  /** Shift-Tab: the adapter cycles the approval mode and redraws the prompt. */
+  | { kind: 'cycle-mode' }
 
 /** A paste at least this many lines (or this many characters) collapses to a token. */
 export const PASTE_COLLAPSE_LINES = 5
@@ -403,6 +405,11 @@ export function reduceEditor(s: EditorState, key: EditorKey): { state: EditorSta
       // The terminal telling us it gained/lost focus. Not input: the adapter reads
       // it to gate attention signals; the buffer is unaffected.
       return { state: s }
+
+    case 'cycle-mode':
+      // The draft survives: changing how much runs without asking has nothing to do
+      // with what you were typing.
+      return { state: s, outcome: { kind: 'cycle-mode' } }
   }
 }
 
