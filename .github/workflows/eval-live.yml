@@ -100,11 +100,16 @@ jobs:
       # and prints the scorecard (per-task pass rate, baseline delta, the tools each run reached for,
       # wall-clock, and estimated spend) to the job log. Fails on a regression, on an unrecorded
       # model, or on a malformed baseline — never on a single flaked attempt.
+      # On a SCHEDULED run there are no inputs, so every one of these interpolates to an empty
+      # string — `env: FOO: ${{ inputs.foo }}` sets FOO='', it does not leave it unset. That is
+      # exactly how a nightly once resolved an empty model id and recorded a baseline of all zeros.
+      # The suite now treats an empty env var as unset (evals/config.ts) and validates the result,
+      # so passing them through unconditionally is safe and keeps the dispatch inputs meaningful.
       - name: Score the task evals against the baseline
         env:
           HOUSTON_EVAL_LIVE: '1'
-          HOUSTON_EVAL_PROVIDER: ${{ inputs.provider || 'anthropic' }}
-          HOUSTON_EVAL_MODEL: ${{ inputs.model || '' }}
-          HOUSTON_EVAL_ATTEMPTS: ${{ inputs.attempts || '3' }}
+          HOUSTON_EVAL_PROVIDER: ${{ inputs.provider }}
+          HOUSTON_EVAL_MODEL: ${{ inputs.model }}
+          HOUSTON_EVAL_ATTEMPTS: ${{ inputs.attempts }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npm run eval

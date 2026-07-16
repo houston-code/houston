@@ -46,14 +46,17 @@ import type { ProviderConfig } from '@shared/types'
 import { defaultProviders } from '@shared/defaults'
 import { providerKeyEnvVars } from '@shared/provider-keys'
 import {
+  assertRecordable,
   baselineFileName,
   compareToBaseline,
+  isDeadBaseline,
   isEvalBaseline,
   recordBaseline,
   type BaselineVerdict,
   type EvalBaseline,
   type TaskScore
 } from './baseline'
+import { resolveEvalConfig } from './config'
 import { materializeTask, runVerify, taskDirNames } from './fixtures'
 import { formatReport, type TaskReport } from './report'
 import { TASKS } from './tasks'
@@ -61,8 +64,11 @@ import type { EvalResult, EvalTask } from './types'
 
 // ---- driver selection ----
 
-const LIVE = process.env.HOUSTON_EVAL_LIVE === '1'
-const PROVIDER_ID = process.env.HOUSTON_EVAL_PROVIDER ?? 'anthropic'
+// Resolved by a pure, unit-tested module (config.ts) rather than inline here: an
+// empty env var must mean "unset", and getting that wrong silently recorded a
+// baseline of all zeros once already. See config.ts for the incident.
+const { live: LIVE, record: RECORD, providerId: PROVIDER_ID, model: MODEL, attempts: ATTEMPTS } =
+  resolveEvalConfig(process.env, defaultProviders())
 
 function liveProviderConfig(): ProviderConfig {
   const cfg = defaultProviders().find((p) => p.id === PROVIDER_ID)
@@ -79,26 +85,12 @@ function liveKey(): string | null {
   return null
 }
 
-const MODEL = LIVE
-  ? (process.env.HOUSTON_EVAL_MODEL ?? liveProviderConfig().defaultModel ?? '')
-  : 'claude-sonnet-5'
-
 // A live run with no key would otherwise fail every task with an opaque provider
 // error and read as eight harness regressions. Fail loudly on the misconfiguration.
 if (LIVE && !liveKey()) {
   const names = providerKeyEnvVars(PROVIDER_ID).join(' or ')
   throw new Error(`HOUSTON_EVAL_LIVE=1 needs a key for "${PROVIDER_ID}" — set ${names}.`)
 }
-
-/** Recording a baseline scores the model without grading it against one. */
-const RECORD = process.env.HOUSTON_EVAL_RECORD === '1'
-
-/**
- * Scripted runs are deterministic, so a repeat says nothing. A live model is
- * noisy enough that a single attempt per task is a coin-flip signal, so it is
- * averaged over several by default.
- */
-const ATTEMPTS = Number(process.env.HOUSTON_EVAL_ATTEMPTS) || (LIVE ? 3 : 1)
 
 const BASELINES_DIR = fileURLToPath(new URL('./baselines', import.meta.url))
 const baselineFile = join(BASELINES_DIR, baselineFileName(PROVIDER_ID, MODEL))
@@ -129,6 +121,20 @@ function loadBaseline(): EvalBaseline {
   const parsed: unknown = JSON.parse(readFileSync(baselineFile, 'utf8'))
   if (!isEvalBaseline(parsed)) {
     throw new Error(`Baseline at ${baselineFile} is malformed — re-record it with npm run eval:baseline.`)
+  }
+  // A shape-valid baseline can still be a dead gate. Refuse it here too, not just
+  // at record time: this one may have reached the repo without going through the
+  // recorder at all.
+  if (isDeadBaseline(parsed)) {
+    throw new Error(
+      [
+        `Baseline at ${baselineFile} records 0 for every task, so it gates nothing:`,
+        'no score can regress below zero. That is a dead gate reporting green.',
+        '',
+        'It was almost certainly recorded from a misconfigured run (empty/wrong model',
+        'id, bad key, provider outage). Delete it and re-record with npm run eval:baseline.'
+      ].join('\n')
+    )
   }
   return parsed
 }
@@ -322,6 +328,8 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
       passRate: r.passRate,
       attempts: r.attempts
     }))
+    // Never write a baseline that would gate nothing — see assertRecordable.
+    assertRecordable(scores)
     mkdirSync(BASELINES_DIR, { recursive: true })
     const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date())
     writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
