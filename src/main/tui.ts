@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import {
+  APPROVAL_POLICIES,
   HOOK_EVENTS,
   folderTrustState,
   isApprovalPolicy,
@@ -464,20 +465,24 @@ export function spinnerFrame(
   elapsedSec: number,
   paint: Painter,
   /**
-   * What the user is typing while the agent works, and how many messages they've
-   * already queued. The spinner line doubles as the mid-run composer: it is the
-   * one line already being redrawn, so showing the draft there costs no extra
-   * screen real estate and cannot tear the transcript.
+   * What the user is typing while the agent works, how many messages they have
+   * queued, and which approval mode is in force. The spinner line doubles as the
+   * mid-run composer and the mid-run status bar: it is the one line already being
+   * redrawn, so all of this costs no extra screen space and cannot tear the
+   * transcript.
    */
-  opts: { draft?: string; queued?: number } = {}
+  opts: { draft?: string; queued?: number; mode?: string } = {}
 ): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
   const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${elapsedSec}s`, 'dim')}`
+  // The approval mode, kept visible WHILE the turn runs: the composer's status line
+  // is gone exactly when "how much is running without asking?" matters most.
+  const mode = opts.mode ? paint(`  [${opts.mode}]`, 'dim') : ''
   const queued = opts.queued ? paint(`  (${opts.queued} queued)`, 'cyan') : ''
   // The draft is shown verbatim so people can see what they typed; it is their own
   // keystrokes, and the decoder never lets a control character into it.
   const draft = opts.draft ? `  ${paint('›', 'green')} ${opts.draft}` : ''
-  return `${head}${queued}${draft}`
+  return `${head}${mode}${queued}${draft}`
 }
 
 export interface StatusState {
@@ -1479,7 +1484,7 @@ export interface TuiIo {
    * Optional: off-TTY and in tests it's absent and the driver falls back to
    * `readLine` + ComposerBuffer, which reads one physical line at a time.
    */
-  readComposer?: (prompt: string) => Promise<string | null>
+  readComposer?: (prompt: string | (() => string)) => Promise<string | null>
   /**
    * Read a line without echoing it — for pasting an API key in the `/login` flow.
    * Resolves the typed value, or null on cancel (Ctrl-C) / EOF. Optional: off-TTY
@@ -1524,6 +1529,16 @@ export interface TuiIo {
   /** Drop anything queued (the run it followed was abandoned). */
   clearQueued?: () => void
   /**
+   * Register a handler for Shift-Tab (cycle the approval mode). Fires at the
+   * composer and mid-run alike; the driver decides what cycling means.
+   */
+  onCycleMode?: (handler: () => void) => void
+  /**
+   * Show the approval mode on the spinner line while a turn runs — the composer's
+   * status line is gone exactly when it matters most.
+   */
+  setMode?: (label: string) => void
+  /**
    * Present an arrow-key selectable picker (for approvals / `ask_user`). Resolves
    * with the committed value, a request to fall back to typing, or a cancel.
    * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
@@ -1556,6 +1571,13 @@ export interface TuiDeps {
   /** Deliver the user's answer to an MCP server's mid-call input request. */
   resolveElicitation: (runId: string, elicitId: string, result: ElicitationResult) => void
   cancelRun: (runId: string) => void
+  /**
+   * Change a RUNNING turn's approval policy. The core has always supported this
+   * (the GUI switches mid-run); the terminal could only change the policy for the
+   * next turn, so loosening it to get past a wall meant interrupting the work you
+   * were trying to unblock.
+   */
+  setRunPolicy?: (runId: string, policy: ApprovalPolicy) => void
   io: TuiIo
   /**
    * Optional persistence. When present, each session is saved as a conversation
@@ -1691,6 +1713,18 @@ export function renderShellEscapeRecord(command: string, output: string, exitCod
   return body
     ? `${head}\n\n$ ${command}${note}\n\n${body}`
     : `${head}\n\n$ ${command}\n\n(no output)`
+}
+
+/**
+ * The next approval mode, in the order they appear in APPROVAL_POLICIES: plan →
+ * ask → auto-edit → full-auto → plan.
+ *
+ * Ordered least-to-most permissive on purpose, so Shift-Tab reads as "loosen",
+ * and the wrap lands back on the most restrictive rather than sliding past it.
+ */
+export function nextPolicy(current: ApprovalPolicy): ApprovalPolicy {
+  const i = APPROVAL_POLICIES.indexOf(current)
+  return APPROVAL_POLICIES[(i + 1) % APPROVAL_POLICIES.length]
 }
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
@@ -1976,6 +2010,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
 
   deps.io.signal?.({ title: idleTitle(workspaceName) })
+  // Shift-Tab, at the composer or mid-run. Mid-run it also retargets the live run,
+  // so you can loosen the mode to get past an approval without killing the turn.
+  deps.io.setMode?.(policy)
+  deps.io.onCycleMode?.(() => {
+    policy = nextPolicy(policy)
+    deps.io.setMode?.(policy)
+    if (activeRunId) {
+      deps.setRunPolicy?.(activeRunId, policy)
+      deps.io.out(paint(`\n· approval → ${policy} (this run too)\n`, 'dim'))
+    }
+  })
+
   deps.io.out(
     `${paint('Houston', 'bold', 'cyan')} ${paint(deps.version ? `v${deps.version}` : '', 'dim')} ${paint('(interactive)', 'dim')}\n` +
       `${paint(`  cwd:      ${opts.cwd}`, 'dim')}\n` +
@@ -2032,7 +2078,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       pendingQueued = []
       deps.io.out(`${composerPrompt(policy, paint)}${raw}\n`)
     } else if (deps.io.readComposer) {
-      const text = await deps.io.readComposer(composerPrompt(policy, paint))
+      // A thunk, not a string: Shift-Tab can change the policy WHILE this read is
+      // open, and the prompt has to say what will actually happen when you hit Enter.
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint))
       if (text === null) {
         resetComposer = consumeInterrupt() === 'reset'
       } else {
@@ -2316,6 +2364,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'set-approval') {
         policy = result.policy
+        deps.io.setMode?.(policy)
         deps.io.out(paint(`· approval policy → ${policy}\n`, 'dim'))
         continue
       }
@@ -2719,7 +2768,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             // Accepting flips the local policy so the composer + status line reflect
             // that Plan mode is off for the rest of the session (the loop flips the
             // run's own policy independently when the tool result is applied).
-            if (decision.kind === 'accept') policy = decision.mode
+            if (decision.kind === 'accept') {
+              policy = decision.mode
+              deps.io.setMode?.(policy)
+            }
             deps.resolvePlan(e.runId, e.callId, decision)
           })
           break

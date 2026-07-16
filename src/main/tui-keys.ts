@@ -60,6 +60,8 @@ export type EditorKey =
    * Not a keystroke: it lets attention signals fire only when the user is away.
    */
   | { type: 'focus'; on: boolean }
+  /** Shift-Tab: step to the next approval mode. */
+  | { type: 'cycle-mode' }
 
 // ESC (0x1b), built from a char code so no control character appears inside a
 // regex literal (which trips eslint's no-control-regex), matching tui-wrap.ts.
@@ -197,6 +199,10 @@ function csiKey(params: string, final: string): EditorKey | null {
   switch (final) {
     // Focus reporting (mode 1004). Only ever sent with no params, which keeps
     // these distinct from any modified cursor key.
+    // Shift-Tab (backtab). Conventionally "the other Tab", which is why it is the
+    // mode key: Tab completes, Shift-Tab changes how much runs without asking.
+    case 'Z':
+      return { type: 'cycle-mode' }
     case 'I':
       return params === '' ? { type: 'focus', on: true } : null
     case 'O':

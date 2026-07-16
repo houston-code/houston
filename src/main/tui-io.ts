@@ -196,6 +196,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     rawWrite(
       CLEAR_LINE +
         spinnerFrame(tick++, spinnerLabel, Math.floor((now() - spinnerStart) / 1000), paint, {
+          ...(modeLabel ? { mode: modeLabel } : {}),
           ...(draft ? { draft } : {}),
           ...(queued.length ? { queued: queued.length } : {})
         })
@@ -233,6 +234,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   let lastPasteAt = -Infinity
 
   let interruptHandler: (() => void) | null = null
+  // Fired by Shift-Tab, at the composer or mid-run. The driver owns what the modes
+  // ARE and what changing one means; this just reports the keypress.
+  let cycleModeHandler: (() => void) | null = null
+  // The approval mode, shown on the spinner line so it stays visible while a turn
+  // runs — the one time it matters most and the composer's status line is gone.
+  let modeLabel = ''
   let watching = false
   // Messages typed while the agent works, waiting for the turn to end. Kept here
   // (not in the driver) because the driver is blocked awaiting the run.
@@ -516,10 +523,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * manual check). The decoder (tui-keys.ts) and editor (tui-editor.ts) are pure
    * and separately unit-tested.
    */
-  const readComposer = (prompt: string): Promise<string | null> => {
+  const readComposer = (prompt: string | (() => string)): Promise<string | null> => {
+    const promptNow = (): string => (typeof prompt === 'string' ? prompt : prompt())
     if (closed) return Promise.resolve(null)
     // No TTY / no raw mode → the readline path still works (tests, pipes).
-    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(prompt)
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(promptNow())
 
     return new Promise<string | null>((resolve) => {
       stopTimer(true)
@@ -536,7 +544,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const width = (): number =>
         Math.max(8, (deps.columns?.() ?? process.stdout.columns ?? 80) - 1)
       const view = (): ReturnType<typeof renderEditor> =>
-        renderEditor(state, { prompt, width: width(), paint, continuation: paint('… ', 'dim') })
+        renderEditor(state, { prompt: promptNow(), width: width(), paint, continuation: paint('… ', 'dim') })
 
       // readline software-echoes every keystroke off its own 'keypress' listener,
       // even in raw mode. Detach for the duration (exactly as readSecret does) and
@@ -707,6 +715,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               drawn = false
               draw()
               break
+            case 'cycle-mode':
+              // The handler updates the driver's policy; promptNow() then renders the
+              // new one on the very next draw, with the draft untouched.
+              cycleModeHandler?.()
+              draw()
+              break
             case 'complete':
               stdin.removeListener('data', onData)
               void runComplete().finally(() => {
@@ -729,7 +743,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         teardown()
         done = true
         pending = null
-        void plainRead(prompt).then(resolve)
+        void plainRead(promptNow()).then(resolve)
       }
     })
   }
@@ -759,6 +773,13 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     clearQueued: () => {
       queued = []
       draft = ''
+    },
+    onCycleMode: (handler) => {
+      cycleModeHandler = handler
+    },
+    setMode: (label) => {
+      modeLabel = label
+      if (spinnerLabel !== null) drawSpinner()
     },
     signal: (sig: TerminalSignal) => {
       if (sig.title) rawWrite(titleSequence(sig.title))

@@ -266,3 +266,20 @@ describe('decodeInput — focus reporting (mode 1004)', () => {
     expect(feed('\x1bOA')).toEqual([{ type: 'up' }])
   })
 })
+
+describe('decodeInput — Shift-Tab', () => {
+  it('decodes backtab as the mode key', () => {
+    expect(feed('\x1b[Z')).toEqual([{ type: 'cycle-mode' }])
+  })
+
+  it('keeps plain Tab as completion', () => {
+    expect(feed('\t')).toEqual([{ type: 'tab' }])
+  })
+
+  // Changing how much runs without asking is an action, so a pasted tail must not
+  // be able to trigger it.
+  it('is dropped inside the post-paste window', () => {
+    const r = sanitizePastedKeys([{ type: 'cycle-mode' }], 1000, 1005)
+    expect(r.keys).toEqual([])
+  })
+})

@@ -10,7 +10,15 @@ import {
   exceedsImageSizeLimit,
   SUPPORTED_IMAGE_TYPES
 } from '@shared/images'
-import { startRun, resolveApproval, resolveQuestion, resolvePlan, resolveElicitation, cancelRun } from './agent/loop'
+import {
+  startRun,
+  resolveApproval,
+  resolveQuestion,
+  resolvePlan,
+  resolveElicitation,
+  cancelRun,
+  setRunPolicy
+} from './agent/loop'
 import { killAllShells } from './agent/shells'
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
@@ -452,6 +460,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       resolvePlan,
       resolveElicitation,
       cancelRun,
+      setRunPolicy,
       editText: (initial) => editInEditor(initial),
       persistHistory,
       loadImage: (p) => {
