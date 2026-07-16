@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { appendHistory, parseHistory, serializeHistory, HISTORY_CAP } from './tui-history'
+import {
+  appendHistory,
+  parseHistory,
+  serializeHistory,
+  encodeHistoryLine,
+  decodeHistoryLine,
+  HISTORY_CAP
+} from './tui-history'
 
 describe('appendHistory', () => {
   it('appends trimmed non-empty lines (newest last)', () => {
@@ -34,5 +41,24 @@ describe('parseHistory / serializeHistory', () => {
   })
   it('serializes empty to empty string', () => {
     expect(serializeHistory([])).toBe('')
+  })
+
+  // A pasted block is one history entry. Stored raw it would read back as several
+  // bogus one-line entries, and recall would replay only the first line.
+  it('round-trips a multi-line entry as a single entry', () => {
+    const entry = 'fix this:\n\nfunction f() {\n  return 1\n}'
+    const parsed = parseHistory(serializeHistory(['before', entry, 'after']))
+    expect(parsed).toEqual(['before', entry, 'after'])
+  })
+
+  it('round-trips backslashes without turning them into newlines', () => {
+    const entry = 'path C:\\name and a literal \\n'
+    expect(parseHistory(serializeHistory([entry]))).toEqual([entry])
+  })
+
+  it('encodes an entry onto one physical line', () => {
+    expect(encodeHistoryLine('a\nb')).toBe('a\\nb')
+    expect(encodeHistoryLine('a\nb').includes('\n')).toBe(false)
+    expect(decodeHistoryLine('a\\nb')).toBe('a\nb')
   })
 })
