@@ -97,6 +97,7 @@ import {
   overrideForConversation
 } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
+import { isSensitivePath } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun } from './egress'
@@ -248,6 +249,7 @@ interface RunState {
       preview?: FileDiffPreview[]
       sandboxed?: boolean
       shellNetwork?: boolean
+      sensitiveRead?: boolean
     }
   >
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
@@ -551,7 +553,8 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       kind: a.kind,
       ...(a.preview ? { preview: a.preview } : {}),
       ...(a.sandboxed === false ? { sandboxed: false } : {}),
-      ...(a.shellNetwork ? { shellNetwork: true } : {})
+      ...(a.shellNetwork ? { shellNetwork: true } : {}),
+      ...(a.sensitiveRead ? { sensitiveRead: true } : {})
     })
   }
   for (const [callId, q] of run.pendingQuestions) {
@@ -2610,6 +2613,14 @@ export async function startRun(
               call.name === 'run_shell' &&
               typeof execArgs.command === 'string' &&
               shellReferencesExternalPath(execArgs.command, roots)
+            // Reading a credential/secret file prompts even in full-auto (see
+            // isSensitivePath): reads normally never prompt, so this is the one gate
+            // that keeps a committed `.env` or private key from flowing into the
+            // transcript unasked.
+            const sensitiveRead =
+              tool.kind === 'read' &&
+              typeof execArgs.path === 'string' &&
+              isSensitivePath(execArgs.path)
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.
@@ -2623,7 +2634,8 @@ export async function startRun(
               override: kindOverride,
               shellSandboxed: isSandboxed(),
               shellUnsandboxedOverride: run.shellUnsandboxedOverride,
-              shellEscapesWorkspace
+              shellEscapesWorkspace,
+              sensitiveRead
             })
 
             // #3b: in full-auto on a confining host, the first shell command pauses once
@@ -2684,7 +2696,8 @@ export async function startRun(
                 kind: tool.kind,
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
-                ...(consentOnly ? { shellNetwork: true } : {})
+                ...(consentOnly ? { shellNetwork: true } : {}),
+                ...(sensitiveRead ? { sensitiveRead: true } : {})
               })
               emit({
                 type: 'tool_approval',
@@ -2695,7 +2708,8 @@ export async function startRun(
                 kind: tool.kind,
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
-                ...(consentOnly ? { shellNetwork: true } : {})
+                ...(consentOnly ? { shellNetwork: true } : {}),
+                ...(sensitiveRead ? { sensitiveRead: true } : {})
               })
               const { decision, note: denyGuidance } = await waitForApproval(run, call.id)
               // Resolved (or cancelled) — it's no longer awaiting the user.

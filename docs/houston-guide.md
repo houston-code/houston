@@ -376,12 +376,15 @@ Approval is layered. From most to least restrictive:
 - **Ask every time:** every edit and command needs a click.
 - **Auto-approve edits:** file edits go through automatically; shell commands
   still ask.
-- **Full auto:** edits and (sandboxed) commands run without asking. Two egress
-  controls still hold even here, because the sandbox can read your whole
-  filesystem: network egress is granted **per destination** (approving a fetch to
-  one host does not open egress to another), and the first shell command pauses
-  once for a **shell-network consent** so blanket outbound access is never
-  automatic (declining runs commands offline).
+- **Full auto:** edits and (sandboxed) commands run without asking. A few controls
+  still hold even here, because the sandbox can read your whole filesystem: network
+  egress is granted **per destination** (approving a fetch to one host does not open
+  egress to another), the first shell command pauses once for a **shell-network
+  consent** so blanket outbound access is never automatic (declining runs commands
+  offline), and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
+  and the like) prompts even here, since reads otherwise never do. "Allow for run" on
+  that prompt stops it asking about credential reads for the rest of the conversation,
+  and an `allow` permission rule opts a path in permanently.
 
 **Reading the diff.** A file edit shows a real diff before you approve it: the
 changed part with a few lines of context (long untouched stretches are folded away

@@ -69,6 +69,11 @@ export interface ApprovalInputs {
    * `~`, or `..`-climbing). Defaults to false for non-shell calls / clean commands.
    */
   shellEscapesWorkspace?: boolean
+  /**
+   * Whether this is a read of a credential / secret file (see isSensitivePath).
+   * Defaults to false for non-read calls / ordinary files.
+   */
+  sensitiveRead?: boolean
 }
 
 /**
@@ -93,6 +98,13 @@ export interface ApprovalInputs {
  * project-confinement premise even on a confining host (the sandbox may still let
  * it read `/etc` or `~/.ssh`), so it always prompts — even in full-auto or under a
  * generic override — unless an explicit permission `allow` rule whitelisted it.
+ *
+ * A read of a credential / secret file (see isSensitivePath) is the same shape of
+ * risk from the read side: `read_file` never prompts, so an agent could quietly
+ * pull a committed `.env` or private key into the transcript. It prompts even in
+ * full-auto, cleared only by an explicit `allow` rule or a read override the user
+ * granted this run (picking "allow for run" on such a prompt) — the same escape
+ * hatches the workspace-escaping shell has.
  */
 export function decideApproval(inputs: ApprovalInputs): {
   mustApprove: boolean
@@ -111,6 +123,12 @@ export function decideApproval(inputs: ApprovalInputs): {
   // A workspace-escaping shell command always prompts (a generic override or
   // full-auto doesn't cover it); only an explicit allow-rule, handled above, can.
   if (kind === 'shell' && inputs.shellEscapesWorkspace) {
+    return { mustApprove: true, unsandboxedShell: false }
+  }
+  // A read of a credential file always prompts too — unless the user already granted
+  // a read override for this run ("allow for run"), which a generic override on the
+  // read kind is; an explicit allow-rule was handled above.
+  if (kind === 'read' && inputs.sensitiveRead && !override) {
     return { mustApprove: true, unsandboxedShell: false }
   }
   return {
