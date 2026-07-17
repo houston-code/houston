@@ -1,5 +1,6 @@
 import { safeStorage } from 'electron'
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { writeFileAtomicSync } from './atomic-write'
 import { join, dirname } from 'node:path'
 import type { McpOAuthTokens } from './mcp/oauth'
 import { getUserDataDir } from './userData'
@@ -76,10 +77,8 @@ function load(): SecretsFile {
 function persist(data: SecretsFile): void {
   const path = secretsPath()
   mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp`
   // 0600 — owner read/write only.
-  writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 })
-  renameSync(tmp, path)
+  writeFileAtomicSync(path, JSON.stringify(data), 0o600)
   // Any credential/header change invalidates the redactor's cached value list.
   cachedSecretValues = null
 }

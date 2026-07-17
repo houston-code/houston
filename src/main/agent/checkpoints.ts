@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { writeFileAtomic } from '../atomic-write'
 import { resolveInRoots } from './tools'
 import { parsePatch } from './apply-patch'
 import { getUserDataDir } from '../userData'
@@ -158,9 +159,7 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 async function writeJsonAtomic(path: string, data: unknown): Promise<void> {
-  const tmp = `${path}.tmp`
-  await fs.writeFile(tmp, JSON.stringify(data), { encoding: 'utf8', mode: 0o600 })
-  await fs.rename(tmp, path)
+  await writeFileAtomic(path, JSON.stringify(data), 0o600)
 }
 
 async function writeRunFile(runId: string): Promise<void> {

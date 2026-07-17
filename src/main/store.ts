@@ -1,13 +1,6 @@
-import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  existsSync,
-  mkdirSync,
-  statSync,
-  realpathSync
-} from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { writeFileAtomicSync } from './atomic-write'
 import { getUserDataDir } from './userData'
 import type {
   AppSettings,
@@ -333,7 +326,6 @@ function extractHeaderSecrets(settings: AppSettings): { settings: AppSettings; m
 function persist(settings: AppSettings): void {
   const path = settingsPath()
   mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp`
   // Don't persist the derived hasKey flag, and never write custom-header values in
   // cleartext — their secrets live in the encrypted store (moved out by
   // extractHeaderSecrets before we get here); this strips the values as a safety net
@@ -351,8 +343,7 @@ function persist(settings: AppSettings): void {
   }
   // 0600 — owner read/write only. Matches secrets.json: even with header secrets moved
   // out, settings.json still holds workspace paths, prompts, and MCP endpoints.
-  writeFileSync(tmp, JSON.stringify(toWrite, null, 2), { encoding: 'utf8', mode: 0o600 })
-  renameSync(tmp, path)
+  writeFileAtomicSync(path, JSON.stringify(toWrite, null, 2), 0o600)
 }
 
 /**

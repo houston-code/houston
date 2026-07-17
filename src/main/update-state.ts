@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
+import { readFileSync, mkdirSync } from 'node:fs'
+import { writeFileAtomicSync } from './atomic-write'
 import { join, dirname } from 'node:path'
 import { getUserDataDir } from './userData'
 
@@ -33,7 +34,5 @@ export function readLastSeenVersion(path: string = defaultPath()): string | null
 export function writeLastSeenVersion(version: string, path: string = defaultPath()): void {
   const state: UpdateState = { lastSeenVersion: version }
   mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8')
-  renameSync(tmp, path)
+  writeFileAtomicSync(path, JSON.stringify(state, null, 2))
 }
