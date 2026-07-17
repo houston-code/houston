@@ -9,6 +9,8 @@ import { createResponsesProvider } from './responses'
 import { createGeminiProvider, listGeminiModels } from './gemini'
 import { createBedrockProvider, listBedrockModels } from './bedrock'
 import { createVertexProvider, listVertexModels } from './vertex'
+import { createAzureOpenAIProvider, listAzureOpenAIModels } from './azure'
+import { createFoundryProvider, listFoundryModels } from './foundry'
 
 export class ProviderError extends Error {}
 
@@ -42,6 +44,28 @@ function requireRegion(config: ProviderConfig, envVars: string[], baseUrlExempts
   if (envVars.some((v) => process.env[v])) return
   throw new ProviderError(
     `No region set for ${config.label}. Set one in Settings, or export ${envVars[0]}.`
+  )
+}
+
+/**
+ * Address preflight for the Azure-hosted kinds, which name a resource rather than a
+ * region. Same contract as {@link requireRegion}: an explicit `baseUrl` addresses the
+ * host on its own, and the SDK's own env fallback is honored so a provider already
+ * working from the environment isn't rejected for leaving the field blank.
+ *
+ * Worth failing here rather than letting the SDK do it: both Azure clients raise this
+ * in terms of *their* constructor options ("Must provide one of the `baseURL` or
+ * `resource` arguments"), which names nothing a Houston user can act on.
+ */
+function requireAddress(
+  config: ProviderConfig,
+  value: string | undefined,
+  setting: string,
+  envVar: string
+): void {
+  if (value || config.baseUrl || process.env[envVar]) return
+  throw new ProviderError(
+    `No ${setting} set for ${config.label}. Set one in Settings, or export ${envVar}.`
   )
 }
 
@@ -93,6 +117,25 @@ export function createProvider(config: ProviderConfig): Provider {
         baseUrl: config.baseUrl,
         headers
       })
+    case 'azure-openai':
+      requireAddress(config, config.endpoint, 'endpoint', 'AZURE_OPENAI_ENDPOINT')
+      // `requiresKey` is true for this kind, so the preflight above already proved a
+      // key exists; Azure has no ambient-credential path to fall back on.
+      return createAzureOpenAIProvider({
+        apiKey: key ?? undefined,
+        endpoint: config.endpoint,
+        apiVersion: config.apiVersion,
+        baseUrl: config.baseUrl,
+        headers
+      })
+    case 'foundry':
+      requireAddress(config, config.resource, 'resource', 'ANTHROPIC_FOUNDRY_RESOURCE')
+      return createFoundryProvider({
+        apiKey: key ?? undefined,
+        resource: config.resource,
+        baseUrl: config.baseUrl,
+        headers
+      })
     default:
       // Exhaustive: a new ProviderKind is a compile error here, rather than a
       // provider that throws "unknown kind" only once someone selects it.
@@ -106,9 +149,10 @@ export function createProvider(config: ProviderConfig): Provider {
  * each model's context window (`inputTokenLimit`); Anthropic returns ids only,
  * so its capabilities come from the name-heuristics in usage.ts.
  *
- * Bedrock and Vertex have no Models API to fetch from, so they answer from a curated
- * list. That keeps Fetch meaningful (it restores the known ids after an edit) while
- * never reaching the network.
+ * Bedrock, Vertex and Foundry have no Models API to fetch from, so they answer from a
+ * curated list. That keeps Fetch meaningful (it restores the known ids after an edit)
+ * while never reaching the network. Azure OpenAI has neither an API nor a curatable
+ * lineup — its models are deployments the user names — so it echoes what's configured.
  */
 export async function listModels(config: ProviderConfig): Promise<ModelOption[]> {
   const key = getKey(config.id)
@@ -127,6 +171,10 @@ export async function listModels(config: ProviderConfig): Promise<ModelOption[]>
       return listBedrockModels()
     case 'vertex':
       return listVertexModels()
+    case 'foundry':
+      return listFoundryModels()
+    case 'azure-openai':
+      return listAzureOpenAIModels(config.models)
     default:
       // Exhaustive: a new kind must decide how it lists models, rather than silently
       // returning [] and looking like a host that serves nothing.

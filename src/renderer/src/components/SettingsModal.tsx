@@ -35,6 +35,7 @@ import {
   catalogEntryToProvider,
   customEndpointToProvider,
   customProviderId,
+  DEFAULT_AZURE_API_VERSION,
   type CatalogEntry
 } from '@shared/provider-catalog'
 
@@ -961,6 +962,53 @@ export function SettingsModal({
                                 already.
                               </>
                             )}
+                          </p>
+                        </>
+                      )}
+
+                      {p.kind === 'azure-openai' && (
+                        <>
+                          <label className="field">
+                            <span>Endpoint</span>
+                            <input
+                              value={p.endpoint ?? ''}
+                              placeholder="https://my-resource.openai.azure.com"
+                              onChange={(e) => patchProvider(p.id, { endpoint: e.target.value })}
+                            />
+                          </label>
+
+                          <label className="field">
+                            <span>API version</span>
+                            <input
+                              value={p.apiVersion ?? ''}
+                              placeholder={DEFAULT_AZURE_API_VERSION}
+                              onChange={(e) => patchProvider(p.id, { apiVersion: e.target.value })}
+                            />
+                          </label>
+
+                          <p className="field__hint">
+                            Each model above is the name of a deployment on your resource, so add
+                            the names you created in the Azure portal. A newer model may need a
+                            newer API version.
+                          </p>
+                        </>
+                      )}
+
+                      {p.kind === 'foundry' && (
+                        <>
+                          <label className="field">
+                            <span>Resource</span>
+                            <input
+                              value={p.resource ?? ''}
+                              placeholder="my-resource"
+                              onChange={(e) => patchProvider(p.id, { resource: e.target.value })}
+                            />
+                          </label>
+
+                          <p className="field__hint">
+                            The resource name from your Foundry endpoint, the{' '}
+                            <code>my-resource</code> in{' '}
+                            <code>https://my-resource.services.ai.azure.com</code>.
                           </p>
                         </>
                       )}

@@ -141,6 +141,81 @@ describe('cloud-hosted Claude kinds', () => {
   })
 })
 
+/**
+ * The Azure-hosted kinds address a resource rather than a region, and unlike their
+ * ambient-credential siblings above they do need a stored key — so the key gate
+ * applies, and the address preflight is what stands in for the region one.
+ */
+describe('Azure-hosted kinds', () => {
+  const azure = (o: Partial<ProviderConfig> = {}): ProviderConfig =>
+    cfg({
+      id: 'azure-openai',
+      kind: 'azure-openai',
+      label: 'Azure OpenAI',
+      requiresKey: true,
+      endpoint: 'https://my-resource.openai.azure.com',
+      ...o
+    })
+  const foundry = (o: Partial<ProviderConfig> = {}): ProviderConfig =>
+    cfg({
+      id: 'foundry',
+      kind: 'foundry',
+      label: 'Microsoft Foundry',
+      requiresKey: true,
+      resource: 'my-resource',
+      ...o
+    })
+
+  beforeEach(() => {
+    secrets.key = 'azure-key'
+    secrets.stored = true
+    delete process.env.AZURE_OPENAI_ENDPOINT
+    delete process.env.ANTHROPIC_FOUNDRY_RESOURCE
+  })
+
+  it('builds both kinds when a key and an address are configured', () => {
+    expect(typeof createProvider(azure()).streamChat).toBe('function')
+    expect(typeof createProvider(foundry()).streamChat).toBe('function')
+  })
+
+  it('names the setting when no address is configured', () => {
+    expect(() => createProvider(azure({ endpoint: undefined }))).toThrow(ProviderError)
+    expect(() => createProvider(azure({ endpoint: undefined }))).toThrow(
+      /No endpoint set for Azure OpenAI\..*Settings.*AZURE_OPENAI_ENDPOINT/s
+    )
+    expect(() => createProvider(foundry({ resource: undefined }))).toThrow(
+      /No resource set for Microsoft Foundry\..*ANTHROPIC_FOUNDRY_RESOURCE/s
+    )
+  })
+
+  it('accepts an address from the environment the SDK would read', () => {
+    process.env.AZURE_OPENAI_ENDPOINT = 'https://env.openai.azure.com'
+    expect(() => createProvider(azure({ endpoint: undefined }))).not.toThrow()
+    process.env.ANTHROPIC_FOUNDRY_RESOURCE = 'env-resource'
+    expect(() => createProvider(foundry({ resource: undefined }))).not.toThrow()
+  })
+
+  it('lets an explicit base URL stand in for the address on both', () => {
+    // Unlike Vertex, neither puts its resource in the request path — a gateway URL
+    // addresses the host completely.
+    expect(() =>
+      createProvider(azure({ endpoint: undefined, baseUrl: 'https://gw.internal/openai' }))
+    ).not.toThrow()
+    expect(() =>
+      createProvider(foundry({ resource: undefined, baseUrl: 'https://gw.internal/anthropic/' }))
+    ).not.toThrow()
+  })
+
+  it('still demands a key, which the ambient-credential kinds do not', () => {
+    // The whole difference from bedrock-aws/vertex: there is no credential chain to
+    // fall back on, so a keyless provider here can only fail at the first turn.
+    secrets.key = null
+    secrets.stored = false
+    expect(() => createProvider(azure())).toThrow(/No API key set for Azure OpenAI/)
+    expect(() => createProvider(foundry())).toThrow(/No API key set for Microsoft Foundry/)
+  })
+})
+
 describe('listModels for hosts with no Models API', () => {
   it('returns curated ids in each host addressing convention', async () => {
     const bedrock = await listModels(
@@ -149,11 +224,32 @@ describe('listModels for hosts with no Models API', () => {
     const vertex = await listModels(
       cfg({ id: 'vertex', kind: 'vertex', label: 'Vertex', requiresKey: false })
     )
+    const foundry = await listModels(
+      cfg({ id: 'foundry', kind: 'foundry', label: 'Foundry', requiresKey: true })
+    )
     // Non-empty is the point: the pre-existing `default: return []` arm made an
     // unhandled kind look like a host that simply serves no models.
     expect(bedrock.length).toBeGreaterThan(0)
     expect(vertex.length).toBeGreaterThan(0)
+    expect(foundry.length).toBeGreaterThan(0)
     expect(bedrock.every((m) => m.id.startsWith('anthropic.claude-'))).toBe(true)
     expect(vertex.every((m) => m.id.startsWith('claude-'))).toBe(true)
+    expect(foundry.every((m) => m.id.startsWith('claude-'))).toBe(true)
+  })
+
+  it('echoes the configured deployments for Azure OpenAI', async () => {
+    // The one host where the configured list IS the answer: its models are
+    // user-named deployments, so there is nothing to fetch and nothing to curate.
+    const models = await listModels(
+      cfg({
+        id: 'azure-openai',
+        kind: 'azure-openai',
+        label: 'Azure OpenAI',
+        requiresKey: true,
+        endpoint: 'https://r.openai.azure.com',
+        models: [{ id: 'my-gpt5' }, { id: 'my-gpt4o' }]
+      })
+    )
+    expect(models).toEqual([{ id: 'my-gpt5' }, { id: 'my-gpt4o' }])
   })
 })
