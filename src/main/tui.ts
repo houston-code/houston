@@ -1000,6 +1000,8 @@ export type SlashResult =
   | { kind: 'doctor' }
   /** Show or set how hard the model thinks before answering (/reasoning). */
   | { kind: 'reasoning'; effort?: ReasoningEffort }
+  /** Turn vim keys in the composer on or off (/vim). */
+  | { kind: 'vim'; on?: boolean }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
   /** Reprint a past tool result in full (/output [n]). */
@@ -1057,6 +1059,12 @@ export function parseSlashCommand(
       const a = arg.trim().toLowerCase()
       if (isReasoningEffort(a)) return { kind: 'reasoning', effort: a }
       return { kind: 'reasoning' } // no/invalid arg → the driver reports the current one
+    }
+    case 'vim': {
+      const a = arg.trim().toLowerCase()
+      if (a === 'on') return { kind: 'vim', on: true }
+      if (a === 'off') return { kind: 'vim', on: false }
+      return { kind: 'vim' } // bare /vim toggles
     }
     case 'verbose': {
       const a = arg.trim().toLowerCase()
@@ -1162,6 +1170,7 @@ export const HELP_TEXT = [
   '  /settings             settings overview + where to edit them',
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set thinking effort (off | low | medium | high | xhigh)',
+  '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
@@ -2562,6 +2571,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'settings') {
         renderSettingsOverview(deps, paint)
+        continue
+      }
+      if (result.kind === 'vim') {
+        const on = result.on ?? deps.getSettings().tuiEditor !== 'vim'
+        if (!deps.updateSettings) {
+          deps.io.out(paint('· changing settings is unavailable here\n', 'dim'))
+          continue
+        }
+        deps.updateSettings({ tuiEditor: on ? 'vim' : 'emacs' })
+        deps.io.out(
+          paint(
+            on
+              ? '· vim keys on: Esc for normal mode, i to type again (takes effect at the next prompt)\n'
+              : '· vim keys off: the composer is back to the readline keys\n',
+            'dim'
+          )
+        )
         continue
       }
       if (result.kind === 'verbose') {

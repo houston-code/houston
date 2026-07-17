@@ -492,7 +492,9 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
     columns: () => process.stdout.columns || 80,
     // Ctrl-X Ctrl-E in the composer, same editor hand-off plan review uses.
     editText: (initial) => editInEditor(initial, 'MESSAGE.md'),
-    completer: makeCompleter((q) => findFiles(tui.cwd, q))
+    completer: makeCompleter((q) => findFiles(tui.cwd, q)),
+    // Read live, so /vim applies at the next prompt rather than the next launch.
+    editorMode: () => (getSettings().tuiEditor === 'vim' ? 'vim' : 'emacs')
   })
 
   // spawn_session + scheduled runs work in the TUI too: background sessions run

@@ -3855,3 +3855,45 @@ describe('/cost breakdown', () => {
     expect(out).toContain('total')
   })
 })
+
+// The composer has been emacs-keyed since it stopped being readline. For anyone
+// whose fingers type `dw` when they mean it, that is a tax on every message.
+describe('/vim', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('parses the toggle and its explicit forms', () => {
+    const s = {} as AppSettings
+    expect(parseSlashCommand('/vim', s)).toEqual({ kind: 'vim' })
+    expect(parseSlashCommand('/vim on', s)).toEqual({ kind: 'vim', on: true })
+    expect(parseSlashCommand('/vim off', s)).toEqual({ kind: 'vim', on: false })
+  })
+
+  it('turns on from off, and back off from on', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/vim', null])
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toContainEqual({ tuiEditor: 'vim' })
+
+    const second = deps(done)
+    const t2 = fakeIo(['/vim', null])
+    second.d.io = t2.io
+    const patches2: Partial<AppSettings>[] = []
+    second.d.updateSettings = (p) => patches2.push(p)
+    const base = second.d.getSettings()
+    second.d.getSettings = () => ({ ...base, tuiEditor: 'vim' })
+    await runTui(opts, second.d)
+    expect(patches2).toContainEqual({ tuiEditor: 'emacs' })
+  })
+
+  it('says so rather than pretend when settings cannot be written', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['/vim on', null])
+    d.io = t.io
+    d.updateSettings = undefined
+    await runTui(opts, d)
+    expect(t.text()).toContain('unavailable')
+  })
+})
