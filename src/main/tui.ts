@@ -87,6 +87,16 @@ export interface TuiOptions {
   acceptTerms: boolean
   /** Colorize output. index.ts sets this from TTY + NO_COLOR detection. */
   color: boolean
+  /**
+   * Reopen the most recent chat in this folder at launch (`--continue`), or a
+   * specific one (`--resume <id>`).
+   *
+   * Headless has had both since it existed; the terminal had neither, so picking
+   * up where you left off meant starting a session and then running /resume — one
+   * more step, every time, for the most ordinary thing you do.
+   */
+  continueSession?: boolean
+  resumeId?: string
 }
 
 /**
@@ -112,6 +122,8 @@ export function parseTuiArgs(
   let model: string | undefined
   let approvalPolicy: ApprovalPolicy = 'ask'
   let acceptTerms = false
+  let continueSession = false
+  let resumeId: string | undefined
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
@@ -137,11 +149,26 @@ export function parseTuiArgs(
       approvalPolicy = 'full-auto'
     } else if (name === '--accept-terms') {
       acceptTerms = true
+    } else if (name === '--continue') {
+      continueSession = true
+    } else if (name === '--resume') {
+      const { value, next } = flagValue(argv, i)
+      resumeId = value
+      i = next
     }
   }
 
   if (!interactive && !defaultInteractive) return null
-  return { cwd, providerId, model, approvalPolicy, acceptTerms, color: true }
+  return {
+    cwd,
+    providerId,
+    model,
+    approvalPolicy,
+    acceptTerms,
+    color: true,
+    ...(continueSession ? { continueSession } : {}),
+    ...(resumeId ? { resumeId } : {})
+  }
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -2127,6 +2154,35 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
 
   deps.io.signal?.({ title: idleTitle(workspaceName) })
+  // --continue / --resume: open the chat before the first prompt, so picking up
+  // where you left off is the launch itself rather than a step after it.
+  if ((opts.continueSession || opts.resumeId) && deps.persist) {
+    const wanted = opts.resumeId
+    let entry: ResumeEntry | undefined
+    try {
+      entry = wanted
+        ? deps.persist.list(opts.cwd).find((c) => c.id === wanted)
+        : deps.persist.list(opts.cwd)[0]
+    } catch {
+      entry = undefined
+    }
+    // An explicit --resume <id> that isn't there is a mistake worth naming; a
+    // --continue with nothing to continue is just a fresh start.
+    const conv = entry ? deps.persist.get(entry.id) : null
+    if (conv) {
+      conversationId = entry!.id
+      messages = conv.messages
+      persistedProviderId = persistedModel = null
+      deps.io.out(
+        paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
+      )
+    } else if (wanted) {
+      deps.io.out(paint(`· no saved session "${wanted}" in this folder; starting fresh\n`, 'yellow'))
+    } else {
+      deps.io.out(paint('· no saved session in this folder yet; starting fresh\n', 'dim'))
+    }
+  }
+
   // Shift-Tab, at the composer or mid-run. Mid-run it also retargets the live run,
   // so you can loosen the mode to get past an approval without killing the turn.
   deps.io.setMode?.(policy)

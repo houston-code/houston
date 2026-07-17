@@ -89,8 +89,8 @@ Options:
                         (default: deny, or allow under full-auto)
   --accept-terms        accept the terms on first use of this profile
   --json                (-p) machine-readable: one JSON event per line
-  --continue            (-p) resume the folder's most recent session
-  --resume <id>         (-p) resume a specific session
+  --continue            reopen the folder's most recent session
+  --resume <id>         reopen a specific session
   -h, --help            this help
   -v, --version         print the version
 
