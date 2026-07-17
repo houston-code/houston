@@ -24,12 +24,12 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   agent core — live output, inline approvals (with a diff preview on writes and an
   unsandboxed-shell warning), `ask_user` elicitation, slash commands, a session
   cost meter, and sessions persisted as conversations (resumable, shared with the
-  GUI), plus Tab completion of slash commands and `@`-file mentions. *Still
-  deferred:* a **full-screen** TUI (alternate-buffer rendering with themes, vim
-  keybindings, and a status line). *Why deferred:* the full-screen layer means a
-  terminal UI framework (e.g. Ink), which is ESM-only against a CJS main bundle —
-  an integration that needs verifying before it's shipped; the current REPL covers
-  the interactive workflow without it.
+  GUI), plus Tab completion of slash commands and `@`-file mentions. Themes, vim
+  keybindings, and a persistent status line have since shipped in the REPL too.
+  *Still deferred:* a **full-screen** TUI (alternate-buffer rendering). *Why
+  deferred:* the full-screen layer means a terminal UI framework (e.g. Ink), which
+  is ESM-only against a CJS main bundle, an integration that needs verifying before
+  it's shipped; the current REPL covers the interactive workflow without it.
 
 - **Composer screenshot capture.** The composer's `+` attachment menu attaches
   files, a folder, the working-tree diff, a clipboard payload, and a link (and
