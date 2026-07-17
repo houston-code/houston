@@ -3916,6 +3916,78 @@ body.is-resizing .preview-dock__resizer::after {
   flex: 1;
   min-height: 0;
 }
+/* ---- /doctor health view ---- */
+.modal--doctor {
+  width: min(560px, 92vw);
+  max-height: 82vh;
+}
+.doctor {
+  display: block;
+  flex-direction: column;
+  overflow: auto;
+  padding: 4px 18px 16px;
+}
+.doctor__loading {
+  color: var(--text-dim);
+  padding: 20px 0;
+}
+.doctor__group {
+  margin-top: 14px;
+}
+.doctor__group-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.doctor__row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.doctor__mark {
+  font-weight: 700;
+}
+.doctor__mark--ok {
+  color: var(--ok);
+}
+.doctor__mark--warn {
+  color: var(--warn, #d1a000);
+}
+.doctor__mark--fail {
+  color: var(--danger);
+}
+.doctor__label {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.doctor__detail {
+  color: var(--text-dim);
+  word-break: break-word;
+}
+/* The fix wraps under the row, aligned past the mark + label columns. */
+.doctor__fix {
+  grid-column: 3;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.doctor__verdict {
+  margin: 16px 0 0;
+  font-weight: 600;
+}
+.doctor__verdict--ok {
+  color: var(--ok);
+}
+.doctor__verdict--warn {
+  color: var(--warn, #d1a000);
+}
+.doctor__verdict--fail {
+  color: var(--danger);
+}
 .modal__nav {
   flex-shrink: 0;
   width: 176px;

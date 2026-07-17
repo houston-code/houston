@@ -73,6 +73,8 @@ import { listShells, listPreviewServers, onShellsChanged } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { version as APP_VERSION } from '../../package.json'
+import { gatherDoctorFacts } from './doctor'
+import type { DoctorFacts } from '@shared/doctor'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import {
   restoreCheckpoint,
@@ -299,6 +301,14 @@ export function registerIpc(): void {
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
   ipcMain.handle(IPC.appGetVersion, () => APP_VERSION)
+
+  // /doctor: the health facts, graded into a report by @shared/doctor in the
+  // renderer. `workspace` is informational (the report's "workspace" row). Update
+  // state has its own GUI surface, so the doctor's version row just shows the version.
+  ipcMain.handle(IPC.doctorFacts, (_event, workspace: unknown): DoctorFacts => {
+    const cwd = typeof workspace === 'string' ? workspace : ''
+    return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
+  })
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   ipcMain.handle(IPC.updateCheck, () => checkForUpdates())

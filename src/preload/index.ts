@@ -15,6 +15,7 @@ import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import type { GitInitResult } from '@shared/git'
+import type { DoctorFacts } from '@shared/doctor'
 import type { ClipboardContent, PickedFile } from '@shared/composerContext'
 import type {
   AgentEvent,
@@ -45,6 +46,9 @@ import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
  */
 const api = {
   getVersion: (): Promise<string> => ipcRenderer.invoke(IPC.appGetVersion),
+  /** Gather the /doctor health facts for the given workspace. */
+  getDoctorFacts: (workspace: string): Promise<DoctorFacts> =>
+    ipcRenderer.invoke(IPC.doctorFacts, workspace),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>

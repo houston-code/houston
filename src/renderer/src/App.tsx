@@ -80,6 +80,9 @@ import type {
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
 // alone is the largest component in the renderer.
+const DoctorModal = lazy(() =>
+  import('./components/DoctorModal').then((m) => ({ default: m.DoctorModal }))
+)
 const SettingsModal = lazy(() =>
   import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal }))
 )
@@ -157,6 +160,7 @@ export default function App(): JSX.Element {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [doctorOpen, setDoctorOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   const [scorecardOpen, setScorecardOpen] = useState(false)
@@ -1150,7 +1154,8 @@ export default function App(): JSX.Element {
         const inv = parseAgentInvocation(args)
         if (inv) void onSend(agentInvocationPrompt(inv.name, inv.task))
         else chat.notify('Usage: /agent <name> <task> — the name matches a file in .houston/agents', 'error')
-      } else if (cmd.name === 'help') {
+      } else if (cmd.name === 'doctor') setDoctorOpen(true)
+      else if (cmd.name === 'help') {
         chat.notify(
           'Commands: ' + BUILTIN_COMMANDS.map((c) => `/${c.name}`).join('  ') +
             (commands.length > BUILTIN_COMMANDS.length ? '  (+ custom from .houston/commands)' : '')
@@ -1820,6 +1825,8 @@ export default function App(): JSX.Element {
             }}
           />
         )}
+
+        {doctorOpen && <DoctorModal workspace={workspace} onClose={() => setDoctorOpen(false)} />}
 
         {filesOpen && <FilesPanel workspace={workspace} onClose={() => setFilesOpen(false)} />}
 

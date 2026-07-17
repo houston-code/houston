@@ -19,6 +19,8 @@ export const PRESENT_PLAN_TOOL = 'present_plan'
 export const IPC = {
   // App / system
   appGetVersion: 'app:getVersion',
+  /** Gather the /doctor health facts (sandbox, provider keys, MCP, binaries). */
+  doctorFacts: 'app:doctorFacts',
   // Updates
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',
