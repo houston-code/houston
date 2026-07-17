@@ -30,6 +30,8 @@ import {
   expandTemplate,
   mergeCommands,
   resolveCommand,
+  parseAgentInvocation,
+  agentInvocationPrompt,
   type Command
 } from '@shared/commands'
 import type { CompactResult } from './agent/compact'
@@ -2189,39 +2191,9 @@ export function parseMemoryCapture(line: string): string | null {
 /** Where a remembered instruction goes. */
 export type MemoryScope = 'project' | 'global'
 
-/**
- * `/agent <name> <task>` — hand a job to one of the workspace's own subagents.
- *
- * `.houston/agents/*.md` lets a project define specialized agents, and the model
- * can dispatch them. The user could not: `/agents` listed them and that was the
- * whole surface, so the only way to use one you had written was to describe it in
- * prose and hope the model picked the right one.
- *
- * Returns the agent name and its task, or null when the line isn't one.
- */
-export function parseAgentInvocation(arg: string): { name: string; task: string } | null {
-  const trimmed = arg.trim()
-  if (!trimmed) return null
-  const sp = trimmed.search(/\s/)
-  const name = sp === -1 ? trimmed : trimmed.slice(0, sp)
-  if (!/^[\w-]+$/.test(name)) return null
-  return { name, task: sp === -1 ? '' : trimmed.slice(sp + 1).trim() }
-}
-
-/**
- * The turn that runs a named subagent.
- *
- * Phrased as an instruction to dispatch rather than as the task itself: the
- * subagent tools are the model's, and routing through them keeps everything that
- * hangs off a dispatch — the agent's own system prompt, its tool allow-list, its
- * model, the approval tier for a writable one — exactly as it is when the model
- * chooses. A second path into subagents would be a second set of rules to keep in
- * step.
- */
-export function agentInvocationPrompt(name: string, task: string): string {
-  const what = task || 'Use your judgment about what needs doing here, and report back.'
-  return `Use the \`${name}\` subagent for this task. Dispatch it with everything it needs to work on its own, then report what it found.\n\n${what}`
-}
+// `parseAgentInvocation` + `agentInvocationPrompt` now live in `@shared/commands`
+// (imported at the top); re-exported so existing callers of the TUI module keep working.
+export { parseAgentInvocation, agentInvocationPrompt }
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
 export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {

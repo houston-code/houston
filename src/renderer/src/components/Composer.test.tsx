@@ -46,6 +46,20 @@ describe('Composer', () => {
     expect(props.onSend).not.toHaveBeenCalled()
   })
 
+  it('routes /agent to onCommand with its args (the dispatch happens in App)', () => {
+    const agent: Command = { name: 'agent', description: 'Dispatch an agent' }
+    const props = baseProps({ commands: [agent] })
+    render(<Composer {...props} />)
+    // Trailing content after the name keeps the menu closed so Enter submits.
+    const input = type('/agent reviewer check the diff')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'agent' }),
+      'reviewer check the diff'
+    )
+    expect(props.onSend).not.toHaveBeenCalled()
+  })
+
   it('runs a fully-typed command on Enter without needing a second Enter', () => {
     const props = baseProps()
     render(<Composer {...props} />)

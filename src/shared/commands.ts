@@ -59,6 +59,41 @@ export function resolveCommand(commands: Command[], name: string): Command | und
 }
 
 /**
+ * `/agent <name> <task>` — hand a job to one of the workspace's own subagents.
+ *
+ * `.houston/agents/*.md` lets a project define specialized agents, and the model
+ * can dispatch them. The user could not: `/agents` listed them and that was the
+ * whole surface, so the only way to use one you had written was to describe it in
+ * prose and hope the model picked the right one. Shared so both clients recognize
+ * an invocation and phrase the dispatch identically.
+ *
+ * Returns the agent name and its task, or null when the arg isn't a valid one.
+ */
+export function parseAgentInvocation(arg: string): { name: string; task: string } | null {
+  const trimmed = arg.trim()
+  if (!trimmed) return null
+  const sp = trimmed.search(/\s/)
+  const name = sp === -1 ? trimmed : trimmed.slice(0, sp)
+  if (!/^[\w-]+$/.test(name)) return null
+  return { name, task: sp === -1 ? '' : trimmed.slice(sp + 1).trim() }
+}
+
+/**
+ * The turn that runs a named subagent.
+ *
+ * Phrased as an instruction to dispatch rather than as the task itself: the
+ * subagent tools are the model's, and routing through them keeps everything that
+ * hangs off a dispatch — the agent's own system prompt, its tool allow-list, its
+ * model, the approval tier for a writable one — exactly as it is when the model
+ * chooses. A second path into subagents would be a second set of rules to keep in
+ * step.
+ */
+export function agentInvocationPrompt(name: string, task: string): string {
+  const what = task || 'Use your judgment about what needs doing here, and report back.'
+  return `Use the \`${name}\` subagent for this task. Dispatch it with everything it needs to work on its own, then report what it found.\n\n${what}`
+}
+
+/**
  * Merge built-in and custom commands, dropping any custom command that collides
  * with a built-in name (built-ins win) so the list has no duplicates.
  */
@@ -169,7 +204,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   {
     name: 'agent',
     description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
-    clients: ['tui']
+    clients: ['gui', 'tui']
   },
   { name: 'mcp', description: 'List MCP servers (add, remove, login, logout)', clients: ['tui'] },
   {
