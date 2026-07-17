@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vitest/config'
+import { coverageConfigDefaults, defineConfig } from 'vitest/config'
 
 /**
  * Three Vitest projects, split by runtime so each test runs in the right place:
@@ -28,6 +28,34 @@ export default defineConfig({
     // Regenerates the uncommitted src/main/agent/guide-content.ts before any test
     // file is imported. See scripts/vitest-global-setup.mjs.
     globalSetup: ['./scripts/vitest-global-setup.mjs'],
+    // Opt-in coverage: `npm run test:coverage` selects the v8 provider and writes
+    // a text summary plus HTML and lcov reports under coverage/. It is deliberately
+    // NOT wired into the default `npm test` (or CI's gate) — instrumentation adds
+    // runtime and we have no baseline to threshold against yet, so turning it on
+    // by default would only slow every run. The excludes drop everything that
+    // isn't product logic under test: generated files, config, type-only modules,
+    // tests/fixtures/evals, build output, and the desktop/e2e shells.
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      reportsDirectory: './coverage',
+      exclude: [
+        ...coverageConfigDefaults.exclude,
+        '**/*.test.{ts,tsx,mts,mjs}',
+        '**/*.d.ts',
+        'src/main/agent/evals/**',
+        'src/main/agent/goldens/**',
+        'src/main/agent/guide-content.ts',
+        'src/**/test/**',
+        'e2e/**',
+        'website/**',
+        'build/**',
+        'out/**',
+        'scripts/**',
+        '*.config.{ts,mts,mjs,js}',
+        '.claude/**'
+      ]
+    },
     projects: [
       {
         extends: true,
