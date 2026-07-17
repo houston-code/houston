@@ -2252,6 +2252,33 @@ pre.diff {
   color: var(--text-dim);
   user-select: none;
 }
+/* The gutter. `--diff-gutter` is sized from the widest number in the diff, so the
+   column doesn't jitter between hunks. Not selectable: copying a diff should give
+   back the code, not the code with line numbers welded to it. */
+.diff__no {
+  width: var(--diff-gutter, 3ch);
+  flex-shrink: 0;
+  text-align: right;
+  color: var(--text-dim);
+  opacity: 0.65;
+  user-select: none;
+}
+/* The words that actually changed inside a modified line. `<mark>` for the meaning;
+   the browser default (black on yellow) would fight both themes, so it is restyled
+   to lean on the line's own add/del tint. */
+.diff__word {
+  background: transparent;
+  color: inherit;
+  font-weight: 650;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.diff__line--add .diff__word {
+  background: rgba(74, 222, 128, 0.28);
+}
+.diff__line--del .diff__word {
+  background: rgba(255, 107, 107, 0.28);
+}
 .diff__text {
   flex: 1;
   min-width: 0;

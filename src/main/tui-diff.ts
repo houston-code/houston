@@ -1,5 +1,10 @@
-import type { DiffLine, FileDiffPreview } from '@shared/diff'
+import { numberDiff, tokenize, wordDiff, type DiffLine, type FileDiffPreview } from '@shared/diff'
 import type { Painter } from './tui'
+
+// Re-exported so this module stays the terminal's diff surface, while the pure
+// parts (numbering, word marks) live in shared and are rendered by the GUI too —
+// one implementation, so the two clients cannot disagree about what changed.
+export { numberDiff, wordDiff, type NumberedLine } from '@shared/diff'
 
 /**
  * The diff you read before approving an edit.
@@ -17,76 +22,6 @@ import type { Painter } from './tui'
  *
  * Pure, so what gets shown is unit-testable.
  */
-
-/** A diff line with its position in the old/new file, for the gutter. */
-export interface NumberedLine {
-  type: DiffLine['type']
-  text: string
-  count?: number
-  /** Line number in the old file (absent for additions). */
-  oldNo?: number
-  /** Line number in the new file (absent for deletions). */
-  newNo?: number
-}
-
-/**
- * Attach old/new line numbers to a (hunked) diff.
- *
- * A `skip` marker stands for `count` unchanged lines, so both sides advance past
- * it — otherwise every number after the first fold would be wrong, which is worse
- * than having no numbers at all.
- */
-export function numberDiff(diff: DiffLine[]): NumberedLine[] {
-  let oldNo = 0
-  let newNo = 0
-  return diff.map((l) => {
-    switch (l.type) {
-      case 'del':
-        return { ...l, oldNo: ++oldNo }
-      case 'add':
-        return { ...l, newNo: ++newNo }
-      case 'skip': {
-        const n = l.count ?? 0
-        oldNo += n
-        newNo += n
-        return { ...l }
-      }
-      default:
-        return { ...l, oldNo: ++oldNo, newNo: ++newNo }
-    }
-  })
-}
-
-/** Split into words and whitespace runs, so the pieces rejoin exactly. */
-function tokenize(s: string): string[] {
-  return s.match(/\s+|[^\s]+/g) ?? []
-}
-
-/**
- * Which tokens actually differ between two versions of a line.
- *
- * Common prefix + common suffix, which is linear and catches the shape real edits
- * take (one contiguous change). An LCS would be quadratic on a long line for a
- * marginally better answer on edits people rarely make.
- */
-export function wordDiff(oldText: string, newText: string): { del: boolean[]; add: boolean[] } {
-  const a = tokenize(oldText)
-  const b = tokenize(newText)
-  let start = 0
-  while (start < a.length && start < b.length && a[start] === b[start]) start++
-  let endA = a.length
-  let endB = b.length
-  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
-    endA--
-    endB--
-  }
-  // Nothing in common at either end: mark the whole line rather than pretend the
-  // change is narrower than it is.
-  return {
-    del: a.map((_, i) => i >= start && i < endA),
-    add: b.map((_, i) => i >= start && i < endB)
-  }
-}
 
 /** Paint a line, emphasizing only the tokens that changed. */
 function paintWords(text: string, mark: boolean[], paint: Painter, tone: 'red' | 'green'): string {

@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ToolItem } from '../lib/items'
 import { ToolGroup } from './ToolGroup'
 
+/**
+ * A diff line's full text. A modified line is split into per-token spans so the
+ * changed WORDS can be marked inside it, so `getByText` no longer sees the line as
+ * one node. This matches on the line's whole text content, which is still exact.
+ */
+function diffText(text: string, root?: HTMLElement): HTMLElement {
+  const q = root ? within(root) : screen
+  return q.getByText((_, el) => el?.classList.contains('diff__text') === true && el.textContent === text)
+}
+
 /** Build a ToolItem fixture from the real shape in lib/items.ts. */
 function tool(over: Partial<ToolItem> & Pick<ToolItem, 'id' | 'name' | 'status'>): ToolItem {
   return { kind: 'tool', ...over } as ToolItem
@@ -167,8 +177,8 @@ describe('ToolGroup', () => {
     render(<ToolGroup items={items} onApprove={vi.fn()} />)
 
     // The diff is shown without any click because the change is awaiting approval.
-    expect(screen.getByText('old line')).toBeInTheDocument()
-    expect(screen.getByText('new line')).toBeInTheDocument()
+    expect(diffText('old line')).toBeInTheDocument()
+    expect(diffText('new line')).toBeInTheDocument()
     // One line removed, one added.
     expect(screen.getByText('+1')).toBeInTheDocument()
     expect(screen.getByText('−1')).toBeInTheDocument()
@@ -309,7 +319,7 @@ describe('ToolGroup', () => {
     const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
 
     const diff = container.querySelector('.diff')
-    expect(within(diff as HTMLElement).getByText('was here')).toBeInTheDocument()
+    expect(diffText('was here', diff as HTMLElement)).toBeInTheDocument()
     // One line each way, rather than the whole file counted as added.
     expect(screen.getByText('+1')).toBeInTheDocument()
     expect(screen.getByText('−1')).toBeInTheDocument()
@@ -416,8 +426,8 @@ describe('ToolGroup', () => {
     ]
     const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
     fireEvent.click(container.querySelector('.tool-row__head') as HTMLElement)
-    expect(screen.getByText('old line')).toBeInTheDocument()
-    expect(screen.getByText('new line')).toBeInTheDocument()
+    expect(diffText('old line')).toBeInTheDocument()
+    expect(diffText('new line')).toBeInTheDocument()
   })
 
   it('renders the correct mark for each todo status', () => {
