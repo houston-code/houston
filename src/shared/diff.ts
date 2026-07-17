@@ -17,6 +17,93 @@ export interface DiffLine {
   count?: number
 }
 
+/** A diff line with its position in the old/new file, for the gutter. */
+export interface NumberedLine {
+  type: DiffLine['type']
+  text: string
+  count?: number
+  /** Line number in the old file (absent for additions). */
+  oldNo?: number
+  /** Line number in the new file (absent for deletions). */
+  newNo?: number
+}
+
+/**
+ * Attach old/new line numbers to a (hunked) diff.
+ *
+ * A `skip` marker stands for `count` unchanged lines, so both sides advance past
+ * it — otherwise every number after the first fold would be wrong, which is worse
+ * than having no numbers at all.
+ */
+export function numberDiff(diff: DiffLine[]): NumberedLine[] {
+  let oldNo = 0
+  let newNo = 0
+  return diff.map((l) => {
+    switch (l.type) {
+      case 'del':
+        return { ...l, oldNo: ++oldNo }
+      case 'add':
+        return { ...l, newNo: ++newNo }
+      case 'skip': {
+        const n = l.count ?? 0
+        oldNo += n
+        newNo += n
+        return { ...l }
+      }
+      default:
+        return { ...l, oldNo: ++oldNo, newNo: ++newNo }
+    }
+  })
+}
+
+/** Split into words and whitespace runs, so the pieces rejoin exactly. */
+export function tokenize(s: string): string[] {
+  return s.match(/\s+|[^\s]+/g) ?? []
+}
+
+/**
+ * Which tokens actually differ between two versions of a line.
+ *
+ * Common prefix + common suffix, which is linear and catches the shape real edits
+ * take (one contiguous change). An LCS would be quadratic on a long line for a
+ * marginally better answer on edits people rarely make.
+ */
+export function wordDiff(oldText: string, newText: string): { del: boolean[]; add: boolean[] } {
+  const a = tokenize(oldText)
+  const b = tokenize(newText)
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let endA = a.length
+  let endB = b.length
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA--
+    endB--
+  }
+  // Nothing in common at either end: mark the whole line rather than pretend the
+  // change is narrower than it is.
+  return {
+    del: a.map((_, i) => i >= start && i < endA),
+    add: b.map((_, i) => i >= start && i < endB)
+  }
+}
+
+/**
+ * Pair each `del` with the `add` that replaced it, so a modified line can show
+ * WHICH words changed. A `del` immediately followed by an `add` is a replacement;
+ * anything else is a whole-line insert or removal, and marking words inside it
+ * would invent a precision that isn't there.
+ */
+export function replacementPairs(lines: NumberedLine[]): Map<number, number> {
+  const pairs = new Map<number, number>()
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (lines[i].type === 'del' && lines[i + 1].type === 'add') {
+      pairs.set(i, i + 1)
+      i++ // an add already claimed as a replacement can't also start one
+    }
+  }
+  return pairs
+}
+
 /**
  * Above this many lines on either side we skip the O(m·n) LCS table and fall back
  * to a coarse "remove all, then add all" diff, so a huge file overwrite can't lock
