@@ -177,6 +177,51 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   LSP-backed go-to-definition / find-references is the other large lever, tracked
   under IDE integration below.
 
+- **Landlock fallback for the Linux sandbox.** On Linux, `run_shell` is confined by
+  bubblewrap; when bubblewrap is unusable (not installed, or unprivileged user
+  namespaces disabled by the kernel or AppArmor) Houston falls back to running the
+  command unconfined, and every such command then prompts for approval even in full
+  auto. A Landlock (or seccomp) fallback would restore filesystem confinement without
+  bubblewrap. *Why deferred:* Landlock is a kernel LSM reached through raw syscalls
+  that Node does not expose, so it needs a small native helper and real testing across
+  kernel versions; the approval prompt is a working stopgap in the meantime.
+
+- **Cross-session memory the agent maintains itself.** The agent's durable knowledge
+  of a project today is what the user writes in `AGENTS.md` / `CLAUDE.md`; within a run
+  it also keeps a working-memory block, but nothing it learns in one session is carried,
+  on its own, into the next. A self-maintained memory (a per-project store the agent
+  writes to and that is recalled automatically) would close that. *Why deferred:* it
+  needs a stable per-repo identity key (the groundwork exists in
+  [`repoIdentity.ts`](src/main/agent/repoIdentity.ts) but is unused), a storage format,
+  a review surface so the user can see and prune what was remembered, and a stance on
+  what is allowed to persist. A real feature with a UX, not a flag.
+
+- **More lifecycle hook events.** Hooks fire at six points today (`PreToolUse`,
+  `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`, `PreCompact`). Natural
+  additions include `SubagentStop` (when a dispatched subagent finishes), `PostCompact`
+  (after a compaction lands), and a `Notification` event (when a run is waiting on the
+  user). *Why deferred:* each needs its firing point and its blocking/context-injection
+  semantics pinned down (a subagent has several exit paths and no hook wiring yet; a
+  post-compaction hook has no obvious place to splice returned context back in), so they
+  are better designed deliberately than bolted onto the highest-churn part of the loop.
+
+- **Permission rules that match a tool's arguments.** A rule matches a tool name plus a
+  glob over one subject string (the command, path, URL, or query). For a namespaced MCP
+  tool the subject is the tool name itself, so a rule can gate a whole server or tool but
+  cannot say "allow this MCP tool only when a given argument has a given value".
+  Argument-level matching would let a rule (or a project guardrail) target, say, one
+  repository or one destination. *Why deferred:* it adds a structured matcher to the rule
+  schema and the Settings editor, beyond the current single-glob model.
+
+- **Canonicalized path and URL matching in permission rules.** Rule subjects are matched
+  as raw strings with a single `*` wildcard: a path rule does not normalize `.`/`..` or
+  resolve symlinks before matching, and a URL rule compares the raw URL rather than its
+  parsed host, scheme, and port. So `src/*` does not cover `./src/x` or an absolute path
+  to the same file, and a host rule is case- and port-sensitive. *Why deferred:*
+  canonicalizing broadens what a rule matches, which is safe to widen for a `deny` rule
+  but risky for an `allow` rule (it could auto-approve more than intended), so it wants a
+  careful, direction-aware design rather than a blanket normalize.
+
 ## Deferred — polish
 
 - **Open a specific file from the diff, changes list, and tool results.** The
