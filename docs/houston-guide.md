@@ -445,6 +445,10 @@ dispatch can also pass `model` to run one-off legwork on a cheaper sibling model
 Subagents can fan out one level themselves: a dispatched agent may dispatch its
 own nested read-only researchers (never writable, and no deeper).
 
+**Running one yourself.** In the terminal, `/agent <name> <task>` hands a job to
+one of your agents directly, instead of describing it in prose and hoping the
+right one gets picked. `/agent` alone lists them.
+
 ## Spawn separate sessions
 
 Where a subagent reports back into the current turn, `spawn_session` spins off a

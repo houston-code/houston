@@ -166,6 +166,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'List the workspace agents (.houston/agents)',
     clients: ['gui', 'tui']
   },
+  {
+    name: 'agent',
+    description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
+    clients: ['tui']
+  },
   { name: 'mcp', description: 'List MCP servers (add, remove, login, logout)', clients: ['tui'] },
   { name: 'hooks', description: 'List configured hooks', clients: ['tui'] },
   { name: 'theme', description: 'List or switch the color theme', clients: ['tui'] },
