@@ -539,6 +539,43 @@ describe('startRun', () => {
     expect((result as { output: string }).output).toMatch(/Denied/)
   })
 
+  // The note is the "why" on a refusal, folded into the tool result so the model
+  // reads the correction in the same interaction rather than needing a follow-up.
+  it('carries the deny note into the tool result the model reads', async () => {
+    const r = await run({
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('deny', 'use the staging bucket instead'),
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'nope.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ]
+    })
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect((result as { output: string }).output).toContain('use the staging bucket instead')
+  })
+
+  // The contract the doc-comment on ApprovalResolution must match: a note only
+  // rides a refusal. On an allow the tool runs and its real output is the answer,
+  // so a note has nowhere to go and is dropped — pinned here so the comment can't
+  // drift back to claiming "allow, but prefer X next time" works.
+  it('drops a note on an allow — the tool result is the tool output, not the note', async () => {
+    const r = await run({
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('allow', 'prefer X next time'),
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'yes.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ]
+    })
+    expect(readFileSync(join(ws, 'yes.txt'), 'utf8')).toBe('x')
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect((result as { output: string }).output).not.toContain('prefer X next time')
+  })
+
   it('blocks writes in plan mode', async () => {
     const r = await run({
       policy: 'plan',
