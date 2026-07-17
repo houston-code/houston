@@ -469,8 +469,12 @@ export const MAX_PENDING_STEERS = 20
  * interrupt and re-explain in a separate turn. The note rides the SAME
  * interaction, so the correction lands where the refusal did.
  *
- * Carried on every decision (not just `deny`): "allow, but prefer X next time" is
- * as useful as a refusal, and `rule-deny` wants the reason recorded too.
+ * Carried on a refusal — both `deny` and `rule-deny`, which is why it lives on the
+ * resolution rather than just the deny path — where the loop folds it into the tool
+ * result the model reads (see `denialText`). An `allow`/`always`/`rule-allow` carries
+ * no note today: the tool runs and its real output is the answer, and neither client
+ * offers a way to attach "allow, but prefer X next time" to an approval. (Wiring that
+ * through would be a feature, with its own UI, not a field the loop already reads.)
  */
 export interface ApprovalResolution {
   decision: ToolApprovalDecision
