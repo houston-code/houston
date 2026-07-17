@@ -1058,6 +1058,25 @@ export default function App(): JSX.Element {
     [chat.running, settings, queue, sendNow]
   )
 
+  // Steer the running turn: inject the text into the live run before its next step,
+  // rather than queuing it for after. If the run finished between typing and the
+  // click, fall back to queuing so nothing the user typed is dropped.
+  const onSteer = useCallback(
+    (text: string) => {
+      void chat.steer(text).then((accepted) => {
+        if (!accepted && settings?.selected) {
+          queue.enqueue({
+            text,
+            providerId: settings.selected.providerId,
+            model: settings.selected.model,
+            approvalPolicy: settings.approvalPolicy
+          })
+        }
+      })
+    },
+    [chat, settings, queue]
+  )
+
   // Hand off PR creation to the agent: close the panel and send the standing
   // prompt as a normal turn, so the commit/push/open-PR flow runs through the
   // agent's tools and approval gate rather than the renderer touching git.
@@ -1741,6 +1760,7 @@ export default function App(): JSX.Element {
             onCreatePr={canChat ? onCreatePr : undefined}
             onCommand={onCommand}
             onSend={onSend}
+            onSteer={onSteer}
             onCancel={chat.cancel}
           />
         </div>

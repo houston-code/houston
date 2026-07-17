@@ -141,6 +141,7 @@ export function Composer({
   onCreatePr,
   onCommand,
   onSend,
+  onSteer,
   onCancel
 }: {
   /** The open conversation (null for a not-yet-created new chat); keys the draft. */
@@ -163,6 +164,12 @@ export function Composer({
   onCreatePr?: () => void
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
+  /**
+   * Steer the running turn with the composer text, injected before the agent's next
+   * step (distinct from onSend, which queues for after the run). Absent → no steer
+   * affordance; the queue is the only mid-run path.
+   */
+  onSteer?: (text: string) => void
   onCancel: () => void
 }): JSX.Element {
   // Seed from this conversation's persisted draft so text typed but not sent
@@ -621,6 +628,19 @@ export function Composer({
     resetMenus()
   }
 
+  // Steer the running turn with the composer text. A course correction is text only
+  // (steerRun carries no images), so staged images stay for the next full turn; the
+  // text is cleared. No-op without text or a steer handler.
+  const steer = (): void => {
+    const trimmed = text.trim()
+    if (!trimmed || !onSteer || disabled) return
+    appendPromptHistory(trimmed)
+    onSteer(buildMessageWithContext(trimmed, context))
+    setText('')
+    setContext([])
+    resetMenus()
+  }
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     // Ignore keydowns that are part of an IME composition (CJK etc.): the Enter /
     // arrows that confirm or move within a candidate window must not submit the
@@ -913,6 +933,18 @@ export function Composer({
           <div className="composer__bar-right">
             {running ? (
               <>
+                {onSteer && text.trim() && (
+                  <button
+                    type="button"
+                    className="composer__send composer__steer"
+                    aria-label="Steer"
+                    title="Steer the running turn — the agent reads this before its next step"
+                    onClick={steer}
+                    disabled={sendDisabled}
+                  >
+                    <Icon name="steer" size={16} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="composer__send"

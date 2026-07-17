@@ -25,6 +25,7 @@ function installApi() {
       Promise.resolve()
     ),
     setAgentPolicy: vi.fn((_runId: string, _policy: string) => Promise.resolve()),
+    steerAgent: vi.fn((_runId: string, _text: string) => Promise.resolve(true)),
     restoreCheckpoint: vi.fn((_runId: string) => Promise.resolve(3)),
     reapplyCheckpoint: vi.fn((_runId: string) => Promise.resolve(2))
   }
@@ -239,6 +240,32 @@ describe('useChat', () => {
 
     act(() => result.current.setPolicy('plan'))
     expect(api.setAgentPolicy).not.toHaveBeenCalled()
+  })
+
+  it('steers the live run through the bridge, and reports acceptance', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'text', delta: 'working' }) // a run is live
+
+    let accepted: boolean | undefined
+    await act(async () => {
+      accepted = await result.current.steer('use YAML instead')
+    })
+    expect(api.steerAgent).toHaveBeenCalledWith(runId, 'use YAML instead')
+    expect(accepted).toBe(true)
+  })
+
+  it('steer is a no-op returning false when no run is active', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat())
+
+    let accepted: boolean | undefined
+    await act(async () => {
+      accepted = await result.current.steer('nothing to steer')
+    })
+    expect(api.steerAgent).not.toHaveBeenCalled()
+    expect(accepted).toBe(false)
   })
 
   it('reverts and re-applies a checkpoint through the bridge', async () => {

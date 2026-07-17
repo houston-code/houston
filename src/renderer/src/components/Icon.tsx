@@ -28,6 +28,7 @@ export type IconName =
   | 'clipboard'
   | 'link'
   | 'send'
+  | 'steer'
   | 'stop'
   | 'close'
   | 'eye'
@@ -150,6 +151,14 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   // Rounded square — stop the run.
+  // An arrow pushing into a bar (→|): inject into the run that is already going.
+  steer: (
+    <>
+      <path d="M2.5 8h7" />
+      <path d="M6.5 5l3 3-3 3" />
+      <path d="M13 3.5v9" />
+    </>
+  ),
   stop: <path d="M4.8 4.8h6.4v6.4H4.8z" />,
   // X — dismiss a chip.
   close: (

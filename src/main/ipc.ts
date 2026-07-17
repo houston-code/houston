@@ -61,6 +61,7 @@ import {
   resolveQuestion,
   resolvePlan,
   setRunPolicy,
+  steerRun,
   runOwner,
   activeRunForConversation,
   pendingPromptsForConversation,
@@ -971,6 +972,16 @@ export function registerIpc(): void {
       setRunPolicy(runId, policy)
     }
   )
+
+  // Steer the live run: inject a course correction the model reads before its next
+  // step (see steerRun). A run-control call like the others, so it is gated on run
+  // ownership — otherwise another window could push text into this run's context.
+  // steerRun trims + caps the text itself; the boundary only rejects a non-string.
+  ipcMain.handle(IPC.agentSteer, (event, runId: string, text: unknown): boolean => {
+    if (typeof text !== 'string') return false
+    if (!callerOwnsRun(event, runId)) return false
+    return steerRun(runId, text)
+  })
 
   // The runId of the live run for a conversation, or null. The renderer queries
   // this when re-opening a conversation so it can re-adopt a still-running run

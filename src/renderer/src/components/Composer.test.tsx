@@ -491,4 +491,45 @@ describe('Composer + attachment menu', () => {
     expect(sent).toBe('')
     expect(images).toEqual([expect.objectContaining({ mediaType: 'image/png' })])
   })
+
+  // Steering: mid-run, a distinct action from the queue. The queue sends after the
+  // run; a steer reaches the model before its next step.
+  describe('steer', () => {
+    it('offers a Steer button while running with text, and not otherwise', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn() })
+      const { rerender } = render(<Composer {...props} />)
+      // Empty while running: no steer button (nothing to steer).
+      expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull()
+      type('use YAML instead')
+      expect(screen.getByRole('button', { name: 'Steer' })).toBeInTheDocument()
+      // Not running: the steer button never shows, even with text.
+      rerender(<Composer {...baseProps({ running: false, onSteer: props.onSteer })} />)
+      expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull()
+    })
+
+    it('has no Steer affordance when the handler is absent', () => {
+      render(<Composer {...baseProps({ running: true })} />)
+      type('anything')
+      expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull()
+    })
+
+    it('steers the text and clears the field, without queuing it', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('actually, use staging')
+      fireEvent.click(screen.getByRole('button', { name: 'Steer' }))
+      expect(props.onSteer).toHaveBeenCalledWith('actually, use staging')
+      expect(props.onSend).not.toHaveBeenCalled() // steer is not a queue
+      expect(input.value).toBe('')
+    })
+
+    it('leaves the queue (Enter / the send button) untouched while running', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn() })
+      render(<Composer {...props} />)
+      type('a follow-up for later')
+      fireEvent.click(screen.getByRole('button', { name: 'Queue' }))
+      expect(props.onSend).toHaveBeenCalledWith('a follow-up for later', undefined)
+      expect(props.onSteer).not.toHaveBeenCalled()
+    })
+  })
 })

@@ -250,6 +250,9 @@ const api = {
   /** Change the approval policy of an in-flight run (live mode switch). */
   setAgentPolicy: (runId: string, policy: ApprovalPolicy): Promise<void> =>
     ipcRenderer.invoke(IPC.agentSetPolicy, runId, policy),
+  /** Steer the live run: inject `text` into the model's context before its next step. */
+  steerAgent: (runId: string, text: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.agentSteer, runId, text),
   /**
    * The runId of the live run for a conversation, or null. Used to re-adopt a
    * backgrounded run when its conversation is re-opened, instead of starting a
