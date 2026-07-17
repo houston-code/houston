@@ -123,7 +123,7 @@
   },
   {
     "name": "apply_patch",
-    "description": "Apply a multi-file patch in one atomic operation using the OpenAI patch format: an envelope between \"*** Begin Patch\" and \"*** End Patch\" containing \"*** Add File: <path>\" (with +lines), \"*** Update File: <path>\" (optionally followed by \"*** Move to: <path>\", then @@/space/-/+ hunks), and \"*** Delete File: <path>\". Either every change applies or none does. Prefer this when a single change spans several files; use edit_file/multi_edit for one file.",
+    "description": "Apply a multi-file patch in one atomic operation. Accepts either the OpenAI patch format (an envelope between \"*** Begin Patch\" and \"*** End Patch\" containing \"*** Add File: <path>\" with +lines, \"*** Update File: <path>\" optionally followed by \"*** Move to: <path>\" then @@/space/-/+ hunks, and \"*** Delete File: <path>\") or a standard unified diff / \"git diff\" (--- / +++ headers with @@ hunks; /dev/null for adds and deletes; git new-file/deleted-file/rename headers are honored). Either every change applies or none does. Update hunks are located by their context, so include at least one line of context (unified diffs: the default -U3, not -U0). Prefer this when a single change spans several files; use edit_file/multi_edit for one file.",
     "parameters": {
       "type": "object",
       "properties": {
