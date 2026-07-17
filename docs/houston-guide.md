@@ -129,7 +129,7 @@ bracketed-paste support.
 | `Ctrl-J`, `Alt-Enter` | insert a line break |
 | `Up` / `Down` | move between lines, then step through past messages |
 | `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
-| `Tab` | complete a slash command or an `@`-file mention |
+| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`) |
 | `Ctrl-A` / `Ctrl-E` | start / end of line |
 | `Alt-B` / `Alt-F` | move a word |
 | `Ctrl-W` | delete the word before the cursor |
