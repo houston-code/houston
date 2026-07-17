@@ -110,6 +110,8 @@ export const IPC = {
   /** Renderer → main: the user's decision on a present_plan review (accept / suggest / reject). */
   agentResolvePlan: 'agent:resolvePlan',
   agentSetPolicy: 'agent:setPolicy',
+  /** Renderer → main: a course correction for the live run, injected before its next step. */
+  agentSteer: 'agent:steer',
   /** Query the runId of the live run for a conversation (or null) to re-adopt it. */
   agentActiveRun: 'agent:activeRun',
   /** Query the prompts (approvals/questions) blocking a conversation's live run, to replay on re-adopt. */

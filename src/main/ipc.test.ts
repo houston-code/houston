@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   resolveApproval: vi.fn(),
   resolveQuestion: vi.fn(),
   setRunPolicy: vi.fn(),
+  steerRun: vi.fn<(runId: string, text: string) => boolean>(() => true),
   // Spied so the agentStart/agentRetry tests can inspect the request the handler
   // hands the drain loop (in particular the validated approvalPolicy).
   runAndDrain: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('./agent/loop', () => ({
   resolveApproval: h.resolveApproval,
   resolveQuestion: h.resolveQuestion,
   setRunPolicy: h.setRunPolicy,
+  steerRun: h.steerRun,
   runOwner: h.runOwner,
   activeRunForConversation: h.activeRun,
   pendingPromptsForConversation: vi.fn(() => []),
@@ -169,6 +171,30 @@ describe('run-control IPC ownership', () => {
     it('keeps the isToolApprovalDecision guard: an off-list decision never reaches the loop', () => {
       handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'nonsense')
       expect(h.resolveApproval).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('agentSteer', () => {
+    it('steers the run when the owning window calls', () => {
+      handler(IPC.agentSteer)(from(OWNER), RUN, 'use YAML instead')
+      expect(h.steerRun).toHaveBeenCalledWith(RUN, 'use YAML instead')
+    })
+
+    it('rejects a mismatched-sender steer — the run is untouched', () => {
+      const r = handler(IPC.agentSteer)(from(OTHER), RUN, 'inject into another window’s run')
+      expect(h.steerRun).not.toHaveBeenCalled()
+      expect(r).toBe(false)
+    })
+
+    it('ignores a non-string payload', () => {
+      const r = handler(IPC.agentSteer)(from(OWNER), RUN, { evil: true })
+      expect(h.steerRun).not.toHaveBeenCalled()
+      expect(r).toBe(false)
+    })
+
+    it('returns whether a live run accepted it (false → caller falls back to queuing)', () => {
+      h.steerRun.mockReturnValueOnce(false)
+      expect(handler(IPC.agentSteer)(from(OWNER), RUN, 'too late, run ended')).toBe(false)
     })
   })
 

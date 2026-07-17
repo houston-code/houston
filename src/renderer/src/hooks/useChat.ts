@@ -60,6 +60,13 @@ export interface ChatController {
   /** Change the approval policy of the in-flight run, if any (live mode switch). */
   setPolicy: (policy: ApprovalPolicy) => void
   /**
+   * Steer the in-flight run: inject a course correction the model reads before its
+   * next step, instead of queuing it for after the run. No-op when nothing is live.
+   * Returns whether a live run accepted it (false → the caller should fall back to
+   * queuing the text as its own turn, so nothing the user typed is dropped).
+   */
+  steer: (text: string) => Promise<boolean>
+  /**
    * Restore the revert/redo affordance when re-opening a conversation — the
    * checkpoint state is otherwise built only from live events and lost on a
    * transcript rebuild. Pass the conversation's latest-run checkpoint, or null.
@@ -270,6 +277,12 @@ export function useChat(conversationId: string | null = null): ChatController {
     if (runIdRef.current) void window.api.setAgentPolicy(runIdRef.current, policy)
   }, [])
 
+  const steer = useCallback(async (text: string): Promise<boolean> => {
+    const runId = runIdRef.current
+    if (!runId) return false
+    return window.api.steerAgent(runId, text)
+  }, [])
+
   const revertCheckpoint = useCallback(async (): Promise<number> => {
     if (!checkpoint) return 0
     const restored = await window.api.restoreCheckpoint(checkpoint.runId)
@@ -344,6 +357,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     pendingPlan,
     resolvePlan,
     setPolicy,
+    steer,
     seedCheckpoint,
     revertCheckpoint,
     reapplyCheckpoint,
