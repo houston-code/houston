@@ -99,3 +99,32 @@ describe('mergeCommands', () => {
     expect(merged.find((c) => c.name === 'new')?.description).toBe('built-in')
   })
 })
+
+describe('expandTemplate — positional arguments', () => {
+  // A command that wants "the second word" had to make the user re-type it in the
+  // right shape, or parse $ARGUMENTS in prose and hope.
+  it('fills $1, $2 from the words the user typed', () => {
+    expect(expandTemplate('deploy $1 at version $2', 'staging v2')).toBe('deploy staging at version v2')
+  })
+
+  it('leaves an unsupplied positional empty rather than printing $2', () => {
+    expect(expandTemplate('deploy $1 at $2', 'staging')).toBe('deploy staging at ')
+  })
+
+  it('does not append the args again once positionals consumed them', () => {
+    expect(expandTemplate('check $1', 'auth')).toBe('check auth')
+  })
+
+  it('still supports $ARGUMENTS, and both together', () => {
+    expect(expandTemplate('do $ARGUMENTS', 'a b')).toBe('do a b')
+    expect(expandTemplate('first=$1 all=$ARGUMENTS', 'a b')).toBe('first=a all=a b')
+  })
+
+  it('appends the args when the template has no placeholder at all', () => {
+    expect(expandTemplate('Review this', 'the diff')).toBe('Review this\n\nthe diff')
+  })
+
+  it('collapses extra whitespace between words', () => {
+    expect(expandTemplate('$1|$2', '  a   b  ')).toBe('a|b')
+  })
+})

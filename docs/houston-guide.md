@@ -103,9 +103,23 @@ this maps them to orange and blue instead), `mono` (no color at all), and
 `default`. Your choice is remembered.
 
 **Custom commands.** Any Markdown file in `.houston/commands/<name>.md` becomes a
-`/name` command. The file body is a prompt template: `$ARGUMENTS` is replaced
-with whatever the user types after the command name (if there is no placeholder,
-the args are appended). The first line is used as the command's description.
+`/name` command, in the project or in `~/.houston/commands` for one you want
+everywhere. A project's command wins if both define the same name.
+
+The file body is a prompt template. `$ARGUMENTS` is replaced with everything typed
+after the command name, and `$1`, `$2`, … with the individual words, so
+`/deploy staging v2` can fill a template that says `deploy $1 at version $2`. With
+no placeholder at all, the args are appended.
+
+Optional frontmatter sets the description; without it, the first line is used (so
+existing commands keep working):
+
+```markdown
+---
+description: Ship the branch to staging
+---
+Deploy the current branch and report what happened.
+```
 
 ## The terminal composer
 
