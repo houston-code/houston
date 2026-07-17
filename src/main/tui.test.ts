@@ -38,6 +38,8 @@ import {
   THEMES,
   parseMemoryCapture,
   nextPolicy,
+  addModelUsage,
+  renderCostReport,
   renderRecoveredOutput,
   toolResultsFrom,
   FAILURE_LINES,
@@ -1501,7 +1503,9 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     // Two turns each report 100+50 / $0.01 → session total 200+100 / $0.02.
-    expect(t.text()).toContain('session: 200+100 tok · $0.0200')
+    // The breakdown replaced the single "session:" line; the totals are the point.
+    expect(t.text()).toContain('200+100 tok')
+    expect(t.text()).toContain('$0.0200')
   })
 
   it('persists the session as a conversation on the first turn', async () => {
@@ -3774,5 +3778,80 @@ describe('# memory capture', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('unavailable')
+  })
+})
+
+// The loop knew the model and the cache split all along (it needs both to price a
+// round) and dropped them at the event seam, so /cost could only print one number.
+describe('/cost breakdown', () => {
+  const paintNo = makePainter(false)
+  const usage = (over = {}) => ({ inputTokens: 100, outputTokens: 50, cost: 0.01, ...over })
+
+  it('tallies per model, in first-seen order', () => {
+    let t = addModelUsage([], usage({ model: 'claude' }))
+    t = addModelUsage(t, usage({ model: 'gpt-5', cost: 0.02 }))
+    t = addModelUsage(t, usage({ model: 'claude', cost: 0.03 }))
+    expect(t.map((x) => x.model)).toEqual(['claude', 'gpt-5'])
+    expect(t[0].cost).toBeCloseTo(0.04)
+    expect(t[0].inputTokens).toBe(200)
+  })
+
+  it('accumulates the cache split', () => {
+    let t = addModelUsage([], usage({ model: 'claude', cacheReadTokens: 900, cacheWriteTokens: 100 }))
+    t = addModelUsage(t, usage({ model: 'claude', cacheReadTokens: 100 }))
+    expect(t[0].cacheReadTokens).toBe(1000)
+    expect(t[0].cacheWriteTokens).toBe(100)
+  })
+
+  it('labels an event with no model as the session, not a made-up model name', () => {
+    const t = addModelUsage([], usage())
+    expect(t[0].model).toBe('session')
+    expect(t[0].cost).toBeCloseTo(0.01)
+  })
+
+  it('shows the cache split, which is most of a long session’s input', () => {
+    const out = renderCostReport(
+      [{ model: 'claude', inputTokens: 10000, outputTokens: 500, cost: 0.12, cacheReadTokens: 9000, cacheWriteTokens: 200 }],
+      paintNo
+    )
+    expect(out).toContain('claude')
+    expect(out).toContain('10,000+500 tok')
+    expect(out).toContain('(9,000 cached)')
+    expect(out).toContain('(200 cache write)')
+    expect(out).toContain('$0.1200')
+  })
+
+  it('adds a total only when more than one model billed', () => {
+    const one = renderCostReport([{ model: 'a', inputTokens: 1, outputTokens: 1, cost: 1, cacheReadTokens: 0, cacheWriteTokens: 0 }], paintNo)
+    expect(one).not.toContain('total')
+    const two = renderCostReport(
+      [
+        { model: 'a', inputTokens: 1, outputTokens: 1, cost: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        { model: 'b', inputTokens: 2, outputTokens: 2, cost: 2, cacheReadTokens: 0, cacheWriteTokens: 0 }
+      ],
+      paintNo
+    )
+    expect(two).toContain('total')
+    expect(two).toContain('$3.0000')
+  })
+
+  it('says so before anything has been spent', () => {
+    expect(renderCostReport([], paintNo)).toContain('nothing spent yet')
+  })
+
+  it('/cost reports what the run actually billed, per model', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'usage', inputTokens: 1000, outputTokens: 200, cost: 0.05, model: 'claude-sonnet-5', cacheReadTokens: 800 },
+      { runId: 'x', type: 'usage', inputTokens: 0, outputTokens: 90, cost: 0.001, model: 'claude-haiku-4-5' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', '/cost', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('claude-sonnet-5')
+    expect(out).toContain('claude-haiku-4-5') // the subagent's own model, not folded in
+    expect(out).toContain('(800 cached)')
+    expect(out).toContain('total')
   })
 })

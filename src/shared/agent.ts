@@ -752,7 +752,28 @@ export type AgentEvent =
       type: 'notice'
       message: string
     }
-  | { runId: string; type: 'usage'; inputTokens: number; outputTokens: number; cost: number }
+  /**
+   * Tokens + cost for one model round.
+   *
+   * `model` and the cache split were computed to price the round and then thrown
+   * away at this seam, which is why /cost could only ever show one aggregate
+   * number: you could see what a session cost, but not which model spent it or
+   * how much of the input was served from cache (which bills far below the base
+   * rate, and is most of a long session's input).
+   */
+  | {
+      runId: string
+      type: 'usage'
+      inputTokens: number
+      outputTokens: number
+      cost: number
+      /** The model that billed this round; absent on older events. */
+      model?: string
+      /** Portion of `inputTokens` served from the prompt cache (bills lower). */
+      cacheReadTokens?: number
+      /** Portion of `inputTokens` that wrote a cache entry (bills slightly higher). */
+      cacheWriteTokens?: number
+    }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | { runId: string; type: 'error'; message: string }
 

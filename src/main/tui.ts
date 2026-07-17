@@ -503,6 +503,78 @@ export interface SessionCost {
   cost: number
 }
 
+/**
+ * Per-model tally for `/cost`.
+ *
+ * The loop knew the model and the cache split all along — it needs both to price
+ * a round — and then dropped them at the event seam, so /cost could only ever
+ * print one aggregate number. You could see what a session cost but not which
+ * model spent it, nor how much of the input was served from cache (which bills
+ * far below the base rate, and is most of a long session's input).
+ */
+export interface ModelCost extends SessionCost {
+  model: string
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
+/** Fold a usage event into the per-model tallies, in first-seen order. */
+export function addModelUsage(
+  tallies: ModelCost[],
+  e: { model?: string; inputTokens: number; outputTokens: number; cost: number; cacheReadTokens?: number; cacheWriteTokens?: number }
+): ModelCost[] {
+  // An older event carries no model. It still counts toward the session, so label
+  // the row for what it honestly is rather than inventing a model name.
+  const model = e.model ?? 'session'
+  const out = tallies.some((t) => t.model === model) ? [...tallies] : [...tallies, blankCost(model)]
+  const t = out.find((x) => x.model === model) as ModelCost
+  t.inputTokens += e.inputTokens
+  t.outputTokens += e.outputTokens
+  t.cost += e.cost
+  t.cacheReadTokens += e.cacheReadTokens ?? 0
+  t.cacheWriteTokens += e.cacheWriteTokens ?? 0
+  return out
+}
+
+function blankCost(model: string): ModelCost {
+  return { model, inputTokens: 0, outputTokens: 0, cost: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+}
+
+/**
+ * The `/cost` report: one row per model, the cache split, and a session total.
+ * With one model and no caching this collapses to roughly what it printed before,
+ * so the extra detail only appears when there IS extra detail.
+ */
+export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
+  if (!tallies.length) return paint('· nothing spent yet this session', 'dim')
+  const n = (v: number): string => v.toLocaleString('en-US')
+  const total = tallies.reduce(
+    (a, t) => ({
+      inputTokens: a.inputTokens + t.inputTokens,
+      outputTokens: a.outputTokens + t.outputTokens,
+      cost: a.cost + t.cost
+    }),
+    { inputTokens: 0, outputTokens: 0, cost: 0 }
+  )
+  const width = Math.max(...tallies.map((t) => t.model.length))
+  const lines = [paint('Session cost:', 'bold')]
+  for (const t of tallies) {
+    // Cached input is the interesting part of a long session's bill: it is counted
+    // in inputTokens but priced far below the base rate.
+    const cached = t.cacheReadTokens
+      ? paint(`  (${n(t.cacheReadTokens)} cached)`, 'green')
+      : ''
+    const written = t.cacheWriteTokens ? paint(`  (${n(t.cacheWriteTokens)} cache write)`, 'dim') : ''
+    lines.push(
+      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  $${t.cost.toFixed(4)}`
+    )
+  }
+  if (tallies.length > 1) {
+    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  $${total.cost.toFixed(4)}`, 'dim'))
+  }
+  return lines.join('\n')
+}
+
 /** Format a cost total, e.g. "1,234+567 tok · $0.0123". */
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
@@ -2097,6 +2169,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
+  // Per-model tallies for /cost. The aggregate above still drives the status line;
+  // this is what makes "which model spent it, and how much was cached?" answerable.
+  let modelCosts: ModelCost[] = []
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
   // Estimated current context size (last turn's input tokens), for the status line.
@@ -2701,7 +2776,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // 'handled' — informational commands print here where the state lives.
         handleInfoCommand(
           text,
-          { providerId, model, policy, cwd: opts.cwd, sessionCost },
+          { providerId, model, policy, cwd: opts.cwd, sessionCost, modelCosts },
           deps,
           paint,
           customCommands
@@ -2986,6 +3061,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           })
           break
         case 'usage':
+          modelCosts = addModelUsage(modelCosts, e)
           sessionCost.inputTokens += e.inputTokens
           sessionCost.outputTokens += e.outputTokens
           sessionCost.cost += e.cost
@@ -3112,6 +3188,7 @@ function handleInfoCommand(
     policy: ApprovalPolicy
     cwd: string
     sessionCost: SessionCost
+    modelCosts: ModelCost[]
   },
   deps: TuiDeps,
   paint: Painter,
@@ -3133,7 +3210,7 @@ function handleInfoCommand(
     return
   }
   if (name === 'cost') {
-    deps.io.out(paint(`session: ${formatSessionCost(state.sessionCost)}\n`, 'dim'))
+    deps.io.out(`${renderCostReport(state.modelCosts, paint)}\n`)
     return
   }
   if (name === 'theme') {
