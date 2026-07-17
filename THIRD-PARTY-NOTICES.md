@@ -33,7 +33,7 @@ The `ast-grep` binary shipped in Resources/bin, provided by the @ast-grep/cli np
 ---
 ## Bundled npm dependencies (73)
 
-### @anthropic-ai/sdk — 0.110.0
+### @anthropic-ai/sdk — 0.111.0
 
 - License: MIT
 - Homepage: github:anthropics/anthropic-sdk-typescript
