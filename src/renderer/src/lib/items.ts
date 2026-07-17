@@ -209,6 +209,15 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       }
       return [...items, { kind: 'assistant', id: nextId(), text: e.delta, streaming: true }]
     }
+    // A course correction typed mid-turn. It goes into the model's window as an
+    // ordinary user turn, so it renders as one — the transcript should read the way
+    // the model read it. Any streaming assistant bubble is closed first, so the
+    // steer lands between what came before it and what it changed.
+    case 'steered':
+      return [
+        ...items.map((i) => (i.kind === 'assistant' && i.streaming ? { ...i, streaming: false } : i)),
+        { kind: 'user', id: nextId(), text: e.text }
+      ]
     case 'reasoning': {
       const last = items[items.length - 1]
       if (last && last.kind === 'assistant' && last.streaming) {

@@ -17,7 +17,12 @@ import type {
   ToolCall,
   ToolSchema
 } from '@shared/agent'
-import { SYSTEM_NOTE_PREFIX, sanitizeApprovalNote } from '@shared/agent'
+import {
+  SYSTEM_NOTE_PREFIX,
+  sanitizeApprovalNote,
+  MAX_STEER_TEXT,
+  MAX_PENDING_STEERS
+} from '@shared/agent'
 import type { FileDiffPreview } from '@shared/diff'
 import {
   folderTrustState,
@@ -210,6 +215,13 @@ async function summarize(
 
 interface RunState {
   abort: AbortController
+  /**
+   * Course corrections typed while the turn is running, waiting for the next
+   * iteration boundary. Queued rather than applied on arrival: a message can only
+   * enter the window between model calls, never mid-stream, or the request the
+   * provider is already serving would disagree with the one we persisted.
+   */
+  steering: string[]
   approvals: Map<string, (r: ApprovalResolution) => void>
   /** Pending `ask_user` questions, keyed by callId, resolved with the user's answer. */
   questions: Map<string, (answer: string) => void>
@@ -401,6 +413,36 @@ export function cancelRun(runId: string): void {
   run.elicitations.clear()
   run.pendingElicitations.clear()
   run.abort.abort()
+}
+
+/**
+ * Steer a running turn: hand the model a course correction it will see before its
+ * next step, instead of after the whole turn finishes.
+ *
+ * Watching a run go the wrong way and being able to do nothing but interrupt it is
+ * the gap this closes. Interrupting throws away the turn's work and its context;
+ * waiting means the agent keeps building on the wrong thing for however many steps
+ * are left. Steering is the middle: the same message you would have sent anyway,
+ * delivered while it can still change the outcome.
+ *
+ * The message lands at the next iteration boundary as an ordinary user turn, which
+ * is what the landing reminder already does — so it renders in the transcript,
+ * persists, and folds into compaction like any other message, with no special case
+ * anywhere downstream.
+ *
+ * Returns false when there is no live run to steer (it finished, or never started),
+ * so a caller can fall back to sending the text as its own turn rather than
+ * dropping what the user typed.
+ */
+export function steerRun(runId: string, text: string): boolean {
+  const run = runs.get(runId)
+  const trimmed = text.trim().slice(0, MAX_STEER_TEXT)
+  if (!run || !trimmed || run.abort.signal.aborted) return false
+  // Refusing when the queue is full is not a dropped message: false sends the line
+  // to the caller's own follow-up queue, so it is delivered as its own turn instead.
+  if (run.steering.length >= MAX_PENDING_STEERS) return false
+  run.steering.push(trimmed)
+  return true
 }
 
 export function resolveApproval(
@@ -623,6 +665,7 @@ export async function startRun(
   const seededOverride = overrideForConversation(conversationId)
   const run: RunState = {
     abort,
+    steering: [],
     approvals: new Map(),
     questions: new Map(),
     pendingApprovals: new Map(),
@@ -1888,6 +1931,19 @@ export async function startRun(
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
         return
+      }
+
+      // Course corrections typed while this turn was running. Drained here, at the
+      // top of an iteration, because that is the one point where the window is not
+      // mid-request: pushed as ordinary user turns, so the model reads them as what
+      // they are, and the transcript, persistence and compaction need no special
+      // case. Before the landing reminder, so a steer that arrives on the last
+      // iteration is still in the window the model lands with.
+      if (run.steering.length) {
+        const steers = run.steering.splice(0)
+        for (const content of steers) messages.push({ role: 'user', content })
+        persist(messages)
+        for (const content of steers) emit({ type: 'steered', text: content })
       }
 
       // Landing reminder: once the run is within a small margin of the iteration

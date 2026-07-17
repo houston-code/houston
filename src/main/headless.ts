@@ -570,8 +570,11 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         break
       // Internal/streaming events with no headless surface: the --json path above
       // already emits each verbatim, and the human output doesn't show them.
+      // `steered` is here for the same reason — headless has no one at the keyboard
+      // to steer a turn, so it can only arrive on a run adopted from elsewhere.
       case 'reasoning':
       case 'turn_start':
+      case 'steered':
         break
       default:
         assertNever(e, 'headless:unhandled agent event')

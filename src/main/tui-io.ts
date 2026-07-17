@@ -257,6 +257,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // Fired by Shift-Tab, at the composer or mid-run. The driver owns what the modes
   // ARE and what changing one means; this just reports the keypress.
   let cycleModeHandler: (() => void) | null = null
+  /**
+   * Hand a line typed mid-run to the live turn. Returns true when the turn took it;
+   * false means there was nothing running to steer, and the line falls back to the
+   * follow-up queue rather than being dropped.
+   */
+  let steerHandler: ((text: string) => boolean) | null = null
   // The approval mode, shown on the spinner line so it stays visible while a turn
   // runs — the one time it matters most and the composer's status line is gone.
   let modeLabel = ''
@@ -311,11 +317,16 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           draft += key.value.replace(/\n/g, ' ')
           drawSpinner()
           break
-        case 'enter':
-          if (draft.trim()) queued.push(draft.trim())
+        case 'enter': {
+          const line = draft.trim()
+          // Steer the turn that is running if it can still take the line; a turn
+          // that has already finished cannot, and then this is a follow-up for the
+          // next one, exactly as before. Never dropped either way.
+          if (line && !steerHandler?.(line)) queued.push(line)
           draft = ''
           drawSpinner()
           break
+        }
         case 'backspace':
           draft = [...draft].slice(0, -1).join('')
           drawSpinner()
@@ -831,6 +842,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     onCycleMode: (handler) => {
       cycleModeHandler = handler
+    },
+    onSteer: (handler) => {
+      steerHandler = handler
     },
     setMode: (label) => {
       modeLabel = label

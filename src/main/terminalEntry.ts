@@ -12,6 +12,7 @@ import {
 } from '@shared/images'
 import {
   startRun,
+  steerRun,
   resolveApproval,
   resolveQuestion,
   resolvePlan,
@@ -561,6 +562,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       resolveElicitation,
       cancelRun,
       setRunPolicy,
+      steerRun,
       editText: (initial) => editInEditor(initial),
       persistHistory,
       clipboardImage: () => {
