@@ -1931,7 +1931,7 @@ describe('runTui', () => {
 
   // ---- Settings surface: /settings, /hooks, /mcp ----
 
-  it('/settings prints the file path, the desktop-panel note, and the restart note', async () => {
+  it('/settings prints the file path, the desktop-panel note, and that changes apply next message', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     d.settingsPath = () => '/profile/settings.json'
     const t = fakeIo(['/settings', null])
@@ -1940,7 +1940,10 @@ describe('runTui', () => {
     const out = t.text()
     expect(out).toContain('/profile/settings.json')
     expect(out).toContain('desktop app has the full settings panel')
-    expect(out).toContain('picked up on restart')
+    // The commands it lists (/hooks, /mcp, /trust) are re-read by the loop each
+    // turn, so they apply on the next message — the overview must not claim restart.
+    expect(out).toContain('apply on your next message')
+    expect(out).not.toContain('picked up on restart')
   })
 
   it('/hooks lists configured hooks with the settings path + restart note', async () => {
@@ -1969,7 +1972,9 @@ describe('runTui', () => {
     expect(saved).toEqual([
       { hooks: [{ event: 'PostToolUse', matcher: 'edit_file', command: 'npm run typecheck' }] }
     ])
-    expect(t.text()).toContain('hook added')
+    // The loop re-reads hooks each turn, so a newly added one applies next message,
+    // not on restart — the confirmation must say so.
+    expect(t.text()).toContain('hook added. Applies on your next message.')
   })
 
   it('/hooks add rejects an unknown event without persisting', async () => {
@@ -2040,7 +2045,9 @@ describe('runTui', () => {
     })
     expect(server).not.toHaveProperty('url')
     expect(server).not.toHaveProperty('headers')
-    expect(t.text()).toContain('MCP server added')
+    // getMcpToolDefs reconciles connections each run, so a new server connects on
+    // the next message rather than at the next restart.
+    expect(t.text()).toContain('MCP server added. Applies on your next message.')
   })
 
   it('/mcp add accepts a working directory and env pairs (values become secrets)', async () => {

@@ -1478,9 +1478,14 @@ export function renderMcpTools(name: string, status: McpServerStatus | undefined
   return lines.join('\n')
 }
 
-/** The "where the file is / changes need a restart" footer shared by the settings commands. */
+/**
+ * The "where the file is" footer shared by the settings commands. The commands
+ * above it (/hooks, /mcp) apply on your next message; only a file you edit by hand
+ * needs a restart, because the settings cache is read from disk once and the app
+ * has no watcher on it — so that is the one thing this footer calls out.
+ */
 export function renderSettingsFooter(path: string, paint: Painter): string {
-  return paint(`settings file: ${path}\n(changes are picked up on restart)`, 'dim')
+  return paint(`settings file: ${path}\n(a file you edit by hand is picked up on restart)`, 'dim')
 }
 
 // --- /login: in-session API-key setup ----------------------------------------
@@ -2475,8 +2480,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Short project label, folded into titles/notifications so two terminals in two
   // projects are tellable apart at a glance.
   const workspaceName = workspaceLabel(opts.cwd)
-  // Read once: the terminal tells users settings apply on restart, and re-reading
-  // per event would cost a settings load on every streamed token.
+  // Read once: hooks, MCP servers and trust are re-read by the loop each turn, but
+  // this notification toggle is snapshotted here — re-reading it per event would
+  // cost a settings load on every streamed token, and changing it mid-session is
+  // niche enough to be the one setting that genuinely wants a restart.
   const notifyEnabled = settings.desktopNotifications !== false
   // Show each tool's full output as it runs (/verbose). Off by default: the
   // transcript is a conversation, and most results are noise until they aren't.
@@ -3670,7 +3677,7 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
     `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,
     '',
-    paint('  Changes are picked up on restart.', 'dim')
+    paint('  Changes here apply on your next message — no restart needed.', 'dim')
   ]
   deps.io.out(`${lines.join('\n')}\n`)
 }
@@ -3706,7 +3713,7 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
     const removed = hooks[action.index - 1]
     // Rebuild without the removed entry (never mutate the settings array in place).
     deps.updateSettings({ hooks: hooks.filter((_, i) => i !== action.index - 1) })
-    deps.io.out(paint(`· removed hook ${action.index} (${removed.event} ${removed.matcher}). Applies on restart.\n`, 'dim'))
+    deps.io.out(paint(`· removed hook ${action.index} (${removed.event} ${removed.matcher}). Applies on your next message.\n`, 'dim'))
     return
   }
 
@@ -3727,7 +3734,7 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
   if (parseApprovalAnswer(ok ?? '').decision !== 'allow')
     return void deps.io.out(paint('· not added\n', 'dim'))
   deps.updateSettings({ hooks: [...hooks, built] })
-  deps.io.out(paint('· hook added. Applies on restart.\n', 'dim'))
+  deps.io.out(paint('· hook added. Applies on your next message.\n', 'dim'))
 }
 
 /**
@@ -3817,7 +3824,7 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     }
     const removed = servers[action.index - 1]
     deps.updateSettings({ mcpServers: servers.filter((_, i) => i !== action.index - 1) })
-    deps.io.out(paint(`· removed MCP server ${action.index} (${removed.name ?? removed.id}). Applies on restart.\n`, 'dim'))
+    deps.io.out(paint(`· removed MCP server ${action.index} (${removed.name ?? removed.id}). Applies on your next message.\n`, 'dim'))
     return
   }
 
@@ -3845,7 +3852,7 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
   if (parseApprovalAnswer(ok ?? '').decision !== 'allow')
     return void deps.io.out(paint('· not added\n', 'dim'))
   deps.updateSettings({ mcpServers: [...servers, built] })
-  deps.io.out(paint('· MCP server added. Applies on restart.\n', 'dim'))
+  deps.io.out(paint('· MCP server added. Applies on your next message.\n', 'dim'))
   if (built.env && deps.canStoreHeaderSecrets === false) {
     deps.io.out(
       paint(
