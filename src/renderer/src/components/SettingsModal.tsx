@@ -22,6 +22,7 @@ import type {
   PermissionRule,
   ProviderConfig
 } from '@shared/types'
+import { removeFolderTrust } from '@shared/types'
 import type { SandboxEgressSettings } from '@shared/egress'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES, DEFAULT_MAX_ITERATIONS } from '@shared/defaults'
@@ -1881,6 +1882,52 @@ export function SettingsModal({
                   <button className="btn btn--sm" onClick={() => void addRoot()}>
                     + Add folder
                   </button>
+                </SettingsSection>
+
+                <SettingsSection
+                  title="Trusted folders"
+                  desc={
+                    <>
+                      Projects whose <code>.houston/settings.json</code> asks for extra permissions
+                      (allow rules, hooks, MCP servers) and how you answered. Forget a decision to
+                      be asked again the next time that folder is open; a trusted project is also
+                      re-asked automatically whenever its configuration changes.
+                    </>
+                  }
+                >
+                  {(settings.trustedFolders ?? []).length === 0 && (
+                    <p className="settings-empty">
+                      No decisions yet. You&apos;ll be asked when a project requests extra
+                      permissions.
+                    </p>
+                  )}
+                  {(settings.trustedFolders ?? []).map((t) => (
+                    <div className="rule" key={t.path}>
+                      <span
+                        className={`mcp-server__status ${t.decision === 'trusted' ? 'mcp-server__status--ok' : 'mcp-server__status--warn'}`}
+                      >
+                        {t.decision === 'trusted' ? 'trusted' : 'never'}
+                      </span>
+                      <code className="rule__path" title={t.path}>
+                        {t.path}
+                      </code>
+                      <span className="settings-dim">
+                        {new Date(t.decidedAt).toLocaleDateString()}
+                      </span>
+                      <button
+                        className="btn btn--sm btn--danger"
+                        title="Forget this decision (asks again on next open)"
+                        onClick={() =>
+                          setSettings((s) => ({
+                            ...s,
+                            trustedFolders: removeFolderTrust(s.trustedFolders, t.path)
+                          }))
+                        }
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
                 </SettingsSection>
 
                 <SettingsSection

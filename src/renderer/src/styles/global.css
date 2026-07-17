@@ -2114,6 +2114,18 @@ h6.md-h {
   white-space: pre-wrap;
 }
 
+/* Small helpers for settings rows (trusted folders, etc.). */
+.settings-empty {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0;
+}
+.settings-dim {
+  font-size: 12px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
 /* ---- MCP elicitation (a server requesting input mid-call) ---- */
 .elicitation__source {
   font-size: 11px;

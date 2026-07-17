@@ -380,6 +380,19 @@ export function upsertFolderTrust(
 }
 
 /**
+ * Forget a folder's trust decision (immutable). The folder returns to
+ * 'undecided', so the consent banner/prompt asks again on next open — the one
+ * way to reverse a "Never" (or retire a stale "Trust") without hand-editing
+ * settings.json.
+ */
+export function removeFolderTrust(
+  records: FolderTrust[] | undefined,
+  path: string
+): FolderTrust[] {
+  return (records ?? []).filter((r) => r.path !== path)
+}
+
+/**
  * A fine-grained permission rule, consulted before the approval policy. Matches a
  * tool (by name, or `*` for any) and a glob over the call's subject (shell
  * command, path, URL, or query). First match wins.

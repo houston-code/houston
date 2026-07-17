@@ -5,6 +5,7 @@ import {
   HOOK_EVENTS,
   folderTrustState,
   isApprovalPolicy,
+  removeFolderTrust,
   upsertFolderTrust,
   type AppSettings,
   type ApprovalPolicy,
@@ -1104,6 +1105,8 @@ export type SlashResult =
   | { kind: 'hooks'; action: SettingsAction }
   /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
   | { kind: 'mcp'; action: SettingsAction }
+  /** Show or change this folder's project-config trust (/trust, /trust forget). */
+  | { kind: 'trust'; op: 'status' | 'forget' | 'usage' }
   /** Set or replace a provider API key, or add a host (/login, /providers). */
   | { kind: 'login' }
   /** A template command (custom `.houston/commands` or first-party `/review`): run the expanded prompt as a turn. */
@@ -1187,6 +1190,12 @@ export function parseSlashCommand(
       return { kind: 'hooks', action: parseSettingsAction(arg) }
     case 'mcp':
       return { kind: 'mcp', action: parseSettingsAction(arg) }
+    case 'trust': {
+      const a = arg.trim().toLowerCase()
+      if (!a) return { kind: 'trust', op: 'status' }
+      if (a === 'forget') return { kind: 'trust', op: 'forget' }
+      return { kind: 'trust', op: 'usage' }
+    }
     case 'login':
     case 'providers':
       return { kind: 'login' }
@@ -2228,6 +2237,68 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
   )
 }
 
+/**
+ * /trust: show where this folder's project-config trust stands, or forget the
+ * recorded decision (/trust forget) and immediately re-ask — the way to reverse
+ * a "never" (or retire a stale "trust") without hand-editing settings.json.
+ */
+export async function runTrustCommand(
+  op: 'status' | 'forget' | 'usage',
+  cwd: string,
+  deps: TuiDeps,
+  paint: Painter
+): Promise<void> {
+  if (op === 'usage') {
+    deps.io.out(paint('usage: /trust   ·   /trust forget\n', 'yellow'))
+    return
+  }
+  const cfg = await loadProjectConfig(cwd)
+  if (!cfg.elevatedHash) {
+    deps.io.out(
+      paint('· this project defines no extra permissions (nothing in .houston/settings.json elevates)\n', 'dim')
+    )
+    return
+  }
+  let path = cwd
+  try {
+    path = realpathSync(cwd)
+  } catch {
+    // Keep the raw path; trust records normalize the same way, so they still match.
+  }
+  const settings = deps.getSettings()
+  const state = folderTrustState(settings.trustedFolders, path, cfg.elevatedHash)
+
+  if (op === 'status') {
+    const label =
+      state === 'trusted'
+        ? 'trusted: its allow rules, hooks, and MCP servers apply'
+        : state === 'untrusted'
+          ? 'never trusted: its extra permissions are ignored'
+          : state === 'changed'
+            ? 'was trusted, but its config changed: extra permissions are off until you re-decide'
+            : 'undecided: its extra permissions are off'
+    deps.io.out(
+      `· this folder is ${label}\n  it defines ${summarizeElevated(cfg.elevated)}\n` +
+        paint('  /trust forget clears the decision and asks again\n', 'dim')
+    )
+    return
+  }
+
+  // op === 'forget'
+  if (!deps.updateSettings) {
+    deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
+    return
+  }
+  const had = settings.trustedFolders?.some((r) => r.path === path) ?? false
+  if (had) {
+    deps.updateSettings({ trustedFolders: removeFolderTrust(settings.trustedFolders, path) })
+    deps.io.out(paint('· forgot the trust decision for this folder\n', 'dim'))
+  } else {
+    deps.io.out(paint('· no decision was recorded for this folder yet\n', 'dim'))
+  }
+  await promptFolderTrust(cwd, deps, paint)
+}
+
 export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Reassigned by /theme (takes effect from the next output); the spinner keeps
   // the initial theme since its painter lives in the terminal adapter.
@@ -2906,6 +2977,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         await runMcpCommand(result.action, deps, paint)
         continue
       }
+      if (result.kind === 'trust') {
+        await runTrustCommand(result.op, opts.cwd, deps, paint)
+        continue
+      }
       if (result.kind === 'login') {
         if (!deps.setKey) {
           deps.io.out(paint('· setting API keys isn’t available here\n', 'dim'))
@@ -3534,6 +3609,7 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     '  From the terminal you can edit a safe subset:',
     `    ${paint('/hooks', 'cyan')}   list, or  /hooks add  ·  /hooks remove <n>`,
     `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
+    `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,
     '',
     paint('  Changes are picked up on restart.', 'dim')
   ]

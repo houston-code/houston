@@ -69,6 +69,7 @@ import {
   runTui,
   HOOK_EVENTS,
   promptFolderTrust,
+  runTrustCommand,
   summarizeElevated,
   parseSettingsAction,
   resolveHookEventInput,
@@ -2622,11 +2623,24 @@ describe('promptFolderTrust', () => {
     answers: Array<string | null>,
     over: Partial<AppSettings> = {}
   ): { d: TuiDeps; patches: Partial<AppSettings>[]; text: () => string } {
-    const { d } = deps([], over)
     const io = fakeIo(answers)
-    d.io = io.io
     const patches: Partial<AppSettings>[] = []
-    d.updateSettings = (patch) => patches.push(patch)
+    // Apply patches to what getSettings returns, mirroring the real store — a
+    // flow that writes then re-reads (/trust forget then re-prompt) must see
+    // its own update, not the seed state.
+    let current = { ...over }
+    const { d } = deps([], over)
+    d.getSettings = () =>
+      settings({
+        selected: { providerId: 'anthropic', model: 'claude' },
+        legalAcceptedVersion: LEGAL_VERSION,
+        ...current
+      })
+    d.io = io.io
+    d.updateSettings = (patch) => {
+      patches.push(patch)
+      current = { ...current, ...patch }
+    }
     return { d, patches, text: io.text }
   }
 
@@ -2711,6 +2725,78 @@ describe('promptFolderTrust', () => {
     } finally {
       rmSync(ws, { recursive: true, force: true })
     }
+  })
+
+  describe('/trust (runTrustCommand)', () => {
+    it('reports when the project elevates nothing', async () => {
+      const ws = makeWorkspace({ permissionRules: [{ action: 'deny', tool: 'run_shell', match: '*' }] })
+      try {
+        const { d, text } = trustDeps([])
+        await runTrustCommand('status', ws, d, makePainter(false))
+        expect(text()).toContain('defines no extra permissions')
+      } finally {
+        rmSync(ws, { recursive: true, force: true })
+      }
+    })
+
+    it('shows the current state with the elevating counts', async () => {
+      const ws = makeWorkspace(elevatingProject)
+      try {
+        const undecided = trustDeps([])
+        await runTrustCommand('status', ws, undecided.d, makePainter(false))
+        expect(undecided.text()).toContain('undecided')
+        expect(undecided.text()).toContain('1 allow rule, 1 hook, 1 MCP server')
+
+        // Trust it, then status reads back as trusted.
+        const consent = trustDeps(['y'])
+        await promptFolderTrust(ws, consent.d, makePainter(false))
+        const trusted = trustDeps([], consent.patches[0])
+        await runTrustCommand('status', ws, trusted.d, makePainter(false))
+        expect(trusted.text()).toContain('trusted: its allow rules, hooks, and MCP servers apply')
+      } finally {
+        rmSync(ws, { recursive: true, force: true })
+      }
+    })
+
+    it('forget clears the decision and immediately re-asks (a "never" is reversible)', async () => {
+      const ws = makeWorkspace(elevatingProject)
+      try {
+        const consent = trustDeps(['never'])
+        await promptFolderTrust(ws, consent.d, makePainter(false))
+        expect(consent.patches[0].trustedFolders![0].decision).toBe('never')
+
+        // /trust forget under the recorded "never": removal patch, then the fresh
+        // prompt runs right away and the user flips to trusted.
+        const forget = trustDeps(['y'], consent.patches[0])
+        await runTrustCommand('forget', ws, forget.d, makePainter(false))
+        expect(forget.text()).toContain('forgot the trust decision')
+        expect(forget.text()).toContain('asks for extra permissions')
+        expect(forget.patches).toHaveLength(2)
+        expect(forget.patches[0].trustedFolders).toEqual([])
+        expect(forget.patches[1].trustedFolders![0].decision).toBe('trusted')
+      } finally {
+        rmSync(ws, { recursive: true, force: true })
+      }
+    })
+
+    it('forget with nothing recorded says so and still offers the prompt', async () => {
+      const ws = makeWorkspace(elevatingProject)
+      try {
+        const { d, patches, text } = trustDeps([''])
+        await runTrustCommand('forget', ws, d, makePainter(false))
+        expect(text()).toContain('no decision was recorded')
+        expect(text()).toContain('asks for extra permissions')
+        expect(patches).toEqual([]) // nothing removed, prompt answer was blank
+      } finally {
+        rmSync(ws, { recursive: true, force: true })
+      }
+    })
+
+    it('prints usage for an unknown verb', async () => {
+      const { d, text } = trustDeps([])
+      await runTrustCommand('usage', '/nowhere', d, makePainter(false))
+      expect(text()).toContain('usage: /trust')
+    })
   })
 })
 
