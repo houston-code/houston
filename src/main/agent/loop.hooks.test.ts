@@ -168,6 +168,32 @@ describe('lifecycle hooks in the loop', () => {
     expect(events.at(-1)?.type).toBe('done')
   })
 
+  // The TUI tells users a hook edit "Applies on your next message", not on a
+  // restart. That is only honest if the loop re-reads settings each run rather than
+  // snapshotting them at startup. Proven here: a hook added BETWEEN two runs — exactly
+  // what `/hooks add` does, mutating the in-process settings with no restart or new
+  // process — takes effect on the very next turn.
+  it('a hook added mid-session takes effect next turn, no restart', async () => {
+    // Turn 1: no hooks. The prompt is not blocked; the model runs and the guard
+    // command never executes (there is nothing to run it).
+    const first = await run({ turns: [[{ type: 'text', text: 'ran' }, { type: 'done', stopReason: 'end_turn' }]] })
+    expect(first.events.some((e) => e.type === 'done')).toBe(true)
+    expect(h.calls.some((c) => c.command === 'guard')).toBe(false)
+
+    // Add a blocking UserPromptSubmit hook — the same in-process settings mutation
+    // `/hooks add` makes. No restart.
+    h.settings.hooks = [{ event: 'UserPromptSubmit', matcher: '*', command: 'guard' }]
+    h.static = { guard: { exitCode: 1, stdout: 'blocked by the just-added hook' } }
+
+    // Turn 2: the just-added hook is in force — it runs and blocks the prompt.
+    const provider = scripted([[{ type: 'text', text: 'should not run' }, { type: 'done', stopReason: 'end_turn' }]])
+    const second = await run({ provider })
+    const error = second.events.find((e) => e.type === 'error')
+    expect(error && 'message' in error ? error.message : '').toContain('UserPromptSubmit')
+    expect(provider.calls).toBe(0)
+    expect(h.calls.some((c) => c.command === 'guard')).toBe(true)
+  })
+
   it('Stop hook continuation is bounded (cannot loop forever)', async () => {
     h.settings.hooks = [{ event: 'Stop', matcher: '*', command: 'always' }]
     h.static = { always: { exitCode: 1, stdout: 'keep going' } } // always blocks
