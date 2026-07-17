@@ -40,6 +40,28 @@ jobs:
             -o spdx-json@3.0=sbom.spdx3.json
           node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json
 
+      # Completeness floor — runs BEFORE the checkers below, because none of them can catch a
+      # truncated closure. NTIA / FSCT3 / CycloneDX-validate are per-package field validators:
+      # they ask whether each package PRESENT carries a supplier, version, and unique id. Nothing
+      # in them asserts how many packages there should be, and nothing could — there is no
+      # reference closure to compare against. So the exact failure this whole pipeline exists to
+      # prevent (npm sbom silently emitting 56 of 73 production packages, every one of them
+      # well-formed) sails through every checker green. The entry floor is the only guard against
+      # it; the hash floor catches enrichment silently no-op'ing. Same fail-closed stance as
+      # scripts/verify-bundled-binaries.mjs.
+      #
+      # Kept byte-identical to the same step in sbom.yml and release-publish.yml. That is three
+      # copies on purpose: they must describe the same closure, and the planned
+      # .github/actions/sbom-generate composite action lifts all three at once.
+      - name: Verify SBOMs are valid and complete
+        run: |
+          for f in sbom.cyclonedx.json sbom.spdx.json; do
+            node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const items=j.components||j.packages||[]; const n=items.length; const h=items.filter(x=>(x.hashes||x.checksums||[]).length).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} if(h<60){console.error('::error::'+process.argv[1]+' has only '+h+' hashed entries (<60) — enrichment did not run'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries, '+h+' hashed)')" "$f"
+          done
+          # SPDX 3.0 is a JSON-LD graph: verify the package count and that enrichment gave
+          # every package a supplier (the FSCT3-critical field syft omits).
+          node -e "const g=(JSON.parse(require('node:fs').readFileSync('sbom.spdx3.json','utf8'))['@graph']||[]); const pk=g.filter(e=>e.type==='software_Package'); const sup=pk.filter(p=>p.suppliedBy).length; if(pk.length<60){console.error('::error::sbom.spdx3.json has only '+pk.length+' packages (<60)');process.exit(1)} if(sup<pk.length){console.error('::error::sbom.spdx3.json: '+(pk.length-sup)+' packages missing suppliedBy');process.exit(1)} console.log('sbom.spdx3.json OK ('+pk.length+' packages, all supplied)')"
+
       # Tool 1 — CycloneDX CLI: JSON-schema validity of the CycloneDX SBOM.
       - name: CycloneDX CLI validate
         run: |
