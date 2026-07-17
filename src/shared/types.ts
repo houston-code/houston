@@ -13,11 +13,14 @@ import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
 import type { SandboxEgressSettings } from './egress'
 
 /**
- * How a provider talks to its host. `bedrock` and `vertex` are the cloud-hosted
- * Claude backends: they speak the same Messages protocol as `anthropic` (their SDK
- * clients all extend `BaseAnthropic`, so they share one adapter — see
- * `src/main/providers/anthropic.ts`) but resolve credentials from the cloud's own
- * chain rather than an API key, and address models by the host's id convention.
+ * How a provider talks to its host. `bedrock`, `vertex` and `foundry` are the
+ * cloud-hosted Claude backends: they speak the same Messages protocol as `anthropic`
+ * (their SDK clients all extend `BaseAnthropic`, so they share one adapter — see
+ * `src/main/providers/anthropic.ts`) but address models by the host's id convention,
+ * and the first two resolve credentials from the cloud's own chain rather than an API
+ * key. `azure-openai` is the same idea one family over: an `AzureOpenAI` client that
+ * extends `OpenAI`, so it shares the Chat Completions adapter in
+ * `src/main/providers/openai.ts` and only differs in how the client is built.
  */
 export type ProviderKind =
   | 'anthropic'
@@ -26,6 +29,8 @@ export type ProviderKind =
   | 'openai-compatible'
   | 'bedrock'
   | 'vertex'
+  | 'azure-openai'
+  | 'foundry'
 
 /**
  * The placeholder the main process substitutes for every custom-header VALUE before
@@ -136,6 +141,27 @@ export interface ProviderConfig {
    * credentials — so it's usually inferable and left blank. Vertex-only.
    */
   projectId?: string
+  /**
+   * Azure OpenAI resource endpoint, e.g. `https://my-resource.openai.azure.com`.
+   * Houston derives the request URL from it (`{endpoint}/openai/deployments/...`),
+   * falling back to `AZURE_OPENAI_ENDPOINT`. `azure-openai` only; a `baseUrl` set
+   * alongside it wins, for a gateway that fronts the resource.
+   */
+  endpoint?: string
+  /**
+   * Azure OpenAI REST API version, sent as the `api-version` query parameter. Azure
+   * pins request/response shape to it rather than serving one evergreen API, so it
+   * is a required part of the address and every deployment is reachable only at a
+   * version that supports it. Pre-filled on add; newer models need a newer version.
+   * `azure-openai` only.
+   */
+  apiVersion?: string
+  /**
+   * Microsoft Foundry resource name, e.g. `my-resource` for
+   * `https://my-resource.services.ai.azure.com/anthropic/`. Falls back to
+   * `ANTHROPIC_FOUNDRY_RESOURCE`. `foundry` only; a `baseUrl` set alongside it wins.
+   */
+  resource?: string
   /**
    * Extra HTTP headers sent on every request to this provider — e.g. OpenRouter's
    * `HTTP-Referer`/`X-Title` attribution, or a gateway's custom auth header. Sent

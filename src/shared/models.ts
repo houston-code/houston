@@ -61,12 +61,19 @@ const FAMILIES: Record<ProviderKind, FamilyRule[]> = {
   // those that don't fall through to the generic family grouping below.
   'openai-compatible': OPENAI,
   gemini: GEMINI,
-  // Bedrock and Vertex serve the Claude line only (their SDKs are Claude clients —
-  // a Bedrock-hosted Llama isn't reachable through this adapter), so they rank by
-  // the Anthropic families. The rules match on a substring, so the host id prefixes
-  // (`anthropic.claude-opus-4-8`) and `@`-dated Vertex snapshots group correctly.
+  // Bedrock, Vertex and Foundry serve the Claude line only (their SDKs are Claude
+  // clients — a Bedrock-hosted Llama isn't reachable through this adapter), so they
+  // rank by the Anthropic families. The rules match on a substring, so the host id
+  // prefixes (`anthropic.claude-opus-4-8`) and `@`-dated Vertex snapshots group
+  // correctly.
   bedrock: ANTHROPIC,
-  vertex: ANTHROPIC
+  vertex: ANTHROPIC,
+  foundry: ANTHROPIC,
+  // Azure OpenAI serves the GPT/o line. Ids here are user-named *deployments*, so
+  // they only group when the user named them after the model (a common convention,
+  // and the reason this isn't the generic fallback); anything else falls through to
+  // generic grouping, exactly like an OpenAI-compatible host serving unknown ids.
+  'azure-openai': OPENAI
 }
 
 /** Numeric-aware, case-insensitive compare so `gpt-4o` < `gpt-4o mini` and `9` < `10`. */
@@ -106,7 +113,9 @@ function anthropicDisplayName(id: string): string {
  * first-party API uses. Bedrock prefixes the vendor (`anthropic.claude-opus-4-8`)
  * and Vertex separates a dated snapshot with `@` (`claude-opus-4-5@20251101`);
  * neither is part of the model's name, and rewriting `@` to `-` also lets the date
- * suffix be dropped by the same rule that handles first-party dated ids.
+ * suffix be dropped by the same rule that handles first-party dated ids. Foundry
+ * addresses models by the plain id already, so this is a no-op there — it runs
+ * anyway so the hosted-Claude kinds can't drift apart on display.
  */
 function claudeIdFromHost(id: string): string {
   return id.replace(/^anthropic\./, '').replace('@', '-')
@@ -129,8 +138,11 @@ export function modelDisplayName(kind: ProviderKind, id: string): string {
       return anthropicDisplayName(id)
     case 'bedrock':
     case 'vertex':
+    case 'foundry':
       return anthropicDisplayName(claudeIdFromHost(id))
     default:
+      // Including `azure-openai`, whose ids are user-named deployments: normalizing
+      // them would rewrite a name the user chose and has to match in the portal.
       return id
   }
 }

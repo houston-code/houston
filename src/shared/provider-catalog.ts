@@ -45,6 +45,30 @@ export const VERTEX_MODELS: string[] = [
   'claude-opus-4-7'
 ]
 
+/**
+ * Claude models on Microsoft Foundry, addressed with the bare id. The Foundry client
+ * omits the models endpoint outright, so this is the same curated-list contract as
+ * {@link BEDROCK_MODELS}: which of them a resource serves depends on what has been
+ * deployed to it, so the user edits the list.
+ */
+export const FOUNDRY_MODELS: string[] = [
+  'claude-opus-4-8',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5',
+  'claude-opus-4-7'
+]
+
+/**
+ * Azure OpenAI's default REST API version, pre-filled on add and used when a provider
+ * leaves the field blank. Azure pins request and response shape to this rather than
+ * serving one evergreen API, so it is a required part of the address (the SDK throws
+ * without it) and no value is right forever: a deployment of a newer model is only
+ * reachable at a version that knows about it. A conservative GA version is the useful
+ * default; the user edits it in Settings when a model needs newer. Lives here so the
+ * catalog and the adapter (`src/main/providers/azure.ts`) can't disagree.
+ */
+export const DEFAULT_AZURE_API_VERSION = '2024-10-21'
+
 export interface CatalogEntry {
   /**
    * Stable id, reused verbatim as the provider id when added. Adding is therefore
@@ -69,6 +93,11 @@ export interface CatalogEntry {
    * Pre-filled on add so the provider works without a trip to the docs.
    */
   region?: string
+  /**
+   * Default REST API version, for kinds that version their API in the request.
+   * `azure-openai` only; the rest serve one evergreen API.
+   */
+  apiVersion?: string
   /**
    * Models an added provider starts with, for hosts that serve a fixed Claude lineup
    * and have no Models API. Absent elsewhere: the user fetches the live list.
@@ -194,6 +223,35 @@ export const PROVIDER_CATALOG: CatalogEntry[] = [
     docsUrl: 'https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude'
   },
   {
+    // GPT models on an Azure OpenAI resource. Not reachable as an openai-compatible
+    // base URL: the key rides an `api-key` header, the API version is a required
+    // query parameter, and models live under `/deployments/{name}`. No endpoint or
+    // model list is pre-filled because both are specific to the user's resource:
+    // deployments are named by whoever created them (a model id here IS a deployment
+    // name), so there is nothing to curate and nothing to fetch.
+    id: 'azure-openai',
+    kind: 'azure-openai',
+    label: 'Azure OpenAI',
+    apiVersion: DEFAULT_AZURE_API_VERSION,
+    requiresKey: true,
+    category: 'cloud',
+    blurb: 'GPT models on your own Azure OpenAI resource. Add your endpoint and deployment names.',
+    docsUrl: 'https://learn.microsoft.com/azure/ai-services/openai/'
+  },
+  {
+    // Claude on a Microsoft Foundry resource. The key-based member of the
+    // hosted-Claude set, so unlike bedrock-aws/vertex it needs a Houston-stored key.
+    // The resource name is user-specific, so it is left blank rather than guessed.
+    id: 'foundry',
+    kind: 'foundry',
+    label: 'Microsoft Foundry',
+    models: FOUNDRY_MODELS,
+    requiresKey: true,
+    category: 'cloud',
+    blurb: 'Claude models on your own Microsoft Foundry resource, via a Foundry API key.',
+    docsUrl: 'https://learn.microsoft.com/azure/ai-foundry/'
+  },
+  {
     id: 'omlx',
     label: 'oMLX (Apple Silicon)',
     baseUrl: 'http://localhost:8000/v1',
@@ -244,6 +302,7 @@ export function catalogEntryToProvider(entry: CatalogEntry): ProviderConfig {
     label: entry.label,
     ...(entry.baseUrl !== undefined ? { baseUrl: entry.baseUrl } : {}),
     ...(entry.region !== undefined ? { region: entry.region } : {}),
+    ...(entry.apiVersion !== undefined ? { apiVersion: entry.apiVersion } : {}),
     models: (entry.models ?? []).map((id) => ({ id })),
     requiresKey: entry.requiresKey,
     hasKey: false,

@@ -116,28 +116,26 @@ export function maxTokensField(model: string, maxTokens: number): Record<string,
 }
 
 /**
- * Adapter for OpenAI and any OpenAI-compatible endpoint (Ollama, LM Studio,
- * vLLM, OpenRouter, etc.). Local endpoints often don't need a key — callers pass
- * a placeholder, which compatible servers ignore.
+ * The client the Chat Completions adapter drives. Anything that quacks like an
+ * `OpenAI` client works, which is the point: `AzureOpenAI` extends `OpenAI`, so
+ * azure.ts supplies a different client and inherits every wire concern below.
+ * Async so the caller can import its SDK lazily.
  */
-export function createOpenAIProvider(
-  apiKey: string | null,
-  baseURL?: string,
-  headers?: Record<string, string>
-): Provider {
-  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
-  // turn first runs. Providers the user never selects never pull their SDK in.
-  let clientPromise: Promise<OpenAI> | undefined
-  const getClient = (): Promise<OpenAI> =>
-    (clientPromise ??= import('openai').then(
-      (m) =>
-        new m.default({
-          apiKey: apiKey || 'no-key',
-          ...(baseURL ? { baseURL } : {}),
-          ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
-        })
-    ))
+export type ChatCompletionsClient = Pick<OpenAI, 'chat'>
 
+/**
+ * Adapter for any host that speaks Chat Completions, over a caller-supplied client.
+ *
+ * Split from {@link createOpenAIProvider} so a host that needs a *differently
+ * constructed* client — Azure, whose auth and URL layout no base URL can express —
+ * reuses the streaming, tool-call, cache and usage handling here instead of forking
+ * it. Mirrors `createMessagesProvider` in anthropic.ts, which does the same for the
+ * cloud-hosted Claude clients. The factory is called at most once per turn and is
+ * expected to memoize.
+ */
+export function createChatCompletionsProvider(
+  getClient: () => Promise<ChatCompletionsClient>
+): Provider {
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
       const client = await getClient()
@@ -294,6 +292,32 @@ export function createOpenAIProvider(
       }
     }
   }
+}
+
+/**
+ * Adapter for OpenAI and any OpenAI-compatible endpoint (Ollama, LM Studio,
+ * vLLM, OpenRouter, etc.). Local endpoints often don't need a key — callers pass
+ * a placeholder, which compatible servers ignore.
+ */
+export function createOpenAIProvider(
+  apiKey: string | null,
+  baseURL?: string,
+  headers?: Record<string, string>
+): Provider {
+  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
+  // turn first runs. Providers the user never selects never pull their SDK in.
+  let clientPromise: Promise<OpenAI> | undefined
+  const getClient = (): Promise<OpenAI> =>
+    (clientPromise ??= import('openai').then(
+      (m) =>
+        new m.default({
+          apiKey: apiKey || 'no-key',
+          ...(baseURL ? { baseURL } : {}),
+          ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+        })
+    ))
+
+  return createChatCompletionsProvider(getClient)
 }
 
 /**

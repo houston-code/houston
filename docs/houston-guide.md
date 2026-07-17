@@ -54,12 +54,13 @@ terminal saves it as the default for future sessions.
 ### Claude through your cloud account
 
 If your Claude access runs through a cloud account rather than an Anthropic API
-key, add "Amazon Bedrock (AWS credentials)" or "Google Vertex AI" from the
-provider picker in Settings. Both behave like the Anthropic provider once added:
-the same streaming, extended thinking, and prompt caching.
+key, add "Amazon Bedrock (AWS credentials)", "Google Vertex AI", or "Microsoft
+Foundry" from the provider picker in Settings. All three behave like the
+Anthropic provider once added: the same streaming, extended thinking, and prompt
+caching.
 
-Neither one asks you for an API key, because neither uses one. They sign requests
-with the credentials already on your machine:
+Bedrock and Vertex do not ask you for an API key, because neither uses one. They
+sign requests with the credentials already on your machine:
 
 - **Bedrock** uses the standard AWS credential chain, so an `~/.aws/credentials`
   profile, an SSO login, or an instance role all work as-is. Set the region in
@@ -71,14 +72,36 @@ with the credentials already on your machine:
   `gcloud auth application-default login` if you have not already. Set the region
   in Settings (or export `CLOUD_ML_REGION`). The project is usually inferred from
   your credentials, so leave it blank unless you need a specific one.
+- **Foundry** is the exception: it does take an API key, the one from your
+  Foundry resource. Enter it in Settings along with the resource name, the
+  `my-resource` part of `https://my-resource.services.ai.azure.com` (or export
+  `ANTHROPIC_FOUNDRY_RESOURCE`).
 
 Each host addresses models its own way: Bedrock prefixes the vendor
-(`anthropic.claude-opus-4-8`) and Vertex takes the plain id, optionally with a
-dated snapshot (`claude-opus-4-5@20251101`). The model picker shows them under
-one name either way. Neither host publishes a model list, so Houston ships a
-curated one and "Fetch" restores it rather than calling out to the network. If
-your account has access to a model that is not listed, add its id to the list by
-hand.
+(`anthropic.claude-opus-4-8`), while Vertex and Foundry take the plain id, and
+Vertex also accepts a dated snapshot (`claude-opus-4-5@20251101`). The model
+picker shows them under one name either way. None of the three publishes a model
+list, so Houston ships a curated one and "Fetch" restores it rather than calling
+out to the network. If your account has access to a model that is not listed, add
+its id to the list by hand.
+
+### GPT models on Azure OpenAI
+
+Add "Azure OpenAI" from the provider picker to use GPT models on your own Azure
+resource. It needs three things from Settings:
+
+- **API key**, from your Azure OpenAI resource.
+- **Endpoint**, the resource URL, e.g. `https://my-resource.openai.azure.com`
+  (or export `AZURE_OPENAI_ENDPOINT`).
+- **API version**, the `api-version` Azure serves your deployments at. Houston
+  pre-fills a widely supported one; a newer model may need a newer version, which
+  you can change here without waiting on a Houston update.
+
+Azure serves models as **deployments you name yourself**, so there is no model
+list to fetch and none to ship. Each model id in the provider's list is a
+deployment name: add the names you created in the Azure portal, and Houston sends
+each request to that deployment. One provider covers as many deployments as you
+have, so a resource with separate GPT deployments needs only one entry here.
 
 ### Fallback models
 

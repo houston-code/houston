@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BEDROCK_MODELS,
   type CatalogEntry,
+  FOUNDRY_MODELS,
   PROVIDER_CATALOG,
   VERTEX_MODELS,
   catalogEntryToProvider,
@@ -17,7 +18,7 @@ import type { ProviderKind } from './types'
 const entryKind = (e: CatalogEntry): ProviderKind => e.kind ?? 'openai-compatible'
 /** Entries reached over an OpenAI-compatible base URL (the bulk of the catalog). */
 const urlEntries = PROVIDER_CATALOG.filter((e) => entryKind(e) === 'openai-compatible')
-/** Entries with a dedicated adapter that derives its own endpoint (Bedrock, Vertex). */
+/** Entries with a dedicated adapter that derives its own endpoint (the cloud hosts). */
 const nativeEntries = PROVIDER_CATALOG.filter((e) => entryKind(e) !== 'openai-compatible')
 
 describe('PROVIDER_CATALOG', () => {
@@ -59,17 +60,51 @@ describe('PROVIDER_CATALOG', () => {
     }
   })
 
-  it('native cloud kinds are keyless and ship a region plus a curated model list', () => {
-    expect(nativeEntries.map((e) => e.id)).toEqual(['bedrock-aws', 'vertex'])
-    for (const e of nativeEntries) {
+  it('covers every native kind here, so a new one cannot slip in untested', () => {
+    expect(nativeEntries.map((e) => e.id)).toEqual([
+      'bedrock-aws',
+      'vertex',
+      'azure-openai',
+      'foundry'
+    ])
+  })
+
+  it('the ambient-credential kinds are keyless and ship a region', () => {
+    const ambient = nativeEntries.filter((e) => entryKind(e) === 'bedrock' || entryKind(e) === 'vertex')
+    for (const e of ambient) {
       // Credentials resolve ambiently (an AWS profile, gcloud ADC), so requiring a
       // Houston-stored key would block a correctly configured machine.
       expect(e.requiresKey).toBe(false)
       // The endpoint is derived from the region, so an entry without one can't
       // address a host at all (see `requireRegion` in main/providers/index.ts).
       expect(e.region).toBeTruthy()
-      // Neither host has a Models API, so the seeded list is the only model list.
-      expect(e.models?.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('the Azure-hosted kinds need a key and a resource only the user can name', () => {
+    const azure = nativeEntries.filter(
+      (e) => entryKind(e) === 'azure-openai' || entryKind(e) === 'foundry'
+    )
+    expect(azure.map((e) => e.id)).toEqual(['azure-openai', 'foundry'])
+    for (const e of azure) {
+      // No ambient credential chain on either: the stored key is the only auth
+      // Houston configures, so an entry claiming otherwise would fail on first turn.
+      expect(e.requiresKey).toBe(true)
+      // They address a resource, not a region, and its name is specific to the
+      // user's subscription — nothing useful can be pre-filled, so both are left
+      // blank for `requireAddress` (main/providers/index.ts) to demand.
+      expect(e.region).toBeUndefined()
+    }
+  })
+
+  it('seeds a curated model list exactly where there is no Models API to fetch', () => {
+    // Bedrock, Vertex and Foundry serve a fixed Claude lineup no API exposes, so the
+    // seeded list is the only model list. Azure OpenAI is the one host where a
+    // curated list would be wrong rather than merely stale: its models are
+    // deployments the user names, so no list could match anyone's resource.
+    for (const e of nativeEntries) {
+      if (entryKind(e) === 'azure-openai') expect(e.models).toBeUndefined()
+      else expect(e.models?.length).toBeGreaterThan(0)
     }
   })
 
@@ -82,11 +117,12 @@ describe('PROVIDER_CATALOG', () => {
     expect(PROVIDER_CATALOG.find((e) => e.id === 'bedrock-aws')!.kind).toBe('bedrock')
   })
 
-  it('addresses Bedrock models with the vendor prefix and Vertex models without', () => {
+  it('addresses Bedrock models with the vendor prefix, and Vertex/Foundry without', () => {
     // The prefix is Bedrock's addressing, not part of the model name — getting it
     // wrong is a 404 on every turn.
     for (const id of BEDROCK_MODELS) expect(id).toMatch(/^anthropic\.claude-/)
     for (const id of VERTEX_MODELS) expect(id).toMatch(/^claude-/)
+    for (const id of FOUNDRY_MODELS) expect(id).toMatch(/^claude-/)
   })
 })
 
