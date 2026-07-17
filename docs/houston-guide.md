@@ -189,6 +189,19 @@ bracketed-paste support.
 **History.** Messages are remembered per project folder and survive restarts,
 including multi-line ones.
 
+**Vim keys.** `/vim` turns on modal editing in the composer and remembers it;
+`/vim off` goes back. Each prompt starts in insert mode (so typing a message never
+needs a mode change), `Esc` goes to normal mode, and the marker in front of the
+prompt says which mode you are in: `I` or `N`. Terminals that support it also show
+a bar cursor for insert and a block for normal.
+
+Normal mode covers the muscle-memory core: motions `h j k l w W b B e E 0 ^ $ gg G`
+with counts (`3w`, `d2j`), insert with `i a I A o O s`, edits `x X D C r`, the
+operators `d c y` over any motion plus `dd cc yy`, `p`/`P`, and `u` to undo. What
+is not there: visual mode, text objects (`ciw`), registers beyond the unnamed one,
+marks, macros, and `.` repeat. Everything else in the composer (Enter to send,
+`Ctrl-R` history search, `Ctrl-X Ctrl-E`, pasting) works the same in both modes.
+
 **Running a shell command.** A line starting with `!` runs in your own shell. See
 "Running your own commands" below.
 

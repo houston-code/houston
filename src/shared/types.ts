@@ -530,6 +530,12 @@ export interface AppSettings {
    * colorblind reader can tell apart), not a UI appearance mode.
    */
   tuiTheme?: string
+  /**
+   * Which keys the terminal composer answers to. 'emacs' (the default) is the
+   * readline-style set every shell gives you; 'vim' adds modal editing on top of
+   * it. Absent = emacs.
+   */
+  tuiEditor?: 'emacs' | 'vim'
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /**

@@ -125,9 +125,12 @@ function freshBlobToken(haystack: string, from: number, text: string): string {
   return token
 }
 
-const cps = (s: string): string[] => [...s]
-const cpLen = (s: string): number => cps(s).length
-const cpSlice = (s: string, a: number, b?: number): string => cps(s).slice(a, b).join('')
+// Code-point helpers. Exported for the vim layer (tui-vim.ts), which does its own
+// buffer surgery and must count exactly as the editor does — an astral character
+// is one cursor step here, and two `.length` units in a naive implementation.
+export const cps = (s: string): string[] => [...s]
+export const cpLen = (s: string): number => cps(s).length
+export const cpSlice = (s: string, a: number, b?: number): string => cps(s).slice(a, b).join('')
 
 /** Start of the word before `col`, for Ctrl-W / Alt-B. */
 function wordStart(line: string, col: number): number {

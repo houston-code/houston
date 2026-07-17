@@ -126,6 +126,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'vim',
+    description: 'Vim keys in the composer (/vim [on|off])',
+    clients: ['tui']
+  },
+  {
     name: 'verbose',
     description: "Show each tool's full output as it runs",
     clients: ['tui']

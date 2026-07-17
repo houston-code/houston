@@ -25,8 +25,18 @@ import {
   reduceEditor,
   renderEditor,
   setEditorText,
-  type EditorState
+  type EditorState,
+  type EditorOutcome
 } from './tui-editor'
+import {
+  initialVimState,
+  reduceVim,
+  vimStatus,
+  CURSOR_BAR,
+  CURSOR_BLOCK,
+  CURSOR_RESET,
+  type VimState
+} from './tui-vim'
 
 /** Carriage-return + erase-line: rewinds to column 0 and clears the current line. */
 const CLEAR_LINE = '\r\x1b[2K'
@@ -105,6 +115,11 @@ export interface TerminalIoDeps {
    * Called on every redraw, so it must be cheap and synchronous.
    */
   menuFor?: (line: string) => string[]
+  /**
+   * Which key set the composer answers to, read fresh on each read so `/vim` takes
+   * effect on the next prompt rather than the next launch. Absent = emacs.
+   */
+  editorMode?: () => 'emacs' | 'vim'
 }
 
 /**
@@ -541,6 +556,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
 
       let state: EditorState = initialEditorState(deps.history?.() ?? [])
       let dec: DecoderState = initialDecoderState()
+      // Vim keys are decided per read, and a read always starts in insert: a fresh
+      // prompt is for typing, and coming back to one in normal mode would swallow
+      // the first word as commands.
+      const vimOn = (deps.editorMode?.() ?? 'emacs') === 'vim'
+      let vim: VimState = initialVimState()
       let done = false
       let drawn = false
       let prevCursorRow = 0
@@ -553,7 +573,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // run, without having to already know its name.
         const below = deps.menuFor?.(state.lines[state.row] ?? '') ?? []
         return renderEditor(state, {
-          prompt: promptNow(),
+          // The mode marker rides in front of the prompt, so which mode you are in
+          // is answered where you are already looking.
+          prompt: vimOn ? vimStatus(vim.mode, paint) + promptNow() : promptNow(),
           width: width(),
           paint,
           continuation: paint('… ', 'dim'),
@@ -594,6 +616,9 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const teardown = (): void => {
         try {
           stdin.removeListener('data', onData)
+          // Hand the cursor back: a block cursor left behind outlives Houston and
+          // shows up in the user's shell as a bug we caused.
+          if (vimOn) rawWrite(CURSOR_RESET)
           rawWrite(DISABLE_BRACKETED_PASTE)
           for (const l of priorKeypress) stdin.on('keypress', l)
           stdin.setRawMode(false)
@@ -699,7 +724,22 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
             noteFocus(key.on)
             continue
           }
-          const { state: next, outcome } = reduceEditor(state, key)
+          let next: EditorState
+          let outcome: EditorOutcome | undefined
+          if (vimOn) {
+            const before = vim.mode
+            const r2 = reduceVim(vim, state, key)
+            vim = r2.vim
+            next = r2.state
+            outcome = r2.outcome
+            // The cursor shape is the signal a vim user reads without looking; only
+            // written when the mode actually changed, so a keystroke stays one write.
+            if (vim.mode !== before) rawWrite(vim.mode === 'normal' ? CURSOR_BLOCK : CURSOR_BAR)
+          } else {
+            const r2 = reduceEditor(state, key)
+            next = r2.state
+            outcome = r2.outcome
+          }
           state = next
           if (!outcome) {
             draw()
