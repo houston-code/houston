@@ -141,7 +141,10 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
   const total = addUsage(conversationId, {
     inputTokens: e.inputTokens,
     outputTokens: e.outputTokens,
-    cost: e.cost
+    cost: e.cost,
+    ...(e.model ? { model: e.model } : {}),
+    ...(e.cacheReadTokens ? { cacheReadTokens: e.cacheReadTokens } : {}),
+    ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {})
   })
   return mergeRunningTotals(e, total)
 }

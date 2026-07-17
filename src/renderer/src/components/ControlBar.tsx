@@ -2,14 +2,13 @@ import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
 import type { ConversationWorktree, ReasoningEffort, RepoInfo } from '@shared/agent'
 import {
   contextPercent,
-  formatTokens,
-  formatUsd,
   resolveCapabilities,
   resolveContextWindow,
   type SessionUsage
 } from '@shared/usage'
 import { branchNameError } from '../lib/worktree'
 import { ModelPicker } from './ModelPicker'
+import { CostBreakdown } from './CostBreakdown'
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, '').split('/')
@@ -227,28 +226,7 @@ export function ControlBar({
       )}
 
       {usage && (usage.context > 0 || usage.output > 0) && (
-        <span
-          className="usage"
-          title={
-            (ctxWindow
-              ? `Context: ${usage.context.toLocaleString()} / ${ctxWindow.toLocaleString()} tokens (${pct}%)`
-              : `Context: ${usage.context.toLocaleString()} tokens`) +
-            `\nOutput this conversation: ${usage.output.toLocaleString()} tokens` +
-            (usage.cost > 0 ? `\nEstimated cost: ${formatUsd(usage.cost)} (approximate)` : '')
-          }
-        >
-          {pct !== null && (
-            <span className="usage__meter">
-              <span className={`usage__fill${meterClass}`} style={{ width: `${pct}%` }} />
-            </span>
-          )}
-          <span className="usage__text">
-            {pct !== null
-              ? `${formatTokens(usage.context)}/${formatTokens(ctxWindow!)} · ${pct}%`
-              : `${formatTokens(usage.context)} ctx`}{' '}
-            · {formatTokens(usage.output)} out
-          </span>
-        </span>
+        <CostBreakdown usage={usage} contextWindow={ctxWindow} meterPct={pct} meterClass={meterClass} />
       )}
     </div>
   )

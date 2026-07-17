@@ -4,6 +4,7 @@
  * so both processes and the unit tests can use them.
  */
 import type { ModelCaps } from './types'
+import type { ModelUsage } from './agent'
 
 /** Per-conversation running token usage (persisted; displayed in the control bar). */
 export interface SessionUsage {
@@ -13,6 +14,46 @@ export interface SessionUsage {
   output: number
   /** Estimated cumulative cost in USD across every turn (0 when the model has no known price). */
   cost: number
+  /** Cumulative input tokens served from the prompt cache (see ConversationUsage). */
+  cacheRead?: number
+  /** Per-model cost breakdown, in first-seen order (absent until a turn has billed). */
+  perModel?: ModelUsage[]
+}
+
+/**
+ * Fold one turn's usage into the per-model tallies, keyed by model, in first-seen
+ * order. Pure, so the main process (accumulating persisted conversation usage) and
+ * the terminal client tally the same way from the same per-round numbers — one
+ * definition, no drift between what the GUI and the TUI call "what this cost".
+ */
+export function accumulateModelUsage(
+  tallies: ModelUsage[],
+  turn: {
+    model?: string
+    inputTokens: number
+    outputTokens: number
+    cost: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+): ModelUsage[] {
+  // An older event carries no model. It still counts toward the session, so label
+  // the row for what it honestly is rather than inventing a model name.
+  const model = turn.model ?? 'session'
+  const out = tallies.some((t) => t.model === model)
+    ? tallies.map((t) => ({ ...t }))
+    : [...tallies.map((t) => ({ ...t })), blankModelUsage(model)]
+  const t = out.find((x) => x.model === model) as ModelUsage
+  t.inputTokens += turn.inputTokens
+  t.outputTokens += turn.outputTokens
+  t.cost += turn.cost
+  t.cacheReadTokens += turn.cacheReadTokens ?? 0
+  t.cacheWriteTokens += turn.cacheWriteTokens ?? 0
+  return out
+}
+
+function blankModelUsage(model: string): ModelUsage {
+  return { model, inputTokens: 0, outputTokens: 0, cost: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
 }
 
 /** Per-million-token prices in USD for a model (input vs output tokens). */
