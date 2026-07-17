@@ -7,6 +7,9 @@ out/
 dist/
 release/
 
+# Test coverage reports (from `npm run test:coverage`)
+coverage/
+
 # Generated from docs/houston-guide.md by scripts/gen-guide.mjs (postinstall,
 # typecheck, lint, build, and vitest globalSetup all regenerate it). Committed
 # until 2026-07: the whole guide lands on one ~37KB line, so every pair of
