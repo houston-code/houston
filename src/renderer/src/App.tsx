@@ -11,7 +11,13 @@ import {
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, PlanDecision, ReasoningEffort, RepoInfo } from '@shared/agent'
-import { mergeCommands, builtinCommands, type Command } from '@shared/commands'
+import {
+  mergeCommands,
+  builtinCommands,
+  parseAgentInvocation,
+  agentInvocationPrompt,
+  type Command
+} from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import { resolveCapabilities } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
@@ -1130,14 +1136,21 @@ export default function App(): JSX.Element {
   )
 
   const onCommand = useCallback(
-    (cmd: Command) => {
+    (cmd: Command, args: string) => {
       // Only built-in action commands reach here; custom (template) commands are
       // expanded into the composer by the Composer itself.
       if (cmd.name === 'new' || cmd.name === 'clear') void onNewChat()
       else if (cmd.name === 'compact') void onCompact()
       else if (cmd.name === 'skills') void onListCapability('skills')
       else if (cmd.name === 'agents') void onListCapability('agents')
-      else if (cmd.name === 'help') {
+      else if (cmd.name === 'agent') {
+        // Dispatch one of the workspace's own agents. Phrased as an instruction to
+        // dispatch (not a second path into subagents), so the agent's prompt, tools,
+        // model and approval tier stay identical to when the model picks it itself.
+        const inv = parseAgentInvocation(args)
+        if (inv) void onSend(agentInvocationPrompt(inv.name, inv.task))
+        else chat.notify('Usage: /agent <name> <task> — the name matches a file in .houston/agents', 'error')
+      } else if (cmd.name === 'help') {
         chat.notify(
           'Commands: ' + BUILTIN_COMMANDS.map((c) => `/${c.name}`).join('  ') +
             (commands.length > BUILTIN_COMMANDS.length ? '  (+ custom from .houston/commands)' : '')
@@ -1148,7 +1161,7 @@ export default function App(): JSX.Element {
         chat.notify(`Approval mode: ${policy}`)
       }
     },
-    [onNewChat, onCompact, onListCapability, onChangePolicy, chat, commands]
+    [onNewChat, onCompact, onListCapability, onChangePolicy, onSend, chat, commands]
   )
 
   // ---- Keyboard shortcuts, command palette, mode cycling ----

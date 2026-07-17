@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentInvocationPrompt,
   builtinCommands,
   expandTemplate,
   matchCommands,
   mergeCommands,
+  parseAgentInvocation,
   parseSlashCommand,
   resolveCommand,
   type Command
@@ -126,5 +128,39 @@ describe('expandTemplate — positional arguments', () => {
 
   it('collapses extra whitespace between words', () => {
     expect(expandTemplate('$1|$2', '  a   b  ')).toBe('a|b')
+  })
+})
+
+describe('parseAgentInvocation', () => {
+  it('splits a name and its task', () => {
+    expect(parseAgentInvocation('reviewer check the diff')).toEqual({
+      name: 'reviewer',
+      task: 'check the diff'
+    })
+    expect(parseAgentInvocation('reviewer')).toEqual({ name: 'reviewer', task: '' })
+    expect(parseAgentInvocation('  spacing-agent   do a thing  ')).toEqual({
+      name: 'spacing-agent',
+      task: 'do a thing'
+    })
+  })
+
+  it('rejects an empty arg or a name that could not be an agent file', () => {
+    expect(parseAgentInvocation('')).toBeNull()
+    expect(parseAgentInvocation('   ')).toBeNull()
+    // Agents are `.houston/agents/<name>.md`, so a path is never a valid name.
+    expect(parseAgentInvocation('../etc/passwd')).toBeNull()
+    expect(parseAgentInvocation('a/b run')).toBeNull()
+  })
+})
+
+describe('agentInvocationPrompt', () => {
+  it('phrases a dispatch that names the agent and carries the task', () => {
+    const p = agentInvocationPrompt('reviewer', 'check the auth diff')
+    expect(p).toContain('`reviewer` subagent')
+    expect(p).toContain('check the auth diff')
+  })
+
+  it('stands in a default task when none is given', () => {
+    expect(agentInvocationPrompt('reviewer', '')).toContain('Use your judgment')
   })
 })
