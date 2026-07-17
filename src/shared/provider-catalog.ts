@@ -352,3 +352,95 @@ export function customEndpointError(label: string, url: string): string | null {
   if (!/^https?:\/\//i.test(u)) return 'the base URL must start with http:// or https://'
   return null
 }
+
+/**
+ * A per-kind config field a provider needs before it can address its host —
+ * Bedrock's region, Vertex's project, Azure's endpoint, Foundry's resource.
+ *
+ * These exist because `createProvider` refuses to build a client without them
+ * (see `requireRegion` / `requireAddress` in `src/main/providers/index.ts`), and
+ * that refusal lands at request time — long after setup, as an error on a turn
+ * the user thought would work. Declaring them here lets a client ask up front
+ * instead, and keeps the question in one place rather than restated per surface.
+ */
+export interface ProviderSetupField {
+  /** The `ProviderConfig` field to write. */
+  key: 'region' | 'projectId' | 'endpoint' | 'apiVersion' | 'resource'
+  /** Prompt text, phrased for someone who has not read the provider's docs. */
+  label: string
+  /** A concrete example — these are all formats people get subtly wrong. */
+  placeholder: string
+  /**
+   * Env vars the host's own SDK reads for this field. When one is set the field
+   * is already answered, so a client should not ask: prompting for something the
+   * environment supplies is how a working setup gets talked out of working.
+   */
+  envVars: string[]
+  /**
+   * False when the value can be inferred at request time (Vertex reads the
+   * project from the resolved ADC credentials), so skipping it is safe.
+   */
+  required: boolean
+}
+
+const SETUP_FIELDS: Partial<Record<ProviderKind, ProviderSetupField[]>> = {
+  bedrock: [
+    {
+      key: 'region',
+      label: 'AWS region',
+      placeholder: 'us-east-1',
+      envVars: ['AWS_REGION', 'AWS_DEFAULT_REGION'],
+      required: true
+    }
+  ],
+  vertex: [
+    {
+      key: 'region',
+      label: 'Vertex region',
+      placeholder: 'us-east5, or global',
+      envVars: ['CLOUD_ML_REGION'],
+      required: true
+    },
+    {
+      key: 'projectId',
+      label: 'Google Cloud project',
+      placeholder: 'my-project-123',
+      envVars: ['ANTHROPIC_VERTEX_PROJECT_ID'],
+      // Inferable from the ADC credentials, so blank is usually right.
+      required: false
+    }
+  ],
+  'azure-openai': [
+    {
+      key: 'endpoint',
+      label: 'Azure OpenAI endpoint',
+      placeholder: 'https://my-resource.openai.azure.com',
+      envVars: ['AZURE_OPENAI_ENDPOINT'],
+      required: true
+    },
+    {
+      key: 'apiVersion',
+      label: 'API version',
+      placeholder: DEFAULT_AZURE_API_VERSION,
+      envVars: [],
+      required: true
+    }
+  ],
+  foundry: [
+    {
+      key: 'resource',
+      label: 'Foundry resource name',
+      placeholder: 'my-resource',
+      envVars: ['ANTHROPIC_FOUNDRY_RESOURCE'],
+      required: true
+    }
+  ]
+}
+
+/**
+ * The config fields `kind` needs beyond an API key. Empty for the kinds that
+ * carry their whole address in `baseUrl`, which is every other kind.
+ */
+export function providerSetupFields(kind: ProviderKind): ProviderSetupField[] {
+  return SETUP_FIELDS[kind] ?? []
+}
