@@ -11,7 +11,12 @@ import type {
   ProviderStreamEvent,
   ToolApprovalDecision
 } from '@shared/agent'
-import { MAX_APPROVAL_NOTE } from '@shared/agent'
+import {
+  MAX_APPROVAL_NOTE,
+  SYSTEM_NOTE_PREFIX,
+  MAX_STEER_TEXT,
+  MAX_PENDING_STEERS
+} from '@shared/agent'
 import type { ApprovalPolicy, PermissionRule } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
@@ -195,6 +200,7 @@ const {
   resolveQuestion,
   resolvePlan,
   setRunPolicy,
+  steerRun,
   activeRunForConversation,
   pendingPromptsForConversation,
   liveTranscriptForConversation,
@@ -4312,5 +4318,267 @@ describe('scheduled runs (loop wiring)', () => {
     const results = r.events.filter((e) => e.type === 'tool_result')
     expect(results[0]?.type === 'tool_result' && results[0].output).toContain('No scheduled runs')
     expect(results[1]?.type === 'tool_result' && results[1].output).toContain('Cancelled scheduled run sch-test')
+  })
+})
+
+/**
+ * Mid-turn steering. Watching a run go the wrong way and being able to do nothing
+ * but interrupt it is the gap here: interrupting throws away the turn's work,
+ * waiting lets the agent keep building on the wrong thing.
+ */
+describe('steerRun', () => {
+  /** A provider that records the window it was handed on each call. */
+  function recording(turns: ProviderStreamEvent[][]): {
+    provider: Provider
+    requests: ChatMessage[][]
+  } {
+    const requests: ChatMessage[][] = []
+    let i = 0
+    return {
+      requests,
+      provider: {
+        async *streamChat(req) {
+          requests.push((req.messages ?? []) as ChatMessage[])
+          const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+          for (const ev of turn) yield ev
+        }
+      }
+    }
+  }
+
+  /** Two tool turns then a stop, so there is an iteration boundary to steer at. */
+  const twoSteps: ProviderStreamEvent[][] = [
+    [
+      { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: 'a' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [
+      { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: 'b' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+
+  // The whole point: the model must actually READ it, not just have it in a log.
+  it('puts the correction in the model window before the next step', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer'
+    const send = (e: AgentEvent): void => {
+      if (e.type === 'tool_result' && e.callId === 'w1') steerRun(runId, 'stop, use YAML instead')
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    // Steered during step 1, so the request for step 2 must carry it.
+    const second = r.requests[1] ?? []
+    expect(second.some((m) => m.role === 'user' && m.content === 'stop, use YAML instead')).toBe(true)
+    // …and it is an ordinary user turn, not a system note dressed as one.
+    const steer = second.find((m) => m.content === 'stop, use YAML instead')
+    expect(steer?.content.startsWith(SYSTEM_NOTE_PREFIX)).toBe(false)
+  })
+
+  it('announces the steer where it lands, not where it was typed', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer-event'
+    const events: AgentEvent[] = []
+    const send = (e: AgentEvent): void => {
+      events.push(e)
+      if (e.type === 'tool_result' && e.callId === 'w1') steerRun(runId, 'do it differently')
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    const steered = events.filter((e) => e.type === 'steered')
+    expect(steered).toHaveLength(1)
+    expect(steered[0]).toMatchObject({ type: 'steered', text: 'do it differently' })
+    // It lands after the result that prompted it, never before.
+    const at = events.findIndex((e) => e.type === 'steered')
+    const resultAt = events.findIndex((e) => e.type === 'tool_result' && e.callId === 'w1')
+    expect(at).toBeGreaterThan(resultAt)
+  })
+
+  it('keeps several corrections, in the order they were typed', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer-many'
+    const send = (e: AgentEvent): void => {
+      if (e.type === 'tool_result' && e.callId === 'w1') {
+        steerRun(runId, 'first')
+        steerRun(runId, 'second')
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    const second = (r.requests[1] ?? []).filter((m) => m.role === 'user').map((m) => m.content)
+    expect(second.indexOf('first')).toBeGreaterThan(-1)
+    expect(second.indexOf('second')).toBeGreaterThan(second.indexOf('first'))
+  })
+
+  // The return value is load-bearing: false is what tells a client to send the
+  // line as its own turn instead of dropping what the user typed.
+  /**
+   * A steer is user text pushed into a RUNNING turn's window — the same class as an
+   * approval note, and bounded the same way. Length so one cannot flood the window;
+   * count because steers wait for an iteration boundary, and a turn stuck in a long
+   * tool call would otherwise collect them without limit.
+   */
+  it('caps a correction rather than letting it flood the window', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer-cap'
+    const send = (e: AgentEvent): void => {
+      if (e.type === 'tool_result' && e.callId === 'w1') steerRun(runId, 'x'.repeat(MAX_STEER_TEXT + 500))
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    const pushed = (r.requests[1] ?? []).find((m) => m.role === 'user' && m.content.startsWith('xxx'))
+    expect(pushed?.content).toHaveLength(MAX_STEER_TEXT)
+  })
+
+  // Refusing is not dropping: false routes the line to the caller's own queue.
+  it('refuses past the pending limit instead of collecting without bound', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer-flood'
+    const takenThenRefused: boolean[] = []
+    const send = (e: AgentEvent): void => {
+      if (e.type === 'tool_result' && e.callId === 'w1') {
+        for (let i = 0; i < MAX_PENDING_STEERS + 3; i++) takenThenRefused.push(steerRun(runId, `s${i}`))
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    expect(takenThenRefused.filter(Boolean)).toHaveLength(MAX_PENDING_STEERS)
+    expect(takenThenRefused.slice(-3)).toEqual([false, false, false])
+  })
+
+  it('refuses when there is no live run to steer', () => {
+    expect(steerRun('no-such-run', 'hello')).toBe(false)
+  })
+
+  it('refuses an empty correction rather than pushing a blank turn', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer-empty'
+    let refused: boolean[] = []
+    const send = (e: AgentEvent): void => {
+      if (e.type === 'tool_result' && e.callId === 'w1') {
+        refused = [steerRun(runId, ''), steerRun(runId, '   ')]
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    expect(refused).toEqual([false, false])
+    expect((r.requests[1] ?? []).some((m) => m.role === 'user' && !m.content.trim())).toBe(false)
+  })
+
+  it('refuses to steer a run that was interrupted', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer-aborted'
+    let after: boolean | null = null
+    const send = (e: AgentEvent): void => {
+      if (e.type === 'tool_result' && e.callId === 'w1') {
+        cancelRun(runId)
+        after = steerRun(runId, 'too late')
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    expect(after).toBe(false)
+  })
+
+  it('persists the correction, so a reopened chat shows what was said', async () => {
+    const r = recording(twoSteps)
+    h.provider = r.provider
+    const runId = 'run-steer-persist'
+    const saved: ChatMessage[][] = []
+    const send = (e: AgentEvent): void => {
+      if (e.type === 'tool_result' && e.callId === 'w1') steerRun(runId, 'remembered')
+    }
+    await startRun(
+      {
+        runId,
+        conversationId: 'conv-steer',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      (ms) => saved.push([...ms])
+    )
+    expect(saved.at(-1)?.some((m) => m.role === 'user' && m.content === 'remembered')).toBe(true)
   })
 })

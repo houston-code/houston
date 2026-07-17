@@ -1820,6 +1820,12 @@ export interface TuiIo {
    * Take (and clear) the messages typed while the agent was working, for dispatch
    * as the next turn. Absent off-TTY / in tests, where nothing is queued.
    */
+  /**
+   * Register the handler for a line typed while a turn runs. It returns true when
+   * the live turn took the line as a course correction; false sends it to the
+   * follow-up queue instead. Absent ⇒ everything queues, as it did before.
+   */
+  onSteer?: (handler: (text: string) => boolean) => void
   takeQueued?: () => string[]
   /** Drop anything queued (the run it followed was abandoned). */
   clearQueued?: () => void
@@ -1873,6 +1879,13 @@ export interface TuiDeps {
    * were trying to unblock.
    */
   setRunPolicy?: (runId: string, policy: ApprovalPolicy) => void
+  /**
+   * Hand a running turn a course correction, seen before its next step. Returns
+   * false when the run is already over (nothing to steer), which is what lets the
+   * caller fall back to sending the line as its own turn. Absent ⇒ no steering, and
+   * a line typed mid-run queues as a follow-up.
+   */
+  steerRun?: (runId: string, text: string) => boolean
   io: TuiIo
   /**
    * Optional persistence. When present, each session is saved as a conversation
@@ -2373,6 +2386,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // (/resume, /login, plan handoff) is handled as a plain cancel, not a composer
   // reset/exit whose flag would leak into the next composer read.
   let atComposer = false
+  // A line typed mid-run goes to the turn that is running, so "no, not that" lands
+  // while it can still change the outcome. With no live run there is nothing to
+  // steer, and the io layer queues it as a follow-up instead.
+  deps.io.onSteer?.((text) => (activeRunId ? (deps.steerRun?.(activeRunId, text) ?? false) : false))
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
@@ -3384,6 +3401,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'turn_start':
           // Emitted only when the main process auto-starts a queued follow-up turn;
           // the TUI drives its own composer and never uses that buffer, so ignore it.
+          break
+        case 'steered':
+          // Say it when it lands, not when it was typed: until the model reaches an
+          // iteration boundary the message has changed nothing, and echoing it early
+          // would claim otherwise.
+          //
+          // Stripped on the way out for the same reason every other echoed string is:
+          // this one comes from the keyboard today (where the decoder has already
+          // turned escapes into keys, not text), but it is echoed straight to a
+          // terminal, and the next caller of steerRun may not be a keyboard.
+          deps.io.out(paint(`\n· steering: ${stripControlChars(e.text)}\n`, 'cyan'))
           break
         default:
           assertNever(e, 'tui:unhandled agent event')

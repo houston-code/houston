@@ -220,19 +220,32 @@ conversation, not a log. Two ways to see more:
 
 Very long output is capped with a note saying how much was left out.
 
-## Typing while it works
+## Typing while it works (steering)
 
 You do not have to wait for a turn to finish before saying the next thing. Type
-while the agent works: what you type appears on the status line, and `Enter`
-queues it. The line shows how many messages are waiting.
+while the agent works: what you type appears on the status line, and `Enter` sends
+it.
 
-When the turn ends, whatever you queued is sent as the next message
-automatically, with no second `Enter`. Several queued messages go together as one.
+It goes to the turn that is running. The agent reads it before its next step, so
+"no, use YAML instead" changes what happens next rather than arriving after the
+work is done. Houston prints `· steering: …` at the moment the message actually
+reaches the model, not when you pressed `Enter` — until then it has changed
+nothing, and saying otherwise would be a lie. The message is an ordinary part of
+the conversation, so it appears in the transcript and is remembered like anything
+else you said.
+
+This is the middle ground between the two bad options. Interrupting throws away the
+turn's work and its context; waiting lets the agent keep building on the wrong
+thing for however many steps are left.
+
+If the turn finishes before your message lands (you typed it as the agent was
+wrapping up), nothing is lost: it is sent as the next message automatically, with
+no second `Enter`. Several such messages go together as one.
 
 - `Esc` clears what you have typed. On an empty line, `Esc` stops the run (so does
   `Ctrl-C`).
-- Stopping a run also drops anything queued: those messages were follow-ups to
-  work you just threw away.
+- Stopping a run also drops anything still waiting: those messages were follow-ups
+  to work you just threw away.
 
 ## Undoing a turn, and seeing what changed
 

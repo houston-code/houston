@@ -449,6 +449,19 @@ export function isToolApprovalDecision(v: unknown): v is ToolApprovalDecision {
 export const MAX_APPROVAL_NOTE = 2000
 
 /**
+ * Longest course correction accepted mid-turn (see `steerRun`), and how many may
+ * wait for the next iteration boundary at once.
+ *
+ * Same bound, and the same reason, as {@link MAX_APPROVAL_NOTE}: both are a
+ * sentence of guidance the user pushes into a RUNNING turn's window, and neither
+ * should be able to flood it. The count matters as much as the length — steers are
+ * held until the loop reaches a boundary, and a turn stuck in a long tool call
+ * could otherwise collect them without limit.
+ */
+export const MAX_STEER_TEXT = 2000
+export const MAX_PENDING_STEERS = 20
+
+/**
  * The user's verdict plus, optionally, why — "no, and here's what to do instead".
  *
  * Without the note a denial is a dead end: the model is told only that it was
@@ -593,6 +606,13 @@ export function sanitizeElicitationResult(v: unknown, maxValueLen = 4000): Elici
 export type AgentEvent =
   | { runId: string; type: 'text'; delta: string }
   | { runId: string; type: 'reasoning'; delta: string }
+  /**
+   * A course correction the user typed while the turn was running, now in the
+   * model's window (see `steerRun`). Emitted at the iteration boundary where it
+   * actually lands, not when it was typed, so the transcript shows it in the order
+   * the model read it rather than the order it was received.
+   */
+  | { runId: string; type: 'steered'; text: string }
   | {
       runId: string
       type: 'tool_start'

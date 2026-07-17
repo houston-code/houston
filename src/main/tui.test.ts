@@ -4166,3 +4166,91 @@ describe('/agent', () => {
     expect(t.text()).toContain('reviewer')
   })
 })
+
+// Typing while a turn ran only ever bought you a follow-up for the NEXT turn — so
+// "no, not that" arrived after the agent had finished doing exactly that.
+describe('steering a running turn', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('hands a mid-run line to the live turn instead of queueing it', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    const steers: Array<[string, string]> = []
+    d.steerRun = (runId, text) => {
+      steers.push([runId, text])
+      return true
+    }
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    d.startRun = async (req, send) => {
+      // Someone types while this turn is running.
+      expect(hold.steer?.('use YAML instead')).toBe(true)
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    // Steered against the turn that was actually live, whatever id it was given.
+    expect(steers).toHaveLength(1)
+    expect(steers[0][1]).toBe('use YAML instead')
+    expect(steers[0][0]).toBeTruthy()
+  })
+
+  // The return value is the whole contract: what the turn won't take must not vanish.
+  it('falls back to the follow-up queue when the turn will not take it', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    d.steerRun = () => false
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    d.startRun = async (req, send) => {
+      expect(hold.steer?.('too late')).toBe(false)
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+  })
+
+  it('says nothing to steer when no turn is running', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    d.steerRun = () => true // would accept — but there is no run to hand it to
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    await runTui(opts, d)
+    expect(hold.steer?.('anything')).toBe(false)
+  })
+
+  // The text is echoed straight to a terminal. It comes from the keyboard today (the
+  // decoder turns escapes into keys, never text), but the next caller of steerRun may
+  // not be a keyboard, and this is the seam where that would matter.
+  it('strips control characters on the way to the terminal', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'steered', text: '\x1b]52;c;cGF5\x1b[2Jpwn' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain(']52;c;cGF5[2Jpwn')
+    expect(out).not.toContain('\x1b]52')
+  })
+
+  it('shows the correction when it lands in the window', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'steered', text: 'use YAML instead' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('steering: use YAML instead')
+  })
+})
