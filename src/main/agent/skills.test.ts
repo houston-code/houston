@@ -1,15 +1,30 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   BUILTIN_SKILLS,
   withBuiltinSkills,
+  loadSkills,
   loadSkillBody,
   resolveSkillInstructions,
   type Skill
 } from './skills'
 import { HOUSTON_GUIDE } from './guide-content'
+
+/** Run `fn` against a throwaway workspace, cleaned up afterward. */
+async function withWorkspace(fn: (ws: string) => Promise<void>): Promise<void> {
+  const ws = mkdtempSync(join(tmpdir(), 'houston-skills-'))
+  try {
+    await fn(ws)
+  } finally {
+    rmSync(ws, { recursive: true, force: true })
+  }
+}
+
+const SKILL_MD = (name: string, body = 'body'): string =>
+  `---\nname: ${name}\ndescription: d\n---\n${body}`
 
 const here = dirname(fileURLToPath(import.meta.url))
 const guidePath = resolve(here, '../../../docs/houston-guide.md')
@@ -71,5 +86,58 @@ describe('resolveSkillInstructions with the built-in present', () => {
     const out = await resolveSkillInstructions('/anywhere', skills, 'nope')
     expect(out).toContain('Unknown skill')
     expect(out).toContain('houston-guide')
+  })
+})
+
+describe('loadSkills — bundled resources', () => {
+  it('collects the skill directory\'s non-SKILL.md files, recursively and sorted', async () => {
+    await withWorkspace(async (ws) => {
+      const dir = join(ws, '.houston/skills/demo')
+      mkdirSync(join(dir, 'references'), { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('demo'))
+      writeFileSync(join(dir, 'template.txt'), 'x')
+      writeFileSync(join(dir, 'references', 'api.md'), 'y')
+      const skills = await loadSkills(ws)
+      const demo = skills.find((s) => s.name === 'demo')
+      expect(demo?.resources).toEqual([
+        '.houston/skills/demo/references/api.md',
+        '.houston/skills/demo/template.txt'
+      ])
+    })
+  })
+
+  it('omits resources when the directory holds only SKILL.md', async () => {
+    await withWorkspace(async (ws) => {
+      const dir = join(ws, '.houston/skills/plain')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('plain'))
+      const skills = await loadSkills(ws)
+      expect(skills.find((s) => s.name === 'plain')?.resources).toBeUndefined()
+    })
+  })
+
+  it('lists the bundled files after the instructions in the skill tool response', async () => {
+    await withWorkspace(async (ws) => {
+      const dir = join(ws, '.houston/skills/demo')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('demo', 'Do the thing.'))
+      writeFileSync(join(dir, 'helper.py'), 'print(1)')
+      const skills = await loadSkills(ws)
+      const out = await resolveSkillInstructions(ws, skills, 'demo')
+      expect(out).toContain('Do the thing.')
+      expect(out).toContain('Bundled files for this skill')
+      expect(out).toContain('.houston/skills/demo/helper.py')
+    })
+  })
+
+  it('does not append a bundled-files section when there are none', async () => {
+    await withWorkspace(async (ws) => {
+      const dir = join(ws, '.houston/skills/plain')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('plain', 'Just instructions.'))
+      const skills = await loadSkills(ws)
+      const out = await resolveSkillInstructions(ws, skills, 'plain')
+      expect(out).toBe('Just instructions.')
+    })
   })
 })
