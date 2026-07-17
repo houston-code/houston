@@ -145,7 +145,7 @@ on the client, but the common built-ins are:
 The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
 `/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/fork`,
-`/cost`, `/mcp`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
+`/cost`, `/mcp`, `/trust`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
 
 **Themes.** `/theme` lists the terminal's palettes and `/theme <name>` switches:
 `dark` (bright foregrounds for a dark background), `light` (readable on white,
@@ -437,6 +437,12 @@ runs never prompt and simply note when an untrusted folder's extra config is
 being ignored. Trusted project `allow` rules sit BELOW your own rules (they fill
 gaps, never override you), project hooks run after yours, and project MCP
 servers appear namespaced as `mcp__proj-<id>__<tool>`.
+
+Decisions are reviewable: Settings, *Workspace*, *Trusted folders* lists every
+folder you answered for (trusted or never) with a Forget button, and `/trust`
+in the terminal shows the current folder's state (`/trust forget` clears the
+decision and asks again on the spot). Forgetting is how you reverse a "Never"
+or retire a stale "Trust".
 
 **Managed policy.** On a managed device an administrator can ship a machine-wide
 `managed-settings.json` with `deny` / `ask` rules that outrank both project

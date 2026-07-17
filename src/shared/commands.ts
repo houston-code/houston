@@ -172,6 +172,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   { name: 'mcp', description: 'List MCP servers (add, remove, login, logout)', clients: ['tui'] },
+  {
+    name: 'trust',
+    description: "Show this folder's project-config trust (/trust forget re-decides)",
+    clients: ['tui']
+  },
   { name: 'hooks', description: 'List configured hooks', clients: ['tui'] },
   { name: 'theme', description: 'List or switch the color theme', clients: ['tui'] },
   { name: 'image', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },

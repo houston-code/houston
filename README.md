@@ -238,6 +238,9 @@ Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
   asks at session start, and headless runs just note what's being ignored. The
   decision is bound to a fingerprint of the elevating config, so if the project
   later changes it (a pull adds a hook, say), trust drops and Houston asks again.
+  Review or reverse decisions any time: Settings > Workspace > Trusted folders
+  (with a Forget button per folder), or `/trust` in the terminal (`/trust forget`
+  clears the decision and asks again immediately).
   Trusted `allow` rules sit below your own rules, project hooks run after yours,
   and project MCP servers get a `proj-` namespace prefix.
 - **Managed policy (admin-locked).** On a managed device an administrator can ship a
