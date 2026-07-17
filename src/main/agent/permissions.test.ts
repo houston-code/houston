@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import { describe, it, expect } from 'vitest'
 import {
   alreadyAllowedAsRule,
@@ -227,6 +228,112 @@ describe('matchRule', () => {
       const r: PermissionRule[] = [{ action: 'allow', tool: 'read_file', match: 'src/*' }]
       expect(matchRule(r, 'read_file', 'src/a/b/c.ts')).toBe('allow')
       expect(matchRule(r, 'read_file', 'lib/a.ts')).toBeNull()
+    })
+  })
+
+  describe('path subjects are canonicalized and anchored to the roots', () => {
+    const ROOTS = ['/work/project']
+
+    it('a deny cannot be dodged by respelling the same path', () => {
+      const r: PermissionRule[] = [deny('read_file', '/etc/*')]
+      expect(matchRule(r, 'read_file', '/etc/passwd', ROOTS)).toBe('deny')
+      // Same file, different spelling — the rule must still fire.
+      expect(matchRule(r, 'read_file', '/tmp/../etc/passwd', ROOTS)).toBe('deny')
+      expect(matchRule(r, 'read_file', '/etc/./passwd', ROOTS)).toBe('deny')
+    })
+
+    it('a relative allow rule does NOT auto-approve a climb out of the workspace', () => {
+      // The core hole: `src/*` is a `^src/.*$` regex, so the raw subject
+      // `src/../../../etc/passwd` matched it and auto-approved reading /etc/passwd.
+      const r: PermissionRule[] = [allow('read_file', 'src/*')]
+      expect(matchRule(r, 'read_file', 'src/../../../etc/passwd', ROOTS)).toBeNull()
+      expect(matchRule(r, 'read_file', 'src/a/../../../../etc/passwd', ROOTS)).toBeNull()
+      // ...but a climb that returns into src/ is genuinely in src/.
+      expect(matchRule(r, 'read_file', 'src/a/../b.ts', ROOTS)).toBe('allow')
+    })
+
+    it('anchors a relative rule to the roots, so an absolute in-workspace path matches it', () => {
+      const r: PermissionRule[] = [allow('read_file', 'src/*')]
+      expect(matchRule(r, 'read_file', '/work/project/src/a.ts', ROOTS)).toBe('allow')
+      expect(matchRule(r, 'read_file', '/work/other/src/a.ts', ROOTS)).toBeNull()
+    })
+
+    it('anchors an absolute rule, so an equivalent relative path matches it', () => {
+      const r: PermissionRule[] = [{ action: 'ask', tool: 'write_file', match: '/work/project/prod/*' }]
+      expect(matchRule(r, 'write_file', 'prod/deploy.ts', ROOTS)).toBe('ask')
+    })
+
+    it('matches a `~` rule against the expanded home path', () => {
+      const r: PermissionRule[] = [deny('read_file', '~/.ssh/*')]
+      expect(matchRule(r, 'read_file', `${homedir()}/.ssh/id_rsa`, ROOTS)).toBe('deny')
+      // The literal, unexpanded spelling stays covered too.
+      expect(matchRule(r, 'read_file', '~/.ssh/id_rsa', ROOTS)).toBe('deny')
+    })
+
+    it('honours a secondary root', () => {
+      const r: PermissionRule[] = [allow('read_file', 'notes/*')]
+      expect(matchRule(r, 'read_file', '/work/vault/notes/a.md', ['/work/project', '/work/vault'])).toBe('allow')
+    })
+
+    it('leaves a search query alone (not a path)', () => {
+      const r: PermissionRule[] = [allow('web_search', 'rust/../async')]
+      expect(matchRule(r, 'web_search', 'rust/../async', ROOTS)).toBe('allow')
+    })
+  })
+
+  describe('URL rules are case-insensitive on scheme and host', () => {
+    it('a deny cannot be dodged by upper-casing the host or scheme', () => {
+      const r: PermissionRule[] = [deny('web_fetch', 'https://evil.example.com/*')]
+      expect(matchRule(r, 'web_fetch', 'https://EVIL.example.com/steal')).toBe('deny')
+      expect(matchRule(r, 'web_fetch', 'HTTPS://Evil.Example.COM/steal')).toBe('deny')
+      expect(matchRule(r, 'web_fetch', 'https://evil.example.com:8443/steal')).toBeNull() // port is part of the host:port authority
+    })
+
+    it('matches an upper-cased rule against a lower-cased call', () => {
+      const r: PermissionRule[] = [allow('web_fetch', 'https://API.GitHub.com/*')]
+      expect(matchRule(r, 'web_fetch', 'https://api.github.com/repos')).toBe('allow')
+    })
+
+    it('keeps the path case-sensitive (it is, per RFC 3986)', () => {
+      const r: PermissionRule[] = [deny('web_fetch', 'https://x.com/Secret/*')]
+      expect(matchRule(r, 'web_fetch', 'https://x.com/Secret/a')).toBe('deny')
+      expect(matchRule(r, 'web_fetch', 'https://x.com/secret/a')).toBeNull()
+    })
+
+    it('does not case-fold a non-URL-shaped pattern', () => {
+      // `*Evil*` has no scheme, so it must keep matching case-sensitively.
+      const r: PermissionRule[] = [deny('web_fetch', '*/Evil/*')]
+      expect(matchRule(r, 'web_fetch', 'https://x.com/Evil/a')).toBe('deny')
+      expect(matchRule(r, 'web_fetch', 'https://x.com/evil/a')).toBeNull()
+    })
+  })
+
+  describe('run_shell quoting cannot dodge a rule', () => {
+    const denyRm: PermissionRule[] = [deny('run_shell', '*rm -rf*')]
+
+    it('sees through quotes around the program and its flags', () => {
+      expect(matchRule(denyRm, 'run_shell', '"rm" -rf /tmp/x')).toBe('deny')
+      expect(matchRule(denyRm, 'run_shell', "'rm' -rf /tmp/x")).toBe('deny')
+      expect(matchRule(denyRm, 'run_shell', "r''m -rf /tmp/x")).toBe('deny')
+      expect(matchRule(denyRm, 'run_shell', 'rm -r"f" /tmp/x')).toBe('deny')
+      expect(matchRule(denyRm, 'run_shell', 'r"m" "-rf" /tmp/x')).toBe('deny')
+    })
+
+    it('sees through backslash escapes', () => {
+      expect(matchRule(denyRm, 'run_shell', '\\rm -rf /tmp/x')).toBe('deny')
+      expect(matchRule(denyRm, 'run_shell', 'r\\m -r\\f /tmp/x')).toBe('deny')
+    })
+
+    it('still matches a rule the user wrote WITH quotes', () => {
+      const r: PermissionRule[] = [allow('run_shell', 'git commit -m "*"')]
+      expect(matchRule(r, 'run_shell', 'git commit -m "a message"')).toBe('allow')
+      expect(matchRule(r, 'run_shell', 'git commit -m unquoted')).toBe('allow')
+    })
+
+    it('does not let quote-stripping smuggle a command past an allow rule', () => {
+      const allowEcho: PermissionRule[] = [allow('run_shell', 'echo *')]
+      expect(matchRule(allowEcho, 'run_shell', 'echo "hi" && rm -rf /tmp/x')).toBeNull()
+      expect(matchRule(denyRm, 'run_shell', 'echo "hi" && "rm" -rf /tmp/x')).toBe('deny')
     })
   })
 
