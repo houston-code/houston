@@ -341,9 +341,10 @@ itself separately.
 `/doctor` reports what Houston can see: the version (and whether a newer one is
 out), Node and platform, the active model and every provider's key status,
 whether the shell sandbox is actually enforced on this host, which external tools
-(`git`, `gh`, `rg`) are on PATH, each MCP server's connection state, and the
-terminal's size and color support. Each row is marked healthy, worth knowing, or
-broken, and anything not healthy comes with what to do about it.
+(`git`, `gh`, `rg`) are on PATH, and each MCP server's connection state. In the
+terminal it also reports the terminal's size and color support. Each row is marked
+healthy, worth knowing, or broken, and anything not healthy comes with what to do
+about it. It runs in both the desktop app and the terminal.
 
 It answers the questions that used to need source-reading or guesswork, notably
 "is my shell really sandboxed here?" and "why did setting my API key change

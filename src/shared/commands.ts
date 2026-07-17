@@ -164,8 +164,8 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'doctor',
-    description: 'Check your setup: model, sandbox, tools, MCP, terminal',
-    clients: ['tui']
+    description: 'Check your setup: model, sandbox, tools, MCP',
+    clients: ['gui', 'tui']
   },
   {
     name: 'vim',
