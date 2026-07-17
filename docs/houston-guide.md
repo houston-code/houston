@@ -422,7 +422,12 @@ the composer the rest of the time. `/approval <mode>` sets one directly.
 `deny`, or `ask`, matched on the tool plus a glob over its target, e.g. allow
 `run_shell` matching `git *`, deny anything matching `*rm -rf*`, always ask
 before `write_file` under `src/secret/**`. Rules are checked before the mode and
-the first match wins.
+the first match wins. Matching normalizes the target so a rule cannot be dodged
+by respelling it: a file rule is resolved and anchored to the workspace (so
+`src/*` covers the same file written as an absolute path, and a relative climb
+like `src/../../etc/passwd` does not slip past it), a URL rule is
+case-insensitive on scheme and host, and a shell rule sees through quoting and
+backslash escapes (so `deny *rm -rf*` still fires on `"rm" -rf` or `r\m -rf`).
 
 **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
 `deny` / `ask` rules, checked before the user's global rules. Those guardrails

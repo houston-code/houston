@@ -213,15 +213,6 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   repository or one destination. *Why deferred:* it adds a structured matcher to the rule
   schema and the Settings editor, beyond the current single-glob model.
 
-- **Canonicalized path and URL matching in permission rules.** Rule subjects are matched
-  as raw strings with a single `*` wildcard: a path rule does not normalize `.`/`..` or
-  resolve symlinks before matching, and a URL rule compares the raw URL rather than its
-  parsed host, scheme, and port. So `src/*` does not cover `./src/x` or an absolute path
-  to the same file, and a host rule is case- and port-sensitive. *Why deferred:*
-  canonicalizing broadens what a rule matches, which is safe to widen for a `deny` rule
-  but risky for an `allow` rule (it could auto-approve more than intended), so it wants a
-  careful, direction-aware design rather than a blanket normalize.
-
 ## Deferred — polish
 
 - **Open a specific file from the diff, changes list, and tool results.** The

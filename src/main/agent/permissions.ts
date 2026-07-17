@@ -222,6 +222,80 @@ function escapeRegExp(s: string): string {
 }
 
 /**
+ * Which flavour of subject a tool's permission pattern is matched against, so the
+ * matcher can canonicalize both sides consistently before comparing:
+ * - `shell`  — a command line (handled by {@link matchShellRule}, dequoted).
+ * - `url`    — an http(s) URL; scheme + host are case-folded (see {@link lowerUrlAuthority}).
+ * - `path`   — a filesystem path/glob; canonicalized + anchored to the roots.
+ * - `opaque` — a free-form string (a search query, an MCP tool name); matched verbatim.
+ */
+function subjectKind(toolName: string): 'shell' | 'url' | 'path' | 'opaque' {
+  if (toolName === 'run_shell') return 'shell'
+  if (toolName === 'web_fetch') return 'url'
+  if (toolName === 'web_search' || toolName.startsWith('mcp__')) return 'opaque'
+  return 'path'
+}
+
+// The leading `scheme://authority` of a URL (authority = optional userinfo, host,
+// optional :port — everything up to the first `/`, `?`, or `#`). Scheme and host
+// are case-insensitive per RFC 3986, so both are lowercased before matching; the
+// path/query/fragment that follow stay case-sensitive. Anchored, so only the
+// leading authority is touched — a `*`-only pattern (no scheme) is left alone.
+const URL_AUTHORITY_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*/
+
+/** Lowercase a URL's scheme + host so `HTTPS://Evil.COM/x` and `https://evil.com/x` match. */
+function lowerUrlAuthority(s: string): string {
+  return s.replace(URL_AUTHORITY_RE, (m) => m.toLowerCase())
+}
+
+/**
+ * Canonicalize a filesystem-path SUBJECT to the absolute, lexically-normalized
+ * location the file tools themselves would act on (same resolution as
+ * `resolveInRoots`): `.`/`..` collapsed, `~`/`$HOME` expanded, relative paths
+ * anchored at the first root. So equivalent spellings of one location compare
+ * equal — a deny can't be dodged by `/tmp/../etc/passwd`, and a relative `allow`
+ * rule can't be widened by `src/../../../etc/passwd` climbing out of the tree.
+ */
+function canonicalizePath(p: string, roots: string[]): string {
+  const abs = absoluteTarget(p)
+  if (abs !== null) return resolve(abs)
+  const base = roots[0] ?? process.cwd()
+  return resolve(base, p)
+}
+
+/**
+ * The canonical absolute form(s) of a path RULE PATTERN (the `*` wildcard survives
+ * — it is an ordinary character to the path normalizer). An absolute/home pattern
+ * anchors once; a RELATIVE pattern (e.g. `src/*`) is anchored to EACH root, so it
+ * matches a file under any workspace root, not just the first.
+ */
+function candidatePatternPaths(pattern: string, roots: string[]): string[] {
+  const abs = absoluteTarget(pattern)
+  if (abs !== null) return [resolve(abs)]
+  const bases = roots.length ? roots : [process.cwd()]
+  return bases.map((b) => resolve(b, pattern))
+}
+
+/**
+ * Whether a canonicalized path `subject` matches a path rule `rawPattern` (anchored
+ * to the roots). Preserves the two special cases {@link patternMatches} enforces
+ * on the raw pattern — an empty pattern is inert (matches nothing), and a pure
+ * `*`/`**` (or `/`) pattern matches everything — BEFORE anchoring, so an empty
+ * match can't be resolved into "the root directory, and everything under it".
+ */
+function pathPatternMatches(rawPattern: string, roots: string[], subject: string): boolean {
+  const raw = rawPattern.trim()
+  if (!raw) return false
+  if (/^[*/]+$/.test(raw)) return true
+  for (const cand of candidatePatternPaths(raw, roots)) {
+    if (globMatches(cand, subject)) return true
+    // Bare directory prefix: `src` (→ `<root>/src`) covers `<root>/src/a.ts`.
+    if (subject === cand || subject.startsWith(`${cand}/`)) return true
+  }
+  return false
+}
+
+/**
  * Whether `subject` matches a permission `pattern`, where `*` is the only wildcard
  * and — unlike a path glob — it spans ANY characters, including `/`. This is the
  * crux for URLs and nested paths: a rule like `https://host/*` or `src/*` must match
@@ -274,15 +348,32 @@ function patternMatches(pattern: string, subject: string): boolean {
   return subject === p || subject.startsWith(`${p} `) || subject.startsWith(`${p}/`)
 }
 
-/** First matching rule's action for a single subject, or null. */
+/**
+ * First matching rule's action for a single (non-shell) subject, or null. Both the
+ * subject and each rule pattern are canonicalized by kind before comparing — URLs
+ * case-folded on scheme+host, filesystem paths resolved and anchored to the roots —
+ * so a rule can't be dodged (deny) or widened (allow) by a spelling that resolves
+ * to the same target.
+ */
 function matchOne(
   rules: PermissionRule[],
   toolName: string,
-  subject: string
+  subject: string,
+  roots: string[] = []
 ): PermissionRule['action'] | null {
+  const kind = subjectKind(toolName)
+  const canonSubject =
+    kind === 'url' ? lowerUrlAuthority(subject) : kind === 'path' ? canonicalizePath(subject, roots) : subject
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== toolName) continue
-    if (patternMatches(r.match ?? '', subject)) return r.action
+    const match = r.match ?? ''
+    const hit =
+      kind === 'path'
+        ? pathPatternMatches(match, roots, canonSubject)
+        : kind === 'url'
+          ? patternMatches(lowerUrlAuthority(match), canonSubject)
+          : patternMatches(match, canonSubject)
+    if (hit) return r.action
   }
   return null
 }
@@ -293,19 +384,78 @@ function normalizeShellCommand(s: string): string {
 }
 
 /**
+ * Reduce a shell command to the logical text the shell would execute, by stripping
+ * quotes and resolving backslash escapes: `"rm"`, `r''m`, `\rm`, and `rm -r"f"` all
+ * collapse to `rm`. Without this, a deny rule like `*rm -rf*` is trivially dodged by
+ * quoting the program name — the literal command string no longer contains the token
+ * `rm -rf`, so the pattern never fires. Applied to BOTH the rule pattern and the
+ * command before matching, so a rule the user deliberately wrote with quotes (e.g.
+ * `git commit -m "*"`) still matches. The `*` wildcard survives (it's an ordinary
+ * character here — a rule pattern's `*` stays a wildcard for {@link globMatches}).
+ *
+ * Not a full shell parser: it strips quoting/escaping so the matcher sees through
+ * spelling tricks, and runs per leaf sub-command AFTER {@link splitShellCommand}
+ * has already peeled off substitutions and control operators — so it can't merge
+ * two commands into one or hide a smuggled command.
+ */
+function dequoteShell(s: string): string {
+  let out = ''
+  for (let i = 0; i < s.length; ) {
+    const c = s[i]
+    if (c === '\\') {
+      // Backslash escapes the next char (outside quotes); drop the backslash, keep the char.
+      if (i + 1 < s.length) {
+        out += s[i + 1]
+        i += 2
+      } else {
+        i += 1
+      }
+    } else if (c === '"') {
+      i += 1
+      while (i < s.length && s[i] !== '"') {
+        // Inside double quotes a backslash only escapes " ` $ \ (and newline); otherwise literal.
+        if (s[i] === '\\' && i + 1 < s.length && '"`$\\\n'.includes(s[i + 1])) {
+          out += s[i + 1]
+          i += 2
+        } else {
+          out += s[i]
+          i += 1
+        }
+      }
+      i += 1 // skip the closing quote (or run off the end on an unbalanced quote)
+    } else if (c === "'") {
+      i += 1 // single quotes are literal — no escapes inside
+      while (i < s.length && s[i] !== "'") {
+        out += s[i]
+        i += 1
+      }
+      i += 1 // skip the closing quote
+    } else {
+      out += c
+      i += 1
+    }
+  }
+  return out
+}
+
+/**
  * Match a permission pattern against a shell command. `*` matches any run of
  * characters including `/` (a command is not a path — `/` is just a character),
- * so a deny rule like `*rm -rf*` fires on `rm -rf /tmp/x`. Falls back to a prefix
- * match for convenience ("git" matches "git status").
+ * so a deny rule like `*rm -rf*` fires on `rm -rf /tmp/x`. Both sides are first
+ * reduced past quoting/escaping (see {@link dequoteShell}) so the rule matches on
+ * what actually runs, not how it was spelled. Falls back to a prefix match for
+ * convenience ("git" matches "git status").
  */
 function shellCommandMatches(pattern: string, command: string): boolean {
-  const p = pattern.trim()
-  // An empty pattern matches nothing (inert rule), not every command. `*` is the
-  // explicit match-all.
+  // An empty pattern matches nothing (inert rule), not every command — check the
+  // raw pattern before dequoting so a stray-quotes pattern can't be treated as `*`.
+  if (!pattern.trim()) return false
+  const p = normalizeShellCommand(dequoteShell(pattern))
+  const c = normalizeShellCommand(dequoteShell(command))
   if (!p) return false
   if (p === '*') return true
-  if (globMatches(p, command)) return true
-  return command === p || command.startsWith(`${p} `)
+  if (globMatches(p, c)) return true
+  return c === p || c.startsWith(`${p} `)
 }
 
 /** First matching rule's action for a single shell sub-command, or null. */
@@ -474,7 +624,7 @@ export function matchRule(
 ): PermissionRule['action'] | null {
   if (!rules?.length) return null
   if (toolName === 'run_shell') return matchShellRule(rules, subject, roots)
-  return matchOne(rules, toolName, subject)
+  return matchOne(rules, toolName, subject, roots)
 }
 
 /** A leading `VAR=value` env-assignment token, which precedes the real program. */
