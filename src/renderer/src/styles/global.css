@@ -1182,6 +1182,32 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* The `#`-capture scope prompt, above the composer input. */
+.memory-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input, rgba(127, 127, 127, 0.06));
+  font-size: 13px;
+}
+.memory-bar__label {
+  color: var(--text);
+}
+.memory-bar__note {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.memory-bar__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
 /* The chip is clickable only when there's a breakdown behind it. */
 .usage-wrap {
   position: relative;

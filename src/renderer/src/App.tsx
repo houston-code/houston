@@ -1068,6 +1068,22 @@ export default function App(): JSX.Element {
     [chat.running, settings, queue, sendNow]
   )
 
+  // Save a `#`-captured standing instruction to the workspace's (or every project's)
+  // rules file — the files Houston already loads each run — and say where it landed.
+  const onSaveMemory = useCallback(
+    (scope: 'project' | 'global', text: string) => {
+      void window.api.saveMemory(workspace ?? '', scope, text).then((path) => {
+        chat.notify(
+          path
+            ? `Remembered — added to ${scope === 'project' ? 'this project' : 'every project'} (${path})`
+            : 'Could not save that instruction.',
+          path ? 'info' : 'error'
+        )
+      })
+    },
+    [workspace, chat]
+  )
+
   // Steer the running turn: inject the text into the live run before its next step,
   // rather than queuing it for after. If the run finished between typing and the
   // click, fall back to queuing so nothing the user typed is dropped.
@@ -1779,6 +1795,7 @@ export default function App(): JSX.Element {
             onCommand={onCommand}
             onSend={onSend}
             onSteer={onSteer}
+            onSaveMemory={onSaveMemory}
             onCancel={chat.cancel}
           />
         </div>

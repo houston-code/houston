@@ -16,6 +16,7 @@ import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import type { GitInitResult } from '@shared/git'
 import type { DoctorFacts } from '@shared/doctor'
+import type { MemoryScope } from '@shared/memory'
 import type { ClipboardContent, PickedFile } from '@shared/composerContext'
 import type {
   AgentEvent,
@@ -49,6 +50,9 @@ const api = {
   /** Gather the /doctor health facts for the given workspace. */
   getDoctorFacts: (workspace: string): Promise<DoctorFacts> =>
     ipcRenderer.invoke(IPC.doctorFacts, workspace),
+  /** Save a `#`-captured standing instruction; resolves to the file path written, or null. */
+  saveMemory: (workspace: string, scope: MemoryScope, text: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.memorySave, workspace, scope, text),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>

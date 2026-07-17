@@ -34,6 +34,7 @@ import {
   agentInvocationPrompt,
   type Command
 } from '@shared/commands'
+import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
 import type { CompactResult } from './agent/compact'
 import type { McpServerStatus } from './mcp/manager'
 import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
@@ -2170,26 +2171,10 @@ export function renderReasoningStatus(
   return lines.join('\n')
 }
 
-/**
- * A `#`-prefixed line: remember this instruction for next time.
- *
- * Houston already reads AGENTS.md / CLAUDE.md from the project and from ~/.claude
- * on every run, so the mechanism for standing instructions exists and works. What
- * was missing was any way to ADD one without leaving the session to open an
- * editor — so the moment you notice "it should always do X" is exactly the moment
- * you are least likely to write it down.
- *
- * Returns the instruction, or null when the line isn't one. `#` alone isn't a
- * note, and neither is a markdown heading you are typing into a message.
- */
-export function parseMemoryCapture(line: string): string | null {
-  if (!line.startsWith('#')) return null
-  const text = line.replace(/^#+/, '').trim()
-  return text || null
-}
-
-/** Where a remembered instruction goes. */
-export type MemoryScope = 'project' | 'global'
+// `parseMemoryCapture` + `MemoryScope` now live in `@shared/memory` so the desktop
+// app recognizes a `#`-capture identically (imported at the top); re-exported here
+// so existing callers of the TUI module keep working.
+export { parseMemoryCapture, type MemoryScope }
 
 // `parseAgentInvocation` + `agentInvocationPrompt` now live in `@shared/commands`
 // (imported at the top); re-exported so existing callers of the TUI module keep working.

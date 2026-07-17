@@ -75,6 +75,8 @@ import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
 import type { DoctorFacts } from '@shared/doctor'
+import { saveMemory } from './memory'
+import { MAX_MEMORY_NOTE } from '@shared/memory'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import {
   restoreCheckpoint,
@@ -309,6 +311,20 @@ export function registerIpc(): void {
     const cwd = typeof workspace === 'string' ? workspace : ''
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
+  // `#`-capture: save a standing instruction to the workspace's AGENTS.md (project)
+  // or ~/.claude/AGENTS.md (global) — the files Houston already loads every run.
+  // Returns the path written, or null when the input is malformed. Text is capped
+  // here rather than trusting the renderer.
+  ipcMain.handle(
+    IPC.memorySave,
+    async (_event, workspace: unknown, scope: unknown, text: unknown): Promise<string | null> => {
+      if (typeof workspace !== 'string' || typeof text !== 'string') return null
+      if (scope !== 'project' && scope !== 'global') return null
+      const trimmed = text.trim().slice(0, MAX_MEMORY_NOTE)
+      if (!trimmed) return null
+      return saveMemory(workspace, scope, trimmed)
+    }
+  )
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   ipcMain.handle(IPC.updateCheck, () => checkForUpdates())

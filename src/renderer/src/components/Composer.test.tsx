@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Command } from '@shared/commands'
 import { Composer } from './Composer'
@@ -544,6 +544,52 @@ describe('Composer + attachment menu', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Queue' }))
       expect(props.onSend).toHaveBeenCalledWith('a follow-up for later', undefined)
       expect(props.onSteer).not.toHaveBeenCalled()
+    })
+  })
+
+  // `#`-capture: a standing instruction, confirmed by scope before it's written —
+  // the moment you notice "it should always do X" is when you're least likely to
+  // open a rules file and write it down.
+  describe('# memory capture', () => {
+    it('intercepts a #-line on submit and asks for the scope instead of sending', () => {
+      const props = baseProps({ onSaveMemory: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('# always run the linter')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(props.onSend).not.toHaveBeenCalled()
+      const bar = screen.getByRole('group', { name: 'Remember instruction' })
+      expect(within(bar).getByText(/always run the linter/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'In this project' })).toBeInTheDocument()
+    })
+
+    it('saves at the chosen scope and clears the field', () => {
+      const props = baseProps({ onSaveMemory: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('# prefer YAML')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      fireEvent.click(screen.getByRole('button', { name: 'Everywhere' }))
+      expect(props.onSaveMemory).toHaveBeenCalledWith('global', 'prefer YAML')
+      expect(props.onSend).not.toHaveBeenCalled()
+      expect(input.value).toBe('')
+    })
+
+    it('can send the #-line as an ordinary message instead', () => {
+      const props = baseProps({ onSaveMemory: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('# this is actually a heading')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      fireEvent.click(screen.getByRole('button', { name: 'Send as message' }))
+      expect(props.onSend).toHaveBeenCalledWith('# this is actually a heading')
+      expect(props.onSaveMemory).not.toHaveBeenCalled()
+    })
+
+    it('does not intercept when there is no memory handler (# is just a message)', () => {
+      const props = baseProps()
+      render(<Composer {...props} />)
+      const input = type('# no handler here')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(props.onSend).toHaveBeenCalledWith('# no handler here', undefined)
+      expect(screen.queryByRole('button', { name: 'In this project' })).toBeNull()
     })
   })
 })
