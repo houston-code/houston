@@ -458,6 +458,13 @@ full body on demand by calling the `skill` tool when a task matches. This is
 progressive disclosure: skills stay out of the way until they are needed. Houston
 also ships this guide as a built-in `houston-guide` skill.
 
+A skill can bundle more than its SKILL.md. Any other files in the skill directory
+(a `references/` folder, a template, a helper script) are listed at the end of the
+`skill` response, so the agent knows they are there and can read or run them with
+the file tools as the instructions direct. The SKILL.md body stays the first level
+of disclosure; the bundled files are the second, pulled in only when a task needs
+them.
+
 ## Custom subagents
 
 Drop a Markdown file in `.houston/agents/<name>.md` to define a specialized
