@@ -65,6 +65,19 @@ jobs:
       # permissive allowlist. Policy + exceptions live in scripts/license-gate.mjs
       # and scripts/license-gate-exceptions.json.
       - run: npm run license-gate
+      # Attribution gate, alongside the license gate above: both read the installed
+      # dependency closure, so this reuses the `npm ci` already done. Nightly + the
+      # release workflows run the same check, but only catching drift there means a
+      # dep bump merges green and reddens the NEXT nightly instead of its own PR —
+      # which is exactly what happened when @anthropic-ai/sdk 0.111.0 landed. Run
+      # unconditionally rather than gated on a package-lock.json diff: the generator
+      # takes ~1s, while detecting whether the lockfile changed would need the base
+      # ref fetched (fetch-depth: 0) and cost more than the check it guards.
+      - name: Check THIRD-PARTY-NOTICES.md is current
+        run: |
+          npm run notices
+          git diff --exit-code THIRD-PARTY-NOTICES.md \
+            || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
