@@ -12,6 +12,15 @@
  *                       require the middle to be mostly similar (handles a drifted
  *                       interior while refusing unrelated same-size blocks)
  *
+ * When a fuzzy tier matches, the replacement is re-indented to the block it actually
+ * landed on: the model authors `new_string` relative to whatever indentation it put
+ * in `old_string`, so splicing it in verbatim would stamp the model's indentation
+ * over the file's (silently flattening a nested block, or injecting indentation the
+ * file never had). Instead we swap the old block's base indent for the file block's
+ * and keep each replacement line's indentation *relative* to that base, so nesting
+ * inside the block survives. Exact matches already agree with the file, so they are
+ * spliced verbatim.
+ *
  * The uniqueness contract is preserved: a single match unless `replace_all`. CRLF
  * and a leading BOM are preserved. Pure and deterministic — unit-tested without a
  * filesystem.
@@ -28,11 +37,64 @@ export interface EditResult {
 interface Span {
   start: number
   end: number
+  /** Common leading indent of the matched window; set only for fuzzy matches. */
+  indent?: string
+}
+
+interface Replacement {
+  start: number
+  end: number
+  text: string
 }
 
 const STRATEGIES: EditStrategy[] = ['exact', 'line-trimmed', 'block-anchor']
 /** Fraction of a block's interior lines that must still match for block-anchor to fire. */
 const MIN_BLOCK_SIMILARITY = 0.5
+
+/** Leading run of spaces/tabs; other whitespace (e.g. form feed) is not treated as indent. */
+function leadingIndent(line: string): string {
+  const m = /^[ \t]*/.exec(line)
+  return m ? m[0] : ''
+}
+
+/**
+ * The whitespace prefix common to every non-blank line — the block's base indent.
+ * Blank lines are ignored so they don't collapse the prefix to empty.
+ */
+function commonIndent(lines: string[]): string {
+  let prefix: string | null = null
+  for (const line of lines) {
+    if (line.trim() === '') continue
+    const lead = leadingIndent(line)
+    if (prefix === null) {
+      prefix = lead
+      continue
+    }
+    let k = 0
+    while (k < prefix.length && k < lead.length && prefix[k] === lead[k]) k++
+    prefix = prefix.slice(0, k)
+    if (prefix === '') break
+  }
+  return prefix ?? ''
+}
+
+/**
+ * Re-base the replacement onto the file block's indentation: strip the part of each
+ * line's leading whitespace it shares with `oldBase` (what the model indented to),
+ * then prepend `fileBase` (what the file actually uses). Whitespace nested deeper
+ * than the base is kept, so structure inside the block survives. Blank lines pass
+ * through untouched so we never emit whitespace-only lines.
+ */
+function reindent(newLines: string[], oldBase: string, fileBase: string): string[] {
+  if (oldBase === fileBase) return newLines
+  return newLines.map((line) => {
+    if (line.trim() === '') return line
+    const lead = leadingIndent(line)
+    let k = 0
+    while (k < lead.length && k < oldBase.length && lead[k] === oldBase[k]) k++
+    return fileBase + line.slice(k)
+  })
+}
 
 function splitLines(body: string): { lines: string[]; starts: number[] } {
   const lines = body.split('\n')
@@ -62,7 +124,8 @@ function exactSpans(body: string, needle: string): Span[] {
  * Windowed line matches: slide a window of `oldLines.length` lines over the body
  * and keep windows the predicate accepts. Non-overlapping, left to right. When the
  * old text ended in a newline, the span swallows the trailing '\n' so a replacement
- * that also ends in a newline stays symmetric.
+ * that also ends in a newline stays symmetric. Each span records the window's base
+ * indent so the replacement can be re-indented to where it landed.
  */
 function windowSpans(
   body: string,
@@ -80,7 +143,7 @@ function windowSpans(
       const start = starts[i]
       let end = starts[i + L - 1] + lines[i + L - 1].length
       if (oldHadTrailingNewline && body[end] === '\n') end += 1
-      spans.push({ start, end })
+      spans.push({ start, end, indent: commonIndent(window) })
       i += L // don't let matches overlap
     } else {
       i += 1
@@ -108,36 +171,25 @@ function blockAnchorSpans(body: string, oldLines: string[], oldHadTrailingNewlin
   })
 }
 
-function spansFor(body: string, oldString: string, strategy: EditStrategy): Span[] {
-  if (strategy === 'exact') return exactSpans(body, oldString)
-  const oldHadTrailingNewline = oldString.endsWith('\n')
-  const oldLines = (oldHadTrailingNewline ? oldString.slice(0, -1) : oldString).split('\n')
-  // Whitespace-only old text can't be fuzzily located without false positives.
-  if (oldLines.every((l) => l.trim() === '')) return []
-  return strategy === 'line-trimmed'
-    ? lineTrimmedSpans(body, oldLines, oldHadTrailingNewline)
-    : blockAnchorSpans(body, oldLines, oldHadTrailingNewline)
-}
-
 /**
- * Splice `replacement` into the RAW string at spans expressed as offsets in the
- * LF-normalized `body`, leaving every unmatched region byte-for-byte identical. Walks
- * `raw` once, counting `\r\n` as the single `\n` it collapses to in `body`. This keeps
- * a mixed line-ending file's untouched lines on their original terminators, instead of
- * re-encoding the whole file (which flipped every bare LF to CRLF).
+ * Splice per-span replacement text into the RAW string at spans expressed as offsets
+ * in the LF-normalized `body`, leaving every unmatched region byte-for-byte identical.
+ * Walks `raw` once, counting `\r\n` as the single `\n` it collapses to in `body`. This
+ * keeps a mixed line-ending file's untouched lines on their original terminators,
+ * instead of re-encoding the whole file (which flipped every bare LF to CRLF).
  */
-function spliceRaw(raw: string, spans: Span[], replacement: string): string {
-  const sorted = spans.slice().sort((a, b) => a.start - b.start)
+function spliceRaw(raw: string, replacements: Replacement[]): string {
+  const sorted = replacements.slice().sort((a, b) => a.start - b.start)
   const step = (ri: number): number => (raw[ri] === '\r' && raw[ri + 1] === '\n' ? 2 : 1)
   let out = ''
   let ri = 0 // raw offset
   let bi = 0 // body (LF) offset
   let prevRaw = 0
-  for (const s of sorted) {
-    while (bi < s.start) { ri += step(ri); bi++ }
+  for (const r of sorted) {
+    while (bi < r.start) { ri += step(ri); bi++ }
     const rawStart = ri
-    while (bi < s.end) { ri += step(ri); bi++ }
-    out += raw.slice(prevRaw, rawStart) + replacement
+    while (bi < r.end) { ri += step(ri); bi++ }
+    out += raw.slice(prevRaw, rawStart) + r.text
     prevRaw = ri
   }
   return out + raw.slice(prevRaw)
@@ -168,12 +220,36 @@ export function resolveEdit(
   const body = crlf ? raw.replace(/\r\n/g, '\n') : raw
   const oldLf = crlf ? oldString.replace(/\r\n/g, '\n') : oldString
   const newLf = crlf ? newString.replace(/\r\n/g, '\n') : newString
-  // The replacement text takes the file's dominant style; the rest of the file is
-  // preserved verbatim (see spliceRaw), so a mixed-ending file isn't rewritten.
-  const encodedNew = crlf ? newLf.replace(/\n/g, '\r\n') : newLf
+
+  const oldHadTrailingNewline = oldLf.endsWith('\n')
+  const oldLines = (oldHadTrailingNewline ? oldLf.slice(0, -1) : oldLf).split('\n')
+  const oldAllBlank = oldLines.every((l) => l.trim() === '')
+  const oldBase = commonIndent(oldLines)
+
+  const newHadTrailingNewline = newLf.endsWith('\n')
+  const newLines = (newHadTrailingNewline ? newLf.slice(0, -1) : newLf).split('\n')
+
+  // Re-assemble replacement lines back into the file's dominant line ending; the rest
+  // of the file is preserved verbatim (see spliceRaw), so a mixed-ending file isn't
+  // rewritten. Passing `newLines` straight through reproduces `newString` exactly.
+  const encode = (lines: string[]): string => {
+    const joined = lines.join('\n') + (newHadTrailingNewline ? '\n' : '')
+    return crlf ? joined.replace(/\n/g, '\r\n') : joined
+  }
 
   for (const strategy of STRATEGIES) {
-    const spans = spansFor(body, oldLf, strategy)
+    let spans: Span[]
+    if (strategy === 'exact') {
+      spans = exactSpans(body, oldLf)
+    } else if (oldAllBlank) {
+      // Whitespace-only old text can't be fuzzily located without false positives.
+      continue
+    } else {
+      spans =
+        strategy === 'line-trimmed'
+          ? lineTrimmedSpans(body, oldLines, oldHadTrailingNewline)
+          : blockAnchorSpans(body, oldLines, oldHadTrailingNewline)
+    }
     if (spans.length === 0) continue
     if (spans.length > 1 && !replaceAll) {
       const via = strategy === 'exact' ? '' : ` (matched via ${strategy})`
@@ -181,7 +257,14 @@ export function resolveEdit(
         `old_string occurs ${spans.length} times${via}; pass replace_all or provide more context.`
       )
     }
-    const next = spliceRaw(raw, spans, encodedNew)
+
+    const replacements: Replacement[] = spans.map((s) => ({
+      start: s.start,
+      end: s.end,
+      // Fuzzy spans carry the file block's indent; re-base the replacement onto it.
+      text: s.indent !== undefined ? encode(reindent(newLines, oldBase, s.indent)) : encode(newLines)
+    }))
+    const next = spliceRaw(raw, replacements)
     return {
       content: hasBom ? '\uFEFF' + next : next,
       strategy,

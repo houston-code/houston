@@ -39,13 +39,14 @@ describe('resolveEdit — exact', () => {
 })
 
 describe('resolveEdit — line-trimmed (whitespace/indent drift)', () => {
-  it('matches despite different leading indentation', () => {
+  it('matches despite different leading indentation and re-adapts to the file', () => {
     // File line has no indent; model supplied a 4-space indent. Not an exact
-    // substring, so the line-trimmed strategy must catch it.
+    // substring, so the line-trimmed strategy must catch it — and the replacement
+    // is re-indented to the file's (zero) indentation, not the model's 4 spaces.
     const file = 'function f() {\nreturn 1\n}\n'
     const r = resolveEdit(file, '    return 1', '    return 2')
     expect(r.strategy).toBe('line-trimmed')
-    expect(r.content).toBe('function f() {\n    return 2\n}\n')
+    expect(r.content).toBe('function f() {\nreturn 2\n}\n')
   })
 
   it('matches despite trailing whitespace drift', () => {
@@ -55,11 +56,13 @@ describe('resolveEdit — line-trimmed (whitespace/indent drift)', () => {
     expect(r.content).toContain('ALPHA')
   })
 
-  it('matches a multi-line block with per-line indent drift', () => {
+  it('matches a multi-line block with per-line indent drift and preserves the indent', () => {
+    // The model's old/new are at column 0; the file block is indented 6 spaces.
+    // The replacement must land at the file's indentation, not flatten it.
     const file = '      a\n      b\n      c\n'
     const r = resolveEdit(file, 'a\nb\nc', 'a\nB\nc')
     expect(r.strategy).toBe('line-trimmed')
-    expect(r.content).toBe('a\nB\nc\n')
+    expect(r.content).toBe('      a\n      B\n      c\n')
   })
 
   it('replace_all across multiple drifted windows', () => {
@@ -88,6 +91,50 @@ describe('resolveEdit — block-anchor', () => {
   it('does not anchor blocks shorter than 3 lines', () => {
     const file = 'open\nclose\n'
     expect(() => resolveEdit(file, 'open\nDIFFERENT', 'x')).toThrow(/not found/)
+  })
+})
+
+describe('resolveEdit — indentation re-adaptation', () => {
+  it('re-bases the whole block onto the file indent while keeping inner nesting', () => {
+    // File block sits at 4 spaces with a further-nested inner line; model authored
+    // old/new at column 0. Re-indent must add 4 to every line AND keep the inner
+    // line one level deeper.
+    const file = '    if (x) {\n        y()\n    }\n'
+    const old = 'if (x) {\n    y()\n}'
+    const next = 'if (x) {\n    z()\n}'
+    const r = resolveEdit(file, old, next)
+    expect(r.strategy).toBe('line-trimmed')
+    expect(r.content).toBe('    if (x) {\n        z()\n    }\n')
+  })
+
+  it('re-indents each match independently under replace_all', () => {
+    // Two matches at different indentations; each replacement adapts to its own block.
+    // Both lines are indented so exact can't pre-empt the line-trimmed tier.
+    const file = '  a\n  b\n    a\n    b\n'
+    const r = resolveEdit(file, 'a\nb', 'a\nB', true)
+    expect(r.strategy).toBe('line-trimmed')
+    expect(r.content).toBe('  a\n  B\n    a\n    B\n')
+  })
+
+  it('re-indents a block-anchor replacement to the file block', () => {
+    // 4-line block: one interior line kept, one drifted — only block-anchor fires.
+    const file = '    header\n    keep\n    changed\n    footer\n'
+    const old = 'header\nkeep\noriginal\nfooter'
+    const r = resolveEdit(file, old, 'header\nkeep\nNEW\nfooter')
+    expect(r.strategy).toBe('block-anchor')
+    expect(r.content).toBe('    header\n    keep\n    NEW\n    footer\n')
+  })
+
+  it('re-indents in CRLF space and preserves CRLF endings', () => {
+    const file = '\tfoo\r\n\tbar\r\n'
+    const r = resolveEdit(file, 'foo\nbar', 'foo\nBAR')
+    expect(r.content).toBe('\tfoo\r\n\tBAR\r\n')
+  })
+
+  it('leaves a blank replacement line blank rather than indenting it', () => {
+    const file = '    a\n    b\n'
+    const r = resolveEdit(file, 'a\nb', 'a\n\nb')
+    expect(r.content).toBe('    a\n\n    b\n')
   })
 })
 
