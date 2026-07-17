@@ -25,6 +25,9 @@ export default defineConfig({
     }
   },
   test: {
+    // Regenerates the uncommitted src/main/agent/guide-content.ts before any test
+    // file is imported. See scripts/vitest-global-setup.mjs.
+    globalSetup: ['./scripts/vitest-global-setup.mjs'],
     projects: [
       {
         extends: true,

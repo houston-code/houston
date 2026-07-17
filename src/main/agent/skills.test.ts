@@ -15,10 +15,15 @@ const here = dirname(fileURLToPath(import.meta.url))
 const guidePath = resolve(here, '../../../docs/houston-guide.md')
 
 describe('houston-guide built-in skill', () => {
-  it('is compiled in from docs/houston-guide.md (regenerate with `npm run gen:guide`)', () => {
+  it('is compiled in from docs/houston-guide.md', () => {
     const md = readFileSync(guidePath, 'utf8').trim()
-    // If this fails, docs/houston-guide.md changed but guide-content.ts is stale.
+    // guide-content.ts is generated, not committed, and Vitest's globalSetup
+    // regenerates it before this file is imported — so a stale constant is no
+    // longer possible and this no longer guards against one. What it still
+    // catches is a broken generator: wrong source path, mangled escaping, or a
+    // globalSetup that silently stopped running.
     expect(HOUSTON_GUIDE).toBe(md)
+    expect(HOUSTON_GUIDE.length).toBeGreaterThan(0)
   })
 
   it('ships as a built-in with an in-memory body and a self-describing description', () => {

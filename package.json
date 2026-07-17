@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.2.189",
+  "version": "0.2.190",
   "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "Houston developers",
@@ -17,7 +17,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "postinstall": "electron-rebuild --only node-pty",
+    "postinstall": "electron-rebuild --only node-pty && npm run gen:guide",
     "rebuild:native": "electron-rebuild --only node-pty",
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
@@ -28,7 +28,9 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck:e2e": "tsc --noEmit -p tsconfig.e2e.json",
+    "pretypecheck": "npm run gen:guide",
     "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:e2e",
+    "prelint": "npm run gen:guide",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
     "test:watch": "vitest",

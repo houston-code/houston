@@ -7,6 +7,12 @@ out/
 dist/
 release/
 
+# Generated from docs/houston-guide.md by scripts/gen-guide.mjs (postinstall,
+# typecheck, lint, build, and vitest globalSetup all regenerate it). Committed
+# until 2026-07: the whole guide lands on one ~37KB line, so every pair of
+# concurrent PRs touching the guide conflicted there, unresolvably. Keep it out.
+src/main/agent/guide-content.ts
+
 # TypeScript incremental build cache (rewritten on every tsc/typecheck run)
 *.tsbuildinfo
 
