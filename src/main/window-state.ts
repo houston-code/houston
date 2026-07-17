@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { writeFileAtomicSync } from './atomic-write'
 import { join, dirname } from 'node:path'
 import { getUserDataDir } from './userData'
 
@@ -47,9 +48,7 @@ export function loadWindowState(): WindowBounds | null {
 export function saveWindowState(bounds: WindowBounds): void {
   const path = statePath()
   mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(bounds), 'utf8')
-  renameSync(tmp, path)
+  writeFileAtomicSync(path, JSON.stringify(bounds))
 }
 
 /**

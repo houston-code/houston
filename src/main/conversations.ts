@@ -1,14 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  rmSync
-} from 'node:fs'
+import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeFileAtomicSync } from './atomic-write'
 import { CONVERSATION_SCHEMA_VERSION } from '@shared/agent'
 import type {
   AgentEvent,
@@ -138,14 +131,12 @@ function read(id: string): Conversation | null {
 
 function write(conv: Conversation): void {
   const path = filePath(conv.id)
-  const tmp = `${path}.tmp`
   // Stamp on every write, whatever the call path, so a file read as legacy (v0)
   // converges to the current version the first time it's touched.
   const toWrite: Conversation = { ...conv, schemaVersion: CONVERSATION_SCHEMA_VERSION }
   // 0600 — owner read/write only. Transcripts can capture secrets echoed in tool
   // output (a curl with an auth header, an env dump), so keep them off world-read.
-  writeFileSync(tmp, JSON.stringify(toWrite, null, 2), { encoding: 'utf8', mode: 0o600 })
-  renameSync(tmp, path)
+  writeFileAtomicSync(path, JSON.stringify(toWrite, null, 2), 0o600)
 }
 
 export function createConversation(input: {
