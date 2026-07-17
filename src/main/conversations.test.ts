@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  addUsage,
   conversationMatches,
   createConversation,
   deriveTitle,
@@ -115,6 +116,49 @@ describe('mergeRunningTotals', () => {
   it('passes the event through when there is no stored total', () => {
     const e = usage()
     expect(mergeRunningTotals(e, null)).toBe(e)
+  })
+
+  it('carries the running cache-read and per-model breakdown too', () => {
+    const withDetail: ConversationUsage = {
+      inputTokens: 100,
+      outputTokens: 200,
+      cost: 1.5,
+      cacheReadTokens: 800,
+      perModel: [
+        { model: 'claude', inputTokens: 90, outputTokens: 180, cost: 1.4, cacheReadTokens: 800, cacheWriteTokens: 0 }
+      ]
+    }
+    const out = mergeRunningTotals(usage(), withDetail)
+    expect(out).toMatchObject({ cacheReadTokens: 800 })
+    expect((out as Extract<AgentEvent, { type: 'usage' }>).perModel).toHaveLength(1)
+  })
+})
+
+describe('addUsage — persisted per-model + cache breakdown', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('accumulates per model and the cache split across turns, and persists them', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    addUsage(c.id, { inputTokens: 100, outputTokens: 50, cost: 0.01, model: 'claude', cacheReadTokens: 800 })
+    addUsage(c.id, { inputTokens: 120, outputTokens: 30, cost: 0.02, model: 'haiku' }) // a cheaper subagent model
+    const total = addUsage(c.id, { inputTokens: 130, outputTokens: 20, cost: 0.01, model: 'claude', cacheReadTokens: 200 })
+
+    // Aggregate: output sums, cost sums, context is the latest turn, cache sums.
+    expect(total).toMatchObject({ outputTokens: 100, cost: 0.04, inputTokens: 130, cacheReadTokens: 1000 })
+    // Per model, in first-seen order.
+    expect(total?.perModel?.map((m) => m.model)).toEqual(['claude', 'haiku'])
+    expect(total?.perModel?.[0]).toMatchObject({ cost: 0.02, cacheReadTokens: 1000 })
+
+    // Persisted — the breakdown survives a reload (the "resets on restart" fix).
+    expect(getConversation(c.id)?.usage?.perModel?.[1].model).toBe('haiku')
   })
 })
 

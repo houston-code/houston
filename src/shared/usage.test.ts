@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  accumulateModelUsage,
   contextPercent,
   contextWindowFor,
   formatTokens,
@@ -386,5 +387,42 @@ describe('resolveContextWindow', () => {
 
   it('returns null for an unknown id with no listed window', () => {
     expect(resolveContextWindow('deepseek/deepseek-r1')).toBeNull()
+  })
+})
+
+describe('accumulateModelUsage', () => {
+  const turn = (over: Partial<Parameters<typeof accumulateModelUsage>[1]> = {}) => ({
+    inputTokens: 100,
+    outputTokens: 50,
+    cost: 0.01,
+    ...over
+  })
+
+  it('tallies per model, in first-seen order', () => {
+    let t = accumulateModelUsage([], turn({ model: 'claude' }))
+    t = accumulateModelUsage(t, turn({ model: 'gpt-5', cost: 0.02 }))
+    t = accumulateModelUsage(t, turn({ model: 'claude', cost: 0.01 }))
+    expect(t.map((m) => m.model)).toEqual(['claude', 'gpt-5'])
+    expect(t[0]).toMatchObject({ inputTokens: 200, outputTokens: 100, cost: 0.02 })
+    expect(t[1]).toMatchObject({ inputTokens: 100, cost: 0.02 })
+  })
+
+  it('sums the cache split per model', () => {
+    let t = accumulateModelUsage([], turn({ model: 'claude', cacheReadTokens: 800, cacheWriteTokens: 40 }))
+    t = accumulateModelUsage(t, turn({ model: 'claude', cacheReadTokens: 200 }))
+    expect(t[0].cacheReadTokens).toBe(1000)
+    expect(t[0].cacheWriteTokens).toBe(40)
+  })
+
+  it('labels a model-less turn "session" rather than inventing a name', () => {
+    const t = accumulateModelUsage([], turn())
+    expect(t[0].model).toBe('session')
+  })
+
+  it('does not mutate the input tallies (pure)', () => {
+    const before = accumulateModelUsage([], turn({ model: 'claude' }))
+    const snapshot = JSON.parse(JSON.stringify(before))
+    accumulateModelUsage(before, turn({ model: 'claude' }))
+    expect(before).toEqual(snapshot)
   })
 })

@@ -146,7 +146,9 @@ export function useChat(conversationId: string | null = null): ChatController {
         setUsage((prev) => ({
           context: e.inputTokens || prev?.context || 0,
           output: e.outputTokens || prev?.output || 0,
-          cost: e.cost || prev?.cost || 0
+          cost: e.cost || prev?.cost || 0,
+          cacheRead: e.cacheReadTokens ?? prev?.cacheRead,
+          perModel: e.perModel ?? prev?.perModel
         }))
         return
       }

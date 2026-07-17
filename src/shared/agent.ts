@@ -336,6 +336,22 @@ export interface BackgroundShellInfo {
   conversationId?: string
 }
 
+/**
+ * A single model's running tally within a conversation. A session can bill more
+ * than one model — a subagent or a compaction pass often runs on a cheaper one —
+ * so cost is tracked per model rather than only in aggregate.
+ */
+export interface ModelUsage {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cost: number
+  /** Portion of `inputTokens` served from the prompt cache (bills far below base). */
+  cacheReadTokens: number
+  /** Portion of `inputTokens` that wrote a new cache entry (bills slightly above). */
+  cacheWriteTokens: number
+}
+
 /** Token usage persisted with a conversation so it survives reloads/restarts. */
 export interface ConversationUsage {
   /** Input tokens of the most recent turn — i.e. the current context size. */
@@ -344,6 +360,18 @@ export interface ConversationUsage {
   outputTokens: number
   /** Estimated cumulative USD cost across every turn (0 when the model has no known price). */
   cost: number
+  /**
+   * Cumulative input tokens served from the prompt cache across the session. Most
+   * of a long conversation's input, and it bills far below the base rate, so the
+   * meter is misleading without it. Optional for back-compat with usage persisted
+   * before it was tracked.
+   */
+  cacheReadTokens?: number
+  /**
+   * Per-model breakdown, in first-seen order. Optional for back-compat; absent on
+   * conversations last written before per-model tracking.
+   */
+  perModel?: ModelUsage[]
 }
 
 /**
@@ -803,6 +831,13 @@ export type AgentEvent =
       cacheReadTokens?: number
       /** Portion of `inputTokens` that wrote a cache entry (bills slightly higher). */
       cacheWriteTokens?: number
+      /**
+       * The conversation's cumulative per-model breakdown, attached (by the GUI IPC
+       * seam, alongside the running totals) so the renderer can show which model
+       * spent what and the cache split without re-deriving it. Absent on the raw
+       * loop event and on the TUI path, which tallies from the per-round numbers.
+       */
+      perModel?: ModelUsage[]
     }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | { runId: string; type: 'error'; message: string }

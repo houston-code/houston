@@ -14,6 +14,7 @@ import type {
   ConversationWorktree
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
+import { accumulateModelUsage } from '@shared/usage'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import { clearConversationOverride } from './agent/overrides'
 import { redactSecrets } from './agent/redact'
@@ -369,7 +370,14 @@ export function setGeneratedTitle(id: string, title: string): boolean {
  */
 export function addUsage(
   id: string,
-  turn: { inputTokens: number; outputTokens: number; cost: number }
+  turn: {
+    inputTokens: number
+    outputTokens: number
+    cost: number
+    model?: string
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
 ): ConversationUsage | null {
   const conv = read(id)
   if (!conv) return null
@@ -377,7 +385,11 @@ export function addUsage(
   conv.usage = {
     inputTokens: turn.inputTokens || prev.inputTokens,
     outputTokens: prev.outputTokens + (turn.outputTokens || 0),
-    cost: (prev.cost ?? 0) + (turn.cost || 0)
+    cost: (prev.cost ?? 0) + (turn.cost || 0),
+    cacheReadTokens: (prev.cacheReadTokens ?? 0) + (turn.cacheReadTokens ?? 0),
+    // Per-model tallies via the shared accumulator, so the GUI's persisted
+    // breakdown and the TUI's in-memory one agree on what a session cost.
+    perModel: accumulateModelUsage(prev.perModel ?? [], turn)
   }
   write(conv)
   return conv.usage
@@ -392,7 +404,16 @@ export function addUsage(
  */
 export function mergeRunningTotals(e: AgentEvent, total: ConversationUsage | null): AgentEvent {
   if (e.type !== 'usage' || !total) return e
-  return { ...e, inputTokens: total.inputTokens, outputTokens: total.outputTokens, cost: total.cost }
+  return {
+    ...e,
+    inputTokens: total.inputTokens,
+    outputTokens: total.outputTokens,
+    cost: total.cost,
+    // Carry the running cache-read and per-model breakdown too, or the renderer's
+    // cost panel drifts the same way the aggregate meter used to.
+    ...(total.cacheReadTokens ? { cacheReadTokens: total.cacheReadTokens } : {}),
+    ...(total.perModel ? { perModel: total.perModel } : {})
+  }
 }
 
 /**
