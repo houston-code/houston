@@ -24,9 +24,11 @@ import {
   expandTemplate,
   matchCommands,
   parseSlashCommand,
+
   resolveCommand,
   type Command
 } from '@shared/commands'
+import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
 import {
   MAX_ATTACHMENTS,
   exceedsImageSizeLimit,
@@ -142,6 +144,7 @@ export function Composer({
   onCommand,
   onSend,
   onSteer,
+  onSaveMemory,
   onCancel
 }: {
   /** The open conversation (null for a not-yet-created new chat); keys the draft. */
@@ -170,12 +173,20 @@ export function Composer({
    * affordance; the queue is the only mid-run path.
    */
   onSteer?: (text: string) => void
+  /**
+   * Save a `#`-captured standing instruction (`# always run the linter`) to the
+   * project's or every project's rules file. Absent → `#` lines are sent as an
+   * ordinary message, no capture.
+   */
+  onSaveMemory?: (scope: MemoryScope, text: string) => void
   onCancel: () => void
 }): JSX.Element {
   // Seed from this conversation's persisted draft so text typed but not sent
   // survives a restart. App.tsx keys the Composer by conversation, so this only
   // runs when the open chat changes — loading that chat's own draft.
   const [text, setText] = useState(() => loadComposerDraft(conversationId))
+  // A pending `#`-capture awaiting a scope choice (project vs everywhere), or null.
+  const [memoryDraft, setMemoryDraft] = useState<string | null>(null)
   const [images, setImages] = useState<ImageAttachment[]>([])
   // Non-image context (attached files, a folder listing, the working-tree diff, a
   // link) shown as chips and rendered into the outgoing message text on send.
@@ -619,11 +630,40 @@ export function Composer({
         }
         // Unknown command — fall through and send it as a normal message.
       }
+      // A `#`-capture ("# always run the linter") is a standing instruction, not a
+      // turn — but only with no attachments (a message with an image is a message).
+      // Confirm the scope before writing rather than guess: the user can still send
+      // it as an ordinary message from the prompt.
+      const note = !hasAttachments && onSaveMemory ? parseMemoryCapture(trimmed) : null
+      if (note) {
+        setMemoryDraft(note)
+        resetMenus()
+        return
+      }
     }
     if (trimmed) appendPromptHistory(trimmed)
     onSend(buildMessageWithContext(trimmed, context), images.length ? images : undefined)
     setText('')
     setImages([])
+    setContext([])
+    resetMenus()
+  }
+
+  // Resolve a pending `#`-capture: write it at the chosen scope and clear the field.
+  const remember = (scope: MemoryScope): void => {
+    if (!memoryDraft || !onSaveMemory) return
+    onSaveMemory(scope, memoryDraft)
+    setMemoryDraft(null)
+    setText('')
+    resetMenus()
+  }
+  // Send the `#`-line as an ordinary message instead of remembering it.
+  const sendMemoryAsMessage = (): void => {
+    const draft = text.trim()
+    setMemoryDraft(null)
+    if (draft) appendPromptHistory(draft)
+    onSend(buildMessageWithContext(draft, context))
+    setText('')
     setContext([])
     resetMenus()
   }
@@ -748,6 +788,25 @@ export function Composer({
   return (
     <div className="composer">
       <div className="composer__card" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+        {memoryDraft && (
+          <div className="memory-bar" role="group" aria-label="Remember instruction">
+            <span className="memory-bar__label">
+              Remember <span className="memory-bar__note">“{memoryDraft}”</span> as a standing
+              instruction?
+            </span>
+            <div className="memory-bar__actions">
+              <button className="btn btn--sm btn--accent" onClick={() => remember('project')}>
+                In this project
+              </button>
+              <button className="btn btn--sm" onClick={() => remember('global')}>
+                Everywhere
+              </button>
+              <button className="btn btn--sm" onClick={sendMemoryAsMessage}>
+                Send as message
+              </button>
+            </div>
+          </div>
+        )}
         {changes && onShowChanges && onCreatePr && (
           <ComposerPrBar
             changes={changes}

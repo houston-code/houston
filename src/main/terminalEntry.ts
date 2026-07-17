@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { LEGAL_VERSION } from '@shared/legal'
 import type { McpServerConfig } from '@shared/types'
@@ -53,6 +53,7 @@ import { log } from './logger'
 import { runTui, makePainter, mediaTypeForImagePath, type BackgroundSession, type TuiOptions } from './tui'
 import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
+import { saveMemory } from './memory'
 import { checkForUpdate } from './update-check'
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
 import { runHeadless, type HeadlessOptions } from './headless'
@@ -302,47 +303,6 @@ function runUserShell(
     child.on('error', reject)
     child.on('close', (code) => resolve(code ?? 0))
   })
-}
-
-/**
- * Append a standing instruction to a rules file — the composer's `#` capture.
- *
- * Houston already reads AGENTS.md from the project and from ~/.claude on every
- * run, so this writes to the file that machinery ALREADY loads rather than
- * inventing a store. Appends under a heading so a hand-written file keeps its
- * shape, and creates the file when it does not exist yet.
- *
- * Returns the path, so the caller can show where the note went.
- */
-async function saveMemory(workspace: string, scope: 'project' | 'global', text: string): Promise<string> {
-  return saveMemoryTo(scope === 'project' ? workspace : join(homedir(), '.claude'), text)
-}
-
-/** Append `text` as a note to `dir`'s rules file. Exported for tests. */
-export async function saveMemoryTo(dir: string, text: string): Promise<string> {
-  const file = join(dir, 'AGENTS.md')
-  const existing = safeRead(file)
-  const heading = '## Notes'
-  let next: string
-  if (existing === null) {
-    next = `# Project instructions\n\n${heading}\n\n- ${text}\n`
-  } else if (existing.includes(heading)) {
-    // Append inside the existing Notes section, so related notes stay together.
-    const at = existing.indexOf(heading) + heading.length
-    const rest = existing.slice(at)
-    const nextHeading = rest.search(/\n## /)
-    const insertAt = nextHeading === -1 ? existing.length : at + nextHeading
-    next = `${existing.slice(0, insertAt).replace(/\s+$/, '')}\n- ${text}\n${existing.slice(insertAt)}`
-  } else {
-    next = `${existing.replace(/\s+$/, '')}\n\n${heading}\n\n- ${text}\n`
-  }
-  mkdirSync(dir, { recursive: true })
-  // Write via a temp file + rename: a half-written rules file would be loaded on
-  // the very next turn, and a truncated instruction is worse than none.
-  const tmp = `${file}.houston-tmp`
-  writeFileSync(tmp, next, 'utf8')
-  renameSync(tmp, file)
-  return file
 }
 
 /**

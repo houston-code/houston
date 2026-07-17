@@ -15,6 +15,9 @@ const h = vi.hoisted(() => ({
   resolveQuestion: vi.fn(),
   setRunPolicy: vi.fn(),
   steerRun: vi.fn<(runId: string, text: string) => boolean>(() => true),
+  saveMemory: vi.fn<(ws: string, scope: string, text: string) => Promise<string>>(
+    async (_ws, scope) => `/AGENTS.md#${scope}`
+  ),
   // Spied so the agentStart/agentRetry tests can inspect the request the handler
   // hands the drain loop (in particular the validated approvalPolicy).
   runAndDrain: vi.fn(),
@@ -60,6 +63,8 @@ vi.mock('./agent/drain', () => ({
   runAndDrain: h.runAndDrain,
   drainQueue: vi.fn()
 }))
+// Don't touch the real filesystem for the `#`-capture handler.
+vi.mock('./memory', () => ({ saveMemory: h.saveMemory }))
 
 import { MAX_QUESTION_ANSWER_LEN, registerIpc, resolveDeleteAction } from './ipc'
 // The real checkpoints module (not mocked): the gating tests drive actual snapshots.
@@ -171,6 +176,27 @@ describe('run-control IPC ownership', () => {
     it('keeps the isToolApprovalDecision guard: an off-list decision never reaches the loop', () => {
       handler(IPC.agentApprove)(from(OWNER), RUN, CALL, 'nonsense')
       expect(h.resolveApproval).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('memorySave', () => {
+    it('saves a #-capture at the requested scope and returns the path', async () => {
+      const path = await handler(IPC.memorySave)(from(OWNER), '/ws', 'project', '  always lint  ')
+      expect(h.saveMemory).toHaveBeenCalledWith('/ws', 'project', 'always lint') // trimmed
+      expect(path).toBe('/AGENTS.md#project')
+    })
+
+    it('rejects a bad scope, a non-string, or an empty note without touching disk', async () => {
+      expect(await handler(IPC.memorySave)(from(OWNER), '/ws', 'nonsense', 'x')).toBeNull()
+      expect(await handler(IPC.memorySave)(from(OWNER), '/ws', 'project', { evil: true })).toBeNull()
+      expect(await handler(IPC.memorySave)(from(OWNER), '/ws', 'project', '   ')).toBeNull()
+      expect(h.saveMemory).not.toHaveBeenCalled()
+    })
+
+    it('caps an oversized note at the boundary', async () => {
+      await handler(IPC.memorySave)(from(OWNER), '/ws', 'global', 'x'.repeat(9000))
+      const text = h.saveMemory.mock.calls.at(-1)?.[2] as string
+      expect(text.length).toBe(2000) // MAX_MEMORY_NOTE
     })
   })
 

@@ -21,6 +21,8 @@ export const IPC = {
   appGetVersion: 'app:getVersion',
   /** Gather the /doctor health facts (sandbox, provider keys, MCP, binaries). */
   doctorFacts: 'app:doctorFacts',
+  /** Save a `#`-captured standing instruction to AGENTS.md (project or global). */
+  memorySave: 'app:memorySave',
   // Updates
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',
