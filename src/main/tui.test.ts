@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,6 +23,7 @@ import {
   renderProviderMenu,
   summarizeModels,
   otherHostExamples,
+  promptSetupFields,
   parseProviderMenuChoice,
   renderCatalogMenu,
   parseCatalogChoice,
@@ -2285,6 +2286,66 @@ describe('runTui — plan review (present_plan)', () => {
     cancelled.d.io = fakeIo(['go', 'y', null]).io // EOF while awaiting the field value
     await runTui(opts, cancelled.d)
     expect(cancelled.rec.elicitations).toEqual([['run-1', 'm1:e2', { action: 'cancel' }]])
+  })
+})
+
+describe('promptSetupFields (cloud-kind setup on add)', () => {
+  const noPaint = ((s: string) => s) as Parameters<typeof promptSetupFields>[2]
+
+  /** Run the prompt with scripted answers; returns [result, io]. */
+  async function run(
+    provider: Partial<ProviderConfig> & { kind: ProviderConfig['kind'] },
+    inputs: Array<string | null>
+  ): Promise<{ result: ProviderConfig | null; text: string }> {
+    const t = fakeIo(inputs)
+    const result = await promptSetupFields(prov(provider), { io: t.io } as TuiDeps, noPaint)
+    return { result, text: t.text() }
+  }
+
+  it('asks for the fields a kind needs and writes them onto the provider', async () => {
+    const { result } = await run({ id: 'foundry', kind: 'foundry' }, ['my-resource'])
+    expect(result?.resource).toBe('my-resource')
+  })
+
+  it('never asks for a field the environment already answers', async () => {
+    // The SDK reads AWS_REGION itself, so prompting would only invite the user to
+    // overwrite a working setup with a typo.
+    vi.stubEnv('AWS_REGION', 'eu-west-1')
+    const { result, text } = await run({ id: 'bedrock-aws', kind: 'bedrock' }, [])
+    expect(text).not.toContain('AWS region')
+    expect(result?.region).toBeUndefined() // left to the env var, not copied in
+    vi.unstubAllEnvs()
+  })
+
+  it('offers a catalog default as the Enter-to-accept answer', async () => {
+    // Empty answer keeps the seeded default rather than clearing it.
+    const { result, text } = await run({ id: 'bedrock-aws', kind: 'bedrock', region: 'us-east-1' }, [''])
+    expect(text).toContain('Enter for us-east-1')
+    expect(result?.region).toBe('us-east-1')
+  })
+
+  it('takes empty for an answer on an optional field', async () => {
+    // Vertex reads the project from the ADC credentials, so blank is usually the
+    // correct value — it must not be reported as a missing setting.
+    const { result, text } = await run({ id: 'vertex', kind: 'vertex', region: 'us-east5' }, ['', ''])
+    expect(result?.projectId).toBeUndefined()
+    expect(text).not.toContain('needs google cloud project')
+  })
+
+  it('says where a required field can still come from when left blank', async () => {
+    const { result, text } = await run({ id: 'foundry', kind: 'foundry', label: 'Foundry' }, [''])
+    expect(result).not.toBeNull() // the provider is still added
+    expect(text).toContain('ANTHROPIC_FOUNDRY_RESOURCE')
+  })
+
+  it('returns null when the user cancels a prompt', async () => {
+    const { result } = await run({ id: 'foundry', kind: 'foundry' }, [null])
+    expect(result).toBeNull()
+  })
+
+  it('passes a kind with no setup fields straight through', async () => {
+    const { result } = await run({ id: 'openrouter', kind: 'openai-compatible' }, [])
+    expect(result?.id).toBe('openrouter')
   })
 })
 

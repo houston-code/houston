@@ -16,6 +16,7 @@ import { loadProjectConfig } from './agent/projectConfig'
 import {
   catalogForPlatform,
   catalogEntryToProvider,
+  providerSetupFields,
   customEndpointError,
   customEndpointToProvider,
   customProviderId,
@@ -1664,6 +1665,55 @@ async function keyEntryFor(
  * persist it, and return it (with any docs URL) for the key-entry step. Null on cancel
  * or when settings can't be written here.
  */
+/**
+ * Ask for the config a kind needs beyond its key (see `providerSetupFields`),
+ * returning the provider with the answers written on. Null when the user cancels.
+ *
+ * Three rules, each one a way this could annoy rather than help:
+ *  - A field the environment already answers is never asked. The SDKs read those
+ *    vars themselves, so prompting would invite the user to overwrite a working
+ *    setup with a typo.
+ *  - A catalog default (Bedrock's `us-east-1`, Azure's API version) is offered as
+ *    the Enter-to-accept answer rather than a blank the user has to research.
+ *  - An optional field takes empty for an answer. Vertex reads the project from
+ *    the ADC credentials, so blank is usually the *correct* value, not a skip.
+ */
+export async function promptSetupFields(
+  provider: ProviderConfig,
+  deps: TuiDeps,
+  paint: Painter
+): Promise<ProviderConfig | null> {
+  const fields = providerSetupFields(provider.kind).filter(
+    (f) => !f.envVars.some((v) => process.env[v])
+  )
+  if (!fields.length) return provider
+
+  const out: ProviderConfig = { ...provider }
+  for (const f of fields) {
+    const current = out[f.key]
+    const hint = current ? `Enter for ${current}` : f.required ? f.placeholder : 'Enter to skip'
+    deps.io.out(paint(`${f.label} (${hint}):`, 'dim') + '\n')
+    const answer = await deps.io.readLine(paint(`${f.key} › `, 'green'))
+    if (answer === null) {
+      deps.io.out(paint('· cancelled\n', 'dim'))
+      return null
+    }
+    const value = answer.trim()
+    if (value) out[f.key] = value
+    else if (!current && f.required) {
+      // No default, nothing typed, and the provider can't address a host without
+      // it. Say where it can still come from rather than just refusing.
+      deps.io.out(
+        paint(
+          `· ${provider.label} needs ${f.label.toLowerCase()}. Add it in Settings, or export ${f.envVars[0] ?? 'it'}.\n`,
+          'yellow'
+        )
+      )
+    }
+  }
+  return out
+}
+
 async function addHostInteractive(
   deps: TuiDeps,
   paint: Painter,
@@ -1688,9 +1738,16 @@ async function addHostInteractive(
   }
   if (choice.kind === 'host') {
     const entry = catalog[choice.index]
-    const provider = catalogEntryToProvider(entry)
+    const base = catalogEntryToProvider(entry)
+    // The cloud kinds need an address (a region, a project, an Azure endpoint)
+    // before they can reach a host. Ask now: `createProvider` otherwise refuses at
+    // request time, which surfaces as an error on a turn the user thought would
+    // work — long after the moment they knew the answer.
+    const provider = await promptSetupFields(base, deps, paint)
+    if (!provider) return null
     deps.updateSettings({ providers: [...settings.providers, provider] })
-    deps.io.out(paint(`· Added ${entry.label} (${entry.id}) at ${entry.baseUrl}.\n`, 'dim'))
+    const at = provider.baseUrl ?? provider.endpoint ?? provider.region ?? provider.resource
+    deps.io.out(paint(`· Added ${entry.label} (${entry.id})${at ? ` at ${at}` : ''}.\n`, 'dim'))
     return { provider, keyUrl: entry.docsUrl }
   }
 
