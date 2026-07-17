@@ -267,6 +267,13 @@ function ToolRow({
 
       {awaiting && !item.shellNetwork && (
         <div className="tool-row__approval">
+          {item.sensitiveRead && (
+            <p className="tool-row__approval-note">
+              This reads a credential or secret file. Reads normally run without asking, so
+              Houston is checking first even in full auto. Choose "Allow for run" to stop asking
+              about credential reads for the rest of this conversation.
+            </p>
+          )}
           <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'allow')}>
             Allow
           </button>

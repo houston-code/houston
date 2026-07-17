@@ -316,7 +316,9 @@ export function renderApprovalPrompt(
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
       ? `\n${paint('⚠ runs UNSANDBOXED (no OS confinement on this host)', 'yellow', 'bold')}`
-      : ''
+      : ev.sensitiveRead
+        ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
+        : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
   return (

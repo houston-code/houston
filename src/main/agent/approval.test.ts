@@ -248,4 +248,44 @@ describe('decideApproval', () => {
       ).toBe(false)
     })
   })
+
+  describe('credential-file read (sensitiveRead=true)', () => {
+    it('prompts under full-auto, which would otherwise never prompt a read', () => {
+      expect(
+        decideApproval(base({ kind: 'read', policy: 'full-auto', sensitiveRead: true })).mustApprove
+      ).toBe(true)
+    })
+
+    it('prompts under auto-edit too', () => {
+      expect(
+        decideApproval(base({ kind: 'read', policy: 'auto-edit', sensitiveRead: true })).mustApprove
+      ).toBe(true)
+    })
+
+    it('a read override (allow for run) clears it', () => {
+      expect(
+        decideApproval(
+          base({ kind: 'read', policy: 'full-auto', sensitiveRead: true, override: true })
+        ).mustApprove
+      ).toBe(false)
+    })
+
+    it('an explicit allow rule clears it', () => {
+      expect(
+        decideApproval(base({ kind: 'read', ruleAction: 'allow', sensitiveRead: true })).mustApprove
+      ).toBe(false)
+    })
+
+    it('a deny-adjacent ask rule still prompts', () => {
+      expect(
+        decideApproval(base({ kind: 'read', ruleAction: 'ask', sensitiveRead: true })).mustApprove
+      ).toBe(true)
+    })
+
+    it('does not affect an ordinary (non-sensitive) read', () => {
+      expect(
+        decideApproval(base({ kind: 'read', policy: 'full-auto', sensitiveRead: false })).mustApprove
+      ).toBe(false)
+    })
+  })
 })

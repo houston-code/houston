@@ -686,6 +686,12 @@ export type AgentEvent =
        * decline just runs it offline). Lets the UI frame the prompt as a network grant.
        */
       shellNetwork?: boolean
+      /**
+       * Present and `true` only when this read targets a credential / secret file (see
+       * isSensitivePath) and so is prompting even in full-auto. Lets the UI explain why
+       * a read — which normally never prompts — is asking.
+       */
+      sensitiveRead?: boolean
     }
   | {
       runId: string

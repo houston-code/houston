@@ -64,6 +64,11 @@ export interface ToolItem {
    * offline), not whether this command runs. Lets the approval card frame it as such.
    */
   shellNetwork?: boolean
+  /**
+   * True on a credential/secret-file read prompt (see isSensitivePath): a read that,
+   * unusually, is asking — even in full-auto — so the card can explain why.
+   */
+  sensitiveRead?: boolean
   output?: string
   /** Latest progress line from a long-running tool (e.g. a review's current phase). */
   progress?: string
@@ -243,6 +248,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           shellNetwork: e.shellNetwork === true,
+          sensitiveRead: e.sensitiveRead === true,
           status: 'awaiting-approval'
         })
       }
@@ -257,6 +263,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           ...(e.shellNetwork ? { shellNetwork: true } : {}),
+          ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
           status: 'awaiting-approval'
         }
       ]
