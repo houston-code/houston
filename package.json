@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.2.196",
+  "version": "0.2.197",
   "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "Houston developers",
@@ -50,7 +50,9 @@
     "dist:unpacked": "npm run build && npm run verify:resources && electron-builder --mac --arm64 --dir"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.32.0",
     "@anthropic-ai/sdk": "^0.111.0",
+    "@anthropic-ai/vertex-sdk": "^0.19.0",
     "@google/genai": "^2.11.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",

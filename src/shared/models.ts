@@ -60,7 +60,13 @@ const FAMILIES: Record<ProviderKind, FamilyRule[]> = {
   // OpenAI-compatible endpoints (proxies, Ollama, LM Studio) often serve GPT/o ids;
   // those that don't fall through to the generic family grouping below.
   'openai-compatible': OPENAI,
-  gemini: GEMINI
+  gemini: GEMINI,
+  // Bedrock and Vertex serve the Claude line only (their SDKs are Claude clients —
+  // a Bedrock-hosted Llama isn't reachable through this adapter), so they rank by
+  // the Anthropic families. The rules match on a substring, so the host id prefixes
+  // (`anthropic.claude-opus-4-8`) and `@`-dated Vertex snapshots group correctly.
+  bedrock: ANTHROPIC,
+  vertex: ANTHROPIC
 }
 
 /** Numeric-aware, case-insensitive compare so `gpt-4o` < `gpt-4o mini` and `9` < `10`. */
@@ -96,16 +102,37 @@ function anthropicDisplayName(id: string): string {
 }
 
 /**
+ * Strip a cloud host's addressing off a Claude model id, leaving the plain id the
+ * first-party API uses. Bedrock prefixes the vendor (`anthropic.claude-opus-4-8`)
+ * and Vertex separates a dated snapshot with `@` (`claude-opus-4-5@20251101`);
+ * neither is part of the model's name, and rewriting `@` to `-` also lets the date
+ * suffix be dropped by the same rule that handles first-party dated ids.
+ */
+function claudeIdFromHost(id: string): string {
+  return id.replace(/^anthropic\./, '').replace('@', '-')
+}
+
+/**
  * The display name for a model id, in a single convention per provider so a seeded
  * model and a live-fetched one read the same (the fetch listing rarely carries a
  * display label — see providers/index.ts). Anthropic normalizes to the dotted
- * `claude-model-x.y` form; every other provider already returns clean lowercase ids
+ * `claude-model-x.y` form, and the hosted-Claude kinds normalize to that same form
+ * once their host addressing is stripped, so one model reads identically whichever
+ * host serves it. Every other provider already returns clean lowercase ids
  * (`gpt-5.1`, `gpt-5-mini`, `gemini-2.5-pro`, `llama3.1:latest`), so the id IS the
  * name. Pure + dependency-free so the renderer, the settings migration, and the
  * fetch path can all share it.
  */
 export function modelDisplayName(kind: ProviderKind, id: string): string {
-  return kind === 'anthropic' ? anthropicDisplayName(id) : id
+  switch (kind) {
+    case 'anthropic':
+      return anthropicDisplayName(id)
+    case 'bedrock':
+    case 'vertex':
+      return anthropicDisplayName(claudeIdFromHost(id))
+    default:
+      return id
+  }
 }
 
 /** The model's version as a number (`claude-opus-4-8` → 4.8, `gemini-2.5-pro` → 2.5). 0 if none. */

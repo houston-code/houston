@@ -1,11 +1,14 @@
 import type { Provider } from '@shared/agent'
 import type { ModelOption, ProviderConfig } from '@shared/types'
 import { providerHeaderScope } from '@shared/types'
+import { assertNever } from '@shared/assert'
 import { getKey, getSecretHeaders, hasStoredKey } from '../agentHost'
 import { createAnthropicProvider, listAnthropicModels } from './anthropic'
 import { createOpenAIProvider, listOpenAIModels } from './openai'
 import { createResponsesProvider } from './responses'
 import { createGeminiProvider, listGeminiModels } from './gemini'
+import { createBedrockProvider, listBedrockModels } from './bedrock'
+import { createVertexProvider, listVertexModels } from './vertex'
 
 export class ProviderError extends Error {}
 
@@ -18,6 +21,28 @@ export class ProviderError extends Error {}
 function resolveHeaders(providerId: string): Record<string, string> | undefined {
   const headers = getSecretHeaders(providerHeaderScope(providerId))
   return Object.keys(headers).length ? headers : undefined
+}
+
+/**
+ * Region preflight for the cloud-hosted Claude kinds, which build their endpoint from
+ * a region and can't address a host without one. Their SDKs do raise this themselves,
+ * but in terms of constructor options ("the client should be instantiated with the
+ * `region` option") — not something a Houston user can act on. Fail here instead,
+ * naming the setting and the env var they can. Mirrors the missing-key preflight in
+ * {@link createProvider}.
+ *
+ * `envVars` are the SDK's own fallbacks, checked so a provider that already works
+ * from the environment isn't rejected for leaving the field blank. `baseUrlExempts`
+ * covers Bedrock, where an explicit endpoint replaces the region-derived one; Vertex
+ * needs its region regardless, since that also goes in the request path.
+ */
+function requireRegion(config: ProviderConfig, envVars: string[], baseUrlExempts: boolean): void {
+  if (config.region) return
+  if (baseUrlExempts && config.baseUrl) return
+  if (envVars.some((v) => process.env[v])) return
+  throw new ProviderError(
+    `No region set for ${config.label}. Set one in Settings, or export ${envVars[0]}.`
+  )
 }
 
 /** Build a ready-to-use provider for a configured provider, pulling its key from the secrets store. */
@@ -49,8 +74,29 @@ export function createProvider(config: ProviderConfig): Provider {
       return createOpenAIProvider(key, config.baseUrl, headers)
     case 'gemini':
       return createGeminiProvider(key ?? '')
+    case 'bedrock':
+      requireRegion(config, ['AWS_REGION', 'AWS_DEFAULT_REGION'], true)
+      // The key is optional here: pass it as the bearer token when the user stored
+      // one, otherwise the client signs with the AWS credential chain.
+      return createBedrockProvider({
+        region: config.region,
+        apiKey: key ?? undefined,
+        baseUrl: config.baseUrl,
+        headers
+      })
+    case 'vertex':
+      requireRegion(config, ['CLOUD_ML_REGION'], false)
+      // No key of any kind: Vertex authenticates with Google ADC.
+      return createVertexProvider({
+        region: config.region,
+        projectId: config.projectId,
+        baseUrl: config.baseUrl,
+        headers
+      })
     default:
-      throw new ProviderError(`Unknown provider kind: ${config.kind as string}`)
+      // Exhaustive: a new ProviderKind is a compile error here, rather than a
+      // provider that throws "unknown kind" only once someone selects it.
+      return assertNever(config.kind, 'createProvider')
   }
 }
 
@@ -59,6 +105,10 @@ export function createProvider(config: ProviderConfig): Provider {
  * return capability metadata (see `modelOptionFromListing`), and Gemini reports
  * each model's context window (`inputTokenLimit`); Anthropic returns ids only,
  * so its capabilities come from the name-heuristics in usage.ts.
+ *
+ * Bedrock and Vertex have no Models API to fetch from, so they answer from a curated
+ * list. That keeps Fetch meaningful (it restores the known ids after an edit) while
+ * never reaching the network.
  */
 export async function listModels(config: ProviderConfig): Promise<ModelOption[]> {
   const key = getKey(config.id)
@@ -73,7 +123,13 @@ export async function listModels(config: ProviderConfig): Promise<ModelOption[]>
       return listOpenAIModels(key, config.baseUrl, headers)
     case 'gemini':
       return listGeminiModels(key ?? '')
+    case 'bedrock':
+      return listBedrockModels()
+    case 'vertex':
+      return listVertexModels()
     default:
-      return []
+      // Exhaustive: a new kind must decide how it lists models, rather than silently
+      // returning [] and looking like a host that serves nothing.
+      return assertNever(config.kind, 'listModels')
   }
 }

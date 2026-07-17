@@ -5,6 +5,13 @@ import type { ReasoningEffort, ReasoningSummary } from '@shared/agent'
  * supports it on certain models — sending a thinking/reasoning parameter to a
  * model that lacks it is an API error — so every helper is gated on a model-name
  * heuristic and returns `null`/`undefined` when reasoning shouldn't be sent.
+ *
+ * The Claude gates match on a substring so they hold for the same model whichever
+ * host serves it: Bedrock's vendor-prefixed ids (`anthropic.claude-opus-4-8`) match
+ * as-is, and Vertex's `@`-dated snapshots (`claude-sonnet-4@20250514`) are why the
+ * snapshot separator below is `[-@]` rather than `-`. Getting that wrong is silent
+ * and expensive — a dated 4.0 id that misses the legacy gate is sent adaptive
+ * thinking and the API rejects the turn with a 400.
  */
 
 type OnEffort = 'low' | 'medium' | 'high' | 'xhigh'
@@ -50,7 +57,7 @@ export function anthropicSupportsThinking(model: string): boolean {
 export function anthropicUsesLegacyThinking(model: string): boolean {
   return (
     /claude-3-7/i.test(model) || // Claude 3.7
-    /claude-(opus|sonnet)-4-\d{8}/i.test(model) || // Opus/Sonnet 4.0 (dated snapshots)
+    /claude-(opus|sonnet)-4[-@]\d{8}/i.test(model) || // Opus/Sonnet 4.0 (dated snapshots)
     /claude-opus-4-1\b/i.test(model) || // Opus 4.1
     /claude-opus-4-5\b/i.test(model) || // Opus 4.5
     /claude-sonnet-4-5\b/i.test(model) || // Sonnet 4.5
@@ -77,7 +84,7 @@ export function anthropicSupportsXhigh(model: string): boolean {
  * automatically and never take this header, so they're out of scope here.
  */
 export function anthropicSupportsInterleavedThinking(model: string): boolean {
-  return /claude-(opus|sonnet)-4-(\d{8}|1|5)\b/i.test(model)
+  return /claude-(opus|sonnet)-4[-@](\d{8}|1|5)\b/i.test(model)
 }
 
 /** Anthropic reasoning config: adaptive thinking (4.6+) or legacy budget thinking. */

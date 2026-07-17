@@ -3,6 +3,8 @@ import {
   anthropicThinking,
   anthropicSupportsThinking,
   anthropicSupportsInterleavedThinking,
+  anthropicSupportsXhigh,
+  anthropicUsesLegacyThinking,
   openaiReasoningEffort,
   openaiResponsesReasoning,
   openaiSupportsReasoning,
@@ -108,6 +110,53 @@ describe('anthropic thinking', () => {
     const low = anthropicThinking('claude-opus-4-8', 'low')!
     const high = anthropicThinking('claude-opus-4-8', 'high')!
     expect(high.maxTokens).toBeGreaterThan(low.maxTokens)
+  })
+})
+
+describe('anthropic thinking gates across cloud hosts', () => {
+  /**
+   * The same model reached through Bedrock or Vertex must resolve to the same
+   * thinking config as the first-party id. Only the host addressing differs, and
+   * getting it wrong fails silently at the type level but 400s on the wire.
+   */
+  const SAME_MODEL_IDS: Array<[string, string, string]> = [
+    // [first-party, Bedrock, Vertex]
+    ['claude-opus-4-8', 'anthropic.claude-opus-4-8', 'claude-opus-4-8@20260101'],
+    ['claude-opus-4-5', 'anthropic.claude-opus-4-5', 'claude-opus-4-5@20251101'],
+    ['claude-haiku-4-5', 'anthropic.claude-haiku-4-5', 'claude-haiku-4-5@20251001'],
+    ['claude-sonnet-4-20250514', 'anthropic.claude-sonnet-4-20250514', 'claude-sonnet-4@20250514']
+  ]
+
+  it.each(SAME_MODEL_IDS)('resolves %s the same on every host', (direct, bedrock, vertex) => {
+    const expected = anthropicThinking(direct, 'high')
+    expect(anthropicThinking(bedrock, 'high')).toEqual(expected)
+    expect(anthropicThinking(vertex, 'high')).toEqual(expected)
+  })
+
+  it("treats Vertex's @-dated 4.0 snapshot as legacy, like the dashed form", () => {
+    // The `@` separator is the whole reason the snapshot regexes accept `[-@]`:
+    // matching only `-` sent this id adaptive thinking, which it rejects.
+    expect(anthropicUsesLegacyThinking('claude-sonnet-4@20250514')).toBe(true)
+    expect(anthropicSupportsInterleavedThinking('claude-sonnet-4@20250514')).toBe(true)
+    expect(anthropicThinking('claude-sonnet-4@20250514', 'high')).toMatchObject({
+      kind: 'budget',
+      interleaved: true
+    })
+  })
+
+  it('keeps adaptive-only models off the legacy path on every host', () => {
+    for (const id of ['anthropic.claude-opus-4-8', 'claude-opus-4-8@20260101', 'claude-sonnet-4-6']) {
+      expect(anthropicUsesLegacyThinking(id)).toBe(false)
+      expect(anthropicThinking(id, 'high')).toMatchObject({ kind: 'adaptive' })
+    }
+  })
+
+  it('still offers xhigh on a prefixed or dated Opus 4.8', () => {
+    expect(anthropicSupportsXhigh('anthropic.claude-opus-4-8')).toBe(true)
+    expect(anthropicSupportsXhigh('claude-opus-4-8@20260101')).toBe(true)
+    expect(anthropicThinking('anthropic.claude-opus-4-8', 'xhigh')).toMatchObject({
+      effort: 'xhigh'
+    })
   })
 })
 

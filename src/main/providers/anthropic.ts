@@ -180,24 +180,29 @@ function reasoningFromMessage(content: Anthropic.ContentBlock[], model: string):
   return blocks
 }
 
-export function createAnthropicProvider(
-  apiKey: string,
-  baseURL?: string,
-  headers?: Record<string, string>
-): Provider {
-  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
-  // turn first runs. Providers the user never selects never pull their SDK in.
-  let clientPromise: Promise<Anthropic> | undefined
-  const getClient = (): Promise<Anthropic> =>
-    (clientPromise ??= import('@anthropic-ai/sdk').then(
-      (m) =>
-        new m.default({
-          apiKey,
-          ...(baseURL ? { baseURL } : {}),
-          ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
-        })
-    ))
+/**
+ * The client surface this adapter actually drives: `messages.stream`. The
+ * first-party SDK client and the Bedrock/Vertex clients all extend `BaseAnthropic`
+ * and expose the same `messages` resource, so typing the seam structurally lets
+ * every Claude host share one adapter instead of forking the streaming, thinking,
+ * caching and usage logic per host.
+ */
+export interface MessagesClient {
+  messages: Pick<Anthropic['messages'], 'stream'>
+}
 
+/**
+ * A provider over any Claude Messages client. `getClient` is called on the first
+ * turn and should memoize — it's the seam each host uses to construct (and lazily
+ * import) its own SDK client. See {@link createAnthropicProvider} for the
+ * first-party host, and bedrock.ts / vertex.ts for the cloud-hosted ones.
+ *
+ * Everything downstream of the client is host-independent: the Messages wire
+ * protocol, the thinking parameters, cache breakpoints and the usage split are
+ * identical on all three, and `req.model` is already in the host's own id
+ * convention (the caller stores it that way), so nothing here rewrites it.
+ */
+export function createMessagesProvider(getClient: () => Promise<MessagesClient>): Provider {
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
       const client = await getClient()
@@ -308,6 +313,28 @@ export function createAnthropicProvider(
       }
     }
   }
+}
+
+/** A provider for the first-party Anthropic API, authenticated with an API key. */
+export function createAnthropicProvider(
+  apiKey: string,
+  baseURL?: string,
+  headers?: Record<string, string>
+): Provider {
+  // Load the SDK lazily (memoized) so it isn't parsed at startup — only when a
+  // turn first runs. Providers the user never selects never pull their SDK in.
+  let clientPromise: Promise<Anthropic> | undefined
+  const getClient = (): Promise<Anthropic> =>
+    (clientPromise ??= import('@anthropic-ai/sdk').then(
+      (m) =>
+        new m.default({
+          apiKey,
+          ...(baseURL ? { baseURL } : {}),
+          ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+        })
+    ))
+
+  return createMessagesProvider(getClient)
 }
 
 /** Fetch the live model list from the Anthropic API. */

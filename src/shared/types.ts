@@ -12,7 +12,20 @@
 import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
 import type { SandboxEgressSettings } from './egress'
 
-export type ProviderKind = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible'
+/**
+ * How a provider talks to its host. `bedrock` and `vertex` are the cloud-hosted
+ * Claude backends: they speak the same Messages protocol as `anthropic` (their SDK
+ * clients all extend `BaseAnthropic`, so they share one adapter — see
+ * `src/main/providers/anthropic.ts`) but resolve credentials from the cloud's own
+ * chain rather than an API key, and address models by the host's id convention.
+ */
+export type ProviderKind =
+  | 'anthropic'
+  | 'openai'
+  | 'gemini'
+  | 'openai-compatible'
+  | 'bedrock'
+  | 'vertex'
 
 /**
  * The placeholder the main process substitutes for every custom-header VALUE before
@@ -109,6 +122,20 @@ export interface ProviderConfig {
   label: string
   /** Base URL. Required for `openai-compatible`; optional override for the others. */
   baseUrl?: string
+  /**
+   * Cloud region for the hosted-Claude kinds. Bedrock resolves it as `region` arg >
+   * `AWS_REGION` > `AWS_DEFAULT_REGION`; Vertex as `region` arg > `CLOUD_ML_REGION`.
+   * Both build their endpoint from it, so a provider with neither this nor the
+   * matching env var set can't address a host at all (see `createProvider`). Ignored
+   * by the other kinds, which carry their region in `baseUrl` when they have one.
+   */
+  region?: string
+  /**
+   * Google Cloud project that bills and serves Vertex requests. Falls back to
+   * `ANTHROPIC_VERTEX_PROJECT_ID`, then to the project on the resolved ADC
+   * credentials — so it's usually inferable and left blank. Vertex-only.
+   */
+  projectId?: string
   /**
    * Extra HTTP headers sent on every request to this provider — e.g. OpenRouter's
    * `HTTP-Referer`/`X-Title` attribution, or a gateway's custom auth header. Sent
