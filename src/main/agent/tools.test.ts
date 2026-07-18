@@ -78,6 +78,8 @@ describe('tool registry', () => {
       'gh_pr_comment',
       'gh_pr_create',
       'gh_pr_list',
+      'gh_pr_merge',
+      'gh_pr_review',
       'gh_pr_view',
       'gh_repo_create',
       'gh_run_list',
@@ -1415,6 +1417,75 @@ describe('github (gh) tools', () => {
   it('gh_pr_checkout requires a number', async () => {
     const { ctx } = ghCtx(ok('Switched'))
     await expect(getTool('gh_pr_checkout')!.execute({}, ctx)).rejects.toThrow(/required/)
+  })
+
+  it('gh_pr_review and gh_pr_merge are network tools, blocked in plan mode', () => {
+    for (const n of ['gh_pr_review', 'gh_pr_merge']) {
+      expect(getTool(n)!.kind).toBe('network')
+      expect(getTool(n)!.blockedInPlan).toBe(true)
+    }
+  })
+
+  it('gh_pr_review approves without requiring a body', async () => {
+    const { ctx, calls } = ghCtx(ok('Approved'))
+    const out = await getTool('gh_pr_review')!.execute({ number: 8, action: 'approve' }, ctx)
+    expect(out).toBe('Approved')
+    expect(calls[0]).toEqual(['pr', 'review', '8', '--approve'])
+  })
+
+  it('gh_pr_review requires a body for comment and request_changes', async () => {
+    const { ctx } = ghCtx(ok(''))
+    await expect(
+      getTool('gh_pr_review')!.execute({ number: 8, action: 'comment' }, ctx)
+    ).rejects.toThrow(/body is required/)
+    await expect(
+      getTool('gh_pr_review')!.execute({ number: 8, action: 'request_changes', body: '  ' }, ctx)
+    ).rejects.toThrow(/body is required/)
+  })
+
+  it('gh_pr_review builds a request-changes argv with the body', async () => {
+    const { ctx, calls } = ghCtx(ok('done'))
+    await getTool('gh_pr_review')!.execute(
+      { number: 8, action: 'request_changes', body: 'Please fix X' },
+      ctx
+    )
+    expect(calls[0]).toEqual(['pr', 'review', '8', '--request-changes', '--body', 'Please fix X'])
+  })
+
+  it('gh_pr_review defaults to a comment (current branch PR when number omitted)', async () => {
+    const { ctx, calls } = ghCtx(ok('done'))
+    await getTool('gh_pr_review')!.execute({ body: 'nice work' }, ctx)
+    expect(calls[0]).toEqual(['pr', 'review', '--comment', '--body', 'nice work'])
+  })
+
+  it('gh_pr_merge builds an argv with the method and delete-branch', async () => {
+    const { ctx, calls } = ghCtx(ok('Merged'))
+    const out = await getTool('gh_pr_merge')!.execute(
+      { number: 9, method: 'squash', delete_branch: true, subject: 'Land it' },
+      ctx
+    )
+    expect(out).toBe('Merged')
+    expect(calls[0]).toEqual(['pr', 'merge', '9', '--squash', '--delete-branch', '--subject', 'Land it'])
+  })
+
+  it('gh_pr_merge defaults to a merge commit for the current branch PR', async () => {
+    const { ctx, calls } = ghCtx(ok('Merged'))
+    await getTool('gh_pr_merge')!.execute({}, ctx)
+    expect(calls[0]).toEqual(['pr', 'merge', '--merge'])
+  })
+
+  it('gh_pr_merge drops subject/body for a rebase merge (gh rejects them there)', async () => {
+    const { ctx, calls } = ghCtx(ok('Rebased'))
+    await getTool('gh_pr_merge')!.execute(
+      { number: 9, method: 'rebase', subject: 'x', body: 'y' },
+      ctx
+    )
+    expect(calls[0]).toEqual(['pr', 'merge', '9', '--rebase'])
+  })
+
+  it('gh_pr_merge rejects a non-positive number', async () => {
+    const { ctx } = ghCtx(ok(''))
+    await expect(getTool('gh_pr_merge')!.execute({ number: -1 }, ctx)).rejects.toThrow(/positive integer/)
   })
 
   it('gh_pr_list formats the JSON result', async () => {

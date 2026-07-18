@@ -68,6 +68,8 @@ describe('githubContext', () => {
     const ctx = githubContext(() => '/opt/homebrew/bin/gh')
     expect(ctx).toContain('gh_pr_create')
     expect(ctx).toContain('gh_pr_checks')
+    expect(ctx).toContain('gh_pr_review')
+    expect(ctx).toContain('gh_pr_merge')
     expect(ctx).toContain('gh_issue_create')
     expect(ctx).toContain('gh_run_view')
     expect(ctx).toContain('gh_repo_create')

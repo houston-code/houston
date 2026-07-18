@@ -114,8 +114,9 @@ export function githubContext(resolve: () => string | null = resolveGh): string 
   return (
     'GitHub: the `gh` CLI is available. Prefer the dedicated gh_* tools over raw ' +
     '`gh` shell commands — each requires approval (network egress): pull requests ' +
-    '(gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, ' +
-    'gh_pr_checks), issues (gh_issue_list, gh_issue_view, gh_issue_create, ' +
+    '(gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_review, ' +
+    'gh_pr_checkout, gh_pr_checks, gh_pr_merge), issues (gh_issue_list, ' +
+    'gh_issue_view, gh_issue_create, ' +
     'gh_issue_comment), CI runs (gh_run_list, gh_run_view — use log_failed:true to ' +
     'read a failing run\'s logs), and gh_repo_create for a new repository. ' +
     'gh_pr_create needs the branch pushed first (e.g. `git push -u origin <branch>` ' +

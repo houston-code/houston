@@ -2657,6 +2657,94 @@ const ghPrChecks: ToolDef = {
   }
 }
 
+const ghPrReview: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Review PR ${str(a, 'number') || '(current branch)'} (${str(a, 'action') || 'comment'})`,
+  schema: {
+    name: 'gh_pr_review',
+    description:
+      "Submit a review on a GitHub pull request via the gh CLI: approve it, request changes, or leave a general review comment. Omit number to review the current branch's PR. A body is required for a comment or a change request (it is optional when approving). Posts publicly to the PR, so it requires approval (network) and is refused in plan mode.",
+    parameters: objectSchema(
+      {
+        number: { type: 'number', description: 'PR number. Omit to use the current branch\'s PR.' },
+        action: {
+          type: 'string',
+          enum: ['approve', 'request_changes', 'comment'],
+          description: 'The review verdict: approve, request_changes, or comment (default comment).'
+        },
+        body: {
+          type: 'string',
+          description:
+            'The review body (Markdown). Required for comment and request_changes; optional for approve.'
+        }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    const actionRaw = str(args, 'action') || 'comment'
+    const action = ['approve', 'request_changes', 'comment'].includes(actionRaw) ? actionRaw : 'comment'
+    const body = str(args, 'body')
+    if ((action === 'comment' || action === 'request_changes') && !body.trim()) {
+      throw new Error(`A review body is required to ${action === 'comment' ? 'comment on' : 'request changes on'} a PR.`)
+    }
+    const flag = action === 'approve' ? '--approve' : action === 'request_changes' ? '--request-changes' : '--comment'
+    const argv = ['pr', 'review', ...prNumberArgs(args), flag]
+    if (body.trim()) argv.push('--body', body)
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
+const ghPrMerge: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => `Merge PR ${str(a, 'number') || '(current branch)'}`,
+  schema: {
+    name: 'gh_pr_merge',
+    description:
+      "Merge an open GitHub pull request via the gh CLI. Omit number to merge the current branch's PR. Choose the merge method (a merge commit, squash, or rebase; default merge) and optionally delete the head branch afterward. This lands the change on the base branch, an outward and hard-to-undo action, so it requires approval (network) and is refused in plan mode.",
+    parameters: objectSchema(
+      {
+        number: { type: 'number', description: 'PR number. Omit to use the current branch\'s PR.' },
+        method: {
+          type: 'string',
+          enum: ['merge', 'squash', 'rebase'],
+          description: 'How to merge: a merge commit, squash, or rebase (default merge).'
+        },
+        delete_branch: {
+          type: 'boolean',
+          description: 'Delete the head branch after a successful merge (default false).'
+        },
+        subject: {
+          type: 'string',
+          description: 'Commit subject for the merge/squash commit (optional; ignored for rebase).'
+        },
+        body: {
+          type: 'string',
+          description: 'Commit body for the merge/squash commit (optional; ignored for rebase).'
+        }
+      },
+      []
+    )
+  },
+  async execute(args, ctx) {
+    const methodRaw = str(args, 'method') || 'merge'
+    const method = ['merge', 'squash', 'rebase'].includes(methodRaw) ? methodRaw : 'merge'
+    const argv = ['pr', 'merge', ...prNumberArgs(args), `--${method}`]
+    if (args.delete_branch === true) argv.push('--delete-branch')
+    // --subject/--body only apply to a merge commit or squash; gh rejects them with
+    // --rebase, so drop them there rather than surface a confusing gh error.
+    if (method !== 'rebase') {
+      const subject = str(args, 'subject')
+      if (subject) argv.push('--subject', subject)
+      const body = str(args, 'body')
+      if (body) argv.push('--body', body)
+    }
+    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
 interface RunSummary {
   databaseId?: number
   displayTitle?: string
@@ -3049,6 +3137,8 @@ export const TOOLS: ToolDef[] = [
   ghPrComment,
   ghPrCheckout,
   ghPrChecks,
+  ghPrReview,
+  ghPrMerge,
   ghRepoCreate,
   ghIssueList,
   ghIssueView,
