@@ -2275,6 +2275,18 @@ export async function startRun(
           }
         }
 
+        // A course correction can arrive AFTER this iteration's top-of-loop drain —
+        // while the final answer was streaming, or during the Stop/verify gates just
+        // above. steerRun told the caller it was accepted (the run is still live), so
+        // ending here would both lose the user's words and lie that they landed. Loop
+        // once more; the next iteration's drain feeds the steer to the model. The
+        // splice-based drain empties the queue each pass, so this only re-loops for a
+        // genuinely new steer, and the iteration cap bounds it like every other
+        // continuation. This is the common case, not an edge one: the final turn is
+        // always a no-tool end_turn turn, and "wait, do X instead" while the agent
+        // writes its answer is exactly when someone steers.
+        if (run.steering.length) continue
+
         emit({ type: 'done', stopReason })
         return
       }
