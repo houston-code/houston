@@ -2441,6 +2441,59 @@ describe('ask_user', () => {
       expect(texts).not.toContain('first round text')
     })
 
+    // Regression: a steer is persisted the instant it's drained, so its `steered`
+    // event must NOT linger in the replay buffer — otherwise a mid-turn re-adopt
+    // rebuilds the steer from messages AND replays the buffered event, drawing it
+    // twice. Fixed by emitting the event before the persist that clears the buffer.
+    it('does not leave a delivered steer in the replay buffer to be double-counted', async () => {
+      let release = (): void => {}
+      const gate = new Promise<void>((r) => (release = r))
+      let snapshot: AgentEvent[] = []
+      const sent: AgentEvent[] = []
+      const conversationId = 'conv-steer-buffer'
+      const runId = 'run-steer-buffer'
+      let round = 0
+      const provider: Provider = {
+        async *streamChat() {
+          round++
+          if (round === 1) {
+            yield { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'x' } } }
+            yield { type: 'done', stopReason: 'tool_use' }
+            return
+          }
+          yield { type: 'text', text: 'second round text' }
+          await gate
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      h.provider = provider
+      const send = (e: AgentEvent): void => {
+        sent.push(e)
+        if (e.type === 'tool_result' && e.callId === 'w1') steerRun(runId, 'use YAML')
+        if (e.type === 'text' && e.delta === 'second round text') {
+          snapshot = liveTranscriptForConversation(conversationId)
+          release()
+        }
+      }
+      await startRun(
+        {
+          runId,
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        send
+      )
+      // The steer was delivered live (the renderer drew the bubble)…
+      expect(sent.some((e) => e.type === 'steered' && e.text === 'use YAML')).toBe(true)
+      // …but it is NOT in the round-2 replay buffer, because it is already persisted —
+      // so a re-adopt reconstructs it from messages exactly once.
+      expect(snapshot.some((e) => e.type === 'steered')).toBe(false)
+    })
+
     it('returns nothing for a conversation with no live run', () => {
       expect(liveTranscriptForConversation('no-such-conversation')).toEqual([])
     })
