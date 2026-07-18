@@ -1945,8 +1945,15 @@ export async function startRun(
       if (run.steering.length) {
         const steers = run.steering.splice(0)
         for (const content of steers) messages.push({ role: 'user', content })
-        persist(messages)
+        // Emit BEFORE persist. The live renderer needs the `steered` event to draw
+        // the bubble, but `persist` clears the re-adopt replay buffer — so emitting
+        // AFTER it left the steered event in the buffer even though the steer was
+        // already on disk. A mid-turn re-adopt then rebuilt the steer from messages
+        // AND replayed the buffered event, showing it twice. Emitting first keeps the
+        // invariant that the buffer holds only events not yet persisted (send() has
+        // already delivered it live either way).
         for (const content of steers) emit({ type: 'steered', text: content })
+        persist(messages)
       }
 
       // Landing reminder: once the run is within a small margin of the iteration
