@@ -911,6 +911,70 @@
     }
   },
   {
+    "name": "gh_pr_review",
+    "description": "Submit a review on a GitHub pull request via the gh CLI: approve it, request changes, or leave a general review comment. Omit number to review the current branch's PR. A body is required for a comment or a change request (it is optional when approving). Posts publicly to the PR, so it requires approval (network) and is refused in plan mode.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "PR number. Omit to use the current branch's PR."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "request_changes",
+            "comment"
+          ],
+          "description": "The review verdict: approve, request_changes, or comment (default comment)."
+        },
+        "body": {
+          "type": "string",
+          "description": "The review body (Markdown). Required for comment and request_changes; optional for approve."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_pr_merge",
+    "description": "Merge an open GitHub pull request via the gh CLI. Omit number to merge the current branch's PR. Choose the merge method (a merge commit, squash, or rebase; default merge) and optionally delete the head branch afterward. This lands the change on the base branch, an outward and hard-to-undo action, so it requires approval (network) and is refused in plan mode.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "PR number. Omit to use the current branch's PR."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "merge",
+            "squash",
+            "rebase"
+          ],
+          "description": "How to merge: a merge commit, squash, or rebase (default merge)."
+        },
+        "delete_branch": {
+          "type": "boolean",
+          "description": "Delete the head branch after a successful merge (default false)."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Commit subject for the merge/squash commit (optional; ignored for rebase)."
+        },
+        "body": {
+          "type": "string",
+          "description": "Commit body for the merge/squash commit (optional; ignored for rebase)."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "gh_repo_create",
     "description": "Create a new GitHub repository via the gh CLI. By default it creates a PRIVATE repo from the current project directory (adds it as the \"origin\" remote) and pushes the existing commits — so commit your work first (the directory must be a git repo with at least one commit; run `git init && git add -A && git commit` via run_shell if needed). Set source:false to instead create an empty remote repo with no local wiring. Requires approval (network) and is refused in plan mode. Returns the new repository URL.",
     "parameters": {
