@@ -4454,6 +4454,45 @@ describe('steerRun', () => {
     expect(at).toBeGreaterThan(resultAt)
   })
 
+  // Regression: the existing tests steer on a tool turn, where another iteration
+  // follows. But the FINAL turn is a no-tool end_turn — the drain has already run,
+  // and a steer that arrives while that answer streams must not be silently dropped
+  // (steerRun returned true, so the client won't fall back to queuing it). The fix
+  // loops once more so the correction reaches the model instead of vanishing.
+  it('delivers a steer that arrives during the final (no-tool) turn', async () => {
+    const r = recording([
+      [{ type: 'text', text: 'here is my answer' }, { type: 'done', stopReason: 'end_turn' }],
+      [{ type: 'text', text: 'ok, revised' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    h.provider = r.provider
+    const runId = 'run-steer-final'
+    let steered = false
+    const send = (e: AgentEvent): void => {
+      // Steer while the final answer streams — after this iteration's top-of-loop drain.
+      if (e.type === 'text' && !steered) {
+        steered = true
+        expect(steerRun(runId, 'wait, use TOML')).toBe(true)
+      }
+    }
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      send,
+      () => {}
+    )
+    // Without the fix the run ends after one call and the steer is lost; with it, a
+    // second call carries the correction into the model's window.
+    expect(r.requests.length).toBe(2)
+    const second = r.requests[1] ?? []
+    expect(second.some((m) => m.role === 'user' && m.content === 'wait, use TOML')).toBe(true)
+  })
+
   it('keeps several corrections, in the order they were typed', async () => {
     const r = recording(twoSteps)
     h.provider = r.provider
