@@ -53,7 +53,8 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS } from '@shared/agent'
-import { contextWindowFor, contextPercent } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage } from '@shared/usage'
+import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
@@ -538,41 +539,13 @@ export interface SessionCost {
 }
 
 /**
- * Per-model tally for `/cost`.
- *
- * The loop knew the model and the cache split all along — it needs both to price
- * a round — and then dropped them at the event seam, so /cost could only ever
- * print one aggregate number. You could see what a session cost but not which
- * model spent it, nor how much of the input was served from cache (which bills
- * far below the base rate, and is most of a long session's input).
+ * Per-model tally for `/cost`. This is the shared {@link ModelUsage} — the exact
+ * shape (and accumulator) the desktop app's cost breakdown uses — so the terminal's
+ * `/cost` and the GUI can't drift on what a session cost. `addModelUsage` is the
+ * shared `accumulateModelUsage`; only the terminal-specific rendering lives here.
  */
-export interface ModelCost extends SessionCost {
-  model: string
-  cacheReadTokens: number
-  cacheWriteTokens: number
-}
-
-/** Fold a usage event into the per-model tallies, in first-seen order. */
-export function addModelUsage(
-  tallies: ModelCost[],
-  e: { model?: string; inputTokens: number; outputTokens: number; cost: number; cacheReadTokens?: number; cacheWriteTokens?: number }
-): ModelCost[] {
-  // An older event carries no model. It still counts toward the session, so label
-  // the row for what it honestly is rather than inventing a model name.
-  const model = e.model ?? 'session'
-  const out = tallies.some((t) => t.model === model) ? [...tallies] : [...tallies, blankCost(model)]
-  const t = out.find((x) => x.model === model) as ModelCost
-  t.inputTokens += e.inputTokens
-  t.outputTokens += e.outputTokens
-  t.cost += e.cost
-  t.cacheReadTokens += e.cacheReadTokens ?? 0
-  t.cacheWriteTokens += e.cacheWriteTokens ?? 0
-  return out
-}
-
-function blankCost(model: string): ModelCost {
-  return { model, inputTokens: 0, outputTokens: 0, cost: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
-}
+export type ModelCost = ModelUsage
+export const addModelUsage = accumulateModelUsage
 
 /**
  * The `/cost` report: one row per model, the cache split, and a session total.
