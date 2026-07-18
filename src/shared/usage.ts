@@ -4,7 +4,7 @@
  * so both processes and the unit tests can use them.
  */
 import type { ModelCaps } from './types'
-import type { ModelUsage } from './agent'
+import type { ModelUsage, ConversationUsage } from './agent'
 
 /** Per-conversation running token usage (persisted; displayed in the control bar). */
 export interface SessionUsage {
@@ -54,6 +54,22 @@ export function accumulateModelUsage(
 
 function blankModelUsage(model: string): ModelUsage {
   return { model, inputTokens: 0, outputTokens: 0, cost: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+}
+
+/**
+ * Map a conversation's persisted usage to the shape the control bar renders. One
+ * place so a field added to {@link ConversationUsage} can't be silently dropped on
+ * reopen — the reason the per-model breakdown and cache split used to vanish when a
+ * conversation was reopened (only `context`/`output`/`cost` were carried across).
+ */
+export function sessionUsageFromConversation(u: ConversationUsage): SessionUsage {
+  return {
+    context: u.inputTokens,
+    output: u.outputTokens,
+    cost: u.cost ?? 0,
+    cacheRead: u.cacheReadTokens,
+    perModel: u.perModel
+  }
 }
 
 /** Per-million-token prices in USD for a model (input vs output tokens). */

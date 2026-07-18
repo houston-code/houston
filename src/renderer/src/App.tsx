@@ -19,7 +19,7 @@ import {
   type Command
 } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
-import { resolveCapabilities } from '@shared/usage'
+import { resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
 import { branchNameError, planNewChatWorkspace, suggestBranch } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
@@ -540,13 +540,9 @@ export default function App(): JSX.Element {
       }
       chat.reset(
         items,
-        conv.usage
-          ? {
-              context: conv.usage.inputTokens,
-              output: conv.usage.outputTokens,
-              cost: conv.usage.cost ?? 0
-            }
-          : null,
+        // Map through the shared helper so the persisted per-model breakdown and
+        // cache split survive a reopen too — not just context/output/cost.
+        conv.usage ? sessionUsageFromConversation(conv.usage) : null,
         Boolean(conv.lastError)
       )
       // A run for this conversation is still in flight in the main process —
@@ -1454,6 +1450,7 @@ export default function App(): JSX.Element {
           changesOpen ||
           filesOpen ||
           scorecardOpen ||
+          doctorOpen ||
           findOpen ||
           isAnyPopoverOpen()
         )
@@ -1470,6 +1467,7 @@ export default function App(): JSX.Element {
         else if (changesOpen) setChangesOpen(false)
         else if (filesOpen) setFilesOpen(false)
         else if (scorecardOpen) setScorecardOpen(false)
+        else if (doctorOpen) setDoctorOpen(false)
         else if (chat.running) chat.cancel()
       }
     }

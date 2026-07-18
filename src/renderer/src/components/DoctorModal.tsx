@@ -45,13 +45,10 @@ export function DoctorModal({
     }
   }, [workspace])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+  // Esc is handled by App's global key handler (which knows this modal is open and
+  // suppresses cycle-mode / run-cancel while it is), the same as the Scorecard and
+  // Files panels. A private document-level Esc listener here fired first and let
+  // App's handler fall through to `chat.cancel()`, silently killing a running turn.
 
   const report = facts ? buildDoctorReport(facts) : null
   const all = report?.groups.flatMap((g) => g.checks) ?? []
