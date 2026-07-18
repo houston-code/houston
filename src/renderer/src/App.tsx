@@ -1085,9 +1085,15 @@ export default function App(): JSX.Element {
   // click, fall back to queuing so nothing the user typed is dropped.
   const onSteer = useCallback(
     (text: string) => {
+      // The conversation this steer belongs to, captured now: if the run declines it
+      // (it ended between typing and the round-trip) the fallback resolves async, and
+      // the user may have switched chats by then — the text must queue into THIS one,
+      // not wherever they navigated.
+      const targetConv = currentId
       void chat.steer(text).then((accepted) => {
-        if (!accepted && settings?.selected) {
+        if (!accepted && settings?.selected && targetConv) {
           queue.enqueue({
+            conversationId: targetConv,
             text,
             providerId: settings.selected.providerId,
             model: settings.selected.model,
@@ -1096,7 +1102,7 @@ export default function App(): JSX.Element {
         }
       })
     },
-    [chat, settings, queue]
+    [chat, settings, queue, currentId]
   )
 
   // Hand off PR creation to the agent: close the panel and send the standing
