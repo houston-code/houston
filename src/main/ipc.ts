@@ -320,6 +320,11 @@ export function registerIpc(): void {
     async (_event, workspace: unknown, scope: unknown, text: unknown): Promise<string | null> => {
       if (typeof workspace !== 'string' || typeof text !== 'string') return null
       if (scope !== 'project' && scope !== 'global') return null
+      // A project-scoped save needs a real workspace: an empty one makes the write
+      // resolve to `AGENTS.md` in the process cwd and mkdir('') throw, which without
+      // this would reject the IPC call (the renderer has no .catch, so the user got
+      // no "couldn't save" feedback). Return null so the caller reports it cleanly.
+      if (scope === 'project' && !workspace.trim()) return null
       const trimmed = text.trim().slice(0, MAX_MEMORY_NOTE)
       if (!trimmed) return null
       return saveMemory(workspace, scope, trimmed)

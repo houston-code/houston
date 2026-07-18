@@ -198,6 +198,17 @@ describe('run-control IPC ownership', () => {
       const text = h.saveMemory.mock.calls.at(-1)?.[2] as string
       expect(text.length).toBe(2000) // MAX_MEMORY_NOTE
     })
+
+    // A project save with no workspace would let the write land in the process cwd
+    // and throw in mkdir(''); the renderer has no .catch, so it must not reach saveMemory.
+    it('returns null for a project save with an empty workspace', async () => {
+      expect(await handler(IPC.memorySave)(from(OWNER), '', 'project', 'note')).toBeNull()
+      expect(await handler(IPC.memorySave)(from(OWNER), '   ', 'project', 'note')).toBeNull()
+      expect(h.saveMemory).not.toHaveBeenCalled()
+      // Global scope has no workspace to speak of, so an empty one is fine there.
+      await handler(IPC.memorySave)(from(OWNER), '', 'global', 'note')
+      expect(h.saveMemory).toHaveBeenCalledWith('', 'global', 'note')
+    })
   })
 
   describe('agentSteer', () => {
