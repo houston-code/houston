@@ -11,6 +11,7 @@ import {
   resolveContextWindow,
   resolvePricing,
   resolveToolSupport,
+  sessionUsageFromConversation,
   turnCostUsd
 } from './usage'
 
@@ -424,5 +425,40 @@ describe('accumulateModelUsage', () => {
     const snapshot = JSON.parse(JSON.stringify(before))
     accumulateModelUsage(before, turn({ model: 'claude' }))
     expect(before).toEqual(snapshot)
+  })
+})
+
+describe('sessionUsageFromConversation', () => {
+  // The reopen regression: the per-model breakdown and cache split are PERSISTED,
+  // so mapping them back is what makes them survive a reopen. Dropping them (as the
+  // old inline map did) made the breakdown panel silently disappear until the next
+  // live turn.
+  it('carries the per-model breakdown and cache split, not just the aggregate', () => {
+    const s = sessionUsageFromConversation({
+      inputTokens: 1200,
+      outputTokens: 800,
+      cost: 0.42,
+      cacheReadTokens: 900,
+      perModel: [
+        { model: 'claude', inputTokens: 1000, outputTokens: 700, cost: 0.4, cacheReadTokens: 900, cacheWriteTokens: 0 },
+        { model: 'haiku', inputTokens: 200, outputTokens: 100, cost: 0.02, cacheReadTokens: 0, cacheWriteTokens: 0 }
+      ]
+    })
+    expect(s).toEqual({
+      context: 1200,
+      output: 800,
+      cost: 0.42,
+      cacheRead: 900,
+      perModel: [
+        { model: 'claude', inputTokens: 1000, outputTokens: 700, cost: 0.4, cacheReadTokens: 900, cacheWriteTokens: 0 },
+        { model: 'haiku', inputTokens: 200, outputTokens: 100, cost: 0.02, cacheReadTokens: 0, cacheWriteTokens: 0 }
+      ]
+    })
+  })
+
+  // A conversation persisted before per-model tracking has neither field.
+  it('maps a pre-upgrade conversation without inventing fields', () => {
+    const s = sessionUsageFromConversation({ inputTokens: 100, outputTokens: 50, cost: 0 })
+    expect(s).toEqual({ context: 100, output: 50, cost: 0, cacheRead: undefined, perModel: undefined })
   })
 })

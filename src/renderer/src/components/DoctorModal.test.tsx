@@ -66,14 +66,27 @@ describe('DoctorModal', () => {
     expect(screen.getByText(/worth knowing/)).toBeInTheDocument()
   })
 
-  it('closes on the button and on Escape', async () => {
+  it('closes on the button and the backdrop', async () => {
+    installApi(facts())
+    const onClose = vi.fn()
+    const { container } = render(<DoctorModal workspace={null} onClose={onClose} />)
+    await waitFor(() => expect(screen.getByText('Everything looks healthy.')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Close doctor' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    fireEvent.click(container.querySelector('.modal-backdrop')!)
+    expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  // Esc is deliberately NOT handled here: it's owned by App's global key handler,
+  // which knows the modal is open and suppresses run-cancel/cycle-mode while it is.
+  // A private Esc listener here fired first and let App's handler fall through to
+  // cancel a running turn (the bug this modal's Esc handling was removed to fix).
+  it('does not register its own Escape listener', async () => {
     installApi(facts())
     const onClose = vi.fn()
     render(<DoctorModal workspace={null} onClose={onClose} />)
     await waitFor(() => expect(screen.getByText('Everything looks healthy.')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Close doctor' }))
-    expect(onClose).toHaveBeenCalledTimes(1)
     fireEvent.keyDown(document, { key: 'Escape' })
-    expect(onClose).toHaveBeenCalledTimes(2)
+    expect(onClose).not.toHaveBeenCalled()
   })
 })
