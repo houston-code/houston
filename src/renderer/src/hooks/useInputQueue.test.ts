@@ -63,6 +63,23 @@ describe('useInputQueue', () => {
     await waitFor(() => expect(result.current.queued).toEqual([{ id: 'q-new', text: 'do B', imageCount: 0 }]))
   })
 
+  // A steer the run declines falls back to queuing, resolving async — by which time
+  // the user may have opened another chat. An explicit target keeps the text in the
+  // conversation it was typed in, and the open conversation's bar is left untouched.
+  it('queues into an explicit target conversation, not the open one', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useInputQueue('open-conv'))
+
+    act(() => result.current.enqueue({ text: 'late steer', conversationId: 'origin-conv', ...ENQUEUE }))
+
+    expect(api.queueInput).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'origin-conv', userText: 'late steer' })
+    )
+    // The bar reflects the OPEN conversation, so queuing elsewhere must not change it.
+    await waitFor(() => expect(api.queueInput).toHaveBeenCalled())
+    expect(result.current.queued).toEqual([])
+  })
+
   it('remove and clear route to the bridge and update the bar', async () => {
     const { api } = installApi({ c1: [{ id: 'a', text: 'x', imageCount: 0 }] })
     const { result } = renderHook(() => useInputQueue('c1'))

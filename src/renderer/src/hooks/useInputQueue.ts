@@ -13,6 +13,13 @@ export interface InputQueue {
     providerId: string
     model: string
     approvalPolicy: ApprovalPolicy
+    /**
+     * Queue into this conversation instead of the open one. For a fallback that
+     * resolves after an async gap (a steer that the run declined), during which the
+     * user may have navigated away — the text belongs to the conversation it was
+     * typed in, not wherever they are now.
+     */
+    conversationId?: string
   }) => void
   /** Drop one queued message by id. */
   remove: (id: string) => void
@@ -57,7 +64,9 @@ export function useInputQueue(conversationId: string | null): InputQueue {
   }, [])
 
   const enqueue = useCallback<InputQueue['enqueue']>((input) => {
-    const cid = convIdRef.current
+    // An explicit target wins over the open conversation, so a deferred fallback
+    // queues into the chat the text was typed in even after navigating away.
+    const cid = input.conversationId ?? convIdRef.current
     if (!cid) return
     void window.api
       .queueInput({
