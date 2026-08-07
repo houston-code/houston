@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.2.230",
+  "version": "0.2.231",
   "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "Houston developers",
@@ -80,7 +80,7 @@
     "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-v8": "^4.1.10",
     "@vscode/ripgrep": "^1.18.0",
-    "electron": "^43.1.1",
+    "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "eslint": "^10.7.0",
