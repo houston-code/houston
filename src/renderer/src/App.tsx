@@ -1647,7 +1647,7 @@ export default function App(): JSX.Element {
         {chat.items.length === 0 ? (
           <div className="welcome">
             <h1>Houston</h1>
-            <p>A coding agent. Bring your own model.</p>
+            <p>A model-agnostic, sandboxed coding agent. Decoupled from your model bill.</p>
             {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
             {workspace && !settings.selected && (
               <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>
