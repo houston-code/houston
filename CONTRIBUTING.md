@@ -198,6 +198,29 @@ npm run build
 
 Keep commits focused and incremental.
 
-Houston is proprietary software (see [LICENSE](LICENSE)), not MIT-licensed. The terms
-for accepting outside contributions are being finalized; this note will be updated once
-they are settled.
+## Licensing of contributions
+
+Houston is licensed under the [Apache License 2.0](LICENSE). Unless you say otherwise
+in writing, any contribution you intentionally submit for inclusion is licensed under
+those same terms, per section 5 of the license:
+
+> Unless You explicitly state otherwise, any Contribution intentionally submitted for
+> inclusion in the Work by You to the Licensor shall be under the terms and conditions
+> of this License, without any additional terms or conditions.
+
+That covers the copyright and patent grants, so there is no separate CLA to sign. By
+opening a pull request you confirm that you wrote the contribution or otherwise have
+the right to submit it under Apache-2.0.
+
+Copyright stays with you. Houston does not ask for an assignment, and there is no
+per-file copyright header to add: the repository-level [LICENSE](LICENSE) and
+[NOTICE](NOTICE) cover the whole tree. If you are contributing on behalf of an
+employer, make sure they are on board first.
+
+### Third-party code and dependencies
+
+New dependencies must be permissively licensed. CI runs `npm run license-gate`, which
+fails the build if anything in the installed tree carries AGPL, SSPL, BUSL, or another
+copyleft or source-available license, since none of those can be redistributed inside
+an Apache-2.0 binary. If you vendor code from another project, keep its license header
+intact and add it to the notices.

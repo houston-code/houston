@@ -100,7 +100,11 @@ describe('legalAcceptanceMessage', () => {
     expect(m).toContain('--accept-terms')
     expect(m).toContain('/docs/TERMS.md')
     expect(m).toContain('/docs/PRIVACY.md')
+    // The Apache-2.0 license is linked for reference, but is NOT one of the documents
+    // the run is blocked on accepting — only the Terms and Privacy Policy are.
     expect(m).toContain('/LICENSE')
+    expect(m).toContain('open source under the Apache License 2.0')
+    expect(m).not.toMatch(/accept .*Privacy Policy, and License/)
   })
 
   it('uses re-acceptance wording when the terms changed since a prior acceptance', () => {

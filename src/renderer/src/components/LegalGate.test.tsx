@@ -41,7 +41,19 @@ describe('LegalGate', () => {
       'href',
       PRIVACY_URL
     )
-    expect(screen.getByRole('link', { name: /license/i })).toHaveAttribute('href', LICENSE_URL)
+    expect(screen.getByRole('link', { name: /apache license 2\.0/i })).toHaveAttribute(
+      'href',
+      LICENSE_URL
+    )
+  })
+
+  it('asks acceptance for the Terms and Privacy Policy only, not the license', () => {
+    // Houston is Apache-2.0: the license grants rights rather than imposing conditions
+    // on running the app, so it is linked for reference but never something to accept.
+    render(<LegalGate onAccept={() => {}} />)
+    const consent = screen.getByText(/by selecting/i)
+    expect(consent).toHaveTextContent(/accept the Terms of Use and the Privacy Policy/i)
+    expect(consent).not.toHaveTextContent(/accept the Terms of Use, Privacy Policy, and License/i)
   })
 
   it('accepts only via the "I Agree" button', () => {

@@ -1,6 +1,6 @@
 appId: com.houston.app
 productName: Houston
-copyright: Copyright © 2026 Houston developers
+copyright: Copyright © 2026 The Houston Authors
 
 # Update feed for electron-updater. electron-builder generates the update
 # metadata (latest-mac.yml) alongside the DMG; publishing a GitHub Release with
@@ -54,14 +54,18 @@ asar: true
 asarUnpack:
   - node_modules/node-pty/**
 
-# Ship the attribution notices INSIDE the packaged app (→ Contents/Resources/THIRD-PARTY-NOTICES.md
-# on macOS, resources/ on Windows/Linux) rather than only as a loose release asset. Two reasons:
-#   1. Compliance: the app bundles the same MIT/Apache deps (in the asar), whose licenses require
-#      the notices to travel with the redistributed binary — so they belong in the app itself.
-#   2. Trust: as bundle content it is covered by the app's code signature and macOS notarization,
-#      so it is delivered under the notarized umbrella instead of as a bare, quarantined file a
-#      scanner can flag on its own. Same file the release also attaches standalone (repo root).
+# Ship the license and attribution files INSIDE the packaged app (→ Contents/Resources/ on
+# macOS, resources/ on Windows/Linux) rather than only as loose release assets. Two reasons:
+#   1. Compliance: Houston itself is Apache-2.0, whose §4(a) requires a copy of the License and
+#      §4(d) the NOTICE contents to travel with every distribution — including the binary. The
+#      bundled MIT/Apache deps (in the asar) impose the same duty for THIRD-PARTY-NOTICES.md.
+#   2. Trust: as bundle content they are covered by the app's code signature and macOS
+#      notarization, so they are delivered under the notarized umbrella instead of as bare,
+#      quarantined files a scanner can flag on their own. Same files the release also attaches
+#      standalone (repo root).
 extraResources:
+  - LICENSE
+  - NOTICE
   - THIRD-PARTY-NOTICES.md
 
 mac:

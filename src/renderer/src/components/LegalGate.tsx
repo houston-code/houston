@@ -3,10 +3,13 @@ import { useFocusTrap } from '../lib/useFocusTrap'
 import { LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 
 /**
- * Blocking legal-acceptance gate: the user must accept the Terms of Use, Privacy
- * Policy, and License before using Houston. Unlike other modals it cannot be
+ * Blocking legal-acceptance gate: the user must accept the Terms of Use and the
+ * Privacy Policy before using Houston. Unlike other modals it cannot be
  * dismissed — Escape and backdrop clicks do nothing; the only way forward is to
  * accept, and the only way out is to quit.
+ *
+ * The Apache-2.0 LICENSE is linked but deliberately not something to accept; see
+ * the note in @shared/legal.
  *
  * Shown on first run, and again whenever LEGAL_VERSION bumps (see @shared/legal).
  * `isUpdate` distinguishes a returning user being re-prompted after a terms change
@@ -44,7 +47,7 @@ export function LegalGate({
         <div className="modal__body legal-gate__body">
           <p>
             {isUpdate
-              ? 'We’ve updated Houston’s Terms of Use, Privacy Policy, and License. Please review and accept the updated terms to continue.'
+              ? 'We’ve updated Houston’s Terms of Use and Privacy Policy. Please review and accept the updated terms to continue.'
               : 'Houston is a coding agent that can read, edit, delete, and run files and commands on your device, and connect to AI models and other services that you choose. Please read and accept the terms below before continuing.'}
           </p>
           <ul className="legal-gate__points">
@@ -84,14 +87,14 @@ export function LegalGate({
             <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
               Privacy Policy
             </a>
-            {' · '}
-            <a href={LICENSE_URL} target="_blank" rel="noreferrer">
-              License
-            </a>
           </p>
           <p className="legal-gate__consent">
             By selecting “I Agree”, you confirm that you have read and accept the Terms
-            of Use, Privacy Policy, and License.
+            of Use and the Privacy Policy. Houston itself is open source under the{' '}
+            <a href={LICENSE_URL} target="_blank" rel="noreferrer">
+              Apache License 2.0
+            </a>
+            , which grants you rights rather than asking anything of you.
           </p>
         </div>
         <div className="modal__foot">

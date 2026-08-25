@@ -8,6 +8,8 @@ by an approval flow and, where the OS supports it, confined to a sandbox.
 Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
 (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+).
 
+Open source under the [Apache License 2.0](LICENSE).
+
 ![Houston icon](build/icon.png)
 
 ## Features
@@ -445,8 +447,10 @@ Grab the artifact for your platform:
 ## First run
 
 1. On first launch Houston shows a one-time notice and asks you to accept the
-   [Terms of Use](docs/TERMS.md), [Privacy Policy](docs/PRIVACY.md), and
-   [License](LICENSE) before you can use it.
+   [Terms of Use](docs/TERMS.md) and [Privacy Policy](docs/PRIVACY.md) before you
+   can use it. (The [Apache-2.0 license](LICENSE) is linked there for reference,
+   but grants rights rather than asking anything of you, so it is not part of what
+   you accept.)
 2. Open **Settings** (sidebar) and set an API key for at least one provider
    (or point a local endpoint at Ollama/LM Studio — no key needed).
 3. Pick a **project folder** (control bar, above the composer).
@@ -509,8 +513,8 @@ a script can tell the run needed more than it was granted. The default is
 is `allow`; an unrecognized value is treated as `deny`.
 
 **First-run terms.** The GUI shows a one-time gate to accept the
-[Terms of Use](docs/TERMS.md), [Privacy Policy](docs/PRIVACY.md), and
-[License](LICENSE) before use. Headless mode has no UI, so the first time you run
+[Terms of Use](docs/TERMS.md) and [Privacy Policy](docs/PRIVACY.md)
+before use. Headless mode has no UI, so the first time you run
 it on a profile that hasn't accepted them you must pass `--accept-terms`;
 acceptance is then persisted (shared with the GUI), so later runs don't need it.
 Without it, the run prints the terms links and exits with code `2`.
@@ -724,7 +728,8 @@ fails if a vendored binary is missing, so a build can't silently ship without se
 
 Per-PR CI runs on Linux only (×1 Actions-minute multiplier): a dependency license gate
 (`npm run license-gate`, which fails the PR if any package in the installed tree carries
-AGPL or another copyleft/source-available license, and holds everything that ships to a
+AGPL or another copyleft/source-available license, which is incompatible with
+redistributing Houston under Apache-2.0, and holds everything that ships to a
 permissive allowlist), the unit gate (lint + typecheck + vitest), the real bubblewrap
 sandbox exercise, and a `dist:linux` packaging smoke that gates merge but uploads no
 artifact. The full matrix — Linux x64, macOS arm64,
@@ -923,20 +928,45 @@ What's intentionally not done yet — out of scope for a macOS desktop app, or a
 larger effort — is tracked in [ROADMAP.md](./ROADMAP.md) with the
 rationale for each.
 
+## License
+
+Houston is licensed under the **[Apache License 2.0](LICENSE)**. You may use it for
+any purpose, study and modify the source, and redistribute original or modified
+copies, commercially or not. In return the license asks that you keep the license
+and copyright notices, ship the [NOTICE](NOTICE) file with your distribution, and
+state which files you changed. It also includes an express patent grant from every
+contributor, and a patent-retaliation clause that ends that grant for anyone who
+sues over patents in Houston.
+
+Two things it does not give you: the **Houston** name and logo (Apache-2.0 section
+6 grants no trademark rights), and any warranty (sections 7 and 8 disclaim all of
+them).
+
+Houston bundles third-party open-source components, each under its own license;
+they are listed with their license texts in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which also ships inside the
+packaged app. A CI [license gate](#build-a-release) keeps a copyleft or
+source-available dependency from silently landing in that closure.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how contributions are licensed.
+
 ## Legal
 
-Houston is proprietary software, provided **as is**, without warranty, and you
-use it at your own risk. It can read, edit, delete, and run files and commands on
-your device, and it sends your prompts, code, and files only to the model and
-other providers **you** configure — under those providers' own terms, privacy,
-and model-training policies. You are responsible for reviewing the agent's
-actions, keeping backups, and meeting any data-residency or data-protection
-obligations that apply to you.
+Houston is provided **as is**, without warranty, and you use it at your own risk.
+It can read, edit, delete, and run files and commands on your device, and it sends
+your prompts, code, and files only to the model and other providers **you**
+configure, under those providers' own terms, privacy, and model-training policies.
+You are responsible for reviewing the agent's actions, keeping backups, and meeting
+any data-residency or data-protection obligations that apply to you.
 
-- [License](LICENSE) — proprietary license, all rights reserved
-- [Terms of Use](docs/TERMS.md)
-- [Privacy Policy](docs/PRIVACY.md)
+- [Terms of Use](docs/TERMS.md): governs the build we distribute; the LICENSE
+  prevails over it wherever the two conflict
+- [Privacy Policy](docs/PRIVACY.md): Houston stores your data locally and collects
+  no telemetry
 
-> These documents are templates and not legal advice. Replace the bracketed
-> placeholders (licensor, contact, governing law) and have a lawyer review them
-> before distributing.
+Neither document is required by Apache-2.0; they are published so the "we receive
+nothing" claim is written down rather than inferred.
+
+> These documents are templates and not legal advice. The Terms still carry
+> bracketed placeholders for governing law and dispute venue (section 17); fill
+> those and have a lawyer review both documents before distributing.

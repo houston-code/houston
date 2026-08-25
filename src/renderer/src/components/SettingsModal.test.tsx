@@ -203,7 +203,7 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Legal' }))
     expect(screen.getByRole('link', { name: 'Terms of Use' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Privacy Policy' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'License' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'License (Apache-2.0)' })).toBeInTheDocument()
   })
 
   it('offers a Loop scorecard button on the Models tab that calls onShowScorecard', () => {

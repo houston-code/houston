@@ -6,6 +6,7 @@
 
 - Type: desktop application (macOS, Windows, Linux), built with Electron, React, and TypeScript.
 - Price: free. You bring your own model API keys, or run a local model; you pay only your provider's usage, never Houston.
+- License: open source under the Apache License 2.0. Use, modify, and redistribute it, commercially or not, keeping the license and copyright notices and the NOTICE file. The Houston name and logo are not licensed.
 - Bring your own model: Claude (Anthropic), GPT (OpenAI), Gemini (Google), any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Switch models per conversation.
 - Privacy: runs on your device; no in-app telemetry. Data leaves only to providers you configure, when you use a feature that reaches the network. Our download host keeps aggregate download and update-check counts for released files (no personal data, no in-app tracking).
 - Safety: choose an approval mode from review-every-action to full autonomy; shell commands are sandboxed where the OS supports it.
@@ -25,6 +26,7 @@
 - Source and issues: https://github.com/piyushvijay/houston
 - Privacy Policy: https://houstoncode.ai/privacy.html
 - Terms of Use: https://houstoncode.ai/terms.html
+- License (Apache-2.0): https://github.com/piyushvijay/houston/blob/main/LICENSE
 
 ## Platforms
 

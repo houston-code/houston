@@ -76,7 +76,7 @@ export interface HeadlessOptions {
   /** `--resume <id>`: resume a specific saved session (e.g. one started in the TUI). */
   resumeId?: string
   /**
-   * Accept the legal terms (Terms of Use, Privacy Policy, License) for this and
+   * Accept the legal terms (Terms of Use, Privacy Policy) for this and
    * future runs. Required the first time headless mode is used on a profile that
    * hasn't accepted them (the GUI shows a gate; headless has no UI, so it's a
    * flag). Once accepted it's persisted, so later runs don't need it.
@@ -239,14 +239,16 @@ export function resolveHeadlessModel(
  */
 export function legalAcceptanceMessage(isUpdate: boolean): string {
   const lead = isUpdate
-    ? 'Houston’s Terms of Use, Privacy Policy, and License have been updated and must be re-accepted before using headless mode.\n'
-    : 'You must accept the Houston Terms of Use, Privacy Policy, and License before using headless mode.\n'
+    ? 'Houston’s Terms of Use and Privacy Policy have been updated and must be re-accepted before using headless mode.\n'
+    : 'You must accept the Houston Terms of Use and Privacy Policy before using headless mode.\n'
   return (
     lead +
     `  Terms:   ${TERMS_URL}\n` +
     `  Privacy: ${PRIVACY_URL}\n` +
-    `  License: ${LICENSE_URL}\n` +
-    'Re-run with --accept-terms to accept (recorded once; later runs won’t ask).\n'
+    'Re-run with --accept-terms to accept (recorded once; later runs won’t ask).\n' +
+    // Linked for reference only: Apache-2.0 grants rights, so there is nothing here
+    // for a user running the app to accept. See @shared/legal.
+    `Houston is open source under the Apache License 2.0: ${LICENSE_URL}\n`
   )
 }
 

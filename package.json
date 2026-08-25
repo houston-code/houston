@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.2.232",
+  "version": "0.2.233",
   "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "Houston developers",
@@ -11,7 +11,7 @@
     "houston": "./out/cli/houston-cli.cjs"
   },
   "homepage": "https://github.com/piyushvijay/houston",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "private": true,
   "engines": {
     "node": ">=22"

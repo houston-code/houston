@@ -2059,7 +2059,7 @@ export function SettingsModal({
               <>
                 <SettingsSection
                   title="Legal"
-                  desc="The terms you accepted when you started using Houston."
+                  desc="The terms you accepted when you started using Houston, and the open-source license Houston itself ships under."
                 >
                   <p className="settings-legal__links">
                     <a href={TERMS_URL} target="_blank" rel="noreferrer">
@@ -2071,7 +2071,7 @@ export function SettingsModal({
                     </a>
                     {' · '}
                     <a href={LICENSE_URL} target="_blank" rel="noreferrer">
-                      License
+                      License (Apache-2.0)
                     </a>
                   </p>
                 </SettingsSection>

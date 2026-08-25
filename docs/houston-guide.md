@@ -819,3 +819,31 @@ Settings covers providers and keys, web search, approval mode and permission
 rules, hooks, MCP servers, additional folders, context threshold, appearance
 (theme, notifications), and optional integrations (`gh`, formatters). API keys
 are encrypted with the OS keychain and stay in the main process.
+
+## License and legal
+
+Houston is open-source software under the **Apache License 2.0** (`LICENSE` in the
+repository, and a copy inside the packaged app under `Resources/`). That means
+anyone can use it for any purpose, read and modify the source, and redistribute
+original or modified copies, commercially or not, as long as they keep the license
+and copyright notices, pass along the `NOTICE` file, and state which files they
+changed. The license also carries an express patent grant from every contributor.
+It does not license the Houston name or logo (Apache-2.0 section 6 grants no
+trademark rights), and it disclaims all warranties.
+
+Contributions are covered by the same license under Apache-2.0 section 5, so there
+is no CLA to sign; see `CONTRIBUTING.md`.
+
+Separately from the license, Houston shows a one-time first-run gate asking the
+user to accept the Terms of Use and the Privacy Policy. The license is linked there
+but is not part of what is accepted, because it grants rights rather than imposing
+conditions on running the app. In the terminal clients, `--accept-terms` records
+that acceptance for scripted launches; headless runs exit with code 2 until it is
+given once.
+
+Houston stores conversations, settings, and project data on the user's machine and
+sends no telemetry anywhere. Prompts, code, and files go only to the model and
+other providers the user configures, under those providers' own terms and
+model-training policies. Third-party components bundled into the app are listed
+with their license texts in `THIRD-PARTY-NOTICES.md`, which also ships inside the
+packaged app.
