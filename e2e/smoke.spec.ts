@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import electronPath from 'electron'
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
-import { acceptLegalGate } from './helpers'
 
 const ROOT = join(__dirname, '..')
 
@@ -32,9 +31,8 @@ test('app boots and renders the UI', async () => {
   const { executablePath, args, mode } = resolveLaunch()
   test.info().annotations.push({ type: 'launch-mode', description: mode })
 
-  // Isolate userData: this test accepts the first-run legal gate, which persists
-  // `legalAcceptedVersion`. Without isolation that write lands in the developer's
-  // REAL profile, so the gate never shows for them again. Use a throwaway dir.
+  // Isolate userData: a boot writes settings and window state. Without isolation
+  // those writes land in the developer's REAL profile. Use a throwaway dir.
   const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
   const app: ElectronApplication = await electron.launch({
     executablePath,
@@ -47,9 +45,6 @@ test('app boots and renders the UI', async () => {
     // The window title is "Houston" — set both in index.html's <title> and on the
     // BrowserWindow (`title: APP_NAME`) in src/main/index.ts.
     await expect(window).toHaveTitle('Houston')
-
-    // First launch shows the legal-acceptance gate before the app shell mounts.
-    await acceptLegalGate(window)
 
     // The app shell only mounts after the renderer has round-tripped to the main
     // process over IPC (settings + conversation list), so reaching `.app` proves
@@ -74,7 +69,6 @@ test('integrated terminal opens and round-trips through a PTY', async () => {
 
   try {
     const window = await app.firstWindow()
-    await acceptLegalGate(window)
     await expect(window.locator('.app')).toBeVisible()
 
     // Open the terminal from the top-right titlebar action. This is also the real
@@ -141,7 +135,6 @@ test('forces slim auto-hiding overlay scrollbars regardless of the OS setting', 
 
   try {
     const window = await app.firstWindow()
-    await acceptLegalGate(window)
     await expect(window.locator('.app')).toBeVisible()
 
     // Main process pins the scroller style to overlay via the app's own
@@ -187,7 +180,6 @@ test('sidebar collapses to a rail and expands again', async () => {
 
   try {
     const window = await app.firstWindow()
-    await acceptLegalGate(window)
     await expect(window.locator('.app')).toBeVisible()
 
     // Expanded by default: the drag handle and the collapse toggle are present.

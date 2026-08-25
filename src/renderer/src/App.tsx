@@ -67,9 +67,7 @@ import { Composer } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
-import { LegalGate } from './components/LegalGate'
 import { isAnyPopoverOpen } from './components/Popover'
-import { LEGAL_VERSION, needsLegalAcceptance } from '@shared/legal'
 import type {
   UpdateCheckResult,
   UpdateDownloaded,
@@ -677,15 +675,6 @@ export default function App(): JSX.Element {
     },
     [refreshConversations]
   )
-
-  // Record acceptance of the current legal terms, dismissing the first-run gate.
-  const onAcceptLegal = useCallback(async () => {
-    const fresh = await window.api.saveSettings({
-      ...(await window.api.getSettings()),
-      legalAcceptedVersion: LEGAL_VERSION
-    })
-    setSettings(fresh)
-  }, [])
 
   // ---- Custom groups (persisted in settings) ----
 
@@ -1503,16 +1492,6 @@ export default function App(): JSX.Element {
 
   if (!settings) {
     return <div className="loading">Loading…</div>
-  }
-
-  // First-run / updated-terms gate: block all use of the app until the user
-  // accepts the current legal terms. Renders alone (nothing else mounts) so the
-  // disclaimers can't be bypassed. A non-zero stored version means they accepted
-  // earlier terms and are being re-prompted after a bump (vs. a fresh first run).
-  if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
-    return (
-      <LegalGate onAccept={onAcceptLegal} isUpdate={(settings.legalAcceptedVersion ?? 0) > 0} />
-    )
   }
 
   // The composer is usable only when the *selected* provider is actually ready —

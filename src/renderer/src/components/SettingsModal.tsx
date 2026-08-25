@@ -10,7 +10,7 @@ import {
   type ShortcutDef
 } from '../lib/shortcuts'
 import { chordFromString, chordFromEvent, chordToString } from '../lib/keybindingOverrides'
-import { LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
+import { LICENSE_URL, PRIVACY_URL } from '@shared/legal'
 import type { UpdateCheckResult } from '@shared/update'
 import type {
   AppSettings,
@@ -2059,15 +2059,11 @@ export function SettingsModal({
               <>
                 <SettingsSection
                   title="Legal"
-                  desc="The terms you accepted when you started using Houston, and the open-source license Houston itself ships under."
+                  desc="How Houston handles your data, and the open-source license Houston itself ships under."
                 >
                   <p className="settings-legal__links">
-                    <a href={TERMS_URL} target="_blank" rel="noreferrer">
-                      Terms of Use
-                    </a>
-                    {' · '}
                     <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
-                      Privacy Policy
+                      Privacy
                     </a>
                     {' · '}
                     <a href={LICENSE_URL} target="_blank" rel="noreferrer">

@@ -8,7 +8,6 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
-import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import { missingKeyHint } from '@shared/provider-keys'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
@@ -75,13 +74,6 @@ export interface HeadlessOptions {
   continueSession: boolean
   /** `--resume <id>`: resume a specific saved session (e.g. one started in the TUI). */
   resumeId?: string
-  /**
-   * Accept the legal terms (Terms of Use, Privacy Policy) for this and
-   * future runs. Required the first time headless mode is used on a profile that
-   * hasn't accepted them (the GUI shows a gate; headless has no UI, so it's a
-   * flag). Once accepted it's persisted, so later runs don't need it.
-   */
-  acceptTerms: boolean
 }
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
@@ -112,7 +104,6 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   let approvalPolicy: ApprovalPolicy = 'plan'
   let onApproval: HeadlessApprovalMode | undefined
   let json = false
-  let acceptTerms = false
   let continueSession = false
   let resumeId: string | undefined
 
@@ -154,8 +145,6 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
       i = next
     } else if (name === '--json') {
       json = true
-    } else if (name === '--accept-terms') {
-      acceptTerms = true
     }
   }
 
@@ -170,7 +159,6 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
     // policy picks: full-auto keeps auto-approving, the gating policies deny.
     onApproval: onApproval ?? (approvalPolicy === 'full-auto' ? 'allow' : 'deny'),
     json,
-    acceptTerms,
     continueSession,
     resumeId
   }
@@ -232,30 +220,8 @@ export function resolveHeadlessModel(
   }
 }
 
-/**
- * The stderr message shown when a headless run is blocked on legal acceptance.
- * `isUpdate` is true when the user accepted an earlier terms version and is being
- * asked to re-accept after a change (vs. a fresh first run). Exported for tests.
- */
-export function legalAcceptanceMessage(isUpdate: boolean): string {
-  const lead = isUpdate
-    ? 'Houston’s Terms of Use and Privacy Policy have been updated and must be re-accepted before using headless mode.\n'
-    : 'You must accept the Houston Terms of Use and Privacy Policy before using headless mode.\n'
-  return (
-    lead +
-    `  Terms:   ${TERMS_URL}\n` +
-    `  Privacy: ${PRIVACY_URL}\n` +
-    'Re-run with --accept-terms to accept (recorded once; later runs won’t ask).\n' +
-    // Linked for reference only: Apache-2.0 grants rights, so there is nothing here
-    // for a user running the app to accept. See @shared/legal.
-    `Houston is open source under the Apache License 2.0: ${LICENSE_URL}\n`
-  )
-}
-
 export interface HeadlessDeps {
   getSettings: () => AppSettings
-  /** Persist acceptance of the current legal terms (sets legalAcceptedVersion). */
-  recordLegalAcceptance: () => void
   startRun: (
     req: AgentRunRequest,
     send: (e: AgentEvent) => void,
@@ -305,20 +271,6 @@ export interface HeadlessDeps {
  */
 export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Promise<number> {
   const settings = deps.getSettings()
-
-  // Legal gate: the GUI shows a blocking acceptance dialog on first run; headless
-  // has no UI, so it requires --accept-terms once. Acceptance is then persisted,
-  // so later runs (and the GUI) don't ask again. Exit code 2 distinguishes
-  // "terms not accepted" from a normal run failure (1). A non-zero stored version
-  // means the terms changed since they last accepted (vs. a fresh first run).
-  if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
-    if (!opts.acceptTerms) {
-      deps.err(legalAcceptanceMessage((settings.legalAcceptedVersion ?? 0) > 0))
-      return 2
-    }
-    deps.recordLegalAcceptance()
-    if (!opts.json) deps.err('· Houston terms accepted (recorded for future runs)\n')
-  }
 
   const resolved = resolveHeadlessModel(settings, opts)
   if ('error' in resolved) {

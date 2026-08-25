@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
-import { LEGAL_VERSION } from '@shared/legal'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import {
   parseTuiArgs,
@@ -122,22 +121,21 @@ describe('parseTuiArgs', () => {
     expect(parseTuiArgs(['--tui'], '/d')).not.toBeNull()
   })
 
-  it('defaults cwd, approval=ask, and no acceptTerms', () => {
+  it('defaults cwd and approval=ask', () => {
     const o = parseTuiArgs(['-i'], '/here')
-    expect(o).toMatchObject({ cwd: '/here', approvalPolicy: 'ask', acceptTerms: false, color: true })
+    expect(o).toMatchObject({ cwd: '/here', approvalPolicy: 'ask', color: true })
   })
 
-  it('parses cwd / provider / model / approval / accept-terms', () => {
+  it('parses cwd / provider / model / approval', () => {
     const o = parseTuiArgs(
-      ['-i', '--cwd', '/proj', '--provider', 'openai', '--model=gpt', '--approval', 'auto-edit', '--accept-terms'],
+      ['-i', '--cwd', '/proj', '--provider', 'openai', '--model=gpt', '--approval', 'auto-edit'],
       '/d'
     )
     expect(o).toMatchObject({
       cwd: '/proj',
       providerId: 'openai',
       model: 'gpt',
-      approvalPolicy: 'auto-edit',
-      acceptTerms: true
+      approvalPolicy: 'auto-edit'
     })
   })
 
@@ -889,7 +887,6 @@ interface Recorder {
   plans: Array<[string, string, PlanDecision]>
   elicitations: Array<[string, string, ElicitationResult]>
   cancels: string[]
-  accepted: () => number
 }
 
 /** Build deps whose startRun emits a scripted event list, recording everything. */
@@ -904,13 +901,9 @@ function deps(
   const plans: Recorder['plans'] = []
   const elicitations: Recorder['elicitations'] = []
   const cancels: string[] = []
-  let accepted = 0
   const d: TuiDeps = {
     getSettings: () =>
-      settings({ selected: { providerId: 'anthropic', model: 'claude' }, legalAcceptedVersion: LEGAL_VERSION, ...over }),
-    recordLegalAcceptance: () => {
-      accepted++
-    },
+      settings({ selected: { providerId: 'anthropic', model: 'claude' }, ...over }),
     startRun: async (req, send, onMessages) => {
       runs.push({
         providerId: req.providerId,
@@ -929,7 +922,7 @@ function deps(
     io: undefined as unknown as TuiIo,
     newId: () => `run-${runs.length + 1}`
   }
-  return { d, rec: { runs, approvals, questions, plans, elicitations, cancels, accepted: () => accepted } }
+  return { d, rec: { runs, approvals, questions, plans, elicitations, cancels } }
 }
 
 /** An in-memory conversation store standing in for conversations.ts. */
@@ -1004,7 +997,6 @@ function fakePersist(
 const opts = {
   cwd: '/proj',
   approvalPolicy: 'ask' as const,
-  acceptTerms: false,
   color: false
 }
 
@@ -1423,30 +1415,6 @@ describe('runTui', () => {
     expect(rec.runs).toHaveLength(0)
     expect(t.text()).not.toContain('Ctrl-C again or Ctrl-D to exit') // no composer-reset semantics
     expect(t.text()).toContain('Bye') // the later Ctrl-D exited cleanly
-  })
-
-  it('blocks and exits 2 when terms are declined interactively', async () => {
-    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
-      legalAcceptedVersion: 0
-    })
-    const t = fakeIo(['n']) // decline the terms prompt
-    d.io = t.io
-    const code = await runTui(opts, d)
-    expect(code).toBe(2)
-    expect(rec.accepted()).toBe(0)
-    expect(rec.runs).toHaveLength(0)
-  })
-
-  it('records acceptance and proceeds when terms are accepted interactively', async () => {
-    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
-      legalAcceptedVersion: 0
-    })
-    const t = fakeIo(['y', 'hello', null]) // accept, then one turn
-    d.io = t.io
-    const code = await runTui(opts, d)
-    expect(code).toBe(0)
-    expect(rec.accepted()).toBe(1)
-    expect(rec.runs).toHaveLength(1)
   })
 
   it('errors when no model can be resolved', async () => {
@@ -2701,7 +2669,6 @@ describe('promptFolderTrust', () => {
     d.getSettings = () =>
       settings({
         selected: { providerId: 'anthropic', model: 'claude' },
-        legalAcceptedVersion: LEGAL_VERSION,
         ...current
       })
     d.io = io.io

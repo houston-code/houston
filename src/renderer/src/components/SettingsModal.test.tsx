@@ -199,10 +199,9 @@ describe('SettingsModal', () => {
     expect(labels.at(-1)).toBe('Legal')
 
     // Its content isn't rendered until selected; then the legal links appear.
-    expect(screen.queryByRole('link', { name: 'Terms of Use' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Privacy' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Legal' }))
-    expect(screen.getByRole('link', { name: 'Terms of Use' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Privacy Policy' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Privacy' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'License (Apache-2.0)' })).toBeInTheDocument()
   })
 

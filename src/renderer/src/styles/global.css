@@ -3874,45 +3874,16 @@ body.is-resizing .preview-dock__resizer::after {
   height: auto;
   max-height: 86vh;
 }
-/* Medium, content-height variant (e.g. the first-run legal gate). */
-.modal--md {
-  width: 560px;
-  height: auto;
-  max-height: 86vh;
-}
-
-/* ---- First-run legal gate ---- */
-.legal-gate__body p {
-  margin: 0 0 12px;
-  line-height: 1.5;
-}
-.legal-gate__points {
-  margin: 0 0 12px;
-  padding-left: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  line-height: 1.45;
-}
-.legal-gate__links {
-  font-size: 13px;
-}
-.legal-gate__consent {
-  color: var(--text-dim);
-  font-size: 13px;
-}
 .settings-legal__links {
   margin: 0;
   font-size: 13px;
 }
 /* Theme the legal links: bare <a> tags otherwise render in the UA blue/visited
    purple, which is illegible on the dark surfaces. */
-.legal-gate__links a,
 .settings-legal__links a {
   color: var(--accent);
   text-decoration: none;
 }
-.legal-gate__links a:hover,
 .settings-legal__links a:hover {
   text-decoration: underline;
 }

@@ -834,12 +834,10 @@ trademark rights), and it disclaims all warranties.
 Contributions are covered by the same license under Apache-2.0 section 5, so there
 is no CLA to sign; see `CONTRIBUTING.md`.
 
-Separately from the license, Houston shows a one-time first-run gate asking the
-user to accept the Terms of Use and the Privacy Policy. The license is linked there
-but is not part of what is accepted, because it grants rights rather than imposing
-conditions on running the app. In the terminal clients, `--accept-terms` records
-that acceptance for scripted launches; headless runs exit with code 2 until it is
-given once.
+There is no Terms of Use, no account, and no acceptance gate: Houston opens
+straight into the app on first launch. The license's warranty disclaimer (section
+7) and limitation of liability (section 8) apply on their own, so there is nothing
+for a user to click through.
 
 Houston stores conversations, settings, and project data on the user's machine and
 sends no telemetry anywhere. Prompts, code, and files go only to the model and

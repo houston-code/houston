@@ -37,7 +37,6 @@ import {
 import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
 import type { CompactResult } from './agent/compact'
 import type { McpServerStatus } from './mcp/manager'
-import { needsLegalAcceptance, LICENSE_URL, PRIVACY_URL, TERMS_URL } from '@shared/legal'
 import type {
   AgentEvent,
   AgentRunRequest,
@@ -90,8 +89,6 @@ export interface TuiOptions {
   model?: string
   /** Starting approval policy; switchable at runtime with `/approval`. Defaults to 'ask'. */
   approvalPolicy: ApprovalPolicy
-  /** Accept the legal terms non-interactively (parity with headless `--accept-terms`). */
-  acceptTerms: boolean
   /** Colorize output. index.ts sets this from TTY + NO_COLOR detection. */
   color: boolean
   /**
@@ -111,7 +108,7 @@ export interface TuiOptions {
  * (`-i` / `--interactive` / `--tui`) is present, so the caller falls through to
  * the headless check and then the GUI. Shares flag plumbing with headless so the
  * two entry points accept the same `--cwd` / `--provider` / `--model` /
- * `--approval` / `--full-auto` / `--accept-terms` options.
+ * `--approval` / `--full-auto` options.
  *
  * `defaultInteractive` lets a caller treat the absence of `-i` as interactive
  * anyway (still honoring the other flags): the standalone CLI passes it when a
@@ -128,7 +125,6 @@ export function parseTuiArgs(
   let providerId: string | undefined
   let model: string | undefined
   let approvalPolicy: ApprovalPolicy = 'ask'
-  let acceptTerms = false
   let continueSession = false
   let resumeId: string | undefined
 
@@ -154,8 +150,6 @@ export function parseTuiArgs(
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'
-    } else if (name === '--accept-terms') {
-      acceptTerms = true
     } else if (name === '--continue') {
       continueSession = true
     } else if (name === '--resume') {
@@ -171,7 +165,6 @@ export function parseTuiArgs(
     providerId,
     model,
     approvalPolicy,
-    acceptTerms,
     color: true,
     ...(continueSession ? { continueSession } : {}),
     ...(resumeId ? { resumeId } : {})
@@ -1898,8 +1891,6 @@ export interface TuiIo {
 
 export interface TuiDeps {
   getSettings: () => AppSettings
-  /** Persist acceptance of the current legal terms (sets legalAcceptedVersion). */
-  recordLegalAcceptance: () => void
   startRun: (
     req: AgentRunRequest,
     send: (e: AgentEvent) => void,
@@ -2301,26 +2292,6 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // initial theme since its painter lives in the terminal adapter.
   let paint = makePainter(opts.color, resolveTheme(settings.tuiTheme ?? '') ?? 'default')
   const newId = deps.newId ?? randomUUID
-
-  // Legal gate — interactive, so we can ask right here instead of forcing a flag
-  // like headless does. --accept-terms still works for scripted launches.
-  if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
-    if (!opts.acceptTerms) {
-      deps.io.out(
-        `\nBefore using Houston you must accept the Terms of Use and Privacy Policy.\n` +
-          `  Terms:   ${TERMS_URL}\n  Privacy: ${PRIVACY_URL}\n` +
-          // Reference only: Apache-2.0 grants rights, so there is nothing to accept.
-          `Houston is open source under the Apache License 2.0: ${LICENSE_URL}\n`
-      )
-      const answer = await deps.io.readLine('Accept? [y/N] ')
-      if (parseApprovalAnswer(answer ?? '').decision !== 'allow') {
-        deps.io.out('Terms not accepted. Exiting.\n')
-        return 2
-      }
-    }
-    deps.recordLegalAcceptance()
-    deps.io.out(paint('· Houston terms accepted (recorded for future runs)\n', 'dim'))
-  }
 
   // Trusted-folders gate: if this project's .houston/settings.json ELEVATES
   // (allow rules / hooks / MCP servers) and the folder is undecided (or its

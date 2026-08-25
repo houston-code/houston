@@ -87,7 +87,6 @@ Options:
   --approval <policy>   plan | ask | auto-edit | full-auto
   --on-approval <mode>  (-p) approval prompts with no human: allow | deny | fail
                         (default: deny, or allow under full-auto)
-  --accept-terms        accept the terms on first use of this profile
   --json                (-p) machine-readable: one JSON event per line
   --continue            reopen the folder's most recent session
   --resume <id>         reopen a specific session
