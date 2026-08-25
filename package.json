@@ -1,9 +1,9 @@
 {
   "name": "houston",
   "version": "0.2.234",
-  "description": "A coding agent desktop app for macOS — bring your own model (Claude, GPT, Gemini, or a local LLM).",
+  "description": "A coding agent desktop app for macOS, Windows, and Linux: bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
-    "name": "Houston developers",
+    "name": "The Houston Authors",
     "email": "dev@houstoncode.ai"
   },
   "main": "./out/main/index.js",

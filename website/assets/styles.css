@@ -299,10 +299,6 @@ section { padding: 80px 0; }
 .legal ul { margin: 14px 0 0; padding-left: 22px; }
 .legal li { margin: 8px 0 0; }
 .legal .back { display: inline-block; margin-bottom: 24px; font-weight: 500; }
-.legal .placeholder {
-  background: color-mix(in srgb, #e2a400 20%, transparent); color: inherit;
-  border-radius: 4px; padding: 0 5px; font-weight: 600; white-space: nowrap;
-}
 
 @media (max-width: 640px) {
   section { padding: 60px 0; }
