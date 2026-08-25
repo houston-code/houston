@@ -1,137 +1,96 @@
 <!--
-  MAINTAINER NOTE — no bracketed placeholders remain in this document.
-  The named data controller is the individual who publishes Houston. On
-  incorporation, switch it to the company name here and in docs/TERMS.md, and keep
-  it consistent with SBOM_AUTHOR in scripts/enrich-sbom.mjs.
-  Keep this in sync with the app's actual data behavior. If you ever add
-  telemetry, crash reporting, or any server-side component, this document MUST be
-  updated before that ships. Have a lawyer review before relying on it.
+  MAINTAINER NOTE — this is a descriptive document, not a contract. It explains
+  what Houston does with data so users can decide what to point it at. Keep it in
+  sync with the app's actual behavior: if you ever add telemetry, crash
+  reporting, or any server-side component, update this file before that ships.
 -->
 
-# Houston Privacy Policy
+# Privacy
 
-**Last updated: August 6, 2026 · Version 1.2**
+**Last updated: August 25, 2026**
 
-This Privacy Policy explains how Houston (the "Software"), published by Piyush
-Kumar Vijay ("we", "us", "our"), handles your information. It is part of the
-[Terms of Use](TERMS.md).
+Houston is a locally-installed coding agent. You bring your own model and
+credentials, so almost every privacy question comes down to one thing: which
+providers you choose to connect. This document explains what Houston stores, what
+it sends, and where.
 
-## Summary
+## The short version
 
-- **Houston runs on your device.** Your conversations, settings, and project data
-  are stored locally on your computer.
-- **We collect no analytics or telemetry from the app.** Houston runs no in-app
-  instrumentation that sends your usage, conversations, code, or personal data to
-  us, and we operate no server that receives your content. The only usage signal we
-  can see is the aggregate download and update-check count our download host keeps
-  for released files (see "Application updates" below); it holds no personal data.
-- **Your data leaves your device only to providers you choose.** When you use a
-  feature that reaches the network (sending a prompt to an AI model, searching
-  the web, connecting an external tool, or checking for app updates), data goes to
-  that destination, under that destination's own privacy policy, not ours.
-- **You control where your data goes.** Because Houston is "bring your own model",
-  you decide which providers and regions handle your data, and you are responsible
-  for meeting your own data-residency and data-protection obligations.
+- **Houston runs on your device.** Conversations, settings, and project data are
+  stored locally on your computer.
+- **There is no telemetry.** Houston runs no in-app instrumentation, and the
+  project operates no server that receives your content. The only usage signal
+  that exists is the aggregate download and update-check count our download host
+  keeps for released files, which holds no personal data.
+- **Your data leaves your device only to providers you configure.** Prompts,
+  code, search queries, and tool calls go to the destinations you set up, under
+  those destinations' own privacy policies.
 
-## 1. Information stored on your device
+## Stored on your device
 
-Houston stores the following locally, in your operating system's application-data
-directory, and does not transmit it to us:
+Houston writes the following to your operating system's application-data
+directory and sends none of it anywhere:
 
 - **Conversations**: your messages, the model's responses, and a record of tool
   activity, saved one file per conversation.
-- **Settings**: your preferences, configured providers and endpoints, model
+- **Settings**: preferences, configured providers and endpoints, model
   selections, permission rules, and similar configuration.
-- **API keys and credentials**: stored using your operating system's secure
+- **API keys and credentials**: stored in your operating system's secure
   credential storage (for example, the OS keychain) where available, so they are
   encrypted at rest rather than kept in plain configuration files.
-- **Window and interface state**: for example, window size and panel layout.
+- **Window and interface state**: window size, panel layout, and the like.
 
-You can delete this data at any time by deleting the relevant conversations or
-settings within the app, or by removing Houston's application-data directory and
-uninstalling the Software.
+You can delete any of it by removing the conversation or setting in the app, or
+by deleting Houston's application-data directory.
 
-## 2. Information sent to third parties you choose
+## Sent to providers you configure
 
-Houston is designed so that data leaves your device only when you use a feature
-that requires it, and only to the destination you have configured. Specifically:
+Data leaves your device only when you use a feature that reaches the network, and
+only to the destination you configured:
 
 - **AI model providers.** When you send a message, the content of your prompt
   (which may include your messages, selected files, code, images, and related
-  context) is sent to the AI model provider you have configured (using the API
-  key or endpoint you supplied) so it can generate a response. This includes
-  local models you run yourself, in which case the data stays on your own machine
-  or network.
-- **Web search and web fetch.** If you use web search or let the agent fetch a
-  URL, the relevant query or request is sent to the search provider or website
-  involved. These actions are gated by Houston's approval flow.
-- **External tools (Model Context Protocol servers).** If you connect an external
-  tool, data needed for that tool's calls is sent to the server you configured.
-- **Application updates.** Packaged builds may contact the update service to check
-  for and download new versions. This involves standard network metadata (such as
-  your IP address and app version) handled by that service; it does not send your
-  conversations or project data. Like any download host, the update service keeps
-  aggregate counts of how many times each released file is fetched, including the
-  small metadata file an update check reads. We may consult those aggregate counts
-  to gauge rough adoption. They are totals held by that service, not by us, contain
-  no personal data, and involve no tracking inside the app.
+  context) goes to the model provider you configured, using the API key or
+  endpoint you supplied. If you run a local model, that data stays on your own
+  machine or network.
+- **Web search and web fetch.** Search queries and fetched URLs go to the search
+  provider or website involved. These actions are gated by Houston's approval
+  flow.
+- **External tools (Model Context Protocol servers).** Data needed for a tool's
+  calls goes to the server you configured.
+- **Application updates.** Packaged builds contact the update service to check for
+  and download new versions. That involves standard network metadata such as your
+  IP address and app version, handled by that service. It does not send your
+  conversations or project data. Like any download host, the service keeps
+  aggregate counts of how often each released file is fetched; those totals are
+  held by that service, contain no personal data, and involve no in-app tracking.
 
-**These third parties operate under their own privacy policies and terms, not
-ours.** Their handling of your data (including whether they log it, how long
-they retain it, and whether they use it to train or improve their models)
-is governed by them, and varies by provider and plan. Review each provider's
-policy before connecting, and choose providers and settings appropriate for the
-sensitivity of your data.
+Each of these third parties handles your data under its own policies, which vary
+by provider and plan: whether they log it, how long they keep it, and whether
+they use it to train or improve their models. Review a provider's policy before
+connecting it, and pick providers and settings that suit the sensitivity of your
+data. Houston is not an intermediary for that traffic. It flows directly from
+your device to the destination you chose, so the provider is the party to ask
+about retention, deletion, or access.
 
-## 3. We are not a processor of your provider data
+## Data residency
 
-We do not receive, store, or process the data you send to the third-party
-providers you configure. We are not an intermediary for that traffic; it flows
-directly from your device to the destination you chose. As a result, for that
-data, the provider, not us, is the relevant party for any data-subject request,
-retention question, or compliance matter.
+Because you choose the providers and their regions, you determine where your data
+is processed and stored. If you have data-residency, cross-border-transfer, or
+sectoral obligations (GDPR, UK GDPR, CCPA/CPRA, HIPAA, or similar), Houston gives
+you the controls to meet them: which provider, which endpoint, which region, and
+local versus hosted models. The choices are yours to make.
 
-## 4. Data residency and your compliance obligations
+## Security
 
-Because you choose your providers and their regions, **you determine where your
-data is processed and stored, and you are solely responsible for meeting any
-data-residency, cross-border-transfer, data-protection, or sectoral requirements
-that apply to you** (for example, the GDPR, UK GDPR, CCPA/CPRA, HIPAA, or
-similar laws). Houston gives you the controls (which provider, which endpoint,
-which region, local vs. hosted models); the choices, and their legal
-consequences, are yours.
+Credentials go into your operating system's secure credential storage where
+available, and everything else stays on your device. No method of storage or
+transmission is completely secure. Keep your operating system, Houston, and your
+credentials up to date, and revoke API keys you believe may be compromised. See
+[docs/sandboxing.md](sandboxing.md) for how Houston confines what the agent can
+reach, and `SECURITY.md` for how to report a vulnerability.
 
-## 5. Children
+## Questions
 
-Houston is not directed to children and is intended for users who meet the
-eligibility requirements in the [Terms of Use](TERMS.md). We do not knowingly
-collect personal information from children.
-
-## 6. Security
-
-Houston stores credentials using your operating system's secure credential
-storage where available and keeps your other data on your device. No method of
-storage or transmission is completely secure, and the security of data you send
-to third-party providers, and of your device itself, is your responsibility. Keep
-your operating system, Houston, and your credentials secure, and revoke API keys
-you believe may be compromised.
-
-## 7. Your rights
-
-Because your Houston data lives on your device and under the third-party providers
-you choose, you exercise most data rights directly: you can view, export, or
-delete conversations and settings within the app or your filesystem, and you
-should direct requests about data held by a provider (access, deletion,
-retention) to that provider. If you have questions about this Policy, contact us
-at privacy@houstoncode.ai.
-
-## 8. Changes to this Policy
-
-We may update this Policy from time to time. When we do, we will revise the "Last
-updated" date and version above and may surface the updated Policy in the
-application. If we ever introduce analytics, telemetry, crash reporting, or any
-server-side component, we will update this Policy before that change ships.
-
-## 9. Contact
-
-Questions or privacy requests: privacy@houstoncode.ai.
+Open an issue on the [repository](https://github.com/piyushvijay/houston), or for
+anything sensitive, email security@houstoncode.ai.

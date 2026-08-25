@@ -104,7 +104,7 @@ jobs:
           # isolated profile and no key must load the engine graph + host wiring and
           # exit non-zero with the friendly "No model configured" message — no
           # display server, no network.
-          out="$(cd "$iso" && HOUSTON_DATA_DIR="$iso/profile" node houston-cli.cjs -p ping --cwd "$iso" --accept-terms 2>&1)" && code=0 || code=$?
+          out="$(cd "$iso" && HOUSTON_DATA_DIR="$iso/profile" node houston-cli.cjs -p ping --cwd "$iso" 2>&1)" && code=0 || code=$?
           echo "$out"
           [ "$code" -ne 0 ] || { echo "::error::CLI -p with no key unexpectedly exited 0"; exit 1; }
           echo "$out" | grep -q "No model configured" || { echo "::error::CLI -p did not surface the expected 'No model configured' error"; exit 1; }

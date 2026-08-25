@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
-import { LEGAL_VERSION } from '@shared/legal'
 import type { McpServerConfig } from '@shared/types'
 import {
   isSupportedImageType,
@@ -460,9 +459,6 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       // Real terminal width (re-read each turn) so status-line truncation and
       // markdown wrapping track the actual terminal, not a hardcoded 80 columns.
       columns: () => process.stdout.columns || 80,
-      recordLegalAcceptance: () => {
-        updateSettings({ legalAcceptedVersion: LEGAL_VERSION })
-      },
       startRun,
       resolveApproval,
       resolveQuestion,
@@ -599,9 +595,6 @@ export async function runHeadlessEntry(headless: HeadlessOptions): Promise<numbe
   try {
     code = await runHeadless(headless, {
       getSettings,
-      recordLegalAcceptance: () => {
-        updateSettings({ legalAcceptedVersion: LEGAL_VERSION })
-      },
       startRun,
       resolveApproval,
       resolveQuestion,

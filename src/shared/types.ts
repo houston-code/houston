@@ -607,12 +607,6 @@ export interface AppSettings {
   previewOpen?: boolean
   /** Width (px) of the docked plan-review panel (Plan mode). */
   planWidth?: number
-  /**
-   * Highest legal-terms version (see LEGAL_VERSION in @shared/legal) the user has
-   * accepted via the first-run gate. Absent/older than LEGAL_VERSION means the
-   * Terms of Use, Privacy Policy, and License must be (re)accepted before use.
-   */
-  legalAcceptedVersion?: number
 }
 
 /** One format-on-save backend and whether its binary is present on this machine. */

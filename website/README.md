@@ -33,7 +33,6 @@ python3 -m http.server 8000 -d website  # → http://localhost:8000
 website/
   index.html          Landing page
   privacy.html        Generated from docs/PRIVACY.md
-  terms.html          Generated from docs/TERMS.md
   404.html            Not-found page (Cloudflare serves this automatically)
   assets/
     styles.css        All styles (theme-aware light/dark)
@@ -45,10 +44,10 @@ website/
   _headers            Cloudflare Pages security + cache headers
   _redirects          /download, /releases, /github short links
   robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
-  sitemap.xml         homepage + legal pages, with lastmod
+  sitemap.xml         homepage + privacy page, with lastmod
   llms.txt            curated product summary for AI assistants (llmstxt.org)
   tools/
-    build-legal.mjs       docs/*.md → privacy.html / terms.html
+    build-legal.mjs       docs/PRIVACY.md → privacy.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
     capture-screens.mjs   real app screenshots against a local model + demo workspace
@@ -93,18 +92,13 @@ That's the whole setup — no secrets, no CI wiring.
 
 ## Maintenance
 
-- **Legal pages** are generated. After editing `docs/PRIVACY.md` or `docs/TERMS.md`,
-  re-run `node website/tools/build-legal.mjs` and commit the updated HTML.
+- **The privacy page** is generated. After editing `docs/PRIVACY.md`, re-run
+  `node website/tools/build-legal.mjs` and commit the updated HTML.
 - **Social card:** after editing `assets/og.svg`, re-run `node website/tools/build-og.mjs`.
 - **App icon:** if `build/icon.png` changes, `cp build/icon.png website/assets/icon.png`.
 
 ## Before it goes public
 
-- [ ] **Fill the remaining legal placeholders.** `docs/TERMS.md` still contains
-      `[Governing-law jurisdiction]` and `[Dispute venue]` (section 17). The
-      contracting party and data controller are already named in both docs.
-      Fill them in the docs, re-run `build-legal.mjs`, and have a lawyer review.
-      The generated pages highlight these in yellow so they can't ship unnoticed.
 - [ ] Confirm `houstoncode.ai` is the intended domain (all canonical URLs, the
       sitemap, and OG tags assume it).
 - [ ] Optional: add real product screenshots to the landing page.

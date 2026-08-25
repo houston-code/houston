@@ -4,10 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AppSettings } from '@shared/types'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
-import { LEGAL_VERSION } from '@shared/legal'
 import { loadProjectConfig } from './agent/projectConfig'
 import {
-  legalAcceptanceMessage,
   parseHeadlessArgs,
   resolveHeadlessModel,
   runHeadless,
@@ -37,15 +35,9 @@ describe('parseHeadlessArgs', () => {
       approvalPolicy: 'plan',
       onApproval: 'deny',
       json: true,
-      acceptTerms: false,
       continueSession: false,
       resumeId: undefined
     })
-  })
-
-  it('parses --accept-terms (defaults to false)', () => {
-    expect(parseHeadlessArgs(['-p', 'x'], '/d')?.acceptTerms).toBe(false)
-    expect(parseHeadlessArgs(['-p', 'x', '--accept-terms'], '/d')?.acceptTerms).toBe(true)
   })
 
   it('parses --continue and --resume <id>', () => {
@@ -89,28 +81,6 @@ describe('parseHeadlessArgs', () => {
     // Falling back to the policy default would make a typo fail OPEN under
     // --full-auto (silently allow); an explicit-but-bogus value must deny.
     expect(parseHeadlessArgs(['-p', 'x', '--full-auto', '--on-approval', 'bogus'], '/d')?.onApproval).toBe('deny')
-  })
-})
-
-describe('legalAcceptanceMessage', () => {
-  it('uses first-run wording and points to --accept-terms + the doc links', () => {
-    const m = legalAcceptanceMessage(false)
-    expect(m).toContain('before using headless mode')
-    expect(m).not.toContain('have been updated')
-    expect(m).toContain('--accept-terms')
-    expect(m).toContain('/docs/TERMS.md')
-    expect(m).toContain('/docs/PRIVACY.md')
-    // The Apache-2.0 license is linked for reference, but is NOT one of the documents
-    // the run is blocked on accepting — only the Terms and Privacy Policy are.
-    expect(m).toContain('/LICENSE')
-    expect(m).toContain('open source under the Apache License 2.0')
-    expect(m).not.toMatch(/accept .*Privacy Policy, and License/)
-  })
-
-  it('uses re-acceptance wording when the terms changed since a prior acceptance', () => {
-    const m = legalAcceptanceMessage(true)
-    expect(m).toContain('have been updated and must be re-accepted')
-    expect(m).toContain('--accept-terms')
   })
 })
 
@@ -226,18 +196,8 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
   const questions: Array<[string, string, string]> = []
   const plans: Array<[string, string, PlanDecision]> = []
   const elicitations: Array<[string, string, ElicitationResult]> = []
-  // Default profile has already accepted the current terms, so existing-behavior
-  // tests aren't about the gate. Gate tests override getSettings.
-  let accepted = 0
   const d: HeadlessDeps = {
-    getSettings: () =>
-      settings({
-        selected: { providerId: 'anthropic', model: 'claude' },
-        legalAcceptedVersion: LEGAL_VERSION
-      }),
-    recordLegalAcceptance: () => {
-      accepted++
-    },
+    getSettings: () => settings({ selected: { providerId: 'anthropic', model: 'claude' } }),
     startRun: async (_req, send) => {
       for (const e of events) send(e)
     },
@@ -250,7 +210,7 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
     newId: () => 'run-1',
     ...extra
   }
-  return { d, out, err, approvals, questions, plans, elicitations, accepted: () => accepted }
+  return { d, out, err, approvals, questions, plans, elicitations }
 }
 
 const baseOpts = {
@@ -259,7 +219,6 @@ const baseOpts = {
   approvalPolicy: 'plan' as const,
   onApproval: 'deny' as const, // the non-full-auto parse default
   json: false,
-  acceptTerms: false,
   continueSession: false
 }
 
@@ -353,7 +312,6 @@ describe('runHeadless', () => {
         getSettings: () =>
           settings({
             selected: { providerId: 'anthropic', model: 'claude' },
-            legalAcceptedVersion: LEGAL_VERSION,
             trustedFolders: [
               { path: realpathSync(ws), decision: 'trusted', hash: cfg.elevatedHash, decidedAt: 1 }
             ]
@@ -442,50 +400,9 @@ describe('runHeadless', () => {
 
   it('returns 1 when no model is configured', async () => {
     const { d } = deps([], {
-      getSettings: () =>
-        settings({ providers: [], selected: null, legalAcceptedVersion: LEGAL_VERSION })
+      getSettings: () => settings({ providers: [], selected: null })
     })
     expect(await runHeadless(baseOpts, d)).toBe(1)
-  })
-
-  it('refuses to run until terms are accepted, pointing to --accept-terms (exit 2)', async () => {
-    let ran = false
-    const { d, err, accepted } = deps([], {
-      // No legalAcceptedVersion → not yet accepted.
-      getSettings: () => settings({ selected: { providerId: 'anthropic', model: 'claude' } }),
-      startRun: async () => {
-        ran = true
-      }
-    })
-    const code = await runHeadless(baseOpts, d)
-    expect(code).toBe(2)
-    expect(ran).toBe(false)
-    expect(accepted()).toBe(0)
-    expect(err.join('')).toContain('--accept-terms')
-  })
-
-  it('accepts with --accept-terms on an unaccepted profile, records it, and runs', async () => {
-    let ran = false
-    const { d, accepted, err } = deps([], {
-      getSettings: () => settings({ selected: { providerId: 'anthropic', model: 'claude' } }),
-      startRun: async (_req, send) => {
-        ran = true
-        send({ runId: 'run-1', type: 'done', stopReason: 'end_turn' })
-      }
-    })
-    const code = await runHeadless({ ...baseOpts, acceptTerms: true }, d)
-    expect(code).toBe(0)
-    expect(ran).toBe(true)
-    expect(accepted()).toBe(1)
-    expect(err.join('')).toContain('terms accepted')
-  })
-
-  it('does not require --accept-terms once terms are already accepted', async () => {
-    // Default deps profile has already accepted the current terms.
-    const { d, accepted } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
-    const code = await runHeadless(baseOpts, d)
-    expect(code).toBe(0)
-    expect(accepted()).toBe(0)
   })
 
   /** A session store fake + a startRun that echoes messages to onMessages. */
@@ -716,7 +633,6 @@ describe('runHeadless', () => {
       getSettings: () =>
         settings({
           selected: { providerId: 'anthropic', model: 'claude' },
-          legalAcceptedVersion: LEGAL_VERSION,
           verifyOnStop: true
         })
     })
@@ -730,7 +646,6 @@ describe('runHeadless', () => {
       getSettings: () =>
         settings({
           selected: { providerId: 'anthropic', model: 'claude' },
-          legalAcceptedVersion: LEGAL_VERSION,
           verifyOnStop: true
         })
     })

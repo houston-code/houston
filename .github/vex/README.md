@@ -20,9 +20,8 @@ so downstream consumers get your risk assessment, not just the dependency list.
 
 SBOMs, VEX documents, and security advisories published with releases are good-faith
 assessments as of their stated timestamp, provided for information only. They are not a
-warranty or guarantee of security and may be revised without notice. The binding version of
-this statement lives in the site Terms of Use (`website/terms.html`, "Disclaimer of
-warranties"); keep the two in sync if either changes.
+warranty or guarantee of security and may be revised without notice. The binding disclaimer
+is sections 7 and 8 of the Apache-2.0 `LICENSE`, which Houston ships under.
 
 ## Adding a statement (the triage)
 

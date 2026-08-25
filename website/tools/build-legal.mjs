@@ -1,15 +1,14 @@
-// Generates website/privacy.html and website/terms.html from the canonical
-// Markdown in docs/. The Markdown stays the single source of truth — re-run
-// this after editing docs/PRIVACY.md or docs/TERMS.md:
+// Generates website/privacy.html from the canonical Markdown in docs/. The
+// Markdown stays the single source of truth — re-run this after editing
+// docs/PRIVACY.md:
 //
 //     node website/tools/build-legal.mjs
 //
 // Dependency-free (matches the repo's no-extra-deps convention). Handles the
-// small Markdown subset those two documents use: h1–h3, bold, links, unordered
-// lists, and paragraphs. Maintainer placeholders like [Dispute venue] are preserved
-// and visually flagged so they can't be shipped by accident. [Licensor] is resolved
-// (the party is named inline in both docs) but stays in the list below as a guard
-// against it being reintroduced.
+// small Markdown subset the document uses: h1–h3, bold, links, unordered lists,
+// and paragraphs. Bracketed maintainer placeholders are preserved and visually
+// flagged so an unfilled one can't be shipped by accident; none remain today, and
+// the list stays as a guard against one being reintroduced.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -22,7 +21,6 @@ const SITE = resolve(__dirname, "..");
 // Relative links inside the docs → their public destinations.
 const LINK_MAP = {
   "PRIVACY.md": "/privacy.html",
-  "TERMS.md": "/terms.html",
   "../LICENSE": "https://github.com/piyushvijay/houston/blob/main/LICENSE",
   "../NOTICE": "https://github.com/piyushvijay/houston/blob/main/NOTICE",
   "sandboxing.md": "https://github.com/piyushvijay/houston/blob/main/docs/sandboxing.md",
@@ -125,7 +123,6 @@ function page({ title, description, contentTitle, html, slug }) {
       <div class="footer-bottom">
         <span>© <span id="year">2026</span> Houston ·
           <a href="/privacy.html">Privacy</a> ·
-          <a href="/terms.html">Terms</a> ·
           <a href="https://github.com/piyushvijay/houston" rel="noopener">GitHub</a>
         </span>
       </div>
@@ -142,19 +139,12 @@ const DOCS = [
     src: resolve(ROOT, "docs", "PRIVACY.md"),
     out: resolve(SITE, "privacy.html"),
     slug: "privacy.html",
-    title: "Houston Privacy Policy",
-    description: "How Houston handles your data: it runs on your device, collects no analytics or telemetry from the app, and your data leaves only to the providers you choose.",
-  },
-  {
-    src: resolve(ROOT, "docs", "TERMS.md"),
-    out: resolve(SITE, "terms.html"),
-    slug: "terms.html",
-    title: "Houston Terms of Use",
-    description: "The terms that govern your use of the Houston desktop coding agent.",
+    title: "Houston Privacy",
+    description: "How Houston handles your data: it runs on your device, collects no analytics or telemetry, and your data leaves only to the providers you choose.",
   },
 ];
 
-// Render every legal page in memory (no writes). Used by the CLI below and by
+// Render every generated page in memory (no writes). Used by the CLI below and by
 // build-legal.test.mjs, which asserts the committed HTML matches this output —
 // so a docs/ edit that isn't regenerated fails CI instead of silently drifting.
 export function buildPages() {
@@ -177,7 +167,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   }
   if (flagged) {
     console.log(
-      `\n⚠  ${flagged} maintainer placeholder(s) present (e.g. [Dispute venue]). ` +
+      `\n⚠  ${flagged} maintainer placeholder(s) present (e.g. [Licensor]). ` +
         `Fill them in the docs/ sources and re-run before the site goes public.`
     );
   }

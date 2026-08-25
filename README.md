@@ -446,11 +446,8 @@ Grab the artifact for your platform:
 
 ## First run
 
-1. On first launch Houston shows a one-time notice and asks you to accept the
-   [Terms of Use](docs/TERMS.md) and [Privacy Policy](docs/PRIVACY.md) before you
-   can use it. (The [Apache-2.0 license](LICENSE) is linked there for reference,
-   but grants rights rather than asking anything of you, so it is not part of what
-   you accept.)
+1. Open Houston. There is no account, no sign-up, and nothing to accept: it is
+   [Apache-2.0](LICENSE) software that runs on your machine.
 2. Open **Settings** (sidebar) and set an API key for at least one provider
    (or point a local endpoint at Ollama/LM Studio — no key needed).
 3. Pick a **project folder** (control bar, above the composer).
@@ -463,9 +460,6 @@ Run a single prompt without opening the window — useful for scripts, pipelines
 and CI. Pass `-p`/`--prompt` to the app binary:
 
 ```bash
-# first headless use on a profile: accept the terms once (recorded for later runs)
-Houston -p "Summarize the architecture" --cwd ~/code/myproj --accept-terms
-
 # read-only by default (plan mode): analysis / Q&A, no edits or commands
 /Applications/Houston.app/Contents/MacOS/Houston -p "Summarize the architecture" --cwd ~/code/myproj
 
@@ -489,8 +483,8 @@ Houston -i   # /resume picks up the same conversation
 Flags: `--cwd <dir>` (project folder, default the current directory),
 `--provider <id>` / `--model <id>` (default your selected model), `--approval
 <plan|ask|auto-edit|full-auto>` (default `plan`), `--on-approval
-<allow|deny|fail>` (below), `--json`, `--accept-terms`, `--continue` (resume the
-most recent session in the folder), `--resume <id>` (resume a specific one).
+<allow|deny|fail>` (below), `--json`, `--continue` (resume the most recent
+session in the folder), `--resume <id>` (resume a specific one).
 Assistant text streams to stdout, tool activity (plus a one-line token/cost
 total, failed tools, and an early-stop notice if the run hits a step/output
 limit) to stderr, and the process exits non-zero on error. It
@@ -511,13 +505,6 @@ auto-approves), `allow` approves it, and `fail` refuses it and exits non-zero so
 a script can tell the run needed more than it was granted. The default is
 `deny`, except under `full-auto` (which already opts into everything) where it
 is `allow`; an unrecognized value is treated as `deny`.
-
-**First-run terms.** The GUI shows a one-time gate to accept the
-[Terms of Use](docs/TERMS.md) and [Privacy Policy](docs/PRIVACY.md)
-before use. Headless mode has no UI, so the first time you run
-it on a profile that hasn't accepted them you must pass `--accept-terms`;
-acceptance is then persisted (shared with the GUI), so later runs don't need it.
-Without it, the run prints the terms links and exits with code `2`.
 
 ## Interactive terminal
 
@@ -580,10 +567,9 @@ lists recent sessions for the current folder and reopens one where you left off;
 `/clear` starts a fresh one.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
-(default `ask`), `--full-auto`, and `--accept-terms`. It reuses your saved settings
-and Keychain-stored API keys, and the first-run terms gate applies the same way —
-interactive mode asks you to accept once (or pass `--accept-terms`). Running in a
-pipe (no TTY) isn't interactive; use headless `-p` there instead.
+(default `ask`), and `--full-auto`. It reuses your saved settings and
+Keychain-stored API keys. Running in a pipe (no TTY) isn't interactive; use
+headless `-p` there instead.
 
 ## Standalone CLI (no desktop app)
 
@@ -596,7 +582,7 @@ Linux servers and small VPSes where the desktop app cannot even start.
 # grab houston-cli.cjs from the latest release (optionally verify it first;
 # see "Verifying downloads", e.g. sha256sum -c houston-cli.cjs.sha256), then:
 node houston-cli.cjs --help          # or: chmod +x houston-cli.cjs && ./houston-cli.cjs
-ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --cwd ~/code/myproj --accept-terms
+ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --cwd ~/code/myproj
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -i
 ```
 
@@ -959,14 +945,11 @@ configure, under those providers' own terms, privacy, and model-training policie
 You are responsible for reviewing the agent's actions, keeping backups, and meeting
 any data-residency or data-protection obligations that apply to you.
 
-- [Terms of Use](docs/TERMS.md): governs the build we distribute; the LICENSE
-  prevails over it wherever the two conflict
-- [Privacy Policy](docs/PRIVACY.md): Houston stores your data locally and collects
-  no telemetry
+Houston ships as a plain Apache-2.0 project: there is no separate Terms of Use
+and nothing to accept. Sections 7 and 8 of the [LICENSE](LICENSE) carry the
+warranty disclaimer and liability limitation, and they apply on their own.
 
-Neither document is required by Apache-2.0; they are published so the "we receive
-nothing" claim is written down rather than inferred.
-
-> These documents are templates and not legal advice. The Terms still carry
-> bracketed placeholders for governing law and dispute venue (section 17); fill
-> those and have a lawyer review both documents before distributing.
+[docs/PRIVACY.md](docs/PRIVACY.md) describes what Houston stores and where data
+goes. It is a description of the software's behavior, not a contract: nothing is
+required by Apache-2.0, but the "we receive nothing" claim is worth writing down
+rather than leaving to be inferred.

@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import http from 'node:http'
 import electronPath from 'electron'
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
-import { acceptLegalGate } from './helpers'
 
 const ROOT = join(__dirname, '..')
 const ART = process.env.PREVIEW_ART_DIR ?? mkdtempSync(join(tmpdir(), 'houston-preview-'))
@@ -85,7 +84,6 @@ test('preview dock renders a live dev server and enforces its limits', async () 
 
   try {
     const window = await app.firstWindow()
-    await acceptLegalGate(window)
     await expect(window.locator('.app')).toBeVisible()
 
     // 1. The Preview button toggles the right-side dock open.
