@@ -145,7 +145,7 @@ linux:
   # The .deb (Debian) target requires a package maintainer. electron-builder derives it
   # from package.json `author` (now name + email), but set it explicitly too so the deb
   # build never fails on a missing maintainer. Uses the project's dev contact address.
-  maintainer: Houston developers <dev@houstoncode.ai>
+  maintainer: The Houston Authors <dev@houstoncode.ai>
   # AppImage = portable + the ONLY Linux target electron-updater can auto-update (reads
   # latest-linux.yml). deb = native Debian/Ubuntu install but does NOT auto-update. The
   # bundled ast-grep has no musl variant, so builds require a glibc runner (ubuntu is fine).

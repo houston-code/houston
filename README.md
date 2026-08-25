@@ -938,18 +938,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how contributions are licensed.
 
 ## Legal
 
-Houston is provided **as is**, without warranty, and you use it at your own risk.
-It can read, edit, delete, and run files and commands on your device, and it sends
-your prompts, code, and files only to the model and other providers **you**
-configure, under those providers' own terms, privacy, and model-training policies.
-You are responsible for reviewing the agent's actions, keeping backups, and meeting
-any data-residency or data-protection obligations that apply to you.
+Houston ships as a plain Apache-2.0 project: no separate Terms of Use, no account,
+nothing to accept. The warranty disclaimer and liability limitation in sections 7
+and 8 of the [LICENSE](LICENSE) apply on their own.
 
-Houston ships as a plain Apache-2.0 project: there is no separate Terms of Use
-and nothing to accept. Sections 7 and 8 of the [LICENSE](LICENSE) carry the
-warranty disclaimer and liability limitation, and they apply on their own.
+So, plainly: Houston is provided **as is**, and you use it at your own risk. It can
+read, edit, delete, and run files and commands on your device, and it sends your
+prompts, code, and files only to the model and other providers **you** configure,
+under those providers' own terms, privacy, and model-training policies. You are
+responsible for reviewing the agent's actions, keeping backups, and meeting any
+data-residency or data-protection obligations that apply to you.
 
 [docs/PRIVACY.md](docs/PRIVACY.md) describes what Houston stores and where data
-goes. It is a description of the software's behavior, not a contract: nothing is
-required by Apache-2.0, but the "we receive nothing" claim is worth writing down
-rather than leaving to be inferred.
+goes. It is a description of the software's behavior, not a contract: Apache-2.0
+requires no such document, but the "we receive nothing" claim is worth writing
+down rather than leaving to be inferred.

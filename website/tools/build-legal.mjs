@@ -6,9 +6,7 @@
 //
 // Dependency-free (matches the repo's no-extra-deps convention). Handles the
 // small Markdown subset the document uses: h1–h3, bold, links, unordered lists,
-// and paragraphs. Bracketed maintainer placeholders are preserved and visually
-// flagged so an unfilled one can't be shipped by accident; none remain today, and
-// the list stays as a guard against one being reintroduced.
+// and paragraphs.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -26,8 +24,6 @@ const LINK_MAP = {
   "sandboxing.md": "https://github.com/piyushvijay/houston/blob/main/docs/sandboxing.md",
 };
 
-const PLACEHOLDERS = ["[Licensor]", "[Governing-law jurisdiction]", "[Dispute venue]"];
-
 const escapeHtml = (s) =>
   s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
 
@@ -42,10 +38,6 @@ function inline(text) {
   });
   // Bold: **text**
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  // Flag maintainer placeholders so they are obvious on the page.
-  for (const ph of PLACEHOLDERS) {
-    out = out.split(ph).join(`<span class="placeholder">${ph}</span>`);
-  }
   return out;
 }
 
@@ -151,24 +143,15 @@ export function buildPages() {
   return DOCS.map((doc) => {
     const md = readFileSync(doc.src, "utf8");
     const { html } = mdToHtml(md);
-    const flagged = PLACEHOLDERS.filter((ph) => md.includes(ph)).length;
-    return { ...doc, output: page({ ...doc, contentTitle: doc.title, html }), flagged };
+    return { ...doc, output: page({ ...doc, contentTitle: doc.title, html }) };
   });
 }
 
 // Only write files when run directly (`node website/tools/build-legal.mjs`).
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   mkdirSync(SITE, { recursive: true });
-  let flagged = 0;
   for (const p of buildPages()) {
     writeFileSync(p.out, p.output);
-    flagged += p.flagged;
     console.log(`✓ ${p.out.replace(ROOT + "/", "")}`);
-  }
-  if (flagged) {
-    console.log(
-      `\n⚠  ${flagged} maintainer placeholder(s) present (e.g. [Licensor]). ` +
-        `Fill them in the docs/ sources and re-run before the site goes public.`
-    );
   }
 }
