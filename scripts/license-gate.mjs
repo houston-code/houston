@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// License gate — fail CI when the dependency tree picks up a license that could
-// block enterprise adoption of a proprietary app (AGPL and friends). Runs on every
+// License gate — fail CI when the dependency tree picks up a license Houston cannot
+// redistribute under Apache-2.0, or that would block enterprise adoption of the app
+// (AGPL and friends). Apache-2.0 is one-way compatible: it can absorb MIT/ISC/BSD, but
+// a copyleft dependency would force its own terms onto the whole distribution. Runs on every
 // PR (ci.yml `test` job) against the installed tree, so an accidental transitive
 // dependency with a hostile license is caught on the PR that introduces it, never
 // on main.

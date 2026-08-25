@@ -2307,8 +2307,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   if (needsLegalAcceptance(settings.legalAcceptedVersion)) {
     if (!opts.acceptTerms) {
       deps.io.out(
-        `\nBefore using Houston you must accept the Terms of Use, Privacy Policy, and License.\n` +
-          `  Terms:   ${TERMS_URL}\n  Privacy: ${PRIVACY_URL}\n  License: ${LICENSE_URL}\n`
+        `\nBefore using Houston you must accept the Terms of Use and Privacy Policy.\n` +
+          `  Terms:   ${TERMS_URL}\n  Privacy: ${PRIVACY_URL}\n` +
+          // Reference only: Apache-2.0 grants rights, so there is nothing to accept.
+          `Houston is open source under the Apache License 2.0: ${LICENSE_URL}\n`
       )
       const answer = await deps.io.readLine('Accept? [y/N] ')
       if (parseApprovalAnswer(answer ?? '').decision !== 'allow') {

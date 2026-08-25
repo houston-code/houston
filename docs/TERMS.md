@@ -1,23 +1,34 @@
 <!--
   MAINTAINER NOTE — replace the bracketed placeholders before distributing:
-    [Licensor]                  → the legal name of the copyright holder / licensor
     [Governing-law jurisdiction] → the country/state whose law governs
     [Dispute venue]             → courts that have jurisdiction over disputes
+  The contracting party is named inline as the individual who publishes Houston. On
+  incorporation, switch it to the company name here and in docs/PRIVACY.md, and keep
+  it consistent with SBOM_AUTHOR in scripts/enrich-sbom.mjs.
+  Note this is NOT the copyright holder line: Houston's Apache-2.0 LICENSE attributes
+  copyright collectively to "The Houston Authors", which is fine for attribution but
+  cannot be a contracting party or a data controller.
   Have a lawyer review this before relying on it. This is a template, not legal advice.
 -->
 
 # Houston Terms of Use
 
-**Last updated: July 14, 2026 · Version 1.1**
+**Last updated: August 6, 2026 · Version 2.0**
 
-These Terms of Use ("Terms") are a binding agreement between you ("you" or
-"your") and [Licensor] ("we", "us", or "our") and govern your access to and use
-of the Houston desktop application and any related documentation and updates
-(together, "Houston" or the "Software"). The [LICENSE](../LICENSE) and the
-[Privacy Policy](PRIVACY.md) are part of these Terms.
+These Terms of Use ("Terms") are a binding agreement between you ("you" or "your")
+and Piyush Kumar Vijay ("we", "us", or "our") and govern your access to and use of
+the Houston desktop application and any related documentation and updates
+(together, "Houston" or the "Software"). The [Privacy Policy](PRIVACY.md) is part
+of these Terms.
 
-**By installing or using Houston, you agree to these Terms. If you do not agree,
-do not install or use Houston.**
+Houston is open-source software licensed under the Apache License, Version 2.0
+(the "[LICENSE](../LICENSE)"). The LICENSE is a separate grant and is **not** part
+of these Terms: it governs your rights to use, copy, modify, and redistribute
+Houston's source code and binaries, and nothing in these Terms limits, conditions,
+or adds to those rights. See section 3.
+
+**By installing or using the Houston application we distribute, you agree to these
+Terms. If you do not agree, do not install or use it.**
 
 ## 1. What Houston is
 
@@ -38,11 +49,24 @@ organization to these Terms.
 
 ## 3. License
 
-Your right to use Houston is granted under, and limited by, the
-[LICENSE](../LICENSE). Subject to these Terms and the LICENSE, you may install and
-use Houston for your personal or internal business purposes. You may not
-redistribute, resell, sublicense, modify, or reverse engineer Houston except as
-the LICENSE or applicable law expressly allows.
+Houston is licensed to you under the Apache License, Version 2.0. The full text is
+in the [LICENSE](../LICENSE) file, and a copy ships inside the packaged
+application. Among other things, that license lets you use Houston for any
+purpose, study and modify its source, and redistribute original or modified
+copies, subject to its conditions (keep the license and copyright notices, pass
+along the [NOTICE](../NOTICE) file, and mark the files you change).
+
+**The LICENSE controls.** If anything in these Terms conflicts with the LICENSE as
+applied to your rights in Houston's source code or binaries, the LICENSE prevails
+and the conflicting provision does not apply to those rights. These Terms exist to
+set expectations about the copy of Houston **we** distribute (how it behaves, what
+you are responsible for, and what we do not warrant), not to claw back anything
+the LICENSE grants.
+
+Two things the LICENSE does not cover, which these Terms address: our trademarks
+and branding (Apache-2.0 section 6 grants no trademark rights, and neither do
+these Terms), and the third-party services and models you connect Houston to,
+which are governed by their own terms (see section 8).
 
 ## 4. Your responsibilities
 
@@ -140,10 +164,19 @@ Houston or any feature at any time.
 
 ## 11. Intellectual property
 
-Houston, and all intellectual-property rights in it, are owned by us and our
-licensors. You retain all rights to your own files, code, prompts, and other
-content; we claim no ownership of it. These Terms grant you no rights in our
-trademarks or branding.
+Copyright in Houston is held by us, our contributors, and our licensors. Making
+Houston available under the Apache License 2.0 does not transfer that ownership;
+it grants you the broad rights described in section 3, and those rights are yours
+to exercise without further permission from us.
+
+You retain all rights to your own files, code, prompts, and other content; we
+claim no ownership of it, and Houston sends none of it to us.
+
+The "Houston" name, logo, and branding are **not** licensed to you. Apache-2.0
+section 6 expressly withholds trademark rights, and these Terms grant none either.
+You may state truthfully that your work is based on or derived from Houston; you
+may not use our name or marks in a way that suggests we publish, endorse, or
+support your distribution.
 
 ## 12. Disclaimer of warranties
 
@@ -185,9 +218,11 @@ Terms or of any law or third-party right.
 
 ## 15. Termination
 
-These Terms apply while you use Houston. Your rights end automatically if you
-breach them. You may stop using Houston at any time by uninstalling it. Sections
-that by their nature should survive termination (including ownership,
+These Terms apply while you use Houston. Your rights **under these Terms** end
+automatically if you breach them. This does not terminate your Apache-2.0 license,
+which ends only on its own terms (see LICENSE section 4 and the patent-litigation
+clause in section 3). You may stop using Houston at any time by uninstalling it.
+Sections that by their nature should survive termination (including ownership,
 disclaimers, limitation of liability, indemnification, and governing law) survive.
 
 ## 16. Changes to these Terms
@@ -207,8 +242,10 @@ a claim elsewhere.
 
 ## 18. Miscellaneous
 
-These Terms, together with the LICENSE and Privacy Policy, are the entire
-agreement between you and us regarding Houston and supersede any prior agreement.
+These Terms, together with the Privacy Policy, are the entire agreement between
+you and us regarding the copy of Houston we distribute, and supersede any prior
+agreement. The LICENSE stands on its own alongside them and, as section 3 says,
+prevails over these Terms wherever the two conflict.
 If any provision is held unenforceable, the remaining provisions stay in effect.
 Our failure to enforce a provision is not a waiver. You may not assign these
 Terms without our consent; we may assign them in connection with a merger,

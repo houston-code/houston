@@ -100,8 +100,9 @@ That's the whole setup — no secrets, no CI wiring.
 
 ## Before it goes public
 
-- [ ] **Fill the legal placeholders.** `docs/PRIVACY.md` and `docs/TERMS.md` still
-      contain `[Licensor]`, `[Governing-law jurisdiction]`, and `[Dispute venue]`.
+- [ ] **Fill the remaining legal placeholders.** `docs/TERMS.md` still contains
+      `[Governing-law jurisdiction]` and `[Dispute venue]` (section 17). The
+      contracting party and data controller are already named in both docs.
       Fill them in the docs, re-run `build-legal.mjs`, and have a lawyer review.
       The generated pages highlight these in yellow so they can't ship unnoticed.
 - [ ] Confirm `houstoncode.ai` is the intended domain (all canonical URLs, the

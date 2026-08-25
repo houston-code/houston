@@ -6,8 +6,10 @@
 //
 // Dependency-free (matches the repo's no-extra-deps convention). Handles the
 // small Markdown subset those two documents use: h1–h3, bold, links, unordered
-// lists, and paragraphs. Maintainer placeholders like [Licensor] are preserved
-// and visually flagged so they can't be shipped by accident.
+// lists, and paragraphs. Maintainer placeholders like [Dispute venue] are preserved
+// and visually flagged so they can't be shipped by accident. [Licensor] is resolved
+// (the party is named inline in both docs) but stays in the list below as a guard
+// against it being reintroduced.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -22,6 +24,7 @@ const LINK_MAP = {
   "PRIVACY.md": "/privacy.html",
   "TERMS.md": "/terms.html",
   "../LICENSE": "https://github.com/piyushvijay/houston/blob/main/LICENSE",
+  "../NOTICE": "https://github.com/piyushvijay/houston/blob/main/NOTICE",
   "sandboxing.md": "https://github.com/piyushvijay/houston/blob/main/docs/sandboxing.md",
 };
 
@@ -174,7 +177,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   }
   if (flagged) {
     console.log(
-      `\n⚠  ${flagged} maintainer placeholder(s) present (e.g. [Licensor]). ` +
+      `\n⚠  ${flagged} maintainer placeholder(s) present (e.g. [Dispute venue]). ` +
         `Fill them in the docs/ sources and re-run before the site goes public.`
     );
   }

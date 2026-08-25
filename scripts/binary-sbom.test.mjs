@@ -285,6 +285,12 @@ describe('assembleCycloneDx', () => {
   it('emits no wall-clock timestamp (deterministic output)', () => {
     expect(doc.metadata.timestamp).toBeUndefined()
   })
+
+  it('declares the root product’s own license (Houston is Apache-2.0)', () => {
+    // There is no manifest for a packaged .app, so this root is hand-built; without an
+    // explicit license it would ship NOASSERTION for the very product the SBOM is about.
+    expect(doc.metadata.component.licenses).toEqual([{ license: { id: 'Apache-2.0' } }])
+  })
 })
 
 describe('assembleSpdx', () => {
@@ -318,6 +324,12 @@ describe('assembleSpdx', () => {
 
   it('formats a person supplier for the Rust CLIs', () => {
     expect(doc.packages.find((p) => p.name === 'ripgrep').supplier).toBe('Person: Andrew Gallant')
+  })
+
+  it('declares the root product’s own license (Houston is Apache-2.0)', () => {
+    const root = doc.packages.find((p) => p.SPDXID === 'SPDXRef-Package-root')
+    expect(root.licenseDeclared).toBe('Apache-2.0')
+    expect(root.licenseConcluded).toBe('Apache-2.0')
   })
 })
 

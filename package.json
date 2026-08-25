@@ -11,7 +11,7 @@
     "houston": "./out/cli/houston-cli.cjs"
   },
   "homepage": "https://github.com/piyushvijay/houston",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "private": true,
   "engines": {
     "node": ">=22"

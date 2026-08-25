@@ -1,6 +1,8 @@
 <!--
-  MAINTAINER NOTE — replace the bracketed placeholders before distributing:
-    [Licensor]      → the legal name of the data controller / publisher
+  MAINTAINER NOTE — no bracketed placeholders remain in this document.
+  The named data controller is the individual who publishes Houston. On
+  incorporation, switch it to the company name here and in docs/TERMS.md, and keep
+  it consistent with SBOM_AUTHOR in scripts/enrich-sbom.mjs.
   Keep this in sync with the app's actual data behavior. If you ever add
   telemetry, crash reporting, or any server-side component, this document MUST be
   updated before that ships. Have a lawyer review before relying on it.
@@ -8,10 +10,10 @@
 
 # Houston Privacy Policy
 
-**Last updated: July 13, 2026 · Version 1.1**
+**Last updated: August 6, 2026 · Version 1.2**
 
-This Privacy Policy explains how Houston (the "Software"), published by [Licensor]
-("we", "us", "our"), handles your information. It is part of the
+This Privacy Policy explains how Houston (the "Software"), published by Piyush
+Kumar Vijay ("we", "us", "our"), handles your information. It is part of the
 [Terms of Use](TERMS.md).
 
 ## Summary

@@ -47,7 +47,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { join, resolve, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SBOM_AUTHOR, spdxSupplier, authorAsSpdxActor } from './enrich-sbom.mjs'
+import { SBOM_AUTHOR, SBOM_ROOT_LICENSE, spdxSupplier, authorAsSpdxActor } from './enrich-sbom.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -412,6 +412,7 @@ export function assembleCycloneDx(components, { rootName, version, platform, aut
     name: rootName,
     version,
     supplier: { name: author.name },
+    licenses: [{ license: { id: SBOM_ROOT_LICENSE } }],
     description: `Houston packaged desktop application (native/binary layer${platform ? `, ${platform}` : ''})`
   }
   if (platform) root.properties = [{ name: 'houston:platform', value: platform }]
@@ -463,8 +464,8 @@ export function assembleSpdx(components, { rootName, version, platform, author =
       downloadLocation: 'NOASSERTION',
       filesAnalyzed: false,
       supplier: authorAsSpdxActor(author),
-      licenseConcluded: 'NOASSERTION',
-      licenseDeclared: 'NOASSERTION',
+      licenseConcluded: SBOM_ROOT_LICENSE,
+      licenseDeclared: SBOM_ROOT_LICENSE,
       copyrightText: 'NOASSERTION',
       comment: platform ? `platform: ${platform}` : undefined
     },

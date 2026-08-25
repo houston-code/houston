@@ -45,16 +45,24 @@ test('packaged app bundles rg and ast-grep as non-empty executables', () => {
   }
 })
 
-test('packaged app bundles THIRD-PARTY-NOTICES.md under Resources', () => {
-  // Shipped via electron-builder `extraResources` so the attribution notices travel
-  // INSIDE the code-signed, notarized bundle (see electron-builder.yml) — required by the
-  // bundled deps' licenses, and delivered under the notarized umbrella rather than as a
-  // loose, separately-scanned file. Same skip logic as the binaries test above.
+/**
+ * License and attribution files shipped via electron-builder `extraResources`, so they
+ * travel INSIDE the code-signed, notarized bundle (see electron-builder.yml). LICENSE and
+ * NOTICE are Houston's own Apache-2.0 obligations (§4(a) and §4(d) require both to
+ * accompany every distribution, binaries included); THIRD-PARTY-NOTICES.md discharges the
+ * same duty for the bundled dependencies.
+ */
+const BUNDLED_LICENSE_FILES = ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.md']
+
+test('packaged app bundles the license and attribution files under Resources', () => {
+  // Same skip logic as the binaries test above.
   test.skip(!resourcesDir && !process.env.CI, 'no packaged app in release/ (unpackaged local run)')
 
   expect(resourcesDir, 'packaged Houston.app not found in release/ — did `npm run dist` run first?').toBeTruthy()
 
-  const p = join(resourcesDir as string, 'THIRD-PARTY-NOTICES.md')
-  expect(existsSync(p), 'THIRD-PARTY-NOTICES.md is missing from the packaged Resources').toBe(true)
-  expect(statSync(p).size, 'THIRD-PARTY-NOTICES.md is present but empty').toBeGreaterThan(0)
+  for (const name of BUNDLED_LICENSE_FILES) {
+    const p = join(resourcesDir as string, name)
+    expect(existsSync(p), `${name} is missing from the packaged Resources`).toBe(true)
+    expect(statSync(p).size, `${name} is present but empty`).toBeGreaterThan(0)
+  }
 })

@@ -30,6 +30,12 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // { name: '<Company>', isOrg: true } (and the SPDX/CDX formatting below follows).
 export const SBOM_AUTHOR = { name: 'Piyush Kumar Vijay', email: 'piyushvijay@houstoncode.ai', isOrg: false }
 
+// License of the ROOT product itself. For the npm-closure SBOM syft reads this off
+// package.json, but binary-sbom.mjs constructs its root component by hand (there is no
+// manifest for a packaged .app), so it needs the value stated here rather than emitting
+// the NOASSERTION that FSCT3 and the NTIA minimum elements both flag.
+export const SBOM_ROOT_LICENSE = 'Apache-2.0'
+
 /** Decode an npm `sha512-<base64>` integrity string to lowercase hex, or null. */
 export function integrityToHex(integrity) {
   const m = /^sha512-(.+)$/.exec(integrity || '')

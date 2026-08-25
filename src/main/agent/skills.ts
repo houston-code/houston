@@ -90,7 +90,7 @@ export const BUILTIN_SKILLS: Skill[] = [
   {
     name: 'houston-guide',
     description:
-      "How Houston itself works: its slash commands, skills, subagents, hooks, plugins, MCP servers, approval modes and permission rules, plan mode, sandboxing, GitHub tools, and settings. Load this to answer any question about Houston's own features.",
+      "How Houston itself works: its slash commands, skills, subagents, hooks, plugins, MCP servers, approval modes and permission rules, plan mode, sandboxing, GitHub tools, settings, and its license. Load this to answer any question about Houston's own features or licensing.",
     path: '(built-in)',
     body: HOUSTON_GUIDE
   }
