@@ -17,11 +17,11 @@ name: SBOM
 # This is the AD-HOC generator (manual dispatch only). The per-release SBOM — the one
 # that ships attached to each published GitHub Release — is produced by the Linux leg
 # of release-publish.yml, NOT here. A `push: branches: [main]` trigger was tried and
-# removed: it fired only sporadically and never produced a durable release asset. A
-# GITHUB_TOKEN auto-merge (routine feature PRs) does not start a workflow run at all, so
-# most commits to main got no SBOM; a release PR merged by hand DID fire it, but only as
-# a transient 90-day Actions artifact. See ci.yml's push-trigger note for the same
-# GITHUB_TOKEN limitation.
+# removed: it never produced a durable release asset. Human merges do start a push run now
+# (the old GITHUB_TOKEN auto-merge did not, so most main commits got no SBOM at all), but that
+# only changes how OFTEN this would fire, not what it yields: a transient 90-day Actions
+# artifact rather than something attached to a Release. Re-adding the trigger would burn
+# minutes on every merge for an artifact that expires.
 on:
   workflow_dispatch:
 

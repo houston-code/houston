@@ -277,11 +277,10 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   deliberately-deferred additions remain — all *in scope* (gh-driven,
   `kind:'network'` behind the approval gate), just not built yet:
   - **`gh_pr_merge`.** Merge a pull request. *Why deferred:* it's the riskiest
-    mutating GitHub op and clashes with a label-gated **auto-merge CI** workflow,
-    where CI — not the agent — merges once checks pass (and a direct
-    `gh pr merge` silently bypasses that gate on repos without enforced branch
-    protection). Doing it safely wants an explicit confirm, a merge-method choice
-    (merge/squash/rebase), and a required-checks guard — more than a thin wrapper.
+    mutating GitHub op, and on a repo without enforced branch protection a direct
+    `gh pr merge` silently lands a PR whose checks never passed. Doing it safely
+    wants an explicit confirm, a merge-method choice (merge/squash/rebase), and a
+    required-checks guard — more than a thin wrapper.
   - **`gh_pr_review` (approve / request-changes / comment).** Submit a *formal*
     PR review verdict. *Why deferred:* an agent recording an `approve` is a
     trust-sensitive action distinct from a plain comment (which `gh_pr_comment`

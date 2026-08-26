@@ -1,22 +1,19 @@
 name: CI
 
 on:
-  # `labeled` is included so adding the `auto-merge` label triggers a run that
-  # sees it: when a PR is opened and labeled near-simultaneously, the `opened`
-  # event payload can miss the label and the label-gated jobs skip. (opened,
-  # synchronize, reopened are the defaults, restated here since `types` replaces them.)
+  # `labeled` is included so adding the `intentional-revert` label re-triggers the
+  # run: `revert-guard` reads that label, and without a fresh run the guard would keep
+  # reporting the pre-label result. (opened, synchronize, reopened are the defaults,
+  # restated here since `types` replaces them.)
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-  # NOTE: this push trigger is inert for the COMMON merge. The auto-merge job below
-  # lands most PRs by pushing their folded commit with GITHUB_TOKEN, and GitHub does
-  # not start a workflow run from a GITHUB_TOKEN push — so main is not re-tested
-  # *after* those merges. That gap is exactly what let an untested PR+PR combination
-  # land and then redden every later PR's merge ref. The real safety net is therefore
-  # the pre-merge validation gate in `auto-merge`, which tests the actual landing
-  # commit *before* merging. The one case that DOES fire this trigger: a PR that edits
-  # .github/workflows/** is pushed with AUTOMERGE_PAT (the default App token can't push
-  # workflow files), and PAT pushes — unlike GITHUB_TOKEN pushes — do start a run. A
-  # rare human push to main gets checked here too.
+  # PRs are merged by a human, so every merge is a real push and this trigger fires —
+  # main is genuinely re-tested after each one. That post-merge run is the backstop for
+  # the case per-PR CI structurally cannot see: two PRs that are each green alone and
+  # broken together. Branch protection makes that rare by requiring a branch to be up to
+  # date before it can merge (so the merge ref CI tested IS the landing tree), but "rare"
+  # is not "impossible" — a flaky-ordering or timing interaction can still slip through,
+  # and this is what catches it.
   push:
     branches: [main]
 
@@ -31,15 +28,11 @@ env:
 
 jobs:
   test:
-    # Dedupe the near-simultaneous opened + labeled runs: a PR created with
-    # `--label auto-merge` fires both events, spawning two full validation runs of
-    # this job. Keyed per-PR with cancel-in-progress, the labeled run cancels the
-    # opened run's still-running job (and any superseded synchronize run) instead
-    # of both billing in parallel. This is per-JOB, NOT workflow-level, ON PURPOSE:
-    # a workflow-level cancel would also tear down a mid-merge `auto-merge` job,
-    # which deliberately opts OUT of cancellation (see its own concurrency block).
-    # Non-PR runs (push:[main]) fall back to run_id — a unique group per run — so
-    # they never cancel one another.
+    # Dedupe superseded runs: a `labeled` or `synchronize` event while an earlier run
+    # is still going cancels that earlier run instead of both billing in parallel.
+    # Keyed per-PR. Non-PR runs (push:[main]) fall back to run_id — a unique group per
+    # run — so they never cancel one another, and a post-merge run on main is never
+    # torn down by activity on some other PR.
     concurrency:
       group: ci-test-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
@@ -168,8 +161,8 @@ jobs:
   # burning macOS (×10) or Windows (×2) minutes. The FULL signed macOS/Windows/Linux
   # matrix is built and published at release time by release-publish.yml, and the heavy
   # matrix also runs in release-prepare.yml before a release is cut — so macOS/Windows
-  # packaging regressions surface there. This job is in auto-merge's `needs`, so a PR that
-  # breaks Linux packaging won't auto-merge. Cross-compilation is impossible (native
+  # packaging regressions surface there. This job is a required status check, so a PR that
+  # breaks Linux packaging can't be merged. Cross-compilation is impossible (native
   # node-pty + per-(os,arch) rg/ast-grep binaries), which is why a single runner can only
   # validate its own platform. Trade-off: the macOS packaged-app e2e moved to release time.
   build:
@@ -182,9 +175,8 @@ jobs:
       cancel-in-progress: true
     timeout-minutes: 25
     needs: test
-    # Runs on EVERY PR, independent of the `auto-merge` label — packaging is a real check, so
-    # it shouldn't depend on whether the PR happens to be set to auto-merge. The label only
-    # drives the `auto-merge` job (which merges); it never changes what CI validates.
+    # Runs on EVERY PR: packaging is a real check. Skipped on push:[main] because the
+    # packaged artifacts for main come from nightly-build.yml instead.
     if: github.event_name == 'pull_request'
     # Pinned to ubuntu-22.04 (NOT ubuntu-latest): the native node-pty addon is compiled here,
     # so the runner's glibc sets the shipped app's minimum glibc. 22.04 = glibc 2.35, our
@@ -205,244 +197,35 @@ jobs:
       # still gates merge. Inspectable build outputs come from nightly-build.yml (uploaded as
       # artifacts) and release-publish.yml (published as a GitHub Release) instead.
       - run: npm run dist:linux
-
-  # Pre-merge validation gate — a poor-man's merge queue.
+  # Silent-clobber guard. A PR branched off an out-of-date main can, when merged,
+  # delete files and revert code that landed while it was open — and CI does not
+  # notice, because the reverted features' tests are removed in the same commit. That
+  # happened once: #551 reverted three merged PRs (~3,200 lines, 8 files) and main
+  # stayed green. See CLAUDE.md > "Avoiding silent-clobber merges".
   #
-  # The `test` job above runs against the PR's merge ref, which GitHub computes as
-  # `main + PR` *at the moment the PR event fired*. When several PRs are open at
-  # once, each is green against a main that has since moved on, and a naive merge
-  # would happily land a PR against the *current* main even though that exact
-  # combination was never tested (there's no branch protection / GitHub merge
-  # queue on this plan to require an up-to-date branch). A broken A+B combination
-  # then lands on main and poisons every later PR's merge ref — green per-PR, red
-  # on merge, whole queue blocked.
+  # `actions/checkout` on a pull_request event checks out `refs/pull/N/merge`, which is
+  # this PR already merged into main — so HEAD here IS the landing tree, and the guard
+  # sees exactly what merging would produce. Branch protection requires the branch to be
+  # up to date before merging, so that tree is the one that actually lands.
   #
-  # This job closes that gap: before merging, it reproduces the *real* landing
-  # commit (current main + this PR) and re-runs the `test` job's suite against it,
-  # merging only if that is green — so a broken combination can never reach main.
-  # A compare-and-swap loop re-validates if main advances mid-run (a concurrent PR
-  # merged), and bails safely if it can't get a stable base — far better than
-  # silently merging an untested tree. (`linux-sandbox` and `build` still validate
-  # the PR's merge ref only: re-running them against the landing tree too would
-  # roughly double the cost of every merge, for jobs merge skew rarely breaks.)
-  auto-merge:
-    # One validation pass ≈ the `test` job (≤15 min), and the compare-and-swap
-    # loop can run up to 3 of them if main keeps advancing, plus the merge and
-    # version bump — bounded, but far above the old merge-only job's 10.
-    timeout-minutes: 45
-    # The merge gate: this job runs — and can merge — only after EVERY job listed in
-    # `needs` has succeeded. If any of them (or any of their matrix legs) fails, GitHub
-    # skips this job and the PR does not merge. IMPORTANT: when you add a CI job that
-    # must block merges, add it to this list too (it is not auto-discovered).
-    needs: [test, linux-sandbox, build]
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto-merge')
+  # A deliberate removal (dead code, a real revert) is acknowledged with the
+  # `intentional-revert` label, which sets ALLOW_REVERT=1 and puts the intent on record.
+  revert-guard:
+    timeout-minutes: 5
+    # Only meaningful on a PR: on push:[main] the merge has already happened.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # A PR opened *and* labeled at once can spawn two CI runs for the same PR (see
-    # the `on:` comment). Serialize auto-merge per-PR so the second job waits for
-    # the first instead of both racing to land the merge. cancel-in-progress is false
-    # on purpose: cancelling could tear down a mid-merge job, and we never want to
-    # lose the run carrying the label. (Per-PR, not global: a global group would
-    # cancel intermediate *pending* runs during a burst and strand those PRs.)
-    concurrency:
-      group: auto-merge-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      pull-requests: write
-    env:
-      # `gh` auth for read/PR operations: prefer the PAT when present, else the default
-      # token (either can read PRs and delete branches). The PAT does the load-bearing work
-      # elsewhere: the Land step pushes a workflow-editing PR's folded commit over an explicit
-      # AUTOMERGE_PAT remote, because the default GITHUB_TOKEN is a GitHub App token that
-      # GitHub blocks from *pushing* commits that touch .github/workflows/**. That PAT push
-      # re-triggers the `push: [main]` run (a GITHUB_TOKEN push would not), so we use it ONLY
-      # for workflow PRs — every other PR still pushes with GITHUB_TOKEN. See the Land step.
-      GH_TOKEN: ${{ secrets.AUTOMERGE_PAT || secrets.GITHUB_TOKEN }}
-      PR: ${{ github.event.pull_request.number }}
-      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: main
+          # The guard scans main's recent commits to decide whether a removal collides
+          # with work that landed while this branch was open, so it needs real history,
+          # not the default depth-1 checkout.
           fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-
-      # Classify the PR by whether it edits .github/workflows/**. This no longer selects the merge
-      # STRATEGY — every PR now lands the same way: a local merge commit with the PATCH bump folded
-      # in (one commit per PR). It selects only the PUSH CREDENTIAL. The default GITHUB_TOKEN is a
-      # GitHub App token that GitHub BLOCKS from *pushing* commits that touch workflow files, so a
-      # PR that edits them must push its folded commit over an explicit AUTOMERGE_PAT remote; every
-      # other PR pushes over origin with the default GITHUB_TOKEN. That split matters for cost: a
-      # GITHUB_TOKEN push does NOT start a workflow run, but a PAT push DOES re-trigger the
-      # push:[main] run — so we PAT-push only the (rare) workflow PRs, never all of them.
-      - name: Classify PR (edits workflow files?)
-        id: classify
-        run: |
-          set -eo pipefail
-          files=$(gh pr diff "$PR" --name-only)
-          if printf '%s\n' "$files" | grep -q '^\.github/workflows/'; then
-            echo "workflow=true" >> "$GITHUB_OUTPUT"
-            echo "PR #$PR edits workflow files -> fold the bump, push with AUTOMERGE_PAT (re-triggers main CI)."
-          else
-            echo "workflow=false" >> "$GITHUB_OUTPUT"
-            echo "PR #$PR does not edit workflow files -> fold the bump, push with GITHUB_TOKEN."
-          fi
-
-      # --- Folded path (ALL PRs): ONE commit per merge ----------------------------------------
-      # Build the merge commit locally, fold the PATCH bump into it, then push — so main gets a
-      # single commit per PR instead of a "Merge pull request" commit trailed by a floating
-      # "chore(release)" commit. The push to main IS the compare-and-swap: it fast-forwards only
-      # if main is still where we validated, so a concurrent merge can't slip an untested tree in.
-      # Both PR types take this path; only the git credential differs (see the Classify step):
-      # normal PRs keep the checkout's default GITHUB_TOKEN, workflow-editing PRs re-point origin
-      # at an AUTOMERGE_PAT remote (their folded commit the default App token is blocked from pushing).
-      - name: Land the PR with a folded version bump
-        run: |
-          set -eo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-          # Pick the git credential for this whole job. A workflow-editing PR can't push its folded
-          # commit with the default token (a GitHub App token, which GitHub blocks from pushing
-          # commits that touch .github/workflows/**), so route every git op — fetch, push, branch
-          # delete — through AUTOMERGE_PAT. Non-workflow PRs keep the checkout's GITHUB_TOKEN auth,
-          # whose push does NOT re-trigger the push:[main] run (a PAT push does — hence PAT only here).
-          use_pat='${{ steps.classify.outputs.workflow }}'
-          if [ "$use_pat" = "true" ]; then
-            if [ -z "${AUTOMERGE_PAT:-}" ]; then
-              echo "::error::PR #$PR edits .github/workflows/** and needs AUTOMERGE_PAT to push (the default token is blocked from pushing workflow files), but the secret is empty/unset. Add a fine-grained PAT (Contents + Pull requests + Workflows: write) as the AUTOMERGE_PAT repo secret."
-              exit 1
-            fi
-            # Point origin at a PAT-authenticated remote AND drop the App-token Authorization that
-            # actions/checkout injects as an http.<host>.extraheader. Removing the header is REQUIRED:
-            # git/curl prefer that extra header over URL credentials, so with it in place the push
-            # would still auth as the blocked App token (a plain PAT-in-URL push is not enough). With
-            # the header gone, origin's PAT credential drives fetch, push, and branch delete. Token
-            # hygiene: no `set -x`, and the URL is never echoed; git anonymizes credentials in its own
-            # progress/error output and Actions masks the secret value, so the raw PAT never prints.
-            git config --local --unset-all 'http.https://github.com/.extraheader' || true
-            git remote set-url origin "https://x-access-token:${AUTOMERGE_PAT}@github.com/${GH_REPO}"
-          fi
-
-          meta=$(gh pr view "$PR" --json headRefName,isCrossRepository,title,headRepositoryOwner)
-          head_ref=$(jq -r .headRefName <<<"$meta")
-          title=$(jq -r .title <<<"$meta")
-          cross=$(jq -r .isCrossRepository <<<"$meta")
-          owner=$(jq -r '.headRepositoryOwner.login // ""' <<<"$meta")
-          [ -n "$owner" ] || owner='${{ github.repository_owner }}'
-          # release-prep PRs already carry their MINOR bump in a `release: vX.Y.Z` commit, so they
-          # must NOT get an extra PATCH folded on top. (They're normally merged by hand — defensive.)
-          is_release=${{ contains(github.event.pull_request.labels.*.name, 'release') && 'true' || 'false' }}
-
-          # Up to 3 attempts, each validating against the current main. --no-ff makes the merge's
-          # second parent the PR head — that reachability is what flips the PR to "Merged" once
-          # this lands (a squash/rebase would not).
-          for attempt in 1 2 3; do
-            state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
-            if [ "$state" = "MERGED" ]; then echo "PR #$PR already merged."; exit 0; fi
-            if [ "$state" != "OPEN" ]; then
-              echo "::error::PR #$PR is $state, not OPEN; refusing to merge."; exit 1
-            fi
-
-            # Fetch the PR head fresh and pin its SHA: if the author pushes mid-run, landing a
-            # stale SHA would ship code they didn't last push AND leave the PR "open" (its new
-            # head wouldn't be reachable from main). We re-check this right before pushing.
-            git fetch --no-tags --force origin "pull/$PR/head:pr-head"
-            head_sha=$(git rev-parse pr-head)
-
-            git fetch --no-tags origin main
-            base=$(git rev-parse FETCH_HEAD)
-            echo "Attempt $attempt: landing PR #$PR (head ${head_sha:0:8}) onto main@${base:0:8}"
-            git checkout --quiet -B ci-land "$base"
-
-            # Merge but DON'T commit yet, so the bump lands in the SAME commit.
-            if ! git merge --no-ff --no-commit pr-head; then
-              git merge --abort || true
-              echo "::error::PR #$PR does not merge cleanly into current main — rebase the branch onto main and resolve conflicts."
-              exit 1
-            fi
-
-            # Revert-guard: refuse a merge that would SILENTLY roll back content already on
-            # main. This is the #551 clobber's choke point — that PR was finalized with
-            # `git reset --soft origin/main` over a stale tree, so its merge recorded three
-            # freshly-landed PRs' files as ~3,200 deleted lines, and CI stayed green because
-            # the reverted features' tests were deleted in the same commit. The guard runs on
-            # the ACTUAL landing tree (the merge we just built), before the bump and the push,
-            # so a stale-tree clobber can never reach main. A deliberate removal sets the
-            # `intentional-revert` label to put the intent on the record. See
-            # CLAUDE.md > "Avoiding silent-clobber merges".
-            merge_tree=$(git write-tree)
-            if ! ALLOW_REVERT='${{ contains(github.event.pull_request.labels.*.name, 'intentional-revert') && '1' || '' }}' \
-                 node scripts/merge-revert-guard.mjs "$base" "$merge_tree"; then
-              git merge --abort || true
-              exit 1
-            fi
-
-            # Exactly the required `test` job's checks, against the tree that will actually land.
-            # Any failure exits non-zero (set -e) without committing or pushing, so main stays green.
-            npm ci
-            npm run license-gate
-            npm run lint
-            npm run typecheck
-            npm test
-
-            subject="Merge pull request #$PR from $owner/$head_ref"
-            if [ "$is_release" = "true" ]; then
-              git commit -m "$subject" -m "$title"
-            else
-              # --no-git-tag-version: edit package.json + package-lock only (no git ops, no
-              # clean-tree requirement); then fold exactly those two files into the merge commit.
-              new=$(npm version patch --no-git-tag-version)
-              git add package.json package-lock.json
-              git commit -m "$subject" -m "$title" -m "chore(release): $new"
-              echo "Folded $new into the merge commit."
-            fi
-
-            # Stale-head guard: if the PR head advanced during validation, discard and retry.
-            cur=$(gh pr view "$PR" --json headRefOid --jq .headRefOid) || cur=""
-            if [ -n "$cur" ] && [ "$cur" != "$head_sha" ]; then
-              echo "PR #$PR head advanced (${head_sha:0:8} -> ${cur:0:8}); re-validating."
-              continue
-            fi
-
-            # Land it. Fast-forwards only if main is still at $base (compare-and-swap); a
-            # non-fast-forward rejection means a concurrent PR merged, so re-validate. origin was
-            # re-pointed at the PAT remote above for a workflow-editing PR (that push re-triggers
-            # push:[main]); for every other PR it carries the default GITHUB_TOKEN (no re-trigger).
-            if git push origin HEAD:main; then
-              echo "Landed PR #$PR on main."
-            else
-              echo "push to main rejected on attempt $attempt (main advanced); re-validating."
-              continue
-            fi
-
-            # GitHub marks the PR "Merged" asynchronously once its head is reachable from main.
-            # Confirm BEFORE deleting the branch, so branch removal can't pre-empt that detection.
-            merged=false
-            for check in 1 2 3 4 5; do
-              state=$(gh pr view "$PR" --json state --jq .state) || state=UNKNOWN
-              if [ "$state" = "MERGED" ]; then merged=true; break; fi
-              echo "Post-land check $check: PR #$PR state=$state (awaiting Merged)."
-              sleep 3
-            done
-            if [ "$merged" = "true" ]; then
-              if [ "$cross" != "true" ]; then
-                git push origin --delete "$head_ref" || echo "::warning::could not delete branch $head_ref (already gone?)."
-              fi
-              echo "PR #$PR is Merged."
-              exit 0
-            fi
-            echo "::warning::PR #$PR code is on main but GitHub hasn't marked it Merged yet; leaving branch $head_ref for inspection. It should flip shortly."
-            exit 0
-          done
-          echo "::error::main kept advancing; could not land PR #$PR against a stable base in 3 attempts. Re-run this job, or update the branch."
-          exit 1
+      - name: Check this merge does not revert work already on main
         env:
-          # Raw PAT, consumed only when this PR edits workflow files: it re-points origin at a
-          # PAT-authenticated remote (see the credential block above). Kept in env, never inlined
-          # into the script or echoed; git anonymizes credentials in its own output and Actions
-          # masks the secret value, so the raw PAT never reaches a log line.
-          AUTOMERGE_PAT: ${{ secrets.AUTOMERGE_PAT }}
+          ALLOW_REVERT: ${{ contains(github.event.pull_request.labels.*.name, 'intentional-revert') && '1' || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=100 origin main
+          node scripts/merge-revert-guard.mjs origin/main HEAD

@@ -157,9 +157,12 @@ Rules to prevent it:
   auto-resolved hunk; prefer a fresh 3-way cherry-pick onto current `main` over replaying a
   hand-resolved commit.
 
-**Automated backstop.** The `auto-merge` CI job runs `scripts/merge-revert-guard.mjs` on the
-real landing tree before pushing: it fails the merge if it would delete a file that still
-exists on `main`, or roll back a large chunk of a file `main` touched recently. A *deliberate*
-removal (dead code, a real revert) is acknowledged with the `intentional-revert` label, which
-sets `ALLOW_REVERT=1`. Keep the guard's logic and unit tests
-(`scripts/merge-revert-guard.test.mjs`) in sync if you change the merge flow.
+**Automated backstop.** The `revert-guard` CI job runs `scripts/merge-revert-guard.mjs` on
+every PR: it fails the check if merging would delete a file that still exists on `main`, or
+roll back a large chunk of a file `main` touched recently. It runs against
+`refs/pull/N/merge` — this PR already merged into `main` — so it sees the tree that merging
+would actually produce, and branch protection requires a branch to be up to date before it can
+merge, so that tree is the one that lands. A *deliberate* removal (dead code, a real revert) is
+acknowledged with the `intentional-revert` label, which sets `ALLOW_REVERT=1`. Keep the guard's
+logic and unit tests (`scripts/merge-revert-guard.test.mjs`) in sync if you change the merge
+flow, and `src/main/ci-workflow.test.ts` pins that the job is wired correctly.

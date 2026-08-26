@@ -10,8 +10,8 @@ Everyone taking part is expected to follow the
 ## Prerequisites
 
 - A supported OS: macOS 12 Monterey+ (Apple Silicon or Intel), Windows 10+ (x64), or
-  Linux x64 (glibc 2.35+ — Ubuntu 22.04+ / Debian 12+ / Fedora 36+). Each platform+arch
-  builds its own artifacts on its own host — native modules and the per-platform binaries
+  Linux x64 (glibc 2.35+: Ubuntu 22.04+ / Debian 12+ / Fedora 36+). Each platform+arch
+  builds its own artifacts on its own host, because native modules and the per-platform binaries
   can't cross-compile.
 - Node.js 22+ (pinned in `.nvmrc` and `engines`; CI uses the same)
 - Xcode Command Line Tools (macOS, for `iconutil`/`sips` if you regenerate the icon)
@@ -28,13 +28,13 @@ npm run dev
 See the [Architecture](README.md#architecture) section of the README. The short
 version:
 
-- `src/shared` — types + IPC channel names shared across processes. Add a new
+- `src/shared`: types + IPC channel names shared across processes. Add a new
   feature's types here first.
-- `src/main` — the Node backend: providers, the agent loop, the sandbox, storage,
+- `src/main`: the Node backend, holding providers, the agent loop, the sandbox, storage,
   and IPC handlers.
-- `src/preload` — the `contextBridge` surface. Every renderer→main capability is
+- `src/preload`: the `contextBridge` surface. Every renderer to main capability is
   one method here, named in `src/shared/constants.ts`.
-- `src/renderer` — the React UI.
+- `src/renderer`: the React UI.
 
 ## Conventions
 
@@ -57,7 +57,7 @@ version:
 npm test
 ```
 
-Add or update tests for non-trivial logic — especially anything touching the
+Add or update tests for non-trivial logic, especially anything touching the
 sandbox boundary, path containment, or provider message translation.
 
 Tests live next to the code as `*.test.ts(x)`. Vitest runs them in three projects
@@ -70,9 +70,9 @@ shared code run under Node, the React renderer runs under jsdom with
 ### Agent-behavior goldens
 
 `src/main/agent/golden.test.ts` runs scripted scenarios through the real agent
-loop and compares the full behavior surface — the system prompt per client
+loop and compares the full behavior surface (the system prompt per client
 config and model family, the tool schemas advertised to the model, every
-provider request, and the emitted event stream — against checked-in golden
+provider request, and the emitted event stream) against checked-in golden
 files in `src/main/agent/goldens/`. Any prompt or loop change that shifts one
 of these surfaces fails the test with a text diff.
 
@@ -201,6 +201,31 @@ npm run build
 ```
 
 Keep commits focused and incremental.
+
+## How a PR gets merged
+
+Every PR is reviewed and merged by a maintainer. Nothing merges automatically, and CI
+holds no credential that can write to `main`.
+
+`main` is protected. Four checks must pass before the merge button unlocks:
+
+| Check | What it covers |
+| --- | --- |
+| `test` | `license-gate`, notices freshness, lint, typecheck, the full vitest suite, and the standalone-CLI smoke |
+| `linux-sandbox` | the real bubblewrap backend, which the `test` job can only skip |
+| `build` | Linux packaging, so a packaging regression cannot land |
+| `revert-guard` | that merging would not delete or roll back work already on `main` |
+
+Branches must also be **up to date with `main`** before merging. This is what makes the
+checks meaningful: CI tests `refs/pull/N/merge`, so keeping the branch current means the
+tree CI tested is the tree that lands. If `main` moves while your PR is open, GitHub will
+ask you to update the branch and CI will re-run. That is working as intended, not a
+hiccup.
+
+If `revert-guard` fails, read it carefully before overriding. It fires when your merge
+would remove something that still exists on `main`, which is usually a stale branch about
+to clobber someone else's merged work. Rebase onto current `main` and re-check. If the
+removal really is intended, say so in the PR and add the `intentional-revert` label.
 
 ## Licensing of contributions
 
