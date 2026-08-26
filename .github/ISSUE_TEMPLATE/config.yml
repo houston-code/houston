@@ -1,0 +1,13 @@
+# Blank issues are disabled so every report arrives with the fields maintainers
+# need. Security reports are deliberately routed OFF the issue tracker, matching
+# SECURITY.md: a public issue for a vulnerability IS the disclosure.
+#
+# This links to SECURITY.md rather than straight to /security/advisories/new on
+# purpose: that page only exists once private vulnerability reporting is enabled
+# on the repo, whereas SECURITY.md always resolves and carries both the advisory
+# link and the email fallback.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/piyushvijay/houston/blob/main/SECURITY.md
+    about: Report vulnerabilities privately, never as a public issue.

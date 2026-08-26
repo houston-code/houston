@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a capability or a change to how something works.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [ROADMAP.md](https://github.com/piyushvijay/houston/blob/main/ROADMAP.md)
+        first, since the idea may already be planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the situation you are in, not the solution you have in mind. What is hard today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: If you have a specific design in mind, describe it. Rough ideas are fine too.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: clients
+    attributes:
+      label: Which clients should this cover?
+      description: >-
+        Houston keeps the GUI, the interactive terminal, and headless at parity. A change to
+        the agent core usually has to land in all three.
+      multiple: true
+      options:
+        - Desktop app (GUI)
+        - Interactive terminal
+        - Headless
+        - Not applicable / not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: Workarounds you are using today, or other approaches you considered and rejected.
+    validations:
+      required: false

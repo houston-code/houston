@@ -3,6 +3,10 @@
 Thanks for your interest! Houston is an Electron + React + TypeScript desktop
 app. This guide covers local setup and the conventions the codebase follows.
 
+Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md). To report a vulnerability, follow
+[SECURITY.md](SECURITY.md) rather than opening an issue.
+
 ## Prerequisites
 
 - A supported OS: macOS 12 Monterey+ (Apple Silicon or Intel), Windows 10+ (x64), or
