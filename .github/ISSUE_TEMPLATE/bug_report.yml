@@ -1,0 +1,86 @@
+name: Bug report
+description: Something in Houston behaves differently than it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file this.
+
+        **Do not paste API keys, tokens, or the contents of your keychain.** Houston
+        handles provider credentials, so logs and transcripts can contain them. Redact
+        before pasting. If the issue is a security vulnerability, stop here and follow
+        [SECURITY.md](https://github.com/piyushvijay/houston/blob/main/SECURITY.md) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: Houston version
+      description: 'Houston → About, or the title bar. In a terminal client: `houston --version`.'
+      placeholder: 0.2.235
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Which client?
+      description: Houston has three clients over one agent core; they can diverge.
+      options:
+        - Desktop app (GUI)
+        - Interactive terminal (`-i` / `--tui`)
+        - Headless (`-p` / `--prompt`)
+        - Standalone CLI (houston-cli.cjs)
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows (x64)
+        - Linux (x64)
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Provider and model
+      description: Which provider and model were selected? Say if it was a local endpoint.
+      placeholder: anthropic / claude-opus-5
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that triggers it. A repo or file that reproduces it helps a lot.
+      placeholder: |
+        1. Open a project folder
+        2. Set the approval policy to ...
+        3. Ask the agent to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: 'Relevant output. Terminal clients print tool activity to stderr; `--json` gives one event per line. Redact secrets first.'
+      render: shell
+    validations:
+      required: false

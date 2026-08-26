@@ -934,7 +934,9 @@ they are listed with their license texts in
 packaged app. A CI [license gate](#build-a-release) keeps a copyleft or
 source-available dependency from silently landing in that closure.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how contributions are licensed.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how contributions are licensed, and
+the [Code of Conduct](CODE_OF_CONDUCT.md) for what is expected of everyone taking
+part.
 
 ## Legal
 

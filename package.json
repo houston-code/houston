@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.2.235",
+  "version": "0.2.236",
   "description": "A coding agent desktop app for macOS, Windows, and Linux: bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "The Houston Authors",
@@ -11,6 +11,13 @@
     "houston": "./out/cli/houston-cli.cjs"
   },
   "homepage": "https://github.com/piyushvijay/houston",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piyushvijay/houston.git"
+  },
+  "bugs": {
+    "url": "https://github.com/piyushvijay/houston/issues"
+  },
   "license": "Apache-2.0",
   "private": true,
   "engines": {
