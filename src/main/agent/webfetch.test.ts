@@ -259,7 +259,7 @@ describe('sanitizeHeaderText', () => {
 
   it('strips control and non-ASCII characters', () => {
     expect(sanitizeHeaderText('OK\r\nX-Evil: 1')).toBe('OKX-Evil: 1')
-    expect(sanitizeHeaderText('OK ')).toBe('OK')
+    expect(sanitizeHeaderText('OK\u0000\u007f')).toBe('OK')
   })
 
   it('caps a server that sends prose instead of a reason phrase', () => {

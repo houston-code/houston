@@ -742,7 +742,10 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
     })
   const out: PermissionRule[] = []
   const seen = new Set<string>()
-  const key = (r: PermissionRule): string => `${r.action} ${r.tool} ${r.match}`
+  // NUL separates the fields because it cannot appear in any of them. Write it as an
+  // escape, never as a raw byte: a literal NUL makes grep and ripgrep treat the whole
+  // file as binary and skip it.
+  const key = (r: PermissionRule): string => `${r.action}\u0000${r.tool}\u0000${r.match}`
   for (const r of rules) {
     let expanded: PermissionRule[] = [r]
     if (r.action === 'allow' && r.tool === 'run_shell') {
