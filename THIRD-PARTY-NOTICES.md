@@ -14396,10 +14396,10 @@ programs and associated documentation files created by the
 Original Author, when distributed with the Software.
 ```
 
-### brace-expansion — 5.0.6
+### brace-expansion — 5.0.9
 
 - License: MIT
-- Homepage: ssh://git@github.com/juliangruber/brace-expansion
+- Homepage: https://github.com/juliangruber/brace-expansion
 
 ```text
 MIT License
@@ -15815,7 +15815,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### js-yaml — 4.3.0
+### js-yaml — 4.3.2
 
 - License: MIT
 - Homepage: nodeca/js-yaml
