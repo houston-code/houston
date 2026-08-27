@@ -24,7 +24,22 @@ const h = vi.hoisted(() => ({
   // Configured per test to return the WebContents id that "owns" a run.
   runOwner: vi.fn<(runId: string) => number | undefined>(),
   // Steerable "is a run live on this conversation" — the checkpoint gate reads it.
-  activeRun: vi.fn<(conversationId: string) => string | null>(() => null)
+  activeRun: vi.fn<(conversationId: string) => string | null>(() => null),
+  // Electron 44's clipboard: both reads resolve, and an image comes back as a Blob
+  // under an image/* MIME type rather than from the removed readImage().
+  clipboard: {
+    readText: vi.fn<() => Promise<string>>(async () => ''),
+    read: vi.fn<() => Promise<unknown[]>>(async () => [])
+  },
+  // Stands in for Chromium's image decoder: any non-empty payload decodes, and toPNG
+  // re-encodes it to PNG bytes whatever the source format was. Empty bytes are what the
+  // real nativeImage reports for something that doesn't decode as an image at all.
+  nativeImage: {
+    createFromBuffer: vi.fn((buf: Buffer) => ({
+      isEmpty: () => buf.length === 0,
+      toPNG: () => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), buf])
+    }))
+  }
 }))
 
 // Mock electron so registerIpc can register (and we can capture) its handlers
@@ -37,7 +52,8 @@ vi.mock('electron', () => ({
   },
   app: { getVersion: () => '0.0.0-test', getPath: () => '/tmp', getName: () => 'Houston', on: () => {} },
   dialog: {},
-  clipboard: {},
+  clipboard: h.clipboard,
+  nativeImage: h.nativeImage,
   shell: {},
   BrowserWindow: { getAllWindows: () => [], fromWebContents: () => null }
 }))
@@ -483,5 +499,96 @@ describe('agentStart / agentRetry approval-policy validation', () => {
     const updated = getConversation(id)
     expect(updated?.providerId).toBe('q')
     expect(updated?.model).toBe('m2')
+  })
+})
+
+/**
+ * Electron 44 replaced the synchronous clipboard with Chromium's asynchronous,
+ * W3C-shaped API: `readText()` resolves, `readImage()` is gone, and an image arrives as
+ * a Blob under whichever `image/*` MIME type the source app offered. The handler has to
+ * flatten all of that into the one shape the composer consumes — `{ text, image }` with
+ * the image always PNG — and a clipboard that rejects (locked by another process) has to
+ * read as an empty clipboard, not as a failed paste.
+ */
+describe('clipboardRead', () => {
+  registerIpc()
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+  const event = {} // the handler ignores the IpcMainInvokeEvent
+  const read = (): Promise<{ text: string; image: { mediaType: string; data: string } | null }> =>
+    handler(IPC.clipboardRead)(event) as Promise<{
+      text: string
+      image: { mediaType: string; data: string } | null
+    }>
+
+  /** A ClipboardItem as clipboard.read() hands it back: a type list + a lazy getType(). */
+  const item = (payloads: Record<string, Buffer | object>) => ({
+    types: Object.keys(payloads),
+    getType: vi.fn(async (t: string) => {
+      const payload = payloads[t]
+      return Buffer.isBuffer(payload) ? new Blob([new Uint8Array(payload)]) : payload
+    })
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    h.clipboard.readText.mockResolvedValue('')
+    h.clipboard.read.mockResolvedValue([])
+  })
+
+  it('returns the clipboard text when there is no image', async () => {
+    h.clipboard.readText.mockResolvedValue('hello')
+    expect(await read()).toEqual({ text: 'hello', image: null })
+  })
+
+  it('re-encodes an image payload to PNG and reads only the image representation', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0])
+    const entry = item({ 'text/html': Buffer.from('<b>hi</b>'), 'image/jpeg': jpeg })
+    h.clipboard.readText.mockResolvedValue('hi')
+    h.clipboard.read.mockResolvedValue([entry])
+
+    const res = await read()
+    expect(res.text).toBe('hi')
+    // Always PNG, whatever the source app put on the clipboard.
+    expect(res.image).toEqual({
+      mediaType: 'image/png',
+      data: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), jpeg]).toString('base64')
+    })
+    // getType() is lazy, so the non-image representation is never materialized.
+    expect(entry.getType).toHaveBeenCalledTimes(1)
+    expect(entry.getType).toHaveBeenCalledWith('image/jpeg')
+  })
+
+  it('drops an image over the per-image cap but still pastes the text', async () => {
+    h.clipboard.readText.mockResolvedValue('caption')
+    h.clipboard.read.mockResolvedValue([item({ 'image/png': Buffer.alloc(6 * 1024 * 1024, 1) })])
+    expect(await read()).toEqual({ text: 'caption', image: null })
+  })
+
+  it('ignores an entry with no image representation', async () => {
+    h.clipboard.read.mockResolvedValue([item({ 'text/html': Buffer.from('<b>hi</b>') })])
+    expect((await read()).image).toBeNull()
+  })
+
+  it('ignores bytes that do not decode as an image', async () => {
+    h.clipboard.read.mockResolvedValue([item({ 'image/png': Buffer.alloc(0) })])
+    expect((await read()).image).toBeNull()
+  })
+
+  it('ignores an image type whose payload is not a Blob', async () => {
+    // getType() resolves to a plain object for the bookmark format; a source app can
+    // offer any type, so the handler must not assume every payload is a Blob.
+    h.clipboard.read.mockResolvedValue([item({ 'image/png': { title: 'x', url: 'y' } })])
+    expect((await read()).image).toBeNull()
+  })
+
+  it('reads as an empty clipboard when the OS clipboard is unavailable', async () => {
+    h.clipboard.readText.mockRejectedValue(new Error('clipboard locked'))
+    h.clipboard.read.mockRejectedValue(new Error('clipboard locked'))
+    // A rejection here would surface in the renderer as a failed paste instead.
+    await expect(read()).resolves.toEqual({ text: '', image: null })
   })
 })

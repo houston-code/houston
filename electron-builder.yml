@@ -72,11 +72,11 @@ mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns
   # Pin the OS floor explicitly (→ LSMinimumSystemVersion in Info.plist) instead of
-  # inheriting Electron's implicit minimum. Electron 42 supports "macOS Monterey and
-  # up", so 12.0 is the real floor; setting it here makes an older Mac show a clean
-  # "requires macOS 12.0 or later" dialog rather than a confusing dyld crash, and keeps
+  # inheriting Electron's implicit minimum. Electron 44 dropped macOS 12 (Chromium did),
+  # so 13.0 is the real floor; setting it here makes an older Mac show a clean
+  # "requires macOS 13.0 or later" dialog rather than a confusing dyld crash, and keeps
   # the floor from silently shifting under us on a future Electron bump.
-  minimumSystemVersion: '12.0'
+  minimumSystemVersion: '13.0'
   # `dmg` is the human download / first install. `zip` is what electron-updater
   # actually pulls on macOS to update an installed app — without it, the published
   # latest-mac.yml has nothing the updater can fetch and auto-update never fires.
