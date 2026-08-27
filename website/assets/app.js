@@ -53,7 +53,7 @@
     var version = (release.tag_name || release.name || "").replace(/^v/i, "");
     if (version) {
       var meta = $("#hero-version");
-      if (meta) meta.innerHTML = "Latest release <strong>v" + escapeHtml(version) + "</strong> · free, bring your own API keys.";
+      if (meta) meta.innerHTML = "Latest release <strong>v" + escapeHtml(version) + "</strong> · free and open, bring your own API keys.";
     }
 
     // Map each pre-rendered link (by asset-name suffix) to its direct download URL.
