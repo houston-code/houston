@@ -4,12 +4,14 @@ name: Alert on failure
 # owner, and close it when that workflow next goes green. Called from nightly-build, eval-live,
 # and provider-canary.
 #
-# WHY THIS EXISTS AT ALL — a scheduled run notifies nobody. GitHub sends Actions failure
-# notifications to the run's *triggering actor*, and for a `schedule` event that actor is the
-# account behind the workflow file on the default branch. Every commit reaches main through the
-# label-gated auto-merge job (`gh pr merge`), so that account is github-actions[bot] on every
-# run — a bot with no inbox. The failure mail is addressed to nobody, and no personal
-# notification setting can redirect it: the problem is the actor, not the inbox.
+# WHY THIS EXISTS AT ALL — a scheduled run notifies nobody reliably. GitHub sends Actions
+# failure notifications to the run's *triggering actor*, and for a `schedule` event that actor
+# is the account behind the workflow file on the default branch. That used to be
+# github-actions[bot] on every run (a bot with no inbox) because commits reached main through a
+# label-gated auto-merge job. Merges are now made by a human, so the actor is usually a real
+# account again — but this workflow stays, and stays the primary signal, for two reasons:
+# the actor still silently changes with whoever last touched the file on main, and Actions
+# failure mail is trivially filtered or muted. Assignment does not have either weakness.
 #
 # This is not theoretical. The nightly's macOS packaged-app e2e went red for four days
 # (2026-07-13 → 07-16) with nobody told, and Jul 4 / 5 / 8 failed silently before that. Since

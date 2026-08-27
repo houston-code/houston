@@ -186,7 +186,7 @@ jobs:
           gh pr create --base main --head "$branch" --label release \
             --title "release: v$VERSION" \
             --body "$(cat <<EOF
-          Automated release-prep PR for **v$VERSION** (do not add the \`auto-merge\` label — this PR waits for you).
+          Automated release-prep PR for **v$VERSION**. Review the artifacts below, then merge it yourself.
 
           ## Before approving
           The notes in \`CHANGELOG.md\` are AI-drafted when \`ANTHROPIC_API_KEY\` is set, otherwise a deterministic placeholder. Either way, review them as a draft:

@@ -250,9 +250,9 @@ jobs:
       # independent; Linux runs LAST in the serialized matrix so the draft release exists
       # before upload). This is THE per-release SBOM path: it attaches the SBOM to the
       # published Release deterministically, regardless of how the release commit landed. The
-      # push-triggered sbom.yml can't be relied on for this — a GITHUB_TOKEN auto-merge never
-      # starts a workflow run (so most main commits get no SBOM), and even a hand-merged
-      # release PR only yields a transient 90-day Actions artifact, not a durable Release asset.
+      # push-triggered sbom.yml can't be relied on for this: it yields a transient 90-day
+      # Actions artifact, not a durable Release asset. (It also has no push trigger today; see
+      # the note at the top of sbom.yml.)
       - name: Install Syft
         if: matrix.os == 'ubuntu-22.04'
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
