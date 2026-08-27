@@ -29,7 +29,7 @@
 
 ## Platforms
 
-- macOS 12 Monterey or newer (Apple Silicon and Intel)
+- macOS 13 Ventura or newer (Apple Silicon and Intel)
 - Windows 10 or newer (x64)
 - Linux x64 (glibc 2.35+, e.g. Ubuntu 22.04+)
 - Standalone terminal CLI on any platform with Node 22+

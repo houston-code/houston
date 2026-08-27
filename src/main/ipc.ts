@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, clipboard, shell } from 'electron'
+import { ipcMain, dialog, BrowserWindow, clipboard, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
@@ -288,6 +288,46 @@ function callerOwnsRun(event: { sender: WebContents }, runId: string): boolean {
   return owner === undefined || owner === event.sender.id
 }
 
+/**
+ * The clipboard's plain text, or '' when there is none. Electron 44 moved the clipboard to
+ * Chromium's asynchronous W3C-shaped API, which can reject while another process holds the
+ * OS clipboard lock — a transient condition the composer should read as "nothing to paste"
+ * rather than surface as a failed paste.
+ */
+async function readClipboardText(): Promise<string> {
+  try {
+    const text = await clipboard.readText()
+    return typeof text === 'string' ? text : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The first image on the clipboard, re-encoded to PNG and dropped if it exceeds the
+ * per-image cap, or null. Electron 44 removed `clipboard.readImage()`, so an image now
+ * arrives as a Blob under whichever `image/*` MIME type the source app offered (PNG from
+ * most, JPEG from some). nativeImage re-encodes it to the single format the model APIs
+ * accept, and reports empty for bytes that don't decode as an image at all.
+ */
+async function readClipboardImage(): Promise<ClipboardContent['image']> {
+  try {
+    for (const item of await clipboard.read()) {
+      for (const type of item.types.filter((t) => t.startsWith('image/'))) {
+        const payload = await item.getType(type)
+        if (!(payload instanceof Blob)) continue
+        const img = nativeImage.createFromBuffer(Buffer.from(await payload.arrayBuffer()))
+        if (img.isEmpty()) continue
+        const data = img.toPNG().toString('base64')
+        if (data && !exceedsImageSizeLimit(data)) return { mediaType: 'image/png', data }
+      }
+    }
+  } catch {
+    // Clipboard unreadable (locked by another process, or a payload that won't decode).
+  }
+  return null
+}
+
 /** Register every IPC handler the renderer can call. */
 export function registerIpc(): void {
   // Bind the agent's spawn_session tool to the real shell capabilities (once).
@@ -417,18 +457,15 @@ export function registerIpc(): void {
     return result.filePaths.slice(0, MAX_ATTACHMENT_FILES).map(readPickedFile)
   })
 
-  // Composer "+" menu: read the clipboard (text + image) on demand. The image is
-  // re-encoded to PNG and dropped if it exceeds the per-image cap.
-  ipcMain.handle(IPC.clipboardRead, (): ClipboardContent => {
-    const text = clipboard.readText()
-    const img = clipboard.readImage()
-    let image: ClipboardContent['image'] = null
-    if (!img.isEmpty()) {
-      const data = img.toPNG().toString('base64')
-      if (data && !exceedsImageSizeLimit(data)) image = { mediaType: 'image/png', data }
-    }
-    return { text: typeof text === 'string' ? text : '', image }
-  })
+  // Composer "+" menu: read the clipboard (text + image) on demand. Both halves are
+  // independent: an unreadable image still pastes the text, and vice versa.
+  ipcMain.handle(
+    IPC.clipboardRead,
+    async (): Promise<ClipboardContent> => ({
+      text: await readClipboardText(),
+      image: await readClipboardImage()
+    })
+  )
 
   // Git repo info for the "new chat in a worktree" picker: main worktree root,
   // current branch, and local branches to pick a base from. Read-only; a non-repo

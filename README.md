@@ -5,7 +5,7 @@ Gemini, any OpenAI-compatible API, or a local model (Ollama / LM Studio), give i
 a project folder, and let it read, edit, search, and run code — every action gated
 by an approval flow and, where the OS supports it, confined to a sandbox.
 
-Built with Electron + React + TypeScript. Runs on macOS 12 Monterey or newer
+Built with Electron + React + TypeScript. Runs on macOS 13 Ventura or newer
 (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+).
 
 Open source under the [Apache License 2.0](LICENSE).
@@ -409,8 +409,8 @@ Grab the artifact for your platform:
 
 | Platform | Minimum OS | Download | Update notifications? |
 |----------|------------|----------|-----------------------|
-| macOS (Apple Silicon) | macOS 12 Monterey | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
-| macOS (Intel) | macOS 12 Monterey | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
+| macOS (Apple Silicon) | macOS 13 Ventura | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
+| macOS (Intel) | macOS 13 Ventura | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
