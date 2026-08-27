@@ -227,6 +227,40 @@ would remove something that still exists on `main`, which is usually a stale bra
 to clobber someone else's merged work. Rebase onto current `main` and re-check. If the
 removal really is intended, say so in the PR and add the `intentional-revert` label.
 
+### Dependency PRs and the notices gate
+
+The `test` job checks that `THIRD-PARTY-NOTICES.md` matches the installed dependency
+closure. Dependabot changes that closure but cannot run the generator, so its PRs used to
+fail this gate every time and wait for someone to regenerate the file by hand.
+
+`.github/workflows/dependabot-notices.yml` now does it: on a Dependabot PR it runs
+`npm run notices` and, if the file changed, commits it back to the PR branch. CI re-runs
+on the new commit and the gate passes.
+
+It is a separate workflow rather than a step in `ci.yml` on purpose. Committing back needs
+a credential that can write to the branch, and `ci.yml` runs the PR's own tests, build, and
+package scripts, so a secret readable there is readable by the PR's own code. The
+auto-commit job runs no project code at all: it installs with `--ignore-scripts`, runs one
+generator that only reads package metadata, and exposes the credential to the push step
+alone. `src/main/dependabot-notices-workflow.test.ts` pins those properties.
+
+**One-time setup.** The workflow needs a fine-grained PAT with `Contents: read and write`
+on this repository, stored as a **Dependabot** secret named `NOTICES_PAT`:
+
+```bash
+gh secret set NOTICES_PAT --app dependabot
+```
+
+It has to be a Dependabot secret, not an Actions secret: Dependabot-triggered runs read
+from Dependabot secrets, and an Actions secret of the same name arrives empty. The
+workflow token itself cannot be used here, because pushes made with `GITHUB_TOKEN` do not
+start new workflow runs, so the four required checks would never run against the commit it
+just created. Until the secret exists, a Dependabot PR with stale notices fails with an
+error saying so rather than passing quietly.
+
+Writing to the branch means Dependabot stops rebasing that PR itself. Comment
+`@dependabot recreate` if you need it rebuilt from scratch.
+
 ## Licensing of contributions
 
 Houston is licensed under the [Apache License 2.0](LICENSE). Unless you say otherwise

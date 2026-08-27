@@ -1,0 +1,136 @@
+name: Dependabot notices
+
+# Regenerates THIRD-PARTY-NOTICES.md on a Dependabot PR and commits it back to the PR
+# branch, so a dependency bump stops failing the notices freshness gate in `test`.
+#
+# Why this exists: the gate in ci.yml runs `npm run notices` and fails if the committed
+# file differs. Dependabot changes the dependency closure but cannot run that generator,
+# so EVERY dependency PR is red by construction and a maintainer has to regenerate the
+# file by hand before the bump can land. That is the whole failure mode this closes.
+#
+# WHY IT IS A SEPARATE WORKFLOW, AND NOT A STEP IN ci.yml
+#
+# ci.yml deliberately holds no push credential — `src/main/ci-workflow.test.ts` asserts
+# it, because ci.yml runs the PR's own tests and build, and any secret readable there is
+# readable by the PR's own code. Committing back needs a credential, so it is isolated
+# here in a job that runs NO project code: `npm ci --ignore-scripts` (nothing from the
+# dependency tree executes) and one generator that only reads package metadata and
+# LICENSE files. The credential is scoped to the single push step, after all of that.
+#
+# WHY IT CANNOT USE GITHUB_TOKEN
+#
+# Pushes made with GITHUB_TOKEN do not create new workflow runs. The commit would move
+# the PR head to a SHA that `test`, `linux-sandbox`, `build`, and `revert-guard` had
+# never run against, and since all four are required, the PR would be MORE stuck than
+# the stale-notices failure this replaces. A PAT push is a real push, so CI re-runs on
+# the new head and the required checks land where branch protection can see them.
+#
+# SETUP (one time): store a fine-grained PAT with Contents: read and write on this
+# repository as a *Dependabot* secret named NOTICES_PAT —
+#
+#   gh secret set NOTICES_PAT --app dependabot --repo <owner>/<repo>
+#
+# It must be a Dependabot secret, not an Actions secret: Dependabot-triggered runs read
+# from Dependabot secrets, and an Actions secret of the same name arrives empty. Without
+# it this workflow fails loudly on a stale file rather than skipping quietly, so a
+# misconfiguration cannot masquerade as "notices were already current".
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# The workflow token stays read-only. The push below authenticates with NOTICES_PAT
+# instead, so nothing here can write using the ambient token.
+permissions:
+  contents: read
+
+# One regeneration per PR. A second push while the first is still installing supersedes
+# it rather than racing to commit the same file twice.
+concurrency:
+  group: dependabot-notices-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  notices:
+    # Dependabot PRs only. A human author can run `npm run notices` locally, and gating
+    # on the actor keeps this credential-holding job off every other PR in the repo.
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The PR branch itself, not the merge ref: the commit has to land on the
+          # branch. Dependabot pushes its branches to this repo, so a ref name resolves.
+          ref: ${{ github.event.pull_request.head.ref }}
+          # No credential left in .git/config. checkout's extraheader would otherwise
+          # shadow the token in the push URL below and the push would use the wrong
+          # identity, which is a silent failure that looks like a permissions error.
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      # --ignore-scripts is load-bearing, not hygiene. This job exists to process a PR
+      # that changes dependency versions, in a run that can reach a repo-write token; a
+      # lifecycle script from a newly bumped package is the one place that token could
+      # leak. The generator reads package.json and LICENSE files out of the installed
+      # tree and shells out to `npm ls --omit=dev` — it needs the tree on disk, never
+      # any of it executed.
+      - name: Install dependencies without running any package scripts
+        run: npm ci --ignore-scripts
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - name: Regenerate THIRD-PARTY-NOTICES.md
+        id: notices
+        run: |
+          set -euo pipefail
+          npm run notices
+          if git diff --quiet -- THIRD-PARTY-NOTICES.md; then
+            echo 'THIRD-PARTY-NOTICES.md is already current; nothing to commit.'
+            echo 'stale=false' >> "$GITHUB_OUTPUT"
+          else
+            git --no-pager diff --stat -- THIRD-PARTY-NOTICES.md
+            echo 'stale=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Commit the regenerated notices back to the PR branch
+        if: steps.notices.outputs.stale == 'true'
+        env:
+          # Scoped to this step alone — the install and generate steps above never see it.
+          NOTICES_PAT: ${{ secrets.NOTICES_PAT }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${NOTICES_PAT}" ]; then
+            echo '::error::THIRD-PARTY-NOTICES.md is out of date and no NOTICES_PAT Dependabot secret is set, so it cannot be committed back. Add one with `gh secret set NOTICES_PAT --app dependabot`, or regenerate the file locally with `npm run notices` and push it to this branch.'
+            exit 1
+          fi
+
+          # Refuse to commit anything but the notices file. `npm ci` and the generator
+          # should touch nothing else; if they did, something changed underfoot and a
+          # blind `git commit -a` would sweep it into a dependency PR unreviewed.
+          unexpected="$(git status --porcelain | grep -v ' THIRD-PARTY-NOTICES.md$' || true)"
+          if [ -n "${unexpected}" ]; then
+            echo "::error::Refusing to commit: the working tree has changes beyond THIRD-PARTY-NOTICES.md:"
+            echo "${unexpected}"
+            exit 1
+          fi
+
+          # Attribute the commit to the automation that made it. Not dependabot[bot]:
+          # impersonating it in the history would misreport who generated this file.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git add -- THIRD-PARTY-NOTICES.md
+          git commit -m 'build(deps): regenerate THIRD-PARTY-NOTICES.md' \
+            -m 'The dependency closure changed, so the committed attribution file went stale and the CI freshness gate failed. Regenerated by .github/workflows/dependabot-notices.yml.'
+
+          # Push over HTTPS with the PAT in the URL. persist-credentials: false above
+          # means no extraheader competes with it.
+          git push "https://x-access-token:${NOTICES_PAT}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/${HEAD_REF}"
+
+          echo "Pushed the regenerated notices to ${HEAD_REF}; CI will re-run on the new head."
