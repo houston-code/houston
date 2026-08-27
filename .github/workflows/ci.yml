@@ -51,14 +51,27 @@ jobs:
   # Only `pull_request` is scoped. A push to main and a merge-queue candidate always run
   # the full suite: those are the trees that ship, and the few minutes are worth it.
   scope:
+    # Dedupe superseded runs like the jobs below, so a rapid second push does not leave a
+    # full-history clone running for a run whose dependents were already cancelled.
+    concurrency:
+      group: ci-scope-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     timeout-minutes: 5
+    # NEVER give this job an `if:`. Its consumers use `needs: scope`, and a job whose
+    # dependency is skipped is skipped too — which for a required check reports a PASS.
+    # Gating this job to pull requests would therefore silently stop running `test` and
+    # `linux-sandbox` on main and on merge-queue candidates, while reporting them green.
     runs-on: ubuntu-latest
     outputs:
       # Empty on non-PR events (the step below is skipped), and every consumer tests
       # `!= 'true'`, so anything other than a definite "inert" runs the full suite.
       inert: ${{ steps.scope.outputs.inert }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Only a pull request is ever scoped, so main and queue candidates skip the clone
+        # rather than paying full history to compute an answer nothing reads. The JOB
+        # still runs on those events (see above) — only this step is conditional.
+        if: github.event_name == 'pull_request'
         with:
           # Needed for a real merge-base. A depth-1 checkout cannot compute `base...HEAD`,
           # and the script treats a failed diff as "run everything" — correct, but it
@@ -85,7 +98,11 @@ jobs:
     timeout-minutes: 15
     needs: scope
     # Skipped only when every changed path is on the allowlist in scripts/ci-scope.mjs.
-    if: needs.scope.outputs.inert != 'true'
+    # `!cancelled()` rather than a bare condition: if `scope` FAILS, this job would
+    # otherwise be skipped for an unsatisfied `needs`, and a skipped required check
+    # reports a PASS — a broken scope job would silently mark an untested PR mergeable.
+    # With this guard a failed scope leaves `inert` empty, which runs the full suite.
+    if: ${{ !cancelled() && needs.scope.outputs.inert != 'true' }}
     # Per-PR unit gate — Linux only (×1). lint + typecheck + the full vitest suite. The
     # conformance suite (src/main/sandbox/conformance.test.ts) runs here against the
     # unconfined backend (no bubblewrap on this runner, so confinement-only assertions
@@ -178,8 +195,8 @@ jobs:
       cancel-in-progress: true
     timeout-minutes: 15
     needs: scope
-    # See `test`. The sandbox backend cannot be reached from a prose or website change.
-    if: needs.scope.outputs.inert != 'true'
+    # See `test`, including why this is `!cancelled()` and not a bare condition.
+    if: ${{ !cancelled() && needs.scope.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

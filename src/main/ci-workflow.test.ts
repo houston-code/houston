@@ -91,8 +91,27 @@ describe('CI scopes work to what a change can affect', () => {
     // check reporting; the job is skipped, and a skipped job reports as a pass.
     expect(workflow).toContain('\n  scope:')
     expect(workflow).not.toMatch(/^ {2}paths(-ignore)?:/m)
-    const scoped = workflow.match(/if: needs\.scope\.outputs\.inert != 'true'/g) ?? []
+    const scoped = workflow.match(/needs\.scope\.outputs\.inert != 'true'/g) ?? []
     expect(scoped).toHaveLength(2) // test + linux-sandbox; build inherits via needs: test
+  })
+
+  it('runs the full suite when the scope job itself fails', () => {
+    // Without `!cancelled()`, a failed `scope` would skip its dependents for an
+    // unsatisfied `needs`, and a skipped required check reports a PASS — so a network
+    // blip in the scope job would silently mark an untested PR mergeable. The guard
+    // makes a failed scope leave `inert` empty, which runs everything.
+    const guards = workflow.match(/!cancelled\(\) && needs\.scope\.outputs\.inert != 'true'/g) ?? []
+    expect(guards).toHaveLength(2)
+  })
+
+  it('never gates the scope job itself on an event', () => {
+    // Same skip-is-a-pass mechanism, one level up: an `if:` on `scope` would skip every
+    // consumer via `needs`, silently disabling `test` and `linux-sandbox` on main and on
+    // merge-queue candidates while reporting them green. The CHECKOUT step inside may be
+    // conditional; the job may not.
+    const scopeJob = workflow.slice(workflow.indexOf('\n  scope:'), workflow.indexOf('\n  test:'))
+    const jobLevelIf = scopeJob.match(/^ {4}if:/m)
+    expect(jobLevelIf).toBeNull()
   })
 
   it('treats anything but a definite "inert" as run-everything', () => {
