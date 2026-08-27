@@ -16,6 +16,16 @@ on:
   # and this is what catches it.
   push:
     branches: [main]
+  # Merge queue. GitHub builds a candidate commit (main + the PRs ahead in the queue +
+  # this one) and runs the required checks against it; without this trigger those checks
+  # would never report on that candidate and the queue would stall on every entry.
+  #
+  # This is what removes the rebase treadmill. Strict required checks mean any merge to
+  # main invalidates the up-to-date status of every other open PR, so landing N PRs costs
+  # N sequential rebase-and-full-CI cycles — and a PR's CI can finish green against a main
+  # that already moved while it ran. The queue keeps the same guarantee (the tree that is
+  # tested is the tree that lands) while doing the sequencing itself.
+  merge_group:
 
 permissions:
   contents: read
@@ -27,6 +37,55 @@ env:
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
 jobs:
+  # Decide whether this PR can possibly affect the app. A change confined to the
+  # marketing site or standalone prose is covered by none of the heavy jobs — eslint
+  # ignores `website/**`, no tsconfig includes it, nothing packages it — yet it was
+  # paying ~7 minutes of wall clock for `test` plus `build`, and paying it again on
+  # every rebase.
+  #
+  # Read scripts/ci-scope.mjs before widening the allowlist. A job skipped by `if:`
+  # reports its required check as a PASS, so a wrong answer here does not turn CI red,
+  # it lets an untested change merge. The rule is an allowlist that must match EVERY
+  # changed path, and anything unrecognised means "run everything".
+  #
+  # Only `pull_request` is scoped. A push to main and a merge-queue candidate always run
+  # the full suite: those are the trees that ship, and the few minutes are worth it.
+  scope:
+    # Dedupe superseded runs like the jobs below, so a rapid second push does not leave a
+    # full-history clone running for a run whose dependents were already cancelled.
+    concurrency:
+      group: ci-scope-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    timeout-minutes: 5
+    # NEVER give this job an `if:`. Its consumers use `needs: scope`, and a job whose
+    # dependency is skipped is skipped too — which for a required check reports a PASS.
+    # Gating this job to pull requests would therefore silently stop running `test` and
+    # `linux-sandbox` on main and on merge-queue candidates, while reporting them green.
+    runs-on: ubuntu-latest
+    outputs:
+      # Empty on non-PR events (the step below is skipped), and every consumer tests
+      # `!= 'true'`, so anything other than a definite "inert" runs the full suite.
+      inert: ${{ steps.scope.outputs.inert }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Only a pull request is ever scoped, so main and queue candidates skip the clone
+        # rather than paying full history to compute an answer nothing reads. The JOB
+        # still runs on those events (see above) — only this step is conditional.
+        if: github.event_name == 'pull_request'
+        with:
+          # Needed for a real merge-base. A depth-1 checkout cannot compute `base...HEAD`,
+          # and the script treats a failed diff as "run everything" — correct, but it
+          # would silently never scope anything.
+          fetch-depth: 0
+      - id: scope
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE"
+          node scripts/ci-scope.mjs "origin/$BASE"
+
   test:
     # Dedupe superseded runs: a `labeled` or `synchronize` event while an earlier run
     # is still going cancels that earlier run instead of both billing in parallel.
@@ -37,6 +96,13 @@ jobs:
       group: ci-test-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     timeout-minutes: 15
+    needs: scope
+    # Skipped only when every changed path is on the allowlist in scripts/ci-scope.mjs.
+    # `!cancelled()` rather than a bare condition: if `scope` FAILS, this job would
+    # otherwise be skipped for an unsatisfied `needs`, and a skipped required check
+    # reports a PASS — a broken scope job would silently mark an untested PR mergeable.
+    # With this guard a failed scope leaves `inert` empty, which runs the full suite.
+    if: ${{ !cancelled() && needs.scope.outputs.inert != 'true' }}
     # Per-PR unit gate — Linux only (×1). lint + typecheck + the full vitest suite. The
     # conformance suite (src/main/sandbox/conformance.test.ts) runs here against the
     # unconfined backend (no bubblewrap on this runner, so confinement-only assertions
@@ -47,7 +113,7 @@ jobs:
     # unit regression surfaces nightly / at release, not on the PR that introduced it.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
@@ -128,9 +194,12 @@ jobs:
       group: ci-linux-sandbox-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     timeout-minutes: 15
+    needs: scope
+    # See `test`, including why this is `!cancelled()` and not a bare condition.
+    if: ${{ !cancelled() && needs.scope.outputs.inert != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
@@ -174,10 +243,13 @@ jobs:
       group: ci-build-${{ github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
     timeout-minutes: 25
+    # `needs: test` also carries the scoping: when `test` is skipped as inert, this job
+    # is skipped with it, so packaging is not rebuilt for a website copy change.
     needs: test
-    # Runs on EVERY PR: packaging is a real check. Skipped on push:[main] because the
-    # packaged artifacts for main come from nightly-build.yml instead.
-    if: github.event_name == 'pull_request'
+    # Runs on every PR AND on every merge-queue candidate: packaging is a real check, and
+    # a candidate that cannot be packaged must not reach main. Skipped on push:[main]
+    # because the packaged artifacts for main come from nightly-build.yml instead.
+    if: github.event_name != 'push'
     # Pinned to ubuntu-22.04 (NOT ubuntu-latest): the native node-pty addon is compiled here,
     # so the runner's glibc sets the shipped app's minimum glibc. 22.04 = glibc 2.35, our
     # documented Linux floor (README). ubuntu-latest tracks the newest image (24.04 → glibc
@@ -185,7 +257,7 @@ jobs:
     # in nightly-build.yml / release-prepare.yml / release-publish.yml so smoke == shipped.
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
@@ -213,10 +285,20 @@ jobs:
   revert-guard:
     timeout-minutes: 5
     # Only meaningful on a PR: on push:[main] the merge has already happened.
+    #
+    # Deliberately NOT run on merge_group either, even though a queue candidate is a
+    # landing tree. The `intentional-revert` override is read from the PR's labels, which
+    # a merge_group event does not carry, so a legitimate revert would hit a guard it has
+    # no way to acknowledge and wedge the queue. Running it on the PR loses nothing:
+    # `refs/pull/N/merge` is recomputed against current main, so the guard already sees
+    # the real before/after regardless of how stale the branch is.
+    #
+    # NOT scoped by `scope` either. It is 8 seconds and it is the one check that is more
+    # valuable, not less, on a branch that has been open long enough to go stale.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The guard scans main's recent commits to decide whether a removal collides
           # with work that landed while this branch was open, so it needs real history,

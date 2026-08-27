@@ -222,10 +222,74 @@ tree CI tested is the tree that lands. If `main` moves while your PR is open, Gi
 ask you to update the branch and CI will re-run. That is working as intended, not a
 hiccup.
 
+### What runs, and when it does not
+
+`test`, `linux-sandbox`, and `build` are skipped when **every** file a PR touches is on the
+allowlist in `scripts/ci-scope.mjs`: the marketing site under `website/` (but not
+`website/tools/`, which has tests), and standalone prose like this file. Nothing in the app
+reads those paths, so a one-line copy change no longer pays roughly seven minutes for a
+full test run and an Electron package. `revert-guard` always runs; it takes eight seconds
+and it matters most on the long-lived branches that look cheapest to skip.
+
+If any changed path is not on the allowlist, everything runs. That direction is
+deliberate: a job skipped by a workflow condition reports its required check as a **pass**,
+so a wrong answer here would not turn CI red, it would let an untested change merge. New
+top-level files are treated as code until someone adds them to the allowlist, and
+`scripts/ci-scope.test.mjs` pins the paths that must never land on it, such as
+`docs/houston-guide.md`, which is compiled into the agent's prompt.
+
+Pushes to `main` and merge-queue candidates are never scoped. Those are the trees that
+ship.
+
+### The rebase treadmill
+
+Because required checks are strict, any merge to `main` invalidates the up-to-date status
+of every other open PR. Landing several PRs therefore costs a rebase and a full CI run
+each, in sequence, and a PR's CI can finish green against a `main` that already moved while
+it ran.
+
+`ci.yml` runs on `merge_group`, so a maintainer can turn on GitHub's merge queue to remove
+that treadmill. The queue keeps the same guarantee that the tested tree is the tree that
+lands, and does the sequencing itself instead of asking each contributor to rebase.
+
 If `revert-guard` fails, read it carefully before overriding. It fires when your merge
 would remove something that still exists on `main`, which is usually a stale branch about
 to clobber someone else's merged work. Rebase onto current `main` and re-check. If the
 removal really is intended, say so in the PR and add the `intentional-revert` label.
+
+### Dependency PRs and the notices gate
+
+The `test` job checks that `THIRD-PARTY-NOTICES.md` matches the installed dependency
+closure. Dependabot changes that closure but cannot run the generator, so its PRs used to
+fail this gate every time and wait for someone to regenerate the file by hand.
+
+`.github/workflows/dependabot-notices.yml` now does it: on a Dependabot PR it runs
+`npm run notices` and, if the file changed, commits it back to the PR branch. CI re-runs
+on the new commit and the gate passes.
+
+It is a separate workflow rather than a step in `ci.yml` on purpose. Committing back needs
+a credential that can write to the branch, and `ci.yml` runs the PR's own tests, build, and
+package scripts, so a secret readable there is readable by the PR's own code. The
+auto-commit job runs no project code at all: it installs with `--ignore-scripts`, runs one
+generator that only reads package metadata, and exposes the credential to the push step
+alone. `src/main/dependabot-notices-workflow.test.ts` pins those properties.
+
+**One-time setup.** The workflow needs a fine-grained PAT with `Contents: read and write`
+on this repository, stored as a **Dependabot** secret named `NOTICES_PAT`:
+
+```bash
+gh secret set NOTICES_PAT --app dependabot
+```
+
+It has to be a Dependabot secret, not an Actions secret: Dependabot-triggered runs read
+from Dependabot secrets, and an Actions secret of the same name arrives empty. The
+workflow token itself cannot be used here, because pushes made with `GITHUB_TOKEN` do not
+start new workflow runs, so the four required checks would never run against the commit it
+just created. Until the secret exists, a Dependabot PR with stale notices fails with an
+error saying so rather than passing quietly.
+
+Writing to the branch means Dependabot stops rebasing that PR itself. Comment
+`@dependabot recreate` if you need it rebuilt from scratch.
 
 ## Licensing of contributions
 
