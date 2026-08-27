@@ -84,6 +84,52 @@ describe('CI holds no push credentials', () => {
   })
 })
 
+describe('CI scopes work to what a change can affect', () => {
+  it('gates the heavy jobs on the scope job, never on a raw path filter', () => {
+    // A workflow-level `paths:` filter would leave a required check permanently
+    // "Expected" and block the PR forever. Gating a job on a computed output keeps the
+    // check reporting; the job is skipped, and a skipped job reports as a pass.
+    expect(workflow).toContain('\n  scope:')
+    expect(workflow).not.toMatch(/^ {2}paths(-ignore)?:/m)
+    const scoped = workflow.match(/if: needs\.scope\.outputs\.inert != 'true'/g) ?? []
+    expect(scoped).toHaveLength(2) // test + linux-sandbox; build inherits via needs: test
+  })
+
+  it('treats anything but a definite "inert" as run-everything', () => {
+    // The output is empty on non-PR events. `!= 'true'` runs the suite for empty, for
+    // 'false', and for anything unexpected; `== 'false'` would skip on an empty value.
+    expect(workflow).not.toContain("needs.scope.outputs.inert == 'false'")
+  })
+
+  it('scopes pull requests only, never main or a queue candidate', () => {
+    // Those are the trees that ship. Scoping them would mean main could land untested.
+    const scopeJob = workflow.slice(workflow.indexOf('\n  scope:'), workflow.indexOf('\n  test:'))
+    expect(scopeJob).toContain("if: github.event_name == 'pull_request'")
+    expect(scopeJob).toContain('fetch-depth: 0')
+  })
+
+  it('never scopes away the revert guard', () => {
+    // It costs 8 seconds and matters most on exactly the stale branches that would
+    // otherwise look cheap to skip.
+    expect(revertGuardJob).not.toContain('needs.scope')
+  })
+})
+
+describe('CI supports the merge queue', () => {
+  it('runs on merge_group, so queue candidates report the required checks', () => {
+    // Without this trigger the checks never report on the candidate commit and the queue
+    // stalls on every entry.
+    expect(workflow).toMatch(/^ {2}merge_group:$/m)
+  })
+
+  it('packages a queue candidate, not just a PR', () => {
+    // `== 'pull_request'` would skip `build` on a candidate, so a packaging break could
+    // reach main through the queue.
+    const buildJob = workflow.slice(workflow.indexOf('\n  build:'), workflow.indexOf('\n  revert-guard:'))
+    expect(buildJob).toContain("if: github.event_name != 'push'")
+  })
+})
+
 describe('CI validates every PR before it can merge', () => {
   it('runs the full suite on pull requests', () => {
     for (const check of ['npm ci', 'npm run lint', 'npm run typecheck', 'npm test']) {

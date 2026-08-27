@@ -222,6 +222,36 @@ tree CI tested is the tree that lands. If `main` moves while your PR is open, Gi
 ask you to update the branch and CI will re-run. That is working as intended, not a
 hiccup.
 
+### What runs, and when it does not
+
+`test`, `linux-sandbox`, and `build` are skipped when **every** file a PR touches is on the
+allowlist in `scripts/ci-scope.mjs`: the marketing site under `website/` (but not
+`website/tools/`, which has tests), and standalone prose like this file. Nothing in the app
+reads those paths, so a one-line copy change no longer pays roughly seven minutes for a
+full test run and an Electron package. `revert-guard` always runs; it takes eight seconds
+and it matters most on the long-lived branches that look cheapest to skip.
+
+If any changed path is not on the allowlist, everything runs. That direction is
+deliberate: a job skipped by a workflow condition reports its required check as a **pass**,
+so a wrong answer here would not turn CI red, it would let an untested change merge. New
+top-level files are treated as code until someone adds them to the allowlist, and
+`scripts/ci-scope.test.mjs` pins the paths that must never land on it, such as
+`docs/houston-guide.md`, which is compiled into the agent's prompt.
+
+Pushes to `main` and merge-queue candidates are never scoped. Those are the trees that
+ship.
+
+### The rebase treadmill
+
+Because required checks are strict, any merge to `main` invalidates the up-to-date status
+of every other open PR. Landing several PRs therefore costs a rebase and a full CI run
+each, in sequence, and a PR's CI can finish green against a `main` that already moved while
+it ran.
+
+`ci.yml` runs on `merge_group`, so a maintainer can turn on GitHub's merge queue to remove
+that treadmill. The queue keeps the same guarantee that the tested tree is the tree that
+lands, and does the sequencing itself instead of asking each contributor to rebase.
+
 If `revert-guard` fails, read it carefully before overriding. It fires when your merge
 would remove something that still exists on `main`, which is usually a stale branch about
 to clobber someone else's merged work. Rebase onto current `main` and re-check. If the
