@@ -45,6 +45,7 @@ export const INERT_FILES = new Set([
   'CODE_OF_CONDUCT.md',
   'SECURITY.md',
   'CHANGELOG.md',
+  'AGENTS.md',
   'CLAUDE.md',
   'docs/PRIVACY.md',
   'docs/sandboxing.md',

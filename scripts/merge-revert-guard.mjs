@@ -124,7 +124,7 @@ function main() {
     '\nThis is the #551 stale-tree clobber signature. If the branch is stale, rebase it onto the\n' +
       'latest main and re-verify (a rebase preserves files it does not touch; a reset-then-commit\n' +
       'of a stale tree does not). If the removal is genuinely intended, add the `intentional-revert`\n' +
-      'label to acknowledge it. See CLAUDE.md > "Avoiding silent-clobber merges".'
+      'label to acknowledge it. See AGENTS.md > "Avoiding silent-clobber merges".'
   )
   process.exit(1)
 }

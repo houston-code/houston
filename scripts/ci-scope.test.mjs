@@ -24,6 +24,7 @@ describe('inert paths', () => {
   it('treats standalone prose as inert', () => {
     expect(isInertPath('README.md')).toBe(true)
     expect(isInertPath('CONTRIBUTING.md')).toBe(true)
+    expect(isInertPath('AGENTS.md')).toBe(true)
     expect(isInertPath('docs/PRIVACY.md')).toBe(true)
     expect(isInertPath('.github/ISSUE_TEMPLATE/bug_report.yml')).toBe(true)
   })

@@ -16,7 +16,7 @@ Only if they apply:
 
 - [ ] **Client parity.** Houston has three clients over one agent core (GUI, interactive
       terminal, headless). A new `AgentEvent` variant or a new blocking tool must be handled
-      by all three in this same PR, or a client hangs. See CLAUDE.md.
+      by all three in this same PR, or a client hangs. See AGENTS.md.
 - [ ] **Goldens.** If this touches `prompt.ts`, tool schemas in `tools.ts`, or `loop.ts`
       request/event wiring, `golden.test.ts` will fail. That failure is the feature: read the
       diff, confirm the behavior change is intended, then regenerate with

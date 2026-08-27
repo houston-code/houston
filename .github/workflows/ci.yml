@@ -273,7 +273,7 @@ jobs:
   # delete files and revert code that landed while it was open — and CI does not
   # notice, because the reverted features' tests are removed in the same commit. That
   # happened once: #551 reverted three merged PRs (~3,200 lines, 8 files) and main
-  # stayed green. See CLAUDE.md > "Avoiding silent-clobber merges".
+  # stayed green. See AGENTS.md > "Avoiding silent-clobber merges".
   #
   # `actions/checkout` on a pull_request event checks out `refs/pull/N/merge`, which is
   # this PR already merged into main — so HEAD here IS the landing tree, and the guard

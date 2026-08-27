@@ -92,7 +92,7 @@ describe('Dependabot notices workflow fails loudly when misconfigured', () => {
   it('errors on a stale file it cannot commit rather than skipping quietly', () => {
     // A silent skip on a missing secret would look exactly like "notices were already
     // current" — a dead gate reporting green, which is the failure mode this repo has
-    // been bitten by before (see the all-zero eval baseline in CLAUDE.md).
+    // been bitten by before (see the all-zero eval baseline in AGENTS.md).
     expect(commitStep.run).toMatch(/if \[ -z "\$\{NOTICES_PAT\}" \]/)
     expect(commitStep.run).toContain('::error::')
     expect(commitStep.run).toMatch(/exit 1/)
