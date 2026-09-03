@@ -59,6 +59,9 @@ asarUnpack:
 #   1. Compliance: Houston itself is Apache-2.0, whose §4(a) requires a copy of the License and
 #      §4(d) the NOTICE contents to travel with every distribution — including the binary. The
 #      bundled MIT/Apache deps (in the asar) impose the same duty for THIRD-PARTY-NOTICES.md.
+#      NOTICE reserves the name and carves the logo artwork out of the Apache grant, and points
+#      at TRADEMARK.md for what that permits, so TRADEMARK.md travels with it or the pointer
+#      dangles for anyone reading the shipped NOTICE.
 #   2. Trust: as bundle content they are covered by the app's code signature and macOS
 #      notarization, so they are delivered under the notarized umbrella instead of as bare,
 #      quarantined files a scanner can flag on their own. Same files the release also attaches
@@ -66,6 +69,7 @@ asarUnpack:
 extraResources:
   - LICENSE
   - NOTICE
+  - TRADEMARK.md
   - THIRD-PARTY-NOTICES.md
 
 mac:
