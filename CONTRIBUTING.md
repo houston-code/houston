@@ -310,6 +310,11 @@ per-file copyright header to add: the repository-level [LICENSE](LICENSE) and
 [NOTICE](NOTICE) cover the whole tree. If you are contributing on behalf of an
 employer, make sure they are on board first.
 
+The one exception is the Houston icon and logo artwork, which [NOTICE](NOTICE) carves
+out of the Apache grant and [TRADEMARK.md](TRADEMARK.md) governs. Contributions that
+touch those files are still welcome, and submitting one licenses it to the project
+under the same carve-out rather than under Apache-2.0.
+
 ### Third-party code and dependencies
 
 New dependencies must be permissively licensed. CI runs `npm run license-gate`, which
