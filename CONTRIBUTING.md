@@ -9,7 +9,7 @@ Everyone taking part is expected to follow the
 
 ## Prerequisites
 
-- A supported OS: macOS 12 Monterey+ (Apple Silicon or Intel), Windows 10+ (x64), or
+- A supported OS: macOS 13 Ventura+ (Apple Silicon or Intel), Windows 10+ (x64), or
   Linux x64 (glibc 2.35+: Ubuntu 22.04+ / Debian 12+ / Fedora 36+). Each platform+arch
   builds its own artifacts on its own host, because native modules and the per-platform binaries
   can't cross-compile.

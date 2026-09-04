@@ -2,8 +2,8 @@
 
 Houston covers a broad span of coding-agent features (see the **Features** list in
 the [README](./README.md)). This file tracks the items that are intentionally
-**not done yet** — either out of scope for a macOS desktop app, or a larger effort
-than the current sweep covered. Each notes *why*
+**not done yet**: either out of scope for a macOS desktop app, or a larger effort
+than the work so far has covered. Each notes *why*
 it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 ## Deferred — larger effort

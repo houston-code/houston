@@ -29,7 +29,7 @@ permissions:
   contents: read
   # cosign keyless signing (below) mints an OIDC token to get a short-lived Fulcio cert and
   # records the signature in the public Rekor log. Unlike GitHub artifact attestation, this
-  # needs no attestation store, so it works on this user-owned PRIVATE repo — and anyone can
+  # needs no attestation store, so it works on any user-owned repo, and anyone can
   # verify against the public log with no repo access. Dispatching this workflow doubles as
   # the end-to-end test of that signing path before the release pipeline relies on it.
   id-token: write
