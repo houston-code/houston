@@ -7,15 +7,8 @@ import { describe, expect, it } from 'vitest'
  * Guards CI's merge-safety invariants, not application code — but it lives in the
  * node test project so it runs in the same `npm test` that gates every PR.
  *
- * History: this file used to pin a bespoke `auto-merge` job that reproduced the real
- * landing commit locally, re-validated it, and fast-forward-pushed it to main. That
- * machinery existed for one reason, stated in its own comments: the repo had no branch
- * protection, so nothing could require a PR to be up to date before merging, and a PR
- * green against a stale main could land an untested combination.
- *
- * That premise is gone. Branch protection now enforces strict (up-to-date) required
- * status checks, so the merge ref CI tests IS the tree that lands, and merges are made
- * by a human rather than by a labelled job holding a repo-write PAT. What remains worth
+ * Branch protection enforces strict (up-to-date) required status checks, so the merge
+ * ref CI tests IS the tree that lands, and merges are made by a human. What is worth
  * pinning is what branch protection cannot express: that the revert guard actually runs
  * on the landing tree, and that no PR-triggered job carries a push credential.
  *

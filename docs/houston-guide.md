@@ -828,8 +828,17 @@ anyone can use it for any purpose, read and modify the source, and redistribute
 original or modified copies, commercially or not, as long as they keep the license
 and copyright notices, pass along the `NOTICE` file, and state which files they
 changed. The license also carries an express patent grant from every contributor.
-It does not license the Houston name or logo (Apache-2.0 section 6 grants no
-trademark rights), and it disclaims all warranties.
+It disclaims all warranties, and it does not license the Houston brand.
+
+The brand is held back in two ways, because a name and a piece of artwork are
+protected differently. The name is a trademark, and Apache-2.0 section 6 grants no
+trademark rights. The logo is also copyrightable artwork, so the icon and logo files
+are carved out of the Apache grant explicitly in `NOTICE`. Everything else in the
+repository, source and non-source alike, is Apache-2.0 with no carve-out.
+`TRADEMARK.md` sets out what anyone may do without asking: redistribute unmodified
+builds under the name, package Houston for a package manager, refer to Houston in
+their own work, and fork it and say so. What it asks in return is that a modified
+build handed to other people carries a different name.
 
 Contributions are covered by the same license under Apache-2.0 section 5, so there
 is no CLA to sign; see `CONTRIBUTING.md`.

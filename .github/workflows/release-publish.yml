@@ -7,7 +7,7 @@ name: Release - publish
 # CHANGELOG notes, un-drafts it, and marks it `latest` so the updater picks it up.
 #
 # Distribution lives in a SEPARATE PUBLIC repo (piyushvijay/houston-releases) so the app
-# can fetch updates with no embedded token, while source stays private. Writing to that
+# can fetch updates with no embedded token. Writing to that
 # repo requires a PAT (the default GITHUB_TOKEN is scoped to this repo only): mint a
 # fine-grained PAT with contents:write on houston-releases and add it as the
 # GH_RELEASES_TOKEN secret here.
@@ -53,14 +53,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
           syft-version: v1.46.0
       - name: Generate production SBOM for scanning
         run: syft scan file:./package-lock.json -o cyclonedx-json@1.6=sbom.cyclonedx.json
       - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           sbom: sbom.cyclonedx.json
           # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
@@ -83,7 +83,7 @@ jobs:
     permissions:
       contents: read
       # cosign keyless signing (below) needs an OIDC token for Fulcio; Rekor is public, so
-      # this works on this private repo and the signatures verify with no repo access.
+      # this works whatever the repo's visibility, and signatures verify with no repo access.
       id-token: write
     strategy:
       fail-fast: false
@@ -255,7 +255,7 @@ jobs:
       # the note at the top of sbom.yml.)
       - name: Install Syft
         if: matrix.os == 'ubuntu-22.04'
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
           syft-version: v1.46.0
@@ -319,7 +319,7 @@ jobs:
       # never un-drafts.
       - name: Scan binary SBOM for vulnerabilities (fail on fixable High/Critical)
         if: matrix.os == 'ubuntu-22.04'
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           sbom: sbom.binary.linux-x64.cyclonedx.json
           # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
@@ -352,8 +352,8 @@ jobs:
             .github/vex/houston.openvex.json \
             -R piyushvijay/houston-releases --clobber
       # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
-      # Fulcio cert + Rekor proof) beside each. This is the private-repo-compatible,
-      # customer-verifiable alternative to GitHub attestation (which can't run here). Each leg
+      # Fulcio cert + Rekor proof) beside each. This is the customer-verifiable
+      # alternative to GitHub attestation, and it needs no attestation store. Each leg
       # signs its own release/* binaries; the Linux leg also signs the CLI, SBOMs, and the
       # third-party notices (so the notices carry the same verifiable provenance as the code
       # they attribute — closing the gap where the loose .md was the only unsigned sibling

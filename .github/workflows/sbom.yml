@@ -17,9 +17,8 @@ name: SBOM
 # This is the AD-HOC generator (manual dispatch only). The per-release SBOM — the one
 # that ships attached to each published GitHub Release — is produced by the Linux leg
 # of release-publish.yml, NOT here. A `push: branches: [main]` trigger was tried and
-# removed: it never produced a durable release asset. Human merges do start a push run now
-# (the old GITHUB_TOKEN auto-merge did not, so most main commits got no SBOM at all), but that
-# only changes how OFTEN this would fire, not what it yields: a transient 90-day Actions
+# removed: it never produced a durable release asset. A push trigger would only change how
+# OFTEN this fires, not what it yields: a transient 90-day Actions
 # artifact rather than something attached to a Release. Re-adding the trigger would burn
 # minutes on every merge for an artifact that expires.
 on:
@@ -29,7 +28,7 @@ permissions:
   contents: read
   # cosign keyless signing (below) mints an OIDC token to get a short-lived Fulcio cert and
   # records the signature in the public Rekor log. Unlike GitHub artifact attestation, this
-  # needs no attestation store, so it works on this user-owned PRIVATE repo — and anyone can
+  # needs no attestation store, so it works on any user-owned repo, and anyone can
   # verify against the public log with no repo access. Dispatching this workflow doubles as
   # the end-to-end test of that signing path before the release pipeline relies on it.
   id-token: write
@@ -56,7 +55,7 @@ jobs:
       # --ignore-scripts skips the native rebuild (electron-rebuild) — not needed to read
       # package.json. --omit=dev keeps node_modules aligned with the production closure.
       - run: npm ci --omit=dev --ignore-scripts
-      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
           syft-version: v1.46.0
@@ -93,7 +92,7 @@ jobs:
       # (.github/vex/houston.openvex.json — see .github/vex/README.md). Scans the closure that
       # ships.
       - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           sbom: sbom.cyclonedx.json
           # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.

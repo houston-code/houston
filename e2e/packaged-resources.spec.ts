@@ -50,9 +50,11 @@ test('packaged app bundles rg and ast-grep as non-empty executables', () => {
  * travel INSIDE the code-signed, notarized bundle (see electron-builder.yml). LICENSE and
  * NOTICE are Houston's own Apache-2.0 obligations (§4(a) and §4(d) require both to
  * accompany every distribution, binaries included); THIRD-PARTY-NOTICES.md discharges the
- * same duty for the bundled dependencies.
+ * same duty for the bundled dependencies. TRADEMARK.md ships alongside them because NOTICE
+ * carves the logo artwork out of the Apache grant and points at TRADEMARK.md for the terms
+ * that replace it, so the pointer has to resolve inside the bundle too.
  */
-const BUNDLED_LICENSE_FILES = ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.md']
+const BUNDLED_LICENSE_FILES = ['LICENSE', 'NOTICE', 'TRADEMARK.md', 'THIRD-PARTY-NOTICES.md']
 
 test('packaged app bundles the license and attribution files under Resources', () => {
   // Same skip logic as the binaries test above.
