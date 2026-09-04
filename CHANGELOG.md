@@ -1,5 +1,7 @@
 # Changelog
 
+> PR numbers below refer to the pre-release development repository.
+
 ## v0.2.0 — 2026-07-12
 
 Houston 0.2.0 takes the app fully cross-platform, adding Windows and Linux execution backends alongside signed, notarized macOS builds with in-app auto-update. Beyond the desktop app, it adds a standalone CLI and an interactive terminal mode, broader model and provider support (the OpenAI Responses API, Amazon Bedrock, MCP resources, and one-click setup for known model hosts), and richer agent workflows including writable subagents, invocable skills, session persistence and search, and durable long-context memory. It also lands a large batch of security hardening (secret redaction, SSRF and symlink-escape fixes, and honest sandbox confinement) plus dozens of UX refinements across chats, diffs, the Files panel, and PR tooling.

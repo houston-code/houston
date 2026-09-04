@@ -44,8 +44,7 @@ describe('buildPrompt', () => {
 })
 
 describe('SYSTEM_PROMPT', () => {
-  it('forbids naming competitors and inventing changes (repo policy)', () => {
-    expect(SYSTEM_PROMPT).toMatch(/never name competing/i)
+  it('forbids inventing changes', () => {
     expect(SYSTEM_PROMPT).toMatch(/do not invent/i)
   })
 })

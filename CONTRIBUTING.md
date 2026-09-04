@@ -9,7 +9,7 @@ Everyone taking part is expected to follow the
 
 ## Prerequisites
 
-- A supported OS: macOS 12 Monterey+ (Apple Silicon or Intel), Windows 10+ (x64), or
+- A supported OS: macOS 13 Ventura+ (Apple Silicon or Intel), Windows 10+ (x64), or
   Linux x64 (glibc 2.35+: Ubuntu 22.04+ / Debian 12+ / Fedora 36+). Each platform+arch
   builds its own artifacts on its own host, because native modules and the per-platform binaries
   can't cross-compile.
@@ -309,6 +309,11 @@ Copyright stays with you. Houston does not ask for an assignment, and there is n
 per-file copyright header to add: the repository-level [LICENSE](LICENSE) and
 [NOTICE](NOTICE) cover the whole tree. If you are contributing on behalf of an
 employer, make sure they are on board first.
+
+The one exception is the Houston icon and logo artwork, which [NOTICE](NOTICE) carves
+out of the Apache grant and [TRADEMARK.md](TRADEMARK.md) governs. Contributions that
+touch those files are still welcome, and submitting one licenses it to the project
+under the same carve-out rather than under Apache-2.0.
 
 ### Third-party code and dependencies
 
