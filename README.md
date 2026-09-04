@@ -924,9 +924,21 @@ state which files you changed. It also includes an express patent grant from eve
 contributor, and a patent-retaliation clause that ends that grant for anyone who
 sues over patents in Houston.
 
-Two things it does not give you: the **Houston** name and logo (Apache-2.0 section
-6 grants no trademark rights), and any warranty (sections 7 and 8 disclaim all of
-them).
+Two things it does not give you: the **Houston** brand, and any warranty (sections 7
+and 8 disclaim all of them).
+
+The brand is reserved in two separate ways, because a name and a piece of artwork are
+protected differently. The **name** is a trademark, and Apache-2.0 section 6 grants no
+trademark rights. The **logo** is also copyrightable artwork, so the icon and logo
+files are explicitly carved out of the Apache grant in [NOTICE](NOTICE); they live in
+the repository so the project can build and ship itself, not as material you are
+licensed to copy and modify. Everything else here, source and non-source alike, is
+Apache-2.0 with no carve-out.
+
+[TRADEMARK.md](TRADEMARK.md) is the practical version: what you may do without
+asking (redistribute unmodified builds under the name, package Houston, refer to it
+in your own work, fork it and say so) and the one thing it asks in return, which is
+that a modified build you hand to other people gets a different name.
 
 Houston bundles third-party open-source components, each under its own license;
 they are listed with their license texts in

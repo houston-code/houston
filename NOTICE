@@ -10,3 +10,32 @@ for the full terms.
 Houston bundles third-party open-source components, each under its own
 license. Those components are listed with their license texts in
 THIRD-PARTY-NOTICES.md, which ships inside the packaged application.
+
+TRADEMARKS AND BRAND ASSETS
+
+"Houston" and the Houston logo are trademarks of the Houston Authors.
+Section 6 of the Apache License grants no trademark rights.
+
+The Houston icon and logo artwork is additionally EXCLUDED from the
+Apache License grant over this repository. That artwork is:
+
+    build/icon.png
+    build/icon.icns
+    build/icon.ico
+    website/assets/icon.png
+    website/assets/og.svg
+    website/assets/og.png
+    website/apple-touch-icon.png
+    website/apple-touch-icon-precomposed.png
+    website/favicon.ico
+
+together with any work derived from those files. They are included here
+so the project can build and ship itself; they are not licensed to you
+for copying or modification. All rights in them are reserved.
+
+Everything else in this repository, source and non-source alike, is
+covered by the Apache License with no carve-out.
+
+TRADEMARK.md states what you may do with the Houston name and logo
+without asking, including redistributing unmodified builds under the
+name and referring to Houston in your own work.

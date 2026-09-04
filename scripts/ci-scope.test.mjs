@@ -104,7 +104,16 @@ describe('inert changesets', () => {
 
 describe('the allowlist itself', () => {
   it('never lists a file that another job consumes', () => {
-    for (const consumed of ['THIRD-PARTY-NOTICES.md', 'docs/houston-guide.md', 'LICENSE', 'NOTICE']) {
+    // TRADEMARK.md is on this list because electron-builder `extraResources` packages it
+    // and e2e/packaged-resources.spec.ts asserts it is inside the bundle. It reads like a
+    // root doc, so it is exactly the kind of file someone would add to INERT_FILES.
+    for (const consumed of [
+      'THIRD-PARTY-NOTICES.md',
+      'docs/houston-guide.md',
+      'LICENSE',
+      'NOTICE',
+      'TRADEMARK.md'
+    ]) {
       expect(INERT_FILES.has(consumed), consumed).toBe(false)
     }
   })

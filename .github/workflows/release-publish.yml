@@ -7,7 +7,7 @@ name: Release - publish
 # CHANGELOG notes, un-drafts it, and marks it `latest` so the updater picks it up.
 #
 # Distribution lives in a SEPARATE PUBLIC repo (piyushvijay/houston-releases) so the app
-# can fetch updates with no embedded token, while source stays private. Writing to that
+# can fetch updates with no embedded token. Writing to that
 # repo requires a PAT (the default GITHUB_TOKEN is scoped to this repo only): mint a
 # fine-grained PAT with contents:write on houston-releases and add it as the
 # GH_RELEASES_TOKEN secret here.
@@ -83,7 +83,7 @@ jobs:
     permissions:
       contents: read
       # cosign keyless signing (below) needs an OIDC token for Fulcio; Rekor is public, so
-      # this works on this private repo and the signatures verify with no repo access.
+      # this works whatever the repo's visibility, and signatures verify with no repo access.
       id-token: write
     strategy:
       fail-fast: false
@@ -352,8 +352,8 @@ jobs:
             .github/vex/houston.openvex.json \
             -R piyushvijay/houston-releases --clobber
       # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
-      # Fulcio cert + Rekor proof) beside each. This is the private-repo-compatible,
-      # customer-verifiable alternative to GitHub attestation (which can't run here). Each leg
+      # Fulcio cert + Rekor proof) beside each. This is the customer-verifiable
+      # alternative to GitHub attestation, and it needs no attestation store. Each leg
       # signs its own release/* binaries; the Linux leg also signs the CLI, SBOMs, and the
       # third-party notices (so the notices carry the same verifiable provenance as the code
       # they attribute — closing the gap where the loose .md was the only unsigned sibling

@@ -17,9 +17,8 @@ name: SBOM
 # This is the AD-HOC generator (manual dispatch only). The per-release SBOM — the one
 # that ships attached to each published GitHub Release — is produced by the Linux leg
 # of release-publish.yml, NOT here. A `push: branches: [main]` trigger was tried and
-# removed: it never produced a durable release asset. Human merges do start a push run now
-# (the old GITHUB_TOKEN auto-merge did not, so most main commits got no SBOM at all), but that
-# only changes how OFTEN this would fire, not what it yields: a transient 90-day Actions
+# removed: it never produced a durable release asset. A push trigger would only change how
+# OFTEN this fires, not what it yields: a transient 90-day Actions
 # artifact rather than something attached to a Release. Re-adding the trigger would burn
 # minutes on every merge for an artifact that expires.
 on:
@@ -29,7 +28,7 @@ permissions:
   contents: read
   # cosign keyless signing (below) mints an OIDC token to get a short-lived Fulcio cert and
   # records the signature in the public Rekor log. Unlike GitHub artifact attestation, this
-  # needs no attestation store, so it works on this user-owned PRIVATE repo — and anyone can
+  # needs no attestation store, so it works on any user-owned repo, and anyone can
   # verify against the public log with no repo access. Dispatching this workflow doubles as
   # the end-to-end test of that signing path before the release pipeline relies on it.
   id-token: write
