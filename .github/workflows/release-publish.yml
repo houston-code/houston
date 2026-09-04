@@ -60,7 +60,7 @@ jobs:
       - name: Generate production SBOM for scanning
         run: syft scan file:./package-lock.json -o cyclonedx-json@1.6=sbom.cyclonedx.json
       - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           sbom: sbom.cyclonedx.json
           # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
@@ -319,7 +319,7 @@ jobs:
       # never un-drafts.
       - name: Scan binary SBOM for vulnerabilities (fail on fixable High/Critical)
         if: matrix.os == 'ubuntu-22.04'
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
           sbom: sbom.binary.linux-x64.cyclonedx.json
           # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
