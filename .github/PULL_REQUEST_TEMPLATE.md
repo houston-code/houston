@@ -26,8 +26,6 @@ Only if they apply:
       (`src/main/agent/guide-content.ts` is generated and must never be committed.)
 - [ ] **New dependency?** `npm run license-gate` passes, and `THIRD-PARTY-NOTICES.md` is
       regenerated.
-- [ ] No competing tools or products are named anywhere in the diff, including commit
-      messages and this PR text. Describe capabilities on their own terms.
 
 ## Notes for the reviewer
 

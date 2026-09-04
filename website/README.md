@@ -96,9 +96,3 @@ That's the whole setup — no secrets, no CI wiring.
   `node website/tools/build-legal.mjs` and commit the updated HTML.
 - **Social card:** after editing `assets/og.svg`, re-run `node website/tools/build-og.mjs`.
 - **App icon:** if `build/icon.png` changes, `cp build/icon.png website/assets/icon.png`.
-
-## Before it goes public
-
-- [ ] Confirm `houstoncode.ai` is the intended domain (all canonical URLs, the
-      sitemap, and OG tags assume it).
-- [ ] Optional: add real product screenshots to the landing page.
