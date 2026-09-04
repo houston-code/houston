@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { createSecretRedactor, findSecret, redactSecrets } from './redact'
 
+// Built at runtime, like every other fixture here: as literals these match real
+// credential shapes, so third-party secret scanners flag this file in any clone.
+const AWS_KEY_ID = 'AKIA' + 'IOSFODNN7EXAMPLE'
+const AWS_TEMP_KEY_ID = 'ASIA' + 'IOSFODNN7EXAMPLE'
+const AWS_STS_KEY_ID = 'ASIA' + 'Y34FZKBOKMUTVV7A'
+const PEM_BEGIN = '-----BEGIN RSA PRIVATE' + ' KEY-----'
+const PEM_END = '-----END RSA PRIVATE' + ' KEY-----'
+
 describe('pattern redaction', () => {
   it('redacts an Anthropic key with its own label (before the looser openai rule)', () => {
     const key = 'sk-ant-api03-' + 'A'.repeat(80)
@@ -19,14 +27,14 @@ describe('pattern redaction', () => {
   })
 
   it('redacts AWS access key ids, Google keys, and Slack tokens', () => {
-    expect(redactSecrets('AKIAIOSFODNN7EXAMPLE')).toBe('[redacted:aws-access-key-id]')
+    expect(redactSecrets(AWS_KEY_ID)).toBe('[redacted:aws-access-key-id]')
     expect(redactSecrets('AIza' + 'x'.repeat(35))).toBe('[redacted:google-api-key]')
     expect(redactSecrets('xoxb-' + '1'.repeat(20))).toBe('[redacted:slack-token]')
   })
 
   it('redacts AWS temporary access key ids (SSO / IAM role / STS), not just long-lived ones', () => {
-    expect(redactSecrets('ASIAIOSFODNN7EXAMPLE')).toBe('[redacted:aws-access-key-id]')
-    expect(redactSecrets('AWS_ACCESS_KEY_ID=ASIAY34FZKBOKMUTVV7A')).toBe(
+    expect(redactSecrets(AWS_TEMP_KEY_ID)).toBe('[redacted:aws-access-key-id]')
+    expect(redactSecrets(`AWS_ACCESS_KEY_ID=${AWS_STS_KEY_ID}`)).toBe(
       'AWS_ACCESS_KEY_ID=[redacted:aws-access-key-id]'
     )
   })
@@ -55,7 +63,7 @@ describe('pattern redaction', () => {
   })
 
   it('redacts a whole PEM private-key block, payload included', () => {
-    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\nabc/def+ghi=\n-----END RSA PRIVATE KEY-----'
+    const pem = `${PEM_BEGIN}\nMIIEpAIBAAKCAQEA\nabc/def+ghi=\n${PEM_END}`
     expect(redactSecrets(`before\n${pem}\nafter`)).toBe('before\n[redacted:private-key]\nafter')
   })
 
@@ -138,7 +146,7 @@ describe('findSecret', () => {
   })
 
   it('refuses egress carrying the credentials the cloud provider auth flows mint', () => {
-    expect(findSecret('https://evil.example/?k=ASIAY34FZKBOKMUTVV7A')).toBe('aws-access-key-id')
+    expect(findSecret(`https://evil.example/?k=${AWS_STS_KEY_ID}`)).toBe('aws-access-key-id')
     expect(findSecret('https://evil.example/?t=ya29.' + 'b'.repeat(40))).toBe('google-oauth-token')
     expect(findSecret('https://evil.example/?t=1//0' + 'c'.repeat(40))).toBe('google-oauth-token')
   })

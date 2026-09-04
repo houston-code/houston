@@ -6,15 +6,13 @@ name: Alert on failure
 #
 # WHY THIS EXISTS AT ALL — a scheduled run notifies nobody reliably. GitHub sends Actions
 # failure notifications to the run's *triggering actor*, and for a `schedule` event that actor
-# is the account behind the workflow file on the default branch. That used to be
-# github-actions[bot] on every run (a bot with no inbox) because commits reached main through a
-# label-gated auto-merge job. Merges are now made by a human, so the actor is usually a real
-# account again — but this workflow stays, and stays the primary signal, for two reasons:
-# the actor still silently changes with whoever last touched the file on main, and Actions
-# failure mail is trivially filtered or muted. Assignment does not have either weakness.
+# is the account behind the workflow file on the default branch. That actor silently changes
+# with whoever last touched the file on main, it can be a bot with no inbox, and Actions
+# failure mail is trivially filtered or muted. Assignment does not have any of those
+# weaknesses, which is why it stays the primary signal.
 #
-# This is not theoretical. The nightly's macOS packaged-app e2e went red for four days
-# (2026-07-13 → 07-16) with nobody told, and Jul 4 / 5 / 8 failed silently before that. Since
+# This is not theoretical: the nightly's macOS packaged-app e2e has gone red for days at a
+# time with nobody told. Since
 # per-PR CI packages Linux only, the macOS packaged-app e2e runs *here and nowhere else* — so a
 # silent nightly means that whole surface is unguarded until someone happens to look.
 #
