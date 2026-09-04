@@ -55,7 +55,7 @@ jobs:
       # --ignore-scripts skips the native rebuild (electron-rebuild) — not needed to read
       # package.json. --omit=dev keeps node_modules aligned with the production closure.
       - run: npm ci --omit=dev --ignore-scripts
-      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
           syft-version: v1.46.0
