@@ -19,15 +19,12 @@ import { resolve } from 'node:path'
 
 const MODEL = 'claude-opus-4-8'
 
-// Houston's repo policy forbids naming competing tools/products anywhere — bake it into the
-// instructions so generated notes never do.
 export const SYSTEM_PROMPT = `You are writing release notes for Houston, a desktop app, for an audience of end users.
 
 Write notes that are sharp, crisp, and strictly about what changed for the user. Rules:
 - Summarize only user-facing impact. Drop purely internal changes (CI, tests, refactors, dependency bumps, docs) entirely.
 - Do NOT invent changes. Only describe what the provided pull requests actually did; if a PR's effect is unclear, omit it rather than guess.
 - Call out breaking changes and any manual/migration steps the user must take, explicitly.
-- Never name competing tools, products, or companies — describe capabilities on their own terms.
 - Output raw Markdown only — no code fences, no preamble, no commentary outside the notes.`
 
 // Build the user prompt: the exact heading to use, plus the merged PRs to summarize.

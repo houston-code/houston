@@ -216,9 +216,9 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 ## Deferred — polish
 
 - **Open a specific file from the diff, changes list, and tool results.** The
-  project-level opener already exists — each chat's ⋯ menu has an "Open in" submenu
-  that launches the chat's working directory in VS Code / Cursor / Windsurf / Zed /
-  Xcode, or reveals it in the file manager. The next step is opening a *single file*
+  project-level opener already exists: each chat's ⋯ menu has an "Open in" submenu
+  that launches the chat's working directory in a detected editor, or reveals it in
+  the file manager. The next step is opening a *single file*
   (and ideally a line) from the surfaces that already carry it as **structured** data:
   a diff hunk, the changed-files list, an edit/write tool-result card. The path is
   known exactly, so there's no prose parsing and no false-positive risk. *What's still
@@ -318,7 +318,7 @@ stance or require a hosted backend. They're
 deliberately **not** on the roadmap (recorded here so the gap analysis is honest
 and nothing is silently dropped):
 
-- **Subscription / OAuth sign-in (ChatGPT, Claude Pro/Max, GitHub Copilot).**
+- **Subscription / OAuth sign-in.**
   Houston is **bring-your-own-API-key** by design — keys are stored in the macOS
   Keychain and used directly. Subscription sign-in (vendor OAuth, included usage,
   workspace RBAC) is a different account / billing model that doesn't fit a
