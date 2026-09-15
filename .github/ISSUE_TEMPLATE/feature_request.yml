@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Check [ROADMAP.md](https://github.com/piyushvijay/houston/blob/main/ROADMAP.md)
+        Check [ROADMAP.md](https://github.com/houston-code/houston/blob/main/ROADMAP.md)
         first, since the idea may already be planned.
 
   - type: textarea

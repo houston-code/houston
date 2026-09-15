@@ -10,7 +10,7 @@
  */
 
 /** Base URL for the published documents (repo `main`). */
-const DOCS_BASE = 'https://github.com/piyushvijay/houston/blob/main'
+const DOCS_BASE = 'https://github.com/houston-code/houston/blob/main'
 
 export const LICENSE_URL = `${DOCS_BASE}/LICENSE`
 export const PRIVACY_URL = `${DOCS_BASE}/docs/PRIVACY.md`

@@ -6,7 +6,7 @@
 (function () {
   "use strict";
 
-  var RELEASES_REPO = "piyushvijay/houston-releases";
+  var RELEASES_REPO = "houston-code/houston";
   var RELEASES_API = "https://api.github.com/repos/" + RELEASES_REPO + "/releases/latest";
   var RELEASES_PAGE = "https://github.com/" + RELEASES_REPO + "/releases/latest";
 

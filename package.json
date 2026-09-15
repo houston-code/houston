@@ -10,13 +10,13 @@
   "bin": {
     "houston": "./out/cli/houston-cli.cjs"
   },
-  "homepage": "https://github.com/piyushvijay/houston",
+  "homepage": "https://github.com/houston-code/houston",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/piyushvijay/houston.git"
+    "url": "git+https://github.com/houston-code/houston.git"
   },
   "bugs": {
-    "url": "https://github.com/piyushvijay/houston/issues"
+    "url": "https://github.com/houston-code/houston/issues"
   },
   "license": "Apache-2.0",
   "private": true,

@@ -125,7 +125,7 @@ describe('checkForUpdates', () => {
     })
     // The manual-download link must point at the PUBLIC releases repo (the private
     // source repo has no published assets), not just any github.com URL.
-    expect(result.status === 'available' && result.releaseUrl).toContain('houston-releases/releases')
+    expect(result.status === 'available' && result.releaseUrl).toContain('houston-code/houston/releases')
 
     const broadcasts = h.sent.filter((s) => s.channel === IPC.updateAvailable)
     expect(broadcasts).toHaveLength(1)

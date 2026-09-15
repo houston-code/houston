@@ -5,11 +5,10 @@ name: Nightly build
 # minutes, so without this a macOS or Windows packaging regression would first surface when
 # cutting a release — and block it. This catches it within a day instead.
 #
-# THIS WORKFLOW NEVER PUBLISHES A RELEASE. Three independent guarantees:
+# THIS WORKFLOW NEVER PUBLISHES A RELEASE. Two independent guarantees:
 #   1. electron-builder is invoked with `--publish never`.
-#   2. No publish credential is in scope (GH_RELEASES_TOKEN is never set here), so even an
-#      accidental `--publish always` would have nothing to authenticate with.
-#   3. `permissions: contents: read` — the job literally cannot create a tag or release.
+#   2. `permissions: contents: read` — the job's token literally cannot create a tag or
+#      release, so even an accidental `--publish always` has nothing to authenticate with.
 # Build outputs are uploaded only as ephemeral Actions artifacts (invisible to the updater,
 # which reads published Releases) for inspection when a nightly fails.
 

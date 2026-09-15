@@ -7,7 +7,7 @@ const available: Extract<UpdateCheckResult, { status: 'available' }> = {
   status: 'available',
   currentVersion: '0.1.0',
   latestVersion: '0.2.0',
-  releaseUrl: 'https://github.com/piyushvijay/houston/releases'
+  releaseUrl: 'https://github.com/houston-code/houston/releases'
 }
 
 const noop = (): void => {}

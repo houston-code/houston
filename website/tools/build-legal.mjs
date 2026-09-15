@@ -19,9 +19,9 @@ const SITE = resolve(__dirname, "..");
 // Relative links inside the docs → their public destinations.
 const LINK_MAP = {
   "PRIVACY.md": "/privacy.html",
-  "../LICENSE": "https://github.com/piyushvijay/houston/blob/main/LICENSE",
-  "../NOTICE": "https://github.com/piyushvijay/houston/blob/main/NOTICE",
-  "sandboxing.md": "https://github.com/piyushvijay/houston/blob/main/docs/sandboxing.md",
+  "../LICENSE": "https://github.com/houston-code/houston/blob/main/LICENSE",
+  "../NOTICE": "https://github.com/houston-code/houston/blob/main/NOTICE",
+  "sandboxing.md": "https://github.com/houston-code/houston/blob/main/docs/sandboxing.md",
 };
 
 const escapeHtml = (s) =>
@@ -115,7 +115,7 @@ function page({ title, description, contentTitle, html, slug }) {
       <div class="footer-bottom">
         <span>© <span id="year">2026</span> Houston ·
           <a href="/privacy.html">Privacy</a> ·
-          <a href="https://github.com/piyushvijay/houston" rel="noopener">GitHub</a>
+          <a href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
         </span>
       </div>
     </div>
