@@ -3,7 +3,7 @@ import { buildPredicate } from './slsa-provenance.mjs'
 
 const env = {
   GITHUB_SERVER_URL: 'https://github.com',
-  GITHUB_REPOSITORY: 'piyushvijay/houston',
+  GITHUB_REPOSITORY: 'houston-code/houston',
   GITHUB_REF: 'refs/heads/main',
   GITHUB_SHA: 'abc123def456',
   GITHUB_RUN_ID: '42',
@@ -14,19 +14,19 @@ const env = {
 describe('buildPredicate (SLSA v1.0)', () => {
   it('sets the builder id to the release workflow at the ref', () => {
     expect(buildPredicate(env).runDetails.builder.id).toBe(
-      'https://github.com/piyushvijay/houston/.github/workflows/release-publish.yml@refs/heads/main'
+      'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main'
     )
   })
 
   it('records the source repo + commit as a resolved dependency', () => {
     const dep = buildPredicate(env).buildDefinition.resolvedDependencies[0]
-    expect(dep.uri).toBe('git+https://github.com/piyushvijay/houston@refs/heads/main')
+    expect(dep.uri).toBe('git+https://github.com/houston-code/houston@refs/heads/main')
     expect(dep.digest.gitCommit).toBe('abc123def456')
   })
 
   it('records the run invocation id (run + attempt)', () => {
     expect(buildPredicate(env).runDetails.metadata.invocationId).toBe(
-      'https://github.com/piyushvijay/houston/actions/runs/42/attempts/2'
+      'https://github.com/houston-code/houston/actions/runs/42/attempts/2'
     )
   })
 

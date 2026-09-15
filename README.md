@@ -896,7 +896,7 @@ inside the bundle, so anyone can verify with no account, key, or repo access:
 ```bash
 cosign verify-blob houston-cli.cjs \
   --bundle houston-cli.cjs.cosign.bundle \
-  --certificate-identity 'https://github.com/piyushvijay/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+  --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
 

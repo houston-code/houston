@@ -10,7 +10,7 @@ body:
         **Do not paste API keys, tokens, or the contents of your keychain.** Houston
         handles provider credentials, so logs and transcripts can contain them. Redact
         before pasting. If the issue is a security vulnerability, stop here and follow
-        [SECURITY.md](https://github.com/piyushvijay/houston/blob/main/SECURITY.md) instead.
+        [SECURITY.md](https://github.com/houston-code/houston/blob/main/SECURITY.md) instead.
 
   - type: input
     id: version

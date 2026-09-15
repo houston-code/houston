@@ -92,5 +92,5 @@ reach, and `SECURITY.md` for how to report a vulnerability.
 
 ## Questions
 
-Open an issue on the [repository](https://github.com/piyushvijay/houston), or for
+Open an issue on the [repository](https://github.com/houston-code/houston), or for
 anything sensitive, email security@houstoncode.ai.

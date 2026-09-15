@@ -105,7 +105,7 @@ jobs:
       # Fulcio cert + Rekor inclusion proof) per file. Verify with, e.g.:
       #   cosign verify-blob sbom.cyclonedx.json \
       #     --bundle sbom.cyclonedx.json.cosign.bundle \
-      #     --certificate-identity 'https://github.com/piyushvijay/houston/.github/workflows/sbom.yml@refs/heads/main' \
+      #     --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/sbom.yml@refs/heads/main' \
       #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:

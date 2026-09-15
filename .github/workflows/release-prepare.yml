@@ -195,6 +195,6 @@ jobs:
           3. Sanity-check the **Breaking changes** section against the actual diff.
 
           ## To ship
-          Merge this PR, then run the **Release - publish** workflow. It builds the full signed matrix and publishes to the public releases repo (visible to the updater).
+          Merge this PR, then run the **Release - publish** workflow. It builds the full signed matrix and publishes the GitHub Release the updater reads.
           EOF
           )"

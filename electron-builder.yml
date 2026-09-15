@@ -7,14 +7,13 @@ copyright: Copyright © 2026 The Houston Authors
 # those assets is what lets packaged apps auto-update from it.
 #
 # Distribution is a SEPARATE PUBLIC repo (source stays private). A public feed means the
-# packaged app fetches updates with NO embedded token — pointing this at the private source
-# repo would force shipping a credential in the client. Releases are pushed here only by the
-# "Release - publish" workflow, using a PAT with contents:write on this repo
-# (GH_RELEASES_TOKEN); the default GITHUB_TOKEN can't write a different repo.
+# packaged app fetches updates with NO embedded token, because the repo is public. Releases
+# are pushed only by the "Release - publish" workflow, using the workflow's own GITHUB_TOKEN
+# with contents:write; no PAT is involved now that releases live alongside the source.
 publish:
   provider: github
-  owner: piyushvijay
-  repo: houston-releases
+  owner: houston-code
+  repo: houston
 
 directories:
   buildResources: build

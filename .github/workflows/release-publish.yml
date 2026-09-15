@@ -2,21 +2,19 @@ name: Release - publish
 
 # Manual trigger — run AFTER the `release/vX.Y.Z` PR from "Release - prepare" has merged to
 # main. Builds the full signed matrix (macOS arm64, Windows x64, Linux x64) and publishes a
-# GitHub Release to the PUBLIC releases repo, which is what electron-updater reads. The
+# GitHub Release, which is what electron-updater reads. The
 # release is created as a draft by electron-builder, then the finalize job attaches the
 # CHANGELOG notes, un-drafts it, and marks it `latest` so the updater picks it up.
 #
-# Distribution lives in a SEPARATE PUBLIC repo (piyushvijay/houston-releases) so the app
-# can fetch updates with no embedded token. Writing to that
-# repo requires a PAT (the default GITHUB_TOKEN is scoped to this repo only): mint a
-# fine-grained PAT with contents:write on houston-releases and add it as the
-# GH_RELEASES_TOKEN secret here.
+# The repo is public, so the app fetches updates with no embedded token and the release is
+# published here alongside the source. The workflow's own GITHUB_TOKEN carries the
+# contents:write needed to create and upload it; no PAT is involved.
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Build artifacts but do NOT publish to the public repo'
+        description: 'Build artifacts but do NOT publish a release'
         type: boolean
         default: false
 
@@ -28,20 +26,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  guard:
-    timeout-minutes: 5
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require GH_RELEASES_TOKEN for a real publish
-        if: ${{ !inputs.dry_run }}
-        env:
-          TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "::error::GH_RELEASES_TOKEN secret is not set. Mint a fine-grained PAT with contents:write on piyushvijay/houston-releases and add it as the GH_RELEASES_TOKEN repo secret. (Or re-run with dry_run=true to only build artifacts.)"
-            exit 1
-          fi
-
   # Vulnerability gate. Runs BEFORE build (build `needs` it), so a known-vulnerable
   # production closure aborts the release before anything is built or published, rather than
   # failing mid-matrix after some legs already uploaded. Scans the same production SBOM the
@@ -78,17 +62,18 @@ jobs:
     uses: ./.github/workflows/sbom-conformance.yml
 
   build:
-    needs: [guard, scan, sbom-conformance]
+    needs: [scan, sbom-conformance]
     timeout-minutes: 40
     permissions:
-      contents: read
+      # the release is created and uploaded from this job, in this repo
+      contents: write
       # cosign keyless signing (below) needs an OIDC token for Fulcio; Rekor is public, so
       # this works whatever the repo's visibility, and signatures verify with no repo access.
       id-token: write
     strategy:
       fail-fast: false
       # Serialize so the three platforms don't race to CREATE the same draft release on the
-      # public repo (the first leg creates it; the others upload into it). Releases are
+      # release (the first leg creates it; the others upload into it). Releases are
       # infrequent, so the extra wall-clock is fine in exchange for a deterministic publish.
       max-parallel: 1
       matrix:
@@ -145,10 +130,10 @@ jobs:
             || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
       - name: Package and publish
         # electron-builder's github publisher reads GH_TOKEN; pointing it at the PAT makes
-        # it write to the public houston-releases repo (per electron-builder.yml `publish`).
+        # it publish the release (per electron-builder.yml `publish`).
         # GITHUB_TOKEN is intentionally NOT in scope here — it can't write that repo.
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code-signing + notarization. SCOPED to the macOS legs via startsWith():
           # CSC_LINK/CSC_KEY_PASSWORD are ALSO electron-builder's Windows Authenticode vars,
           # so leaking the mac .p12 to the Windows leg would make it try to sign the installer
@@ -183,14 +168,14 @@ jobs:
             tag="v$(node -p "require('./package.json').version")"
             mkdir -p arm64-feed merged-feed
             # Pull the arm64-only feed the arm64 leg uploaded to the draft, then merge x64 into it.
-            gh release download "$tag" -R piyushvijay/houston-releases -p latest-mac.yml -D arm64-feed --clobber
+            gh release download "$tag" -R houston-code/houston -p latest-mac.yml -D arm64-feed --clobber
             node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml > merged-feed/latest-mac.yml
             # Upload every x64 binary (dmg/zip/blockmaps, whatever electron-builder named them),
             # then replace the feed with the merged one. Exclude *.yml from the binary upload so
             # the x64-only latest-mac.yml is never published.
             find release -maxdepth 1 -type f ! -name '*.yml' -print0 \
-              | xargs -0 gh release upload "$tag" -R piyushvijay/houston-releases --clobber
-            gh release upload "$tag" merged-feed/latest-mac.yml -R piyushvijay/houston-releases --clobber
+              | xargs -0 gh release upload "$tag" -R houston-code/houston --clobber
+            gh release upload "$tag" merged-feed/latest-mac.yml -R houston-code/houston --clobber
           else
             # Appends to the dist script's electron-builder invocation: --publish always
             # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
@@ -331,7 +316,7 @@ jobs:
       - name: Attach standalone CLI + SBOMs to the release
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
           # Upload the bundle, its checksum, and the attribution notices together:
@@ -350,7 +335,7 @@ jobs:
             sbom.spdx.json \
             sbom.spdx3.json \
             .github/vex/houston.openvex.json \
-            -R piyushvijay/houston-releases --clobber
+            -R houston-code/houston --clobber
       # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
       # Fulcio cert + Rekor proof) beside each. This is the customer-verifiable
       # alternative to GitHub attestation, and it needs no attestation store. Each leg
@@ -361,7 +346,7 @@ jobs:
       # dry_run (nothing published) and placed AFTER publish so a signing hiccup can't strand a
       # half-published release. Verify a download with:
       #   cosign verify-blob <file> --bundle <file>.cosign.bundle \
-      #     --certificate-identity 'https://github.com/piyushvijay/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+      #     --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
       #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
       - name: Install cosign
         if: ${{ !inputs.dry_run }}
@@ -371,7 +356,7 @@ jobs:
       - name: Sign release binaries + attach bundles
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           tag="v$(node -p "require('./package.json').version")"
@@ -380,7 +365,7 @@ jobs:
           # .blockmaps — not artifacts a user downloads and verifies).
           for f in release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb; do
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
-            gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f.cosign.bundle" -R houston-code/houston --clobber
           done
       # This leg's own deep binary SBOM (generated above from its packaged app): attach it and its
       # cosign bundle. Runs on EVERY leg — the platform-tagged filename means the four legs never
@@ -389,24 +374,24 @@ jobs:
       - name: Attach + sign the binary SBOM
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           tag="v$(node -p "require('./package.json').version")"
           for f in sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json sbom.binary.${{ matrix.sbom_label }}.spdx.json; do
-            gh release upload "$tag" "$f" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f" -R houston-code/houston --clobber
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
-            gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f.cosign.bundle" -R houston-code/houston --clobber
           done
       - name: Sign standalone CLI + SBOMs + notices + attach bundles
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
           for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json .github/vex/houston.openvex.json THIRD-PARTY-NOTICES.md; do
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
-            gh release upload "$tag" "$f.cosign.bundle" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f.cosign.bundle" -R houston-code/houston --clobber
           done
       # GPG signing (Linux leg only) — the offline, sigstore-independent verification path Linux
       # users and distro packagers expect: `gpg --verify` against a pinned key fingerprint, no
@@ -426,7 +411,7 @@ jobs:
       - name: GPG-sign Linux artifacts + whole-release checksums
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         shell: bash
@@ -452,7 +437,7 @@ jobs:
           # 1) Detached signature beside each Linux artifact built on this leg.
           for f in release/*.AppImage release/*.deb; do
             sign "$f"
-            gh release upload "$tag" "$f.asc" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f.asc" -R houston-code/houston --clobber
           done
           # 2) One SHA256SUMS over the Linux + platform-independent assets (basenames, so the
           #    listed names match what a user downloads), signed once. cd into each file's dir so
@@ -470,7 +455,7 @@ jobs:
           #    can verify with no keyserver. houston-signing-key.asc is the repo-root file checked
           #    out at `ref: main`, so what users get is exactly what's committed to source.
           gh release upload "$tag" SHA256SUMS SHA256SUMS.asc houston-signing-key.asc \
-            -R piyushvijay/houston-releases --clobber
+            -R houston-code/houston --clobber
       # SLSA v1.0 build provenance. Complements the cosign SIGNATURES above (integrity +
       # signer identity) with a structured attestation of HOW each artifact was built —
       # builder = this workflow, plus the source repo + commit. cosign attest-blob sets each
@@ -478,7 +463,7 @@ jobs:
       # path as the signatures. Like the signatures, these are !dry_run, so they are first
       # exercised on a real publish. Verify with:
       #   cosign verify-blob-attestation <file> --bundle <file>.slsa.bundle --type slsaprovenance1 \
-      #     --certificate-identity 'https://github.com/piyushvijay/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+      #     --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
       #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
       - name: Generate SLSA provenance predicate
         if: ${{ !inputs.dry_run }}
@@ -486,7 +471,7 @@ jobs:
       - name: Attest release binaries (SLSA provenance)
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           tag="v$(node -p "require('./package.json').version")"
@@ -494,32 +479,32 @@ jobs:
           for f in release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb; do
             cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
               --bundle "$f.slsa.bundle" "$f"
-            gh release upload "$tag" "$f.slsa.bundle" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f.slsa.bundle" -R houston-code/houston --clobber
           done
       - name: Attest standalone CLI + SBOMs (SLSA provenance)
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
           for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json; do
             cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
               --bundle "$f.slsa.bundle" "$f"
-            gh release upload "$tag" "$f.slsa.bundle" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f.slsa.bundle" -R houston-code/houston --clobber
           done
       # This leg's per-platform binary SBOM gets the same SLSA provenance as every other asset
       # (the predicate step above runs on every leg, so slsa-predicate.json is present here too).
       - name: Attest binary SBOM (SLSA provenance)
         if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           tag="v$(node -p "require('./package.json').version")"
           for f in sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json sbom.binary.${{ matrix.sbom_label }}.spdx.json; do
             cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
               --bundle "$f.slsa.bundle" "$f"
-            gh release upload "$tag" "$f.slsa.bundle" -R piyushvijay/houston-releases --clobber
+            gh release upload "$tag" "$f.slsa.bundle" -R houston-code/houston --clobber
           done
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
@@ -554,7 +539,7 @@ jobs:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
-      # Tag the SOURCE repo at the released commit so the next release's note range starts here.
+      # Tag the repo at the released commit so the next release's note range starts here.
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -580,11 +565,11 @@ jobs:
             git tag "$tag"
             git push origin "$tag"
           fi
-      - name: Publish the GitHub Release on the public repo
+      - name: Publish the GitHub Release
         env:
-          GH_TOKEN: ${{ secrets.GH_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v${{ steps.meta.outputs.version }}"
           # electron-builder created this as a draft; attach the notes, un-draft, mark latest.
-          gh release edit "$tag" -R piyushvijay/houston-releases \
+          gh release edit "$tag" -R houston-code/houston \
             --draft=false --latest --notes-file release-notes.md

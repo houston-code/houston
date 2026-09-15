@@ -22,10 +22,10 @@
 ## Links
 
 - Home: https://houstoncode.ai/
-- Download (all platforms): https://github.com/piyushvijay/houston-releases/releases/latest
-- Source and issues: https://github.com/piyushvijay/houston
+- Download (all platforms): https://github.com/houston-code/houston/releases/latest
+- Source and issues: https://github.com/houston-code/houston
 - Privacy: https://houstoncode.ai/privacy.html
-- License (Apache-2.0): https://github.com/piyushvijay/houston/blob/main/LICENSE
+- License (Apache-2.0): https://github.com/houston-code/houston/blob/main/LICENSE
 
 ## Platforms
 

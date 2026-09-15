@@ -5,7 +5,7 @@ The marketing + download site for Houston, served at **houstoncode.ai**.
 It's a **static site — no build step, no framework, no dependencies.** Plain HTML,
 one stylesheet, one small progressive-enhancement script. The binaries are **not**
 hosted here: download buttons resolve to the public
-[`houston-releases`](https://github.com/piyushvijay/houston-releases/releases/latest)
+[the releases page](https://github.com/houston-code/houston/releases/latest)
 GitHub Releases feed, fetched live by `assets/app.js` (with a static fallback link
 if the API is unreachable).
 
@@ -76,7 +76,7 @@ emit text but don't drive Houston's native tool execution.
 Binaries stay on GitHub Releases, so this is a pure static deploy — no build command.
 
 1. **Cloudflare dashboard → Workers & Pages → Create → Pages → Connect to Git.**
-   Authorize the `piyushvijay/houston` repo.
+   Authorize the `houston-code/houston` repo.
 2. Configure the build:
    - **Production branch:** `main`
    - **Framework preset:** None

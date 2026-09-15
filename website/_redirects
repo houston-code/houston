@@ -1,5 +1,5 @@
 # Cloudflare Pages redirects. https://developers.cloudflare.com/pages/configuration/redirects/
 # Short links to the public releases feed (binaries live on GitHub Releases, not here).
-/download   https://github.com/piyushvijay/houston-releases/releases/latest   302
-/releases   https://github.com/piyushvijay/houston-releases/releases/latest   302
-/github     https://github.com/piyushvijay/houston   302
+/download   https://github.com/houston-code/houston/releases/latest   302
+/releases   https://github.com/houston-code/houston/releases/latest   302
+/github     https://github.com/houston-code/houston   302

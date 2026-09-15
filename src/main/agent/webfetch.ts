@@ -370,7 +370,7 @@ export async function fetchUrlAsDocument(
         url: current,
         signal: ac.signal,
         headers: {
-          'user-agent': 'Houston-Agent/0.1 (+https://github.com/piyushvijay/houston)',
+          'user-agent': 'Houston-Agent/0.1 (+https://github.com/houston-code/houston)',
           accept: 'text/*, application/json, application/xhtml+xml'
         },
         pin,

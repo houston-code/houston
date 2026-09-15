@@ -20,8 +20,8 @@ import { log } from './logger'
  */
 
 /** The public releases feed (source repo is private; distribution is not). */
-const LATEST_RELEASE_API = 'https://api.github.com/repos/piyushvijay/houston-releases/releases/latest'
-export const RELEASES_URL = 'https://github.com/piyushvijay/houston-releases/releases'
+const LATEST_RELEASE_API = 'https://api.github.com/repos/houston-code/houston/releases/latest'
+export const RELEASES_URL = 'https://github.com/houston-code/houston/releases'
 
 /** How long a check result is reused before asking again. */
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
