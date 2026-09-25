@@ -7,12 +7,13 @@ import { describe, expect, it } from 'vitest'
  * Guards CI's merge-safety invariants, not application code — but it lives in the
  * node test project so it runs in the same `npm test` that gates every PR.
  *
- * Branch protection enforces strict (up-to-date) required status checks, so the merge
- * ref CI tests IS the tree that lands, and merges are made by a human. What is worth
- * pinning is what branch protection cannot express: that the revert guard actually runs
- * on the landing tree, and that no PR-triggered job carries a push credential.
+ * A ruleset on main requires the checks and routes every merge through the merge
+ * queue, so the candidate CI tests IS the tree that lands. What is worth pinning is what
+ * the ruleset cannot express: that the revert guard actually runs on the PR's merge
+ * tree, that the queue's candidates get the checks it waits on, and that no
+ * PR-triggered job carries a push credential.
  *
- * Branch-protection settings themselves are NOT asserted here — they live in GitHub, not
+ * Ruleset settings themselves are NOT asserted here — they live in GitHub, not
  * in the tree, so a test could only assert a copy of them. They are documented in
  * CONTRIBUTING.md instead.
  */
@@ -158,7 +159,7 @@ describe('CI validates every PR before it can merge', () => {
   })
 
   it('re-tests main after each merge', () => {
-    // Human merges are real pushes, so this trigger fires and main is checked after the
+    // Queue merges are real pushes, so this trigger fires and main is checked after the
     // fact — the backstop for a broken two-PR combination that per-PR CI cannot see.
     expect(workflow).toMatch(/push:\n {4}branches: \[main\]/)
   })

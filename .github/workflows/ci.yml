@@ -7,24 +7,24 @@ on:
   # restated here since `types` replaces them.)
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-  # PRs are merged by a human, so every merge is a real push and this trigger fires —
+  # Every merge lands through the merge queue as a real push, so this trigger fires and
   # main is genuinely re-tested after each one. That post-merge run is the backstop for
   # the case per-PR CI structurally cannot see: two PRs that are each green alone and
-  # broken together. Branch protection makes that rare by requiring a branch to be up to
-  # date before it can merge (so the merge ref CI tested IS the landing tree), but "rare"
-  # is not "impossible" — a flaky-ordering or timing interaction can still slip through,
-  # and this is what catches it.
+  # broken together. The queue makes that rare by testing the candidate it is about to
+  # land (main + the PRs ahead of it + this one), but "rare" is not "impossible" — a
+  # flaky-ordering or timing interaction can still slip through, and this is what
+  # catches it.
   push:
     branches: [main]
   # Merge queue. GitHub builds a candidate commit (main + the PRs ahead in the queue +
   # this one) and runs the required checks against it; without this trigger those checks
   # would never report on that candidate and the queue would stall on every entry.
   #
-  # This is what removes the rebase treadmill. Strict required checks mean any merge to
-  # main invalidates the up-to-date status of every other open PR, so landing N PRs costs
-  # N sequential rebase-and-full-CI cycles — and a PR's CI can finish green against a main
-  # that already moved while it ran. The queue keeps the same guarantee (the tree that is
-  # tested is the tree that lands) while doing the sequencing itself.
+  # The queue is enabled (a `merge-queue` ruleset on the default branch), and it replaced
+  # strict "branch must be up to date" required checks. Under strict checks any merge to
+  # main invalidated the up-to-date status of every other open PR, so landing N PRs cost
+  # N sequential rebase-and-full-CI cycles. The queue keeps the same guarantee (the tree
+  # that is tested is the tree that lands) while doing the sequencing itself.
   merge_group:
 
 permissions:
@@ -283,8 +283,10 @@ jobs:
   #
   # `actions/checkout` on a pull_request event checks out `refs/pull/N/merge`, which is
   # this PR already merged into main — so HEAD here IS the landing tree, and the guard
-  # sees exactly what merging would produce. Branch protection requires the branch to be
-  # up to date before merging, so that tree is the one that actually lands.
+  # sees exactly what merging would produce against main as of this run. Main can move
+  # before the queue lands the PR, but that cannot open a hole: the queue lands a real
+  # three-way merge, which carries only this PR's own changes, so nothing merged after
+  # this run can be reverted by it. Everything already on main, this run did see.
   #
   # A deliberate removal (dead code, a real revert) is acknowledged with the
   # `intentional-revert` label, which sets ALLOW_REVERT=1 and puts the intent on record.

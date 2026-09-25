@@ -204,10 +204,11 @@ Keep commits focused and incremental.
 
 ## How a PR gets merged
 
-Every PR is reviewed and merged by a maintainer. Nothing merges automatically, and CI
-holds no credential that can write to `main`.
+Every PR is reviewed by a maintainer, who adds it to the merge queue. Nothing merges
+without a maintainer, and CI holds no credential that can write to `main`.
 
-`main` is protected. Four checks must pass before the merge button unlocks:
+`main` is protected. Four checks must pass before a PR can enter the merge queue, and
+again on the queue's candidate before it lands:
 
 | Check | What it covers |
 | --- | --- |
@@ -215,12 +216,6 @@ holds no credential that can write to `main`.
 | `linux-sandbox` | the real bubblewrap backend, which the `test` job can only skip |
 | `build` | Linux packaging, so a packaging regression cannot land |
 | `revert-guard` | that merging would not delete or roll back work already on `main` |
-
-Branches must also be **up to date with `main`** before merging. This is what makes the
-checks meaningful: CI tests `refs/pull/N/merge`, so keeping the branch current means the
-tree CI tested is the tree that lands. If `main` moves while your PR is open, GitHub will
-ask you to update the branch and CI will re-run. That is working as intended, not a
-hiccup.
 
 ### What runs, and when it does not
 
@@ -241,16 +236,16 @@ top-level files are treated as code until someone adds them to the allowlist, an
 Pushes to `main` and merge-queue candidates are never scoped. Those are the trees that
 ship.
 
-### The rebase treadmill
+### The merge queue
 
-Because required checks are strict, any merge to `main` invalidates the up-to-date status
-of every other open PR. Landing several PRs therefore costs a rebase and a full CI run
-each, in sequence, and a PR's CI can finish green against a `main` that already moved while
-it ran.
+`main` is protected by a ruleset that requires a pull request, the four checks above, and
+GitHub's merge queue. Branches do **not** need to be up to date with `main` to merge. When
+a PR is green, choose **Merge when ready**: the queue builds a candidate commit of `main`
+plus the PRs ahead of it plus yours, runs the required checks on it, and lands it only if
+they pass. The tested tree is still the tree that lands, without a rebase and full CI run
+per PR every time something else merges.
 
-`ci.yml` runs on `merge_group`, so a maintainer can turn on GitHub's merge queue to remove
-that treadmill. The queue keeps the same guarantee that the tested tree is the tree that
-lands, and does the sequencing itself instead of asking each contributor to rebase.
+Rebase only when your PR has a real conflict with `main`.
 
 If `revert-guard` fails, read it carefully before overriding. It fires when your merge
 would remove something that still exists on `main`, which is usually a stale branch about
