@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_NAME } from '@shared/constants'
 
 /**
@@ -29,6 +29,12 @@ vi.mock('electron', () => ({
 vi.mock('./ipc', () => ({ registerIpc: vi.fn() }))
 
 describe('main entry app identity', () => {
+  // Vitest clears mock call history between tests, so each test must evaluate
+  // the entry module afresh rather than reading calls from a cached import.
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
   it('sets the app name before whenReady so userData/Keychain stay stable', async () => {
     await import('./index')
 
