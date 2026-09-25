@@ -61,14 +61,28 @@ jobs:
   sbom-conformance:
     uses: ./.github/workflows/sbom-conformance.yml
 
+  # The single human approval for a release. The `release-approval` environment carries the
+  # required reviewer; this job holds no secrets and does nothing but pass the gate. Build
+  # `needs` it, so one approval covers every matrix leg. (Putting the reviewer on `release`
+  # instead gates each leg separately, and `max-parallel: 1` below means each leg reaches the
+  # gate on its own: four platforms, four approvals.) Runs alongside the scans, so the
+  # approval can be given while they run.
+  approve:
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    environment: release-approval
+    steps:
+      - run: echo "Release approval gate passed."
+
   build:
-    needs: [scan, sbom-conformance]
+    needs: [scan, sbom-conformance, approve]
     timeout-minutes: 40
     # The signing credentials (Apple notarization, the Developer ID .p12, and the GPG
     # release key) live in the `release` environment, not as repository secrets, so they
     # are unreadable by any job that does not declare it. The environment restricts
     # deployment to protected branches, so a fork or a feature branch cannot reach them
-    # even by editing this file.
+    # even by editing this file. It has no required reviewer: the human approval is the
+    # `approve` job above.
     environment: release
     permissions:
       # the release is created and uploaded from this job, in this repo
