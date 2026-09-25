@@ -12,41 +12,46 @@ if the API is unreachable).
 ## Preview locally
 
 The site uses root-absolute paths (`/assets/…`), so serve it from a web root —
-opening `index.html` as a `file://` won't resolve assets.
+opening `public/index.html` as a `file://` won't resolve assets.
 
 Faithful Cloudflare Pages preview (recommended — also applies `_redirects`,
 `_headers`, and `404.html`, exactly like production):
 
 ```
-npx wrangler pages dev website          # → http://localhost:8788
+npx wrangler pages dev website/public   # → http://localhost:8788
 ```
 
 Quick pages-only preview (zero install; does NOT apply `_redirects`/`_headers`):
 
 ```
-python3 -m http.server 8000 -d website  # → http://localhost:8000
+python3 -m http.server 8000 -d website/public  # → http://localhost:8000
 ```
 
 ## Layout
 
+Everything under `public/` is deployed, and nothing else is. This README and
+`tools/` sit outside it so they are never served.
+
 ```
 website/
-  index.html          Landing page
-  privacy.html        Generated from docs/PRIVACY.md
-  404.html            Not-found page (Cloudflare serves this automatically)
-  assets/
-    styles.css        All styles (theme-aware light/dark)
-    app.js            Live release data + platform detection
-    icon.png          App icon (copied from build/icon.png)
-    og.svg            Social-card source (real icon composited at render time)
-    og.png            Social-card render (1200×630), generated from og.svg
-    screens/          Real product screenshots (see capture tool below)
-  _headers            Cloudflare Pages security + cache headers
-  _redirects          /download, /releases, /github short links
-  robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
-  sitemap.xml         homepage + privacy page, with lastmod
-  llms.txt            curated product summary for AI assistants (llmstxt.org)
-  tools/
+  README.md           This file (not deployed)
+  public/             The deployed site (Cloudflare Pages output directory)
+    index.html          Landing page
+    privacy.html        Generated from docs/PRIVACY.md
+    404.html            Not-found page (Cloudflare serves this automatically)
+    assets/
+      styles.css        All styles (theme-aware light/dark)
+      app.js            Live release data + platform detection
+      icon.png          App icon (copied from build/icon.png)
+      og.svg            Social-card source (real icon composited at render time)
+      og.png            Social-card render (1200×630), generated from og.svg
+      screens/          Real product screenshots (see capture tool below)
+    _headers            Cloudflare Pages security + cache headers
+    _redirects          /download, /releases, /github short links
+    robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
+    sitemap.xml         homepage + privacy page, with lastmod
+    llms.txt            curated product summary for AI assistants (llmstxt.org)
+  tools/              Build scripts (not deployed)
     build-legal.mjs       docs/PRIVACY.md → privacy.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
@@ -55,14 +60,14 @@ website/
 
 ## Screenshots
 
-`assets/screens/*.png` are real captures of the app, taken against a throwaway
+`public/assets/screens/*.png` are real captures of the app, taken against a throwaway
 profile, a disposable demo workspace, and a **local** model (Ollama) — so they show
 the genuine UI with no API keys, private code, or paid inference. To regenerate:
 
 ```
 ollama serve &                               # a local model, e.g. `ollama pull llama3.1`
 DEMO_DIR=/path/to/a/demo/project \
-SHOT_DIR=$PWD/website/assets/screens \
+SHOT_DIR=$PWD/website/public/assets/screens \
 MODEL=llama3.1:latest \
 node website/tools/capture-screens.mjs       # needs `npm run build` first
 ```
@@ -81,7 +86,7 @@ Binaries stay on GitHub Releases, so this is a pure static deploy — no build c
    - **Production branch:** `main`
    - **Framework preset:** None
    - **Build command:** *(leave empty)*
-   - **Build output directory:** `website`
+   - **Build output directory:** `website/public`
    - **Root directory:** *(leave as repo root)*
 3. **Save and Deploy.** Every push to `main` redeploys; pull requests get a preview URL.
 4. **Custom domain:** Pages project → **Custom domains → Set up a domain →**
@@ -94,5 +99,5 @@ That's the whole setup — no secrets, no CI wiring.
 
 - **The privacy page** is generated. After editing `docs/PRIVACY.md`, re-run
   `node website/tools/build-legal.mjs` and commit the updated HTML.
-- **Social card:** after editing `assets/og.svg`, re-run `node website/tools/build-og.mjs`.
-- **App icon:** if `build/icon.png` changes, `cp build/icon.png website/assets/icon.png`.
+- **Social card:** after editing `public/assets/og.svg`, re-run `node website/tools/build-og.mjs`.
+- **App icon:** if `build/icon.png` changes, `cp build/icon.png website/public/assets/icon.png`.

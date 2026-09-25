@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ASSETS = resolve(__dirname, "..", "assets");
+const ASSETS = resolve(__dirname, "..", "public", "assets");
 
 // Composite the real app icon so the card matches the header/favicon exactly.
 const iconDataUri =
@@ -23,4 +23,4 @@ await page.setContent(
 const el = await page.$("svg");
 await el.screenshot({ path: resolve(ASSETS, "og.png") });
 await browser.close();
-console.log("✓ website/assets/og.png (1200×630)");
+console.log("✓ website/public/assets/og.png (1200×630)");

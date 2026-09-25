@@ -11,8 +11,8 @@ Nothing here restricts your rights under the Apache License. It grants you
 
 - The name **Houston**, as a name for this software.
 - The Houston icon and logo artwork, including `build/icon.png`, `build/icon.icns`,
-  `build/icon.ico`, `website/assets/icon.png`, `website/assets/og.svg`,
-  `website/favicon.ico`, and the apple-touch icons, along with any file derived from
+  `build/icon.ico`, `website/public/assets/icon.png`, `website/public/assets/og.svg`,
+  `website/public/favicon.ico`, and the apple-touch icons, along with any file derived from
   them.
 - The domain **houstoncode.ai** and the project's accounts and handles.
 
