@@ -61,7 +61,7 @@ jobs:
     # dependency is skipped is skipped too — which for a required check reports a PASS.
     # Gating this job to pull requests would therefore silently stop running `test` and
     # `linux-sandbox` on main and on merge-queue candidates, while reporting them green.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       # Empty on non-PR events (the step below is skipped), and every consumer tests
       # `!= 'true'`, so anything other than a definite "inert" runs the full suite.
@@ -111,7 +111,7 @@ jobs:
     # OFF the per-PR path to nightly-build.yml + release-prepare.yml — they bill macOS ×10 /
     # Windows ×2 and shouldn't sit on every push. Trade-off: a macOS- or Windows-specific
     # unit regression surfaces nightly / at release, not on the PR that introduced it.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -197,7 +197,7 @@ jobs:
     needs: scope
     # See `test`, including why this is `!cancelled()` and not a bare condition.
     if: ${{ !cancelled() && needs.scope.outputs.inert != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -304,7 +304,7 @@ jobs:
     # NOT scoped by `scope` either. It is 8 seconds and it is the one check that is more
     # valuable, not less, on a branch that has been open long enough to go stale.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

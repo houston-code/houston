@@ -41,7 +41,7 @@ concurrency:
 jobs:
   auto-queue:
     if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       # Both are needed to enable auto-merge on a PR. Nothing in this job pushes.
