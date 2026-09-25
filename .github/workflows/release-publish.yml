@@ -64,6 +64,12 @@ jobs:
   build:
     needs: [scan, sbom-conformance]
     timeout-minutes: 40
+    # The signing credentials (Apple notarization, the Developer ID .p12, and the GPG
+    # release key) live in the `release` environment, not as repository secrets, so they
+    # are unreadable by any job that does not declare it. The environment restricts
+    # deployment to protected branches, so a fork or a feature branch cannot reach them
+    # even by editing this file.
+    environment: release
     permissions:
       # the release is created and uploaded from this job, in this repo
       contents: write
