@@ -211,6 +211,8 @@ export function prebuildSbom(electronVersion, releases) {
 // location (an SBOM scan has no source file). Keep the High/Critical results the policy acts on
 // (selected via the grype JSON, not by parsing SARIF prose) and anchor each to the lockfile line
 // that pins Electron: that is the line a fix changes, and code scanning needs a real path.
+// Grype's own partialFingerprints were hashed for that empty location, so drop them and let
+// upload-sarif fingerprint the new one (otherwise it warns "inconsistent fingerprint" per result).
 export function shapeSarif(sarif, report, { uri, line }) {
   const keep = new Set(
     (report.matches || [])
@@ -228,7 +230,7 @@ export function shapeSarif(sarif, report, { uri, line }) {
     runs: (sarif.runs || []).map((run) => {
       const results = (run.results || [])
         .filter((r) => keep.has(r.ruleId))
-        .map((r) => ({ ...r, locations: [location] }))
+        .map(({ partialFingerprints, ...r }) => ({ ...r, locations: [location] }))
       const used = new Set(results.map((r) => r.ruleId))
       const rules = (run.tool?.driver?.rules || []).filter((r) => used.has(r.id))
       return { ...run, tool: { ...run.tool, driver: { ...run.tool?.driver, rules } }, results }
