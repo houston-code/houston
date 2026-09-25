@@ -268,7 +268,13 @@ jobs:
       # consumes it. `npm run dist:linux` exits non-zero on any packaging failure, so the job
       # still gates merge. Inspectable build outputs come from nightly-build.yml (uploaded as
       # artifacts) and release-publish.yml (published as a GitHub Release) instead.
-      - run: npm run dist:linux
+      #
+      # `--publish never` is load-bearing on merge_group. Without an explicit policy,
+      # electron-builder publishes implicitly whenever it detects CI and the run is not a
+      # PR, and it recognises a PR only by GITHUB_BASE_REF, which a merge-queue candidate
+      # does not set. It then tries to create a GitHub release, fails for want of GH_TOKEN
+      # (ci.yml holds no credential, by design), and every queue entry is ejected.
+      - run: npm run dist:linux -- --publish never
   # Silent-clobber guard. A PR branched off an out-of-date main can, when merged,
   # delete files and revert code that landed while it was open — and CI does not
   # notice, because the reverted features' tests are removed in the same commit. That
