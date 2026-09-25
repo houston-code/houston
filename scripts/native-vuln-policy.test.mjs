@@ -353,7 +353,7 @@ describe('shapeSarif', () => {
           }
         },
         results: [
-          { ruleId: 'CVE-H-chromium', locations: emptyLoc },
+          { ruleId: 'CVE-H-chromium', locations: emptyLoc, partialFingerprints: { primaryLocationLineHash: 'grype-hash' } },
           { ruleId: 'CVE-C-chromium', locations: emptyLoc },
           { ruleId: 'CVE-M-chromium', locations: emptyLoc }
         ]
@@ -387,6 +387,11 @@ describe('shapeSarif', () => {
         }
       ])
     }
+  })
+
+  it("drops grype's fingerprints so upload-sarif computes them for the new location", () => {
+    const out = shapeSarif(sarif, report, { uri: 'package-lock.json', line: 42 })
+    for (const r of out.runs[0].results) expect(r).not.toHaveProperty('partialFingerprints')
   })
 
   it('yields an empty (still valid) run when nothing is High/Critical', () => {
