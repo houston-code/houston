@@ -56,6 +56,17 @@ jobs:
           only-fixed: true
           output-format: table
 
+  # Native-layer gate, pre-build: scans the Electron runtime the lockfile pins (and the Chromium +
+  # Node it embeds) before anything is built. A runtime that a stable Electron already fixes fails
+  # the release here, in about a minute, rather than on the Linux leg's post-build scan after the
+  # serialized macOS and Windows legs have built and uploaded. Findings only a pre-release fixes
+  # are tracked in code scanning, not blocking. See native-vuln-scan.yml.
+  native-scan:
+    uses: ./.github/workflows/native-vuln-scan.yml
+    permissions:
+      contents: read
+      security-events: write
+
   # SBOM conformance gate: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass before we
   # build or publish anything (build `needs` it), so a release can't ship a regressed SBOM.
   sbom-conformance:
@@ -75,7 +86,7 @@ jobs:
       - run: echo "Release approval gate passed."
 
   build:
-    needs: [scan, sbom-conformance, approve]
+    needs: [scan, native-scan, sbom-conformance, approve]
     timeout-minutes: 40
     # The signing credentials (Apple notarization, the Developer ID .p12, and the GPG
     # release key) live in the `release` environment, not as repository secrets, so they
@@ -312,27 +323,38 @@ jobs:
           node scripts/binary-sbom.mjs --app "${{ matrix.sbom_app }}" --platform "${{ matrix.sbom_label }}" \
             -o cyclonedx-json="sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json" \
             -o spdx-json="sbom.binary.${{ matrix.sbom_label }}.spdx.json"
-      # Vulnerability gate for the NATIVE layer — the coverage the lockfile scan can't provide.
-      # Without it a Chromium/Node/ripgrep CVE is invisible to the release (the calibration run
-      # flagged fixable High + a Critical in the shipped Chromium, matched via its CPE). Same
-      # policy as the lockfile gate: fail on a fixable High/Critical, suppress a finding assessed
-      # not-exploitable via the shared VEX doc. Runs ONCE, on the Linux leg: the six vuln-relevant
-      # components are identical across platforms (the mac-only Squirrel frameworks carry no NVD
-      # coordinates), so one scan covers the matrix without four redundant failure points. Runs
-      # post-build (the packaged app only exists after build) — consistent with the lockfile
-      # SBOM's post-build floor checks above; a failure here fails the build job, so finalize
-      # never un-drafts.
-      - name: Scan binary SBOM for vulnerabilities (fail on fixable High/Critical)
+      # Vulnerability gate for the NATIVE layer, the coverage the lockfile scan can't provide:
+      # without it a Chromium/Node/ripgrep CVE is invisible to the release (the calibration run
+      # flagged fixable High + a Critical in the shipped Chromium, matched via its CPE). Runs ONCE,
+      # on the Linux leg: the six vuln-relevant components are identical across platforms (the
+      # mac-only Squirrel frameworks carry no NVD coordinates). Post-build because it scans the
+      # packaged app; the pre-build native-scan job has already checked the runtime, so what this
+      # adds is node-pty, rg and ast-grep, read from the shipped binaries.
+      #
+      # Policy (scripts/native-vuln-policy.mjs), unlike the lockfile gate's "block every fixable
+      # High/Critical": a finding only BLOCKS when we could ship the fix today (a stable Electron
+      # carries it, or the component isn't Electron's). One that only a pre-release Electron fixes
+      # ships as an `affected` statement in this release's VEX document, which is generated
+      # here (repo assessments + those statements) into release-vex/ and is the copy attached,
+      # signed and checksummed below. A failure fails the build job, so finalize never un-drafts.
+      - name: Install grype
         if: matrix.os == 'ubuntu-22.04'
-        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        id: grype
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          sbom: sbom.binary.linux-x64.cyclonedx.json
           # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
           grype-version: v0.115.0
-          vex: .github/vex/houston.openvex.json
-          severity-cutoff: high
-          only-fixed: true
-          output-format: table
+      - name: Scan binary SBOM + apply native-layer policy
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          curl -fsSL --retry 3 https://releases.electronjs.org/releases.json -o electron-releases.json
+          "${{ steps.grype.outputs.cmd }}" sbom:sbom.binary.linux-x64.cyclonedx.json \
+            --only-fixed --vex .github/vex/houston.openvex.json -o table -o json=grype.binary.json
+          mkdir -p release-vex
+          node scripts/native-vuln-policy.mjs evaluate --report grype.binary.json \
+            --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY" \
+            --vex-in .github/vex/houston.openvex.json --vex-out release-vex/houston.openvex.json \
+            --release "$(node -p "require('./package.json').version")"
       - name: Attach standalone CLI + SBOMs to the release
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
@@ -354,7 +376,7 @@ jobs:
             sbom.cyclonedx.json \
             sbom.spdx.json \
             sbom.spdx3.json \
-            .github/vex/houston.openvex.json \
+            release-vex/houston.openvex.json \
             -R houston-code/houston --clobber
       # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
       # Fulcio cert + Rekor proof) beside each. This is the customer-verifiable
@@ -409,7 +431,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v$(node -p "require('./package.json').version")"
-          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json .github/vex/houston.openvex.json THIRD-PARTY-NOTICES.md; do
+          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json release-vex/houston.openvex.json THIRD-PARTY-NOTICES.md; do
             cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
             gh release upload "$tag" "$f.cosign.bundle" -R houston-code/houston --clobber
           done
@@ -468,7 +490,7 @@ jobs:
             ( cd out/cli && sha256sum houston-cli.cjs )
             sha256sum sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json \
               sbom.binary.linux-x64.cyclonedx.json sbom.binary.linux-x64.spdx.json THIRD-PARTY-NOTICES.md
-            ( cd .github/vex && sha256sum houston.openvex.json )
+            ( cd release-vex && sha256sum houston.openvex.json )
           } > SHA256SUMS
           sign SHA256SUMS
           # 3) Publish the manifest, its signature, and the committed public key so a downloader
@@ -551,6 +573,7 @@ jobs:
             sbom.spdx3.json
             sbom.binary.*.cyclonedx.json
             sbom.binary.*.spdx.json
+            release-vex/houston.openvex.json
           if-no-files-found: error
 
   finalize:

@@ -27,8 +27,8 @@ const RELEASES = [
 ]
 
 const CHROMIUM = { name: 'chromium', version: '152.0.7977.78', purl: 'pkg:generic/chromium@152.0.7977.78' }
-const match = (id, severity, artifact, fixes, state = 'fixed') => ({
-  vulnerability: { id, severity, fix: { versions: fixes, state } },
+const match = (id, severity, artifact, fixes, state = 'fixed', knownExploited) => ({
+  vulnerability: { id, severity, fix: { versions: fixes, state }, ...(knownExploited && { knownExploited }) },
   artifact
 })
 
@@ -131,6 +131,24 @@ describe('classify', () => {
     expect(blocking).toEqual([])
     expect(tracked).toHaveLength(1)
     expect(tracked[0]).toMatchObject({ id: 'CVE-2', severity: 'Critical', installed: '152.0.7977.130' })
+  })
+
+  it('flags a CISA KEV finding without changing its class', () => {
+    const chromium130 = { ...CHROMIUM, version: '152.0.7977.130', purl: 'pkg:generic/chromium@152.0.7977.130' }
+    const { blocking, tracked } = classify(
+      {
+        matches: [
+          match('CVE-K', 'High', chromium130, ['153.0.8010.36'], 'fixed', [{ cve: 'CVE-K' }]),
+          match('CVE-N', 'High', chromium130, ['153.0.8010.36'])
+        ]
+      },
+      RELEASES
+    )
+    expect(blocking).toEqual([])
+    expect(tracked.map((t) => [t.id, t.kev])).toEqual([
+      ['CVE-K', true],
+      ['CVE-N', false]
+    ])
   })
 
   it('always BLOCKS a fixable finding in a component Electron does not supply', () => {
@@ -244,6 +262,17 @@ describe('renderSummary', () => {
     expect(out).toMatch(/\| CVE-B \| High \| chromium \| 1 \| 2 \| r \|/)
     expect(out).toMatch(/Tracked, not blocking: 2\*\* \(1 Critical, 1 High;/)
     expect(out).toMatch(/<details>/)
+  })
+
+  it('marks KEV findings and calls them out above the table', () => {
+    const row = { severity: 'High', key: 'chromium', installed: '1', fixes: ['3'], reason: 'r' }
+    const one = renderSummary({ blocking: [], tracked: [{ ...row, id: 'CVE-K', kev: true }, { ...row, id: 'CVE-N', kev: false }] })
+    expect(one).toMatch(/\| CVE-K \| High \(KEV\) \|/)
+    expect(one).toMatch(/\| CVE-N \| High \|/)
+    expect(one).toMatch(/\*\*1 tracked finding is on CISA's Known Exploited Vulnerabilities list\*\*/)
+    const two = renderSummary({ blocking: [], tracked: [{ ...row, id: 'A', kev: true }, { ...row, id: 'B', kev: true }] })
+    expect(two).toMatch(/2 tracked findings are on CISA/)
+    expect(renderSummary({ blocking: [], tracked: [{ ...row, id: 'N', kev: false }] })).not.toMatch(/Known Exploited/)
   })
 
   it('says zero blocking and omits the tracked table when clean', () => {

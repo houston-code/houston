@@ -1,0 +1,84 @@
+name: Native vulnerability scan
+
+# Scans the Electron runtime (and the Chromium + Node it embeds) that the lockfile pins, WITHOUT
+# building anything, and applies the native-layer release policy (scripts/native-vuln-policy.mjs):
+#   • a fixable High/Critical that a STABLE Electron already fixes fails the run (we are behind:
+#     bump Electron);
+#   • one that only a pre-release fixes is tracked, not blocking: it is uploaded to GitHub code
+#     scanning (Security tab), where the alert closes itself once a later scan stops reporting it.
+#
+# Why this runs before the build, and daily:
+#   • release-publish.yml calls it alongside its other pre-build gates, so a runtime that must be
+#     upgraded fails the release in about a minute, instead of on the Linux leg's post-build scan
+#     after the serialized macOS/Windows legs have built and uploaded to the draft release.
+#   • The schedule catches a new Chromium/Node advisory the day grype's database learns of it,
+#     not on release day. Scheduled failures file an issue (alert-on-failure.yml), since GitHub
+#     notifies nobody about a red scheduled run.
+#
+# Runtime versions come from Electron's published release metadata for the lockfile's Electron.
+# The release's post-build scan still reads them from the real packaged binary, and adds the
+# components Electron does not supply (node-pty, rg, ast-grep).
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    # Daily, an hour before the nightly build.
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # upload the SARIF to code scanning
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+      - uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        id: grype
+        with:
+          # Same Grype as the release gates.
+          grype-version: v0.115.0
+      # One snapshot per run, so the SBOM and the policy judge against the same metadata.
+      - name: Fetch Electron release metadata
+        run: curl -fsSL --retry 3 https://releases.electronjs.org/releases.json -o electron-releases.json
+      - name: Build pre-build runtime SBOM
+        run: node scripts/native-vuln-policy.mjs sbom --releases electron-releases.json -o sbom.native-runtime.cyclonedx.json
+      - name: Scan with grype
+        run: |
+          "${{ steps.grype.outputs.cmd }}" sbom:sbom.native-runtime.cyclonedx.json \
+            --only-fixed --vex .github/vex/houston.openvex.json \
+            -o json=grype.native.json -o sarif=grype.native.sarif
+      - name: Shape SARIF for code scanning
+        run: node scripts/native-vuln-policy.mjs sarif --report grype.native.json --in grype.native.sarif --out native-runtime.sarif
+      # Before the policy step, so tracked findings are recorded even on a run the policy fails.
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: native-runtime.sarif
+          category: native-runtime
+      - name: Apply release policy (fail only if a stable Electron fixes it)
+        run: |
+          node scripts/native-vuln-policy.mjs evaluate --report grype.native.json \
+            --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY"
+
+  # Scheduled runs only: see alert-on-failure.yml. A called or hand-run scan has a human actor.
+  alert:
+    needs: [scan]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: Native vulnerability scan
+      failed: ${{ contains(needs.*.result, 'failure') }}

@@ -90,7 +90,9 @@ export function stableUpgrade(key, fixes, releases) {
 }
 
 // Classify every fixable High/Critical match. Returns { blocking, tracked }, each a list of
-// { id, severity, key, purl, installed, fixes, upgrade?, reason }.
+// { id, severity, kev, key, purl, installed, fixes, upgrade?, reason }. `kev` marks a CVE on
+// CISA's Known Exploited Vulnerabilities list; it does not change the class (blocking cannot ship
+// a fix no stable Electron has), but the summary puts it in front of whoever reads it.
 export function classify(report, releases) {
   if (!Array.isArray(releases) || releases.length === 0) {
     throw new Error('Electron release metadata is missing or empty; refusing to classify (fail closed).')
@@ -109,6 +111,7 @@ export function classify(report, releases) {
     const item = {
       id: v.id,
       severity: v.severity,
+      kev: (v.knownExploited || []).length > 0,
       key,
       purl: m.artifact?.purl,
       installed: m.artifact?.version,
@@ -168,7 +171,7 @@ export function renderSummary({ blocking, tracked }) {
   const table = (rows) => [
     '| CVE | Severity | Component | Installed | Fixed in | Why |',
     '| --- | --- | --- | --- | --- | --- |',
-    ...rows.map((r) => `| ${r.id} | ${r.severity} | ${r.key} | ${r.installed} | ${r.fixes.join(', ')} | ${r.reason} |`)
+    ...rows.map((r) => `| ${r.id} | ${r.severity}${r.kev ? ' (KEV)' : ''} | ${r.key} | ${r.installed} | ${r.fixes.join(', ')} | ${r.reason} |`)
   ]
   if (blocking.length) {
     lines.push(`**Blocking: ${blocking.length}** (a stable fix exists; upgrade before releasing)`, '', ...table(blocking), '')
@@ -176,10 +179,14 @@ export function renderSummary({ blocking, tracked }) {
     lines.push('**Blocking: 0**', '')
   }
   const bySev = (s) => tracked.filter((t) => t.severity === s).length
+  const kev = tracked.filter((t) => t.kev).length
   lines.push(
     `**Tracked, not blocking: ${tracked.length}** (${bySev('Critical')} Critical, ${bySev('High')} High; ` +
       'no stable Electron carries the fix yet)'
   )
+  if (kev) {
+    lines.push('', `**${kev} tracked finding${kev === 1 ? ' is' : 's are'} on CISA's Known Exploited Vulnerabilities list** (marked KEV). Take the stable Electron that fixes ${kev === 1 ? 'it' : 'them'} as soon as it ships.`)
+  }
   if (tracked.length) lines.push('', '<details><summary>Tracked findings</summary>', '', ...table(tracked), '', '</details>')
   return lines.join('\n') + '\n'
 }
