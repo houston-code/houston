@@ -18,7 +18,7 @@ const SITE = resolve(__dirname, "..", "public");
 
 // Relative links inside the docs → their public destinations.
 const LINK_MAP = {
-  "PRIVACY.md": "/privacy.html",
+  "PRIVACY.md": "/privacy",
   "../LICENSE": "https://github.com/houston-code/houston/blob/main/LICENSE",
   "../NOTICE": "https://github.com/houston-code/houston/blob/main/NOTICE",
   "sandboxing.md": "https://github.com/houston-code/houston/blob/main/docs/sandboxing.md",
@@ -114,7 +114,7 @@ function page({ title, description, contentTitle, html, slug }) {
     <div class="wrap">
       <div class="footer-bottom">
         <span>© <span id="year">2026</span> Houston ·
-          <a href="/privacy.html">Privacy</a> ·
+          <a href="/privacy">Privacy</a> ·
           <a href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
         </span>
       </div>
@@ -130,7 +130,9 @@ const DOCS = [
   {
     src: resolve(ROOT, "docs", "PRIVACY.md"),
     out: resolve(SITE, "privacy.html"),
-    slug: "privacy.html",
+    // Cloudflare Pages serves privacy.html at its extensionless URL (and 308s the
+    // .html form there), so the canonical URL is the extensionless one.
+    slug: "privacy",
     title: "Houston Privacy",
     description: "How Houston handles your data: it runs on your device, collects no analytics or telemetry, and your data leaves only to the providers you choose.",
   },

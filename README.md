@@ -412,8 +412,8 @@ Grab the artifact for your platform:
 | macOS (Apple Silicon) | macOS 13 Ventura | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | macOS (Intel) | macOS 13 Ventura | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
-| Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.AppImage` — `chmod +x` and run | Yes (AppImage only) |
-| Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x64.deb` — `sudo apt install ./…deb` | **No** — update via your package manager or re-download |
+| Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x86_64.AppImage`: `chmod +x` and run | Yes (AppImage only) |
+| Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-amd64.deb`: `sudo apt install ./…deb` | **No**, update via your package manager or re-download |
 | Any (terminal only) | Node ≥ 22 | `houston-cli.cjs` — the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i`, or put it on your PATH as `houston` | **No** — re-download to update |
 
 > **macOS builds are signed and notarized**, so they open with no Gatekeeper warning
@@ -878,7 +878,7 @@ gpg --verify SHA256SUMS.asc SHA256SUMS   # trust the manifest,
 sha256sum -c SHA256SUMS                   # then check your downloads against it
 
 # or verify a single Linux artifact directly:
-gpg --verify Houston-<version>-x64.AppImage.asc Houston-<version>-x64.AppImage
+gpg --verify Houston-<version>-x86_64.AppImage.asc Houston-<version>-x86_64.AppImage
 ```
 
 A `Good signature` line carrying the fingerprint above confirms authenticity. This is
