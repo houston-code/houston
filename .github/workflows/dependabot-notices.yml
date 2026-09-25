@@ -55,7 +55,7 @@ jobs:
     # Dependabot PRs only. A human author can run `npm run notices` locally, and gating
     # on the actor keeps this credential-holding job off every other PR in the repo.
     if: github.actor == 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

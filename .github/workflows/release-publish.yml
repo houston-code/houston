@@ -34,7 +34,7 @@ jobs:
   # not-exploitable is suppressed via the VEX document (.github/vex/houston.openvex.json).
   scan:
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
@@ -543,7 +543,7 @@ jobs:
     needs: build
     if: ${{ !inputs.dry_run }}
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       # Tag the repo at the released commit so the next release's note range starts here.
       contents: write
