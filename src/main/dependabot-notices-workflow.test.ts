@@ -5,7 +5,7 @@ import { load } from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
 /**
- * Guards the one workflow in this repo that holds a credential able to write to a branch.
+ * Guards the one workflow in this repo that holds a credential able to push to a branch.
  *
  * `ci-workflow.test.ts` pins the complementary invariant: ci.yml holds no push credential,
  * because ci.yml runs the PR's own tests and build, so any secret readable there is
