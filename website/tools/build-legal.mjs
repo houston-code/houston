@@ -1,4 +1,4 @@
-// Generates website/privacy.html from the canonical Markdown in docs/. The
+// Generates website/public/privacy.html from the canonical Markdown in docs/. The
 // Markdown stays the single source of truth — re-run this after editing
 // docs/PRIVACY.md:
 //
@@ -14,7 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
-const SITE = resolve(__dirname, "..");
+const SITE = resolve(__dirname, "..", "public");
 
 // Relative links inside the docs → their public destinations.
 const LINK_MAP = {

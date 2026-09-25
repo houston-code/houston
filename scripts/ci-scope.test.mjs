@@ -10,9 +10,10 @@ describe('inert paths', () => {
   it('treats the marketing site as inert', () => {
     // eslint.config.mjs ignores website/**, no tsconfig includes it, and
     // electron-builder does not package it.
-    expect(isInertPath('website/assets/app.js')).toBe(true)
-    expect(isInertPath('website/index.html')).toBe(true)
-    expect(isInertPath('website/assets/style.css')).toBe(true)
+    expect(isInertPath('website/public/assets/app.js')).toBe(true)
+    expect(isInertPath('website/public/index.html')).toBe(true)
+    expect(isInertPath('website/public/assets/styles.css')).toBe(true)
+    expect(isInertPath('website/README.md')).toBe(true)
   })
 
   it('does NOT treat website tooling as inert', () => {
@@ -98,7 +99,7 @@ describe('inert changesets', () => {
   it('reproduces the case this was built for', () => {
     // PR #683 changed exactly one line of the hero copy and ran 4,729 tests plus a full
     // Electron package, none of which touch the file.
-    expect(isInertChange(['website/assets/app.js'])).toBe(true)
+    expect(isInertChange(['website/public/assets/app.js'])).toBe(true)
   })
 })
 

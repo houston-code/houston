@@ -22,12 +22,12 @@ Apache License grant over this repository. That artwork is:
     build/icon.png
     build/icon.icns
     build/icon.ico
-    website/assets/icon.png
-    website/assets/og.svg
-    website/assets/og.png
-    website/apple-touch-icon.png
-    website/apple-touch-icon-precomposed.png
-    website/favicon.ico
+    website/public/assets/icon.png
+    website/public/assets/og.svg
+    website/public/assets/og.png
+    website/public/apple-touch-icon.png
+    website/public/apple-touch-icon-precomposed.png
+    website/public/favicon.ico
 
 together with any work derived from those files. They are included here
 so the project can build and ship itself; they are not licensed to you
