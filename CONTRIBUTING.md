@@ -286,6 +286,18 @@ error saying so rather than passing quietly.
 Writing to the branch means Dependabot stops rebasing that PR itself. Comment
 `@dependabot recreate` if you need it rebuilt from scratch.
 
+### Dependency PRs join the merge queue on their own
+
+`.github/workflows/dependabot-auto-queue.yml` turns on auto-merge for Dependabot's patch
+and minor updates, security fixes included. Here that means the PR enters the merge queue
+once its required checks pass, and the queue tests it again before it lands. Nothing
+skips a check. Major updates are left alone: review them and choose **Merge when ready**
+yourself.
+
+The workflow needs **Allow auto-merge** turned on in the repository settings. It never
+checks out or runs the PR's code, and it acts only on PRs that Dependabot opened and last
+pushed to.
+
 ## Licensing of contributions
 
 Houston is licensed under the [Apache License 2.0](LICENSE). Unless you say otherwise

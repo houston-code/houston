@@ -1,0 +1,72 @@
+name: Dependabot auto-queue
+
+# Turns on auto-merge for Dependabot's patch and minor updates. On this repo auto-merge
+# does not merge anything by itself: `main` is protected by a merge-queue ruleset, so
+# auto-merge means "add this PR to the merge queue once its required checks pass". The
+# PR still has to pass `test`, `linux-sandbox`, `build`, and `revert-guard` on its own
+# head, and then again on the queue's candidate (main + the PRs ahead of it + this one),
+# before anything lands. This workflow only saves a maintainer the click.
+#
+# Major bumps are left for a human. They are the updates that tend to need code changes
+# (see the TypeScript 7 and vite 8 holds in dependabot.yml), and green CI on a major is
+# weaker evidence than on a patch. That covers security updates too: a patch or minor
+# security fix is queued here, a major one waits for review like any other major.
+#
+# WHY THIS IS SAFE TO RUN WITH A WRITE TOKEN
+#
+# The job never checks out the repository and never runs project or dependency code. Its
+# only steps are Dependabot's own metadata action (which reads the PR through the API) and
+# one `gh pr merge --auto`. That is the property the retired auto-merge job lacked: it ran
+# `npm ci` and `npm test` on the PR tree while holding a write credential.
+#
+# The job is gated on BOTH the PR author and the event actor being Dependabot. The author
+# check keeps it off every human PR. The actor check keeps it off a Dependabot PR that a
+# human has since pushed to, since that push is no longer purely Dependabot's change.
+#
+# REQUIRES the repo setting "Allow auto-merge" (Settings > General). Without it the
+# `gh pr merge --auto` call fails loudly, which is the intended failure mode.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Read-only at the top level; the one job below raises exactly what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-auto-queue-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-queue:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Both are needed to enable auto-merge on a PR. Nothing in this job pushes.
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Read Dependabot's update metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - name: Queue patch and minor updates
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          set -euo pipefail
+          gh pr merge --auto --merge "${PR_URL}"
+          echo "Auto-merge enabled (${UPDATE_TYPE}); the PR joins the merge queue once its required checks pass."
+      - name: Leave major updates for review
+        if: >-
+          steps.metadata.outputs.update-type != 'version-update:semver-patch' &&
+          steps.metadata.outputs.update-type != 'version-update:semver-minor'
+        env:
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: echo "Not queued automatically (update type '${UPDATE_TYPE}'). A maintainer reviews and queues it."
