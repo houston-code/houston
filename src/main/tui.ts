@@ -57,6 +57,7 @@ import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
+import { createFindingPrinter } from '@shared/reviewFindings'
 import { truncateVisible, stripControlChars } from './tui-wrap'
 import { MarkdownStream } from './markdown-ansi'
 import { renderPreviewView } from './tui-diff'
@@ -3137,6 +3138,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     const toolArgs = new Map<string, Record<string, unknown>>()
     // todo_write calls whose list we already drew, so their summary line is dropped.
     const todoCalls = new Set<string>()
+    // Review findings print once per status change (line mode can't update in place).
+    const printFinding = createFindingPrinter()
     // Per-turn token/cost tally. The loop emits a `usage` event per model round
     // (and per subagent), which would be noisy to print each time — the live
     // session total already sits in the status line above the composer. So we sum
@@ -3214,6 +3217,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // start line, then a done/error line, indented under the parent tool.
           deps.io.out(paint(`    ${subagentGlyph(e.status)} ${e.label}\n`, 'dim'))
           break
+        case 'review_finding': {
+          const line = printFinding(e.parentCallId, e.finding)
+          if (line) {
+            const s = e.finding.status
+            const tone = s === 'confirmed' ? 'yellow' : s === 'candidate' ? undefined : 'dim'
+            const text = `      ${truncate(line, 120)}\n`
+            deps.io.out(tone ? paint(text, tone) : text)
+          }
+          break
+        }
         case 'retry':
           deps.io.setSpinnerLabel?.('Retrying')
           deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))

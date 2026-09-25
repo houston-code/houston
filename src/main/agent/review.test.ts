@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import type { SubAgentOptions } from './subagent'
+import type { ReviewFinding } from '@shared/agent'
 import {
   chunkReviewInput,
+  describeFinding,
   formatReviewInput,
+  locationKey,
+  resolveVerified,
   isSafeReviewPath,
   parseFindings,
   reviewWorkspaceChanges,
@@ -517,5 +521,203 @@ describe('reviewWorkspaceChanges', () => {
     expect(diffArgs).toContain('src/api')
     expect(out).toContain('No uncommitted changes')
     expect(out).toContain('src/api')
+  })
+})
+
+describe('describeFinding', () => {
+  it('splits the head into location and title, and keeps the supporting lines as detail', () => {
+    const d = describeFinding(
+      '- [SEVERITY: high] src/api/export.ts:88 — Missing auth check\n  Why: anyone can export\n  Suggested fix: call requireOwner'
+    )
+    expect(d).toEqual({
+      location: 'src/api/export.ts:88',
+      title: 'Missing auth check',
+      detail: 'Why: anyone can export\nSuggested fix: call requireOwner'
+    })
+  })
+
+  it('accepts backticked locations, ranges, and en or plain dashes', () => {
+    expect(describeFinding('- [low] `a/b.ts:3-9` - nit').location).toBe('a/b.ts:3-9')
+    expect(describeFinding('- [low] a.ts – nit').location).toBe('a.ts')
+  })
+
+  it('keeps the whole head as the title when it has no path-like location', () => {
+    expect(describeFinding('- [medium] Retries never back off')).toEqual({
+      title: 'Retries never back off',
+      detail: ''
+    })
+    expect(describeFinding('- [medium] Retries — never back off').location).toBeUndefined()
+  })
+
+  it("drops the verifier's closing tally from the last finding's detail", () => {
+    const d = describeFinding('- [HIGH] a.ts:1 — bug\n  Fix: x\n\nConfirmed 1 of 3 candidate findings.')
+    expect(d.detail).toBe('Fix: x')
+  })
+})
+
+describe('locationKey', () => {
+  it('normalizes ./ and line ranges to path:line', () => {
+    expect(locationKey('./src/a.ts:12-20')).toBe('src/a.ts:12')
+    expect(locationKey('src/a.ts')).toBe('src/a.ts')
+    expect(locationKey(undefined)).toBeUndefined()
+  })
+})
+
+describe('resolveVerified', () => {
+  const rf = (id: string, location: string | undefined, over: Partial<ReviewFinding> = {}): ReviewFinding => ({
+    id,
+    dimension: id.split(':')[0],
+    severity: 'medium',
+    ...(location ? { location } : {}),
+    title: `t ${id}`,
+    status: 'verifying',
+    ...over
+  })
+
+  it('confirms matched candidates, rejects the rest, and takes the verifier wording', () => {
+    const out = resolveVerified(
+      [rf('security:0', 'a.ts:1'), rf('correctness:0', 'b.ts:2')],
+      [rf('verified:0', './a.ts:1', { severity: 'high', title: 'better wording', dimension: 'review' })]
+    )
+    expect(out).toContainEqual(
+      expect.objectContaining({ id: 'security:0', dimension: 'security', status: 'confirmed', severity: 'high', title: 'better wording' })
+    )
+    expect(out).toContainEqual(expect.objectContaining({ id: 'correctness:0', status: 'rejected' }))
+  })
+
+  it('marks a second candidate at a claimed location as merged, not rejected', () => {
+    const out = resolveVerified(
+      [rf('security:0', 'a.ts:1'), rf('correctness:0', 'a.ts:1')],
+      [rf('verified:0', 'a.ts:1')]
+    )
+    expect(out.find((f) => f.id === 'security:0')?.status).toBe('confirmed')
+    expect(out.find((f) => f.id === 'correctness:0')?.status).toBe('merged')
+  })
+
+  it('falls back to the only candidate in the same file when the line moved', () => {
+    const out = resolveVerified([rf('quality:0', 'a.ts:10')], [rf('verified:0', 'a.ts:12')])
+    expect(out).toEqual([expect.objectContaining({ id: 'quality:0', status: 'confirmed', location: 'a.ts:12' })])
+  })
+
+  it('reports an unmatched verified finding as its own confirmed row', () => {
+    const out = resolveVerified([rf('quality:0', 'a.ts:1')], [rf('verified:0', 'z.ts:5'), rf('verified:1', undefined)])
+    expect(out.filter((f) => f.status === 'confirmed').map((f) => f.id)).toEqual(['verified:0', 'verified:1'])
+    expect(out.find((f) => f.id === 'quality:0')?.status).toBe('rejected')
+  })
+})
+
+describe('runReview live findings', () => {
+  const collect = (): { seen: ReviewFinding[]; onFinding: (f: ReviewFinding) => void } => {
+    const seen: ReviewFinding[] = []
+    return { seen, onFinding: (f) => seen.push(f) }
+  }
+  const latest = (seen: ReviewFinding[]): Map<string, ReviewFinding> => new Map(seen.map((f) => [f.id, f]))
+
+  it("emits a dimension's findings as candidates as soon as that reviewer finishes", async () => {
+    const { seen, onFinding } = collect()
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const fn = async (o: SubAgentOptions): Promise<string> => {
+      if (isVerifier(o)) return 'No confirmed issues.'
+      if (dimensionOf(o) === 'SECURITY') return '- [SEVERITY: high] a.ts:1 — hole\n  Why: x'
+      await gate // correctness and quality are still running
+      return 'No issues found.'
+    }
+    const run = runReview(base({ runAgent: fn, onFinding }))
+    await new Promise((r) => setTimeout(r, 0))
+    // Security finished; its finding is already out while the others are blocked.
+    expect(seen).toEqual([
+      expect.objectContaining({ id: 'security:0', dimension: 'security', severity: 'high', location: 'a.ts:1', title: 'hole', detail: 'Why: x', status: 'candidate' })
+    ])
+    release()
+    await run
+  })
+
+  it('normal effort: marks candidates verifying, then settles them against the verifier output', async () => {
+    const { seen, onFinding } = collect()
+    const { fn } = fakeAgent((o) => {
+      if (isVerifier(o)) return '- [HIGH] a.ts:1 — hole\n  Fix: y\n  Verified: read it\n\nConfirmed 1 of 2 candidate findings.'
+      if (dimensionOf(o) === 'SECURITY') return '- [SEVERITY: high] a.ts:1 — hole'
+      if (dimensionOf(o) === 'CORRECTNESS') return '- [SEVERITY: low] b.ts:2 — nit'
+      return 'No issues found.'
+    })
+    await runReview(base({ runAgent: fn, onFinding }))
+    expect(seen.filter((f) => f.status === 'verifying').map((f) => f.id).sort()).toEqual(['correctness:0', 'security:0'])
+    const end = latest(seen)
+    expect(end.get('security:0')).toMatchObject({ status: 'confirmed', detail: 'Fix: y\nVerified: read it' })
+    expect(end.get('correctness:0')?.status).toBe('rejected')
+  })
+
+  it('normal effort: rejects every candidate on an explicit all-clear', async () => {
+    const { seen, onFinding } = collect()
+    const { fn } = fakeAgent((o) =>
+      isVerifier(o) ? 'No confirmed issues.' : dimensionOf(o) === 'QUALITY' ? '- [low] a.ts:1 — nit' : 'No issues found.'
+    )
+    await runReview(base({ runAgent: fn, onFinding }))
+    expect(latest(seen).get('quality:0')?.status).toBe('rejected')
+  })
+
+  it('normal effort: reverts to unverified when the verifier fails or answers in prose', async () => {
+    for (const reply of ['[subagent error: boom]', 'I looked and it seems mostly fine.']) {
+      const { seen, onFinding } = collect()
+      const { fn } = fakeAgent((o) =>
+        isVerifier(o) ? reply : dimensionOf(o) === 'QUALITY' ? '- [low] a.ts:1 — nit' : 'No issues found.'
+      )
+      await runReview(base({ runAgent: fn, onFinding }))
+      expect(latest(seen).get('quality:0')?.status).toBe('candidate')
+    }
+  })
+
+  it('high effort: reports votes as they arrive and settles each finding by majority', async () => {
+    const { seen, onFinding } = collect()
+    const { fn } = fakeAgent((o) => {
+      if (isSkeptic(o)) return o.prompt.includes('bug one') ? 'CONFIRMED' : 'REJECTED'
+      return dimensionOf(o) === 'CORRECTNESS'
+        ? '- [SEVERITY: high] a.ts:1 — bug one\n- [SEVERITY: low] b.ts:2 — nit two'
+        : 'No issues found.'
+    })
+    await runReview(base({ runAgent: fn, effort: 'high', onFinding }))
+    const one = seen.filter((f) => f.id === 'correctness:0')
+    expect(one[0].status).toBe('candidate')
+    expect(one[1]).toMatchObject({ status: 'verifying', votes: { confirmed: 0, cast: 0, total: 3 } })
+    // Settles at the second confirming vote, before the third one is in.
+    expect(one.find((f) => f.status === 'confirmed')?.votes).toEqual({ confirmed: 2, cast: 2, total: 3 })
+    expect(one.at(-1)).toMatchObject({ status: 'confirmed', votes: { confirmed: 3, cast: 3, total: 3 } })
+    const two = seen.filter((f) => f.id === 'correctness:1')
+    expect(two.find((f) => f.status === 'rejected')?.votes).toEqual({ confirmed: 0, cast: 2, total: 3 })
+  })
+
+  it('scrubs finding text with the redactor before emitting it', async () => {
+    const { seen, onFinding } = collect()
+    const { fn } = fakeAgent((o) =>
+      isVerifier(o)
+        ? 'No confirmed issues.'
+        : dimensionOf(o) === 'SECURITY'
+          ? '- [high] a.ts:1 — leaks SECRET123\n  Why: SECRET123 is logged'
+          : 'No issues found.'
+    )
+    await runReview(base({ runAgent: fn, onFinding, redact: (t) => t.replaceAll('SECRET123', '[redacted]') }))
+    expect(JSON.stringify(seen)).not.toContain('SECRET123')
+    expect(seen[0].title).toBe('leaks [redacted]')
+  })
+
+  it('caps the number of live finding rows but still updates the ones shown', async () => {
+    const { seen, onFinding } = collect()
+    const many = Array.from({ length: 150 }, (_, i) => `- [low] f${i}.ts:1 — n${i}`).join('\n')
+    const { fn } = fakeAgent((o) =>
+      isVerifier(o) ? 'No confirmed issues.' : dimensionOf(o) === 'QUALITY' ? many : 'No issues found.'
+    )
+    await runReview(base({ runAgent: fn, onFinding }))
+    const ids = new Set(seen.map((f) => f.id))
+    expect(ids.size).toBe(100)
+    expect(latest(seen).get('quality:0')?.status).toBe('rejected')
+  })
+
+  it('does not change the report returned to the agent', async () => {
+    const reply = (o: SubAgentOptions): string =>
+      isVerifier(o) ? '- [HIGH] a.ts:1 — hole' : dimensionOf(o) === 'SECURITY' ? '- [high] a.ts:1 — hole' : 'No issues found.'
+    const withLive = await runReview(base({ runAgent: fakeAgent(reply).fn, onFinding: () => {} }))
+    const without = await runReview(base({ runAgent: fakeAgent(reply).fn }))
+    expect(withLive).toBe(without)
   })
 })

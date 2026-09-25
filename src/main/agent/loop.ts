@@ -1570,6 +1570,7 @@ export async function startRun(
           onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
           onSubAgent: (ev) =>
             emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
+          onFinding: (finding) => emit({ type: 'review_finding', parentCallId: callId, finding }),
           onUsage: (u) => {
             reviewInput += u.inputTokens ?? 0
             reviewOutput += u.outputTokens ?? 0

@@ -5,12 +5,14 @@ import {
   type ChatMessage,
   type ElicitationField,
   type PlanPayload,
-  type QuestionOption
+  type QuestionOption,
+  type ReviewFinding
 } from '@shared/agent'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { FileDiffPreview } from '@shared/diff'
 import type { ImageAttachment } from '@shared/images'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
+import { upsertFinding } from '@shared/reviewFindings'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
@@ -74,6 +76,8 @@ export interface ToolItem {
   progress?: string
   /** Live child rows for nested subagents this tool spawned (e.g. review dimension reviewers). */
   subagents?: SubAgentRow[]
+  /** Live review findings (review_changes), upserted by id as verification settles them. */
+  findings?: ReviewFinding[]
   /** Images the tool produced (e.g. a view_localhost screenshot). */
   images?: ImageAttachment[]
 }
@@ -313,6 +317,14 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         return { ...it, subagents }
       })
     }
+    case 'review_finding': {
+      // Add or update a finding under its review row (no-op if the row is gone).
+      return items.map((it) =>
+        it.kind === 'tool' && it.id === e.parentCallId
+          ? { ...it, findings: upsertFinding(it.findings ?? [], e.finding) }
+          : it
+      )
+    }
     case 'tool_question': {
       const finalized = finalizeStreaming(items)
       // Upsert (see tool_approval): a question card rebuilt from the log and then
@@ -399,17 +411,28 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         progress: undefined, // clear the live progress line now the tool has finished
         ...(e.images?.length ? { images: e.images } : {})
       })
-      // The tool finished, so any nested subagent row still spinning is now resolved.
-      const updated = patched.map((it) =>
-        it.kind === 'tool' && it.id === e.callId && it.subagents?.some((s) => s.status === 'running')
-          ? {
-              ...it,
-              subagents: it.subagents.map((s) =>
-                s.status === 'running' ? { ...s, status: 'done' as const } : s
-              )
-            }
-          : it
-      )
+      // The tool finished, so any nested subagent row still spinning is now resolved,
+      // and a finding still mid-verification (an aborted or failed review) never got
+      // a verdict: show it as unverified rather than spinning forever.
+      const updated = patched.map((it) => {
+        if (it.kind !== 'tool' || it.id !== e.callId) return it
+        let next = it
+        if (it.subagents?.some((s) => s.status === 'running')) {
+          next = {
+            ...next,
+            subagents: it.subagents.map((s) => (s.status === 'running' ? { ...s, status: 'done' as const } : s))
+          }
+        }
+        if (it.findings?.some((f) => f.status === 'verifying')) {
+          next = {
+            ...next,
+            findings: it.findings.map((f) =>
+              f.status === 'verifying' ? { ...f, status: 'candidate' as const, votes: undefined } : f
+            )
+          }
+        }
+        return next
+      })
       // Highlight a PR opening/merging as its own notice, above the tool row.
       const pr = prNoticeFromToolResult(e.name, e.ok, e.output)
       if (pr) {
