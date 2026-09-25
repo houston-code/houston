@@ -140,6 +140,14 @@ describe('CI supports the merge queue', () => {
     const buildJob = workflow.slice(workflow.indexOf('\n  build:'), workflow.indexOf('\n  revert-guard:'))
     expect(buildJob).toContain("if: github.event_name != 'push'")
   })
+
+  it('never lets electron-builder publish from a queue candidate', () => {
+    // A merge_group run has no GITHUB_BASE_REF, so electron-builder does not see a PR and
+    // publishes implicitly unless told not to. With no token that fails `build`, and the
+    // queue ejects every entry.
+    const buildJob = workflow.slice(workflow.indexOf('\n  build:'), workflow.indexOf('\n  revert-guard:'))
+    expect(buildJob).toContain('npm run dist:linux -- --publish never')
+  })
 })
 
 describe('CI validates every PR before it can merge', () => {
