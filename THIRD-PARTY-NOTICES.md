@@ -34,7 +34,7 @@ The `ast-grep` binary shipped in Resources/bin, provided by the @ast-grep/cli np
 ---
 ## Bundled npm dependencies (146)
 
-### @anthropic-ai/bedrock-sdk — 0.33.3
+### @anthropic-ai/bedrock-sdk — 0.33.7
 
 - License: MIT
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -49,7 +49,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### @anthropic-ai/foundry-sdk — 0.4.4
+### @anthropic-ai/foundry-sdk — 0.4.8
 
 - License: MIT
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -64,7 +64,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### @anthropic-ai/sdk — 0.122.0
+### @anthropic-ai/sdk — 0.127.0
 
 - License: MIT
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -79,7 +79,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### @anthropic-ai/vertex-sdk — 0.19.6
+### @anthropic-ai/vertex-sdk — 0.19.10
 
 - License: MIT
 - Homepage: github:anthropics/anthropic-sdk-typescript
@@ -4919,7 +4919,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### @google/genai — 2.19.0
+### @google/genai — 2.23.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/googleapis/js-genai#readme
@@ -16542,7 +16542,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### openai — 7.8.0
+### openai — 7.19.0
 
 - License: Apache-2.0
 - Homepage: github:openai/openai-node
