@@ -33,16 +33,15 @@ async function boot() {
     args: [MAIN, `--user-data-dir=${userDataDir}`],
   });
   const win = await app.firstWindow();
-  await win.locator(".legal-gate__backdrop, .app").first().waitFor({ state: "visible" });
-  const agree = win.getByRole("button", { name: "I Agree" });
-  if (await agree.isVisible().catch(() => false)) await agree.click();
   await win.locator(".app").waitFor({ state: "visible" });
   return { app, win };
 }
 
-// Phase A — let the app persist a full default settings.json, then close.
+// Phase A — have the app persist a full default settings.json, then close. The app
+// only writes settings on a change, so round-trip its defaults through the save IPC.
 {
-  const { app } = await boot();
+  const { app, win } = await boot();
+  await win.evaluate(async () => window.api.saveSettings(await window.api.getSettings()));
   await app.close();
 }
 

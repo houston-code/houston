@@ -5,8 +5,7 @@ The marketing + download site for Houston, served at **houstoncode.ai**.
 It's a **static site — no build step, no framework, no dependencies.** Plain HTML,
 one stylesheet, one small progressive-enhancement script. The binaries are **not**
 hosted here: download buttons resolve to the public
-[the releases page](https://github.com/houston-code/houston/releases/latest)
-GitHub Releases feed, fetched live by `assets/app.js` (with a static fallback link
+[GitHub Releases feed](https://github.com/houston-code/houston/releases/latest), fetched live by `assets/app.js` (with a static fallback link
 if the API is unreachable).
 
 ## Preview locally
@@ -54,6 +53,7 @@ website/
   tools/              Build scripts (not deployed)
     build-legal.mjs       docs/PRIVACY.md → privacy.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
+    download-links.test.mjs  fails CI if a download button's asset suffix matches no build
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
     capture-screens.mjs   real app screenshots against a local model + demo workspace
 ```
