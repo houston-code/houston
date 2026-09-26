@@ -66,6 +66,10 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      # Not used here: native-vuln-scan's `alert` job only runs on its own schedule. But GitHub
+      # checks every nested job's permissions against the caller's grant at startup, even one
+      # whose `if` is false, and refuses to start the whole run if one asks for more.
+      issues: write
 
   # SBOM conformance gate: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass before we
   # build or publish anything (build `needs` it), so a release can't ship a regressed SBOM.
