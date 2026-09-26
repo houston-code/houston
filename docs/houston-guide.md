@@ -555,7 +555,11 @@ an occurrence missed while Houston was closed fires once at the next launch.
   correctness, security, and quality. It runs an independent read-only reviewer
   per dimension, each in a fresh context, then a skeptical verifier that
   re-checks every candidate against the real code and drops false positives, and
-  reports the confirmed findings. Scope it to a `base` branch or specific
+  reports the confirmed findings. Findings show up under the review as soon as
+  each reviewer reports them, marked unverified, and update in place as the
+  verifier confirms or rejects them; once the review ends, rejected findings fold
+  into a "dropped as false positives" line you can expand. Click a finding to see
+  why it matters and the suggested fix. Scope it to a `base` branch or specific
   `paths`, raise `effort` to `high` to verify each finding with several
   independent skeptics, or pass `model` to run the reviewers and verifiers on a
   cheaper sibling model.

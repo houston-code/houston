@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import type { ReviewFinding } from '@shared/agent'
 import type { ToolItem } from '../lib/items'
 import { ToolGroup } from './ToolGroup'
 
@@ -504,6 +505,82 @@ describe('ToolGroup', () => {
     expect(done?.querySelector('.tool-row__glyph--done')).not.toBeNull()
     const running = screen.getByText('Security').closest('.tool-row__subagent')
     expect(running?.querySelector('[aria-label="running"]')).not.toBeNull()
+  })
+
+  describe('live review findings', () => {
+    const finding = (id: string, over: Partial<ReviewFinding> = {}): ReviewFinding => ({
+      id,
+      dimension: 'security',
+      severity: 'medium',
+      title: `title ${id}`,
+      status: 'candidate',
+      ...over
+    })
+    const review = (status: ToolItem['status'], findings: ReviewFinding[]): ToolItem[] => [
+      tool({ id: 'rev', name: 'review_changes', status, args: {}, findings })
+    ]
+
+    it('shows findings while the review runs, most severe first, with their live status', () => {
+      const { container } = render(
+        <ToolGroup
+          items={review('running', [
+            finding('q:0', { severity: 'low', status: 'candidate' }),
+            finding('s:0', { severity: 'high', location: 'src/api.ts:88', status: 'verifying', votes: { confirmed: 1, cast: 1, total: 3 } }),
+            finding('c:0', { severity: 'medium', status: 'rejected' })
+          ])}
+          onApprove={vi.fn()}
+        />
+      )
+      const rows = [...container.querySelectorAll('.finding')]
+      expect(rows.map((r) => r.querySelector('.finding__sev')?.textContent)).toEqual(['high', 'medium', 'low'])
+      expect(within(rows[0] as HTMLElement).getByText('src/api.ts:88')).toBeInTheDocument()
+      expect(within(rows[0] as HTMLElement).getByText('1/3')).toBeInTheDocument()
+      // A rejected finding stays in place, struck through, while the review is running.
+      expect(rows[1].classList.contains('finding--rejected')).toBe(true)
+      expect(within(rows[2] as HTMLElement).getByText('◇ unverified')).toBeInTheDocument()
+      expect(screen.getByText('2 found so far')).toBeInTheDocument()
+    })
+
+    it('folds dropped findings behind a toggle once the review is done, and tallies the rest', () => {
+      const { container } = render(
+        <ToolGroup
+          items={review('done', [
+            finding('s:0', { severity: 'high', status: 'confirmed' }),
+            finding('c:0', { status: 'rejected' }),
+            finding('c:1', { status: 'merged' })
+          ])}
+          onApprove={vi.fn()}
+        />
+      )
+      expect(container.querySelectorAll('.finding')).toHaveLength(1)
+      const tally = screen.getByText('1 high')
+      expect(tally.classList.contains('tool-row__tally--alarm')).toBe(true)
+      const toggle = screen.getByRole('button', { name: /1 dropped as a false positive, 1 merged as a duplicate/ })
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      fireEvent.click(toggle)
+      expect(container.querySelectorAll('.finding')).toHaveLength(3)
+    })
+
+    it('says no confirmed issues when every finding was dropped', () => {
+      render(<ToolGroup items={review('done', [finding('c:0', { status: 'rejected' })])} onApprove={vi.fn()} />)
+      expect(screen.getByText('no confirmed issues')).toBeInTheDocument()
+    })
+
+    it('expands a finding to show why and the fix, as plain text', () => {
+      render(
+        <ToolGroup
+          items={review('done', [finding('s:0', { status: 'confirmed', title: 'Hole', detail: 'Why: <b>x</b>\nFix: y' })])}
+          onApprove={vi.fn()}
+        />
+      )
+      const head = screen.getByRole('button', { name: /Hole/ })
+      expect(screen.queryByText(/Fix: y/)).toBeNull()
+      fireEvent.click(head)
+      expect(head).toHaveAttribute('aria-expanded', 'true')
+      const detail = screen.getByText(/Fix: y/)
+      expect(detail.textContent).toContain('<b>x</b>')
+      expect(detail.querySelector('b')).toBeNull()
+    })
   })
 
   it('shows the highest-priority status on a fold of reads with mixed statuses', () => {

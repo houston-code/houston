@@ -1,9 +1,10 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { MAX_APPROVAL_NOTE, type ToolApprovalDecision } from '@shared/agent'
+import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
+import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/reviewFindings'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
@@ -105,6 +106,110 @@ function StatusGlyph({ status }: { status: ToolItem['status'] }): JSX.Element {
   return <span className={`tool-row__glyph tool-row__glyph--${status}`}>{GLYPH[status]}</span>
 }
 
+/** The status tag at the end of a finding row. Nothing for a settled confirmed finding. */
+function FindingTag({ f, running }: { f: ReviewFinding; running: boolean }): JSX.Element | null {
+  const votes = f.votes ? ` ${f.votes.confirmed}/${f.votes.total}` : ''
+  switch (f.status) {
+    case 'candidate':
+      return <span className="finding__tag">◇ unverified</span>
+    case 'verifying':
+      return (
+        <span className="finding__tag">
+          <span className="tool-row__spinner finding__spinner" aria-hidden="true" />
+          {f.votes ? `${f.votes.confirmed}/${f.votes.total}` : 'verifying'}
+        </span>
+      )
+    case 'confirmed':
+      return running ? <span className="finding__tag finding__tag--ok">✓ confirmed{votes}</span> : null
+    case 'rejected':
+      return <span className="finding__tag">✕ rejected{votes}</span>
+    case 'merged':
+      return <span className="finding__tag">↳ merged</span>
+  }
+}
+
+function FindingRow({ f, running }: { f: ReviewFinding; running: boolean }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const expandable = Boolean(f.detail)
+  const body = (
+    <>
+      <span className={`finding__sev finding__sev--${f.severity}`}>{f.severity}</span>
+      <span className="finding__main">
+        <span className="finding__title">{f.title}</span>
+        {f.location && <span className="finding__loc">{f.location}</span>}
+      </span>
+      <FindingTag f={f} running={running} />
+      {expandable && <span className="finding__chevron">{open ? '▾' : '▸'}</span>}
+    </>
+  )
+  return (
+    <li className={`finding finding--${f.status}`}>
+      {expandable ? (
+        <button type="button" className="finding__head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          {body}
+        </button>
+      ) : (
+        <div className="finding__head">{body}</div>
+      )}
+      {open && f.detail && <div className="finding__detail">{f.detail}</div>}
+    </li>
+  )
+}
+
+/**
+ * Live findings under a review_changes row. While the review runs, every finding is
+ * shown as it arrives (dropped ones struck through in place); once it's done the
+ * dropped ones fold behind a single toggle so the confirmed list reads cleanly.
+ */
+function ReviewFindings({ findings, running }: { findings: ReviewFinding[]; running: boolean }): JSX.Element {
+  const [showDropped, setShowDropped] = useState(false)
+  const sorted = sortFindings(findings)
+  const shown = running ? sorted : sorted.filter((f) => !isDropped(f))
+  const dropped = running ? [] : sorted.filter(isDropped)
+  const summary = droppedSummary(dropped)
+  return (
+    <div className="review-findings">
+      {shown.length > 0 && (
+        <ul className="review-findings__list">
+          {shown.map((f) => (
+            <FindingRow key={f.id} f={f} running={running} />
+          ))}
+        </ul>
+      )}
+      {summary && (
+        <button
+          type="button"
+          className="review-findings__dropped"
+          aria-expanded={showDropped}
+          onClick={() => setShowDropped((v) => !v)}
+        >
+          {showDropped ? '▾' : '▸'} {summary}
+        </button>
+      )}
+      {showDropped && dropped.length > 0 && (
+        <ul className="review-findings__list">
+          {dropped.map((f) => (
+            <FindingRow key={f.id} f={f} running={running} />
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** The review row's header summary: a running count, then the severity tally. */
+function reviewTally(findings: ReviewFinding[] | undefined, running: boolean): { text: string; alarm: boolean } | null {
+  if (!findings || findings.length === 0) return null
+  if (running) {
+    const n = findings.filter((f) => !isDropped(f)).length
+    return { text: `${n} found so far`, alarm: false }
+  }
+  const text = findingTally(findings)
+  if (!text) return null
+  const alarm = findings.some((f) => !isDropped(f) && (f.severity === 'critical' || f.severity === 'high'))
+  return { text, alarm }
+}
+
 function ToolRow({
   item,
   onApprove
@@ -123,6 +228,8 @@ function ToolRow({
   const stat = allLines.length > 0 ? diffStat(allLines) : null
   const { verb, target, mono } = describeTool(item)
   const awaiting = item.status === 'awaiting-approval'
+  const running = item.status === 'running'
+  const tally = reviewTally(item.findings, running)
 
   // Open the diff/output by default while a change is awaiting approval.
   const [open, setOpen] = useState(awaiting)
@@ -162,6 +269,9 @@ function ToolRow({
           </span>
         )}
         <span className="tool-row__spacer" />
+        {tally && (
+          <span className={`tool-row__tally${tally.alarm ? ' tool-row__tally--alarm' : ''}`}>{tally.text}</span>
+        )}
         {stat && (
           <span className="diff-stat">
             <span className="diff-stat__add">+{stat.added}</span>
@@ -186,6 +296,10 @@ function ToolRow({
             </li>
           ))}
         </ul>
+      )}
+
+      {item.findings && item.findings.length > 0 && (
+        <ReviewFindings findings={item.findings} running={running} />
       )}
 
       {isTodo && (

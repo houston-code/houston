@@ -11,6 +11,7 @@ import { loadProjectConfig } from './agent/projectConfig'
 import { missingKeyHint } from '@shared/provider-keys'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
+import { createFindingPrinter } from '@shared/reviewFindings'
 import type {
   AgentEvent,
   AgentRunRequest,
@@ -376,6 +377,8 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
   let inTok = 0
   let outTok = 0
   let cost = 0
+  // Review findings print once per status change (see createFindingPrinter).
+  const printFinding = createFindingPrinter()
   const send = (e: AgentEvent): void => {
     if (opts.json) {
       deps.out(`${JSON.stringify(e)}\n`)
@@ -511,6 +514,12 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         // A nested subagent row (e.g. one review dimension) starting/finishing.
         if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}\n`)
         break
+      case 'review_finding': {
+        // A review finding as it's raised, then its verdict. stderr, like the rows above.
+        const line = opts.json ? null : printFinding(e.parentCallId, e.finding)
+        if (line) deps.err(`·     ${line}\n`)
+        break
+      }
       case 'elicitation':
         // No interactive user in headless mode — decline, so the MCP server takes
         // its documented no-answer path instead of hanging the run. Deliberately
