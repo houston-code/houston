@@ -140,3 +140,19 @@ describe('committed signing public key', () => {
     expect(key).not.toContain('PRIVATE KEY BLOCK')
   })
 })
+
+describe('release-publish Download table', () => {
+  const finalize = workflow.slice(workflow.indexOf('\n  finalize:\n'))
+
+  it('builds the table from the draft before the tag is pushed', () => {
+    const table = finalize.indexOf('node scripts/release-downloads.mjs houston-code/houston "$tag"')
+    expect(table).toBeGreaterThan(-1)
+    expect(table).toBeLessThan(finalize.indexOf('- name: Tag source repo at released commit'))
+  })
+
+  it('publishes the table followed by the changelog notes', () => {
+    expect(finalize).toContain('cat release-notes.md')
+    expect(finalize).toContain('--notes-file release-body.md')
+    expect(finalize).not.toContain('--notes-file release-notes.md')
+  })
+})
