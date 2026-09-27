@@ -911,17 +911,20 @@ cosign verify-blob SHA256SUMS \
 with its own `<file>.cosign.bundle`, which the same command verifies with the file's
 name and bundle substituted.
 
-**Build provenance.** Each installer, the CLI, and the SBOMs also carry a
-`<file>.slsa.bundle`: a signed [SLSA](https://slsa.dev/) provenance statement recording
-the workflow, source repository, and commit that built it. To check it:
+**Build provenance.** Each release also carries one `provenance.slsa.bundle`: a signed
+[SLSA](https://slsa.dev/) provenance statement recording the workflow, source repository,
+and commit that built the release. It lists every file in `SHA256SUMS`, so the same bundle
+checks any of them:
 
 ```bash
 cosign verify-blob-attestation Houston-<version>-arm64.dmg \
-  --bundle Houston-<version>-arm64.dmg.slsa.bundle \
+  --bundle provenance.slsa.bundle \
   --type slsaprovenance1 \
   --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
+
+(Releases up to v0.3.0 carry a separate `<file>.slsa.bundle` per file instead.)
 
 None of this gates the in-app updater: it verifies each update against the checksum in
 its update feed, fetched over HTTPS, and on macOS also checks the code signature. A
