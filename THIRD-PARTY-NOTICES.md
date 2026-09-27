@@ -16542,7 +16542,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### openai — 7.19.0
+### openai — 7.20.0
 
 - License: Apache-2.0
 - Homepage: github:openai/openai-node
