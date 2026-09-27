@@ -22,14 +22,20 @@ const gpgStep = (() => {
   return next === -1 ? rest : rest.slice(0, next)
 })()
 
+// The `checksums` job: from its key to the next top-level job.
+const checksumsJob = (() => {
+  const start = workflow.indexOf('\n  checksums:\n')
+  return workflow.slice(start, workflow.indexOf('\n  finalize:\n', start))
+})()
+
 describe('release-publish GPG signing', () => {
   it('defines a GPG signing step', () => {
-    expect(workflow).toContain('- name: GPG-sign Linux artifacts + whole-release checksums')
+    expect(workflow).toContain('- name: GPG-sign Linux artifacts')
   })
 
   it('runs only on the Linux leg and never on a dry run', () => {
-    // The manifest covers assets present on the Linux leg (which is last in the serialized
-    // matrix); dry_run publishes nothing, so there is nothing to sign or attach.
+    // The AppImage and deb exist only on the Linux leg; dry_run publishes nothing, so there
+    // is nothing to sign or attach.
     expect(gpgStep).toContain("matrix.os == 'ubuntu-22.04'")
     expect(gpgStep).toContain('!inputs.dry_run')
   })
@@ -60,18 +66,45 @@ describe('release-publish GPG signing', () => {
     expect(gpgStep).toMatch(/gh release upload "\$tag" "\$f\.asc"/)
   })
 
-  it('produces one signed SHA256SUMS manifest covering the release assets', () => {
-    // A single signed manifest (SHA256SUMS + SHA256SUMS.asc) replaces the lone per-CLI .sha256,
-    // so one verify covers the whole set. Manifest is built from bare filenames so the listed
-    // names match what a user downloads.
-    expect(gpgStep).toContain('sha256sum')
-    expect(gpgStep).toMatch(/> SHA256SUMS/)
-    expect(gpgStep).toContain('sign SHA256SUMS')
-    expect(gpgStep).toMatch(/gh release upload "\$tag" SHA256SUMS SHA256SUMS\.asc houston-signing-key\.asc/)
+  it('publishes the public key so a downloader needs no keyserver', () => {
+    expect(gpgStep).toMatch(/gh release upload "\$tag" houston-signing-key\.asc/)
   })
 
-  it('publishes the public key so a downloader needs no keyserver', () => {
-    expect(gpgStep).toContain('houston-signing-key.asc')
+  it('leaves the whole-release manifest to the checksums job', () => {
+    // Built on the Linux leg it could only hash that runner's files, so it missed every mac
+    // and Windows download.
+    expect(gpgStep).not.toContain('SHA256SUMS')
+  })
+})
+
+describe('release-publish SHA256SUMS manifest', () => {
+  it('runs after every build leg and before finalize publishes', () => {
+    expect(checksumsJob).toContain('needs: build')
+    expect(workflow).toContain('\n  finalize:\n    needs: [build, checksums]\n')
+  })
+
+  it('never runs on a dry run', () => {
+    expect(checksumsJob).toContain('if: ${{ !inputs.dry_run }}')
+  })
+
+  it('hashes the assets as downloaded from the draft, with bare filenames', () => {
+    expect(checksumsJob).toContain('node scripts/release-checksums.mjs houston-code/houston "$tag" > checksummed.txt')
+    expect(checksumsJob).toContain('gh release download "$tag" -R houston-code/houston -p "$name" -D assets')
+    expect(checksumsJob).toContain('( cd assets && sha256sum -- "${names[@]}" ) > SHA256SUMS')
+  })
+
+  it('signs the manifest with cosign always and GPG when the key is set', () => {
+    expect(checksumsJob).toContain('cosign sign-blob --yes SHA256SUMS --bundle SHA256SUMS.cosign.bundle')
+    expect(checksumsJob).toMatch(/if \[ -z "\$GPG_PRIVATE_KEY" \]/)
+    expect(checksumsJob).toMatch(/GNUPGHOME="\$\(mktemp -d\)"/)
+    expect(checksumsJob).toContain('--pinentry-mode loopback --passphrase "$GPG_PASSPHRASE"')
+    expect(checksumsJob).toContain('--detach-sign --output SHA256SUMS.asc SHA256SUMS')
+    expect(checksumsJob).toContain('gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber')
+  })
+
+  it('reads the signing secrets from the release environment', () => {
+    expect(checksumsJob).toContain('environment: release')
+    expect(checksumsJob).toContain('id-token: write')
   })
 })
 
@@ -83,9 +116,9 @@ describe('release-publish source commit', () => {
     expect(workflow).not.toMatch(/^\s*ref:\s*main\s*$/m)
   })
 
-  it('pins the build and finalize checkouts to github.sha', () => {
+  it('pins the build, checksums and finalize checkouts to github.sha', () => {
     const pinned = workflow.match(/^\s*ref: \$\{\{ github\.sha \}\}\s*$/gm) ?? []
-    expect(pinned).toHaveLength(2)
+    expect(pinned).toHaveLength(3)
   })
 
   it('refuses to publish under a version tag that names a different commit', () => {
