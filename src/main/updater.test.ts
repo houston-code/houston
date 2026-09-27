@@ -220,7 +220,20 @@ describe('menuUpdateDialog', () => {
     })
     expect(downloadUrl).toBeNull()
     expect(options.type).toBe('warning')
-    expect(options.detail).toBe('feed unreachable')
+    expect(options.message).toBe('Couldn’t check for updates.')
+    // Not a network error: no hint, and never the raw error text.
+    expect(options.detail).toBeUndefined()
+  })
+
+  it('shows a connection hint, not the raw error, when offline', async () => {
+    const { menuUpdateDialog } = await load()
+    const { options } = menuUpdateDialog({
+      status: 'error',
+      currentVersion: '0.3.0',
+      message: 'net::ERR_NAME_NOT_RESOLVED'
+    })
+    expect(options.detail).toBe('Check your internet connection and try again.')
+    expect(JSON.stringify(options)).not.toContain('ERR_NAME_NOT_RESOLVED')
   })
 })
 
