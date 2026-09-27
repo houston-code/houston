@@ -581,8 +581,8 @@ needed, and a full run peaks around **60 MB of RAM**, so it works on headless
 Linux servers and small VPSes where the desktop app cannot even start.
 
 ```bash
-# grab houston-cli.cjs from the latest release (optionally verify it first;
-# see "Verifying downloads", e.g. sha256sum -c houston-cli.cjs.sha256), then:
+# grab houston-cli.cjs from the latest release (optionally verify it first, see
+# "Verifying downloads": sha256sum -c --ignore-missing SHA256SUMS), then:
 node houston-cli.cjs --help          # or: chmod +x houston-cli.cjs && ./houston-cli.cjs
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --cwd ~/code/myproj
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -i
@@ -862,54 +862,70 @@ your login keychain and export the same variables in your shell before
 
 ### Verifying downloads
 
-Every published artifact can be verified before you run it. Three independent methods
-are provided, and any one is enough.
+Every release carries a `SHA256SUMS` file listing the SHA-256 of every download, for
+every platform. It is signed two ways: with the project GPG key (`SHA256SUMS.asc`) and
+keylessly with [cosign](https://docs.sigstore.dev/) (`SHA256SUMS.cosign.bundle`).
+Verifying the signature on `SHA256SUMS`, then checking your download against it, proves
+the file came from this project's release workflow and wasn't altered. Pick whichever
+signature tool you have; either one is enough.
 
-**1. GPG (offline, no extra tooling).** The Linux artifacts (`*.AppImage`, `*.deb`)
-ship with a detached `<file>.asc` signature, and every release carries a `SHA256SUMS`
-manifest, listing every platform's downloads, signed as `SHA256SUMS.asc`. Both are made with the project signing key,
-published as `houston-signing-key.asc` on each release. Import the key once (pin the
-fingerprint below), then verify:
+**1. Check your download against `SHA256SUMS`.** Download `SHA256SUMS` into the same
+folder as the file you downloaded, then:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS          # Linux
+shasum -a 256 -c --ignore-missing SHA256SUMS      # macOS
+```
+
+On Windows, compare the output of `Get-FileHash .\Houston-<version>-x64-setup.exe` (in
+PowerShell) with that file's line in `SHA256SUMS`. An `OK` (or matching hash) means the
+download is intact. On its own this doesn't prove who published the list, so also
+verify its signature with step 2 or 3.
+
+**2. Verify `SHA256SUMS` with GPG.** The signing key is published as
+`houston-signing-key.asc` on each release. Import it once and pin the fingerprint:
 
 ```bash
 gpg --import houston-signing-key.asc
 # fingerprint: A11D D282 4C1E F838 D441  452F 5DD4 F607 9F8B A5DB
-
-# verify the whole release in one step:
-gpg --verify SHA256SUMS.asc SHA256SUMS   # trust the manifest,
-sha256sum -c --ignore-missing SHA256SUMS  # then check the files you downloaded
-
-# or verify a single Linux artifact directly:
-gpg --verify Houston-<version>-x86_64.AppImage.asc Houston-<version>-x86_64.AppImage
+gpg --verify SHA256SUMS.asc SHA256SUMS
 ```
 
-A `Good signature` line carrying the fingerprint above confirms authenticity. This is
-for verifying a download by hand: the in-app updater does not use GPG (it verifies the
-update feed over HTTPS), so a bad signature here means re-download, not a blocked update.
+A `Good signature` line carrying that fingerprint confirms it. The Linux AppImage and
+deb also have their own detached signature, so you can check one directly:
+`gpg --verify Houston-<version>-x86_64.AppImage.asc Houston-<version>-x86_64.AppImage`.
 
-**2. cosign (keyless, transparency-logged).** Every artifact (the desktop installers,
-the standalone `houston-cli.cjs`, and the CycloneDX + SPDX SBOMs, covering both the
-JavaScript dependency closure and the native/runtime layer) also ships with a
-`<file>.cosign.bundle` beside it. Each is keyless-signed in CI with
-[cosign](https://docs.sigstore.dev/): the signature, its short-lived certificate, and a
-[Rekor](https://docs.sigstore.dev/logging/overview/) transparency-log proof all live
-inside the bundle, so anyone can verify with no account, key, or repo access:
+**3. Verify `SHA256SUMS` with cosign (no key to import).** The bundle holds the signature,
+a short-lived certificate naming the release workflow, and a
+[Rekor](https://docs.sigstore.dev/logging/overview/) transparency-log proof, so no
+account, key, or repo access is needed:
 
 ```bash
-cosign verify-blob houston-cli.cjs \
-  --bundle houston-cli.cjs.cosign.bundle \
+cosign verify-blob SHA256SUMS \
+  --bundle SHA256SUMS.cosign.bundle \
   --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
 
-`Verified OK` confirms the file came from this project's release workflow and has not been
-altered. The same command verifies any released file: substitute its name and matching
-`.cosign.bundle`.
+`Verified OK` confirms it. Each installer, the standalone CLI, and each SBOM also ships
+with its own `<file>.cosign.bundle`, which the same command verifies with the file's
+name and bundle substituted.
 
-**3. Checksums only.** For a plain integrity check without verifying who signed it,
-`sha256sum -c --ignore-missing SHA256SUMS` (or the standalone `houston-cli.cjs.sha256`)
-confirms a download matches what was published. On macOS, use
-`shasum -a 256 -c --ignore-missing SHA256SUMS`.
+**Build provenance.** Each installer, the CLI, and the SBOMs also carry a
+`<file>.slsa.bundle`: a signed [SLSA](https://slsa.dev/) provenance statement recording
+the workflow, source repository, and commit that built it. To check it:
+
+```bash
+cosign verify-blob-attestation Houston-<version>-arm64.dmg \
+  --bundle Houston-<version>-arm64.dmg.slsa.bundle \
+  --type slsaprovenance1 \
+  --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+None of this gates the in-app updater: it verifies each update against the checksum in
+its update feed, fetched over HTTPS, and on macOS also checks the code signature. A
+failed check here means re-download, not a blocked update.
 
 ## Roadmap
 

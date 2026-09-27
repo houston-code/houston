@@ -19,9 +19,9 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { planReleaseDraft } from './release-draft.mjs'
 
-// Signatures, provenance, updater metadata and per-file checksums describe other assets
-// and are verified through them, so they are not listed themselves.
-const EXCLUDED_SUFFIXES = ['.cosign.bundle', '.slsa.bundle', '.asc', '.blockmap', '.yml', '.sha256']
+// Signatures, provenance and updater metadata describe other assets and are verified
+// through them, so they are not listed themselves.
+const EXCLUDED_SUFFIXES = ['.cosign.bundle', '.slsa.bundle', '.asc', '.blockmap', '.yml']
 const EXCLUDED_NAMES = new Set(['SHA256SUMS'])
 
 // One entry per download the manifest must cover. Matched loosely on the arch/format part
