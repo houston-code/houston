@@ -168,6 +168,10 @@ linux:
 dmg:
   title: ${productName} ${version}
   artifactName: ${productName}-${version}-${arch}.dmg
+  # No .dmg.blockmap and no dmg entry in latest-mac.yml: the dmg is only the first-install
+  # download, and MacUpdater updates from the zip (findFile(files, "zip")), so a dmg
+  # blockmap was an extra release file nothing reads.
+  writeUpdateInfo: false
   contents:
     - x: 130
       y: 220
