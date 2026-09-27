@@ -37,17 +37,25 @@ function artifactName(section, ext, arch) {
     .replace("${ext}", ext);
 }
 
-const produced = BUILDS.map(([section, ext, arch]) => artifactName(section, ext, arch));
-const suffixes = [...html.matchAll(/data-asset-suffix="([^"]+)"/g)].map((m) => m[1]);
+// The standalone CLI (scripts/build-cli.mjs) is the one linked download electron-builder
+// doesn't name.
+const CLI = "houston-cli.cjs";
+const produced = [...BUILDS.map(([section, ext, arch]) => artifactName(section, ext, arch)), CLI];
+// Files published beside each download. A suffix must not match these either, or a
+// button could resolve to a signature instead of the file.
+const SIDECARS = [".blockmap", ".cosign.bundle", ".slsa.bundle", ".asc", ".sha256"];
+const released = produced.flatMap((name) => [name, ...SIDECARS.map((s) => name + s)]);
+const suffixes = [...new Set([...html.matchAll(/data-asset-suffix="([^"]+)"/g)].map((m) => m[1]))];
 
 describe("landing-page download links match the release asset names", () => {
-  it("links every installer electron-builder produces", () => {
-    expect(suffixes).toHaveLength(BUILDS.length);
+  it("links every installer electron-builder produces, plus the CLI", () => {
+    expect(suffixes).toHaveLength(BUILDS.length + 1);
+    expect(suffixes).toContain(CLI);
   });
 
   for (const suffix of suffixes) {
-    it(`${suffix} resolves to exactly one built artifact`, () => {
-      expect(produced.filter((name) => name.endsWith(suffix))).toHaveLength(1);
+    it(`${suffix} resolves to exactly one released file`, () => {
+      expect(released.filter((name) => name.endsWith(suffix))).toHaveLength(1);
     });
   }
 });
