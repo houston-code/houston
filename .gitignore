@@ -15,6 +15,9 @@ coverage/
 # until 2026-07: the whole guide lands on one ~37KB line, so every pair of
 # concurrent PRs touching the guide conflicted there, unresolvably. Keep it out.
 src/main/agent/guide-content.ts
+# Generated from CHANGELOG.md by scripts/gen-release-highlights.mjs (same hooks as the
+# guide): the running build's "What's new" text.
+src/shared/release-highlights.ts
 
 # TypeScript incremental build cache (rewritten on every tsc/typecheck run)
 *.tsbuildinfo
