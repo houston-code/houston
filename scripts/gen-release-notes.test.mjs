@@ -71,7 +71,9 @@ describe('buildNotes', () => {
 
   it('groups entries and always emits a summary placeholder + Required steps', () => {
     const md = buildNotes({ version: '0.2.0', date: '2026-06-28', prs })
-    expect(md).toContain('## v0.2.0 — 2026-06-28')
+    expect(md).toContain('## v0.2.0 - 2026-06-28')
+    // CHANGELOG.md is customer-facing (it becomes the GitHub Release body): no em dashes.
+    expect(md).not.toContain('\u2014')
     expect(md).toContain('2–3 sentence plain-English summary')
     expect(md).toContain('### Required steps')
     expect(md).toContain('### Breaking changes')
@@ -101,15 +103,15 @@ describe('buildNotes', () => {
 
   it('handles an empty PR set without throwing', () => {
     const md = buildNotes({ version: '0.0.1', date: '2026-06-28', prs: [] })
-    expect(md).toContain('## v0.0.1 — 2026-06-28')
+    expect(md).toContain('## v0.0.1 - 2026-06-28')
     expect(md).toMatch(/### Breaking changes\n_None\._/)
   })
 })
 
 describe('prependToChangelog', () => {
   it('inserts the new section directly under the H1, above older entries', () => {
-    const existing = '# Changelog\n\n## v0.1.0 — 2026-06-01\n\n### Added\n- First release\n'
-    const section = '## v0.2.0 — 2026-06-28\n\n### Added\n- New thing\n'
+    const existing = '# Changelog\n\n## v0.1.0 - 2026-06-01\n\n### Added\n- First release\n'
+    const section = '## v0.2.0 - 2026-06-28\n\n### Added\n- New thing\n'
     const out = prependToChangelog(existing, section)
     expect(out.indexOf('v0.2.0')).toBeLessThan(out.indexOf('v0.1.0'))
     expect(out.startsWith('# Changelog\n')).toBe(true)
@@ -117,7 +119,7 @@ describe('prependToChangelog', () => {
   })
 
   it('creates a clean file when there is no existing changelog', () => {
-    const out = prependToChangelog('', '## v0.1.0 — 2026-06-28\n\n### Added\n- First\n')
-    expect(out).toBe('# Changelog\n\n## v0.1.0 — 2026-06-28\n\n### Added\n- First\n')
+    const out = prependToChangelog('', '## v0.1.0 - 2026-06-28\n\n### Added\n- First\n')
+    expect(out).toBe('# Changelog\n\n## v0.1.0 - 2026-06-28\n\n### Added\n- First\n')
   })
 })
