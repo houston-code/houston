@@ -17,33 +17,71 @@
   var yearEl = $("#year");
   if (yearEl) yearEl.textContent = String(new Date().getFullYear());
 
-  // ---- Platform detection (best effort; browsers can't distinguish mac arch) ----
-  function detectOS() {
-    var ua = navigator.userAgent || "";
-    var plat = navigator.platform || "";
-    if (/Win/.test(plat) || /Windows/.test(ua)) return "win";
-    if (/Linux/.test(plat) && !/Android/.test(ua)) return "linux";
-    if (/Mac/.test(plat) || /Mac OS X/.test(ua)) return "mac-arm";
-    return null;
+  // ---- Platform detection (logic in platform.js; this gathers signals + applies it) ----
+  var HERO_LABEL = { mac: "Download for macOS", win: "Download for Windows", linux: "Download for Linux" };
+
+  // The GPU name, which on a Mac is the only non-Chromium hint of the CPU. Read locally
+  // and never sent anywhere.
+  function webglRenderer() {
+    try {
+      var canvas = document.createElement("canvas");
+      var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+      if (!gl) return "";
+      var ext = gl.getExtension("WEBGL_debug_renderer_info");
+      return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || "");
+    } catch (e) {
+      return "";
+    }
   }
 
-  var os = detectOS();
-  var HERO_LABEL = { "mac-arm": "Download for macOS", "mac-x64": "Download for macOS", win: "Download for Windows", linux: "Download for Linux" };
-  var heroLabel = $("#hero-download-label");
-  if (os && heroLabel && HERO_LABEL[os]) heroLabel.textContent = HERO_LABEL[os];
+  function gatherSignals() {
+    var signals = {
+      ua: navigator.userAgent || "",
+      platform: navigator.platform || "",
+      touchPoints: navigator.maxTouchPoints || 0,
+      uaArch: "",
+      gpu: "",
+    };
+    var isMac = /Mac/.test(signals.platform) || /Mac OS X/.test(signals.ua);
+    var uaData = navigator.userAgentData;
+    var hints = uaData && typeof uaData.getHighEntropyValues === "function"
+      ? uaData.getHighEntropyValues(["architecture"]).then(
+          function (v) { signals.uaArch = (v && v.architecture) || ""; },
+          function () {}
+        )
+      : Promise.resolve();
+    return hints.then(function () {
+      if (isMac && !signals.uaArch) signals.gpu = webglRenderer();
+      return signals;
+    });
+  }
 
-  // Emphasize the visitor's platform card.
-  if (os) {
-    var card = $('.dl-card[data-os="' + os + '"]');
-    if (card) {
-      card.classList.add("is-recommended");
-      var badge = document.createElement("span");
-      badge.className = "dl-badge";
-      badge.textContent = "Recommended for you";
-      card.insertBefore(badge, card.firstChild);
-      var primary = $(".dl-primary", card);
-      if (primary) { primary.classList.remove("btn-secondary"); primary.classList.add("btn-primary"); }
+  function applyPlatform(result) {
+    var heroLabel = $("#hero-download-label");
+    if (result.os && heroLabel && HERO_LABEL[result.os]) heroLabel.textContent = HERO_LABEL[result.os];
+
+    // A Mac we can't place: say how to tell rather than recommend a build that may not open.
+    if (result.os === "mac" && !result.card) {
+      var hint = $("#mac-arch-hint");
+      if (hint) hint.hidden = false;
     }
+
+    // Emphasize the visitor's platform card.
+    if (!result.card) return;
+    var card = $('.dl-card[data-os="' + result.card + '"]');
+    if (!card) return;
+    card.classList.add("is-recommended");
+    var badge = document.createElement("span");
+    badge.className = "dl-badge";
+    badge.textContent = "Recommended for you";
+    card.insertBefore(badge, card.firstChild);
+    var primary = $(".dl-primary", card);
+    if (primary) { primary.classList.remove("btn-secondary"); primary.classList.add("btn-primary"); }
+  }
+
+  // Only the landing page loads platform.js; other pages have no download cards.
+  if (window.HoustonPlatform && window.Promise) {
+    gatherSignals().then(function (signals) { applyPlatform(window.HoustonPlatform.classify(signals)); });
   }
 
   // ---- Live release data ----
