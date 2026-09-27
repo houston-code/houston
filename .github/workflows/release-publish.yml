@@ -2,9 +2,10 @@ name: Release - publish
 
 # Manual trigger — run AFTER the `release/vX.Y.Z` PR from "Release - prepare" has merged to
 # main. Builds the full signed matrix (macOS arm64, Windows x64, Linux x64) and publishes a
-# GitHub Release, which is what electron-updater reads. The
-# release is created as a draft by electron-builder, then the finalize job attaches the
-# CHANGELOG notes, un-drafts it, and marks it `latest` so the updater picks it up.
+# GitHub Release, which is what electron-updater reads. The first build leg creates the
+# release as a draft (scripts/release-draft.mjs), every leg uploads into it, then the finalize
+# job attaches the CHANGELOG notes, un-drafts it, and marks it `latest` so the updater picks
+# it up.
 #
 # The repo is public, so the app fetches updates with no embedded token and the release is
 # published here alongside the source. The workflow's own GITHUB_TOKEN carries the
@@ -106,15 +107,19 @@ jobs:
       # this works whatever the repo's visibility, and signatures verify with no repo access.
       id-token: write
     strategy:
-      fail-fast: false
-      # Serialize so the three platforms don't race to CREATE the same draft release on the
-      # release (the first leg creates it; the others upload into it). Releases are
-      # infrequent, so the extra wall-clock is fine in exchange for a deterministic publish.
+      # A real publish stops at the first failed leg: the release can't be finalized without
+      # every platform, so the remaining legs would only burn ~40 min of macOS/Windows time
+      # each and add more assets to a draft that has to be deleted anyway. A dry run keeps
+      # going, so one run reports every platform's failure (release-prepare does the same).
+      fail-fast: ${{ !inputs.dry_run }}
+      # Serialize so the legs upload into the draft one after another, in the order below
+      # (the Intel leg merges into the arm64 feed). Releases are infrequent, so the extra
+      # wall-clock is fine in exchange for a deterministic publish.
       max-parallel: 1
       matrix:
         include:
-          # macos-14 (arm64) MUST be first: its `--publish always` creates the draft release
-          # AND owns the single `latest-mac.yml` update feed. The macos-15-intel (Intel) leg
+          # macos-14 (arm64) MUST be first: its `--publish always` owns the single
+          # `latest-mac.yml` update feed. The macos-15-intel (Intel) leg
           # then uploads only its .dmg/.zip INTO that existing draft — never its own
           # latest-mac.yml, which would clobber arm64's and break the updater
           # (electron-builder#5592). max-parallel:1 (above) keeps this order deterministic.
@@ -169,6 +174,19 @@ jobs:
           npm run notices
           git diff --exit-code THIRD-PARTY-NOTICES.md \
             || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
+      # Create the draft release up front (or reuse the one a previous attempt made) so
+      # electron-builder never creates it. Left to itself, it creates the release lazily from
+      # each target's upload, and the arm64 leg's zip and dmg uploads raced: both saw no
+      # release and both created one, splitting the assets across two drafts. Every leg runs
+      # this, so a duplicate from any source stops the run before more uploads scatter.
+      - name: Ensure a single draft release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"
       - name: Package and publish
         # electron-builder's github publisher reads GH_TOKEN; pointing it at the PAT makes
         # it publish the release (per electron-builder.yml `publish`).
@@ -222,6 +240,16 @@ jobs:
             # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
             npm run ${{ matrix.dist }} -- --publish always
           fi
+      # electron-builder must have uploaded into the existing draft, not made another one.
+      # Checked before the signing steps below, which upload to the draft by tag.
+      - name: Check the release is still a single draft
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/release-draft.mjs check houston-code/houston "$tag"
       # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
       # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
       # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
@@ -632,6 +660,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="v${{ steps.meta.outputs.version }}"
-          # electron-builder created this as a draft; attach the notes, un-draft, mark latest.
+          # The build legs filled this draft; attach the notes, un-draft, mark latest.
           gh release edit "$tag" -R houston-code/houston \
             --draft=false --latest --notes-file release-notes.md
