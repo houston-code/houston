@@ -54,7 +54,7 @@ website/
   tools/              Build scripts (not deployed)
     build-legal.mjs       docs/PRIVACY.md → privacy.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
-    download-links.test.mjs  fails CI if a download button's asset suffix matches no build
+    download-links.test.mjs  fails CI if a download link's asset suffix matches no build (or the CLI)
     platform.test.mjs     platform.js recommendations for each browser/OS/CPU
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
     capture-screens.mjs   real app screenshots against a local model + demo workspace
