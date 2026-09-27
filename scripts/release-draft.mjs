@@ -67,6 +67,11 @@ export async function waitUntilListed(list, tag, id, { attempts = 10, delayMs = 
   }
 }
 
+/** gh argv that points an existing draft release at `sha`. */
+export function retargetArgs(repo, id, sha) {
+  return ['api', '-X', 'PATCH', `repos/${repo}/releases/${id}`, '-f', `target_commitish=${sha}`, '--silent']
+}
+
 function defaultSleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
@@ -115,7 +120,11 @@ async function main(argv) {
   }
 
   if (plan.action === 'reuse') {
-    console.log(`Reusing the existing draft release for ${tag} (${plan.id}).`)
+    // The draft may be left from an earlier, failed run, pointing at that run's commit.
+    // Retarget it at the commit this run builds, so the release's target_commitish names
+    // what actually shipped (finalize tags this same commit).
+    gh(retargetArgs(repo, plan.id, sha))
+    console.log(`Reusing the existing draft release for ${tag} (${plan.id}), retargeted at ${sha}.`)
     return
   }
 
