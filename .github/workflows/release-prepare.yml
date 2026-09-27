@@ -102,6 +102,9 @@ jobs:
     needs: [verify, sbom-conformance]
     timeout-minutes: 10
     runs-on: ubuntu-24.04
+    # RELEASE_PR_TOKEN lives in the `release-pr` environment (deployment branches: main only), so
+    # a workflow edited on a feature branch can't read it.
+    environment: release-pr
     permissions:
       contents: write
       pull-requests: write
@@ -171,13 +174,22 @@ jobs:
           # Prepend the new section above any existing CHANGELOG body.
           node -e "const fs=require('fs');import('./scripts/gen-release-notes.mjs').then(m=>{const s=fs.readFileSync('.release-section.md','utf8');const e=fs.existsSync('CHANGELOG.md')?fs.readFileSync('CHANGELOG.md','utf8'):'';fs.writeFileSync('CHANGELOG.md',m.prependToChangelog(e,s))})"
           rm -f prs.json .release-section.md
+      # Push the branch with GITHUB_TOKEN, but open the PR with a fine-grained PAT. A PR opened
+      # by GITHUB_TOKEN triggers no workflows, so the merge queue's required checks would never
+      # run on it (and GITHUB_TOKEN can't open PRs at all unless the repo/org allows it). The PAT
+      # is scoped to this one step: never persisted to .git/config and never in the environment
+      # of the earlier npm install / note-generation steps, which run third-party code.
       - name: Open release PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::RELEASE_PR_TOKEN is not set in the release-pr environment; cannot open the release PR."
+            exit 1
+          fi
           branch="release/v$VERSION"
           git checkout -b "$branch"
           git add package.json package-lock.json CHANGELOG.md
