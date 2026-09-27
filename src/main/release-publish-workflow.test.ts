@@ -80,7 +80,7 @@ describe('release-publish GPG signing', () => {
 describe('release-publish SHA256SUMS manifest', () => {
   it('runs after every build leg and before finalize publishes', () => {
     expect(checksumsJob).toContain('needs: build')
-    expect(workflow).toMatch(/\n  finalize:\n    needs: \[build, checksums\]/)
+    expect(workflow).toContain('\n  finalize:\n    needs: [build, checksums]\n')
   })
 
   it('never runs on a dry run', () => {
