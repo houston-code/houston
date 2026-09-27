@@ -83,3 +83,12 @@ describe("landing page wiring", () => {
     expect(html).toMatch(/id="linux-arm-hint" hidden/);
   });
 });
+
+describe("third-party logos", () => {
+  const html = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "public", "index.html"), "utf8");
+
+  it("does not draw the Apple logo (Apple's trademark guidelines don't allow it)", () => {
+    // The start of the Apple logo's SVG path, as the download cards used to draw it.
+    expect(html).not.toContain("M12.152 6.896");
+  });
+});
