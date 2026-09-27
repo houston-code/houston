@@ -137,11 +137,12 @@ mac:
 
 win:
   icon: build/icon.ico
-  # nsis only: it is both the human installer and what the updater downloads (NsisUpdater
-  # fetches the -setup.exe listed in latest.yml, differentially via its .blockmap). A zip
-  # target used to ride along, but no updater path reads it, the installer already installs
-  # per-user with no admin, and it added an unsigned portable copy plus two signature files
-  # to every release. windows-latest is x64; arm64 Windows is a follow-up (needs a
+  # nsis only. Today the Windows updater only reads latest.yml and shows a banner linking
+  # to the release (autoDownload is off until the build is Authenticode-signed; see
+  # src/main/update-policy.ts). Once it is signed, NsisUpdater downloads the -setup.exe
+  # listed there, differentially via its .blockmap. A zip target used to ride along, but no
+  # updater path reads it, the installer already installs per-user with no admin, and it
+  # added an unsigned portable copy plus two signature files to every release. windows-latest is x64; arm64 Windows is a follow-up (needs a
   # windows-11-arm runner).
   target:
     - target: nsis
