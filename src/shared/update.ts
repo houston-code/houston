@@ -1,3 +1,5 @@
+import { RELEASE_SUMMARY } from './release-highlights'
+
 /**
  * Update-related types + the bundled release highlights, shared by the main
  * process (which produces them) and the renderer (which renders them).
@@ -52,25 +54,19 @@ export interface UpdateDownloaded {
 /** The one-shot payload for the post-restart "What's new" popup. */
 export interface WhatsNew {
   version: string
-  /** 1–2 short lines, authored to fit the small popup. */
+  /** One sentence of at most 120 characters: the release's changelog summary. */
   highlights: string
 }
 
 /**
- * Human-written highlights per shipped version, shown in the post-update
- * "What's new" popup. Bundled in the app (rather than fetched) so the popup is
- * available offline and works for manually-installed DMGs, and so each entry is
- * guaranteed to fit the small popup.
- *
- * Author a new entry — 1–2 short lines — whenever package.json's version bumps.
+ * The "What's new" text for `version`, or null when there's none. It is the one-sentence
+ * summary that opens this build's CHANGELOG.md section, bundled at build time by
+ * scripts/gen-release-highlights.mjs, so the popup matches the release notes and works
+ * offline and for manually installed builds. Only the running build's summary is bundled,
+ * which is all the popup needs: it shows once, right after updating to this version.
  */
-export const RELEASE_HIGHLIGHTS: Record<string, string> = {
-  '0.1.0': 'First public build — a bring-your-own-model coding agent for macOS.'
-}
-
-/** Highlights for a specific version, or null when none are recorded. */
 export function highlightsFor(version: string): string | null {
-  return RELEASE_HIGHLIGHTS[version] ?? null
+  return RELEASE_SUMMARY && RELEASE_SUMMARY.version === version ? RELEASE_SUMMARY.summary : null
 }
 
 /**

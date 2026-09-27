@@ -1,20 +1,20 @@
-import { describe, expect, it } from 'vitest'
-import { highlightsFor, RELEASE_HIGHLIGHTS, updateErrorHint } from './update'
+import { describe, expect, it, vi } from 'vitest'
+
+// The generated module holds only the running build's summary; pin it so these tests
+// don't depend on whatever CHANGELOG.md currently says.
+vi.mock('./release-highlights', () => ({
+  RELEASE_SUMMARY: { version: '1.4.0', summary: 'Parallel test runs and a faster terminal client.' }
+}))
+
+import { highlightsFor, updateErrorHint } from './update'
 
 describe('highlightsFor', () => {
-  it('returns the bundled highlights for a known version', () => {
-    expect(highlightsFor('0.1.0')).toBe(RELEASE_HIGHLIGHTS['0.1.0'])
+  it("returns this build's changelog summary for its own version", () => {
+    expect(highlightsFor('1.4.0')).toBe('Parallel test runs and a faster terminal client.')
   })
 
-  it('returns null for a version with no recorded highlights', () => {
+  it('returns null for any other version', () => {
     expect(highlightsFor('9.9.9')).toBeNull()
-  })
-
-  it('keeps every entry short enough for the small popup (≤ 2 lines)', () => {
-    for (const [version, text] of Object.entries(RELEASE_HIGHLIGHTS)) {
-      expect(text.length, version).toBeLessThanOrEqual(160)
-      expect(text.split('\n').length, version).toBeLessThanOrEqual(2)
-    }
   })
 })
 

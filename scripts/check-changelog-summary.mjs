@@ -26,7 +26,7 @@ export const SUMMARY_MAX = 120
 
 // Same sentence boundary the update notice uses (src/main/update-check.ts shortenHeadline):
 // . ! or ? followed by whitespace and a capital, digit or quote. Keep the two in sync.
-const SENTENCE_BREAK = /(?<=[.!?])\s+(?=[A-Z0-9"'(])/
+export const SENTENCE_BREAK = /(?<=[.!?])\s+(?=[A-Z0-9"'(])/
 
 /**
  * Problems with a section body's opening summary (the text under `## v<version>`), as
