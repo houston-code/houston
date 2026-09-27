@@ -105,10 +105,12 @@ function parseRelease(body: unknown): { latest: string; headline?: string } | nu
   const tag = typeof r.tag_name === 'string' ? r.tag_name : typeof r.name === 'string' ? r.name : null
   if (!tag) return null
   const notes = typeof r.body === 'string' ? r.body : ''
-  const headline = notes
-    .split('\n')
-    .map((l) => stripControlChars(l).trim())
-    .find(Boolean)
+  const lines = notes.split('\n').map((l) => stripControlChars(l).trim())
+  // Release bodies open with a per-platform Download table (scripts/release-downloads.mjs)
+  // and the changelog follows under "## What's changed", so start there when it's present.
+  // Headings and table rows are never a headline.
+  const changed = lines.findIndex((l) => /^#{1,6}\s+what['\u2019]s changed$/i.test(l))
+  const headline = lines.slice(changed + 1).find((l) => l && !l.startsWith('#') && !l.startsWith('|'))
   return { latest: tag.replace(/^v/, ''), ...(headline ? { headline: headline.slice(0, 120) } : {}) }
 }
 
