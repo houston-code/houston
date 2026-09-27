@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planReleaseDraft, waitUntilListed } from './release-draft.mjs'
+import { planReleaseDraft, retargetArgs, waitUntilListed } from './release-draft.mjs'
 
 describe('planReleaseDraft', () => {
   it('creates when no release has the tag', () => {
@@ -80,5 +80,16 @@ describe('waitUntilListed', () => {
     const plan = await waitUntilListed(() => [], 'v1.2.0', 9, { attempts: 4, delayMs: 3000, sleep: async (ms) => slept.push(ms) })
     expect(plan).toEqual({ action: 'error', message: 'draft release 9 for v1.2.0 did not appear in the release list after 12s.' })
     expect(slept).toEqual([3000, 3000, 3000])
+  })
+})
+
+describe('retargetArgs', () => {
+  it('points a reused draft at the commit this run builds', () => {
+    // A draft left by a failed run still names that run's commit; v0.3.0 shipped with a
+    // stale target_commitish this way.
+    expect(retargetArgs('houston-code/houston', 397742693, 'abc123')).toEqual([
+      'api', '-X', 'PATCH', 'repos/houston-code/houston/releases/397742693',
+      '-f', 'target_commitish=abc123', '--silent',
+    ])
   })
 })
