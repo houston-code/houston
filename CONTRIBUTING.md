@@ -298,6 +298,10 @@ The workflow needs **Allow auto-merge** turned on in the repository settings. It
 checks out or runs the PR's code, and it acts only on PRs that Dependabot opened and last
 pushed to.
 
+Version updates wait out a 7-day `cooldown` (set in `.github/dependabot.yml`) before
+Dependabot proposes them, so a malicious release that gets yanked within days never reaches
+the queue. Security updates skip the cooldown.
+
 ## Licensing of contributions
 
 Houston is licensed under the [Apache License 2.0](LICENSE). Unless you say otherwise
