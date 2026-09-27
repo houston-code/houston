@@ -65,14 +65,19 @@ jobs:
       # Tool 1 — CycloneDX CLI: JSON-schema validity of the CycloneDX SBOM.
       - name: CycloneDX CLI validate
         run: |
-          docker run --rm -v "$PWD:/w" cyclonedx/cyclonedx-cli:0.32.0 \
+          # Pinned by digest, not just the tag: a tag can be re-pushed to a different image,
+          # and this step runs inside the release workflow's pre-publish gate.
+          docker run --rm -v "$PWD:/w" cyclonedx/cyclonedx-cli:0.32.0@sha256:9a858a15e7b0843606efc0ff19d5f7575011a5428d7f3d343b4f6cf09d8f0d4e \
             validate --input-file /w/sbom.cyclonedx.json --fail-on-errors
 
       # Tool 2 — SPDX NTIA Conformance Checker: NTIA minimum elements (SPDX 2.3 + 3.0) and
       # CISA FSCT3 minimum (SPDX 3.0). Any non-conformant document fails the build.
       - name: NTIA + CISA FSCT3 conformance
         run: |
-          python3 -m pip install --quiet --disable-pip-version-check ntia-conformance-checker==5.0.3
+          # Hash-locked (see .github/sbom-tools/requirements.txt), so a replaced release of the
+          # checker or any of its dependencies fails the install instead of running here.
+          python3 -m pip install --quiet --disable-pip-version-check --require-hashes \
+            -r .github/sbom-tools/requirements.txt
           fail=0
           gate() {
             label="$1"; shift
