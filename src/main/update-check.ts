@@ -111,7 +111,31 @@ function parseRelease(body: unknown): { latest: string; headline?: string } | nu
   // Headings and table rows are never a headline.
   const changed = lines.findIndex((l) => /^#{1,6}\s+what['\u2019]s changed$/i.test(l))
   const headline = lines.slice(changed + 1).find((l) => l && !l.startsWith('#') && !l.startsWith('|'))
-  return { latest: tag.replace(/^v/, ''), ...(headline ? { headline: headline.slice(0, 120) } : {}) }
+  const short = headline ? shortenHeadline(headline) : ''
+  return { latest: tag.replace(/^v/, ''), ...(short ? { headline: short } : {}) }
+}
+
+const HEADLINE_MAX = 120
+
+/**
+ * Turn a release-notes line into a one-line headline for the terminal: Markdown reduced to
+ * plain text, then the first sentence if it fits in HEADLINE_MAX characters, otherwise cut
+ * at the last whole word with an ellipsis. A bare slice cut the v0.3.0 intro mid-word.
+ */
+export function shortenHeadline(line: string): string {
+  const text = line
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url) and images -> text
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/\s+/g, ' ')
+    .trim()
+  // A sentence ends at . ! or ? followed by whitespace and a capital, digit or quote, so
+  // "github.com/x." ends one but "e.g. foo" and "v0.3.0 is" don't.
+  const first = text.split(/(?<=[.!?])\s+(?=[A-Z0-9"'(])/)[0]
+  if (first.length <= HEADLINE_MAX) return first
+  const cut = text.slice(0, HEADLINE_MAX - 1)
+  const lastSpace = cut.lastIndexOf(' ')
+  return `${(lastSpace > HEADLINE_MAX / 2 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:]+$/, '')}\u2026`
 }
 
 export interface UpdateCheckDeps {
