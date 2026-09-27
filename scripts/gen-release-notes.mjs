@@ -64,7 +64,7 @@ export function buildNotes({ version, date, prs }) {
     if (cat) groups[cat.section].push(bullet(pr, cat.summary))
   }
 
-  const out = [`## v${version} — ${date}`, '']
+  const out = [`## v${version} - ${date}`, '']
   out.push('<!-- Replace this line with a 2–3 sentence plain-English summary of the release. -->', '')
 
   const breaking = groups.Breaking
