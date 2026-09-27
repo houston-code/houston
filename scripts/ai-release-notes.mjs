@@ -10,12 +10,17 @@
 // ships — that review gate is what makes trusting a model for this safe. release-prepare.yml
 // falls back to gen-release-notes.mjs when ANTHROPIC_API_KEY is absent or this call fails.
 //
-// buildPrompt/extractText are pure and unit-tested; the CLI wrapper (which makes the API
-// call) runs only when invoked directly.
+// The section opens with ONE summary sentence of at most 120 characters (see
+// check-changelog-summary.mjs). When the draft misses that, the model gets one follow-up
+// turn to rewrite just the summary; the result is reviewed in the release PR either way.
+//
+// buildPrompt/extractText/summaryFixPrompt/sectionBody are pure and unit-tested; the CLI
+// wrapper (which makes the API calls) runs only when invoked directly.
 
 import Anthropic from '@anthropic-ai/sdk'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
+import { summaryProblems, SUMMARY_MAX } from './check-changelog-summary.mjs'
 
 const MODEL = 'claude-opus-4-8'
 
@@ -52,7 +57,7 @@ export function buildPrompt({ version, date, prs }) {
 Start with exactly this heading line and nothing before it:
 ## v${version} - ${date}
 
-Then a 2–3 sentence plain-English summary of the release. Then, only the sections that apply, in this order, as \`###\` headings: "Breaking changes", "Required steps", "Added", "Fixed", "Changed". Use \`- \` bullets and cite the PR number like \`(#123)\`. Omit a section if it has no entries, except always include "Breaking changes" (write a single bullet "- None." when there are none).
+Then ONE plain-English summary sentence of at most 120 characters that captures the whole release, as its own paragraph: it heads the release notes and is shown alone as the headline of the in-app update notice. Optionally follow it with a blank line and one or two sentences of context. Then, only the sections that apply, in this order, as \`###\` headings: "Breaking changes", "Required steps", "Added", "Fixed", "Changed". Use \`- \` bullets and cite the PR number like \`(#123)\`. Omit a section if it has no entries, except always include "Breaking changes" (write a single bullet "- None." when there are none).
 
 Merged pull requests in this release:
 
@@ -72,6 +77,19 @@ export function extractText(content) {
   return text
 }
 
+/** The section text below its `## v<version>` heading line. */
+export function sectionBody(text) {
+  const nl = text.indexOf('\n')
+  return nl === -1 ? '' : text.slice(nl + 1)
+}
+
+/** The follow-up turn asking the model to fix only the opening summary. */
+export function summaryFixPrompt(problems) {
+  return `The opening summary does not meet the rule: ${problems.join('; ')}.
+
+Rewrite the whole section, changing ONLY the opening summary: make it one plain-English sentence of at most ${SUMMARY_MAX} characters that captures the release as a whole, as its own paragraph, with any extra context moved to a second paragraph. Keep the heading and every other section exactly as they are.`
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const version = process.env.VERSION
   if (!version) {
@@ -87,18 +105,32 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
 
   // new Anthropic() reads ANTHROPIC_API_KEY from the env.
   const client = new Anthropic()
-  const message = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    thinking: { type: 'adaptive' },
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: buildPrompt({ version, date, prs }) }]
-  })
+  const ask = async (messages) =>
+    extractText(
+      (
+        await client.messages.create({
+          model: MODEL,
+          max_tokens: 8000,
+          thinking: { type: 'adaptive' },
+          system: SYSTEM_PROMPT,
+          messages
+        })
+      ).content
+    )
 
-  const text = extractText(message.content)
+  const prompt = { role: 'user', content: buildPrompt({ version, date, prs }) }
+  let text = await ask([prompt])
   if (!text) {
     console.error('ai-release-notes: model returned no text')
     process.exit(1)
+  }
+
+  const problems = summaryProblems(sectionBody(text))
+  if (problems.length) {
+    console.error(`ai-release-notes: summary needs a fix (${problems.join('; ')}); asking once more`)
+    const fixed = await ask([prompt, { role: 'assistant', content: text }, { role: 'user', content: summaryFixPrompt(problems) }])
+    // Keep the rewrite only if it is at least as good; the release PR review decides the rest.
+    if (fixed && summaryProblems(sectionBody(fixed)).length <= problems.length) text = fixed
   }
   process.stdout.write(text.endsWith('\n') ? text : text + '\n')
 }
