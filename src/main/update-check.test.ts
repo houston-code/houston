@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkForUpdate, updateCheckEnabled, CHECK_INTERVAL_MS, RELEASES_URL } from './update-check'
+import { checkForUpdate, shortenHeadline, updateCheckEnabled, CHECK_INTERVAL_MS, RELEASES_URL } from './update-check'
 
 const CURRENT = '0.2.141'
 
@@ -197,5 +197,35 @@ describe('checkForUpdate — hostile feed', () => {
     await expect(
       checkForUpdate(CURRENT, { fetch: feed({}), path, env: {}, now: () => 1000 })
     ).resolves.toBeNull()
+  })
+})
+
+describe('shortenHeadline', () => {
+  it('keeps the first sentence of a long intro (the v0.3.0 shape)', () => {
+    const intro =
+      "This is Houston's first public release, published from github.com/houston-code/houston. Since 0.2.0, the terminal client has grown into a full interactive REPL."
+    expect(shortenHeadline(intro)).toBe("This is Houston's first public release, published from github.com/houston-code/houston.")
+  })
+
+  it('does not split on abbreviations or version numbers', () => {
+    expect(shortenHeadline('Adds tools, e.g. search. More below.')).toBe('Adds tools, e.g. search.')
+    expect(shortenHeadline('Requires v0.3.0 or newer. Then more.')).toBe('Requires v0.3.0 or newer.')
+  })
+
+  it('cuts an over-long first sentence at a word boundary with an ellipsis', () => {
+    const long = 'word '.repeat(40).trim() + '.'
+    const got = shortenHeadline(long)
+    expect(got.length).toBeLessThanOrEqual(120)
+    expect(got.endsWith('word\u2026')).toBe(true)
+  })
+
+  it('reduces Markdown to plain text', () => {
+    expect(shortenHeadline('**Steer** a running turn with `Esc`, see [the docs](https://x/y).')).toBe(
+      'Steer a running turn with Esc, see the docs.'
+    )
+  })
+
+  it('leaves a short plain line alone', () => {
+    expect(shortenHeadline('Faster startup')).toBe('Faster startup')
   })
 })
