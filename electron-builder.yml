@@ -137,15 +137,14 @@ mac:
 
 win:
   icon: build/icon.ico
-  # Names the zip (nsis sets its own below), so it carries the arch like every other file.
-  artifactName: ${productName}-${version}-${arch}-win.${ext}
-  # nsis = human installer; zip = the differential-download artifact the updater pulls
-  # (Windows nsis updates read latest.yml). windows-latest is x64; arm64 Windows is a
-  # follow-up (needs a windows-11-arm runner).
+  # nsis only: it is both the human installer and what the updater downloads (NsisUpdater
+  # fetches the -setup.exe listed in latest.yml, differentially via its .blockmap). A zip
+  # target used to ride along, but no updater path reads it, the installer already installs
+  # per-user with no admin, and it added an unsigned portable copy plus two signature files
+  # to every release. windows-latest is x64; arm64 Windows is a follow-up (needs a
+  # windows-11-arm runner).
   target:
     - target: nsis
-      arch: x64
-    - target: zip
       arch: x64
   # Unsigned for now → SmartScreen warns on first run until an Authenticode (OV/EV) cert
   # signs the installer. Seam: set CSC_LINK + CSC_KEY_PASSWORD (or signtoolOptions) when one exists.
