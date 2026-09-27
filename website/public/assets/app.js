@@ -60,9 +60,10 @@
     var heroLabel = $("#hero-download-label");
     if (result.os && heroLabel && HERO_LABEL[result.os]) heroLabel.textContent = HERO_LABEL[result.os];
 
-    // A Mac we can't place: say how to tell rather than recommend a build that may not open.
-    if (result.os === "mac" && !result.card) {
-      var hint = $("#mac-arch-hint");
+    // No card fits (a Mac we can't place, Linux on Arm): reveal the note that explains
+    // what to get, rather than recommend a build that may not run.
+    if (result.hint) {
+      var hint = document.getElementById(result.hint);
       if (hint) hint.hidden = false;
     }
 
