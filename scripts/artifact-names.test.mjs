@@ -6,9 +6,9 @@ import { load } from 'js-yaml'
 import { Arch, getArtifactArchName } from 'builder-util/out/arch.js'
 
 // Every file a release ships should name its arch. electron-builder's DEFAULT zip name
-// leaves the arch out for x64 (`Houston-<v>-mac.zip`, `Houston-<v>-win.zip`), which made
-// the Intel mac zip look like a universal build next to the arm64 one. The mac/win
-// platform `artifactName` fixes that; these checks keep it from regressing.
+// leaves the arch out for x64 (`Houston-<v>-mac.zip`), which made the Intel mac zip look
+// like a universal build next to the arm64 one. The mac platform `artifactName` fixes
+// that; these checks keep it from regressing.
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const config = load(readFileSync(resolve(ROOT, 'electron-builder.yml'), 'utf8'))
@@ -32,7 +32,6 @@ const SHIPPED = [
   ['mac', 'dmg', 'dmg', Arch.x64, 'Houston-1.2.3-x64.dmg'],
   ['mac', 'zip', 'zip', Arch.x64, 'Houston-1.2.3-x64-mac.zip'],
   ['win', 'nsis', 'exe', Arch.x64, 'Houston-1.2.3-x64-setup.exe'],
-  ['win', 'zip', 'zip', Arch.x64, 'Houston-1.2.3-x64-win.zip'],
   ['linux', 'appImage', 'AppImage', Arch.x64, 'Houston-1.2.3-x86_64.AppImage'],
   ['linux', 'deb', 'deb', Arch.x64, 'Houston-1.2.3-amd64.deb'],
 ]
@@ -43,6 +42,10 @@ describe('release artifact names', () => {
       expect(artifactName(platform, target, ext, arch)).toBe(expected)
     })
   }
+
+  it('ships Windows as the nsis installer only (the updater never reads a zip there)', () => {
+    expect(config.win.target.map((t) => t.target)).toEqual(['nsis'])
+  })
 
   it('gives every shipped file a distinct name', () => {
     const names = SHIPPED.map(([p, t, e, a]) => artifactName(p, t, e, a))
