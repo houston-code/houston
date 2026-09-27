@@ -26,7 +26,7 @@ const ROWS = [
   ],
   [
     'Linux, x64',
-    'glibc 2.35 or newer (Ubuntu 22.04+). The AppImage updates itself. The .deb does not: download the new version to upgrade.',
+    'glibc 2.35 or newer (Ubuntu 22.04+). The AppImage shows a banner when a new version is out. The .deb does not check, so download new versions yourself.',
     (n) => n.endsWith('.AppImage'),
     (n) => n.endsWith('.deb'),
   ],
