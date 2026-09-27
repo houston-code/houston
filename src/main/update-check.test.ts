@@ -43,6 +43,36 @@ describe('checkForUpdate', () => {
     expect(got?.url).toContain('releases')
   })
 
+  it('skips the Download table and takes the headline from the changelog', async () => {
+    // The shape finalize publishes: scripts/release-downloads.mjs output, then the notes.
+    const body = [
+      '## Download',
+      '',
+      '| Platform | File | Requirements |',
+      '| --- | --- | --- |',
+      '| macOS, Apple Silicon | [Houston-0.3.0-arm64.dmg](https://x) | macOS 13 |',
+      '',
+      'To check a download, compare it against SHA256SUMS.',
+      '',
+      "## What's changed",
+      '',
+      'Steer a running turn from the terminal.',
+      '',
+      '### Added'
+    ].join('\n')
+    const got = await checkForUpdate(CURRENT, { fetch: feed({ tag_name: 'v0.3.0', body }), path: tmpCache(), env: {} })
+    expect(got?.headline).toBe('Steer a running turn from the terminal.')
+  })
+
+  it('never uses a heading as the headline', async () => {
+    const got = await checkForUpdate(CURRENT, {
+      fetch: feed({ tag_name: 'v0.3.0', body: '### Added\n- Faster startup' }),
+      path: tmpCache(),
+      env: {}
+    })
+    expect(got?.headline).toBe('- Faster startup')
+  })
+
   it('says nothing when the published release is not newer', async () => {
     const same = await checkForUpdate(CURRENT, { fetch: feed({ tag_name: `v${CURRENT}` }), path: tmpCache(), env: {} })
     expect(same).toBeNull()
