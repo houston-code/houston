@@ -26,7 +26,8 @@ name: Dependabot notices
 # the new head and the required checks land where branch protection can see them.
 #
 # SETUP (one time): store a fine-grained PAT with Contents: read and write on this
-# repository as a *Dependabot* secret named NOTICES_PAT —
+# repository as a *Dependabot* secret named NOTICES_PAT. dependabot-auto-queue.yml
+# enables auto-merge with the same secret, which also needs Pull requests: read and write.
 #
 #   gh secret set NOTICES_PAT --app dependabot --repo <owner>/<repo>
 #
