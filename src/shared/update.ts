@@ -72,3 +72,16 @@ export const RELEASE_HIGHLIGHTS: Record<string, string> = {
 export function highlightsFor(version: string): string | null {
   return RELEASE_HIGHLIGHTS[version] ?? null
 }
+
+/**
+ * What to tell the user when an update check fails. The raw error (for example Chromium's
+ * `net::ERR_NAME_NOT_RESOLVED`) is logged, not shown: it means nothing to most people, and
+ * "Couldn't check for updates" already says what happened. A network failure gets a
+ * connection hint; anything else (such as a .deb install, which has no update feed) gets
+ * no hint, because a connection hint would mislead there.
+ */
+export function updateErrorHint(message: string | undefined): string | null {
+  const network =
+    /net::ERR_|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|socket hang up|getaddrinfo/i
+  return message && network.test(message) ? 'Check your internet connection and try again.' : null
+}
