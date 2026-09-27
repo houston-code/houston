@@ -64,13 +64,12 @@ function fail(message) {
   process.exit(1)
 }
 
-function main(argv) {
-  const [repo, tag] = argv
-  if (!repo || !tag) {
-    console.error('usage: node scripts/release-checksums.mjs <owner/repo> <tag>')
-    process.exit(2)
-  }
-
+/**
+ * Asset names on the single draft release for `tag`. Exits the process (with a workflow
+ * error) if there is no draft or more than one release for the tag. Shared with
+ * release-downloads.mjs.
+ */
+export function draftAssetNames(repo, tag) {
   // The list endpoint includes drafts (the release is still one while this runs).
   const releases = gh(['api', '--paginate', `repos/${repo}/releases?per_page=100`, '--jq', '.[] | {id, tag_name, draft}'])
     .split('\n')
@@ -80,9 +79,19 @@ function main(argv) {
   if (plan.action === 'error') fail(plan.message)
   if (plan.action !== 'reuse') fail(`no draft release exists for ${tag}.`)
 
-  const names = gh(['api', '--paginate', `repos/${repo}/releases/${plan.id}/assets?per_page=100`, '--jq', '.[].name'])
+  return gh(['api', '--paginate', `repos/${repo}/releases/${plan.id}/assets?per_page=100`, '--jq', '.[].name'])
     .split('\n')
     .filter((line) => line.trim())
+}
+
+function main(argv) {
+  const [repo, tag] = argv
+  if (!repo || !tag) {
+    console.error('usage: node scripts/release-checksums.mjs <owner/repo> <tag>')
+    process.exit(2)
+  }
+
+  const names = draftAssetNames(repo, tag)
 
   const missing = missingRequired(names)
   if (missing.length) fail(`the ${tag} draft is missing: ${missing.join(', ')}.`)
