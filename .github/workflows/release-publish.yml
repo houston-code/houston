@@ -691,6 +691,21 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # Pull just this version's section out of CHANGELOG.md to use as the Release body.
           VERSION="$version" node scripts/extract-changelog-section.mjs > release-notes.md
+      # GitHub lists release files flat, so the notes open with a per-platform table linking
+      # each installer (scripts/release-downloads.mjs, built from the draft's real asset
+      # names). Runs before tagging so a missing installer stops the release with nothing
+      # pushed.
+      - name: Put the Download table above the notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v${{ steps.meta.outputs.version }}"
+          {
+            node scripts/release-downloads.mjs houston-code/houston "$tag"
+            printf "\n## What's changed\n\n"
+            cat release-notes.md
+          } > release-body.md
+          cat release-body.md
       - name: Tag source repo at released commit
         run: |
           git config user.name "github-actions[bot]"
@@ -716,4 +731,4 @@ jobs:
           tag="v${{ steps.meta.outputs.version }}"
           # The build legs filled this draft; attach the notes, un-draft, mark latest.
           gh release edit "$tag" -R houston-code/houston \
-            --draft=false --latest --notes-file release-notes.md
+            --draft=false --latest --notes-file release-body.md
