@@ -83,3 +83,24 @@ describe("landing page wiring", () => {
     expect(html).toMatch(/id="linux-arm-hint" hidden/);
   });
 });
+
+describe("third-party logos", () => {
+  const html = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "public", "index.html"), "utf8");
+
+  // Platform owners' logos are their trademarks, and their brand rules don't let third
+  // parties use them; the download cards name the platforms in text instead. These are the
+  // opening commands of the SVG paths the cards used to draw.
+  it("does not draw the Apple logo", () => {
+    expect(html).not.toContain("M12.152 6.896");
+  });
+
+  it("does not draw the Windows logo", () => {
+    expect(html).not.toContain("M3 5.1 10.5 4v7.5H3V5.1z");
+  });
+
+  it("uses only stroke-drawn generic icons on the download cards", () => {
+    const icons = [...html.matchAll(/<div class="os-icon"><svg ([^>]*)>/g)].map((m) => m[1]);
+    expect(icons).toHaveLength(4);
+    for (const attrs of icons) expect(attrs).toContain('fill="none"');
+  });
+});
