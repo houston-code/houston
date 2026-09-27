@@ -147,9 +147,15 @@ jobs:
             sbom_label: linux-x64
     runs-on: ${{ matrix.os }}
     steps:
+      # Build the commit this run was dispatched on (github.sha), never a fresh `main`. The
+      # legs run one after another (max-parallel: 1) for up to ~40 min each, after the approval
+      # wait, and main keeps moving under the merge queue meanwhile: checking out `main` here
+      # let each platform build a different commit while the SLSA provenance
+      # (scripts/slsa-provenance.mjs reads GITHUB_SHA) named yet another. The `release`
+      # environment only admits runs on main, so github.sha is always a main commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
@@ -499,7 +505,7 @@ jobs:
           sign SHA256SUMS
           # 3) Publish the manifest, its signature, and the committed public key so a downloader
           #    can verify with no keyserver. houston-signing-key.asc is the repo-root file checked
-          #    out at `ref: main`, so what users get is exactly what's committed to source.
+          #    out at the released commit, so what users get is exactly what's committed to source.
           gh release upload "$tag" SHA256SUMS SHA256SUMS.asc houston-signing-key.asc \
             -R houston-code/houston --clobber
       # SLSA v1.0 build provenance. Complements the cosign SIGNATURES above (integrity +
@@ -589,9 +595,11 @@ jobs:
       # Tag the repo at the released commit so the next release's note range starts here.
       contents: write
     steps:
+      # Same commit the build legs packaged and attested, so the tag marks what actually
+      # shipped rather than whatever main has become by the end of the run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract version + this release's notes
@@ -607,7 +615,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           tag="v${{ steps.meta.outputs.version }}"
           if git rev-parse "$tag" >/dev/null 2>&1; then
-            echo "Tag $tag already exists; skipping."
+            # A re-run may find its own tag; a tag on any other commit means the release
+            # would publish assets built from one commit under a tag naming another.
+            tagged="$(git rev-parse "$tag^{commit}")"
+            if [ "$tagged" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $tag already points at $tagged, not the built commit $GITHUB_SHA."
+              exit 1
+            fi
+            echo "Tag $tag already exists at the built commit; skipping."
           else
             git tag "$tag"
             git push origin "$tag"

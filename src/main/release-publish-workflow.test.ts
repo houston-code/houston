@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * Guards the Linux GPG-signing invariants in the release-publish workflow, not application
+ * Guards the Linux GPG-signing and source-commit invariants in the release-publish workflow, not application
  * code — but it lives in the node test project so it runs in the same `npm test` that gates
  * every PR. release-publish.yml is workflow_dispatch-only, so its GPG step never executes on a
  * normal PR; these assertions are the only automated check that the signing contract stays
@@ -72,6 +72,28 @@ describe('release-publish GPG signing', () => {
 
   it('publishes the public key so a downloader needs no keyserver', () => {
     expect(gpgStep).toContain('houston-signing-key.asc')
+  })
+})
+
+describe('release-publish source commit', () => {
+  // Every job that checks out code must build, attest, and tag the commit the run was
+  // dispatched on. A fresh `main` drifts across the serialized legs, and the SLSA provenance
+  // (scripts/slsa-provenance.mjs) records GITHUB_SHA regardless of what was checked out.
+  it('never checks out a moving branch ref', () => {
+    expect(workflow).not.toMatch(/^\s*ref:\s*main\s*$/m)
+  })
+
+  it('pins the build and finalize checkouts to github.sha', () => {
+    const pinned = workflow.match(/^\s*ref: \$\{\{ github\.sha \}\}\s*$/gm) ?? []
+    expect(pinned).toHaveLength(2)
+  })
+
+  it('refuses to publish under a version tag that names a different commit', () => {
+    const start = workflow.indexOf('- name: Tag source repo at released commit')
+    const step = workflow.slice(start, workflow.indexOf('\n      - ', start + 1))
+    expect(step).toContain('git rev-parse "$tag^{commit}"')
+    expect(step).toContain('"$GITHUB_SHA"')
+    expect(step).toContain('exit 1')
   })
 })
 
