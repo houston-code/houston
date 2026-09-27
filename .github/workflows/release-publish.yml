@@ -170,9 +170,9 @@ jobs:
           git diff --exit-code THIRD-PARTY-NOTICES.md \
             || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
       - name: Package and publish
-        # electron-builder's github publisher reads GH_TOKEN; pointing it at the PAT makes
-        # it publish the release (per electron-builder.yml `publish`).
-        # GITHUB_TOKEN is intentionally NOT in scope here — it can't write that repo.
+        # electron-builder's github publisher reads GH_TOKEN; the job's own GITHUB_TOKEN
+        # (contents: write) is enough, since the release lives in this repo (per
+        # electron-builder.yml `publish`). The gh calls in this step use it too.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code-signing + notarization. SCOPED to the macOS legs via startsWith():
