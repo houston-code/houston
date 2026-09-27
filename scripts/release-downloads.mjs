@@ -30,7 +30,11 @@ const ROWS = [
     (n) => n.endsWith('.AppImage'),
     (n) => n.endsWith('.deb'),
   ],
-  ['Terminal CLI, any OS', 'Node 22 or newer. Run `node houston-cli.cjs --help` to start.', (n) => n === 'houston-cli.cjs'],
+  [
+    'Terminal CLI: macOS, Windows, Linux',
+    'Node 22 or newer, on x64 or Arm. Run `node houston-cli.cjs --help` to start.',
+    (n) => n === 'houston-cli.cjs',
+  ],
 ]
 
 function link(repo, tag, name) {
