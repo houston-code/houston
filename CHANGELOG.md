@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.0 — 2026-09-27
+
+This release updates the bundled Electron runtime to pick up upstream security backports and fixes the Linux download links on the website. Most other work in this cycle was internal release and CI hardening with no direct user impact.
+
+### Breaking changes
+- None.
+
+### Fixed
+- Linux download buttons on the website (and the README install table and GPG example) now point at the actual build artifact names, instead of silently falling back to the generic releases page (#20).
+
+### Changed
+- Updated the bundled Electron to 44.4.5, incorporating upstream security backports from ANGLE, Chromium, Dawn, PDFium, and V8 (#23).
+
 > PR numbers below refer to the pre-release development repository.
 
 ## v0.2.0 — 2026-07-12
