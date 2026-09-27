@@ -6,6 +6,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Wait a week after a version is published before proposing it. Patch and minor PRs
+    # are queued for merge automatically (dependabot-auto-queue.yml), and a hijacked
+    # maintainer account's malicious release is usually caught and yanked within days;
+    # without a cooldown it could merge, and later run its install scripts in the release
+    # job that holds the signing keys, before anyone noticed. Security updates are not
+    # subject to the cooldown, so a published fix still arrives immediately.
+    cooldown:
+      default-days: 7
     groups:
       dev-dependencies:
         dependency-type: development
@@ -30,3 +38,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Same reasoning as npm above: a retagged or compromised action release gets a week
+    # to be caught before it is proposed.
+    cooldown:
+      default-days: 7
