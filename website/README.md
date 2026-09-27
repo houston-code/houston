@@ -40,7 +40,8 @@ website/
     404.html            Not-found page (Cloudflare serves this automatically)
     assets/
       styles.css        All styles (theme-aware light/dark)
-      app.js            Live release data + platform detection
+      app.js            Live release data + applies the platform recommendation
+      platform.js       Which download card fits the visitor (pure, tested in tools/)
       icon.png          App icon (copied from build/icon.png)
       og.svg            Social-card source (real icon composited at render time)
       og.png            Social-card render (1200×630), generated from og.svg
@@ -54,6 +55,7 @@ website/
     build-legal.mjs       docs/PRIVACY.md → privacy.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
     download-links.test.mjs  fails CI if a download button's asset suffix matches no build
+    platform.test.mjs     platform.js recommendations for each browser/OS/CPU
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
     capture-screens.mjs   real app screenshots against a local model + demo workspace
 ```
