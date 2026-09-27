@@ -865,7 +865,7 @@ are provided, and any one is enough.
 
 **1. GPG (offline, no extra tooling).** The Linux artifacts (`*.AppImage`, `*.deb`)
 ship with a detached `<file>.asc` signature, and every release carries a `SHA256SUMS`
-manifest signed as `SHA256SUMS.asc`. Both are made with the project signing key,
+manifest, listing every platform's downloads, signed as `SHA256SUMS.asc`. Both are made with the project signing key,
 published as `houston-signing-key.asc` on each release. Import the key once (pin the
 fingerprint below), then verify:
 
@@ -875,7 +875,7 @@ gpg --import houston-signing-key.asc
 
 # verify the whole release in one step:
 gpg --verify SHA256SUMS.asc SHA256SUMS   # trust the manifest,
-sha256sum -c SHA256SUMS                   # then check your downloads against it
+sha256sum -c --ignore-missing SHA256SUMS  # then check the files you downloaded
 
 # or verify a single Linux artifact directly:
 gpg --verify Houston-<version>-x86_64.AppImage.asc Houston-<version>-x86_64.AppImage
@@ -905,8 +905,9 @@ altered. The same command verifies any released file: substitute its name and ma
 `.cosign.bundle`.
 
 **3. Checksums only.** For a plain integrity check without verifying who signed it,
-`sha256sum -c SHA256SUMS` (or the standalone `houston-cli.cjs.sha256`) confirms a
-download matches what was published.
+`sha256sum -c --ignore-missing SHA256SUMS` (or the standalone `houston-cli.cjs.sha256`)
+confirms a download matches what was published. On macOS, use
+`shasum -a 256 -c --ignore-missing SHA256SUMS`.
 
 ## Roadmap
 
