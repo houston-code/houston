@@ -47,6 +47,11 @@ describe('release artifact names', () => {
     expect(config.win.target.map((t) => t.target)).toEqual(['nsis'])
   })
 
+  it('keeps the dmg out of the update feed (no .dmg.blockmap; MacUpdater reads the zip)', () => {
+    expect(config.dmg.writeUpdateInfo).toBe(false)
+    expect(config.mac.target).toContain('zip')
+  })
+
   it('gives every shipped file a distinct name', () => {
     const names = SHIPPED.map(([p, t, e, a]) => artifactName(p, t, e, a))
     expect(new Set(names).size).toBe(names.length)
