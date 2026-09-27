@@ -55,9 +55,19 @@ describe('Dependabot auto-queue workflow runs no PR code', () => {
     }
   })
 
-  it('keeps the top-level token read-only and grants write to the one job', () => {
+  it('keeps the workflow token read-only everywhere', () => {
+    // The write credential is NOTICES_PAT, scoped to the queue step. The ambient token
+    // only reads the PR for Dependabot's metadata action.
     expect(doc.permissions).toEqual({ contents: 'read' })
-    expect(job.permissions).toEqual({ contents: 'write', 'pull-requests': 'write' })
+    expect(job.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' })
+  })
+
+  it('exposes the PAT to the queue step only', () => {
+    for (const step of steps) {
+      if (step === queueStep) continue
+      expect(JSON.stringify(step)).not.toContain('secrets.')
+    }
+    expect(JSON.stringify(job.env ?? {})).not.toContain('secrets.')
   })
 })
 
@@ -66,6 +76,17 @@ describe('Dependabot auto-queue workflow queues only what it should', () => {
     // --auto hands the PR to the merge queue once its required checks pass. A plain
     // `gh pr merge` would try to land it outright.
     expect(queueStep.run).toContain('gh pr merge --auto --merge')
+  })
+
+  it('enables auto-merge with a PAT, never GITHUB_TOKEN', () => {
+    // Auto-merge enabled as github-actions[bot] is never acted on by the merge queue, and
+    // a queue entry it did create would get no merge_group CI run. See the header.
+    expect(queueStep.env.GH_TOKEN).toBe('${{ secrets.NOTICES_PAT }}')
+    expect(source).not.toMatch(/github\.token|secrets\.GITHUB_TOKEN/)
+  })
+
+  it('fails loudly when the PAT is missing', () => {
+    expect(queueStep.run).toMatch(/if \[ -z "\$\{GH_TOKEN\}" \]; then[\s\S]*exit 1/)
   })
 
   it('queues patch and minor updates only', () => {
