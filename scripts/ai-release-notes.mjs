@@ -25,7 +25,8 @@ Write notes that are sharp, crisp, and strictly about what changed for the user.
 - Summarize only user-facing impact. Drop purely internal changes (CI, tests, refactors, dependency bumps, docs) entirely.
 - Do NOT invent changes. Only describe what the provided pull requests actually did; if a PR's effect is unclear, omit it rather than guess.
 - Call out breaking changes and any manual/migration steps the user must take, explicitly.
-- Output raw Markdown only — no code fences, no preamble, no commentary outside the notes.`
+- Never use em dashes (the long dash character). Use a comma, colon, parentheses, or a new sentence instead.
+- Output raw Markdown only: no code fences, no preamble, no commentary outside the notes.`
 
 // Build the user prompt: the exact heading to use, plus the merged PRs to summarize.
 export function buildPrompt({ version, date, prs }) {
@@ -49,7 +50,7 @@ export function buildPrompt({ version, date, prs }) {
   return `Write the CHANGELOG section for release v${version}.
 
 Start with exactly this heading line and nothing before it:
-## v${version} — ${date}
+## v${version} - ${date}
 
 Then a 2–3 sentence plain-English summary of the release. Then, only the sections that apply, in this order, as \`###\` headings: "Breaking changes", "Required steps", "Added", "Fixed", "Changed". Use \`- \` bullets and cite the PR number like \`(#123)\`. Omit a section if it has no entries, except always include "Breaking changes" (write a single bullet "- None." when there are none).
 

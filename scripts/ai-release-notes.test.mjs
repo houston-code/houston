@@ -9,7 +9,10 @@ describe('buildPrompt', () => {
 
   it('pins the exact heading line for the version + date', () => {
     const p = buildPrompt({ version: '0.2.0', date: '2026-06-28', prs })
-    expect(p).toContain('## v0.2.0 — 2026-06-28')
+    expect(p).toContain('## v0.2.0 - 2026-06-28')
+    // The model copies the heading verbatim, so it must not carry an em dash either.
+    expect(p).not.toContain('\u2014')
+    expect(SYSTEM_PROMPT).toContain('Never use em dashes')
     expect(p).toContain('Write the CHANGELOG section for release v0.2.0.')
   })
 
@@ -53,15 +56,15 @@ describe('extractText', () => {
   it('joins text blocks and ignores thinking blocks', () => {
     const content = [
       { type: 'thinking', thinking: 'internal reasoning' },
-      { type: 'text', text: '## v0.2.0 — 2026-06-28\n\n' },
+      { type: 'text', text: '## v0.2.0 - 2026-06-28\n\n' },
       { type: 'text', text: 'Summary.' }
     ]
-    expect(extractText(content)).toBe('## v0.2.0 — 2026-06-28\n\nSummary.')
+    expect(extractText(content)).toBe('## v0.2.0 - 2026-06-28\n\nSummary.')
   })
 
   it('strips a wrapping ```markdown code fence if the model adds one', () => {
-    const content = [{ type: 'text', text: '```markdown\n## v0.2.0 — x\n\n- Thing (#1)\n```' }]
-    expect(extractText(content)).toBe('## v0.2.0 — x\n\n- Thing (#1)')
+    const content = [{ type: 'text', text: '```markdown\n## v0.2.0 - x\n\n- Thing (#1)\n```' }]
+    expect(extractText(content)).toBe('## v0.2.0 - x\n\n- Thing (#1)')
   })
 
   it('returns empty string when there are no text blocks', () => {
