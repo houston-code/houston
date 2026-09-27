@@ -30,10 +30,19 @@ const commitStep = steps.find((s) => String(s.name ?? '').includes('Commit'))
 
 describe('Dependabot notices workflow', () => {
   it('runs only on Dependabot pull requests', () => {
-    // Gating on the actor keeps the credential-holding job off every human PR, where the
-    // author can just run `npm run notices` locally.
+    // Gating keeps the credential-holding job off every human PR, where the author can
+    // just run `npm run notices` locally.
     expect(triggers).toHaveProperty('pull_request')
-    expect(job.if).toBe("github.actor == 'dependabot[bot]'")
+    expect(job.if).toContain("github.actor == 'dependabot[bot]'")
+  })
+
+  it('checks who opened the PR and where its branch lives, not just the actor', () => {
+    // github.actor is whoever triggered this event. Dependabot can be made to push to a
+    // branch it did not open (a fork's Dependabot updating a cross-repo PR's head), and
+    // this job runs the PR's own generator script before the push step reads the PAT.
+    expect(job.if).toContain("github.event.pull_request.user.login == 'dependabot[bot]'")
+    expect(job.if).toContain('github.event.pull_request.head.repo.full_name == github.repository')
+    expect(job.if).not.toMatch(/\|\|/)
   })
 
   it('commits to the PR branch, not the merge ref', () => {

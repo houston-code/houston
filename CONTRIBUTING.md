@@ -267,7 +267,9 @@ a credential that can write to the branch, and `ci.yml` runs the PR's own tests,
 package scripts, so a secret readable there is readable by the PR's own code. The
 auto-commit job runs no project code at all: it installs with `--ignore-scripts`, runs one
 generator that only reads package metadata, and exposes the credential to the push step
-alone. `src/main/dependabot-notices-workflow.test.ts` pins those properties.
+alone. It runs only on PRs that Dependabot opened, from a branch in this repository, so a
+fork cannot steer Dependabot into running it. `src/main/dependabot-notices-workflow.test.ts`
+pins those properties.
 
 **One-time setup.** The workflow needs a fine-grained PAT with `Contents: read and write`
 on this repository, stored as a **Dependabot** secret named `NOTICES_PAT`:

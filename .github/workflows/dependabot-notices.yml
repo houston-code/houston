@@ -53,8 +53,15 @@ concurrency:
 jobs:
   notices:
     # Dependabot PRs only. A human author can run `npm run notices` locally, and gating
-    # on the actor keeps this credential-holding job off every other PR in the repo.
-    if: github.actor == 'dependabot[bot]'
+    # keeps this credential-holding job off every other PR in the repo. The actor alone is
+    # not enough: it names whoever caused this event, and Dependabot can be made to push to
+    # a branch it did not open (a fork's Dependabot updating the head of someone's
+    # cross-repo PR, say). That PR's own scripts/generate-notices.mjs runs below, so also
+    # require that Dependabot opened the PR and that its branch lives in this repository.
+    if: >-
+      github.actor == 'dependabot[bot]'
+      && github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
