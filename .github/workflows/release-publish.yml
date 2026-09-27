@@ -521,56 +521,8 @@ jobs:
           # houston-signing-key.asc is the repo-root file checked out at the released commit,
           # so what users get is exactly what's committed to source.
           gh release upload "$tag" houston-signing-key.asc -R houston-code/houston --clobber
-      # SLSA v1.0 build provenance. Complements the cosign SIGNATURES above (integrity +
-      # signer identity) with a structured attestation of HOW each artifact was built —
-      # builder = this workflow, plus the source repo + commit. cosign attest-blob sets each
-      # artifact's digest as the subject and signs keyless (Fulcio + Rekor), the same trust
-      # path as the signatures. Like the signatures, these are !dry_run, so they are first
-      # exercised on a real publish. Verify with:
-      #   cosign verify-blob-attestation <file> --bundle <file>.slsa.bundle --type slsaprovenance1 \
-      #     --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
-      #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
-      - name: Generate SLSA provenance predicate
-        if: ${{ !inputs.dry_run }}
-        run: node scripts/slsa-provenance.mjs > slsa-predicate.json
-      - name: Attest release binaries (SLSA provenance)
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          shopt -s nullglob
-          for f in release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb; do
-            cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
-              --bundle "$f.slsa.bundle" "$f"
-            gh release upload "$tag" "$f.slsa.bundle" -R houston-code/houston --clobber
-          done
-      - name: Attest standalone CLI + SBOMs (SLSA provenance)
-        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json; do
-            cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
-              --bundle "$f.slsa.bundle" "$f"
-            gh release upload "$tag" "$f.slsa.bundle" -R houston-code/houston --clobber
-          done
-      # This leg's per-platform binary SBOM gets the same SLSA provenance as every other asset
-      # (the predicate step above runs on every leg, so slsa-predicate.json is present here too).
-      - name: Attest binary SBOM (SLSA provenance)
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          for f in sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json sbom.binary.${{ matrix.sbom_label }}.spdx.json; do
-            cosign attest-blob --yes --predicate slsa-predicate.json --type slsaprovenance1 \
-              --bundle "$f.slsa.bundle" "$f"
-            gh release upload "$tag" "$f.slsa.bundle" -R houston-code/houston --clobber
-          done
+      # Build provenance is not made per file here: the `checksums` job signs one statement
+      # for the whole release once every leg has uploaded.
       # On a REAL publish the assets live on the published GitHub Release, so no Actions
       # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
       # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
@@ -605,6 +557,14 @@ jobs:
   # fails if any platform's installer is missing. The manifest is signed with the GPG release
   # key (SHA256SUMS.asc) and keyless with cosign (SHA256SUMS.cosign.bundle), like every other
   # release file. Without GPG_PRIVATE_KEY it still ships SHA256SUMS, cosign-signed only.
+  #
+  # It also makes the release's SLSA v1.0 build provenance: ONE in-toto statement whose
+  # subjects are every file in SHA256SUMS (scripts/slsa-provenance.mjs --subjects), signed
+  # keyless (Fulcio + Rekor) into provenance.slsa.bundle. That replaces a .slsa.bundle per
+  # file. verify-blob-attestation accepts any file whose SHA-256 is one of the subjects:
+  #   cosign verify-blob-attestation <file> --bundle provenance.slsa.bundle --type slsaprovenance1 \
+  #     --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+  #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
   checksums:
     needs: build
     if: ${{ !inputs.dry_run }}
@@ -664,6 +624,20 @@ jobs:
             files+=(SHA256SUMS.asc)
           fi
           gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber
+      - name: Attest the release (SLSA provenance, one statement)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/slsa-provenance.mjs --subjects SHA256SUMS > provenance-statement.json
+          cosign attest-blob --yes --statement provenance-statement.json --bundle provenance.slsa.bundle
+          # Prove the bundle verifies for a listed download before publishing it.
+          first="$(awk 'NR==1 {print $2}' SHA256SUMS)"
+          cosign verify-blob-attestation "assets/$first" --bundle provenance.slsa.bundle \
+            --type slsaprovenance1 \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-publish.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+          gh release upload "$tag" provenance.slsa.bundle -R houston-code/houston --clobber
 
   finalize:
     needs: [build, checksums]

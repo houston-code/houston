@@ -156,3 +156,34 @@ describe('release-publish Download table', () => {
     expect(finalize).not.toContain('--notes-file release-notes.md')
   })
 })
+
+describe('release-publish SLSA provenance', () => {
+  const checksumsJob = (() => {
+    const start = workflow.indexOf('\n  checksums:\n')
+    return workflow.slice(start, workflow.indexOf('\n  finalize:\n', start))
+  })()
+  // The build job's commands only: comments (including the checksums job's header, which
+  // sits just above `checksums:`) may still describe provenance.
+  const buildJob = workflow
+    .slice(workflow.indexOf('\n  build:\n'), workflow.indexOf('\n  checksums:\n'))
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('#'))
+    .join('\n')
+
+  it('attests the whole release once, from SHA256SUMS', () => {
+    expect(checksumsJob).toContain('node scripts/slsa-provenance.mjs --subjects SHA256SUMS > provenance-statement.json')
+    expect(checksumsJob).toContain('cosign attest-blob --yes --statement provenance-statement.json --bundle provenance.slsa.bundle')
+    expect(checksumsJob).toContain('gh release upload "$tag" provenance.slsa.bundle')
+  })
+
+  it('verifies the bundle against a real download before uploading it', () => {
+    const verify = checksumsJob.indexOf('cosign verify-blob-attestation "assets/$first" --bundle provenance.slsa.bundle')
+    expect(verify).toBeGreaterThan(-1)
+    expect(verify).toBeLessThan(checksumsJob.indexOf('gh release upload "$tag" provenance.slsa.bundle'))
+  })
+
+  it('no longer writes a .slsa.bundle per file in the build legs', () => {
+    expect(buildJob).not.toContain('cosign attest-blob')
+    expect(buildJob).not.toContain('.slsa.bundle')
+  })
+})
