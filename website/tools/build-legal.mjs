@@ -88,7 +88,8 @@ function page({ title, description, contentTitle, html, slug }) {
   <link rel="canonical" href="https://houstoncode.ai/${slug}" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
-  <link rel="icon" type="image/png" href="/assets/icon.png" />
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="/assets/styles.css" />
   <script src="/assets/theme.js"></script>
 </head>
