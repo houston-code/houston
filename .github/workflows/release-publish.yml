@@ -450,7 +450,8 @@ jobs:
       # This leg's own deep binary SBOM (generated above from its packaged app): attach it and its
       # cosign bundle. Runs on EVERY leg — the platform-tagged filename means the four legs never
       # collide, and each ships the SBOM whose hashes match that platform's binaries. The Linux
-      # leg's pair is additionally folded into the signed SHA256SUMS manifest below.
+      # leg's pair, like every platform's, is also listed in the signed SHA256SUMS manifest
+      # (the `checksums` job).
       - name: Attach + sign the binary SBOM
         if: ${{ !inputs.dry_run }}
         env:
@@ -478,17 +479,16 @@ jobs:
       # cosign install and no Fulcio/Rekor round-trip. Complements (does not replace) the cosign
       # bundles above. NOTE: this does NOT gate electron-updater — the AppImage auto-update path
       # verifies sha512 over HTTPS from latest-linux.yml; these signatures are for a human (or
-      # packaging pipeline) verifying a download. Two things are produced:
-      #   • a detached ASCII-armored signature (.asc) beside each Linux artifact (AppImage, deb), and
-      #   • a single SHA256SUMS manifest covering the Linux + platform-independent assets, signed
-      #     once (SHA256SUMS.asc) so one `gpg --verify` + `sha256sum -c` verifies the whole set.
-      # The public key is published beside them so a verifier needs no keyserver. Runs AFTER
+      # packaging pipeline) verifying a download. This step puts a detached ASCII-armored
+      # signature (.asc) beside each Linux artifact (AppImage, deb); the whole-release
+      # SHA256SUMS manifest is signed with the same key by the `checksums` job, once every leg
+      # has uploaded. The public key is published beside them so a verifier needs no keyserver. Runs AFTER
       # publish so a signing hiccup can't strand a half-published release; skipped on dry_run. If
       # GPG_PRIVATE_KEY is unset it SOFT-skips (release still publishes unsigned) rather than
       # failing — GPG is additive, mirroring how the macOS signing gate degrades without certs.
       # The key is imported into an ephemeral GNUPGHOME (mktemp) so nothing persists on the runner,
       # with loopback pinentry so the passphrase is supplied non-interactively.
-      - name: GPG-sign Linux artifacts + whole-release checksums
+      - name: GPG-sign Linux artifacts
         if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -514,28 +514,15 @@ jobs:
                 --local-user "$key_id" --armor --detach-sign --output "$1.asc" "$1"
           }
           shopt -s nullglob
-          # 1) Detached signature beside each Linux artifact built on this leg.
+          # Detached signature beside each Linux artifact built on this leg.
           for f in release/*.AppImage release/*.deb; do
             sign "$f"
             gh release upload "$tag" "$f.asc" -R houston-code/houston --clobber
           done
-          # 2) One SHA256SUMS over the Linux + platform-independent assets (basenames, so the
-          #    listed names match what a user downloads), signed once. cd into each file's dir so
-          #    the manifest carries bare filenames rather than build paths. The mac/win installers
-          #    keep their per-file cosign bundles; extending this manifest to them is a follow-up.
-          {
-            ( cd release && sha256sum *.AppImage *.deb )
-            ( cd out/cli && sha256sum houston-cli.cjs )
-            sha256sum sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json \
-              sbom.binary.linux-x64.cyclonedx.json sbom.binary.linux-x64.spdx.json THIRD-PARTY-NOTICES.md
-            ( cd release-vex && sha256sum houston.openvex.json )
-          } > SHA256SUMS
-          sign SHA256SUMS
-          # 3) Publish the manifest, its signature, and the committed public key so a downloader
-          #    can verify with no keyserver. houston-signing-key.asc is the repo-root file checked
-          #    out at the released commit, so what users get is exactly what's committed to source.
-          gh release upload "$tag" SHA256SUMS SHA256SUMS.asc houston-signing-key.asc \
-            -R houston-code/houston --clobber
+          # Publish the committed public key so a downloader can verify with no keyserver.
+          # houston-signing-key.asc is the repo-root file checked out at the released commit,
+          # so what users get is exactly what's committed to source.
+          gh release upload "$tag" houston-signing-key.asc -R houston-code/houston --clobber
       # SLSA v1.0 build provenance. Complements the cosign SIGNATURES above (integrity +
       # signer identity) with a structured attestation of HOW each artifact was built —
       # builder = this workflow, plus the source repo + commit. cosign attest-blob sets each
@@ -614,8 +601,75 @@ jobs:
             release-vex/houston.openvex.json
           if-no-files-found: error
 
-  finalize:
+  # The whole-release SHA256SUMS manifest. It runs once every build leg has uploaded, and
+  # hashes the files as downloaded FROM THE DRAFT, so it covers every platform (the Linux leg
+  # used to build it from its own runner, which left out the mac and Windows downloads) and
+  # lists exactly the bytes a user gets. scripts/release-checksums.mjs picks the assets and
+  # fails if any platform's installer is missing. The manifest is signed with the GPG release
+  # key (SHA256SUMS.asc) and keyless with cosign (SHA256SUMS.cosign.bundle), like every other
+  # release file. Without GPG_PRIVATE_KEY it still ships SHA256SUMS, cosign-signed only.
+  checksums:
     needs: build
+    if: ${{ !inputs.dry_run }}
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    # GPG_PRIVATE_KEY / GPG_PASSPHRASE live in the `release` environment (see `build`).
+    environment: release
+    permissions:
+      contents: write
+      # cosign keyless signing needs an OIDC token for Fulcio.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v2.6.3'
+      - name: Build SHA256SUMS from the draft's assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/release-checksums.mjs houston-code/houston "$tag" > checksummed.txt
+          names=()
+          while IFS= read -r n; do names+=("$n"); done < checksummed.txt
+          mkdir assets
+          for name in "${names[@]}"; do
+            gh release download "$tag" -R houston-code/houston -p "$name" -D assets
+          done
+          # Bare filenames, so `sha256sum -c SHA256SUMS` works in a folder of downloads.
+          ( cd assets && sha256sum -- "${names[@]}" ) > SHA256SUMS
+          cat SHA256SUMS
+      - name: Sign + attach SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          cosign sign-blob --yes SHA256SUMS --bundle SHA256SUMS.cosign.bundle
+          files=(SHA256SUMS SHA256SUMS.cosign.bundle)
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::warning::GPG_PRIVATE_KEY not set: SHA256SUMS ships without SHA256SUMS.asc (cosign-signed only)."
+          else
+            # Ephemeral keyring and loopback pinentry, as in the build job's GPG step.
+            GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
+            chmod 700 "$GNUPGHOME"
+            echo 'allow-loopback-pinentry' > "$GNUPGHOME/gpg-agent.conf"
+            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+            key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+                --local-user "$key_id" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+            files+=(SHA256SUMS.asc)
+          fi
+          gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber
+
+  finalize:
+    needs: [build, checksums]
     if: ${{ !inputs.dry_run }}
     timeout-minutes: 10
     runs-on: ubuntu-24.04
