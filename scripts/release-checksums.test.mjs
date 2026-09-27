@@ -8,7 +8,6 @@ const DOWNLOADS = [
   'Houston-1.2.0-x64.dmg',
   'Houston-1.2.0-x64-mac.zip',
   'Houston-1.2.0-x64-setup.exe',
-  'Houston-1.2.0-x64-win.zip',
   'Houston-1.2.0-x86_64.AppImage',
   'Houston-1.2.0-amd64.deb',
   'houston-cli.cjs',
