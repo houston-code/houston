@@ -74,6 +74,12 @@ extraResources:
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns
+  # Names the zip (the dmg sets its own below). electron-builder's default zip name drops
+  # the arch for x64, so the Intel build shipped as a bare `Houston-<v>-mac.zip` beside
+  # `Houston-<v>-arm64-mac.zip`, which reads like a universal build. An explicit pattern
+  # always expands ${arch}. The merged update feed still tells the arches apart by
+  # "arm64" in the URL (scripts/merge-mac-update-yml.mjs).
+  artifactName: ${productName}-${version}-${arch}-mac.${ext}
   # Pin the OS floor explicitly (→ LSMinimumSystemVersion in Info.plist) instead of
   # inheriting Electron's implicit minimum. Electron 44 dropped macOS 12 (Chromium did),
   # so 13.0 is the real floor; setting it here makes an older Mac show a clean
@@ -131,6 +137,8 @@ mac:
 
 win:
   icon: build/icon.ico
+  # Names the zip (nsis sets its own below), so it carries the arch like every other file.
+  artifactName: ${productName}-${version}-${arch}-win.${ext}
   # nsis = human installer; zip = the differential-download artifact the updater pulls
   # (Windows nsis updates read latest.yml). windows-latest is x64; arm64 Windows is a
   # follow-up (needs a windows-11-arm runner).
