@@ -703,12 +703,12 @@ mac, on the target arch — arm64 on Apple Silicon, x64 on an Intel mac):
 ```bash
 npm run dist:mac      # macOS arm64 → .dmg + .zip (+ latest-mac.yml) — run on Apple Silicon
 npm run dist:mac:x64  # macOS x64   → .dmg + .zip                    — run on an Intel mac
-npm run dist:win      # Windows x64 → -setup.exe + .zip (+ latest.yml) — run on Windows
+npm run dist:win      # Windows x64 → -setup.exe (+ latest.yml)       — run on Windows
 npm run dist:linux    # Linux x64   → .AppImage + .deb (+ latest-linux.yml) — run on glibc 2.35+ (Ubuntu 22.04)
 ```
 
-The human download is the `.dmg` / `-setup.exe` / `.AppImage`; the `.zip` / nsis /
-AppImage feeds (+ `latest-*.yml`) are what `electron-updater` uses to auto-update an
+The human download is the `.dmg` / `-setup.exe` / `.AppImage`; the mac `.zip`, the nsis
+installer and the AppImage (+ `latest-*.yml`) (+ `latest-*.yml`) are what `electron-updater` uses to auto-update an
 installed app (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
 fails if a vendored binary is missing, so a build can't silently ship without search.
 
