@@ -11,7 +11,7 @@ import {
 } from '../lib/shortcuts'
 import { chordFromString, chordFromEvent, chordToString } from '../lib/keybindingOverrides'
 import { LICENSE_URL, PRIVACY_URL } from '@shared/legal'
-import type { UpdateCheckResult } from '@shared/update'
+import { updateErrorHint, type UpdateCheckResult } from '@shared/update'
 import type {
   AppSettings,
   Hook,
@@ -2049,7 +2049,9 @@ export function SettingsModal({
                       {updateResult.status === 'disabled' &&
                         'Update checks run only in packaged builds.'}
                       {updateResult.status === 'error' &&
-                        `Couldn’t check for updates: ${updateResult.message}`}
+                        ['Couldn’t check for updates.', updateErrorHint(updateResult.message)]
+                          .filter(Boolean)
+                          .join(' ')}
                     </p>
                   )}
                 </SettingsSection>

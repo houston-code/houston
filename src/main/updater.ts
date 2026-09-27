@@ -5,6 +5,7 @@ import type { UpdateInfo } from 'electron-updater'
 import { IPC } from '@shared/constants'
 import {
   highlightsFor,
+  updateErrorHint,
   type UpdateCheckResult,
   type UpdateDownloaded,
   type UpdateDownloadProgress,
@@ -200,7 +201,9 @@ export function menuUpdateDialog(result: UpdateCheckResult): {
           detail: `You’re running Houston ${result.currentVersion} from a development build.`
         }
       }
-    case 'error':
+    case 'error': {
+      // The raw error is already logged by checkForUpdates; show a hint, not the error.
+      const hint = updateErrorHint(result.message)
       return {
         downloadUrl: null,
         options: {
@@ -209,9 +212,10 @@ export function menuUpdateDialog(result: UpdateCheckResult): {
           defaultId: 0,
           title: 'Check for updates',
           message: 'Couldn’t check for updates.',
-          detail: result.message
+          ...(hint ? { detail: hint } : {})
         }
       }
+    }
   }
 }
 
