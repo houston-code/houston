@@ -417,10 +417,12 @@ Grab the artifact for your platform:
 | Any (terminal only) | Node ≥ 22 | `houston-cli.cjs` — the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i`, or put it on your PATH as `houston` | **No** — re-download to update |
 
 > **macOS builds are signed and notarized**, so they open with no Gatekeeper warning
-> and update in place. **Windows and Linux builds are unsigned** for now:
+> and update in place. **Windows and Linux builds are not OS-code-signed** for now:
 > - **Windows**: SmartScreen warns until the installer is signed with an Authenticode
 >   cert. Click **More info** → **Run anyway**.
-> - **Linux**: AppImage/deb are unsigned (conventional).
+> - **Linux**: there is no OS-level signing to apply, but the AppImage and deb ship with
+>   GPG signatures (`.asc`), and every release's signed `SHA256SUMS` covers every
+>   platform. See [Verifying downloads](#verifying-downloads).
 >
 > **Only macOS auto-downloads and installs updates** (its signature is verifiable). On
 > Windows and Linux, "Yes" above means the app checks the update feed and shows a banner
