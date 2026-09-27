@@ -288,10 +288,9 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           npm run build:cli
-          # A downloaded .cjs has no package manager to verify it, so ship a
-          # checksum beside it: users can run `sha256sum -c houston-cli.cjs.sha256`.
-          # Built here (not in the attach step) so dry_run's artifact carries it too.
-          ( cd out/cli && sha256sum houston-cli.cjs > houston-cli.cjs.sha256 )
+          # No separate houston-cli.cjs.sha256: the signed SHA256SUMS (the `checksums`
+          # job) already lists the CLI, and an unsigned per-file checksum proved nothing
+          # a tamperer couldn't also replace.
       # Software Bill of Materials (CycloneDX + SPDX) for the production dependency
       # closure, generated with Syft scanning package-lock.json directly. npm's built-in
       # `npm sbom --omit dev` was tried first but SILENTLY UNDER-REPORTS: it emitted 56 of
@@ -409,7 +408,6 @@ jobs:
           # exploitability assessment, not just the list.
           gh release upload "$tag" \
             out/cli/houston-cli.cjs \
-            out/cli/houston-cli.cjs.sha256 \
             THIRD-PARTY-NOTICES.md \
             sbom.cyclonedx.json \
             sbom.spdx.json \
@@ -591,7 +589,6 @@ jobs:
             release/*.deb
             release/latest*.yml
             out/cli/houston-cli.cjs
-            out/cli/houston-cli.cjs.sha256
             THIRD-PARTY-NOTICES.md
             sbom.cyclonedx.json
             sbom.spdx.json

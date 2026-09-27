@@ -31,7 +31,6 @@ const SIDECARS = [
   'Houston-1.2.0-arm64.dmg.cosign.bundle',
   'Houston-1.2.0-arm64.dmg.slsa.bundle',
   'Houston-1.2.0-x86_64.AppImage.asc',
-  'houston-cli.cjs.sha256',
   'houston-signing-key.asc',
   'latest-mac.yml',
   'latest.yml',
