@@ -29,7 +29,7 @@ describe('downloadsTable', () => {
     expect(table).toContain(`| macOS, Apple Silicon | [Houston-1.2.0-arm64.dmg](${url('Houston-1.2.0-arm64.dmg')}) |`)
     expect(table).toContain(`| macOS, Intel | [Houston-1.2.0-x64.dmg](${url('Houston-1.2.0-x64.dmg')}) |`)
     expect(table).toContain(`| Windows, x64 | [Houston-1.2.0-x64-setup.exe](${url('Houston-1.2.0-x64-setup.exe')}) |`)
-    expect(table).toContain(`| Terminal CLI, any OS | [houston-cli.cjs](${url('houston-cli.cjs')}) |`)
+    expect(table).toContain(`| Terminal CLI: macOS, Windows, Linux | [houston-cli.cjs](${url('houston-cli.cjs')}) |`)
   })
 
   it('puts both Linux packages in one row', () => {

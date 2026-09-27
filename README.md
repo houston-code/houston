@@ -414,7 +414,7 @@ Grab the artifact for your platform:
 | Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x86_64.AppImage`: `chmod +x` and run | Yes (AppImage only) |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-amd64.deb`: `sudo apt install ./…deb` | **No**, update via your package manager or re-download |
-| Any (terminal only) | Node ≥ 22 | `houston-cli.cjs` — the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i`, or put it on your PATH as `houston` | **No** — re-download to update |
+| macOS, Windows, Linux (x64 or Arm), terminal only | Node ≥ 22 | `houston-cli.cjs`, the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i`, or put it on your PATH as `houston` | **No**: re-download to update |
 
 > **macOS builds are signed and notarized**, so they open with no Gatekeeper warning
 > and update in place. **Windows and Linux builds are not OS-code-signed** for now:
@@ -588,12 +588,20 @@ ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --
 ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -i
 ```
 
-Requires **Node ≥ 22** — that's the only dependency. All the flags, slash
-commands, approvals, sandboxing, and session persistence described in
-[Headless / scripting](#headless--scripting) and
-[Interactive terminal](#interactive-terminal) work identically: it is the same
-client code, built without the desktop shell. (From a source checkout:
-`npm run build:cli` produces `out/cli/houston-cli.cjs`.)
+Runs on **macOS, Windows, and Linux**, on x64 or Arm, and requires **Node ≥ 22**:
+that's the only dependency. All the flags, slash commands, approvals, and session
+persistence described in [Headless / scripting](#headless--scripting) and
+[Interactive terminal](#interactive-terminal) work the same: it is the same client code,
+built without the desktop shell. (From a source checkout: `npm run build:cli` produces
+`out/cli/houston-cli.cjs`.)
+
+What varies by platform, since the CLI bundles no native binaries:
+
+- **Shell sandbox:** Seatbelt on macOS, and bubblewrap on Linux when `bwrap` is installed.
+  On Windows, or on Linux without `bwrap`, shell commands run unsandboxed, so each one asks
+  for your approval. The file tools stay confined to the workspace everywhere.
+- **Search:** `search_files` uses `ripgrep` (`rg`) when it's on your PATH and a slower
+  built-in search otherwise. Structural search (`ast_grep`) needs `ast-grep` installed.
 
 **Run it as a bare `houston` command.** Once it's on your PATH, typing `houston`
 by itself drops straight into the interactive terminal, with no flag and no
