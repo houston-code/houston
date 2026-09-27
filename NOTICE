@@ -28,10 +28,13 @@ Apache License grant over this repository. That artwork is:
     website/public/apple-touch-icon.png
     website/public/apple-touch-icon-precomposed.png
     website/public/favicon.ico
+    scripts/make-icon.mjs
 
-together with any work derived from those files. They are included here
-so the project can build and ship itself; they are not licensed to you
-for copying or modification. All rights in them are reserved.
+together with any work derived from those files, including any image
+produced by running scripts/make-icon.mjs (the program that draws
+build/icon.png) or a modified version of it. They are included here so
+the project can build and ship itself; they are not licensed to you for
+copying or modification. All rights in them are reserved.
 
 Everything else in this repository, source and non-source alike, is
 covered by the Apache License with no carve-out.

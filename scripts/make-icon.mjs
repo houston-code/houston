@@ -1,4 +1,6 @@
 // Generates build/icon.png (1024x1024) — the Houston app icon.
+// This file IS the logo artwork in program form, so like the icon files it is carved
+// out of the Apache grant (see NOTICE and TRADEMARK.md). Keep it on those lists.
 // Dependency-free: rasterizes with simple signed-distance fields and encodes
 // the PNG by hand via node:zlib. Run: node scripts/make-icon.mjs
 import { deflateSync } from 'node:zlib'
