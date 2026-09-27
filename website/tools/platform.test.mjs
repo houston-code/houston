@@ -29,8 +29,8 @@ describe("classify: Macs", () => {
   it("recommends no Mac card when it can't tell (Safari's generic GPU name)", () => {
     // The old behavior recommended Apple Silicon to every Mac, including Intel ones that
     // can't open that build.
-    expect(classify(mac({ ua: MAC_UA, gpu: "Apple GPU" }))).toEqual({ os: "mac", card: null });
-    expect(classify(mac({ ua: MAC_UA }))).toEqual({ os: "mac", card: null });
+    expect(classify(mac({ ua: MAC_UA, gpu: "Apple GPU" }))).toEqual({ os: "mac", card: null, hint: "mac-arch-hint" });
+    expect(classify(mac({ ua: MAC_UA }))).toEqual({ os: "mac", card: null, hint: "mac-arch-hint" });
   });
 
   it("prefers Client Hints over the GPU name", () => {
@@ -52,6 +52,15 @@ describe("classify: other platforms", () => {
     expect(classify({ ua: "Mozilla/5.0 (X11; Linux x86_64)", platform: "Linux x86_64" })).toEqual({ os: "linux", card: "linux" });
   });
 
+  it("offers Linux on Arm the CLI note instead of the x64 build", () => {
+    const arm = { os: "linux", card: null, hint: "linux-arm-hint" };
+    // Firefox tells the truth in navigator.platform.
+    expect(classify({ ua: "Mozilla/5.0 (X11; Linux aarch64; rv:140.0) Gecko/20100101 Firefox/140.0", platform: "Linux aarch64" })).toEqual(arm);
+    // Chromium's frozen UA says x86_64; Client Hints say arm.
+    expect(classify({ ua: "Mozilla/5.0 (X11; Linux x86_64)", platform: "Linux x86_64", uaArch: "arm" })).toEqual(arm);
+    expect(classify({ ua: "Mozilla/5.0 (X11; Linux armv7l)", platform: "Linux armv7l" })).toEqual(arm);
+  });
+
   it("recommends nothing for Android or unknown platforms", () => {
     expect(classify({ ua: "Mozilla/5.0 (Linux; Android 15)", platform: "Linux armv8l" })).toEqual({ os: null, card: null });
     expect(classify({ ua: "", platform: "" })).toEqual({ os: null, card: null });
@@ -71,5 +80,6 @@ describe("landing page wiring", () => {
     expect(html.indexOf("/assets/platform.js")).toBeGreaterThan(-1);
     expect(html.indexOf("/assets/platform.js")).toBeLessThan(html.indexOf("/assets/app.js"));
     expect(html).toMatch(/id="mac-arch-hint" hidden/);
+    expect(html).toMatch(/id="linux-arm-hint" hidden/);
   });
 });
