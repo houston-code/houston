@@ -1,4 +1,5 @@
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   alreadyAllowedAsRule,
@@ -86,6 +87,32 @@ describe('shellReferencesExternalPath', () => {
     expect(shellReferencesExternalPath('cd /work/b/pkg && npm i', roots)).toBe(false)
     expect(shellReferencesExternalPath('cat /work/a/src/x.ts', roots)).toBe(false)
     expect(shellReferencesExternalPath('cat /work/c/x', roots)).toBe(true)
+  })
+
+  it('does NOT flag stdio devices or the sandbox-writable temp dirs', () => {
+    // The discard/log idioms agents use on nearly every server start; flagging them
+    // forced an approval prompt in full-auto for commands like `lsof -i :5173 2>/dev/null`.
+    expect(ext('lsof -i :5173 2>/dev/null')).toBe(false)
+    expect(ext('npm run build > /dev/null 2>&1')).toBe(false)
+    expect(ext('cmd &>/dev/null')).toBe(false)
+    expect(ext('echo hi >/dev/stderr')).toBe(false)
+    expect(ext('cat /dev/fd/3')).toBe(false)
+    expect(ext('npm run dev > /tmp/vite.log 2>&1')).toBe(false)
+    expect(ext('cat /tmp/vite.log')).toBe(false)
+    expect(ext('cat /private/tmp/django.log')).toBe(false)
+    expect(ext(`cat ${join(tmpdir(), 'out.txt')}`)).toBe(false)
+  })
+
+  it('still flags real device nodes and paths that climb out of a temp dir', () => {
+    expect(ext('cat /dev/disk0')).toBe(true)
+    expect(ext('dd if=/dev/rdisk2 of=out.img')).toBe(true)
+    expect(ext('ls /dev')).toBe(true)
+    // Lexical normalization: `/tmp/..` is `/`, not a temp path.
+    expect(ext('cat /tmp/../etc/passwd')).toBe(true)
+    // A sibling sharing the `/tmp` prefix is not inside it.
+    expect(ext('cat /tmpfoo/secret')).toBe(true)
+    // The home dir is never scratch, even though temp dirs are.
+    expect(ext('cat ~/.ssh/id_rsa 2>/dev/null')).toBe(true)
   })
 
   it('flags relative paths that climb above the workspace', () => {
