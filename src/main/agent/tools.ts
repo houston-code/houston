@@ -2903,6 +2903,9 @@ function parseQuestionOptions(raw: unknown): QuestionOption[] {
   return out
 }
 
+/** A question that is only a stub word, e.g. `placeholder`, `TODO`, `...`. */
+const PLACEHOLDER_QUESTION = /^(?:placeholder|todo|tbd|test|question|\.{2,}|…)\??$/i
+
 const askUser: ToolDef = {
   kind: 'read',
   summarize: (a) => `Ask: ${str(a, 'question')}`,
@@ -2948,6 +2951,11 @@ const askUser: ToolDef = {
     if (!ctx.askUser) throw new Error('Asking the user is not available in this context.')
     const question = str(args, 'question').trim()
     if (!question) throw new Error('question is required.')
+    // A stub the model emitted mid-garble (seen: a bare `{"question":"placeholder"}`
+    // alongside a malformed sibling call). Showing it would ask the user nothing.
+    if (PLACEHOLDER_QUESTION.test(question)) {
+      throw new Error('question is a placeholder, not a real question. Ask the actual question or skip the call.')
+    }
     const options = parseQuestionOptions(args.options)
     const multiSelect = args.multiSelect === true
     const answer = await ctx.askUser({ question, options, multiSelect })
