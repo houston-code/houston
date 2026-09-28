@@ -382,7 +382,9 @@ Approval is layered. From most to least restrictive:
   egress is granted **per destination** (approving a fetch to one host does not open
   egress to another), the first shell command pauses once for a **shell-network
   consent** so blanket outbound access is never automatic (declining runs commands
-  offline), and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
+  offline), a shell command that **names a path outside the project** asks first
+  (`/dev/null` and the temp directory the sandbox can already write to don't count),
+  and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
   and the like) prompts even here, since reads otherwise never do. "Allow for run" on
   that prompt stops it asking about credential reads for the rest of the conversation,
   and an `allow` permission rule opts a path in permanently.
