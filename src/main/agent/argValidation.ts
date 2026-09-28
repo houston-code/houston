@@ -16,9 +16,12 @@ import type { JSONSchema } from '@shared/agent'
  * arguments the tools already accept and handle correctly*. So we only check what
  * the model is genuinely likely to get wrong in a way that breaks execution:
  *
- *   1. required top-level keys are present (not undefined/null), and
+ *   1. required top-level keys are present (not undefined/null),
  *   2. each *present* top-level property has the declared primitive/array/object
- *      shape (string / number / integer / boolean / array / object).
+ *      shape (string / number / integer / boolean / array / object), and
+ *   3. no string value is a garbled fragment of tool-call syntax (see
+ *      {@link findLeakedMarkup}), the one malformation that otherwise sails through
+ *      the lenient tools and reaches the user or fails confusingly.
  *
  * We do NOT recurse into array items or nested object properties, do NOT enforce
  * enums, and do NOT reject unknown extra keys — matching the tools' existing
@@ -146,7 +149,57 @@ export function validateToolArgs(
     }
   }
 
+  // (3) No leaked tool-call markup in any string value. See findLeakedMarkup.
+  const leaked = findLeakedMarkup(args)
+  if (leaked) {
+    issues.push({
+      key: leaked,
+      message:
+        `"${leaked}" contains tool-call syntax (e.g. \`<parameter name=...>\` or \`"key">\`) instead of ` +
+        'a plain value; the call was garbled. Re-issue it with valid JSON arguments'
+    })
+  }
+
   return issues
+}
+
+/**
+ * A string value that STARTS or ENDS with fragments of the model's own tool-call
+ * syntax rather than the value itself. Two shapes have been seen in real sessions:
+ *
+ *  - an ask_user option `<parameter name="label">AI image generation`, where the
+ *    model began writing XML-style parameters inside a JSON array. It was shown to
+ *    the user verbatim as an answer choice.
+ *  - a multi_edit `edits` array of bare strings whose first item was
+ *    `[{"old_string">  const { login } = useAuth();`, i.e. a JSON object with its
+ *    `":` replaced by `">`. It failed later with a misleading "old_string must not
+ *    be empty".
+ *
+ * Anchored to the start/end of the value so file content that merely MENTIONS such
+ * markup mid-text (docs, tests, a parser) still passes; only a value that is itself
+ * garbled is caught.
+ */
+const LEAKED_MARKUP_START = /^\s*(?:<\/?(?:parameter|invoke|function_calls)\b|\[?\s*\{\s*"[A-Za-z_]\w*"\s*>)/
+const LEAKED_MARKUP_END = /<\/(?:parameter|invoke|function_calls)>\s*$/
+
+/** Max nesting walked when scanning argument values, so a pathological payload stays cheap. */
+const MAX_SCAN_DEPTH = 6
+
+/**
+ * The top-level argument key whose value (or any string nested inside it) carries
+ * leaked tool-call markup, or null when none does.
+ */
+export function findLeakedMarkup(args: Record<string, unknown>): string | null {
+  const garbled = (v: unknown, depth: number): boolean => {
+    if (typeof v === 'string') return LEAKED_MARKUP_START.test(v) || LEAKED_MARKUP_END.test(v)
+    if (depth >= MAX_SCAN_DEPTH || v === null || typeof v !== 'object') return false
+    const values = Array.isArray(v) ? v : Object.values(v as Record<string, unknown>)
+    return values.some((x) => garbled(x, depth + 1))
+  }
+  for (const [key, v] of Object.entries(args)) {
+    if (garbled(v, 0)) return key
+  }
+  return null
 }
 
 /**
