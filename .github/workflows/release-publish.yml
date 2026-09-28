@@ -584,3 +584,151 @@ jobs:
             echo "::warning::Couldn't turn on auto-merge for $url; add it to the merge queue yourself."
             echo "**Add $url to the merge queue yourself** once its checks pass: RELEASE_PR_TOKEN couldn't turn on auto-merge (it needs Contents: read and write)." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  # Package-manager channels for the standalone CLI: npm (@houston-code/cli), the Homebrew
+  # tap (houston-code/homebrew-tap) and the AUR (houston-bin). Runs once the release is public
+  # and works from the houston-cli.cjs it downloads from it, checked against the signed
+  # SHA256SUMS, so every channel ships the exact released bytes.
+  #
+  # Only for the latest release: these channels follow one version each (npm's `latest` tag,
+  # the tap's formula, the AUR package), so a patch to an older line or a pre-release must not
+  # take them over, for the same reason `finalize` leaves `latest` alone for those.
+  #
+  # Each channel is off until its repository variable is set to 'true', so a release never
+  # fails on a channel nobody has registered yet. packaging/README.md has the one-time setup
+  # (accounts, trusted publisher, tokens) for each. The rendered formula and PKGBUILD are
+  # always uploaded as an artifact, so they can be checked or pushed by hand.
+  distribute:
+    needs: [source, finalize]
+    if: ${{ !inputs.dry_run && needs.source.outputs.latest == 'true' }}
+    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    # HOMEBREW_TAP_TOKEN and AUR_SSH_KEY live in the `release` environment, and npm's trusted
+    # publisher is bound to this workflow + environment.
+    environment: release
+    permissions:
+      contents: read
+      # npm trusted publishing (OIDC, no stored token) and its provenance attestation.
+      id-token: write
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+      SHA: ${{ needs.source.outputs.sha }}
+    steps:
+      # The packaging scripts come from main, like the rest of the orchestration; the shipped
+      # bytes, and the package metadata, come from the release itself.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v2.6.3'
+      # SHA256SUMS is checked against the keyless signature the `checksums` job made in this
+      # run's workflow, so a houston-cli.cjs and SHA256SUMS swapped on the release together
+      # are refused before anything reaches a registry.
+      - name: Download the released CLI and verify it
+        id: cli
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir dl
+          gh release download "v$VERSION" -R houston-code/houston \
+            -p houston-cli.cjs -p SHA256SUMS -p SHA256SUMS.cosign.bundle -D dl
+          cosign verify-blob dl/SHA256SUMS --bundle dl/SHA256SUMS.cosign.bundle \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-publish.yml@${GITHUB_REF}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+          ( cd dl && sha256sum -c --ignore-missing SHA256SUMS )
+          got="$(node dl/houston-cli.cjs --version)"
+          if [ "$got" != "$VERSION" ]; then
+            echo "::error::The released houston-cli.cjs reports $got, not $VERSION."
+            exit 1
+          fi
+          echo "sha256=$(sha256sum dl/houston-cli.cjs | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+      - name: Render the Homebrew formula and AUR package
+        env:
+          SHA256: ${{ steps.cli.outputs.sha256 }}
+        run: node scripts/render-packaging.mjs --version "$VERSION" --sha256 "$SHA256" --out packaging-out
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-packaging
+          retention-days: 30
+          include-hidden-files: true
+          path: packaging-out
+          if-no-files-found: error
+      - name: Publish @houston-code/cli to npm
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        env:
+          # Trusted publishing needs npm 11.5.1+, and Node 22 bundles npm 10. This npm is run
+          # straight from its registry tarball, checked against this pinned hash, rather than
+          # installed globally.
+          NPM_VERSION: '11.20.0'
+          NPM_SHA256: d1a92f40e6c407b84c3a00c3cf978a10b24fd42f153c527e2016cef7bb34a483
+        run: |
+          set -euo pipefail
+          if npm view "@houston-code/cli@$VERSION" version >/dev/null 2>&1; then
+            echo "@houston-code/cli@$VERSION is already on npm; skipping."
+            exit 0
+          fi
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/npm.tgz" "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
+          echo "${NPM_SHA256}  $RUNNER_TEMP/npm.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/npm.tgz" -C "$RUNNER_TEMP"
+          # The manifest's engines, repository and license come from the release commit, which
+          # built this bundle, not from main.
+          git fetch --quiet --no-tags --depth 1 origin "$SHA"
+          git show "$SHA:package.json" > "$RUNNER_TEMP/release-package.json"
+          manifest_version="$(node -p "require(process.argv[1]).version" "$RUNNER_TEMP/release-package.json")"
+          if [ "$manifest_version" != "$VERSION" ]; then
+            echo "::error::The release commit's package.json says $manifest_version, not $VERSION."
+            exit 1
+          fi
+          node scripts/stage-npm-cli.mjs --cli dl/houston-cli.cjs --out npm-cli \
+            --manifest "$RUNNER_TEMP/release-package.json"
+          cd npm-cli
+          node "$RUNNER_TEMP/package/bin/npm-cli.js" publish --provenance --access public --registry https://registry.npmjs.org
+      - name: Update the Homebrew tap
+        if: ${{ vars.HOMEBREW_TAP == 'true' }}
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$TAP_TOKEN" ] || { echo "::error::HOMEBREW_TAP is on but HOMEBREW_TAP_TOKEN is not set."; exit 1; }
+          git clone --quiet --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/houston-code/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp packaging-out/homebrew/houston.rb tap/Formula/houston.rb
+          cd tap
+          git add Formula/houston.rb
+          if git diff --cached --quiet; then echo "Tap already at $VERSION."; exit 0; fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -qm "houston $VERSION"
+          git push --quiet origin HEAD
+      - name: Update the AUR package
+        if: ${{ vars.AUR_PUBLISH == 'true' }}
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          # The aur.archlinux.org line for known_hosts, checked against the fingerprints
+          # published on aur.archlinux.org. Pinned rather than ssh-keyscan'd at run time.
+          AUR_KNOWN_HOSTS: ${{ vars.AUR_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [ -n "$AUR_SSH_KEY" ] && [ -n "$AUR_KNOWN_HOSTS" ] \
+            || { echo "::error::AUR_PUBLISH is on but AUR_SSH_KEY or AUR_KNOWN_HOSTS is not set."; exit 1; }
+          ssh_dir="$(mktemp -d)"
+          trap 'rm -rf "$ssh_dir"' EXIT
+          chmod 700 "$ssh_dir"
+          printf '%s\n' "$AUR_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$AUR_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          chmod 600 "$ssh_dir/key" "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
+          git clone --quiet ssh://aur@aur.archlinux.org/houston-bin.git aur
+          cp packaging-out/aur/PKGBUILD packaging-out/aur/.SRCINFO aur/
+          cd aur
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then echo "AUR already at $VERSION."; exit 0; fi
+          git -c user.name='The Houston Authors' -c user.email='dev@houstoncode.ai' \
+              commit -qm "Update to $VERSION"
+          git push --quiet origin HEAD:master

@@ -13,3 +13,10 @@
 # deploy lands, instead of a day later beside HTML that already expects them.
 /assets/*
   Cache-Control: public, max-age=0, must-revalidate
+
+# The CLI installer (curl -fsSL https://houstoncode.ai/install.sh | sh). Plain text so a
+# browser shows the script instead of downloading it, and revalidated on every use so a
+# fix reaches users the moment a deploy lands.
+/install.sh
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate

@@ -94,6 +94,10 @@ on to build and sign everything without publishing (it still asks for approval).
    The release PR merged into the line, not `main`, so without this `main` would keep the old
    version and miss these notes, and the next line would be cut without them. If auto-merge
    can't be turned on, the run still passes and its summary says to queue the PR yourself.
+9. **distribute**: for a release marked **latest** only, sends the standalone CLI to npm
+   (`@houston-code/cli`), the Homebrew tap and the AUR. Each channel stays off until its
+   repository variable is `true`; [packaging/README.md](../packaging/README.md) has the
+   setup for each.
 
 The workflow files and the release orchestration scripts come from `main`, and everything
 that's built and shipped comes from the release commit. So a fix to the pipeline applies to a
