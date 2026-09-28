@@ -77,9 +77,14 @@
     badge.className = "dl-badge";
     badge.textContent = "Recommended";
     ($(".dl-head", card) || card).appendChild(badge);
-    var primary = $(".dl-primary", card);
-    if (primary) { primary.classList.remove("btn-secondary"); primary.classList.add("btn-primary"); }
-    recommended = primary;
+    // Every card's button starts as primary, so with no clear pick all four read as
+    // equally good choices. Once one card is recommended, the others step back.
+    $all(".dl-card").forEach(function (other) {
+      if (other === card) return;
+      var button = $(".dl-primary", other);
+      if (button) { button.classList.remove("btn-primary"); button.classList.add("btn-secondary"); }
+    });
+    recommended = $(".dl-primary", card);
     syncHeroDownload();
   }
 
