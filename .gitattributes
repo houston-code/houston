@@ -1,0 +1,5 @@
+# Check text files out with LF on every platform. Windows runners default to
+# core.autocrlf=true, and a CRLF shebang ("#!/usr/bin/env node\r\n") in a script that
+# Vitest's globalSetup imports is not stripped by Vite's /^#!.*\n/ (`.` doesn't match
+# \r), so the module fails to parse and the whole run dies before collecting a test.
+* text=auto eol=lf
