@@ -137,3 +137,32 @@ export function shouldLand(
   if (state.alreadyLanded) return { land: false, iterationsLeft, trigger }
   return { land: nearCap || overCost, iterationsLeft, trigger }
 }
+
+/**
+ * The note pushed before the LAST iteration of a turn. The landing reminder above is
+ * advisory and a model can ignore it (seen in a real session: told "3 steps left",
+ * it kept editing and the turn ended on a bare tool result with no summary). On the
+ * last iteration the loop therefore also drops any tool call the model makes, so
+ * this note tells it up front that tools won't run and a summary is the only useful
+ * reply.
+ */
+export const FINAL_STEP_NOTE =
+  "This is the last step of this turn: tool calls made now will NOT run. Reply to the user " +
+  "in plain text only: what you finished, what is still left, and that they can say " +
+  '"continue" to pick it up.'
+
+/**
+ * Shown to the user when the last iteration produced only tool calls and no text, so
+ * a capped turn still ends on a readable message instead of silence. User-facing.
+ */
+export const FINAL_STEP_FALLBACK =
+  "I reached this turn's step limit before finishing, so I've stopped here. " +
+  'Say "continue" to pick up where I left off.'
+
+/**
+ * Whether iteration `iter` (zero-based) is the last one the budget allows. A one-step
+ * budget never counts as "final" so the model can still use tools in it.
+ */
+export function isFinalStep(iter: number, limits: BudgetLimits): boolean {
+  return limits.maxIterations > 1 && iter === limits.maxIterations - 1
+}
