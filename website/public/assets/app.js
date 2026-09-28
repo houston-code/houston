@@ -79,6 +79,18 @@
     ($(".dl-head", card) || card).appendChild(badge);
     var primary = $(".dl-primary", card);
     if (primary) { primary.classList.remove("btn-secondary"); primary.classList.add("btn-primary"); }
+    recommended = primary;
+    syncHeroDownload();
+  }
+
+  // The hero button downloads the recommended build directly, but only once both halves
+  // are known: which card fits (platform detection) and that card's real file URL (the
+  // release feed). Until then, or if either never arrives, it scrolls to the cards.
+  var recommended = null;
+  function syncHeroDownload() {
+    var hero = $("#hero-download");
+    if (!hero || !recommended || !recommended.hasAttribute("data-resolved")) return;
+    hero.setAttribute("href", recommended.getAttribute("href"));
   }
 
   // Only the landing page loads platform.js; other pages have no download cards.
@@ -111,8 +123,10 @@
       // Only trust https URLs — never let an API value become a javascript: href.
       if (match && /^https:\/\//.test(match.browser_download_url || "")) {
         el.setAttribute("href", match.browser_download_url);
+        el.setAttribute("data-resolved", "");
       }
     });
+    syncHeroDownload();
   }
 
   if (window.fetch) {
