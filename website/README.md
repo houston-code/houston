@@ -37,6 +37,7 @@ website/
   public/             The deployed site (Cloudflare Pages output directory)
     index.html          Landing page
     privacy.html        Generated from docs/PRIVACY.md
+    contact.html        Contact addresses (GitHub issues first, then email by topic)
     404.html            Not-found page (Cloudflare serves this automatically)
     assets/
       styles.css        All styles; its header documents the design tokens
@@ -50,7 +51,7 @@ website/
     _headers            Cloudflare Pages security + cache headers
     _redirects          /download, /releases, /github short links
     robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
-    sitemap.xml         homepage + privacy page, with lastmod
+    sitemap.xml         homepage, contact, and privacy pages, with lastmod
     llms.txt            curated product summary for AI assistants (llmstxt.org)
   tools/              Build scripts (not deployed)
     build-legal.mjs       docs/PRIVACY.md → privacy.html
@@ -108,8 +109,8 @@ and two corner radii. Build new UI from those rather than adding values;
 `tools/palette.test.mjs` fails on any color outside the tokens and on any text pairing
 below 4.5:1 in either theme.
 
-The header, footer, and theme script are repeated in `index.html`, `404.html`, and the
-template in `tools/build-legal.mjs`. Change all three together.
+The header, footer, and theme script are repeated in `index.html`, `404.html`,
+`contact.html`, and the template in `tools/build-legal.mjs`. Change them together.
 
 ## Maintenance
 
