@@ -99,7 +99,7 @@ describe("third-party logos", () => {
   });
 
   it("uses only stroke-drawn generic icons on the download cards", () => {
-    const icons = [...html.matchAll(/<div class="os-icon"><svg ([^>]*)>/g)].map((m) => m[1]);
+    const icons = [...html.matchAll(/<div class="dl-head"><svg ([^>]*)>/g)].map((m) => m[1]);
     expect(icons).toHaveLength(4);
     for (const attrs of icons) expect(attrs).toContain('fill="none"');
   });
