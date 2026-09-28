@@ -38,6 +38,9 @@ async function run({ platform, release }) {
     hero: doc.getElementById("hero-download").getAttribute("href"),
     label: doc.getElementById("hero-download-label").textContent,
     version: doc.getElementById("hero-version"),
+    primaryCards: [...doc.querySelectorAll(".dl-card")]
+      .filter((c) => c.querySelector(".dl-primary").classList.contains("btn-primary"))
+      .map((c) => c.getAttribute("data-os")),
   };
 }
 
@@ -66,5 +69,17 @@ describe("hero download button", () => {
     const bad = { ...RELEASE, assets: [{ name: "Houston-1.2.3-arm64.dmg", browser_download_url: "javascript:alert(1)" }] };
     const r = await run({ platform: { os: "mac", card: "mac-arm" }, release: bad });
     expect(r.hero).toBe("#download");
+  });
+});
+
+describe("download card buttons", () => {
+  it("highlights only the recommended card's button", async () => {
+    const r = await run({ platform: { os: "win", card: "win" }, release: RELEASE });
+    expect(r.primaryCards).toEqual(["win"]);
+  });
+
+  it("keeps all four highlighted when no single build fits", async () => {
+    const r = await run({ platform: { os: "mac", hint: "mac-arch-hint" }, release: RELEASE });
+    expect(r.primaryCards).toEqual(["mac-arm", "mac-x64", "win", "linux"]);
   });
 });
