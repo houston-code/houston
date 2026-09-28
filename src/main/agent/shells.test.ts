@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
 import {
   killShell,
@@ -38,7 +38,7 @@ describe('background shell registry', () => {
 
   it('reports not-found for an unknown id', () => {
     expect(readShellOutput('does-not-exist').found).toBe(false)
-    expect(killShell('does-not-exist')).toBe(false)
+    expect(killShell('does-not-exist')).toBe('not-found')
   })
 
   it('kills a running shell', async () => {
@@ -46,9 +46,40 @@ describe('background shell registry', () => {
     const id = registerShell('node loop', child)
     expect(readShellOutput(id).running).toBe(true)
     expect(listShells().find((s) => s.id === id)?.running).toBe(true)
-    expect(killShell(id)).toBe(true)
+    expect(killShell(id)).toBe('killed')
     await onClose(child)
     expect(readShellOutput(id).running).toBe(false)
+  })
+
+  it('reports already-exited for a finished shell with nothing left running', async () => {
+    const child = node('process.exit(0)')
+    const id = registerShell('node done', child)
+    await onClose(child)
+    expect(killShell(id)).toBe('already-exited')
+  })
+
+  // A detached shell (as the sandbox backends spawn them) that backgrounds a
+  // long-lived child and exits: the child stays in the shell's process group, so the
+  // registry sees the shell as exited while the "server" keeps running. POSIX only;
+  // Windows has no process groups to probe.
+  it.skipIf(process.platform === 'win32')('reaps a process a shell backgrounded before exiting', async () => {
+    const child = spawn('/bin/sh', ['-c', 'sleep 30 >/dev/null 2>&1 &\necho started'], { detached: true })
+    const id = registerShell('sleep 30 &', child)
+    await onClose(child)
+    const pgid = child.pid!
+    const groupAlive = (): boolean => {
+      try {
+        process.kill(-pgid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    expect(readShellOutput(id).running).toBe(false)
+    expect(groupAlive()).toBe(true)
+    expect(killShell(id)).toBe('killed-leftovers')
+    await vi.waitFor(() => expect(groupAlive()).toBe(false))
+    expect(killShell(id)).toBe('already-exited')
   })
 
   it('exposes timestamps, exit code, and the spawning conversation in listShells', async () => {
