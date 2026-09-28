@@ -148,7 +148,14 @@ import {
 import { getConversation, setCompaction } from '../conversations'
 import { buildPinnedMessages, lastUserTurnIndex } from './workingMemory'
 import { StallDetector, resolveStallThresholds } from './stall'
-import { resolveBudgetLimits, shouldLand, landingReminder } from './budget'
+import {
+  resolveBudgetLimits,
+  shouldLand,
+  landingReminder,
+  isFinalStep,
+  FINAL_STEP_NOTE,
+  FINAL_STEP_FALLBACK
+} from './budget'
 import {
   shouldVerify,
   runVerification,
@@ -1974,6 +1981,15 @@ export async function startRun(
         }
       }
 
+      // Last iteration: tell the model its tool calls won't run, so it spends the step
+      // on a summary. Enforced below by dropping any tool call it makes anyway. Tools
+      // stay in the request (a history with tool_use blocks must still declare them).
+      const finalStep = isFinalStep(iter, budget)
+      if (finalStep) {
+        messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${FINAL_STEP_NOTE}` })
+        persist(messages)
+      }
+
       // The tool schemas for this turn. Recomputed each iteration because lazy MCP
       // loading grows the set as find_tools reveals tools. They ride along on every
       // request but aren't part of the message window, so fold their size into the
@@ -2182,6 +2198,21 @@ export async function startRun(
         })
       }
 
+      // On the last iteration a tool call can't be run (the cap is reached), and
+      // persisting it would end the turn on a tool_use with nothing after it. Drop the
+      // calls, keep whatever the model said, and make sure the user gets some text.
+      // Streamed tool calls are only collected above, never emitted, so nothing for
+      // them has reached the UI.
+      let cutAtCap = false
+      if (finalStep && toolCalls.length) {
+        cutAtCap = true
+        toolCalls = []
+        if (!assistantText.trim()) {
+          assistantText = FINAL_STEP_FALLBACK
+          emit({ type: 'text', delta: assistantText })
+        }
+      }
+
       messages.push({
         role: 'assistant',
         content: assistantText,
@@ -2189,6 +2220,12 @@ export async function startRun(
         ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
       })
       persist(messages)
+
+      if (cutAtCap) {
+        emit({ type: 'limit', reason: 'max-steps' })
+        emit({ type: 'done', stopReason: 'end_turn' })
+        return
+      }
 
       if (toolCalls.length === 0) {
         // The model's reply was cut off at its output limit — say so rather than

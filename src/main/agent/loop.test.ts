@@ -3303,6 +3303,85 @@ describe('loop control — adaptive budget', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  it('ends a capped turn on a text reply, never on an unrun tool call', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    // Ignores every wrap-up note and keeps calling tools, but says something on the way.
+    const looping: Provider = {
+      async *streamChat() {
+        yield { type: 'text', text: 'Still reading. ' }
+        yield {
+          type: 'tool_call',
+          call: { id: `c${Math.random()}`, name: 'read_file', arguments: { path: 'a.txt' } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings({ maxIterations: 3, stallDetection: false }, () =>
+      run({ provider: looping, policy: 'full-auto' })
+    )
+    const last = r.messages.at(-1)!
+    expect(last.role).toBe('assistant')
+    expect(last.toolCalls).toBeUndefined()
+    expect(last.content).toBe('Still reading. ')
+    expect(orphanedToolUses(r.messages)).toEqual([])
+    // Only the first two iterations' reads actually ran.
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(2)
+    // The model was told before the last step that its tools would not run.
+    const noteIdx = r.messages.findIndex(
+      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('last step of this turn')
+    )
+    expect(noteIdx).toBeGreaterThan(-1)
+    expect(noteIdx).toBe(r.messages.length - 2)
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('max-steps')
+    expect(types(r).at(-1)).toBe('done')
+  })
+
+  it('shows a fallback message when the last step is only tool calls', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    const silent: Provider = {
+      async *streamChat() {
+        yield {
+          type: 'tool_call',
+          call: { id: `c${Math.random()}`, name: 'read_file', arguments: { path: 'a.txt' } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings({ maxIterations: 2, stallDetection: false }, () =>
+      run({ provider: silent, policy: 'full-auto' })
+    )
+    const last = r.messages.at(-1)!
+    expect(last.role).toBe('assistant')
+    expect(last.content).toMatch(/step limit/)
+    expect(last.content).toMatch(/continue/)
+    expect(last.content).not.toContain('\u2014')
+    // The fallback reached the live transcript too, not just the saved log.
+    const streamed = r.events.filter((e) => e.type === 'text').map((e) => (e as { delta: string }).delta)
+    expect(streamed.join('')).toContain('step limit')
+  })
+
+  it('ends normally when the model answers in text on the last step', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    let n = 0
+    const obeys: Provider = {
+      async *streamChat() {
+        if (n++ === 0) {
+          yield { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'a.txt' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+        } else {
+          yield { type: 'text', text: 'Read a.txt; nothing else left.' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+    }
+    const r = await withSettings({ maxIterations: 2, stallDetection: false }, () =>
+      run({ provider: obeys, policy: 'full-auto' })
+    )
+    expect(r.events.some((e) => e.type === 'limit')).toBe(false)
+    expect(r.messages.at(-1)!.content).toBe('Read a.txt; nothing else left.')
+  })
+
   it('injects a one-time landing reminder as the run nears the cap', async () => {
     writeFileSync(join(ws, 'a.txt'), 'x')
     const looping: Provider = {
