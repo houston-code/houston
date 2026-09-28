@@ -72,10 +72,11 @@
     var card = $('.dl-card[data-os="' + result.card + '"]');
     if (!card) return;
     card.classList.add("is-recommended");
+    // The head row is in every card, so the badge fills space already reserved for it.
     var badge = document.createElement("span");
     badge.className = "dl-badge";
-    badge.textContent = "Recommended for you";
-    card.insertBefore(badge, card.firstChild);
+    badge.textContent = "Recommended";
+    ($(".dl-head", card) || card).appendChild(badge);
     var primary = $(".dl-primary", card);
     if (primary) { primary.classList.remove("btn-secondary"); primary.classList.add("btn-primary"); }
   }
@@ -90,9 +91,15 @@
     if (!release || !Array.isArray(release.assets)) return;
 
     var version = (release.tag_name || release.name || "").replace(/^v/i, "");
-    if (version) {
-      var meta = $("#hero-version");
-      if (meta) meta.innerHTML = "Latest release <strong>v" + escapeHtml(version) + "</strong> · free and open, bring your own API keys.";
+    var versionItem = $("#hero-version");
+    if (version && versionItem) {
+      var link = document.createElement("a");
+      link.href = /^https:\/\//.test(release.html_url || "") ? release.html_url : RELEASES_PAGE;
+      link.rel = "noopener";
+      link.textContent = "v" + version;
+      link.setAttribute("aria-label", "Latest release, version " + version + ", release notes");
+      versionItem.appendChild(link);
+      versionItem.hidden = false;
     }
 
     // Map each pre-rendered link (by asset-name suffix) to its direct download URL.
@@ -105,12 +112,6 @@
       if (match && /^https:\/\//.test(match.browser_download_url || "")) {
         el.setAttribute("href", match.browser_download_url);
       }
-    });
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
 
@@ -127,11 +128,8 @@
       .then(applyRelease)
       .catch(function () {
         // Offline, rate-limited, no releases yet, or timed out: keep the
-        // pre-rendered links to the releases page.
+        // pre-rendered links to the releases page, and show no version.
         clear();
-        var meta = $("#hero-version");
-        if (meta) meta.innerHTML =
-          'Free and open. Bring your own API keys. <a href="' + RELEASES_PAGE + '" rel="noopener">See all releases</a>.';
       });
   }
 })();

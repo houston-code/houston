@@ -39,7 +39,8 @@ website/
     privacy.html        Generated from docs/PRIVACY.md
     404.html            Not-found page (Cloudflare serves this automatically)
     assets/
-      styles.css        All styles (theme-aware light/dark)
+      styles.css        All styles; its header documents the design tokens
+      theme.js          Light/dark toggle (follows the OS until a visitor picks one)
       app.js            Live release data + applies the platform recommendation
       platform.js       Which download card fits the visitor (pure, tested in tools/)
       icon.png          App icon (copied from build/icon.png)
@@ -56,6 +57,7 @@ website/
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
     download-links.test.mjs  fails CI if a download link's asset suffix matches no build (or the CLI)
     platform.test.mjs     platform.js recommendations for each browser/OS/CPU
+    palette.test.mjs      no colors outside the design tokens; every text pairing clears WCAG AA
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
     capture-screens.mjs   real app screenshots against a local model + demo workspace
 ```
@@ -96,6 +98,17 @@ Binaries stay on GitHub Releases, so this is a pure static deploy — no build c
    Cloudflare, the records are added for you; TLS is issued automatically.
 
 That's the whole setup — no secrets, no CI wiring.
+
+## Design system
+
+The site uses a deliberately small set of values, defined at the top of
+`public/assets/styles.css`: five neutrals and five blues per theme, five type sizes,
+and two corner radii. Build new UI from those rather than adding values;
+`tools/palette.test.mjs` fails on any color outside the tokens and on any text pairing
+below 4.5:1 in either theme.
+
+The header, footer, and theme script are repeated in `index.html`, `404.html`, and the
+template in `tools/build-legal.mjs`. Change all three together.
 
 ## Maintenance
 
