@@ -426,6 +426,35 @@ describe('splitShellCommand', () => {
     expect(splitShellCommand('a && b || c ; d | e & f')).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
   })
 
+  it('does not split on an & that is part of a file-descriptor redirection', () => {
+    expect(splitShellCommand('npm run dev > /tmp/vite.log 2>&1')).toEqual(['npm run dev > /tmp/vite.log 2>&1'])
+    expect(splitShellCommand('make &>/dev/null')).toEqual(['make &>/dev/null'])
+    expect(splitShellCommand('make &>> build.log')).toEqual(['make &>> build.log'])
+    expect(splitShellCommand('echo oops >&2')).toEqual(['echo oops >&2'])
+    expect(splitShellCommand('read x <&3')).toEqual(['read x <&3'])
+  })
+
+  it('still splits a background & and the operators around a redirection', () => {
+    // The real command that produced a phantom `1` segment (and an "Always allow" rule
+    // matching `1`): a redirect followed by a background `&` and a newline.
+    expect(
+      splitShellCommand('python manage.py runserver > /tmp/django.log 2>&1 &\nsleep 2 && cat /tmp/django.log')
+    ).toEqual(['python manage.py runserver > /tmp/django.log 2>&1', 'sleep 2', 'cat /tmp/django.log'])
+    expect(splitShellCommand('build 2>&1 | tee out.log')).toEqual(['build 2>&1', 'tee out.log'])
+    expect(splitShellCommand('a >&2; rm -rf x')).toEqual(['a >&2', 'rm -rf x'])
+    expect(splitShellCommand('a & b')).toEqual(['a', 'b'])
+    expect(splitShellCommand('a |& b')).toEqual(['a', 'b'])
+  })
+
+  it('keeps deny and allow matching strict across a redirection', () => {
+    const deny: PermissionRule = { action: 'deny', tool: 'run_shell', match: 'rm -rf*' }
+    expect(matchRule([deny], 'run_shell', 'rm -rf build 2>&1')).toBe('deny')
+    expect(matchRule([deny], 'run_shell', 'echo hi >&2; rm -rf build')).toBe('deny')
+    // An allow for the first command must not cover a chained second one.
+    expect(matchRule([allow('run_shell', 'echo *')], 'run_shell', 'echo hi >&2 && rm -rf x')).toBeNull()
+    expect(matchRule([allow('run_shell', 'npm run *')], 'run_shell', 'npm run build > /tmp/b.log 2>&1')).toBe('allow')
+  })
+
   it('extracts command-substitution and backtick bodies as their own segments', () => {
     expect(splitShellCommand('echo $(whoami)')).toContain('whoami')
     expect(splitShellCommand('echo `id`')).toContain('id')
@@ -452,6 +481,12 @@ describe('splitShellCommand', () => {
 })
 
 describe('shellRulePatterns', () => {
+  it('never derives a rule from a redirection fragment', () => {
+    const pats = shellRulePatterns('cd backend && python manage.py runserver > /tmp/django.log 2>&1 &\nsleep 2')
+    expect(pats).not.toContain('1')
+    expect(pats).toEqual(['python manage.py', 'sleep 2'])
+  })
+
   it('drops the `cd` prelude and generalizes to a <program> <verb> prefix', () => {
     expect(shellRulePatterns('cd /Users/me/repo && npm install lodash')).toEqual(['npm install'])
     expect(shellRulePatterns('cd /work/project && git status')).toEqual(['git status'])

@@ -490,6 +490,17 @@ export function splitShellCommand(command: string): string[] {
   return segments.length ? segments : [command.trim()]
 }
 
+/**
+ * The control operators a command is split on: `||`, `&&`, `;`, newline, `|`, and a
+ * lone `&` (background). An `&` that belongs to a file-descriptor redirection is NOT
+ * an operator and must not split: `2>&1` / `>&2` / `<&3` (preceded by `>`/`<`) and
+ * `&>file` / `&>>file` (followed by `>`). Splitting there cut `cmd > log 2>&1` into
+ * `cmd > log 2>` and a phantom `1` command, which then got persisted as an "Always
+ * allow" rule matching `1`. Bash parses those as redirections, so not splitting them
+ * mirrors what actually runs; an operand after `>&` is a file target, never a command.
+ */
+const SHELL_CONTROL_OPERATOR = /\|\||&&|[;\n|]|(?<![<>])&(?!>)/
+
 /** Cap on substitution nesting so a pathologically deep command can't recurse forever. */
 const MAX_SUBST_DEPTH = 32
 
@@ -540,7 +551,7 @@ function collectShellSegments(command: string, segments: string[], depth: number
       i += 1
     }
   }
-  for (const part of outer.split(/\|\||&&|[;\n|&]/)) {
+  for (const part of outer.split(SHELL_CONTROL_OPERATOR)) {
     const p = part.trim()
     if (p) segments.push(p)
   }
