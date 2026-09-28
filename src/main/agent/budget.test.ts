@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_BUDGET_LIMITS,
+  FINAL_STEP_FALLBACK,
+  isFinalStep,
   landingReminder,
   resolveBudgetLimits,
   shouldLand,
@@ -99,5 +101,21 @@ describe('landingReminder', () => {
 
   it('defaults to the steps phrasing', () => {
     expect(landingReminder(3)).toBe(landingReminder(3, 'steps'))
+  })
+})
+
+describe('isFinalStep', () => {
+  it('is true only on the last allowed iteration', () => {
+    const l = resolveBudgetLimits({ maxIterations: 40 })
+    expect(isFinalStep(38, l)).toBe(false)
+    expect(isFinalStep(39, l)).toBe(true)
+  })
+
+  it('never treats a one-step budget as final, so its only step can still use tools', () => {
+    expect(isFinalStep(0, resolveBudgetLimits({ maxIterations: 1 }))).toBe(false)
+  })
+
+  it('keeps the user-facing fallback free of em dashes', () => {
+    expect(FINAL_STEP_FALLBACK).not.toContain('\u2014')
   })
 })
