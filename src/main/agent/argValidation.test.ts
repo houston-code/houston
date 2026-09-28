@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
+import { coerceToolArgs, findLeakedMarkup, validateToolArgs, validationError } from './argValidation'
 import { getTool, toolSchemas } from './tools'
 
 // Pull real tool schemas so the validator is tested against the shapes it will
@@ -9,6 +9,52 @@ const writeFileSchema = getTool('write_file')!.schema.parameters
 const todoWriteSchema = getTool('todo_write')!.schema.parameters
 const askUserSchema = getTool('ask_user')!.schema.parameters
 const presentPlanSchema = getTool('present_plan')!.schema.parameters
+const multiEditSchema = getTool('multi_edit')!.schema.parameters
+
+describe('leaked tool-call markup', () => {
+  it('rejects the garbled ask_user option seen in a real session', () => {
+    const args = {
+      question: 'How should "rendering designs" actually work?',
+      options: ['<parameter name="label">AI image generation'],
+      description: 'Designer uploads a photo of the room…'
+    }
+    const issues = validateToolArgs(args, askUserSchema)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].key).toBe('options')
+    expect(issues[0].message).toContain('tool-call syntax')
+  })
+
+  it('rejects the garbled multi_edit edits array seen in a real session', () => {
+    const args = {
+      path: 'frontend/src/pages/LoginPage.tsx',
+      edits: ['[{"old_string">  const { login } = useAuth();', 'const navigate = useNavigate();'],
+      new_string: '  const { login, loginDemo } = useAuth();'
+    }
+    expect(validateToolArgs(args, multiEditSchema).map((i) => i.key)).toEqual(['edits'])
+  })
+
+  it('catches markup at either end of a value, nested in objects', () => {
+    expect(findLeakedMarkup({ options: [{ label: 'Yes</parameter>' }] })).toBe('options')
+    expect(findLeakedMarkup({ command: '<invoke name="run_shell">' })).toBe('command')
+    expect(findLeakedMarkup({ q: '</function_calls>' })).toBe('q')
+  })
+
+  it('accepts content that merely mentions the markup mid-text', () => {
+    // A file that documents or parses the syntax is legitimate content.
+    const content = 'const re = /<parameter name="(\\w+)">/\nexport default re\n'
+    expect(validateToolArgs({ path: 'parse.ts', content }, writeFileSchema)).toEqual([])
+    expect(findLeakedMarkup({ question: 'Should we use <invoke> or a queue?' })).toBeNull()
+    expect(findLeakedMarkup({ content: '<div class="x">hi</div>' })).toBeNull()
+    expect(findLeakedMarkup({ content: '<parameters>\n</parameters>' })).toBeNull()
+    expect(findLeakedMarkup({ json: '[{"a": 1}]' })).toBeNull()
+  })
+
+  it('stays bounded on deeply nested values', () => {
+    let deep: unknown = '<parameter name="x">'
+    for (let i = 0; i < 50; i++) deep = [deep]
+    expect(findLeakedMarkup({ v: deep })).toBeNull()
+  })
+})
 
 describe('validateToolArgs', () => {
   it('accepts a valid call with only the required field', () => {

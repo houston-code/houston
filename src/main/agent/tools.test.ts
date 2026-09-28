@@ -230,6 +230,19 @@ describe('ask_user', () => {
     )
   })
 
+  it('refuses a placeholder question instead of showing it to the user', async () => {
+    let asked = false
+    const withAsk: ToolContext = { ...ctx, askUser: async () => ((asked = true), 'x') }
+    for (const question of ['placeholder', 'TODO', '...', 'Placeholder?']) {
+      await expect(getTool('ask_user')!.execute({ question }, withAsk)).rejects.toThrow(/placeholder/)
+    }
+    expect(asked).toBe(false)
+    // A real question that merely contains the word still goes through.
+    await expect(
+      getTool('ask_user')!.execute({ question: 'Keep the placeholder image for now?' }, withAsk)
+    ).resolves.toBe('x')
+  })
+
   it('passes the question and normalized options to askUser and returns the answer', async () => {
     let received: unknown
     const withAsk: ToolContext = {
