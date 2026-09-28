@@ -1,4 +1,4 @@
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute } from 'node:path'
 import type { PermissionRule } from '@shared/types'
 
@@ -131,6 +131,36 @@ function isWithinRoots(target: string, roots: string[]): boolean {
 }
 
 /**
+ * Character devices that carry no file content: discarding output (`2>/dev/null`),
+ * reading zeros/entropy, or addressing the process's own stdio. Naming one is not a
+ * read of anything outside the workspace, so it must not trip the escape check.
+ */
+const STDIO_DEVICE_RE = /^\/dev\/(?:null|zero|random|urandom|tty|stdin|stdout|stderr|fd\/\d+)$/
+
+/**
+ * The scratch directories the shell sandbox already lets a command write to (see the
+ * darwin/linux backends and run_shell's description): the resolved `tmpdir()`, `/tmp`
+ * (and its macOS realpath `/private/tmp`), and `$TMPDIR`. Resolved per call so a
+ * changed `TMPDIR` is honoured.
+ */
+function scratchDirs(): string[] {
+  const dirs = [tmpdir(), '/tmp', '/private/tmp']
+  if (process.env.TMPDIR) dirs.push(process.env.TMPDIR)
+  return dirs
+}
+
+/**
+ * Whether an absolute target is a place a routine command touches without reaching
+ * user data: a stdio/null device, or the sandbox-writable temp dirs agents use for
+ * logs and scratch files (`> /tmp/server.log`). Lexical like {@link isWithinRoots},
+ * so `/tmp/../etc/passwd` normalizes to `/etc/passwd` and is not exempt.
+ */
+function isScratchTarget(abs: string): boolean {
+  if (STDIO_DEVICE_RE.test(resolve(abs))) return true
+  return isWithinRoots(abs, scratchDirs())
+}
+
+/**
  * Whether a single path-like segment escapes the workspace `roots`.
  *
  * - An absolute / home / Windows path escapes only when it resolves OUTSIDE every
@@ -149,7 +179,7 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
   seg = stripSurroundingQuotes(seg)
   if (!seg) return false
   const abs = absoluteTarget(seg)
-  if (abs !== null) return !isWithinRoots(abs, roots)
+  if (abs !== null) return !isWithinRoots(abs, roots) && !isScratchTarget(abs)
   // Relative. Treat backslashes as separators too, so Windows-style relative climbs
   // (`..\x`) are analysed the same as POSIX ones. A token with no separator and no
   // ".." can't climb out.
