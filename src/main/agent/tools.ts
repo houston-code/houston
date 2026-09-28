@@ -1208,13 +1208,40 @@ export function shellTimeoutHint(timeoutMs: number): string {
   )
 }
 
+/**
+ * Whether a command backgrounds part of itself with a lone `&` (not `&&`, `|&`, or an
+ * fd redirection like `2>&1` / `&>file`). Quoted spans are ignored so a URL query
+ * string (`curl "http://x/?a=1&b=2"`) doesn't count. A command that also `wait`s for
+ * what it backgrounded is fine: the shell stays alive and owns those children.
+ *
+ * Used to refuse `&` inside a `background:true` command. The shell exits as soon as
+ * the foreground part finishes, the registry marks it exited, and the backgrounded
+ * server is left orphaned: its output never reaches read_shell_output or the Preview
+ * dock (it was usually redirected to a log file too), and it keeps holding its port
+ * so the next start falls over to another one.
+ */
+export function backgroundsItself(command: string): boolean {
+  const unquoted = command.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""')
+  if (/\bwait\b/.test(unquoted)) return false
+  return /(?<![<>&|\\])&(?![>&])/.test(unquoted)
+}
+
+/** The refusal returned when a background:true command also backgrounds itself. */
+export const BACKGROUND_AMPERSAND_ERROR =
+  'Refused: this command is already run in the background (background:true), so do not also ' +
+  'background part of it with `&`. The shell would exit right away and orphan the process, ' +
+  'which then cannot be read or stopped with kill_shell. Run the long-lived process as the ' +
+  'last command in the foreground of the shell, e.g. `cd frontend && npm run dev`, and let ' +
+  'its output go to stdout (no `> file` redirect) so read_shell_output and the Preview pane ' +
+  'can see it. Drop any trailing `sleep`/`cat log`; poll with read_shell_output instead.'
+
 const runShell: ToolDef = {
   kind: 'shell',
   summarize: (a) => (a.background === true ? `${str(a, 'command')} (background)` : str(a, 'command')),
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; granted network is restricted to an egress allowlist of dev-infrastructure domains (package registries, VCS hosts, plus domains the user adds in Settings), so a refused destination is policy, not an outage. On a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.',
+      'Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; granted network is restricted to an egress allowlist of dev-infrastructure domains (package registries, VCS hosts, plus domains the user adds in Settings), so a refused destination is policy, not an outage. On a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status. A background:true command must not contain `&` itself (it is refused: the shell would exit and orphan the process); run the server as its last foreground command and leave its output on stdout rather than redirecting it to a file, so read_shell_output and the Preview pane can see it.',
     parameters: objectSchema(
       {
         command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' },
@@ -1236,6 +1263,7 @@ const runShell: ToolDef = {
     if (!command) throw new Error('command is required.')
 
     if (args.background === true) {
+      if (backgroundsItself(command)) throw new Error(BACKGROUND_AMPERSAND_ERROR)
       const child = spawnSandboxed({
         command,
         cwd: ctx.workspace,
@@ -1349,7 +1377,8 @@ const killShellTool: ToolDef = {
   summarize: (a) => `Kill shell ${str(a, 'shell_id')}`,
   schema: {
     name: 'kill_shell',
-    description: 'Stop a background shell started by run_shell.',
+    description:
+      'Stop a background shell started by run_shell, including any processes it started that are still running after the shell itself exited.',
     parameters: objectSchema(
       { shell_id: { type: 'string', description: 'The id returned by run_shell with background:true.' } },
       ['shell_id']
@@ -1358,7 +1387,16 @@ const killShellTool: ToolDef = {
   async execute(args) {
     const id = str(args, 'shell_id')
     if (!id) throw new Error('shell_id is required.')
-    return killShell(id) ? `Killed background shell ${id}.` : `No background shell with id ${id}.`
+    switch (killShell(id)) {
+      case 'killed':
+        return `Killed background shell ${id}.`
+      case 'killed-leftovers':
+        return `Background shell ${id} had already exited, but processes it started were still running; stopped them.`
+      case 'already-exited':
+        return `Background shell ${id} had already exited; nothing it started is still running.`
+      case 'not-found':
+        return `No background shell with id ${id}.`
+    }
   }
 }
 

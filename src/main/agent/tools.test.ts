@@ -36,6 +36,8 @@ import {
   clampShellTimeout,
   shellTimeoutHint,
   presentFetchedDocument,
+  backgroundsItself,
+  BACKGROUND_AMPERSAND_ERROR,
   type ToolContext
 } from './tools'
 import type { FetchedDocument } from './webfetch'
@@ -1236,6 +1238,31 @@ describe('web_fetch untrusted-content handling', () => {
   })
 })
 
+describe('backgroundsItself', () => {
+  it('flags a lone & that backgrounds part of the command', () => {
+    expect(backgroundsItself('npm run dev &')).toBe(true)
+    expect(backgroundsItself('npm run dev > /tmp/v.log 2>&1 &\nsleep 3 && cat /tmp/v.log')).toBe(true)
+    expect(backgroundsItself('server & client')).toBe(true)
+    expect(backgroundsItself('a&b')).toBe(true)
+  })
+
+  it('ignores &&, |&, fd redirections, quoted &, and escaped &', () => {
+    expect(backgroundsItself('cd frontend && npm run dev')).toBe(false)
+    expect(backgroundsItself('npm run dev 2>&1')).toBe(false)
+    expect(backgroundsItself('make &>/dev/null')).toBe(false)
+    expect(backgroundsItself('make &>> build.log')).toBe(false)
+    expect(backgroundsItself('echo x >&2')).toBe(false)
+    expect(backgroundsItself('build |& tee log')).toBe(false)
+    expect(backgroundsItself('curl "http://localhost:3000/?a=1&b=2"')).toBe(false)
+    expect(backgroundsItself("curl 'http://x/?a=1&b=2'")).toBe(false)
+    expect(backgroundsItself('echo a \\& b')).toBe(false)
+  })
+
+  it('allows & when the command waits for what it started', () => {
+    expect(backgroundsItself('api & web & wait')).toBe(false)
+  })
+})
+
 describe('background shell tools', () => {
   it('run_shell background returns a shell id message', async () => {
     const out = await run('run_shell', { command: 'echo hi', background: true })
@@ -1248,6 +1275,23 @@ describe('background shell tools', () => {
 
   it('kill_shell reports an unknown id', async () => {
     expect(await run('kill_shell', { shell_id: 'nope' })).toBe('No background shell with id nope.')
+  })
+
+  it('refuses a background command that also backgrounds itself with &', async () => {
+    // The dev-server pattern that orphaned a Vite server and hid its URL from the
+    // Preview dock: the shell exits after the sleep and kill_shell can no longer reach it.
+    await expect(
+      run('run_shell', { command: 'npm run dev > /tmp/vite.log 2>&1 &\nsleep 3 && cat /tmp/vite.log', background: true })
+    ).rejects.toThrow(BACKGROUND_AMPERSAND_ERROR)
+  })
+
+  it('kill_shell says so when the shell had already exited with nothing left running', async () => {
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'])
+    const id = registerShell('node', child)
+    await new Promise<void>((resolve) => child.on('close', () => resolve()))
+    expect(await run('kill_shell', { shell_id: id })).toBe(
+      `Background shell ${id} had already exited; nothing it started is still running.`
+    )
   })
 
   // Inject a real (non-sandboxed) child so the tool's output formatting is

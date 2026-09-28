@@ -283,7 +283,7 @@
   },
   {
     "name": "run_shell",
-    "description": "Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; granted network is restricted to an egress allowlist of dev-infrastructure domains (package registries, VCS hosts, plus domains the user adds in Settings), so a refused destination is policy, not an outage. On a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status.",
+    "description": "Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; granted network is restricted to an egress allowlist of dev-infrastructure domains (package registries, VCS hosts, plus domains the user adds in Settings), so a refused destination is policy, not an outage. On a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status. A background:true command must not contain `&` itself (it is refused: the shell would exit and orphan the process); run the server as its last foreground command and leave its output on stdout rather than redirecting it to a file, so read_shell_output and the Preview pane can see it.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -329,7 +329,7 @@
   },
   {
     "name": "kill_shell",
-    "description": "Stop a background shell started by run_shell.",
+    "description": "Stop a background shell started by run_shell, including any processes it started that are still running after the shell itself exited.",
     "parameters": {
       "type": "object",
       "properties": {

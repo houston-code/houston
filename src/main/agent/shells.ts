@@ -168,12 +168,54 @@ export function readShellOutput(id: string, opts: { full?: boolean } = {}): Shel
   return { found: true, running: s.running, exitCode: s.exitCode, stdout, stderr }
 }
 
-/** Kill a running background shell (and its process tree). Returns false if unknown. */
-export function killShell(id: string): boolean {
+/**
+ * Whether the process group a background shell led still has live members after the
+ * shell itself exited. Background shells are spawned `detached` (see the sandbox
+ * backends), so the shell's pid is its group id, and anything it started with a
+ * trailing `&` stays in that group after the shell exits (a dev server launched as
+ * `npm run dev > log 2>&1 & sleep 3`). Signal 0 probes without delivering anything.
+ * POSIX only: Windows has no process groups here and tree-kills by parent pid, which
+ * an exited parent no longer anchors.
+ */
+function groupHasLiveMembers(pid: number | undefined): boolean {
+  if (pid === undefined || process.platform === 'win32') return false
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch {
+    // ESRCH: the group is empty. EPERM: not ours to signal. Either way, nothing to reap.
+    return false
+  }
+}
+
+/**
+ * Outcome of {@link killShell}:
+ * - `killed`: the shell was running and its process tree was stopped.
+ * - `killed-leftovers`: the shell had already exited but left processes running in
+ *   its group (typically a server it backgrounded), and those were stopped.
+ * - `already-exited`: the shell and everything it started had already ended.
+ * - `not-found`: no shell with that id.
+ */
+export type KillShellResult = 'killed' | 'killed-leftovers' | 'already-exited' | 'not-found'
+
+/**
+ * Stop a background shell and its process tree. A shell that already exited is still
+ * checked for leftover group members, because "exited" only means the shell's own
+ * process ended: a server it backgrounded keeps running (and holding its port) until
+ * the group is signalled.
+ */
+export function killShell(id: string): KillShellResult {
   const s = shells.get(id)
-  if (!s) return false
-  if (s.running) killProcessTree(s.child)
-  return true
+  if (!s) return 'not-found'
+  if (s.running) {
+    killProcessTree(s.child)
+    return 'killed'
+  }
+  if (groupHasLiveMembers(s.child.pid)) {
+    killProcessTree(s.child)
+    return 'killed-leftovers'
+  }
+  return 'already-exited'
 }
 
 export function listShells(): BackgroundShellInfo[] {
@@ -203,9 +245,11 @@ export function listPreviewServers(): PreviewServer[] {
   }))
 }
 
-/** Kill every tracked shell and clear the registry (wired on app shutdown). */
+/** Kill every tracked shell, and any leftovers of exited ones, then clear the registry (wired on app shutdown). */
 export function killAllShells(): void {
-  for (const s of shells.values()) if (s.running) killProcessTree(s.child)
+  for (const s of shells.values()) {
+    if (s.running || groupHasLiveMembers(s.child.pid)) killProcessTree(s.child)
+  }
   shells.clear()
   notifyShellsChanged()
 }
