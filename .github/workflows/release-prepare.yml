@@ -174,6 +174,11 @@ jobs:
           # Prepend the new section above any existing CHANGELOG body.
           node -e "const fs=require('fs');import('./scripts/gen-release-notes.mjs').then(m=>{const s=fs.readFileSync('.release-section.md','utf8');const e=fs.existsSync('CHANGELOG.md')?fs.readFileSync('CHANGELOG.md','utf8'):'';fs.writeFileSync('CHANGELOG.md',m.prependToChangelog(e,s))})"
           rm -f prs.json .release-section.md
+          # Each section opens with ONE summary sentence of at most 120 characters (it heads
+          # the release notes and the in-app update notice). The AI draft is asked for it; flag
+          # a draft that still misses, or the deterministic placeholder, for the PR reviewer.
+          node scripts/check-changelog-summary.mjs "$VERSION" \
+            || echo "::warning::Edit the v$VERSION summary in the release PR (see the notes above)."
       # Push the branch with GITHUB_TOKEN, but open the PR with a fine-grained PAT. A PR opened
       # by GITHUB_TOKEN triggers no workflows, so the merge queue's required checks would never
       # run on it (and GITHUB_TOKEN can't open PRs at all unless the repo/org allows it). The PAT
@@ -202,7 +207,7 @@ jobs:
 
           ## Before approving
           The notes in \`CHANGELOG.md\` are AI-drafted when \`ANTHROPIC_API_KEY\` is set, otherwise a deterministic placeholder. Either way, review them as a draft:
-          1. Tighten the summary so it reads the way you would describe the release.
+          1. Make the summary ONE sentence of at most 120 characters that captures the whole release. It heads the release notes and is the headline of the in-app update notice. Extra context can go in a second paragraph.
           2. Confirm **Required steps** covers any migration or manual action (and that nothing was invented).
           3. Sanity-check the **Breaking changes** section against the actual diff.
 

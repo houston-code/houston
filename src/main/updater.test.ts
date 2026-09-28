@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/constants'
-import { RELEASE_HIGHLIGHTS } from '@shared/update'
+
+// The bundled "What's new" text is generated from CHANGELOG.md for the running version;
+// pin it so these tests stay independent of the changelog's contents.
+const WHATS_NEW = 'A short summary of the release.'
+vi.mock('@shared/release-highlights', () => ({
+  RELEASE_SUMMARY: { version: '0.1.0', summary: 'A short summary of the release.' }
+}))
 
 /**
  * The updater touches electron (`app`, `BrowserWindow`), electron-updater, and the
@@ -322,14 +328,14 @@ describe('without auto-install (unsigned Windows/Linux)', () => {
 describe('initUpdates / takePendingWhatsNew', () => {
   it('stages the "What\'s new" popup once after an upgrade, then records the version', async () => {
     h.isPackaged = false // skip the network check; exercise only the what's-new path
-    h.version = '0.1.0' // a version that has bundled highlights
+    h.version = '0.1.0' // the version the bundled summary is for
     h.lastSeen = '0.0.9'
     const { initUpdates, takePendingWhatsNew } = await load()
     initUpdates()
 
     expect(takePendingWhatsNew()).toEqual({
       version: '0.1.0',
-      highlights: RELEASE_HIGHLIGHTS['0.1.0']
+      highlights: WHATS_NEW
     })
     // One-shot: a second read yields nothing.
     expect(takePendingWhatsNew()).toBeNull()
@@ -361,7 +367,7 @@ describe('initUpdates / takePendingWhatsNew', () => {
 
   it('records an upgrade even when the new version has no authored highlights', async () => {
     h.isPackaged = false
-    h.version = '9.9.9' // no entry in RELEASE_HIGHLIGHTS
+    h.version = '9.9.9' // not the version the bundled summary is for
     h.lastSeen = '0.1.0'
     const { initUpdates, takePendingWhatsNew } = await load()
     initUpdates()

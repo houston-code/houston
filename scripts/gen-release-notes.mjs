@@ -65,7 +65,7 @@ export function buildNotes({ version, date, prs }) {
   }
 
   const out = [`## v${version} - ${date}`, '']
-  out.push('<!-- Replace this line with a 2–3 sentence plain-English summary of the release. -->', '')
+  out.push('<!-- Replace this line with ONE sentence (at most 120 characters) summarizing the whole release. More context can follow as a second paragraph. -->', '')
 
   const breaking = groups.Breaking
   out.push('### Breaking changes')

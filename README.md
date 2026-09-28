@@ -747,10 +747,12 @@ Releases feed configured in [`electron-builder.yml`](electron-builder.yml)
 banner appears at the top of the window until you dismiss it or update. (No-op in
 dev; set `HOUSTON_DISABLE_UPDATER=1` to turn it off.)
 
-After you install a newer build and relaunch, a small **What's new** popup shows a
-1–2 line summary of that version's changes — sourced from the bundled
-[`RELEASE_HIGHLIGHTS`](src/shared/update.ts) map, so add an entry there whenever
-you bump the version in `package.json`.
+After you install a newer build and relaunch, a small **What's new** popup shows the
+one-sentence summary that opens that version's section in [CHANGELOG.md](CHANGELOG.md).
+It is bundled at build time
+([`scripts/gen-release-highlights.mjs`](scripts/gen-release-highlights.mjs)), so the
+popup always matches the release notes and needs no separate entry. The summary is drafted
+in **Release - prepare** and reviewed in the release PR.
 
 **macOS** builds are [signed + notarized](#signing--notarization), so
 `electron-updater` can verify a downloaded package's signature against the running
