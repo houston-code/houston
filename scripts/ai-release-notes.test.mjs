@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildPrompt, extractText, SYSTEM_PROMPT } from './ai-release-notes.mjs'
+import { buildPrompt, extractText, sectionBody, summaryFixPrompt, SYSTEM_PROMPT } from './ai-release-notes.mjs'
+import { summaryProblems } from './check-changelog-summary.mjs'
 
 describe('buildPrompt', () => {
   const prs = [
@@ -71,5 +72,27 @@ describe('extractText', () => {
     expect(extractText([{ type: 'thinking', thinking: 'x' }])).toBe('')
     expect(extractText([])).toBe('')
     expect(extractText(null)).toBe('')
+  })
+})
+
+describe('opening summary', () => {
+  it('asks for one summary sentence of at most 120 characters', () => {
+    const p = buildPrompt({ version: '1.2.0', date: '2026-01-01', prs: [] })
+    expect(p).toContain('ONE plain-English summary sentence of at most 120 characters')
+    expect(p).not.toContain('2–3 sentence')
+  })
+
+  it('checks the draft below its heading line', () => {
+    const draft = '## v1.2.0 - 2026-01-01\n\nParallel test runs. And more.\n\n### Added\n- x (#1)'
+    expect(sectionBody(draft).startsWith('\nParallel')).toBe(true)
+    expect(summaryProblems(sectionBody(draft))[0]).toContain('2 sentences')
+    expect(summaryProblems(sectionBody('## v1.2.0 - x\n\nParallel test runs land.\n\n### Added'))).toEqual([])
+  })
+
+  it('names the problems and asks to change only the summary', () => {
+    const p = summaryFixPrompt(['the summary sentence is 150 characters: keep it to 120 or fewer'])
+    expect(p).toContain('150 characters')
+    expect(p).toContain('changing ONLY the opening summary')
+    expect(p).toContain('at most 120 characters')
   })
 })

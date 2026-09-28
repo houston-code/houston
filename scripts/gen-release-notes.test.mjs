@@ -74,7 +74,7 @@ describe('buildNotes', () => {
     expect(md).toContain('## v0.2.0 - 2026-06-28')
     // CHANGELOG.md is customer-facing (it becomes the GitHub Release body): no em dashes.
     expect(md).not.toContain('\u2014')
-    expect(md).toContain('2–3 sentence plain-English summary')
+    expect(md).toContain('ONE sentence (at most 120 characters)')
     expect(md).toContain('### Required steps')
     expect(md).toContain('### Breaking changes')
     expect(md).toContain('- Rename config key (#13)')

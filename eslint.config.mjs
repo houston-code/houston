@@ -21,6 +21,8 @@ export default tseslint.config(
       '*.config.*',
       // Generated from docs/houston-guide.md by scripts/gen-guide.mjs.
       'src/main/agent/guide-content.ts',
+      // Generated from CHANGELOG.md by scripts/gen-release-highlights.mjs.
+      'src/shared/release-highlights.ts',
       // Eval fixture repos are test DATA, not project source: each one carries a
       // deliberately seeded defect for the agent to fix, and they run as plain
       // Node scripts in a throwaway workspace, never in this project's runtime.
