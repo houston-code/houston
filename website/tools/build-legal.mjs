@@ -41,7 +41,7 @@ function inline(text) {
   return out;
 }
 
-function mdToHtml(md) {
+export function mdToHtml(md) {
   // Drop the leading HTML maintainer comment block.
   const body = md.replace(/^<!--[\s\S]*?-->\s*/, "");
   const blocks = body.split(/\n{2,}/);
@@ -59,10 +59,12 @@ function mdToHtml(md) {
     } else if (block.startsWith("# ")) {
       title = block.slice(2).trim();
       parts.push(`<h1>${inline(block.slice(2))}</h1>`);
-    } else if (block.split("\n").every((l) => l.trim().startsWith("- "))) {
+    } else if (block.startsWith("- ")) {
+      // An item runs until the next "- " line, so wrapped (indented) lines join it.
       const items = block
-        .split("\n")
-        .map((l) => `<li>${inline(l.trim().slice(2))}</li>`)
+        .split(/\n(?=- )/)
+        .map((item) => item.slice(2).split("\n").map((l) => l.trim()).join(" "))
+        .map((text) => `<li>${inline(text)}</li>`)
         .join("\n");
       parts.push(`<ul>\n${items}\n</ul>`);
     } else {
