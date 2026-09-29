@@ -4919,7 +4919,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### @google/genai — 2.23.0
+### @google/genai — 2.24.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/googleapis/js-genai#readme
@@ -16542,7 +16542,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### openai — 7.19.0
+### openai — 7.21.0
 
 - License: Apache-2.0
 - Homepage: github:openai/openai-node
