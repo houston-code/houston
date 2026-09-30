@@ -6,9 +6,10 @@
 //   DEMO_DIR=/path/to/demo SHOT_DIR=/path/to/out \
 //   node website/tools/capture-screens.mjs
 //
-// Two phases: launch once to let the app write a full settings.json, patch it
+// Three phases: launch once to let the app write a full settings.json, patch it
 // (dark theme, demo workspace, local model, read-only plan mode), then relaunch
-// and drive a real read-only task.
+// and drive a real read-only task. Finally relaunch in the light theme for the
+// light copy of the model picker, since the site shows the one matching its theme.
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
@@ -70,7 +71,7 @@ try {
   await win.locator(".model-control").first().click();
   await win.locator(".model-menu").first().waitFor({ state: "visible", timeout: 5000 });
   await win.waitForTimeout(400);
-  await win.screenshot({ path: join(OUT, "shot-modelpicker.png") });
+  await win.screenshot({ path: join(OUT, "shot-modelpicker-dark.png") });
   await win.keyboard.press("Escape");
   await win.waitForTimeout(300);
 } catch (e) {
@@ -102,5 +103,23 @@ await win.waitForTimeout(1500);
 await win.evaluate(() => window.scrollTo(0, 0));
 await win.screenshot({ path: join(OUT, "shot-transcript.png") });
 
-console.log("done ->", OUT);
 await app.close();
+
+// Phase C: the same model-picker shot in the light theme.
+{
+  const light = JSON.parse(readFileSync(settingsPath, "utf8"));
+  light.theme = "light";
+  writeFileSync(settingsPath, JSON.stringify(light, null, 2));
+  const { app, win } = await boot();
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(1360, 880)
+  );
+  await win.waitForTimeout(1000);
+  await win.locator(".model-control").first().click();
+  await win.locator(".model-menu").first().waitFor({ state: "visible", timeout: 5000 });
+  await win.waitForTimeout(400);
+  await win.screenshot({ path: join(OUT, "shot-modelpicker-light.png") });
+  await app.close();
+}
+
+console.log("done ->", OUT);

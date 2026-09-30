@@ -9,12 +9,17 @@ import { chromium } from "playwright";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ASSETS = resolve(__dirname, "..", "public", "assets");
 
-// Composite the real app icon so the card matches the header/favicon exactly.
-const iconDataUri =
-  "data:image/png;base64," + readFileSync(resolve(ASSETS, "icon.png")).toString("base64");
-const svg = readFileSync(resolve(ASSETS, "og.svg"), "utf8").replace("{{ICON_DATA_URI}}", iconDataUri);
+// Composite the real app icon and the dark product screenshot, so the card matches
+// the site exactly.
+const dataUri = (file) =>
+  "data:image/png;base64," + readFileSync(resolve(ASSETS, file)).toString("base64");
+const svg = readFileSync(resolve(ASSETS, "og.svg"), "utf8")
+  .replace("{{ICON_DATA_URI}}", dataUri("icon.png"))
+  .replace("{{SHOT_DATA_URI}}", dataUri("screens/models-dark.png"));
 
-const browser = await chromium.launch();
+// CHROMIUM_PATH points at a specific Chromium when Playwright's own download for this
+// version isn't installed.
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const page = await browser.newPage({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1 });
 await page.setContent(
   `<!doctype html><html><body style="margin:0">${svg}</body></html>`,

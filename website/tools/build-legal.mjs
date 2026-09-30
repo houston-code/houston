@@ -101,6 +101,7 @@ function page({ title, description, contentTitle, html, slug }) {
         <span>Houston</span>
       </a>
       <nav class="nav" aria-label="Primary">
+        <a class="nav-link" href="/#why">Security</a>
         <a class="nav-link" href="/#features">Features</a>
         <a class="nav-link" href="/#download">Download</a>
         <a class="nav-link" href="/#faq">FAQ</a>
