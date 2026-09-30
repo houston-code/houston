@@ -18,10 +18,21 @@
     return pinned ? pinned === "dark" : !!(media && media.matches);
   }
 
+  // Screenshots come in a light and a dark capture inside <picture>. With no pinned
+  // theme the dark <source> follows the OS on its own; a pinned theme forces it on or
+  // off, so the screenshot always matches the page around it.
+  function syncPictures() {
+    var pinned = root.getAttribute("data-theme");
+    var media = pinned ? (pinned === "dark" ? "all" : "not all") : "(prefers-color-scheme: dark)";
+    var sources = document.querySelectorAll('source[data-theme-source="dark"]');
+    for (var i = 0; i < sources.length; i++) sources[i].setAttribute("media", media);
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    syncPictures();
     var button = document.getElementById("theme-toggle");
     if (!button) return;
-    function sync() { button.setAttribute("aria-pressed", String(isDark())); }
+    function sync() { button.setAttribute("aria-pressed", String(isDark())); syncPictures(); }
     button.hidden = false;
     sync();
     button.addEventListener("click", function () {

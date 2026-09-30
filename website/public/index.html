@@ -44,7 +44,7 @@
         "url": "https://houstoncode.ai/",
         "downloadUrl": "https://github.com/houston-code/houston/releases/latest",
         "image": "https://houstoncode.ai/assets/og.png",
-        "screenshot": "https://houstoncode.ai/assets/screens/models.png",
+        "screenshot": ["https://houstoncode.ai/assets/screens/models-dark.png", "https://houstoncode.ai/assets/screens/models-light.png"],
         "featureList": [
           "Bring your own model: Claude, GPT, Gemini, OpenAI-compatible, or local",
           "Agentic file editing, code search, and shell under an approval flow",
@@ -126,6 +126,7 @@
         <span>Houston</span>
       </a>
       <nav class="nav" aria-label="Primary">
+        <a class="nav-link" href="#why">Security</a>
         <a class="nav-link" href="#features">Features</a>
         <a class="nav-link" href="#download">Download</a>
         <a class="nav-link" href="#faq">FAQ</a>
@@ -162,8 +163,11 @@
         </ul>
 
         <figure class="shot">
-          <img src="/assets/screens/models.png" width="1600" height="1035" fetchpriority="high"
+          <picture>
+            <source srcset="/assets/screens/models-dark.png" media="(prefers-color-scheme: dark)" data-theme-source="dark" />
+            <img src="/assets/screens/models-light.png" width="1600" height="1035" fetchpriority="high"
             alt="Houston's model picker open, listing Anthropic Claude, OpenAI GPT, Google Gemini, and local Ollama models, each row showing vision and reasoning capability badges and its context-window size." />
+          </picture>
           <figcaption>The model picker: every provider in one list, with each model's context window and capabilities.</figcaption>
         </figure>
       </div>

@@ -79,6 +79,10 @@ node website/tools/capture-screens.mjs       # needs `npm run build` first
 ```
 
 Then downsize the retina PNGs for the web (`sips -Z 1600 in.png --out out.png`).
+The landing page shows `screens/models-dark.png` or `screens/models-light.png` to
+match the page's theme (from `shot-modelpicker-dark.png` / `-light.png`), so
+regenerate both together; `assets/og.png` embeds the dark one, so re-run
+`build-og.mjs` after it changes.
 A populated "agent running tools" shot needs a frontier model key — local models
 emit text but don't drive Houston's native tool execution.
 
