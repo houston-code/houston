@@ -183,13 +183,14 @@ section { padding: 96px 0; }
 .hero h1 { max-width: 16ch; }
 .lede { max-width: 58ch; margin-top: 20px; font-size: var(--fs-3); color: var(--n4); }
 .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
-.hero-meta {
-  display: flex; flex-wrap: wrap; gap: 4px 0; margin: 20px 0 0; padding: 0;
-  list-style: none; font-size: var(--fs-1); color: var(--n4);
+.hero-release { font-size: var(--fs-1); color: var(--n4); align-self: center; margin-left: 4px; }
+.hero-release:hover { color: var(--n5); }
+.highlights {
+  display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 32px 0 0; padding: 0; list-style: none;
+  font-size: var(--fs-2); font-weight: 500;
 }
-.hero-meta li + li::before { content: "·"; margin: 0 10px; }
-.hero-meta a { font-family: var(--mono); color: var(--n4); }
-.hero-meta a:hover { color: var(--n5); }
+.highlights li { display: inline-flex; align-items: center; gap: 8px; }
+.highlights svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--a5); }
 
 .shot { margin: 64px 0 0; }
 .shot img {
@@ -197,6 +198,15 @@ section { padding: 96px 0; }
   border: 1px solid var(--n3); border-radius: var(--r-2); box-shadow: var(--shadow);
 }
 .shot figcaption { margin-top: 12px; font-size: var(--fs-1); color: var(--n4); }
+
+/* ---- Why Houston ---- */
+.why-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+  margin: 0; padding: 0; list-style: none;
+}
+.why-card { padding: 24px; background: var(--n1); border: 1px solid var(--n3); border-radius: var(--r-2); }
+.why-card svg { display: block; width: 22px; height: 22px; color: var(--a5); margin-bottom: 16px; }
+.why-card p { margin-top: 8px; font-size: var(--fs-2); color: var(--n4); }
 
 /* ---- Features ---- */
 .feature-grid {
@@ -323,7 +333,7 @@ section { padding: 96px 0; }
 
 /* ---- Responsive ---- */
 @media (max-width: 960px) {
-  .download-grid { grid-template-columns: repeat(2, 1fr); }
+  .download-grid, .why-grid { grid-template-columns: repeat(2, 1fr); }
   .footer-grid { grid-template-columns: repeat(3, 1fr); }
   .footer-brand { grid-column: 1 / -1; }
   .faq-layout { grid-template-columns: 1fr; gap: 24px; }
@@ -334,13 +344,16 @@ section { padding: 96px 0; }
   .shot { margin-top: 48px; }
   .nav-link { display: none; }
   .feature-grid, .steps, .dl-extra, .contact-grid { grid-template-columns: 1fr; gap: 24px; }
+  .why-grid { grid-template-columns: 1fr; }
   .footer-grid { grid-template-columns: repeat(2, 1fr); }
-  .hero-meta { gap: 4px 16px; }
-  .hero-meta li + li::before { content: none; }
+  .highlights { gap: 10px 20px; }
 }
 @media (max-width: 560px) {
   .download-grid { grid-template-columns: 1fr; }
   /* One column: put the visitor's build first instead of making them scroll for it. */
   .dl-card.is-recommended { order: -1; }
   .btn-lg { flex: 1 1 100%; }
+  .highlights { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+  .highlights li { align-items: flex-start; }
+  .highlights svg { margin-top: 3px; }
 }

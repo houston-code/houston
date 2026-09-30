@@ -50,7 +50,8 @@ describe("hero download button", () => {
     expect(r.hero).toBe(ARM_DMG);
     expect(r.label).toBe("Download for macOS");
     expect(r.version.hidden).toBe(false);
-    expect(r.version.textContent).toBe("v1.2.3");
+    expect(r.version.textContent).toBe("v1.2.3 release notes");
+    expect(r.version.getAttribute("href")).toBe(RELEASE.html_url);
   });
 
   it("scrolls to the cards when the release feed is unreachable", async () => {

@@ -48,6 +48,10 @@
         "featureList": [
           "Bring your own model: Claude, GPT, Gemini, OpenAI-compatible, or local",
           "Agentic file editing, code search, and shell under an approval flow",
+          "Shell commands confined by the OS sandbox on macOS and Linux, with a per-domain network allowlist",
+          "Each chat in its own git worktree, with one-click undo of a turn's file changes",
+          "Project guardrails, trusted folders, and admin-locked managed policy",
+          "Signed releases with an SBOM and SLSA build provenance",
           "Runs locally with no analytics or telemetry",
           "Open source under the Apache License 2.0",
           "Model Context Protocol servers, custom agents, and skills"
@@ -146,12 +150,15 @@
             <span id="hero-download-label">Download Houston</span>
           </a>
           <a class="btn btn-secondary btn-lg" href="https://github.com/houston-code/houston" rel="noopener">View on GitHub</a>
+          <a class="hero-release" id="hero-version" rel="noopener" hidden></a>
         </div>
-        <ul class="hero-meta">
-          <li id="hero-version" hidden></li>
-          <li>macOS, Windows, Linux</li>
-          <li>Open source, Apache-2.0</li>
-          <li>No telemetry</li>
+        <ul class="highlights" aria-label="Highlights">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Runs locally</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>No telemetry</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Approval-gated actions</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Sandboxed shell</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>macOS, Windows, Linux</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Open source</li>
         </ul>
 
         <figure class="shot">
@@ -159,6 +166,47 @@
             alt="Houston's model picker open, listing Anthropic Claude, OpenAI GPT, Google Gemini, and local Ollama models, each row showing vision and reasoning capability badges and its context-window size." />
           <figcaption>The model picker: every provider in one list, with each model's context window and capabilities.</figcaption>
         </figure>
+      </div>
+    </section>
+
+    <section id="why" class="band">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Built to be trusted with real code</h2>
+          <p>An agent that edits files and runs commands needs hard limits, not just good intentions.</p>
+        </div>
+        <ul class="why-grid">
+          <li class="why-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <h3>A real OS sandbox</h3>
+            <p>Shell commands run under Seatbelt on macOS and bubblewrap on Linux (when installed). Writes stay inside the project, and network stays off until you allow it, then only to domains on an allowlist. Where no sandbox exists, Houston says so and never auto-approves.</p>
+          </li>
+          <li class="why-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12l2 2 4-4"/><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/></svg>
+            <h3>You approve what matters</h3>
+            <p>Plan mode, ask every time, auto-approve edits, or full auto. Edits show an inline diff before you approve, and your choices can become lasting rules. Reaching the network prompts the first time, even in full auto.</p>
+          </li>
+          <li class="why-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/></svg>
+            <h3>Your checkout stays clean</h3>
+            <p>Each new chat in a git repo gets its own worktree and branch, so the agent never edits the files you are working in. Every turn's file changes revert in one click.</p>
+          </li>
+          <li class="why-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V5a2 2 0 0 1 2-2h8l6 6v12"/><path d="M14 3v6h6M9 14h6M9 18h6"/></svg>
+            <h3>Guardrails for teams</h3>
+            <p>A repo can ship rules that only tighten, like always asking before touching infra/. Project config that would grant more is ignored until you trust the folder, and admins can lock a machine-wide policy.</p>
+          </li>
+          <li class="why-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/></svg>
+            <h3>Web pages are data, not instructions</h3>
+            <p>Fetched pages are fenced off as untrusted content. A page that looks like a prompt injection is read by a separate model call with no tools and no history, and only its summary reaches the agent.</p>
+          </li>
+          <li class="why-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.5 1.8 3-.2.9 2.9 2.4 1.8-1 2.9 1 2.9-2.4 1.8-.9 2.9-3-.2L12 21l-2.5-1.8-3 .2-.9-2.9-2.4-1.8 1-2.9-1-2.9 2.4-1.8.9-2.9 3 .2z"/><path d="m9 12 2 2 4-4"/></svg>
+            <h3>Releases you can verify</h3>
+            <p>macOS builds are signed and notarized. Every release ships cosign-signed checksums, an SBOM, and SLSA build provenance, so you can check exactly what you installed and how it was built.</p>
+          </li>
+        </ul>
       </div>
     </section>
 
@@ -173,11 +221,6 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>
             <h3>Any model, your keys</h3>
             <p>Claude (direct, Bedrock, Vertex AI, or Foundry), GPT, Gemini, any OpenAI-compatible endpoint, or a local model through Ollama or LM Studio. Switch per conversation.</p>
-          </li>
-          <li class="feature">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-            <h3>Approval-gated, sandboxed</h3>
-            <p>Plan mode, ask every time, auto-approve edits, or full auto. Where the OS supports it, shell commands run in a best-effort sandbox.</p>
           </li>
           <li class="feature">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
@@ -210,9 +253,14 @@
             <p>Connect MCP servers over stdio, HTTP, or SSE, with OAuth sign-in for hosted ones. Define custom agents and skills in Markdown. Your project's own conventions are picked up too.</p>
           </li>
           <li class="feature">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4m0 0 2-2m-2 2 2 2"/></svg>
+            <h3>GitHub, first-class</h3>
+            <p>With the gh CLI signed in, it opens and reviews pull requests, reads and files issues, and checks CI status without leaving the chat.</p>
+          </li>
+          <li class="feature">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
-            <h3>A terminal CLI too</h3>
-            <p>The same agent as a single-file CLI for macOS, Windows, and Linux, on x64 or Arm. All it needs is Node 22 or newer.</p>
+            <h3>Desktop, terminal, or headless</h3>
+            <p>Use the desktop app, an interactive terminal session, or one-shot headless runs for scripts and CI. A single-file CLI runs anywhere Node 22+ does.</p>
           </li>
         </ul>
       </div>

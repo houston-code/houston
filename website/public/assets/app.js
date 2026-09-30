@@ -108,15 +108,11 @@
     if (!release || !Array.isArray(release.assets)) return;
 
     var version = (release.tag_name || release.name || "").replace(/^v/i, "");
-    var versionItem = $("#hero-version");
-    if (version && versionItem) {
-      var link = document.createElement("a");
-      link.href = /^https:\/\//.test(release.html_url || "") ? release.html_url : RELEASES_PAGE;
-      link.rel = "noopener";
-      link.textContent = "v" + version;
-      link.setAttribute("aria-label", "Latest release, version " + version + ", release notes");
-      versionItem.appendChild(link);
-      versionItem.hidden = false;
+    var versionLink = $("#hero-version");
+    if (version && versionLink) {
+      versionLink.href = /^https:\/\//.test(release.html_url || "") ? release.html_url : RELEASES_PAGE;
+      versionLink.textContent = "v" + version + " release notes";
+      versionLink.hidden = false;
     }
 
     // Map each pre-rendered link (by asset-name suffix) to its direct download URL.
