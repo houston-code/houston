@@ -589,6 +589,8 @@ export function SettingsModal({
   // the tool for a newly-added rule, and which tool groups the user has collapsed.
   const [ruleFilter, setRuleFilter] = useState('')
   const [cleaningRules, setCleaningRules] = useState(false)
+  // What the last "Clean up rules" did, so a no-op click isn't mistaken for a dead button.
+  const [cleanupStatus, setCleanupStatus] = useState<string | null>(null)
   const [newRuleTool, setNewRuleTool] = useState('')
   const [collapsedRuleGroups, setCollapsedRuleGroups] = useState<Set<string>>(new Set())
   const toggleRuleGroup = (tool: string, open: boolean): void =>
@@ -629,8 +631,20 @@ export function SettingsModal({
   // "Clean up rules": re-generalize + dedupe via the shared main-process helper.
   const cleanupRules = async (): Promise<void> => {
     setCleaningRules(true)
+    setCleanupStatus(null)
     try {
-      setRules(await window.api.cleanupPermissionRules(rules))
+      const next = await window.api.cleanupPermissionRules(rules)
+      setRules(next)
+      const removed = rules.length - next.length
+      setCleanupStatus(
+        JSON.stringify(next) === JSON.stringify(rules)
+          ? 'Rules are already tidy.'
+          : removed > 0
+            ? `Removed ${removed} redundant ${removed === 1 ? 'rule' : 'rules'}. Save to apply.`
+            : 'Rules tidied. Save to apply.'
+      )
+    } catch {
+      setCleanupStatus('Could not clean up rules.')
     } finally {
       setCleaningRules(false)
     }
@@ -1464,6 +1478,11 @@ export function SettingsModal({
                         {cleaningRules ? 'Cleaning…' : 'Clean up rules'}
                       </button>
                     </div>
+                  )}
+                  {cleanupStatus && (
+                    <p className="rule-cleanup-status" role="status">
+                      {cleanupStatus}
+                    </p>
                   )}
 
                   {rules.length > 0 && ruleGroups.length === 0 && (
