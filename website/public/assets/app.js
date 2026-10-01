@@ -20,17 +20,21 @@
   // ---- Platform detection (logic in platform.js; this gathers signals + applies it) ----
   var HERO_LABEL = { mac: "Download for macOS", win: "Download for Windows", linux: "Download for Linux" };
 
-  // The GPU name, which on a Mac is the only non-Chromium hint of the CPU. Read locally
-  // and never sent anywhere.
-  function webglRenderer() {
+  // The GPU name, and whether WebGL offers ASTC textures (only Apple's own GPUs do), which
+  // on a Mac are the only non-Chromium hints of the CPU. Read locally and never sent
+  // anywhere.
+  function webglHints() {
     try {
       var canvas = document.createElement("canvas");
       var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
-      if (!gl) return "";
+      if (!gl) return { gpu: "", astc: false };
       var ext = gl.getExtension("WEBGL_debug_renderer_info");
-      return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || "");
+      return {
+        gpu: String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || ""),
+        astc: !!gl.getExtension("WEBGL_compressed_texture_astc"),
+      };
     } catch (e) {
-      return "";
+      return { gpu: "", astc: false };
     }
   }
 
@@ -41,6 +45,7 @@
       touchPoints: navigator.maxTouchPoints || 0,
       uaArch: "",
       gpu: "",
+      astc: false,
     };
     var isMac = /Mac/.test(signals.platform) || /Mac OS X/.test(signals.ua);
     var uaData = navigator.userAgentData;
@@ -51,7 +56,11 @@
         )
       : Promise.resolve();
     return hints.then(function () {
-      if (isMac && !signals.uaArch) signals.gpu = webglRenderer();
+      if (isMac && !signals.uaArch) {
+        var webgl = webglHints();
+        signals.gpu = webgl.gpu;
+        signals.astc = webgl.astc;
+      }
       return signals;
     });
   }
