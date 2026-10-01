@@ -4,15 +4,18 @@
 
    Why it isn't just the user agent: every Mac browser reports "Intel Mac OS X", so the
    UA can't tell Apple Silicon from Intel. Chromium exposes the real CPU through
-   User-Agent Client Hints; other browsers sometimes name the GPU via WebGL. When neither
-   says, we recommend no Mac card instead of guessing, because the Apple Silicon build
-   won't open on an Intel Mac. Linux on Arm gets no card either (there is no Linux arm64
+   User-Agent Client Hints; other browsers sometimes name the GPU via WebGL. Safari names
+   no GPU ("Apple GPU" everywhere), but its WebGL offers ASTC texture compression only on
+   Apple's own GPUs, which Intel and AMD Macs don't have. When none of these says, we
+   recommend no Mac card instead of guessing, because the Apple Silicon build won't open
+   on an Intel Mac. Linux on Arm gets no card either (there is no Linux arm64
    build) and a pointer to the standalone CLI, which runs anywhere Node does. */
 
 (function (root) {
   "use strict";
 
-  // signals: { ua, platform, uaArch ("arm" | "x86" | "" from Client Hints), gpu (WebGL renderer) }
+  // signals: { ua, platform, uaArch ("arm" | "x86" | "" from Client Hints), gpu (WebGL renderer),
+  //            astc (true when WebGL offers WEBGL_compressed_texture_astc) }
   // returns: { os: "mac" | "win" | "linux" | null, card: data-os of the card to recommend, or null,
   //            hint: id of the note to reveal instead, when there is no card to recommend }
   function classify(signals) {
@@ -37,7 +40,9 @@
       if (uaArch === "x86") return { os: "mac", card: "mac-x64" };
       if (/Apple M\d/.test(gpu)) return { os: "mac", card: "mac-arm" };
       if (/Intel|AMD|Radeon|NVIDIA/i.test(gpu)) return { os: "mac", card: "mac-x64" };
-      // Safari reports a generic "Apple GPU" on every Mac: no way to tell.
+      // Safari's generic "Apple GPU": ASTC support still marks Apple's own silicon.
+      if (signals.astc === true) return { os: "mac", card: "mac-arm" };
+      // Nothing to go on: no way to tell.
       return { os: "mac", card: null, hint: "mac-arch-hint" };
     }
     return { os: null, card: null };

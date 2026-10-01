@@ -26,9 +26,19 @@ describe("classify: Macs", () => {
     expect(classify(mac({ ua: MAC_UA, gpu: "AMD Radeon Pro 5500M OpenGL Engine" })).card).toBe("mac-x64");
   });
 
-  it("recommends no Mac card when it can't tell (Safari's generic GPU name)", () => {
+  it("recognizes Apple Silicon in Safari by its ASTC texture support", () => {
+    // Safari names every Mac GPU "Apple GPU"; only Apple's own GPUs offer ASTC.
+    expect(classify(mac({ ua: MAC_UA, gpu: "Apple GPU", astc: true }))).toEqual({ os: "mac", card: "mac-arm" });
+  });
+
+  it("lets a named Intel or AMD GPU outrank ASTC", () => {
+    expect(classify(mac({ ua: MAC_UA, gpu: "Intel(R) Iris(TM) Plus Graphics 655", astc: true })).card).toBe("mac-x64");
+  });
+
+  it("recommends no Mac card when it can't tell (Safari's generic GPU name, no ASTC)", () => {
     // The old behavior recommended Apple Silicon to every Mac, including Intel ones that
     // can't open that build.
+    expect(classify(mac({ ua: MAC_UA, gpu: "Apple GPU", astc: false }))).toEqual({ os: "mac", card: null, hint: "mac-arch-hint" });
     expect(classify(mac({ ua: MAC_UA, gpu: "Apple GPU" }))).toEqual({ os: "mac", card: null, hint: "mac-arch-hint" });
     expect(classify(mac({ ua: MAC_UA }))).toEqual({ os: "mac", card: null, hint: "mac-arch-hint" });
   });
