@@ -19,8 +19,8 @@ name: Task evals (live)
 #
 # WHY IT STILL NEVER GATES A PR. The result is non-deterministic (a model can fail a task it passed
 # yesterday) and metered. A flaky, billed gate on every PR would train everyone to re-run it until
-# green, which is worse than no signal. Hence: nightly, with a tolerance sized to absorb one flaked
-# attempt. A task that regresses HERE is a quality/model signal; a task that fails SCRIPTED is a
+# green, which is worse than no signal. Hence: a weekly scheduled run, with a tolerance sized to absorb
+# one flaked attempt. A task that regresses HERE is a quality/model signal; a task that fails SCRIPTED is a
 # harness regression and reds the PR that caused it.
 #
 # THIS WORKFLOW NEVER PUBLISHES ANYTHING: `permissions: contents: read`, no build/dist/release step,
@@ -37,10 +37,15 @@ name: Task evals (live)
 
 on:
   schedule:
-    # 09:00 UTC daily — an hour after provider-canary.yml (08:00) and two after nightly-build.yml
-    # (07:00), so the three nightlies don't contend. Cron has no timezone; this is fixed UTC.
-    - cron: '0 9 * * *'
-  # On-demand run, e.g. to score a new model the day it ships without waiting for the nightly slot.
+    # Mondays 09:00 UTC — an hour after provider-canary.yml (08:00) and two after nightly-build.yml
+    # (07:00), so they don't contend on the day all three run. Cron has no timezone; this is fixed UTC.
+    #
+    # WEEKLY, NOT NIGHTLY. Every task in the recorded baselines scores 1.0, so this run only reds when
+    # a task fails 2 of 3 attempts: a smoke test for a badly broken agent, not a drift detector. That
+    # signal doesn't change day to day, and each run is billed. Move back to daily once the task set
+    # is hard enough that baselines sit below 1.0 and there is real headroom to regress into.
+    - cron: '0 9 * * 1'
+  # On-demand run, e.g. to score a new model the day it ships without waiting for the weekly slot.
   workflow_dispatch:
     inputs:
       model:
@@ -114,7 +119,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npm run eval
 
-  # Tell a human when the nightly eval breaks — GitHub's own failure notification for a
+  # Tell a human when the scheduled eval breaks — GitHub's own failure notification for a
   # scheduled run goes to github-actions[bot]. Scheduled runs only; a hand-dispatched run
   # already notifies whoever started it. See alert-on-failure.yml.
   alert:
