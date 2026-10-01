@@ -84,12 +84,15 @@ describe('waitUntilListed', () => {
 })
 
 describe('retargetArgs', () => {
-  it('points a reused draft at the commit this run builds', () => {
+  it('points a reused draft at the commit this run builds, keeping its tag', () => {
     // A draft left by a failed run still names that run's commit; v0.3.0 shipped with a
-    // stale target_commitish this way.
-    expect(retargetArgs('houston-code/houston', 397742693, 'abc123')).toEqual([
+    // stale target_commitish this way. tag_name is resent because a PATCH without it
+    // renames the draft's tag to untagged-<hash> (the v0.4.0 re-run split into two drafts).
+    expect(retargetArgs('houston-code/houston', 397742693, 'v0.4.0', 'abc123')).toEqual([
       'api', '-X', 'PATCH', 'repos/houston-code/houston/releases/397742693',
-      '-f', 'target_commitish=abc123', '--silent',
+      '-f', 'tag_name=v0.4.0',
+      '-f', 'target_commitish=abc123',
+      '--silent',
     ])
   })
 })
