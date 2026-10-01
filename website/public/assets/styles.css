@@ -132,9 +132,12 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .brand:hover { text-decoration: none; }
 /* The icon art has ~10% transparent padding; oversize it so the tile reads at 24px. */
 .brand img { width: 30px; height: 30px; margin: -3px; }
+/* A stronger tint than --a1 so the badge reads as blue next to the name; the mix stays
+   inside the palette and palette.test.mjs checks its contrast. */
 .beta-badge {
-  font-size: var(--fs-1); font-weight: 500; line-height: 1; color: var(--a5);
-  padding: 3px 7px; border-radius: 999px; background: var(--a1); border: 1px solid var(--a2);
+  font-size: var(--fs-1); font-weight: 600; line-height: 1; color: var(--a5);
+  padding: 3px 7px; border-radius: 999px; border: 1px solid var(--a2);
+  background: color-mix(in srgb, var(--a3) 18%, var(--n1));
 }
 .nav { display: flex; align-items: center; gap: 4px; }
 .nav-link {
