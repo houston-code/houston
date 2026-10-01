@@ -132,6 +132,10 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .brand:hover { text-decoration: none; }
 /* The icon art has ~10% transparent padding; oversize it so the tile reads at 24px. */
 .brand img { width: 30px; height: 30px; margin: -3px; }
+.beta-badge {
+  font-size: var(--fs-1); font-weight: 500; line-height: 1; color: var(--a5);
+  padding: 3px 7px; border-radius: 999px; background: var(--a1); border: 1px solid var(--a2);
+}
 .nav { display: flex; align-items: center; gap: 4px; }
 .nav-link {
   color: var(--n4); font-size: var(--fs-2); font-weight: 500;
