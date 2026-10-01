@@ -14396,7 +14396,7 @@ programs and associated documentation files created by the
 Original Author, when distributed with the Software.
 ```
 
-### brace-expansion — 5.0.9
+### brace-expansion — 5.0.12
 
 - License: MIT
 - Homepage: https://github.com/juliangruber/brace-expansion
