@@ -3,7 +3,8 @@ import {
   COMPACTION_SUMMARY_PREFIX,
   SYSTEM_NOTE_PREFIX,
   type AgentEvent,
-  type ChatMessage
+  type ChatMessage,
+  type ReviewFinding
 } from '@shared/agent'
 import {
   itemsFromMessages,
@@ -645,5 +646,46 @@ describe('reduceEvent subagent rows', () => {
   it('ignores a subagent event for a parent tool that is not present', () => {
     const items = reduceEvent([], sub('correctness', 'Correctness', 'running'))
     expect(items).toEqual([])
+  })
+})
+
+describe('reduceEvent review findings', () => {
+  const ev = (e: AgentEvent): AgentEvent => e
+  const start = (): DisplayItem[] =>
+    reduceEvent([], ev({ runId: 'r1', type: 'tool_start', callId: 'c1', name: 'review_changes', args: {} }))
+  const finding = (id: string, status: ReviewFinding['status']): AgentEvent =>
+    ev({
+      runId: 'r1',
+      type: 'review_finding',
+      parentCallId: 'c1',
+      finding: { id, dimension: 'security', severity: 'high', title: id, status }
+    })
+  const toolC1 = (items: DisplayItem[]): ToolItem =>
+    items.find((it): it is ToolItem => it.kind === 'tool' && it.id === 'c1')!
+
+  it('adds findings under the review row and updates them in place by id', () => {
+    let items = start()
+    items = reduceEvent(items, finding('security:0', 'candidate'))
+    items = reduceEvent(items, finding('security:1', 'candidate'))
+    items = reduceEvent(items, finding('security:0', 'confirmed'))
+    expect(toolC1(items).findings?.map((f) => [f.id, f.status])).toEqual([
+      ['security:0', 'confirmed'],
+      ['security:1', 'candidate']
+    ])
+  })
+
+  it('turns a finding still verifying into unverified when the review ends', () => {
+    let items = start()
+    items = reduceEvent(items, finding('security:0', 'verifying'))
+    items = reduceEvent(items, finding('security:1', 'rejected'))
+    items = reduceEvent(
+      items,
+      ev({ runId: 'r1', type: 'tool_result', callId: 'c1', name: 'review_changes', ok: true, output: 'x' })
+    )
+    expect(toolC1(items).findings?.map((f) => f.status)).toEqual(['candidate', 'rejected'])
+  })
+
+  it('ignores a finding for a review row that is not present', () => {
+    expect(reduceEvent([], finding('security:0', 'candidate'))).toEqual([])
   })
 })

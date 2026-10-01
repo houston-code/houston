@@ -2042,6 +2042,138 @@ h6.md-h {
 .tool-row__subagent--running .tool-row__subagent-label {
   color: var(--text);
 }
+/* Live review findings under a review_changes row (see ReviewFindings). */
+.tool-row__tally {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tool-row__tally--alarm {
+  color: var(--danger);
+}
+.review-findings {
+  margin: 0 12px 10px 32px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+.review-findings__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.finding__head {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 4px;
+  margin: 0;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border: 0;
+  border-radius: 5px;
+}
+button.finding__head {
+  cursor: pointer;
+}
+button.finding__head:hover {
+  background: var(--bg-hover);
+}
+button.finding__head:focus-visible,
+.review-findings__dropped:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.finding__sev {
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.finding__sev--critical,
+.finding__sev--high {
+  color: var(--danger);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+.finding__sev--medium {
+  color: var(--warn);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.finding__main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.finding__loc {
+  margin-left: 7px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.finding__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.finding__tag--ok {
+  color: var(--ok);
+}
+.finding__spinner {
+  width: 9px;
+  height: 9px;
+}
+.finding__chevron {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.finding--rejected .finding__sev,
+.finding--rejected .finding__main,
+.finding--merged .finding__sev,
+.finding--merged .finding__main {
+  color: var(--text-dim);
+  background: none;
+  border-color: var(--border);
+  text-decoration: line-through;
+}
+.finding__detail {
+  margin: 2px 0 6px 70px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.review-findings__dropped {
+  margin: 4px 0 0;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.review-findings__dropped:hover {
+  color: var(--text);
+}
 .tool-row__approval {
   display: flex;
   flex-wrap: wrap;

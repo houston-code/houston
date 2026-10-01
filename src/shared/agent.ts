@@ -634,6 +634,33 @@ export function sanitizeElicitationResult(v: unknown, maxValueLen = 4000): Elici
   return { action: 'accept', content: out }
 }
 
+export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low'
+
+/**
+ * Where a review finding stands. `candidate`: a reviewer raised it, not yet checked.
+ * `verifying`: the verification pass is on it. `confirmed` / `rejected`: its verdict.
+ * `merged`: the verifier folded it into another finding describing the same problem.
+ */
+export type ReviewFindingStatus = 'candidate' | 'verifying' | 'confirmed' | 'rejected' | 'merged'
+
+/** One review_changes finding, shown live under the review's tool row. */
+export interface ReviewFinding {
+  /** Stable within its review (e.g. "security:0", or "verified:1" for a verifier-merged one). */
+  id: string
+  /** The review dimension that raised it (correctness / security / quality), or "review". */
+  dimension: string
+  severity: ReviewSeverity
+  /** `path:line` the finding points at, when the reviewer gave one. */
+  location?: string
+  /** The one-line problem statement. */
+  title: string
+  /** The finding's supporting lines (why it's a problem, the fix, how it was verified). */
+  detail?: string
+  status: ReviewFindingStatus
+  /** High-effort skeptic votes so far: `confirmed` of `cast` votes, out of `total`. */
+  votes?: { confirmed: number; cast: number; total: number }
+}
+
 /** Events streamed from a running agent to the renderer. */
 export type AgentEvent =
   | { runId: string; type: 'text'; delta: string }
@@ -681,6 +708,16 @@ export type AgentEvent =
       /** Human label for the row (e.g. "Correctness", "Verifying findings"). */
       label: string
       status: 'running' | 'done' | 'error'
+    }
+  | {
+      // One review finding, surfaced under its review_changes row the moment a
+      // reviewer reports it, then updated in place (same `finding.id`) as the
+      // verification pass confirms, rejects, or merges it.
+      runId: string
+      type: 'review_finding'
+      /** The review_changes call this finding belongs to. */
+      parentCallId: string
+      finding: ReviewFinding
     }
   | {
       runId: string
