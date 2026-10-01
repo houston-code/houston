@@ -753,6 +753,9 @@ export function alreadyAllowedAsRule(
   return matchOne(rules, toolName, sample) === 'allow'
 }
 
+/** Shell allow patterns that can never match a real command (see cleanupPermissionRules). */
+const DEAD_SHELL_FRAGMENT = /^\d+$|[<>]$/
+
 /**
  * Rewrite a permission-rule list into an equivalent-but-tidier one, backing the
  * Settings panel's "Clean up rules" action. It:
@@ -763,14 +766,20 @@ export function alreadyAllowedAsRule(
  *   an existing deny rule, so a narrower deny is never silently shadowed.
  * - Drops any allow rule already covered by an earlier kept allow rule, and any exact
  *   duplicate — preserving order, so first-match-wins semantics are unchanged.
+ * - Drops a `run_shell` allow covered by a LATER, broader allow (`ls -la "dir"` before
+ *   `ls -la`) when no deny/ask rule overlaps it, since nothing between the two can then
+ *   change its verdict.
+ * - Drops dead `run_shell` fragments an older splitter minted by cutting `2>&1` at the
+ *   `&`: a pattern ending in a dangling redirect (`… 2>`, which no real command matches)
+ *   and a bare fd number (`1`, not a command).
  *
- * Deny/ask rules and non-shell rules are preserved verbatim (only exact dedupe
- * applies). Pure and order-stable, so the caller can diff old vs new before saving.
+ * Every drop removes an allow, so the result is never looser than the input. Deny/ask
+ * rules and non-shell rules are preserved verbatim (only exact dedupe applies). Pure
+ * and order-stable, so the caller can diff old vs new before saving.
  */
 export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[] {
-  const denies = rules.filter((r) => r.action === 'deny')
-  const wouldShadowDeny = (pattern: string): boolean =>
-    denies.some((d) => {
+  const overlapsAny = (gates: PermissionRule[], pattern: string): boolean =>
+    gates.some((d) => {
       if (d.tool && d.tool !== '*' && d.tool !== 'run_shell') return false
       const deny = (d.match ?? '').trim()
       if (!deny) return false
@@ -781,6 +790,10 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
       // which overlap the prefix `git push` only on the extended `git push --force …`.
       return globsIntersect(deny, pattern) || globsIntersect(deny, `${pattern} *`)
     })
+  const denies = rules.filter((r) => r.action === 'deny')
+  const gates = rules.filter((r) => r.action !== 'allow')
+  const wouldShadowDeny = (pattern: string): boolean => overlapsAny(denies, pattern)
+  const isShellAllow = (r: PermissionRule): boolean => r.action === 'allow' && r.tool === 'run_shell'
   const out: PermissionRule[] = []
   const seen = new Set<string>()
   // NUL separates the fields because it cannot appear in any of them. Write it as an
@@ -788,8 +801,9 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
   // file as binary and skip it.
   const key = (r: PermissionRule): string => `${r.action}\u0000${r.tool}\u0000${r.match}`
   for (const r of rules) {
+    if (isShellAllow(r) && DEAD_SHELL_FRAGMENT.test((r.match ?? '').trim())) continue
     let expanded: PermissionRule[] = [r]
-    if (r.action === 'allow' && r.tool === 'run_shell') {
+    if (isShellAllow(r)) {
       const pats = shellRulePatterns(r.match ?? '')
       // Keep the rule exact if generalizing it could shadow a narrower deny.
       expanded = pats.some(wouldShadowDeny) ? [r] : pats.map((match) => ({ ...r, match }))
@@ -802,5 +816,23 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
       out.push(e)
     }
   }
-  return out
+  // The pass above only sees EARLIER rules, so `ls -la "dir"` saved before `ls -la`
+  // survives it. Drop such a rule when a remaining allow covers both the pattern and its
+  // extensions (it was a prefix rule) and no deny/ask overlaps it. Globs are left alone:
+  // two probe strings can't prove one glob covers another.
+  const kept = [...out]
+  for (const r of out) {
+    if (!isShellAllow(r)) continue
+    const m = (r.match ?? '').trim()
+    if (!m || /[*?[]/.test(m) || overlapsAny(gates, m)) continue
+    const covered = kept.some(
+      (o) =>
+        o !== r &&
+        isShellAllow(o) &&
+        alreadyAllowedAsRule([o], 'run_shell', m) &&
+        alreadyAllowedAsRule([o], 'run_shell', `${m} x`)
+    )
+    if (covered) kept.splice(kept.indexOf(r), 1)
+  }
+  return kept
 }
