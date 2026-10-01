@@ -60,6 +60,8 @@ export function defaultProviders(): ProviderConfig[] {
         { id: 'claude-haiku-4-5' },
         { id: 'claude-opus-4-7' }
       ],
+      // Changing this needs a live eval baseline for the new model in the same PR
+      // (src/main/agent/evals/baselines/), or the scheduled eval-live.yml run reds.
       defaultModel: 'claude-opus-4-8',
       requiresKey: true,
       hasKey: false,

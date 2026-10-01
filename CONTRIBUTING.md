@@ -127,7 +127,7 @@ the agent got worse.
 The **live** driver runs the identical fixtures against a real model with the
 script ignored, several attempts per task, and grades each task against the
 per-model baseline checked in under `evals/baselines/`. It is non-deterministic
-and metered, so it never gates a PR; it runs nightly from
+and metered, so it never gates a PR; it runs weekly from
 [`eval-live.yml`](.github/workflows/eval-live.yml) and **fails on a regression**
 rather than just printing a scorecard. To run it locally, set a provider key the
 same way the CLI does (e.g. `ANTHROPIC_API_KEY`):
@@ -145,8 +145,13 @@ the file the same way you'd commit a golden:
 HOUSTON_EVAL_MODEL=claude-opus-4-8 npm run eval:baseline
 ```
 
+The scheduled run scores the provider's `defaultModel`, so **changing a default
+model in `src/shared/defaults.ts` means recording a baseline for the new model in
+the same PR.** Otherwise the next scheduled run reds with "No quality baseline
+recorded".
+
 The gate has a tolerance sized to absorb exactly one flaked attempt out of the
-default three, because a live model that reds the nightly on noise is a nightly
+default three, because a live model that reds the scheduled run on noise is a job
 everyone learns to ignore. Two flakes is a real drop and fails. A task scoring
 *above* its baseline is reported as `improved`, which means the baseline is stale
 and worth re-recording.
@@ -155,7 +160,7 @@ A baseline where **every** task scored 0 is refused, both when recording it and
 when loading it. Nothing passing is almost always a misconfiguration (an empty or
 wrong model id, a bad key, a provider outage) rather than a real score, and
 freezing it would produce a permanently dead gate: no score can regress below
-zero, so the nightly would report green forever while guarding nothing. If you hit
+zero, so the scheduled run would report green forever while guarding nothing. If you hit
 that refusal, read the per-task run errors in the scorecard, fix the cause, and
 re-record.
 
