@@ -39,6 +39,8 @@ website/
     privacy.html        Generated from docs/PRIVACY.md
     contact.html        Contact addresses (GitHub issues first, then email by topic)
     404.html            Not-found page (Cloudflare serves this automatically)
+    favicon.ico         Tab icon, 16/32/48 px (generated from assets/icon.png)
+    apple-touch-icon.png  180 px iOS / Safari favorites icon (generated)
     assets/
       styles.css        All styles; its header documents the design tokens
       theme.js          Light/dark toggle (follows the OS until a visitor picks one)
@@ -62,6 +64,8 @@ website/
     headers.test.mjs      assets revalidate on every use (no fixed cache lifetime; files keep their names)
     palette.test.mjs      no colors outside the design tokens; every text pairing clears WCAG AA
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
+    build-favicons.mjs    assets/icon.png → favicon.ico, apple-touch-icon.png
+    favicons.test.mjs     fails CI if a page's icon links or icon files drift
     capture-screens.mjs   real app screenshots against a local model + demo workspace
 ```
 
@@ -122,4 +126,6 @@ The header, footer, and theme script are repeated in `index.html`, `404.html`,
 - **The privacy page** is generated. After editing `docs/PRIVACY.md`, re-run
   `node website/tools/build-legal.mjs` and commit the updated HTML.
 - **Social card:** after editing `public/assets/og.svg`, re-run `node website/tools/build-og.mjs`.
-- **App icon:** if `build/icon.png` changes, `cp build/icon.png website/public/assets/icon.png`.
+- **App icon:** if `build/icon.png` changes, `cp build/icon.png website/public/assets/icon.png`,
+  then re-run `node website/tools/build-favicons.mjs` to regenerate `favicon.ico` (16/32/48)
+  and `apple-touch-icon.png` from it.
