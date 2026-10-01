@@ -339,6 +339,16 @@ describe('SettingsModal', () => {
     // The two exact commands collapse to the single generalized rule the helper returns.
     await waitFor(() => expect(document.querySelectorAll('.rule')).toHaveLength(1))
     expect(screen.getByDisplayValue('npm install')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Removed 1 redundant rule. Save to apply.')
+  })
+
+  it('says so when "Clean up rules" finds nothing to change', async () => {
+    const rules = [{ action: 'allow' as const, tool: 'run_shell', match: 'npm install' }]
+    installApi({ cleanupPermissionRules: vi.fn(() => Promise.resolve(rules)) })
+    renderModal({ permissionRules: rules })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clean up rules' }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Rules are already tidy.'))
   })
 
   it('saves an API key via setKey without persisting the modal’s other edits', async () => {
