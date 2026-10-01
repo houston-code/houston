@@ -72,12 +72,30 @@
     var card = $('.dl-card[data-os="' + result.card + '"]');
     if (!card) return;
     card.classList.add("is-recommended");
+    // The head row is in every card, so the badge fills space already reserved for it.
     var badge = document.createElement("span");
     badge.className = "dl-badge";
-    badge.textContent = "Recommended for you";
-    card.insertBefore(badge, card.firstChild);
-    var primary = $(".dl-primary", card);
-    if (primary) { primary.classList.remove("btn-secondary"); primary.classList.add("btn-primary"); }
+    badge.textContent = "Recommended";
+    ($(".dl-head", card) || card).appendChild(badge);
+    // Every card's button starts as primary, so with no clear pick all four read as
+    // equally good choices. Once one card is recommended, the others step back.
+    $all(".dl-card").forEach(function (other) {
+      if (other === card) return;
+      var button = $(".dl-primary", other);
+      if (button) { button.classList.remove("btn-primary"); button.classList.add("btn-secondary"); }
+    });
+    recommended = $(".dl-primary", card);
+    syncHeroDownload();
+  }
+
+  // The hero button downloads the recommended build directly, but only once both halves
+  // are known: which card fits (platform detection) and that card's real file URL (the
+  // release feed). Until then, or if either never arrives, it scrolls to the cards.
+  var recommended = null;
+  function syncHeroDownload() {
+    var hero = $("#hero-download");
+    if (!hero || !recommended || !recommended.hasAttribute("data-resolved")) return;
+    hero.setAttribute("href", recommended.getAttribute("href"));
   }
 
   // Only the landing page loads platform.js; other pages have no download cards.
@@ -90,9 +108,11 @@
     if (!release || !Array.isArray(release.assets)) return;
 
     var version = (release.tag_name || release.name || "").replace(/^v/i, "");
-    if (version) {
-      var meta = $("#hero-version");
-      if (meta) meta.innerHTML = "Latest release <strong>v" + escapeHtml(version) + "</strong> · free and open, bring your own API keys.";
+    var versionLink = $("#hero-version");
+    if (version && versionLink) {
+      versionLink.href = /^https:\/\//.test(release.html_url || "") ? release.html_url : RELEASES_PAGE;
+      versionLink.textContent = "v" + version + " release notes";
+      versionLink.hidden = false;
     }
 
     // Map each pre-rendered link (by asset-name suffix) to its direct download URL.
@@ -104,14 +124,10 @@
       // Only trust https URLs — never let an API value become a javascript: href.
       if (match && /^https:\/\//.test(match.browser_download_url || "")) {
         el.setAttribute("href", match.browser_download_url);
+        el.setAttribute("data-resolved", "");
       }
     });
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
+    syncHeroDownload();
   }
 
   if (window.fetch) {
@@ -127,11 +143,8 @@
       .then(applyRelease)
       .catch(function () {
         // Offline, rate-limited, no releases yet, or timed out: keep the
-        // pre-rendered links to the releases page.
+        // pre-rendered links to the releases page, and show no version.
         clear();
-        var meta = $("#hero-version");
-        if (meta) meta.innerHTML =
-          'Free and open. Bring your own API keys. <a href="' + RELEASES_PAGE + '" rel="noopener">See all releases</a>.';
       });
   }
 })();
