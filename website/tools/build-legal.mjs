@@ -163,7 +163,6 @@ function page({ title, description, contentTitle, html, slug }) {
       </div>
       <div class="footer-bottom">
         <span>© <span id="year">2026</span> The Houston Authors</span>
-        <span>Not affiliated with NASA.</span>
       </div>
     </div>
   </footer>
