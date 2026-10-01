@@ -1,9 +1,13 @@
 # Houston
 
-A **cross-platform coding agent** — **bring your own model**. Point it at Claude, GPT,
+A **cross-platform coding agent**: **bring your own model**. Point it at Claude, GPT,
 Gemini, any OpenAI-compatible API, or a local model (Ollama / LM Studio), give it
-a project folder, and let it read, edit, search, and run code — every action gated
+a project folder, and let it read, edit, search, and run code, with every action gated
 by an approval flow and, where the OS supports it, confined to a sandbox.
+
+> **Beta.** Houston is pre-1.0: expect rough edges, and settings or behavior may change
+> between releases. Please [report problems](https://github.com/houston-code/houston/issues)
+> you run into.
 
 Built with Electron + React + TypeScript. Runs on macOS 13 Ventura or newer
 (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+).
