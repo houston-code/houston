@@ -81,6 +81,15 @@ describe("site palette", () => {
         });
       }
 
+      it("Beta badge text clears 4.5:1 on its tinted background", () => {
+        const pct = Number(css.match(/\.beta-badge \{[^}]*color-mix\(in srgb, var\(--a3\) (\d+)%, var\(--n1\)\)/)[1]) / 100;
+        const channel = (hex, i) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+        const mixed = "#" + [0, 1, 2]
+          .map((i) => Math.round(channel(t.a3, i) * pct + channel(t.n1, i) * (1 - pct)).toString(16).padStart(2, "0"))
+          .join("");
+        expect(contrast(t.a5, mixed)).toBeGreaterThanOrEqual(4.5);
+      });
+
       it("focus ring and primary button clear 3:1 against the page", () => {
         expect(contrast(t.a3, t.n1)).toBeGreaterThanOrEqual(3);
         expect(contrast(t.a3, t.n2)).toBeGreaterThanOrEqual(3);
