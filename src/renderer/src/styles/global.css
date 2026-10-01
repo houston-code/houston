@@ -4598,6 +4598,11 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--text-dim);
   flex-shrink: 0;
 }
+.rule-cleanup-status {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: -4px 0 10px;
+}
 .rule-empty {
   font-size: 13px;
   color: var(--text-dim);

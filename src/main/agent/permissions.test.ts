@@ -656,6 +656,43 @@ describe('cleanupPermissionRules', () => {
     expect(cleanupPermissionRules(clean)).toEqual(clean)
     expect(cleanupPermissionRules(cleanupPermissionRules(clean))).toEqual(clean)
   })
+
+  it('drops an allow covered by a LATER broader allow', () => {
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'ls -la "../Source Files/"'),
+      allow('run_shell', 'npm run'),
+      allow('run_shell', 'ls -la')
+    ]
+    expect(cleanupPermissionRules(rules)).toEqual([
+      allow('run_shell', 'npm run'),
+      allow('run_shell', 'ls -la')
+    ])
+  })
+
+  it('keeps a narrow allow when a deny or ask overlaps it, even if a later allow covers it', () => {
+    for (const gate of [deny('run_shell', 'ls -la /secret*'), { action: 'ask' as const, tool: 'run_shell', match: 'ls -la /secret*' }]) {
+      const rules: PermissionRule[] = [allow('run_shell', 'ls -la /secret/ok'), gate, allow('run_shell', 'ls -la')]
+      const cleaned = cleanupPermissionRules(rules)
+      expect(cleaned).toEqual(rules)
+      expect(matchRule(cleaned, 'run_shell', 'ls -la /secret/ok')).toBe('allow')
+    }
+  })
+
+  it('does not drop a prefix allow that only a narrower glob covers', () => {
+    // `ls -l?` matches `ls -la` but not `ls -la dir`, so it does not cover the prefix rule.
+    const rules: PermissionRule[] = [allow('run_shell', 'ls -la'), allow('run_shell', 'ls -l?')]
+    expect(cleanupPermissionRules(rules)).toEqual(rules)
+  })
+
+  it('purges dead fragments left by the old `2>&1` split', () => {
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'python3 -m venv --help >/dev/null 2>'),
+      allow('run_shell', '1'),
+      allow('run_shell', 'echo venv-ok'),
+      deny('run_shell', '2')
+    ]
+    expect(cleanupPermissionRules(rules)).toEqual([allow('run_shell', 'echo venv-ok'), deny('run_shell', '2')])
+  })
 })
 
 describe('parseTightenOnlyRules', () => {
