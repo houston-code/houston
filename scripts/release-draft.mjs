@@ -67,9 +67,19 @@ export async function waitUntilListed(list, tag, id, { attempts = 10, delayMs = 
   }
 }
 
-/** gh argv that points an existing draft release at `sha`. */
-export function retargetArgs(repo, id, sha) {
-  return ['api', '-X', 'PATCH', `repos/${repo}/releases/${id}`, '-f', `target_commitish=${sha}`, '--silent']
+/**
+ * gh argv that points an existing draft release at `sha`. `tag_name` MUST be resent: a
+ * draft's tag does not exist until finalize publishes it, and a PATCH that omits it makes
+ * GitHub rename the draft's tag to `untagged-<hash>`. electron-builder then cannot find the
+ * draft by tag and creates a second one (the v0.4.0 re-run left two drafts this way).
+ */
+export function retargetArgs(repo, id, tag, sha) {
+  return [
+    'api', '-X', 'PATCH', `repos/${repo}/releases/${id}`,
+    '-f', `tag_name=${tag}`,
+    '-f', `target_commitish=${sha}`,
+    '--silent',
+  ]
 }
 
 function defaultSleep(ms) {
@@ -123,7 +133,11 @@ async function main(argv) {
     // The draft may be left from an earlier, failed run, pointing at that run's commit.
     // Retarget it at the commit this run builds, so the release's target_commitish names
     // what actually shipped (finalize tags this same commit).
-    gh(retargetArgs(repo, plan.id, sha))
+    gh(retargetArgs(repo, plan.id, tag, sha))
+    // Confirm the draft is still listed under the tag after the edit, which is how
+    // electron-builder finds it; otherwise it would quietly create a second draft.
+    const after = await waitUntilListed(() => listReleases(repo), tag, plan.id)
+    if (after.action === 'error') fail(after.message)
     console.log(`Reusing the existing draft release for ${tag} (${plan.id}), retargeted at ${sha}.`)
     return
   }
