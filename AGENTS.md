@@ -67,7 +67,9 @@ work is done; the suite copies it to a throwaway workspace, drives the real `sta
 and grades on that command's exit code, never on the transcript. `npm run eval` (part
 of `npm test`) uses the scripted driver and gates every PR;
 `HOUSTON_EVAL_LIVE=1 npm run eval` drives a real model against the baselines in
-`evals/baselines/` and runs nightly instead.
+`evals/baselines/` and runs weekly instead. Changing a provider's `defaultModel` in
+`src/shared/defaults.ts` needs a baseline for the new model in the same PR, or the scheduled
+run reds (it scores the Anthropic default).
 
 [CONTRIBUTING.md](CONTRIBUTING.md#task-level-evals) covers what each guard catches and
 how to author a task. The invariants to preserve when changing this code:
