@@ -670,6 +670,36 @@ describe('live tool progress (text mode)', () => {
     expect(stderr).toContain('✓ Security')
   })
 
+  it('prints each review finding and its verdict to stderr once per status change', async () => {
+    const finding = (status: 'candidate' | 'verifying' | 'confirmed', cast: number): AgentEvent => ({
+      runId: 'run-1',
+      type: 'review_finding',
+      parentCallId: 'c1',
+      finding: {
+        id: 'security:0',
+        dimension: 'security',
+        severity: 'high',
+        location: 'a.ts:1',
+        title: 'hole',
+        status,
+        votes: { confirmed: cast, cast, total: 3 }
+      }
+    })
+    const { d, err, out } = deps([
+      { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'review_changes', args: {} },
+      finding('candidate', 0),
+      finding('verifying', 1),
+      finding('confirmed', 2),
+      finding('confirmed', 3),
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    const stderr = err.join('')
+    expect(stderr).toContain('◇ HIGH      a.ts:1  hole')
+    expect(stderr.match(/✓ HIGH/g)).toHaveLength(1)
+    expect(out.join('')).not.toContain('hole')
+  })
+
   it('keeps progress off stdout, and out of --json mode text output', async () => {
     const events: AgentEvent[] = [
       { runId: 'run-1', type: 'tool_progress', callId: 'c1', message: 'working' },

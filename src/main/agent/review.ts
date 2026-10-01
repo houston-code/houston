@@ -1,4 +1,4 @@
-import type { Provider, TokenUsage } from '@shared/agent'
+import type { Provider, ReviewFinding, ReviewSeverity, TokenUsage } from '@shared/agent'
 import { runSubAgent, type SubAgentOptions } from './subagent'
 import { gitDiff, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
 
@@ -267,6 +267,146 @@ export function parseFindings(candidateText: string): ParsedFinding[] {
   return findings
 }
 
+/** Cap the live finding rows per review, so a runaway reviewer can't flood the UI. */
+const MAX_LIVE_FINDINGS = 100
+const MAX_FINDING_TITLE = 300
+const MAX_FINDING_DETAIL = 2000
+
+function clip(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+/**
+ * Split one finding block into its parts for display: the `path:line` it points at,
+ * the one-line problem statement, and the supporting lines. The head line looks like
+ * `- [SEVERITY: high] src/a.ts:12 — problem`; a head without a recognizable location
+ * keeps the whole line as the title. Pure.
+ */
+export function describeFinding(text: string): { location?: string; title: string; detail: string } {
+  const [first = '', ...rest] = text.split('\n')
+  const head = first.replace(/^\s*-\s*\[[^\]]*\]\s*/, '').trim()
+  const detail = rest
+    .map((l) => l.trim())
+    // The verifier's closing tally trails its last finding; it isn't part of it.
+    .filter((l) => l && !/^confirmed \d+ of \d+ candidate findings/i.test(l))
+    .join('\n')
+  const m = head.match(/^(\S+)\s+[—–-]\s+(.+)$/)
+  // A location is path-like (has a slash, dot, or :line); anything else is prose.
+  if (m && /[/.:]/.test(m[1])) {
+    return { location: m[1].replace(/^`|`$/g, ''), title: m[2].trim(), detail }
+  }
+  return { title: head || first.trim(), detail }
+}
+
+/** Normalize a `path:line[-end]` location to `path:line` for matching (drops ./ and the range). */
+export function locationKey(location: string | undefined): string | undefined {
+  if (!location) return undefined
+  const m = location.replace(/^\.\//, '').match(/^(.*?)(?::(\d+))?(?:[-–]\d+)?$/)
+  if (!m) return location
+  return m[2] ? `${m[1]}:${m[2]}` : m[1]
+}
+
+/** The path part of a location key (everything before `:line`). */
+function pathOf(key: string): string {
+  return key.replace(/:\d+$/, '')
+}
+
+function asSeverity(s: string): ReviewSeverity {
+  return s === 'critical' || s === 'high' || s === 'medium' ? s : 'low'
+}
+
+/** Build a displayable finding from a parsed block. Scrubbed and size-capped. */
+function toReviewFinding(
+  id: string,
+  f: ParsedFinding,
+  status: ReviewFinding['status'],
+  redact: (t: string) => string
+): ReviewFinding {
+  const { location, title, detail } = describeFinding(f.text)
+  return {
+    id,
+    dimension: f.dimension,
+    severity: asSeverity(f.severity),
+    ...(location ? { location: clip(redact(location), MAX_FINDING_TITLE) } : {}),
+    title: clip(redact(title), MAX_FINDING_TITLE),
+    ...(detail ? { detail: clip(redact(detail), MAX_FINDING_DETAIL) } : {}),
+    status
+  }
+}
+
+/**
+ * Resolve the single verifier's output against the candidates it was given. The
+ * verifier writes its own list (and merges duplicates), so there is no id to join on:
+ * a verified finding claims the first unclaimed candidate at the same `path:line`,
+ * else the only unclaimed candidate in the same file. Further candidates at a claimed
+ * location were merged into it. Unclaimed candidates were rejected; a verified finding
+ * that claims nothing is reported as a new confirmed row. Returns every update to
+ * emit. Pure.
+ */
+export function resolveVerified(candidates: ReviewFinding[], verified: ReviewFinding[]): ReviewFinding[] {
+  const out: ReviewFinding[] = []
+  const claimed = new Set<string>()
+  const claimedKeys = new Set<string>()
+  const keyOf = (f: ReviewFinding): string | undefined => locationKey(f.location)
+  verified.forEach((v, i) => {
+    const key = keyOf(v)
+    let match: ReviewFinding | undefined
+    if (key) {
+      match = candidates.find((c) => !claimed.has(c.id) && keyOf(c) === key)
+      if (!match) {
+        const sameFile = candidates.filter((c) => {
+          const ck = keyOf(c)
+          return !claimed.has(c.id) && ck !== undefined && pathOf(ck) === pathOf(key)
+        })
+        if (sameFile.length === 1) match = sameFile[0]
+      }
+    }
+    if (match) {
+      claimed.add(match.id)
+      const mk = keyOf(match)
+      if (mk) claimedKeys.add(mk)
+      // Keep the candidate's id and dimension; take the verifier's wording and severity.
+      out.push({ ...v, id: match.id, dimension: match.dimension, status: 'confirmed' })
+    } else {
+      if (key) claimedKeys.add(key)
+      out.push({ ...v, id: `verified:${i}`, status: 'confirmed' })
+    }
+  })
+  for (const c of candidates) {
+    if (claimed.has(c.id)) continue
+    const key = keyOf(c)
+    out.push({ ...c, status: key && claimedKeys.has(key) ? 'merged' : 'rejected' })
+  }
+  return out
+}
+
+/** The verifier's explicit all-clear. */
+function isNoConfirmed(report: string): boolean {
+  return /no confirmed issues/i.test(report) && parseFindings(report).length === 0
+}
+
+/** A parsed finding with its stable live-row id. */
+type IdentifiedFinding = ParsedFinding & { id: string }
+
+/**
+ * The live-row updates once the single verifier has answered: all rejected on an
+ * explicit all-clear, matched via resolveVerified when its list parses, and back to
+ * unverified candidates when it failed or answered in a shape we can't read (the
+ * final report still carries its text).
+ */
+function settleVerified(
+  pending: ReviewFinding[],
+  verified: string,
+  redact: (t: string) => string
+): ReviewFinding[] {
+  if (isErrorReport(verified)) return pending.map((f) => ({ ...f, status: 'candidate' }))
+  if (isNoConfirmed(verified)) return pending.map((f) => ({ ...f, status: 'rejected' }))
+  const parsed = parseFindings(verified)
+  if (parsed.length === 0) return pending.map((f) => ({ ...f, status: 'candidate' }))
+  const rows = parsed.map((f, i) => toReviewFinding(`verified:${i}`, f, 'confirmed', redact))
+  return resolveVerified(pending, rows)
+}
+
 /** A skeptic confirms a finding only when its reply opens with CONFIRMED. */
 function isConfirmed(verdict: string): boolean {
   const firstLine = verdict.split('\n').map((l) => l.trim()).find(Boolean) ?? ''
@@ -288,7 +428,7 @@ export function isSafeReviewPath(p: string): boolean {
  * A lifecycle update for one nested reviewer subagent, surfaced live in the UI as
  * its own row under the review_changes tool. `id` is stable across the running→done
  * transition (the dimension name, or 'verify') so the row updates in place; `label`
- * may change to reflect the outcome (e.g. "Correctness" → "Correctness — 2 issues").
+ * may change to reflect the outcome (e.g. "Correctness" → "Correctness, 2 issues").
  */
 export interface ReviewSubAgentEvent {
   id: string
@@ -304,11 +444,11 @@ function titleCase(s: string): string {
 /** The finished-row label + status for one dimension, reflecting what it found. */
 function dimensionOutcome(dimension: string, report: string): ReviewSubAgentEvent {
   const title = titleCase(dimension)
-  if (isErrorReport(report)) return { id: dimension, label: `${title} — failed`, status: 'error' }
-  if (isClean(report)) return { id: dimension, label: `${title} — clean`, status: 'done' }
+  if (isErrorReport(report)) return { id: dimension, label: `${title}, failed`, status: 'error' }
+  if (isClean(report)) return { id: dimension, label: `${title}, clean`, status: 'done' }
   const n = parseFindings(report).length
   const found = n > 0 ? `${n} issue${n === 1 ? '' : 's'}` : 'findings'
-  return { id: dimension, label: `${title} — ${found}`, status: 'done' }
+  return { id: dimension, label: `${title}, ${found}`, status: 'done' }
 }
 
 export interface RunReviewOptions {
@@ -328,6 +468,12 @@ export interface RunReviewOptions {
   onProgress?: (message: string) => void
   /** Called as each nested reviewer subagent starts and finishes (its own live row in the UI). */
   onSubAgent?: (ev: ReviewSubAgentEvent) => void
+  /**
+   * Called with each finding as soon as a reviewer reports it, then again (same id)
+   * as verification moves it to confirmed / rejected / merged, so the UI can show
+   * findings live instead of only in the final report.
+   */
+  onFinding?: (finding: ReviewFinding) => void
   /** Called with each nested subagent turn's token usage, so the caller can meter review cost. */
   onUsage?: (usage: TokenUsage) => void
   /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
@@ -357,6 +503,16 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const progress = opts.onProgress ?? ((): void => {})
   const sub = opts.onSubAgent ?? ((): void => {})
   const redact = opts.redact ?? ((t: string): string => t)
+  // Live finding rows, capped: updates to a row already shown always go through.
+  const shown = new Set<string>()
+  const finding = (f: ReviewFinding): void => {
+    if (!opts.onFinding) return
+    if (!shown.has(f.id)) {
+      if (shown.size >= MAX_LIVE_FINDINGS) return
+      shown.add(f.id)
+    }
+    opts.onFinding(f)
+  }
 
   // Wrap the runner to count model calls and total token usage for a cost summary.
   let modelCalls = 0
@@ -416,7 +572,13 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       )
       const report = mergeChunkReports(chunkReports)
       sub(dimensionOutcome(dimension, report))
-      return { dimension, report }
+      // Show this dimension's findings now, before the other reviewers finish.
+      const parsed: IdentifiedFinding[] =
+        isErrorReport(report) || isClean(report)
+          ? []
+          : parseFindings(report).map((f, i) => ({ ...f, dimension, id: `${dimension}:${i}` }))
+      for (const p of parsed) finding(toReviewFinding(p.id, p, 'candidate', redact))
+      return { dimension, report, parsed }
     })
   )
 
@@ -443,8 +605,9 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
 
   // High effort: verify each finding independently by majority vote of skeptics.
   // Falls back to the single-verifier path if the reports don't parse into findings.
+  const allParsed = candidates.flatMap((c) => c.parsed)
   if ((opts.effort ?? 'normal') === 'high') {
-    const findings = parseFindings(candidateText)
+    const findings = allParsed
     if (findings.length > 0) {
       const toVerify = findings.slice(0, MAX_VERIFIED_FINDINGS)
       if (findings.length > toVerify.length) {
@@ -456,6 +619,20 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       progress(`Verifying ${toVerify.length} findings with ${VOTES_PER_FINDING} skeptics each…`)
       const verdicts = await Promise.all(
         toVerify.map(async (f) => {
+          const row = toReviewFinding(f.id, f, 'verifying', redact)
+          let cast = 0
+          let confirms = 0
+          const tally = (): void => {
+            // Settle as soon as the vote is decided, so faster findings resolve first.
+            const status =
+              confirms >= VOTES_TO_CONFIRM
+                ? 'confirmed'
+                : cast - confirms > VOTES_PER_FINDING - VOTES_TO_CONFIRM
+                  ? 'rejected'
+                  : 'verifying'
+            finding({ ...row, status, votes: { confirmed: confirms, cast, total: VOTES_PER_FINDING } })
+          }
+          tally()
           const votes = await Promise.all(
             Array.from({ length: VOTES_PER_FINDING }, () =>
               run({
@@ -465,6 +642,11 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
                 signal,
                 prompt: skepticPrompt(f.text),
                 systemOverride: skepticSystem()
+              }).then((v) => {
+                cast++
+                if (isConfirmed(v)) confirms++
+                if (!signal.aborted) tally()
+                return v
               })
             )
           )
@@ -479,7 +661,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
         .sort((a, b) => (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9))
       sub({
         id: 'verify',
-        label: `Verified ${toVerify.length} findings — ${confirmed.length} confirmed`,
+        label: `Verified ${toVerify.length} findings, ${confirmed.length} confirmed`,
         status: 'done'
       })
       const tally = `Confirmed ${confirmed.length} of ${toVerify.length} candidate findings (each checked by ${VOTES_PER_FINDING} independent verifiers).`
@@ -497,6 +679,8 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
 
   sub({ id: 'verify', label: 'Verifying findings', status: 'running' })
   progress('Verifying candidate findings…')
+  const pending = allParsed.map((p) => toReviewFinding(p.id, p, 'verifying', redact))
+  for (const f of pending) finding(f)
   const verified = await run({
     provider,
     model,
@@ -506,6 +690,9 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     systemOverride: verifierSystem()
   })
   sub({ id: 'verify', label: 'Verified findings', status: 'done' })
+  if (!signal.aborted) {
+    for (const f of settleVerified(pending, verified, redact)) finding(f)
+  }
 
   const header = `Adversarial review of the current changes (${dimsLabel}), each candidate finding verified in a separate context:`
   const body = verified.trim() || '[verifier returned no output]'
@@ -526,6 +713,12 @@ export interface ReviewWorkspaceOptions {
   onProgress?: (message: string) => void
   /** Called as each nested reviewer subagent starts and finishes (its own live row in the UI). */
   onSubAgent?: (ev: ReviewSubAgentEvent) => void
+  /**
+   * Called with each finding as soon as a reviewer reports it, then again (same id)
+   * as verification moves it to confirmed / rejected / merged, so the UI can show
+   * findings live instead of only in the final report.
+   */
+  onFinding?: (finding: ReviewFinding) => void
   /** Called with each nested subagent turn's token usage, so the caller can meter review cost. */
   onUsage?: (usage: TokenUsage) => void
   /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
@@ -572,6 +765,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     effort: opts.effort,
     onProgress: opts.onProgress,
     onSubAgent: opts.onSubAgent,
+    onFinding: opts.onFinding,
     onUsage: opts.onUsage,
     explicitCacheControl: opts.explicitCacheControl,
     redact: opts.redact,

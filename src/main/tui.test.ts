@@ -1752,6 +1752,32 @@ describe('runTui', () => {
     expect(out).toContain('✓ Correctness')
   })
 
+  it('prints review findings as they arrive, then each verdict once', async () => {
+    const f = (id: string, status: 'candidate' | 'verifying' | 'confirmed' | 'rejected'): AgentEvent => ({
+      runId: 'x',
+      type: 'review_finding',
+      parentCallId: 'c1',
+      finding: { id, dimension: 'security', severity: 'high', location: `${id}.ts:1`, title: `t-${id}`, status }
+    })
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'review_changes', args: {} },
+      f('a', 'candidate'),
+      f('b', 'candidate'),
+      f('a', 'verifying'),
+      f('a', 'confirmed'),
+      f('a', 'confirmed'),
+      f('b', 'rejected'),
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['review', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('◇ HIGH      a.ts:1  t-a')
+    expect(out.match(/✓ HIGH {6}a\.ts:1/g)).toHaveLength(1)
+    expect(out).toContain('✕ rejected  b.ts:1  t-b')
+  })
+
   // Parity with the GUI transcript and headless stderr: a notice event (a hook's
   // user-facing systemMessage) must be shown, not silently dropped.
   it('renders a notice event (hook systemMessage)', async () => {
