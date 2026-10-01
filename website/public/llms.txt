@@ -10,6 +10,9 @@
 - Bring your own model: Claude (Anthropic, or via Amazon Bedrock, Google Vertex AI, or Microsoft Foundry), GPT (OpenAI), Gemini (Google), any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Switch models per conversation.
 - Privacy: runs on your device; no in-app telemetry. Data leaves only to providers you configure, when you use a feature that reaches the network. Our download host keeps aggregate download and update-check counts for released files (no personal data, no in-app tracking).
 - Safety: choose an approval mode from review-every-action to full autonomy; shell commands are sandboxed where the OS supports it.
+- Isolation: shell commands run under Seatbelt (macOS) or bubblewrap (Linux, when installed), with writes confined to the project and network limited to an allowlist once granted. Each chat in a git repo runs in its own worktree, and any turn's file changes can be reverted in one click.
+- Team controls: repos can ship tighten-only permission rules, elevating project config is ignored until the folder is trusted, and admins can lock a machine-wide policy.
+- Supply chain: macOS builds are signed and notarized; every release ships cosign-signed checksums, an SBOM, and SLSA build provenance.
 
 ## Key capabilities
 
@@ -25,6 +28,7 @@
 - Download (all platforms): https://github.com/houston-code/houston/releases/latest
 - Source and issues: https://github.com/houston-code/houston
 - Privacy: https://houstoncode.ai/privacy
+- Contact: https://houstoncode.ai/contact
 - License (Apache-2.0): https://github.com/houston-code/houston/blob/main/LICENSE
 
 ## Platforms

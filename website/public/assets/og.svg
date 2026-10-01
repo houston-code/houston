@@ -1,42 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <!-- Colors are the site's dark-theme tokens (styles.css): n1 #0e1116, n3 #272d38,
+       n4 #9aa3b2, n5 #e9ecf1, a5 #8ab2ff. build-og.mjs fills in the two data URIs. -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#223357"/>
-      <stop offset="1" stop-color="#0d162b"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="0%" r="70%">
-      <stop offset="0" stop-color="#6ea8fe" stop-opacity="0.28"/>
-      <stop offset="0.6" stop-color="#6ea8fe" stop-opacity="0"/>
-    </radialGradient>
+    <clipPath id="shot"><rect x="640" y="104" width="640" height="600" rx="16"/></clipPath>
   </defs>
 
-  <rect width="1200" height="630" fill="url(#bg)"/>
-  <rect width="1200" height="630" fill="url(#glow)"/>
+  <rect width="1200" height="630" fill="#0e1116"/>
 
-  <g fill="#ffffff">
-    <circle cx="120" cy="90" r="2" opacity="0.5"/><circle cx="300" cy="150" r="1.6" opacity="0.35"/>
-    <circle cx="520" cy="70" r="2" opacity="0.4"/><circle cx="900" cy="120" r="1.8" opacity="0.45"/>
-    <circle cx="1080" cy="80" r="2" opacity="0.4"/><circle cx="1010" cy="220" r="1.6" opacity="0.3"/>
-    <circle cx="180" cy="520" r="1.8" opacity="0.35"/><circle cx="980" cy="540" r="2" opacity="0.4"/>
-    <circle cx="1120" cy="470" r="1.6" opacity="0.3"/><circle cx="80" cy="360" r="1.6" opacity="0.3"/>
+  <image x="72" y="68" width="64" height="64" href="{{ICON_DATA_URI}}"/>
+  <text x="148" y="112" font-size="34" font-weight="600" fill="#e9ecf1" letter-spacing="-0.5">Houston</text>
+
+  <g font-size="60" font-weight="700" fill="#e9ecf1" letter-spacing="-1.8">
+    <text x="72" y="256">A coding agent</text>
+    <text x="72" y="326">that runs on</text>
+    <text x="72" y="396">your machine.</text>
   </g>
 
-  <g transform="translate(96, 150)">
-    <image x="0" y="0" width="96" height="96" href="{{ICON_DATA_URI}}"/>
-    <text x="128" y="66" font-size="40" font-weight="600" fill="#c9d8f5" letter-spacing="1">HOUSTON</text>
+  <g font-size="26" fill="#9aa3b2">
+    <text x="72" y="458">Bring your own model: Claude, GPT,</text>
+    <text x="72" y="494">Gemini, or a local LLM.</text>
   </g>
 
-  <text x="96" y="360" font-size="72" font-weight="700" fill="#f4f8ff" letter-spacing="-2">A coding agent that runs</text>
-  <text x="96" y="446" font-size="72" font-weight="700" letter-spacing="-2" fill="#8fbcff">on your machine.</text>
-
-  <text x="96" y="516" font-size="30" fill="#c4d3ef">Bring your own model: Claude, GPT, Gemini, or a local LLM.</text>
-
-  <g font-size="22" fill="#cdd9f2">
-    <rect x="96" y="548" width="196" height="44" rx="22" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
-    <text x="122" y="576">Runs locally</text>
-    <rect x="308" y="548" width="230" height="44" rx="22" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
-    <text x="334" y="576">Approval-gated</text>
-    <rect x="554" y="548" width="270" height="44" rx="22" fill="#ffffff" fill-opacity="0.07" stroke="#ffffff" stroke-opacity="0.14"/>
-    <text x="580" y="576">macOS · Windows · Linux</text>
+  <g font-size="22" font-weight="500" fill="#e9ecf1">
+    <path d="M74 562l6 6 12-13" fill="none" stroke="#8ab2ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="102" y="569">Runs locally</text>
+    <path d="M254 562l6 6 12-13" fill="none" stroke="#8ab2ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="282" y="569">No telemetry</text>
+    <path d="M442 562l6 6 12-13" fill="none" stroke="#8ab2ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="569">Sandboxed</text>
   </g>
+
+  <g clip-path="url(#shot)">
+    <image x="640" y="104" width="928" height="600" preserveAspectRatio="xMinYMin slice" href="{{SHOT_DATA_URI}}"/>
+  </g>
+  <rect x="640.5" y="104.5" width="640" height="600" rx="16" fill="none" stroke="#272d38"/>
 </svg>
