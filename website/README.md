@@ -59,6 +59,7 @@ website/
     download-links.test.mjs  fails CI if a download link's asset suffix matches no build (or the CLI)
     platform.test.mjs     platform.js recommendations for each browser/OS/CPU
     app.test.mjs          app.js on the real page: hero button downloads the detected build, else scrolls
+    headers.test.mjs      assets revalidate on every use (no fixed cache lifetime; files keep their names)
     palette.test.mjs      no colors outside the design tokens; every text pairing clears WCAG AA
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
     capture-screens.mjs   real app screenshots against a local model + demo workspace

@@ -8,5 +8,8 @@
   Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
   Cross-Origin-Opener-Policy: same-origin
 
+# Assets keep their names when they change (no build step adds hashes), so caches must
+# check back on every use. Unchanged files cost a 304; changed ones arrive the moment a
+# deploy lands, instead of a day later beside HTML that already expects them.
 /assets/*
-  Cache-Control: public, max-age=86400
+  Cache-Control: public, max-age=0, must-revalidate
