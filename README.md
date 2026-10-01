@@ -1,4 +1,7 @@
-# Houston
+<p align="center">
+  <img src="build/icon.png" alt="Houston" width="128">
+</p>
+<h1 align="center">Houston</h1>
 
 A **cross-platform coding agent**: **bring your own model**. Point it at Claude, GPT,
 Gemini, any OpenAI-compatible API, or a local model (Ollama / LM Studio), give it
@@ -13,8 +16,6 @@ Built with Electron + React + TypeScript. Runs on macOS 13 Ventura or newer
 (Apple Silicon and Intel), Windows 10 or newer (x64), and Linux x64 (glibc 2.35+).
 
 Open source under the [Apache License 2.0](LICENSE).
-
-![Houston icon](build/icon.png)
 
 ## Features
 
