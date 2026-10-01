@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.4.0 - 2026-10-01
+
+Website redesign, plus more reliable shell handling and clearer update and download guidance.
+
+This release reworks the marketing site and fixes several agent and shell behaviors.
+
+### Breaking changes
+- None.
+
+### Added
+- A small Beta badge now sits next to the Houston name across the website (#72)
+
+### Changed
+- Redesigned the marketing website on a small light/dark design system, with clearer page structure and copy (#60)
+- Download cards now use generic device outlines instead of platform logos (#53)
+- A step-capped turn now ends with a plain-text summary of what finished, what's left, and how to continue, instead of a dropped tool call (#68)
+- In full-auto, shell commands that reference /dev/null, other content-free devices, or the temp directories no longer trigger an approval prompt (#64)
+- Removed the "Not affiliated with NASA." footer line, and made the Beta badge tint read clearly as blue in light mode (#73, #72)
+
+### Fixed
+- The website now recommends the correct download for Apple Silicon Macs browsing in Safari (#71)
+- Website assets revalidate on each use, so a corrected download recommendation shows as soon as a deploy lands instead of up to a day later (#74)
+- A failed update check no longer shows the raw network error: offline now reads "Check your internet connection and try again." (#59)
+- The terminal update notice headline is now trimmed at the first sentence rather than cut at 120 characters (#56)
+- Tool calls whose arguments carry leaked tool-call markup are rejected instead of reaching you or failing with a misleading error (#67)
+- kill_shell now reports what actually happened and cleans up orphaned background server processes that previously lingered and held ports (#66)
+- Shell commands with file-descriptor redirections (for example `2>&1`) are no longer mis-split, preventing bogus "Always allow" permission rules (#65)
+- Wrapped list items now render as proper lists on the privacy page (#61)
+
 ## v0.3.0 - 2026-09-27
 
 This is Houston's first public release, published from github.com/houston-code/houston. Since 0.2.0, the terminal client has grown into a full interactive REPL (a raw-mode composer with vim keys, a real command menu, reviewable diffs, queued follow-ups, `/undo` and `/redo`, and a `/login` wizard). Both clients can now steer a running turn. The agent gains scheduled and resumable subagents, GitHub review and merge tools, and notebook editing. There are new Azure OpenAI, Microsoft Foundry, Bedrock, and Vertex providers, plus fallback-model chains, and MCP servers can now use OAuth sign-in and elicitation. Security work bounds what a full-auto run can send off the machine and closes several shell-approval and SSRF gaps.
