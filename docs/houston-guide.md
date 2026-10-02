@@ -823,7 +823,9 @@ conventions, not as authority to change tool or permission behavior.
 
 Settings covers providers and keys, web search, approval mode and permission
 rules, hooks, MCP servers, additional folders, context threshold, appearance
-(theme, notifications), and optional integrations (`gh`, formatters). API keys
+(theme, notifications), updates (installed version and a manual "Check for updates";
+also **Check for Updates…** in the app menu on macOS or the Help menu on Windows and
+Linux), and optional integrations (`gh`, formatters). API keys
 are encrypted with the OS keychain and stay in the main process.
 
 ## License and legal

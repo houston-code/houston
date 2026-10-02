@@ -748,8 +748,8 @@ and Windows (×2) billed minutes off the per-PR path.
 Packaged builds check for updates via `electron-updater`, against the GitHub
 Releases feed configured in [`electron-builder.yml`](electron-builder.yml)
 (`publish:`). The check runs on launch, again every 6 hours while the app stays open,
-and on demand from **Settings → Appearance → Updates** ("Check for updates") or the
-**Check for Updates…** menu item; when a newer version exists, a persistent banner
+and on demand from **Settings → Updates** ("Check for updates") or the
+**Check for Updates…** menu item (the app menu on macOS, **Help** on Windows and Linux); when a newer version exists, a persistent banner
 appears at the top of the window until you dismiss it or update. (No-op in
 dev; set `HOUSTON_DISABLE_UPDATER=1` to turn it off.)
 
@@ -774,7 +774,8 @@ don't restart, it installs on the next quit (`autoDownload` / `autoInstallOnAppQ
 **Windows and Linux** builds are not OS-code-signed, so `electron-updater` has no
 package signature it can verify and auto-installing a remote package would make the
 release pipeline an RCE boundary. On those platforms the banner and the menu dialog's
-**Update** button link to **Releases** for a manual download, until they are signed too. (Linux downloads can still be verified
+**Update** button link to the [website's download section](https://houstoncode.ai/#download)
+for a manual download, until they are signed too. (Linux downloads can still be verified
 by hand, they're GPG-signed: see [Verifying downloads](#verifying-downloads).)
 
 Update metadata is published by running `npm run dist` with a `GH_TOKEN` and

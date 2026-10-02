@@ -12,13 +12,22 @@ import { RELEASE_SUMMARY } from './release-highlights'
  *    been updated and relaunched.
  */
 
+/**
+ * Where every "download the new version" link goes: the website's download section,
+ * which picks the right installer for the visitor's OS. Used by the desktop banner,
+ * the Settings check, the menu dialog, and the terminal clients' update notice, so
+ * nobody is sent to a raw list of release assets to work out which file is theirs.
+ * A compile-time constant on purpose: no update payload or cache can redirect it.
+ */
+export const DOWNLOAD_URL = 'https://houstoncode.ai/#download'
+
 /** Outcome of an update check (manual button or the on-launch auto-check). */
 export type UpdateCheckResult =
   | {
       status: 'available'
       currentVersion: string
       latestVersion: string
-      /** Releases page to download from (we don't auto-install on unsigned builds). */
+      /** Download page for the new version ({@link DOWNLOAD_URL}; unsigned builds don't auto-install). */
       releaseUrl: string
       /** Short notes from the update feed, when present. */
       notes?: string
