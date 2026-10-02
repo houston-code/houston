@@ -1,4 +1,4 @@
-import { app, screen, BrowserWindow, dialog, systemPreferences } from 'electron'
+import { app, screen, BrowserWindow, systemPreferences } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,14 +13,13 @@ import { attachPreviewHost, destroyAllPreviewPanes } from './preview'
 import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
-import { initUpdates } from './updater'
+import { initUpdates, setInstallGuard } from './updater'
 import { log } from './logger'
 import { pruneRecentWorkspaces } from './store'
 import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
 import { wireLocalhostCapture } from './localhostCapture'
-import { activeRunCount } from './agent/loop'
-import { shouldConfirmQuit, quitConfirmDetail } from './quit-guard'
+import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
 import { parseTuiArgs } from './tui'
 import { runTuiEntry, runHeadlessEntry } from './terminalEntry'
@@ -68,60 +67,6 @@ wireLocalhostCapture()
 
 let mainWindow: BrowserWindow | null = null
 
-// Quit-confirmation state, shared by the two guards below. `quitConfirmed` lets the
-// re-issued quit pass straight through; `quitPrompting` swallows repeat quit
-// gestures while the dialog is already open.
-let quitConfirmed = false
-let quitPrompting = false
-
-/** Ask whether to tear down live runs. Resolves true when the user picks "Quit anyway". */
-async function confirmQuitWithLiveRuns(
-  win: BrowserWindow | undefined,
-  running: number
-): Promise<boolean> {
-  const { response } = await dialog.showMessageBox(win!, {
-    type: 'warning',
-    buttons: ['Quit anyway', 'Cancel'],
-    defaultId: 1,
-    cancelId: 1,
-    title: APP_NAME,
-    message: running === 1 ? 'A chat is still running.' : 'Chats are still running.',
-    detail: quitConfirmDetail(running)
-  })
-  return response === 0
-}
-
-/**
- * Shared guard for both quit paths: cancel the in-progress quit/close, confirm if
- * any run is live, and re-issue the quit only once the user agrees. Wired to
- * `before-quit` (⌘Q and File→Quit, where a window is still alive) and, on
- * Windows/Linux, to the window's `close` (the usual quit gesture there — and the
- * only place a dialog can still be parented, since `before-quit` fires after the
- * window is destroyed). Nothing live → the quit proceeds untouched.
- */
-function guardQuitWithLiveRuns(e: ElectronEvent, win: BrowserWindow | undefined): void {
-  if (quitConfirmed) return
-  const running = activeRunCount()
-  if (!shouldConfirmQuit(running)) return
-  e.preventDefault()
-  if (quitPrompting) return
-  quitPrompting = true
-  confirmQuitWithLiveRuns(win, running)
-    .then((ok) => {
-      quitPrompting = false
-      if (ok) {
-        quitConfirmed = true
-        app.quit()
-      }
-    })
-    .catch((err) => {
-      // A failed prompt must not trap the user: clear the flag so the next quit
-      // attempt re-prompts rather than silently swallowing every future quit.
-      quitPrompting = false
-      log.error('quit confirmation dialog failed', err)
-    })
-}
-
 function createWindow(): void {
   // Fill the primary display's work area on a fresh install; restore the user's
   // saved bounds once they've resized or moved the window (see window-state.ts).
@@ -162,7 +107,7 @@ function createWindow(): void {
   // close guard: closing the window there doesn't quit (the run keeps running and
   // the window reopens from the dock), so ⌘Q is handled by before-quit instead.
   if (process.platform !== 'darwin') {
-    mainWindow.on('close', (e) => guardQuitWithLiveRuns(e, mainWindow ?? undefined))
+    mainWindow.on('close', (e) => guardQuitWithLiveWork(e, mainWindow ?? undefined))
   }
 
   // Remember the window's position and size after the user resizes or moves it,
@@ -245,6 +190,8 @@ if (tui) {
     registerIpc()
     buildAppMenu()
     createWindow()
+    // Restart-to-install asks the same "work is still running" question as ⌘Q.
+    setInstallGuard(confirmRestartForUpdate, resetQuitConfirmation)
     initUpdates()
 
     app.on('activate', () => {
@@ -257,12 +204,12 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Quitting out from under live runs (⌘Q / File→Quit, where the window is still
-// alive) silently aborts them and drops queued input — confirm first. The
+// Quitting out from under live runs or background tasks (⌘Q / File→Quit, where the
+// window is still alive) silently aborts them and drops queued input — confirm first. The
 // window-close path on Windows/Linux is covered by the close guard in
 // createWindow. (Headless uses `app.exit`, which skips before-quit.)
 app.on('before-quit', (e) =>
-  guardQuitWithLiveRuns(e, BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined)
+  guardQuitWithLiveWork(e, BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined)
 )
 
 // Don't leave the agent's background shells or terminals running after the app exits.

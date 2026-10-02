@@ -412,7 +412,7 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.updateDownloaded, listener)
   },
   /** Install a downloaded update now (quit, apply, relaunch). */
-  installUpdate: (): Promise<void> => ipcRenderer.invoke(IPC.updateInstall)
+  installUpdate: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateInstall)
 }
 
 export type CoderApi = typeof api

@@ -16,7 +16,8 @@ type Available = Extract<UpdateCheckResult, { status: 'available' }>
  *  - **downloaded** — the update is ready; shows a "Restart to install" button that
  *    quits, applies, and relaunches (it would otherwise install on the next quit).
  *
- * The user can dismiss it for the session; the on-launch check re-surfaces it until
+ * The user can dismiss it for the session; the next check (on launch, then every 6
+ * hours) re-surfaces it until
  * they're on the new version.
  */
 export function UpdateBanner({
