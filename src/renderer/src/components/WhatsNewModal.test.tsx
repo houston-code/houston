@@ -11,17 +11,31 @@ describe('WhatsNewModal', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows the version heading and the highlights', () => {
-    render(<WhatsNewModal info={info} onClose={() => {}} />)
-    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true')
+  it('shows the version heading and the highlights as a non-modal card', () => {
+    const { container } = render(<WhatsNewModal info={info} onClose={() => {}} />)
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'false')
+    // No backdrop: it must not block the rest of the app.
+    expect(container.querySelector('.modal-backdrop')).toBeNull()
     expect(screen.getByText(/0\.2\.0/)).toBeInTheDocument()
     expect(screen.getByText(info.highlights)).toBeInTheDocument()
   })
 
-  it('closes via the "Got it" button', () => {
+  it('does not steal focus when it appears', () => {
+    render(<WhatsNewModal info={info} onClose={() => {}} />)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('closes via the close button', () => {
     const onClose = vi.fn()
     render(<WhatsNewModal info={info} onClose={onClose} />)
-    fireEvent.click(screen.getByRole('button', { name: /got it/i }))
+    fireEvent.click(screen.getByRole('button', { name: /close what’s new/i }))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('closes on Escape while focused', () => {
+    const onClose = vi.fn()
+    render(<WhatsNewModal info={info} onClose={onClose} />)
+    fireEvent.keyDown(screen.getByRole('button', { name: /close/i }), { key: 'Escape' })
     expect(onClose).toHaveBeenCalledOnce()
   })
 })
