@@ -153,9 +153,9 @@ describe('checkForUpdates', () => {
       latestVersion: '0.3.0',
       notes: 'Faster search'
     })
-    // The manual-download link must point at the PUBLIC releases repo (the private
-    // source repo has no published assets), not just any github.com URL.
-    expect(result.status === 'available' && result.releaseUrl).toContain('houston-code/houston/releases')
+    // The manual-download link goes to the website's download section, never a raw
+    // list of release assets.
+    expect(result.status === 'available' && result.releaseUrl).toBe('https://houstoncode.ai/#download')
 
     const broadcasts = h.sent.filter((s) => s.channel === IPC.updateAvailable)
     expect(broadcasts).toHaveLength(1)
@@ -222,7 +222,7 @@ describe('menuUpdateDialog', () => {
     expect(options.detail).toMatch(/restart to install/i)
   })
 
-  it('falls back to the Releases page where auto-install is unavailable', async () => {
+  it('falls back to the download page where auto-install is unavailable', async () => {
     const { menuUpdateDialog } = await load()
     const { options, action } = menuUpdateDialog({
       status: 'available',
@@ -416,7 +416,7 @@ describe('checkForUpdatesFromMenu', () => {
     expect(h.opened).toEqual([])
   })
 
-  it('offers the Releases page when the download fails', async () => {
+  it('offers the website download page when the download fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     // The background download failed earlier, so Update retries it, and that fails too.
     h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
@@ -433,17 +433,17 @@ describe('checkForUpdatesFromMenu', () => {
     }
     expect(h.quitAndInstallCalls).toBe(0)
     expect(h.dialogs[1]).toMatchObject({ message: 'Couldn’t download the update.' })
-    expect(h.opened).toEqual(['https://github.com/houston-code/houston/releases'])
+    expect(h.opened).toEqual(['https://houstoncode.ai/#download'])
   })
 
-  it('opens the Releases page instead of installing on unsigned builds', async () => {
+  it('opens the website download page instead of installing on unsigned builds', async () => {
     h.autoInstall = false
     h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
     h.dialogResponses = [0]
     const { checkForUpdatesFromMenu } = await load()
     await checkForUpdatesFromMenu()
     expect(h.quitAndInstallCalls).toBe(0)
-    expect(h.opened).toEqual(['https://github.com/houston-code/houston/releases'])
+    expect(h.opened).toEqual(['https://houstoncode.ai/#download'])
   })
 })
 

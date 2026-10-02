@@ -4,6 +4,7 @@ import electronUpdater from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
 import { IPC } from '@shared/constants'
 import {
+  DOWNLOAD_URL,
   highlightsFor,
   updateErrorHint,
   type UpdateCheckResult,
@@ -32,18 +33,13 @@ import { openExternalSafely } from './safeExternal'
  * electron-updater can verify a downloaded package against the running app before
  * replacing it (`shouldAutoInstallUpdates`). Only macOS is signed today, so there we
  * `autoDownload` and `autoInstallOnAppQuit`; Windows and Linux stay unsigned and keep
- * the manual path (the banner links to Releases) until they are signed too. Auto-
+ * the manual path (the banner links to the website's download page) until they are
+ * signed too. Auto-
  * installing an unverifiable package would make the release pipeline a remote-code-
  * execution boundary, which is why the gate is per-platform rather than global.
  *
  * Failures are logged, never thrown — a missing/unreachable feed must not crash.
  */
-
-/** Releases page the banner + menu link to for a manual download (used everywhere,
- *  and the only update path on the not-yet-signed Windows/Linux builds). Points at the
- *  PUBLIC releases repo where artifacts are actually published — must match the
- *  `publish` owner/repo in electron-builder.yml (the source repo is private). */
-const RELEASES_URL = 'https://github.com/houston-code/houston/releases'
 
 /** How often a long-running app re-checks the feed, so a release published while
  *  Houston stays open still surfaces without a restart or a manual check. */
@@ -211,7 +207,7 @@ async function runCheck(): Promise<UpdateCheckResult> {
         status: 'available' as const,
         currentVersion,
         latestVersion: result.updateInfo.version,
-        releaseUrl: RELEASES_URL,
+        releaseUrl: DOWNLOAD_URL,
         notes: notesText(result.updateInfo),
         autoInstall: shouldAutoInstallUpdates()
       }
@@ -231,7 +227,7 @@ export type MenuUpdateAction =
   /** Signed macOS: download if needed, then restart into the new version. */
   | { kind: 'install' }
   /** Unsigned Windows/Linux: nothing can be verified + installed in place, so open
-   *  the Releases page for a manual download. */
+   *  the website's download page for a manual download. */
   | { kind: 'open'; url: string }
 
 /**
@@ -319,7 +315,7 @@ async function showBox(options: MessageBoxOptions): Promise<number> {
  * item is expected to. The available case still broadcasts the in-app banner (via
  * checkForUpdates), so both entry points stay consistent. Its Update button installs
  * in place on signed macOS (waiting out the background download first; the banner
- * shows its progress) and opens the Releases page on unsigned platforms.
+ * shows its progress) and opens the website's download page on unsigned platforms.
  */
 export async function checkForUpdatesFromMenu(): Promise<void> {
   const result = await checkForUpdates()
@@ -342,9 +338,9 @@ export async function checkForUpdatesFromMenu(): Promise<void> {
       cancelId: 1,
       title: 'Update',
       message: 'Couldn’t download the update.',
-      detail: hint ?? 'You can download the new version from the Releases page instead.'
+      detail: hint ?? 'You can download the new version from the website instead.'
     })
-    if (choice === 0) openExternalSafely(RELEASES_URL)
+    if (choice === 0) openExternalSafely(DOWNLOAD_URL)
   }
 }
 

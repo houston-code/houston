@@ -41,7 +41,7 @@ import {
 } from '@shared/provider-catalog'
 
 /** Settings groups shown as tabs in the left-hand nav. */
-type TabId = 'models' | 'tools' | 'workspace' | 'keyboard' | 'appearance' | 'legal'
+type TabId = 'models' | 'tools' | 'workspace' | 'keyboard' | 'appearance' | 'updates' | 'legal'
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'models', label: 'Models & Inference' },
@@ -49,6 +49,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'workspace', label: 'Workspace' },
   { id: 'keyboard', label: 'Keyboard' },
   { id: 'appearance', label: 'Appearance' },
+  { id: 'updates', label: 'Updates' },
   { id: 'legal', label: 'Legal' }
 ]
 
@@ -336,6 +337,12 @@ function SettingsSection({
  * label). currentColor lets each icon track the idle/hover/active text colour.
  */
 const NAV_ICON: Record<TabId, JSX.Element> = {
+  updates: (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13.5 8a5.5 5.5 0 11-1.6-3.9M13.5 2v3h-3" />
+      <path d="M8 5.5v3l2 1.5" />
+    </svg>
+  ),
   legal: (
     <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 1.5h4.5L12 5v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2.5a1 1 0 011-1z" />
@@ -2039,7 +2046,10 @@ export function SettingsModal({
                     </span>
                   </label>
                 </SettingsSection>
-
+              </>
+            )}
+            {tab === 'updates' && (
+              <>
                 <SettingsSection
                   title="Updates"
                   desc="Your installed version, and a manual check for new releases."
