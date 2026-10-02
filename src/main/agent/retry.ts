@@ -52,6 +52,42 @@ export function providerStreamError(ev: {
   return new ProviderError(ev.message, { status: ev.status, retryAfterMs: ev.retryAfterMs })
 }
 
+/** Longest root-cause detail appended to a provider error's message. */
+const CAUSE_DETAIL_MAX = 200
+
+/**
+ * A provider error's message, with the underlying network cause appended when the
+ * SDK's own message hides it. A failed request surfaces from the SDKs as a bare
+ * "Connection error." (or undici's "fetch failed"), which reads the same whether DNS
+ * failed, the connection was refused, or TLS verification rejected a re-signing
+ * proxy's certificate. The real reason sits at the bottom of the `cause` chain, so walk
+ * it and append its code and message: "Connection error. (unable to get local issuer
+ * certificate, UNABLE_TO_GET_ISSUER_CERT_LOCALLY)". Errors with no cause, or whose
+ * cause adds nothing the message doesn't already say, come back unchanged.
+ */
+export function describeProviderError(err: unknown): string {
+  const message = String((err as { message?: unknown })?.message ?? err)
+  let root: unknown = (err as { cause?: unknown })?.cause
+  // Bounded walk: a cause chain can be cyclic.
+  for (let i = 0; i < 8; i++) {
+    const next = (root as { cause?: unknown })?.cause
+    if (next === undefined || next === null || next === root) break
+    root = next
+  }
+  if (root === undefined || root === null) return message
+  const causeMessage = String((root as { message?: unknown })?.message ?? root).trim()
+  const code = (root as { code?: unknown })?.code
+  const codeText = typeof code === 'string' && !causeMessage.includes(code) ? code : ''
+  const parts = [causeMessage, codeText]
+    // Control characters stripped: this lands in the UI and the terminal.
+    // eslint-disable-next-line no-control-regex
+    .map((p) => p.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim())
+    .filter((p) => p && p !== 'fetch failed' && !message.includes(p))
+  if (!parts.length) return message
+  const detail = parts.join(', ')
+  return `${message} (${detail.length > CAUSE_DETAIL_MAX ? `${detail.slice(0, CAUSE_DETAIL_MAX - 1)}\u2026` : detail})`
+}
+
 /** Whether an error looks transient and worth retrying. Defaults to NOT retrying. */
 export function isRetryableError(err: unknown): boolean {
   const status = (err as { status?: number })?.status
