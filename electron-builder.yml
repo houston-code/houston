@@ -114,7 +114,7 @@ mac:
   #                 v26 runs @electron/notarize automatically when those are present (the
   #                 `notarize` option only exists to force-DISABLE it); with no creds it logs
   #                 "skipped" and produces an unsigned build.
-  # The unsigned CI legs (nightly-build, release-prepare) set CSC_IDENTITY_AUTO_DISCOVERY=false
+  # The unsigned CI legs (ci.yml's `package` matrix, release-prepare) set CSC_IDENTITY_AUTO_DISCOVERY=false
   # so they never sign with a stray keychain identity. hardenedRuntime is required for
   # notarization; gatekeeperAssess stays off (the local spctl assess step is flaky on runners).
   hardenedRuntime: true

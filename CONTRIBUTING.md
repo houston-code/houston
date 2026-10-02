@@ -219,27 +219,19 @@ again on the queue's candidate before it lands:
 | --- | --- |
 | `test` | `license-gate`, notices freshness, lint, typecheck, the full vitest suite, and the standalone-CLI smoke |
 | `linux-sandbox` | the real bubblewrap backend, which the `test` job can only skip |
-| `build` | Linux packaging, so a packaging regression cannot land |
+| `build` | packaging on Linux, macOS (arm64 and x64), and Windows, the macOS and Windows unit suites, the packaged-app e2e, and SBOM conformance |
 | `revert-guard` | that merging would not delete or roll back work already on `main` |
 
-### What runs, and when it does not
+### What runs
 
-`test`, `linux-sandbox`, and `build` are skipped when **every** file a PR touches is on the
-allowlist in `scripts/ci-scope.mjs`: the marketing site under `website/` (but not
-`website/tools/`, which has tests), and standalone prose like this file. Nothing in the app
-reads those paths, so a one-line copy change no longer pays roughly seven minutes for a
-full test run and an Electron package. `revert-guard` always runs; it takes eight seconds
-and it matters most on the long-lived branches that look cheapest to skip.
-
-If any changed path is not on the allowlist, everything runs. That direction is
-deliberate: a job skipped by a workflow condition reports its required check as a **pass**,
-so a wrong answer here would not turn CI red, it would let an untested change merge. New
-top-level files are treated as code until someone adds them to the allowlist, and
-`scripts/ci-scope.test.mjs` pins the paths that must never land on it, such as
-`docs/houston-guide.md`, which is compiled into the agent's prompt.
-
-Pushes to `main` and merge-queue candidates are never scoped. Those are the trees that
-ship.
+Every PR and every merge-queue candidate runs the full set; nothing is skipped by path.
+`build` is a single required check that passes only when every leg of the `package`
+matrix (Linux x64, macOS arm64, macOS x64, Windows x64) and the SBOM conformance gate
+succeeded. Each `package` leg builds the app on its own runner; the macOS arm64 leg also
+runs the full unit suite against the real Seatbelt sandbox, the Windows leg runs the
+sandbox backend suite, and both macOS legs run the packaged-app Playwright e2e. Each leg
+uploads its build as a short-lived Actions artifact, so you can install a PR's app without
+building it.
 
 ### The merge queue
 

@@ -125,7 +125,7 @@ jobs:
           # (electron-builder#5592). max-parallel:1 (above) keeps this order deterministic.
           # macos-15-intel replaces the retired macos-13 image (shut down 2025-12-04); GitHub
           # sunsets x64 macOS after macos-15 (~Fall 2027). Keep the Intel label in lockstep
-          # with nightly-build / release-prepare.
+          # with ci.yml's `package` matrix / release-prepare.
           # sbom_app / sbom_label: the packaged-app dir this leg produces + the platform tag for
           # its deep binary SBOM (scripts/binary-sbom.mjs). Each leg emits its OWN
           # sbom.binary.<label>.* so the hashes match the binaries a user of THAT platform actually
