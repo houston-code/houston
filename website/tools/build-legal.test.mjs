@@ -25,3 +25,17 @@ describe("mdToHtml lists", () => {
     expect(mdToHtml("Text with - a dash.").html).toBe("<p>Text with - a dash.</p>");
   });
 });
+
+describe("mdToHtml inline markup", () => {
+  it("renders inline code instead of leaving the backticks in the page", () => {
+    expect(mdToHtml("See `SECURITY.md` for details.").html).toBe(
+      "<p>See <code>SECURITY.md</code> for details.</p>"
+    );
+  });
+
+  it("links a bare email address", () => {
+    expect(mdToHtml("Or email security@houstoncode.ai.").html).toBe(
+      '<p>Or email <a href="mailto:security@houstoncode.ai">security@houstoncode.ai</a>.</p>'
+    );
+  });
+});
