@@ -93,6 +93,21 @@ test('integrated terminal opens and round-trips through a PTY', async () => {
     await window.getByRole('button', { name: 'Terminal', exact: true }).click()
     await expect(window.locator('.terminal-view .xterm')).toBeVisible()
     await expect(window.locator('.terminal-dock')).toContainText('PTYOK')
+
+    // Close the tab before quitting. A live terminal counts as running work, so
+    // quitting with one open raises the modal "Quit anyway?" confirmation (see
+    // quit-confirm.ts), which nothing here would answer and app.close() would hang.
+    await window.locator('.terminal-tab').first().getByRole('button', { name: /^Close / }).click()
+    await expect(window.locator('.terminal-tab')).toHaveCount(0)
+    // The close's kill is an async IPC invoke. Main handles one renderer's IPC in
+    // order, so once a later invoke resolves the PTY is gone from the registry.
+    // (`window` here is the Playwright page, so reach the preload bridge via globalThis.)
+    const drained = await window.evaluate(() =>
+      (
+        globalThis as unknown as { api: { killTerminal(id: string): Promise<boolean> } }
+      ).api.killTerminal('e2e-drain')
+    )
+    expect(drained).toBe(false)
   } finally {
     await app.close()
     rmSync(userDataDir, { recursive: true, force: true })
