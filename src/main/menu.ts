@@ -15,6 +15,10 @@ import { checkForUpdatesFromMenu } from './updater'
  * former opens the in-app Settings modal over IPC, the latter runs the same feed
  * check as the in-Settings button. Both render on every macOS architecture; there
  * is no arch-specific gating.
+ *
+ * Windows and Linux have no app submenu, so "Check for Updates…" lives under a
+ * Help menu there, the platform convention. Without it the only manual check on
+ * those platforms was buried in Settings.
  */
 
 /** Whether the integrated terminal currently holds focus in the renderer. The
@@ -75,9 +79,17 @@ function macAppMenu(): MenuItemConstructorOptions {
   }
 }
 
-export function buildAppMenu(): void {
-  const isMac = process.platform === 'darwin'
-  const template: MenuItemConstructorOptions[] = [
+/** Help menu for Windows/Linux, which carries the manual update check there. */
+function helpMenu(): MenuItemConstructorOptions {
+  return {
+    role: 'help',
+    submenu: [{ label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() }]
+  }
+}
+
+/** The menu template for a platform. Split out so the per-platform layout is testable. */
+export function appMenuTemplate(isMac: boolean): MenuItemConstructorOptions[] {
+  return [
     ...(isMac ? [macAppMenu()] : []),
     {
       label: 'File',
@@ -99,7 +111,11 @@ export function buildAppMenu(): void {
           ? [{ type: 'separator' as const }, { role: 'front' as const }]
           : [{ role: 'close' as const }])
       ]
-    }
+    },
+    ...(isMac ? [] : [helpMenu()])
   ]
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+export function buildAppMenu(): void {
+  Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform === 'darwin')))
 }

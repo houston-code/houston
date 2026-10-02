@@ -808,4 +808,22 @@ describe('SettingsModal', () => {
       expect(document.documentElement.dataset.theme).toBe('light')
     })
   })
+
+  describe('updates tab', () => {
+    it('has its own tab with the manual check, which reports the result', async () => {
+      const api = installApi()
+      renderModal()
+      fireEvent.click(screen.getByRole('button', { name: 'Updates' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }))
+      await waitFor(() => expect(api.checkForUpdates).toHaveBeenCalled())
+      expect(await screen.findByText('You’re on the latest version.')).toBeInTheDocument()
+    })
+
+    it('is no longer buried under Appearance', () => {
+      installApi()
+      renderModal()
+      fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+      expect(screen.queryByRole('button', { name: 'Check for updates' })).toBeNull()
+    })
+  })
 })
