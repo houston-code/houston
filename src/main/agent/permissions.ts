@@ -513,6 +513,10 @@ function matchOneShell(rules: PermissionRule[], command: string): PermissionRule
  * containing one leaked back into the outer command and matched a narrow `allow`
  * rule (e.g. `echo *`), auto-approving the smuggled command; `<(...)`/`>(...)`
  * were not recognized at all.
+ *
+ * Each segment also has its compound-command scaffolding peeled off (see
+ * {@link stripShellScaffolding}), so `for f in *; do rm -rf ~; done` yields `rm -rf ~`,
+ * not `do rm -rf ~` (which a deny on `rm` missed and a junk allow on `do` approved).
  */
 export function splitShellCommand(command: string): string[] {
   const segments: string[] = []
@@ -582,9 +586,49 @@ function collectShellSegments(command: string, segments: string[], depth: number
     }
   }
   for (const part of outer.split(SHELL_CONTROL_OPERATOR)) {
-    const p = part.trim()
+    const p = stripShellScaffolding(part)
     if (p) segments.push(p)
   }
+}
+
+/** Reserved words / grouping that may precede a command without being one. */
+const SHELL_LEAD_KEYWORDS = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', '{', 'time', 'coproc'])
+/** Words that close a compound command; a segment starting with one runs nothing. */
+const SHELL_CLOSERS = new Set(['done', 'fi', 'esac', '}', ')'])
+/** A function-definition head: `name() {` or `function name [()] {`. */
+const SHELL_FUNC_DEF = /^(?:function\s+[A-Za-z_][\w.:-]*(?:\s*\(\s*\))?|[A-Za-z_][\w.:-]*\s*\(\s*\))\s*/
+
+/**
+ * Strip the compound-command scaffolding around the simple command in one segment:
+ * leading reserved words (`do`, `then`, `if`, `while`, `!`, `time`, …), a subshell
+ * `(` or group `{`, and a function-definition head. Returns '' for a segment that
+ * runs nothing itself: a closer (`done`, `fi`, `}`), a bare `else`, or a `for NAME` /
+ * `select NAME` header (its word list can't execute; substitutions in it were already
+ * pulled out). Bash rejects anything following a closer, so `done rm` never runs `rm`.
+ *
+ * `case` is deliberately NOT handled: its `pattern)` arms sit in front of the commands
+ * and can't be told apart from them without a real parser, so a case segment stays
+ * whole and gated (over-segmenting is the safe direction).
+ */
+function stripShellScaffolding(segment: string): string {
+  let s = segment.trim()
+  for (;;) {
+    const before = s
+    s = s.replace(SHELL_FUNC_DEF, '')
+    // A subshell `(cmd`, but not arithmetic `((…))`, which runs no command.
+    if (s.startsWith('(') && !s.startsWith('((')) s = s.slice(1).trimStart()
+    const word = /^(\S+)(?:\s+|$)/.exec(s)
+    if (word && SHELL_LEAD_KEYWORDS.has(word[1])) {
+      s = s.slice(word[0].length)
+      if (word[1] === 'time') s = s.replace(/^-p(?:\s+|$)/, '')
+    }
+    if (s === before) break
+  }
+  const first = /^\S+/.exec(s)?.[0]
+  if (!first || SHELL_CLOSERS.has(first)) return ''
+  // `for NAME …` / `select NAME …` only; a C-style `for ((…))` header stays gated.
+  if (/^(?:for|select)\s+[A-Za-z_]\w*(?:\s|$)/.test(s)) return ''
+  return s
 }
 
 /** Index of the `)` that closes the `(` at `open` (honoring nesting), or -1 if unbalanced. */
@@ -789,6 +833,15 @@ export function alreadyAllowedAsRule(
 const DEAD_SHELL_FRAGMENT = /^\d+$|[<>]$/
 
 /**
+ * A dead fragment, or pure scaffolding (`done`, `fi`, `for f`) that the splitter now
+ * strips before matching, so the rule can no longer match anything.
+ */
+function isDeadShellPattern(match: string): boolean {
+  const m = match.trim()
+  return DEAD_SHELL_FRAGMENT.test(m) || (m !== '' && stripShellScaffolding(m) === '')
+}
+
+/**
  * Rewrite a permission-rule list into an equivalent-but-tidier one, backing the
  * Settings panel's "Clean up rules" action. It:
  *
@@ -803,7 +856,9 @@ const DEAD_SHELL_FRAGMENT = /^\d+$|[<>]$/
  *   change its verdict.
  * - Drops dead `run_shell` fragments an older splitter minted by cutting `2>&1` at the
  *   `&`: a pattern ending in a dangling redirect (`… 2>`, which no real command matches)
- *   and a bare fd number (`1`, not a command).
+ *   and a bare fd number (`1`, not a command). Also drops rules that are pure shell
+ *   scaffolding (`done`, `fi`, `for f`), and re-generalizes keyword-prefixed ones
+ *   (`do wc` becomes `wc`), since segments are matched with that scaffolding stripped.
  *
  * Every drop removes an allow, so the result is never looser than the input. Deny/ask
  * rules and non-shell rules are preserved verbatim (only exact dedupe applies). Pure
@@ -833,7 +888,7 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
   // file as binary and skip it.
   const key = (r: PermissionRule): string => `${r.action}\u0000${r.tool}\u0000${r.match}`
   for (const r of rules) {
-    if (isShellAllow(r) && DEAD_SHELL_FRAGMENT.test((r.match ?? '').trim())) continue
+    if (isShellAllow(r) && isDeadShellPattern(r.match ?? '')) continue
     let expanded: PermissionRule[] = [r]
     if (isShellAllow(r)) {
       const pats = shellRulePatterns(r.match ?? '')

