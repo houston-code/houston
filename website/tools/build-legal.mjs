@@ -38,6 +38,13 @@ function inline(text) {
   });
   // Bold: **text**
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // Inline code: `text`
+  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+  // Bare email addresses become mailto links.
+  out = out.replace(
+    /(^|[\s(])([\w.+-]+@[\w-]+(?:\.[\w-]+)+\b)/g,
+    '$1<a href="mailto:$2">$2</a>'
+  );
   return out;
 }
 
