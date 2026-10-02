@@ -73,6 +73,7 @@ import { isParallelizableRead, partitionCalls } from './scheduling'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
   abortableSleep,
+  describeProviderError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -1819,7 +1820,7 @@ export async function startRun(
               type: 'retry',
               attempt,
               max: MAX_PROVIDER_RETRIES,
-              message: (err as Error).message
+              message: redact(describeProviderError(err))
             })
         )
         if (!summary) return 'failed'
@@ -2151,14 +2152,14 @@ export async function startRun(
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
             }
-            emit({ type: 'error', message: (e as Error).message })
+            emit({ type: 'error', message: redact(describeProviderError(e)) })
             return
           }
           emit({
             type: 'retry',
             attempt: attempt + 1,
             max: MAX_STREAM_RETRIES,
-            message: (e as Error).message
+            message: redact(describeProviderError(e))
           })
           await abortableSleep(retryDelayMs(e, attempt + 1), abort.signal)
           if (abort.signal.aborted) {

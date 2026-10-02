@@ -29,6 +29,7 @@ import {
   cliSetMcpOAuth
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
+import { trustSystemCertificates } from '../main/system-ca'
 
 /**
  * Standalone CLI entry — the interactive TUI (`-i`) and one-shot headless (`-p`)
@@ -116,6 +117,8 @@ Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 /** Wire the Node-side host capabilities. Must run before any settings read. */
 export function wireCliHost(): void {
   setUserDataDir(resolveUserDataDir())
+  // Before any provider call: a TLS-inspecting network's root CA lives in the OS store.
+  trustSystemCertificates()
   configureHasKey((id) => cliHasKey(id))
   // In-session key writes (the TUI's /login flow) land in cli-credentials.json,
   // the same store `houston providers set-key` uses.
