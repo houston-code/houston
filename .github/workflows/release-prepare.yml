@@ -5,9 +5,8 @@ name: Release - prepare
 # carries a generated, user-facing CHANGELOG section. You review/sharpen the notes in that
 # PR and merge to approve. After it merges, run "Release - publish" to build + ship.
 #
-# This is the only place the heavy macOS/Windows packaging matrix runs outside of release
-# (per-merge CI builds Linux only), so packaging regressions on those platforms surface
-# here, before a release is cut.
+# Every PR already ran this matrix (ci.yml's `package`); `verify` re-runs it on the exact
+# tree being released, so a release is never cut from main without a green run of its own.
 
 on:
   workflow_dispatch:
@@ -56,11 +55,9 @@ jobs:
           - os: macos-14
             dist: dist:mac
           # macos-15-intel is GitHub's Intel (x64) runner — the only place the x64 mac app can
-          # be built natively (node-pty + per-arch rg/ast-grep don't cross-compile). Gating the
-          # release on it proves x64 packaging works. x64 mac runs only here and in the publish
-          # workflow, never on per-PR CI, to keep macOS minutes off the merge path. Replaces the
-          # retired macos-13 image (shut down 2025-12-04); GitHub sunsets x64 macOS after
-          # macos-15 (~Fall 2027). Keep in lockstep with nightly-build / release-publish.
+          # be built natively (node-pty + per-arch rg/ast-grep don't cross-compile). GitHub
+          # sunsets x64 macOS after macos-15 (~Fall 2027). Keep in lockstep with ci.yml's
+          # `package` matrix / release-publish.
           - os: macos-15-intel
             dist: dist:mac:x64
           - os: windows-latest
@@ -76,20 +73,18 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       # Full unit suite on every non-Windows leg (the macOS legs exercise the real Seatbelt
-      # backend). Windows runs only the execution-backend suite — the broader suite has
-      # macOS-shaped tests that don't run on Windows (this is the coverage the retired per-PR
-      # `test-windows` job provided).
+      # backend). Windows runs only the execution-backend suite: the broader suite has
+      # macOS-shaped tests that don't run on Windows.
       - if: runner.os != 'Windows'
         run: npm test
       - if: runner.os == 'Windows'
         run: npx vitest run src/main/sandbox
-      # `--publish never` (like nightly-build) — this is a pre-release GATE, not a publish.
+      # `--publish never` (like ci.yml) — this is a pre-release GATE, not a publish.
       # Without it, electron-builder tries to resolve the `github` publisher from
       # electron-builder.yml and fails demanding GH_TOKEN, which is intentionally absent here.
       - run: npm run ${{ matrix.dist }} -- --publish never
-      # The packaged-app e2e (built .app via Playwright) runs at release time — it moved
-      # off the per-merge path to save macOS minutes, so this is where it gates a release.
-      # Runs on BOTH macOS legs (arm64 + Intel) so the x64 packaged app is gated too.
+      # The packaged-app e2e (built .app via Playwright), on BOTH macOS legs (arm64 + Intel)
+      # so the x64 packaged app is gated too.
       - if: startsWith(matrix.os, 'macos')
         run: npm run test:e2e
 

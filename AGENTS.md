@@ -141,10 +141,9 @@ provide. If a change alters one, update them in the same PR.
 
 ## User-facing text
 
-`docs/houston-guide.md` is deliberately excluded from the doc-only CI carve-out in
-`scripts/ci-scope.mjs`, because it is compiled into the agent's prompt and pinned by the
-goldens: a copy edit there is a behavior change and runs the full suite. Renderer and TUI
-strings are ordinary source. Keep both in sync with the feature in the same PR.
+`docs/houston-guide.md` is compiled into the agent's prompt and pinned by the goldens: a
+copy edit there is a behavior change, not a doc tweak. Renderer and TUI strings are
+ordinary source. Keep both in sync with the feature in the same PR.
 
 ## Avoiding silent-clobber merges
 
