@@ -8,7 +8,7 @@ type Available = Extract<UpdateCheckResult, { status: 'available' }>
  * platform:
  *
  *  - **available** — a newer version exists. On unsigned builds (Windows/Linux) this
- *    is the whole story: a manual "Download" link to the Releases page. On signed
+ *    is the whole story: a manual "Download" link to the website. On signed
  *    macOS (`update.autoInstall`) the download starts automatically, so the banner
  *    shows "Downloading…" and moves on.
  *  - **downloading** — the signed-macOS auto-download is in flight; shows a progress

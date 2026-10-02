@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkForUpdate, shortenHeadline, updateCheckEnabled, CHECK_INTERVAL_MS, RELEASES_URL } from './update-check'
+import { checkForUpdate, shortenHeadline, updateCheckEnabled, CHECK_INTERVAL_MS } from './update-check'
+import { DOWNLOAD_URL } from '@shared/update'
 
 const CURRENT = '0.2.141'
 
@@ -40,7 +41,7 @@ describe('checkForUpdate', () => {
       env: {}
     })
     expect(got).toMatchObject({ latest: '0.3.0', headline: 'Faster startup' })
-    expect(got?.url).toContain('releases')
+    expect(got?.url).toBe(DOWNLOAD_URL)
   })
 
   it('skips the Download table and takes the headline from the changelog', async () => {
@@ -162,7 +163,7 @@ describe('checkForUpdate — hostile feed', () => {
       path: tmpCache(),
       env: {}
     })
-    expect(got?.url).toBe(RELEASES_URL)
+    expect(got?.url).toBe(DOWNLOAD_URL)
   })
 
   it('ignores a version the feed cannot justify', async () => {
@@ -188,7 +189,7 @@ describe('checkForUpdate — hostile feed', () => {
     )
     const got = await checkForUpdate(CURRENT, { fetch: feed({}), path, env: {}, now: () => 1000 })
     expect(got?.headline).not.toContain('\x1b')
-    expect(got?.url).toBe(RELEASES_URL) // the link is a constant, never from disk
+    expect(got?.url).toBe(DOWNLOAD_URL) // the link is a constant, never from disk
   })
 
   it('ignores non-string cache fields', async () => {

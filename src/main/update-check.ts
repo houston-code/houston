@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { isNewerVersion } from '@shared/version'
+import { DOWNLOAD_URL } from '@shared/update'
 import { stripControlChars } from './tui-wrap'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
@@ -21,7 +22,6 @@ import { log } from './logger'
 
 /** The public releases feed (source repo is private; distribution is not). */
 const LATEST_RELEASE_API = 'https://api.github.com/repos/houston-code/houston/releases/latest'
-export const RELEASES_URL = 'https://github.com/houston-code/houston/releases'
 
 /** How long a check result is reused before asking again. */
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -166,7 +166,7 @@ export async function checkForUpdate(
   if (cached && now() - cached.checkedAt < CHECK_INTERVAL_MS) {
     // Reuse the day's answer rather than asking again on every launch.
     return cached.latest && isNewerVersion(cached.latest, currentVersion)
-      ? { latest: cached.latest, url: RELEASES_URL, ...(cached.headline ? { headline: cached.headline } : {}) }
+      ? { latest: cached.latest, url: DOWNLOAD_URL, ...(cached.headline ? { headline: cached.headline } : {}) }
       : null
   }
 
@@ -191,7 +191,7 @@ export async function checkForUpdate(
   if (!release || !isNewerVersion(release.latest, currentVersion)) return null
   return {
     latest: release.latest,
-    url: RELEASES_URL,
+    url: DOWNLOAD_URL,
     ...(release.headline ? { headline: release.headline } : {})
   }
 }
