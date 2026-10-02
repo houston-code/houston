@@ -30,6 +30,14 @@ on:
 permissions:
   contents: read
 
+# Dedupe superseded runs: a `synchronize` or `labeled` event while an earlier run on the
+# same PR is still going cancels that earlier run. Merge-queue candidates and pushes to
+# main have no PR number, so they fall back to run_id (a unique group per run) and are
+# never cancelled by activity elsewhere.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   # The e2e suite drives Electron via Playwright's `_electron` launcher, never a
   # bundled browser, so skip the large browser download `@playwright/test`'s
@@ -37,80 +45,13 @@ env:
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
 jobs:
-  # Decide whether this PR can possibly affect the app. A change confined to the
-  # marketing site or standalone prose is covered by none of the heavy jobs — eslint
-  # ignores `website/**`, no tsconfig includes it, nothing packages it — yet it was
-  # paying ~7 minutes of wall clock for `test` plus `build`, and paying it again on
-  # every rebase.
-  #
-  # Read scripts/ci-scope.mjs before widening the allowlist. A job skipped by `if:`
-  # reports its required check as a PASS, so a wrong answer here does not turn CI red,
-  # it lets an untested change merge. The rule is an allowlist that must match EVERY
-  # changed path, and anything unrecognised means "run everything".
-  #
-  # Only `pull_request` is scoped. A push to main and a merge-queue candidate always run
-  # the full suite: those are the trees that ship, and the few minutes are worth it.
-  scope:
-    # Dedupe superseded runs like the jobs below, so a rapid second push does not leave a
-    # full-history clone running for a run whose dependents were already cancelled.
-    concurrency:
-      group: ci-scope-${{ github.event.pull_request.number || github.run_id }}
-      cancel-in-progress: true
-    timeout-minutes: 5
-    # NEVER give this job an `if:`. Its consumers use `needs: scope`, and a job whose
-    # dependency is skipped is skipped too — which for a required check reports a PASS.
-    # Gating this job to pull requests would therefore silently stop running `test` and
-    # `linux-sandbox` on main and on merge-queue candidates, while reporting them green.
-    runs-on: ubuntu-24.04
-    outputs:
-      # Empty on non-PR events (the step below is skipped), and every consumer tests
-      # `!= 'true'`, so anything other than a definite "inert" runs the full suite.
-      inert: ${{ steps.scope.outputs.inert }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        # Only a pull request is ever scoped, so main and queue candidates skip the clone
-        # rather than paying full history to compute an answer nothing reads. The JOB
-        # still runs on those events (see above) — only this step is conditional.
-        if: github.event_name == 'pull_request'
-        with:
-          # Needed for a real merge-base. A depth-1 checkout cannot compute `base...HEAD`,
-          # and the script treats a failed diff as "run everything" — correct, but it
-          # would silently never scope anything.
-          fetch-depth: 0
-      - id: scope
-        if: github.event_name == 'pull_request'
-        env:
-          BASE: ${{ github.base_ref }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin "$BASE"
-          node scripts/ci-scope.mjs "origin/$BASE"
-
   test:
-    # Dedupe superseded runs: a `labeled` or `synchronize` event while an earlier run
-    # is still going cancels that earlier run instead of both billing in parallel.
-    # Keyed per-PR. Non-PR runs (push:[main]) fall back to run_id — a unique group per
-    # run — so they never cancel one another, and a post-merge run on main is never
-    # torn down by activity on some other PR.
-    concurrency:
-      group: ci-test-${{ github.event.pull_request.number || github.run_id }}
-      cancel-in-progress: true
     timeout-minutes: 15
-    needs: scope
-    # Skipped only when every changed path is on the allowlist in scripts/ci-scope.mjs.
-    # `!cancelled()` rather than a bare condition: if `scope` FAILS, this job would
-    # otherwise be skipped for an unsatisfied `needs`, and a skipped required check
-    # reports a PASS — a broken scope job would silently mark an untested PR mergeable.
-    # With this guard a failed scope leaves `inert` empty, which runs the full suite.
-    if: ${{ !cancelled() && needs.scope.outputs.inert != 'true' }}
-    # Per-PR unit gate — Linux only (×1). lint + typecheck + the full vitest suite. The
-    # conformance suite (src/main/sandbox/conformance.test.ts) runs here against the
-    # unconfined backend (no bubblewrap on this runner, so confinement-only assertions
-    # skip); the REAL Linux bubblewrap exercise is the dedicated `linux-sandbox` job below.
-    # The macOS leg (real Seatbelt backend) and the Windows execution-backend suite moved
-    # OFF the per-PR path to nightly-build.yml + release-prepare.yml — they bill macOS ×10 /
-    # Windows ×2 and shouldn't sit on every push. Trade-off: a macOS- or Windows-specific
-    # unit regression surfaces nightly / at release, not on the PR that introduced it.
+    # Linux unit gate: lint + typecheck + the full vitest suite. The conformance suite
+    # (src/main/sandbox/conformance.test.ts) runs here against the unconfined backend (no
+    # bubblewrap on this runner, so confinement-only assertions skip); the REAL bubblewrap
+    # exercise is `linux-sandbox` below, and the macOS (Seatbelt) and Windows backends run
+    # in the `package` matrix.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -125,13 +66,8 @@ jobs:
       # and scripts/license-gate-exceptions.json.
       - run: npm run license-gate
       # Attribution gate, alongside the license gate above: both read the installed
-      # dependency closure, so this reuses the `npm ci` already done. Nightly + the
-      # release workflows run the same check, but only catching drift there means a
-      # dep bump merges green and reddens the NEXT nightly instead of its own PR —
-      # which is exactly what happened when @anthropic-ai/sdk 0.111.0 landed. Run
-      # unconditionally rather than gated on a package-lock.json diff: the generator
-      # takes ~1s, while detecting whether the lockfile changed would need the base
-      # ref fetched (fetch-depth: 0) and cost more than the check it guards.
+      # dependency closure, so this reuses the `npm ci` already done. Run unconditionally
+      # rather than gated on a package-lock.json diff: the generator takes ~1s.
       - name: Check THIRD-PARTY-NOTICES.md is current
         run: |
           npm run notices
@@ -187,16 +123,7 @@ jobs:
   # hard-probes that confinement actually works before running the conformance suite —
   # a failed probe reds the job instead of letting the suite silently skip (false green).
   linux-sandbox:
-    # Dedupe opened+labeled / superseded synchronize runs per-PR (see `test`).
-    # Distinct group prefix so it cancels only its own stale runs, never
-    # `test`/`build`; run_id fallback keeps push:[main] runs unique.
-    concurrency:
-      group: ci-linux-sandbox-${{ github.event.pull_request.number || github.run_id }}
-      cancel-in-progress: true
     timeout-minutes: 15
-    needs: scope
-    # See `test`, including why this is `!cancelled()` and not a bare condition.
-    if: ${{ !cancelled() && needs.scope.outputs.inert != 'true' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -220,42 +147,58 @@ jobs:
       # active, so even a subtle probe/selection mismatch fails the job.
       - run: HOUSTON_REQUIRE_SANDBOX=1 npx vitest run src/main/sandbox/conformance.test.ts
 
-  # NOTE: the Windows execution-backend suite (`npx vitest run src/main/sandbox`) moved off
-  # the per-PR path — it now runs in nightly-build.yml and release-prepare.yml (Windows bills
-  # ×2). Same for the macOS Seatbelt leg of `test`. Per-PR CI keeps the real LINUX sandbox
-  # exercise (`linux-sandbox` below, ×1) since it's cheap.
-
-  # Per-PR packaging smoke — Linux x64 ONLY (×1 Actions-minute multiplier). Proves the
-  # afterPack vendored-binary copy + asar packaging still succeed on every PR without
-  # burning macOS (×10) or Windows (×2) minutes. The FULL signed macOS/Windows/Linux
-  # matrix is built and published at release time by release-publish.yml, and the heavy
-  # matrix also runs in release-prepare.yml before a release is cut — so macOS/Windows
-  # packaging regressions surface there. This job is a required status check, so a PR that
-  # breaks Linux packaging can't be merged. Cross-compilation is impossible (native
-  # node-pty + per-(os,arch) rg/ast-grep binaries), which is why a single runner can only
-  # validate its own platform. Trade-off: the macOS packaged-app e2e moved to release time.
-  build:
-    # Dedupe opened+labeled / superseded synchronize runs per-PR (see `test`).
-    # Distinct group prefix so it cancels only its own stale runs; run_id fallback
-    # keeps push:[main] runs unique. (build is pull_request-only, so run_id is just
-    # a safety net — no push run ever reaches this job.)
-    concurrency:
-      group: ci-build-${{ github.event.pull_request.number || github.run_id }}
-      cancel-in-progress: true
-    timeout-minutes: 25
-    # `needs: test` also carries the scoping: when `test` is skipped as inert, this job
-    # is skipped with it, so packaging is not rebuilt for a website copy change.
-    needs: test
-    # Runs on every PR AND on every merge-queue candidate: packaging is a real check, and
-    # a candidate that cannot be packaged must not reach main. Skipped on push:[main]
-    # because the packaged artifacts for main come from nightly-build.yml instead.
+  # Package the app on every platform it ships on, each on its own runner (cross-compilation
+  # is impossible: native node-pty + per-(os,arch) rg/ast-grep binaries), and run the
+  # platform-specific suites there:
+  #   - macOS arm64 runs the full unit suite against the real Seatbelt sandbox backend.
+  #   - Windows runs the execution-backend suite (scoped to src/main/sandbox: the broader
+  #     suite has macOS-shaped tests that don't run on Windows).
+  #   - Both macOS legs run the packaged-app e2e (Playwright driving the built .app), the
+  #     only check that the asar archive, the afterPack vendored binaries, and the
+  #     main/preload/renderer bridge work together in the real artifact.
+  # Same matrix as release-prepare.yml / release-publish.yml, minus signing and publishing.
+  package:
+    name: package (${{ matrix.target }})
+    timeout-minutes: 45
+    # Not on push:[main]. The merge-queue candidate already ran this on the exact tree
+    # that landed, so a second macOS/Windows pass after the merge would only repeat it.
     if: github.event_name != 'push'
-    # Pinned to ubuntu-22.04 (NOT ubuntu-latest): the native node-pty addon is compiled here,
-    # so the runner's glibc sets the shipped app's minimum glibc. 22.04 = glibc 2.35, our
-    # documented Linux floor (README). ubuntu-latest tracks the newest image (24.04 → glibc
-    # 2.39), which would silently raise that floor. Keep this in lockstep with the Linux legs
-    # in nightly-build.yml / release-prepare.yml / release-publish.yml so smoke == shipped.
-    runs-on: ubuntu-22.04
+    # windows-latest defaults `run:` steps to PowerShell; force bash for the whole matrix so a
+    # bash step can't silently behave differently on the Windows leg.
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Validates packaging, not distribution: never sign or notarize here. No signing
+      # secrets are in scope, and this stops electron-builder probing the keychain, so a
+      # runner that happens to carry a signing identity can't change the output. Real
+      # signing happens only in release-publish.yml.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned to ubuntu-22.04 (NOT ubuntu-latest): the native node-pty addon is compiled
+          # here, so the runner's glibc sets the shipped app's minimum glibc. 22.04 = glibc
+          # 2.35, our documented Linux floor (README). Keep in lockstep with the Linux legs in
+          # release-prepare.yml / release-publish.yml so CI == shipped.
+          - target: linux-x64
+            os: ubuntu-22.04
+            dist: dist:linux
+          - target: mac-arm64
+            os: macos-14
+            dist: dist:mac
+          # macos-15-intel is GitHub's Intel (x64) runner, the only place the x64 mac app
+          # builds natively. GitHub sunsets x64 macOS runners after macos-15 (~Fall 2027), at
+          # which point Intel needs a universal-on-arm64 build or gets dropped. Keep this label
+          # in lockstep with the release workflows' Intel legs.
+          - target: mac-x64
+            os: macos-15-intel
+            dist: dist:mac:x64
+          - target: win-x64
+            os: windows-latest
+            dist: dist:win
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -263,18 +206,70 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
-      # Packaging smoke ONLY — prove `dist:linux` (electron-builder + the afterPack vendored
-      # binaries) succeeds. No artifact is uploaded per PR: it was inspection-only and nothing
-      # consumes it. `npm run dist:linux` exits non-zero on any packaging failure, so the job
-      # still gates merge. Inspectable build outputs come from nightly-build.yml (uploaded as
-      # artifacts) and release-publish.yml (published as a GitHub Release) instead.
-      #
+      - if: matrix.target == 'mac-arm64'
+        run: npm test
+      - if: runner.os == 'Windows'
+        run: npx vitest run src/main/sandbox
       # `--publish never` is load-bearing on merge_group. Without an explicit policy,
       # electron-builder publishes implicitly whenever it detects CI and the run is not a
       # PR, and it recognises a PR only by GITHUB_BASE_REF, which a merge-queue candidate
       # does not set. It then tries to create a GitHub release, fails for want of GH_TOKEN
       # (ci.yml holds no credential, by design), and every queue entry is ejected.
-      - run: npm run dist:linux -- --publish never
+      - run: npm run ${{ matrix.dist }} -- --publish never
+      - if: runner.os == 'macOS'
+        run: npm run test:e2e
+      # Playwright's error context and traces, so a red e2e can be diagnosed from the run.
+      - if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-results-${{ matrix.target }}
+          retention-days: 7
+          path: test-results/
+          if-no-files-found: ignore
+      # Inspection-only build of this PR (never a published feed: the updater reads
+      # Releases). Lets a reviewer install the PR's app without building it locally.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: houston-${{ matrix.target }}
+          retention-days: 3
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*-setup.exe
+            release/*.AppImage
+            release/*.deb
+            release/latest*.yml
+          if-no-files-found: error
+
+  # SBOM conformance (NTIA / CISA FSCT3 / CycloneDX / Google-EO) on every PR, so a
+  # dependency change that drops the shipped SBOMs below the bar fails the PR that made it
+  # rather than the next release.
+  sbom-conformance:
+    if: github.event_name != 'push'
+    uses: ./.github/workflows/sbom-conformance.yml
+
+  # The required `build` check: one stable name over the whole platform matrix and the SBOM
+  # gate, so adding or renaming a matrix leg never needs a ruleset change.
+  #
+  # `always()` is load-bearing. A job whose dependency failed is SKIPPED by default, and a
+  # skipped required check reports a PASS, so without it a red macOS leg would let the PR
+  # merge. Here the job always runs and fails unless every dependency actually succeeded
+  # (a skipped or cancelled dependency fails it too).
+  build:
+    needs: [package, sbom-conformance]
+    if: ${{ always() && github.event_name != 'push' }}
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every platform leg and the SBOM gate to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "dependency results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "::error::a package leg or the SBOM gate did not succeed ($r)"; exit 1; }
+          done
+
   # Silent-clobber guard. A PR branched off an out-of-date main can, when merged,
   # delete files and revert code that landed while it was open — and CI does not
   # notice, because the reverted features' tests are removed in the same commit. That
@@ -300,9 +295,6 @@ jobs:
     # no way to acknowledge and wedge the queue. Running it on the PR loses nothing:
     # `refs/pull/N/merge` is recomputed against current main, so the guard already sees
     # the real before/after regardless of how stale the branch is.
-    #
-    # NOT scoped by `scope` either. It is 8 seconds and it is the one check that is more
-    # valuable, not less, on a branch that has been open long enough to go stale.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:

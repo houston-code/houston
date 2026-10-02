@@ -1,8 +1,8 @@
 name: Alert on failure
 
 # Reusable alert: file one GitHub issue per scheduled-workflow outage, assigned to the repo
-# owner, and close it when that workflow next goes green. Called from nightly-build, eval-live,
-# and provider-canary.
+# owner, and close it when that workflow next goes green. Called from the scheduled workflows
+# (eval-live, provider-canary, native-vuln-scan, dependabot-digest).
 #
 # WHY THIS EXISTS AT ALL — a scheduled run notifies nobody reliably. GitHub sends Actions
 # failure notifications to the run's *triggering actor*, and for a `schedule` event that actor
@@ -11,10 +11,7 @@ name: Alert on failure
 # failure mail is trivially filtered or muted. Assignment does not have any of those
 # weaknesses, which is why it stays the primary signal.
 #
-# This is not theoretical: the nightly's macOS packaged-app e2e has gone red for days at a
-# time with nobody told. Since
-# per-PR CI packages Linux only, the macOS packaged-app e2e runs *here and nowhere else* — so a
-# silent nightly means that whole surface is unguarded until someone happens to look.
+# This is not theoretical: a scheduled run once stayed red for four days with nobody told.
 #
 # Assignment is what makes this land: GitHub always notifies an assignee, regardless of the
 # repo's watch settings. One open issue per workflow, reused for the length of an outage, so a
@@ -24,7 +21,7 @@ on:
   workflow_call:
     inputs:
       workflow:
-        description: Display name of the calling workflow, e.g. "Nightly build". Keys the issue.
+        description: Display name of the calling workflow, e.g. "Provider canary". Keys the issue.
         required: true
         type: string
       failed:

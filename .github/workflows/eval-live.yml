@@ -25,9 +25,9 @@ name: Task evals (live)
 #
 # THIS WORKFLOW NEVER PUBLISHES ANYTHING: `permissions: contents: read`, no build/dist/release step,
 # and the only secret in scope is the model API key (step-scoped, never at job level). It is a
-# separate file from nightly-build.yml for the same reason provider-canary.yml is — that workflow's
-# packaging matrix guarantees "no live API credential in scope", and folding an eval leg into it
-# would erode the posture.
+# separate file from ci.yml for the same reason provider-canary.yml is: ci.yml's packaging
+# matrix guarantees "no live API credential in scope", and folding an eval leg into it would
+# erode the posture.
 #
 # SHELL POSTURE. The eval driver auto-approves every tool call, including an unsandboxed shell (the
 # ubuntu runner has no Seatbelt and may have no bubblewrap, and `full-auto` deliberately cannot
@@ -37,8 +37,8 @@ name: Task evals (live)
 
 on:
   schedule:
-    # Mondays 09:00 UTC — an hour after provider-canary.yml (08:00) and two after nightly-build.yml
-    # (07:00), so they don't contend on the day all three run. Cron has no timezone; this is fixed UTC.
+    # Mondays 09:00 UTC, an hour after provider-canary.yml (08:00), so the two don't contend.
+    # Cron has no timezone; this is fixed UTC.
     #
     # WEEKLY, NOT NIGHTLY. Every task in the recorded baselines scores 1.0, so this run only reds when
     # a task fails 2 of 3 attempts: a smoke test for a badly broken agent, not a drift detector. That

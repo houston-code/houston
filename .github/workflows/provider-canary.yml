@@ -37,14 +37,12 @@ name: Provider canary
 #
 # THIS WORKFLOW NEVER PUBLISHES ANYTHING: `permissions: contents: read`, no build/dist/release
 # step, and each provider key is scoped to only the steps that need it (never at job or workflow
-# level). It is deliberately a SEPARATE file from nightly-build.yml, which guarantees "no publish
-# credential in scope" for the packaging matrix — putting live API keys in that job would erode
-# that posture.
+# level). It is deliberately a SEPARATE file from ci.yml, whose packaging matrix guarantees "no
+# credential in scope". Putting live API keys in that job would erode that posture.
 
 on:
   schedule:
-    # 08:00 UTC daily — one hour after nightly-build.yml (07:00) so the two nightlies don't start
-    # together. Cron has no timezone; this is a fixed UTC wall-clock time.
+    # 08:00 UTC daily. Cron has no timezone; this is a fixed UTC wall-clock time.
     - cron: '0 8 * * *'
   # Allow an on-demand run (e.g. right after a provider announces a model or param change) without
   # waiting for the nightly slot.
