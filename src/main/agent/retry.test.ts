@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   abortableSleep,
   backoffDelayMs,
+  describeProviderError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -305,5 +306,51 @@ describe('withProviderRetry', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('describeProviderError', () => {
+  /** The shape the Anthropic/OpenAI SDKs throw: APIConnectionError -> TypeError -> node error. */
+  const connectionError = (root: unknown): Error =>
+    Object.assign(new Error('Connection error.'), {
+      cause: Object.assign(new TypeError('fetch failed'), { cause: root })
+    })
+
+  it('appends the root TLS cause hidden behind a bare "Connection error."', () => {
+    const tlsErr = Object.assign(new Error('unable to get local issuer certificate'), {
+      code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'
+    })
+    expect(describeProviderError(connectionError(tlsErr))).toBe(
+      'Connection error. (unable to get local issuer certificate, UNABLE_TO_GET_ISSUER_CERT_LOCALLY)'
+    )
+  })
+
+  it('does not repeat a code the cause message already carries', () => {
+    const dns = Object.assign(new Error('getaddrinfo ENOTFOUND api.anthropic.com'), { code: 'ENOTFOUND' })
+    expect(describeProviderError(connectionError(dns))).toBe(
+      'Connection error. (getaddrinfo ENOTFOUND api.anthropic.com)'
+    )
+  })
+
+  it('leaves an error with no cause, or an uninformative one, unchanged', () => {
+    expect(describeProviderError(new Error('429 rate limited'))).toBe('429 rate limited')
+    expect(describeProviderError(Object.assign(new Error('Connection error.'), { cause: new TypeError('fetch failed') }))).toBe(
+      'Connection error.'
+    )
+    expect(describeProviderError('plain string')).toBe('plain string')
+  })
+
+  it('survives a cyclic cause chain and strips control characters', () => {
+    const a: { message: string; cause?: unknown } = { message: 'boom\u001b[31m' }
+    a.cause = a
+    expect(describeProviderError(Object.assign(new Error('Connection error.'), { cause: a }))).toBe(
+      'Connection error. (boom [31m)'
+    )
+  })
+
+  it('caps a long cause', () => {
+    const out = describeProviderError(connectionError(new Error('x'.repeat(500))))
+    expect(out.length).toBeLessThan(240)
+    expect(out.endsWith('\u2026)')).toBe(true)
   })
 })

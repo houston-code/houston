@@ -24,6 +24,7 @@ import { parseHeadlessArgs } from './headless'
 import { parseTuiArgs } from './tui'
 import { runTuiEntry, runHeadlessEntry } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
+import { trustSystemCertificates } from './system-ca'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
 // don't force-exit: in a GUI app a stray async error shouldn't kill the window.
@@ -57,6 +58,12 @@ if (process.platform === 'darwin') {
 // Electron's per-user profile dir. They read it via the userData seam instead of
 // importing electron, so the standalone CLI can wire the same path Electron-free.
 setUserDataDir(app.getPath('userData'))
+
+// Verify outbound TLS against the OS certificate store too, before any provider call.
+// Without it, a network that re-signs TLS with a root CA installed in the Windows store
+// or macOS keychain (corporate proxies, endpoint security) fails every API request with
+// a bare "Connection error." See system-ca.ts.
+trustSystemCertificates()
 
 // Bind the agent engine to its Electron-backed host capabilities before any run
 // can start (all three clients — GUI, headless, TUI — boot through here). The
