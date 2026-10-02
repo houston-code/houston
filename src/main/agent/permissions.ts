@@ -697,6 +697,31 @@ const COMMAND_WRAPPERS = new Set([
   'watch'
 ])
 
+/** Programs that just slice their input, collapsed by {@link isCountOnlyPager}. */
+const PAGERS = new Set(['head', 'tail'])
+
+/** A head/tail count: `-30`, `+5`, `-n30`, `-c+5`, `--lines=30`, with optional size suffix. */
+const PAGER_COUNT_FLAG = /^(?:[-+]\d+|-[nc][+-]?\d+[a-z]*|--(?:lines|bytes)=[+-]?\d+[a-z]*)$/i
+const PAGER_COUNT_VALUE = /^[+-]?\d+[a-z]*$/i
+/** head/tail flags that take no value and touch no file. */
+const PAGER_BARE_FLAGS = new Set(['-q', '-v', '--quiet', '--silent', '--verbose'])
+
+/** Whether `tokens` is `head`/`tail` with only count/quiet flags and no file operand. */
+function isCountOnlyPager(tokens: string[]): boolean {
+  if (!PAGERS.has(tokens[0])) return false
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i]
+    if (PAGER_COUNT_FLAG.test(t) || PAGER_BARE_FLAGS.has(t)) continue
+    // `-n 30` / `--lines 30`: the flag's value is the next token.
+    if (['-n', '-c', '--lines', '--bytes'].includes(t) && PAGER_COUNT_VALUE.test(tokens[i + 1] ?? '')) {
+      i += 1
+      continue
+    }
+    return false // a file operand, redirect, or flag we don't model: keep exact
+  }
+  return true
+}
+
 /**
  * The permission-rule pattern(s) to persist when the user picks "Always allow" on a
  * `run_shell` call. Storing the exact command bakes in one-off arguments (and the
@@ -718,6 +743,11 @@ const COMMAND_WRAPPERS = new Set([
  *   so raw operations like `cat x`, `rm -rf y`, or `sudo rm -rf z` are NOT silently
  *   broadened to `cat`/`rm`/`sudo rm`.
  *
+ * - A `head`/`tail` whose arguments are only line/byte counts (`tail -60`, `head -c 4000`,
+ *   `head -n 30`) collapses to the bare program: it's slicing piped output, and keeping
+ *   the count mints a new rule per number. One with a file operand stays exact, so a
+ *   rule for paging stdin is never broadened into one naming a file.
+ *
  * Used only for the ALLOW case; a deny is always stored exactly (a broadened deny is
  * dangerous). Never returns an empty list.
  */
@@ -729,7 +759,9 @@ export function shellRulePatterns(command: string): string[] {
     const prog = tokens[0]
     if (!prog || CWD_BUILTINS.has(prog)) continue
     const verb = tokens[1]
-    if (!ENV_ASSIGN.test(prog) && !COMMAND_WRAPPERS.has(prog) && verb && SUBCOMMAND_VERB.test(verb)) {
+    if (isCountOnlyPager(tokens)) {
+      patterns.add(prog)
+    } else if (!ENV_ASSIGN.test(prog) && !COMMAND_WRAPPERS.has(prog) && verb && SUBCOMMAND_VERB.test(verb)) {
       patterns.add(`${prog} ${verb}`)
     } else {
       patterns.add(norm)

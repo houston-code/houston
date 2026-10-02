@@ -514,6 +514,20 @@ describe('shellRulePatterns', () => {
     expect(pats).toEqual(['python manage.py', 'sleep 2'])
   })
 
+  it('collapses count-only head/tail pagers to the bare program', () => {
+    for (const cmd of ['tail -60', 'head -30', 'head -c 4000', 'head -n 30', 'head -n30', 'tail -n +5', 'tail +5', 'tail --lines=20', 'head -q -c 1k', 'head']) {
+      expect(shellRulePatterns(cmd)).toEqual([cmd.split(' ')[0]])
+    }
+    expect(shellRulePatterns('npm run build 2>&1 | tail -60')).toEqual(['npm run', 'tail'])
+  })
+
+  it('keeps head/tail exact when it names a file or uses an unmodelled flag', () => {
+    expect(shellRulePatterns('head -30 /etc/passwd')).toEqual(['head -30 /etc/passwd'])
+    expect(shellRulePatterns('tail -f app.log')).toEqual(['tail -f app.log'])
+    expect(shellRulePatterns('head -n')).toEqual(['head -n'])
+    expect(shellRulePatterns('head -n abc')).toEqual(['head -n abc'])
+  })
+
   it('drops the `cd` prelude and generalizes to a <program> <verb> prefix', () => {
     expect(shellRulePatterns('cd /Users/me/repo && npm install lodash')).toEqual(['npm install'])
     expect(shellRulePatterns('cd /work/project && git status')).toEqual(['git status'])
@@ -681,6 +695,22 @@ describe('cleanupPermissionRules', () => {
   it('does not drop a prefix allow that only a narrower glob covers', () => {
     // `ls -l?` matches `ls -la` but not `ls -la dir`, so it does not cover the prefix rule.
     const rules: PermissionRule[] = [allow('run_shell', 'ls -la'), allow('run_shell', 'ls -l?')]
+    expect(cleanupPermissionRules(rules)).toEqual(rules)
+  })
+
+  it('migrates saved per-count head/tail rules onto one rule each', () => {
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'head -30'),
+      allow('run_shell', 'tail -60'),
+      allow('run_shell', 'head -c 4000'),
+      allow('run_shell', 'head -30 notes.txt')
+    ]
+    // `head -30 notes.txt` is covered by the generalized `head`, so it goes too.
+    expect(cleanupPermissionRules(rules)).toEqual([allow('run_shell', 'head'), allow('run_shell', 'tail')])
+  })
+
+  it('keeps a head rule exact when generalizing would shadow a deny', () => {
+    const rules: PermissionRule[] = [allow('run_shell', 'head -30'), deny('run_shell', 'head * /etc/*')]
     expect(cleanupPermissionRules(rules)).toEqual(rules)
   })
 
