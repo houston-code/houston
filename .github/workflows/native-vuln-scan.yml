@@ -23,7 +23,7 @@ on:
   workflow_call:
   workflow_dispatch:
   schedule:
-    # Daily, an hour before the nightly build.
+    # Daily, 06:00 UTC.
     - cron: '0 6 * * *'
 
 permissions:

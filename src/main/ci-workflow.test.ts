@@ -78,53 +78,54 @@ describe('CI holds no push credentials', () => {
   })
 })
 
-describe('CI scopes work to what a change can affect', () => {
-  it('gates the heavy jobs on the scope job, never on a raw path filter', () => {
-    // A workflow-level `paths:` filter would leave a required check permanently
-    // "Expected" and block the PR forever. Gating a job on a computed output keeps the
-    // check reporting; the job is skipped, and a skipped job reports as a pass.
-    expect(workflow).toContain('\n  scope:')
+/** A top-level job's block, from its key to the next top-level job key. */
+function job(name: string): string {
+  const start = workflow.indexOf(`\n  ${name}:`)
+  expect(start).toBeGreaterThan(-1)
+  const next = workflow.slice(start + 1).search(/\n {2}[a-z][a-z-]*:\n/)
+  return next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next)
+}
+
+describe('CI runs everything on every PR', () => {
+  it('has no path scoping that could skip a required check', () => {
+    // A job skipped by a condition reports its required check as a PASS, so any scoping
+    // is a way for an untested change to merge. A workflow-level `paths:` filter is
+    // worse: it leaves a required check permanently "Expected".
+    expect(workflow).not.toContain('\n  scope:')
+    expect(workflow).not.toContain('needs.scope')
     expect(workflow).not.toMatch(/^ {2}paths(-ignore)?:/m)
-    const scoped = workflow.match(/needs\.scope\.outputs\.inert != 'true'/g) ?? []
-    expect(scoped).toHaveLength(2) // test + linux-sandbox; build inherits via needs: test
-  })
-
-  it('runs the full suite when the scope job itself fails', () => {
-    // Without `!cancelled()`, a failed `scope` would skip its dependents for an
-    // unsatisfied `needs`, and a skipped required check reports a PASS — so a network
-    // blip in the scope job would silently mark an untested PR mergeable. The guard
-    // makes a failed scope leave `inert` empty, which runs everything.
-    const guards = workflow.match(/!cancelled\(\) && needs\.scope\.outputs\.inert != 'true'/g) ?? []
-    expect(guards).toHaveLength(2)
-  })
-
-  it('never gates the scope job itself on an event', () => {
-    // Same skip-is-a-pass mechanism, one level up: an `if:` on `scope` would skip every
-    // consumer via `needs`, silently disabling `test` and `linux-sandbox` on main and on
-    // merge-queue candidates while reporting them green. The CHECKOUT step inside may be
-    // conditional; the job may not.
-    const scopeJob = workflow.slice(workflow.indexOf('\n  scope:'), workflow.indexOf('\n  test:'))
-    const jobLevelIf = scopeJob.match(/^ {4}if:/m)
-    expect(jobLevelIf).toBeNull()
-  })
-
-  it('treats anything but a definite "inert" as run-everything', () => {
-    // The output is empty on non-PR events. `!= 'true'` runs the suite for empty, for
-    // 'false', and for anything unexpected; `== 'false'` would skip on an empty value.
-    expect(workflow).not.toContain("needs.scope.outputs.inert == 'false'")
-  })
-
-  it('scopes pull requests only, never main or a queue candidate', () => {
-    // Those are the trees that ship. Scoping them would mean main could land untested.
-    const scopeJob = workflow.slice(workflow.indexOf('\n  scope:'), workflow.indexOf('\n  test:'))
-    expect(scopeJob).toContain("if: github.event_name == 'pull_request'")
-    expect(scopeJob).toContain('fetch-depth: 0')
   })
 
   it('never scopes away the revert guard', () => {
-    // It costs 8 seconds and matters most on exactly the stale branches that would
-    // otherwise look cheap to skip.
-    expect(revertGuardJob).not.toContain('needs.scope')
+    expect(revertGuardJob).not.toContain('needs:')
+  })
+
+  it('packages and tests on every platform it ships on', () => {
+    const pkg = job('package')
+    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-latest']) {
+      expect(pkg).toContain(`os: ${os}`)
+    }
+    // The macOS unit suite (real Seatbelt), the Windows sandbox suite, and the
+    // packaged-app e2e on the macOS legs.
+    expect(pkg).toMatch(/if: matrix\.target == 'mac-arm64'\n {8}run: npm test/)
+    expect(pkg).toMatch(/if: runner\.os == 'Windows'\n {8}run: npx vitest run src\/main\/sandbox/)
+    expect(pkg).toMatch(/if: runner\.os == 'macOS'\n {8}run: npm run test:e2e/)
+  })
+})
+
+describe('CI gates merge on the whole matrix', () => {
+  it('makes the required `build` check depend on every platform leg and the SBOM gate', () => {
+    expect(job('build')).toContain('needs: [package, sbom-conformance]')
+  })
+
+  it('fails `build` when a dependency fails, instead of skipping it to a pass', () => {
+    // Without always(), a failed leg skips `build`, and a skipped required check reports
+    // a PASS: a red macOS e2e would let the PR merge. With it, the job must check every
+    // result itself, and anything but success (failure, skipped, cancelled) fails it.
+    const build = job('build')
+    expect(build).toMatch(/if: \$\{\{ always\(\) && /)
+    expect(build).toContain("join(needs.*.result, ' ')")
+    expect(build).toContain('[ "$r" = success ] ||')
   })
 })
 
@@ -136,18 +137,19 @@ describe('CI supports the merge queue', () => {
   })
 
   it('packages a queue candidate, not just a PR', () => {
-    // `== 'pull_request'` would skip `build` on a candidate, so a packaging break could
+    // `== 'pull_request'` would skip packaging on a candidate, so a packaging break could
     // reach main through the queue.
-    const buildJob = workflow.slice(workflow.indexOf('\n  build:'), workflow.indexOf('\n  revert-guard:'))
-    expect(buildJob).toContain("if: github.event_name != 'push'")
+    for (const name of ['package', 'sbom-conformance']) {
+      expect(job(name)).toContain("if: github.event_name != 'push'")
+    }
+    expect(job('build')).toContain("github.event_name != 'push'")
   })
 
   it('never lets electron-builder publish from a queue candidate', () => {
     // A merge_group run has no GITHUB_BASE_REF, so electron-builder does not see a PR and
-    // publishes implicitly unless told not to. With no token that fails `build`, and the
+    // publishes implicitly unless told not to. With no token that fails packaging, and the
     // queue ejects every entry.
-    const buildJob = workflow.slice(workflow.indexOf('\n  build:'), workflow.indexOf('\n  revert-guard:'))
-    expect(buildJob).toContain('npm run dist:linux -- --publish never')
+    expect(job('package')).toContain('npm run ${{ matrix.dist }} -- --publish never')
   })
 })
 

@@ -1,8 +1,8 @@
 name: SBOM conformance
 
 # Reusable gate: regenerate the three SBOMs from the current lockfile and run them through the
-# standards checkers, failing if any regresses. Called from nightly-build, release-prepare, and
-# release-publish so a dependency change can't silently drop the shipped SBOMs below their
+# standards checkers, failing if any regresses. Called from ci.yml (every PR), release-prepare,
+# and release-publish so a dependency change can't silently drop the shipped SBOMs below their
 # conformance bar. This is the guard that would have caught the fs-extra/jsonfile/universalify
 # supplier regression that broke NTIA (a nested-dedup package lost its supplier) — and the
 # earlier local-vs-CI mismatches — before a release.
@@ -10,7 +10,7 @@ name: SBOM conformance
 on:
   workflow_call:
   # Also dispatchable on its own so the full checker suite can be verified end-to-end in CI
-  # without waiting for a nightly or a release.
+  # without opening a PR or cutting a release.
   workflow_dispatch:
 
 permissions:

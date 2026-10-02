@@ -727,21 +727,17 @@ installer and the AppImage (+ `latest-*.yml`) (+ `latest-*.yml`) are what `elect
 installed app (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
 fails if a vendored binary is missing, so a build can't silently ship without search.
 
-Per-PR CI runs on Linux only (×1 Actions-minute multiplier): a dependency license gate
-(`npm run license-gate`, which fails the PR if any package in the installed tree carries
-AGPL or another copyleft/source-available license, which is incompatible with
-redistributing Houston under Apache-2.0, and holds everything that ships to a
-permissive allowlist), the unit gate (lint + typecheck + vitest), the real bubblewrap
-sandbox exercise, and a `dist:linux` packaging smoke that gates merge but uploads no
-artifact. The full matrix — Linux x64, macOS arm64,
-macOS x64 (Intel), and Windows x64, each packaging on its own runner — runs nightly in
-[`nightly-build.yml`](.github/workflows/nightly-build.yml), which also smoke-tests the
-packaged macOS app with Playwright and uploads inspection-only artifacts
-(`nightly-linux-x64` / `nightly-mac-arm64` / `nightly-mac-x64` / `nightly-win-x64`,
-3-day retention) — grab a build from that run in the **Actions** tab without building
-locally. The same matrix gates a release in `release-prepare.yml`, and
-`release-publish.yml` builds and publishes the Release artifacts — keeping macOS (×10)
-and Windows (×2) billed minutes off the per-PR path.
+Every PR runs a dependency license gate (`npm run license-gate`, which fails the PR if
+any package in the installed tree carries AGPL or another copyleft/source-available
+license, which is incompatible with redistributing Houston under Apache-2.0, and holds
+everything that ships to a permissive allowlist), the unit gate (lint + typecheck +
+vitest), the real bubblewrap sandbox exercise, and the full packaging matrix: Linux x64,
+macOS arm64, macOS x64 (Intel), and Windows x64, each packaging on its own runner. The
+macOS legs also smoke-test the packaged app with Playwright. Each leg uploads its build as
+an inspection-only artifact (`houston-linux-x64` / `houston-mac-arm64` / `houston-mac-x64`
+/ `houston-win-x64`, 3-day retention), so you can grab a PR's build from the **Actions**
+tab without building locally. The same matrix gates a release in `release-prepare.yml`,
+and `release-publish.yml` builds and publishes the Release artifacts.
 
 ## Updates
 
@@ -875,7 +871,7 @@ variables → Actions** on the source repo:
 With those present, [`electron-builder.yml`](electron-builder.yml) signs with the
 imported identity (it leaves `mac.identity` unset so the cert is auto-selected) and
 electron-builder v26 notarizes automatically. Builds without the secrets
-(nightly-build, release-prepare, and a local `npm run dist`) skip signing and
+(PR CI, release-prepare, and a local `npm run dist`) skip signing and
 produce an unsigned app. To sign a build locally, import the Developer ID cert into
 your login keychain and export the same variables in your shell before
 `npm run dist:mac`.
