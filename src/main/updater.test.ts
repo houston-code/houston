@@ -181,7 +181,7 @@ describe('checkForUpdates', () => {
 })
 
 describe('menuUpdateDialog', () => {
-  it('offers a Download button pointing at the release for an available update', async () => {
+  it('offers an Update button pointing at the release for an available update', async () => {
     const { menuUpdateDialog } = await load()
     const { options, downloadUrl } = menuUpdateDialog({
       status: 'available',
@@ -190,7 +190,7 @@ describe('menuUpdateDialog', () => {
       releaseUrl: 'https://example.com/releases'
     })
     expect(downloadUrl).toBe('https://example.com/releases')
-    expect(options.buttons).toEqual(['Download', 'Later'])
+    expect(options.buttons).toEqual(['Update', 'Later'])
     expect(options.defaultId).toBe(0)
     expect(options.message).toContain('0.3.0')
     expect(options.detail).toContain('0.2.0')
