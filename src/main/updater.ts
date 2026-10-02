@@ -156,8 +156,8 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
 /**
  * Map a check result to the native dialog the menu item should show. Split out as
  * a pure function so the wording/branching is unit-testable without Electron. The
- * `downloadUrl` is non-null only for the available case, where the dialog offers a
- * Download button (button index 0) that opens it.
+ * `downloadUrl` is non-null only for the available case, where the dialog offers an
+ * Update button (button index 0) that opens it.
  */
 export function menuUpdateDialog(result: UpdateCheckResult): {
   options: MessageBoxOptions
@@ -169,7 +169,7 @@ export function menuUpdateDialog(result: UpdateCheckResult): {
         downloadUrl: result.releaseUrl,
         options: {
           type: 'info',
-          buttons: ['Download', 'Later'],
+          buttons: ['Update', 'Later'],
           defaultId: 0,
           cancelId: 1,
           title: 'Update available',
@@ -224,7 +224,7 @@ export function menuUpdateDialog(result: UpdateCheckResult): {
  * but reports every outcome through a native dialog, the way a desktop app's menu
  * item is expected to. The available case still broadcasts the in-app banner (via
  * checkForUpdates), so both entry points stay consistent; here we additionally
- * offer a Download button that opens the Releases page — a manual alternative to
+ * offer an Update button that opens the Releases page — a manual alternative to
  * the auto-download/install-on-quit path, and the only route on unsigned platforms.
  */
 export async function checkForUpdatesFromMenu(): Promise<void> {
