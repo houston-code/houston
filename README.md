@@ -747,12 +747,14 @@ and Windows (×2) billed minutes off the per-PR path.
 
 Packaged builds check for updates via `electron-updater`, against the GitHub
 Releases feed configured in [`electron-builder.yml`](electron-builder.yml)
-(`publish:`). The check runs on launch and on demand from **Settings → Appearance
-→ Updates** ("Check for updates"); when a newer version exists, a persistent
-banner appears at the top of the window until you dismiss it or update. (No-op in
+(`publish:`). The check runs on launch, again every 6 hours while the app stays open,
+and on demand from **Settings → Appearance → Updates** ("Check for updates") or the
+**Check for Updates…** menu item; when a newer version exists, a persistent banner
+appears at the top of the window until you dismiss it or update. (No-op in
 dev; set `HOUSTON_DISABLE_UPDATER=1` to turn it off.)
 
-After you install a newer build and relaunch, a small **What's new** popup shows the
+After you install a newer build and relaunch, a small **What's new** card in the
+bottom-right corner shows the
 one-sentence summary that opens that version's section in [CHANGELOG.md](CHANGELOG.md).
 It is bundled at build time
 ([`scripts/gen-release-highlights.mjs`](scripts/gen-release-highlights.mjs)), so the
@@ -761,16 +763,18 @@ in **Release - prepare** and reviewed in the release PR.
 
 **macOS** builds are [signed + notarized](#signing--notarization), so
 `electron-updater` can verify a downloaded package's signature against the running
-app. There the updater auto-downloads an update in the background — a banner shows
-download progress and, once ready, a **Restart to install** button — and it installs
-on the next quit if you don't (`autoDownload` / `autoInstallOnAppQuit` in
+app. There the updater auto-downloads an update in the background (a banner shows
+download progress and, once ready, a **Restart to install** button), and the menu
+dialog's **Update** button installs it directly. Restarting to install asks first if
+chats or background tasks (terminals, backgrounded commands) are still running. If you
+don't restart, it installs on the next quit (`autoDownload` / `autoInstallOnAppQuit` in
 [`src/main/updater.ts`](src/main/updater.ts), gated per-platform by
 `shouldAutoInstallUpdates`).
 
 **Windows and Linux** builds are not OS-code-signed, so `electron-updater` has no
 package signature it can verify and auto-installing a remote package would make the
-release pipeline an RCE boundary. On those platforms the banner links to **Releases**
-for a manual download, until they are signed too. (Linux downloads can still be verified
+release pipeline an RCE boundary. On those platforms the banner and the menu dialog's
+**Update** button link to **Releases** for a manual download, until they are signed too. (Linux downloads can still be verified
 by hand, they're GPG-signed: see [Verifying downloads](#verifying-downloads).)
 
 Update metadata is published by running `npm run dist` with a `GH_TOKEN` and
