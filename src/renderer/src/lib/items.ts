@@ -459,7 +459,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         {
           kind: 'notice',
           id: nextId(),
-          text: `⟳ Connection issue, retrying (${e.attempt}/${e.max})… — ${e.message}`,
+          text: `⟳ Connection issue, retrying (${e.attempt}/${e.max}): ${e.message}`,
           tone: 'info'
         }
       ]
@@ -480,17 +480,17 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       const finalized = finalizeStreaming(items)
       const text =
         e.reason === 'max-steps'
-          ? '⚠ Reached the step limit for one turn and stopped — send a message to have me continue.'
+          ? '⚠ Reached the step limit for one turn and stopped. Send a message to have me continue.'
           : e.reason === 'stalled'
             ? '⚠ Stopped: I appeared to be repeating myself without making progress. Send a message with more direction to continue.'
-            : '⚠ The reply was cut off at the model’s output limit — ask me to continue it.'
+            : '⚠ The reply was cut off at the model’s output limit. Ask me to continue it.'
       return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'error' }]
     }
     case 'verification': {
       const finalized = finalizeStreaming(items)
       const text = e.passed
         ? '✓ Verification passed.'
-        : '⚠ Verification failed — attempting to self-correct.'
+        : '⚠ Verification failed, attempting to self-correct.'
       return [
         ...finalized,
         { kind: 'notice', id: nextId(), text, tone: e.passed ? 'info' : 'error' }
