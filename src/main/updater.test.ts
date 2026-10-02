@@ -26,6 +26,10 @@ const h = vi.hoisted(() => {
     written: [] as string[],
     autoInstall: true,
     quitAndInstallCalls: 0,
+    downloadUpdateCalls: 0,
+    dialogResponses: [] as number[],
+    dialogs: [] as Array<Record<string, unknown>>,
+    opened: [] as string[],
     listeners: {} as Record<string, Array<(arg: unknown) => void>>,
     // Assigned below so the methods can close over `self`.
     autoUpdater: undefined as unknown as {
@@ -33,6 +37,7 @@ const h = vi.hoisted(() => {
       autoInstallOnAppQuit: boolean
       on: (event: string, cb: (arg: unknown) => void) => void
       checkForUpdates: () => Promise<unknown>
+      downloadUpdate: () => Promise<unknown>
       quitAndInstall: () => void
     }
   }
@@ -45,6 +50,10 @@ const h = vi.hoisted(() => {
     checkForUpdates: async () => {
       if (self.checkError) throw self.checkError
       return self.checkResult
+    },
+    downloadUpdate: async () => {
+      self.downloadUpdateCalls++
+      return []
     },
     quitAndInstall: () => {
       self.quitAndInstallCalls++
@@ -65,7 +74,14 @@ vi.mock('electron', () => ({
     },
     getVersion: () => h.version
   },
+  dialog: {
+    showMessageBox: async (...args: unknown[]) => {
+      h.dialogs.push(args[args.length - 1] as Record<string, unknown>)
+      return { response: h.dialogResponses.shift() ?? 1 }
+    }
+  },
   BrowserWindow: {
+    getFocusedWindow: () => null,
     getAllWindows: () => [
       {
         isDestroyed: () => false,
@@ -89,6 +105,10 @@ vi.mock('./update-policy', async (importOriginal) => {
   return { ...actual, shouldAutoInstallUpdates: () => h.autoInstall }
 })
 
+vi.mock('./safeExternal', () => ({
+  openExternalSafely: (url: string) => h.opened.push(url)
+}))
+
 vi.mock('./update-state', () => ({
   readLastSeenVersion: () => h.lastSeen,
   writeLastSeenVersion: (v: string) => h.written.push(v)
@@ -109,6 +129,10 @@ beforeEach(() => {
   h.written = []
   h.autoInstall = true
   h.quitAndInstallCalls = 0
+  h.downloadUpdateCalls = 0
+  h.dialogResponses = []
+  h.dialogs = []
+  h.opened = []
   h.listeners = {}
   h.autoUpdater.autoDownload = false
   h.autoUpdater.autoInstallOnAppQuit = false
@@ -181,50 +205,66 @@ describe('checkForUpdates', () => {
 })
 
 describe('menuUpdateDialog', () => {
-  it('offers a Download button pointing at the release for an available update', async () => {
+  it('offers an Update button that installs in place on auto-install builds', async () => {
     const { menuUpdateDialog } = await load()
-    const { options, downloadUrl } = menuUpdateDialog({
+    const { options, action } = menuUpdateDialog({
       status: 'available',
       currentVersion: '0.2.0',
       latestVersion: '0.3.0',
-      releaseUrl: 'https://example.com/releases'
+      releaseUrl: 'https://example.com/releases',
+      autoInstall: true
     })
-    expect(downloadUrl).toBe('https://example.com/releases')
-    expect(options.buttons).toEqual(['Download', 'Later'])
+    expect(action).toEqual({ kind: 'install' })
+    expect(options.buttons).toEqual(['Update', 'Later'])
     expect(options.defaultId).toBe(0)
     expect(options.message).toContain('0.3.0')
     expect(options.detail).toContain('0.2.0')
+    expect(options.detail).toMatch(/restart to install/i)
+  })
+
+  it('falls back to the Releases page where auto-install is unavailable', async () => {
+    const { menuUpdateDialog } = await load()
+    const { options, action } = menuUpdateDialog({
+      status: 'available',
+      currentVersion: '0.2.0',
+      latestVersion: '0.3.0',
+      releaseUrl: 'https://example.com/releases',
+      autoInstall: false
+    })
+    expect(action).toEqual({ kind: 'open', url: 'https://example.com/releases' })
+    expect(options.buttons).toEqual(['Update', 'Later'])
+    expect(options.detail).toMatch(/download page/i)
   })
 
   it('reports up-to-date with a single OK button and no download', async () => {
     const { menuUpdateDialog } = await load()
-    const { options, downloadUrl } = menuUpdateDialog({
+    const { options, action } = menuUpdateDialog({
       status: 'up-to-date',
       currentVersion: '0.2.0'
     })
-    expect(downloadUrl).toBeNull()
+    expect(action).toBeNull()
     expect(options.buttons).toEqual(['OK'])
     expect(options.detail).toContain('0.2.0')
   })
 
   it('explains the disabled (unpackaged) case', async () => {
     const { menuUpdateDialog } = await load()
-    const { options, downloadUrl } = menuUpdateDialog({
+    const { options, action } = menuUpdateDialog({
       status: 'disabled',
       currentVersion: '0.2.0'
     })
-    expect(downloadUrl).toBeNull()
+    expect(action).toBeNull()
     expect(options.message).toMatch(/packaged builds/i)
   })
 
   it('surfaces the failure message as a warning dialog', async () => {
     const { menuUpdateDialog } = await load()
-    const { options, downloadUrl } = menuUpdateDialog({
+    const { options, action } = menuUpdateDialog({
       status: 'error',
       currentVersion: '0.2.0',
       message: 'feed unreachable'
     })
-    expect(downloadUrl).toBeNull()
+    expect(action).toBeNull()
     expect(options.type).toBe('warning')
     expect(options.message).toBe('Couldn’t check for updates.')
     // Not a network error: no hint, and never the raw error text.
@@ -286,8 +326,194 @@ describe('auto-install (signed macOS)', () => {
 
   it('installUpdate quits and installs', async () => {
     const { installUpdate } = await load()
-    installUpdate()
+    expect(await installUpdate()).toBe(true)
     expect(h.quitAndInstallCalls).toBe(1)
+  })
+
+  it('installUpdate asks the install guard first and stops when it declines', async () => {
+    const { installUpdate, setInstallGuard } = await load()
+    const guard = vi.fn(async () => false)
+    setInstallGuard(guard)
+    expect(await installUpdate()).toBe(false)
+    expect(guard).toHaveBeenCalledOnce()
+    expect(h.quitAndInstallCalls).toBe(0)
+  })
+
+  it('installUpdate proceeds when the guard approves', async () => {
+    const { installUpdate, setInstallGuard } = await load()
+    setInstallGuard(async () => true)
+    expect(await installUpdate()).toBe(true)
+    expect(h.quitAndInstallCalls).toBe(1)
+  })
+
+  it('undoes the confirmation when quitAndInstall throws', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { installUpdate, setInstallGuard } = await load()
+    const aborted = vi.fn()
+    setInstallGuard(async () => true, aborted)
+    const original = h.autoUpdater.quitAndInstall
+    h.autoUpdater.quitAndInstall = () => {
+      throw new Error('boom')
+    }
+    try {
+      expect(await installUpdate()).toBe(false)
+    } finally {
+      h.autoUpdater.quitAndInstall = original
+    }
+    expect(aborted).toHaveBeenCalledOnce()
+  })
+})
+
+describe('checkForUpdatesFromMenu', () => {
+  it('installs once the in-flight background download finishes', async () => {
+    let finish!: () => void
+    const download = new Promise<void>((r) => (finish = r))
+    h.checkResult = {
+      isUpdateAvailable: true,
+      updateInfo: { version: '0.3.0' },
+      downloadPromise: download
+    }
+    h.dialogResponses = [0] // Update
+    const { checkForUpdatesFromMenu } = await load()
+    const done = checkForUpdatesFromMenu()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.quitAndInstallCalls).toBe(0) // still downloading
+    finish()
+    await done
+    expect(h.quitAndInstallCalls).toBe(1)
+    expect(h.downloadUpdateCalls).toBe(0)
+    expect(h.opened).toEqual([])
+  })
+
+  it('installs right away when the update is already downloaded', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates, checkForUpdatesFromMenu } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    h.dialogResponses = [0]
+    await checkForUpdatesFromMenu()
+    expect(h.quitAndInstallCalls).toBe(1)
+    expect(h.downloadUpdateCalls).toBe(0)
+  })
+
+  it('starts a download when none is in flight, then installs', async () => {
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    h.dialogResponses = [0]
+    const { checkForUpdatesFromMenu } = await load()
+    await checkForUpdatesFromMenu()
+    expect(h.downloadUpdateCalls).toBe(1)
+    expect(h.quitAndInstallCalls).toBe(1)
+  })
+
+  it('does nothing on Later', async () => {
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    h.dialogResponses = [1]
+    const { checkForUpdatesFromMenu } = await load()
+    await checkForUpdatesFromMenu()
+    expect(h.quitAndInstallCalls).toBe(0)
+    expect(h.downloadUpdateCalls).toBe(0)
+    expect(h.opened).toEqual([])
+  })
+
+  it('offers the Releases page when the download fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    // The background download failed earlier, so Update retries it, and that fails too.
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const original = h.autoUpdater.downloadUpdate
+    h.autoUpdater.downloadUpdate = async () => {
+      throw new Error('net::ERR_INTERNET_DISCONNECTED')
+    }
+    h.dialogResponses = [0, 0] // Update, then "Open download page"
+    const { checkForUpdatesFromMenu } = await load()
+    try {
+      await checkForUpdatesFromMenu()
+    } finally {
+      h.autoUpdater.downloadUpdate = original
+    }
+    expect(h.quitAndInstallCalls).toBe(0)
+    expect(h.dialogs[1]).toMatchObject({ message: 'Couldn’t download the update.' })
+    expect(h.opened).toEqual(['https://github.com/houston-code/houston/releases'])
+  })
+
+  it('opens the Releases page instead of installing on unsigned builds', async () => {
+    h.autoInstall = false
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    h.dialogResponses = [0]
+    const { checkForUpdatesFromMenu } = await load()
+    await checkForUpdatesFromMenu()
+    expect(h.quitAndInstallCalls).toBe(0)
+    expect(h.opened).toEqual(['https://github.com/houston-code/houston/releases'])
+  })
+})
+
+describe('check scheduling', () => {
+  it('shares one in-flight check between concurrent callers', async () => {
+    let calls = 0
+    const original = h.autoUpdater.checkForUpdates
+    h.autoUpdater.checkForUpdates = async () => {
+      calls++
+      await new Promise((r) => setTimeout(r, 0))
+      return null
+    }
+    try {
+      const { checkForUpdates } = await load()
+      const [a, b] = await Promise.all([checkForUpdates(), checkForUpdates()])
+      expect(calls).toBe(1)
+      expect(a).toEqual(b)
+      await checkForUpdates() // a later call runs a fresh check
+      expect(calls).toBe(2)
+    } finally {
+      h.autoUpdater.checkForUpdates = original
+    }
+  })
+
+  it('re-checks every 6 hours after the launch check', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    const original = h.autoUpdater.checkForUpdates
+    h.autoUpdater.checkForUpdates = async () => {
+      calls++
+      return null
+    }
+    try {
+      const { initUpdates, UPDATE_CHECK_INTERVAL_MS } = await load()
+      expect(UPDATE_CHECK_INTERVAL_MS).toBe(6 * 60 * 60 * 1000)
+      initUpdates()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toBe(1) // launch check
+      await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS - 1)
+      expect(calls).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls).toBe(2)
+      await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS)
+      expect(calls).toBe(3)
+    } finally {
+      h.autoUpdater.checkForUpdates = original
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('schedules nothing in an unpackaged build', async () => {
+    vi.useFakeTimers()
+    h.isPackaged = false
+    let calls = 0
+    const original = h.autoUpdater.checkForUpdates
+    h.autoUpdater.checkForUpdates = async () => {
+      calls++
+      return null
+    }
+    try {
+      const { initUpdates, UPDATE_CHECK_INTERVAL_MS } = await load()
+      initUpdates()
+      await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS * 2)
+      expect(calls).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      h.autoUpdater.checkForUpdates = original
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -320,7 +546,7 @@ describe('without auto-install (unsigned Windows/Linux)', () => {
 
   it('installUpdate is a no-op', async () => {
     const { installUpdate } = await load()
-    installUpdate()
+    expect(await installUpdate()).toBe(false)
     expect(h.quitAndInstallCalls).toBe(0)
   })
 })
