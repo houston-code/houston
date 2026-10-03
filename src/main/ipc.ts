@@ -52,6 +52,8 @@ import { setKey, deleteKey, setMcpOAuthTokens } from './secrets'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
+import { shareHouston, shareHoustonFromMenu, shareHoustonVia } from './share'
+import type { ShareResult, ShareTarget } from '@shared/share'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
 import {
@@ -376,6 +378,18 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
   // "Restart to install" — apply a downloaded update now instead of on next quit.
   ipcMain.handle(IPC.updateInstall, () => installUpdate())
+
+  // Share Houston: the sidebar button anchors the macOS share menu at the point it
+  // passes (window-relative CSS px); a non-finite point falls back to the cursor.
+  ipcMain.handle(IPC.shareHouston, (event, at?: { x: unknown; y: unknown }): ShareResult => {
+    const point =
+      at && Number.isFinite(at.x) && Number.isFinite(at.y)
+        ? { x: at.x as number, y: at.y as number }
+        : undefined
+    return shareHouston(BrowserWindow.fromWebContents(event.sender), point)
+  })
+  ipcMain.handle(IPC.shareVia, (_event, target: ShareTarget) => shareHoustonVia(target))
+  ipcMain.handle(IPC.shareFromMenu, () => shareHoustonFromMenu())
 
   ipcMain.handle(IPC.workspacePick, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
