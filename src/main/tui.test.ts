@@ -6,6 +6,7 @@ import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
+import { SHARE_MESSAGE } from '@shared/share'
 import {
   parseTuiArgs,
   makePainter,
@@ -1855,6 +1856,17 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.runs[0].messages).toEqual([{ role: 'user', content: 'Release the canary build' }])
+  })
+
+  it('/share copies the invite over OSC 52 and prints it', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['/share', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const b64 = Buffer.from(SHARE_MESSAGE, 'utf8').toString('base64')
+    expect(t.text()).toContain(`\x1b]52;c;${b64}\x07`)
+    expect(t.text()).toContain(SHARE_MESSAGE)
+    expect(t.text()).not.toContain('Unknown command')
   })
 
   it('lists custom commands under /help', async () => {

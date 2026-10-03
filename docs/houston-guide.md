@@ -145,7 +145,7 @@ on the client, but the common built-ins are:
 The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
 `/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/fork`,
-`/cost`, `/mcp`, `/trust`, `/hooks`, `/theme`, `/image`, `/cwd`, and `/exit`.
+`/cost`, `/mcp`, `/trust`, `/hooks`, `/theme`, `/image`, `/cwd`, `/share`, and `/exit`.
 
 **Themes.** `/theme` lists the terminal's palettes and `/theme <name>` switches:
 `dark` (bright foregrounds for a dark background), `light` (readable on white,
@@ -818,6 +818,18 @@ conventions, not as authority to change tool or permission behavior.
   Houston profile, so the revert/redo affordance survives an app restart; the
   most recent 50 turns' checkpoints are kept. Shell-command side effects are not
   checkpointed: revert only restores files the editing tools touched.
+
+## Sharing Houston
+
+To invite a friend, click **Share Houston** at the bottom of the sidebar (the share
+icon when the sidebar is collapsed), choose **Share Houston…** from the app menu on
+macOS or the Help menu on Windows and Linux, or run "Share Houston" from the command
+palette. On macOS it opens a menu with **Copy invite** and **Share via** (AirDrop,
+Messages, Mail, and any app that adds itself to the system share menu). On Windows
+and Linux the invite is copied right away, with options to copy it again or send it
+by email. In the terminal, `/share` copies the invite (where the terminal allows
+clipboard access) and prints it. The invite links to https://houstoncode.ai with no
+tracking parameters.
 
 ## Settings and keys
 

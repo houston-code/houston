@@ -12,6 +12,7 @@ import { listEditors, fileManagerName } from '../lib/editors'
 import { Icon } from './Icon'
 import { Popover } from './Popover'
 import { MenuExpander } from './MenuExpander'
+import { ShareButton } from './ShareButton'
 
 /**
  * Custom drag payload carried when a chat row is dragged onto a group. A
@@ -698,6 +699,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           ＋
         </button>
         <div className="sidebar__rail-spacer" />
+        <ShareButton variant="rail" />
         <button
           className="sidebar__rail-btn"
           onClick={props.onOpenSettings}
@@ -766,6 +768,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       </div>
 
       <div className="sidebar__foot">
+        <ShareButton />
         <button className="btn btn--sm sidebar__import" onClick={props.onImport}>
           <Icon name="import" /> Import chat
         </button>

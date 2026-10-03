@@ -565,6 +565,7 @@ Slash commands adjust the session without restarting:
 | `/theme [name]` | list or switch color theme (`default` / `bright` / `mono`) |
 | `/image <path>` | attach an image (PNG/JPEG/GIF/WebP) to your next message |
 | `/cwd` | show the working directory |
+| `/share` | copy an invite to Houston to send a friend |
 | `/help` | list commands |
 | `/exit`, `/quit` | leave |
 

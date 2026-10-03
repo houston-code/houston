@@ -33,6 +33,7 @@ import type {
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
+import type { ShareResult, ShareTarget } from '@shared/share'
 import type {
   UpdateCheckResult,
   UpdateDownloaded,
@@ -382,6 +383,15 @@ const api = {
   /** Open a preview's loopback URL in the OS browser (validated loopback-only in main). */
   openPreviewExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke(IPC.previewOpenExternal, url),
+
+  // Share Houston (see main/share.ts)
+  /** Open the macOS share menu at `at` (window CSS px), or copy the invite elsewhere. */
+  shareHouston: (at?: { x: number; y: number }): Promise<ShareResult> =>
+    ipcRenderer.invoke(IPC.shareHouston, at),
+  /** Copy the invite again, or open email with it prefilled (URL built in main). */
+  shareVia: (target: ShareTarget): Promise<boolean> => ipcRenderer.invoke(IPC.shareVia, target),
+  /** Share with native confirmation, the same flow as the menu item. */
+  shareFromMenu: (): Promise<void> => ipcRenderer.invoke(IPC.shareFromMenu),
 
   // Updates
   /** Manually check the update feed (also broadcasts onUpdateAvailable when newer). */
