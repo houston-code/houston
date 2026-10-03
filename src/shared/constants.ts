@@ -35,6 +35,12 @@ export const IPC = {
   updateInstall: 'update:install',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
   menuOpenSettings: 'menu:openSettings',
+  /** Renderer → main: share Houston (macOS share menu, else copy the invite). */
+  shareHouston: 'share:houston',
+  /** Renderer → main: run a fixed share action (copy the invite, or email it). */
+  shareVia: 'share:via',
+  /** Renderer → main: share with native confirmation (command palette; same as the menu item). */
+  shareFromMenu: 'share:fromMenu',
   // Workspace
   workspacePick: 'workspace:pick',
   directoryPick: 'directory:pick',

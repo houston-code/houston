@@ -35,6 +35,15 @@ export function stripControlChars(s: string): string {
 }
 
 /**
+ * The OSC 52 sequence that asks the terminal to put `text` on the system
+ * clipboard. Only for text WE chose to copy (e.g. `/share`'s fixed invite); this
+ * is exactly the escape `stripControlChars` keeps out of untrusted output.
+ */
+export function osc52Copy(text: string): string {
+  return `\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`
+}
+
+/**
  * Display columns a single code point occupies: 0 for combining/zero-width marks,
  * 2 for East-Asian wide + fullwidth glyphs and astral emoji, 1 otherwise. A
  * pragmatic wcwidth (not exhaustive) so CJK / emoji don't miscount and overflow

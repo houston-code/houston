@@ -2,6 +2,7 @@ import { Menu, BrowserWindow } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import { APP_NAME, IPC } from '@shared/constants'
 import { checkForUpdatesFromMenu } from './updater'
+import { shareHoustonFromMenu } from './share'
 
 /**
  * The application menu. Houston previously relied on Electron's default menu,
@@ -19,6 +20,9 @@ import { checkForUpdatesFromMenu } from './updater'
  * Windows and Linux have no app submenu, so "Check for Updates…" lives under a
  * Help menu there, the platform convention. Without it the only manual check on
  * those platforms was buried in Settings.
+ *
+ * "Share Houston…" sits beside it on every platform (see ./share): the share
+ * sheet on macOS, copy-and-confirm on Windows/Linux.
  */
 
 /** Whether the integrated terminal currently holds focus in the renderer. The
@@ -64,6 +68,7 @@ function macAppMenu(): MenuItemConstructorOptions {
     label: APP_NAME,
     submenu: [
       { role: 'about' },
+      { label: 'Share Houston…', click: () => void shareHoustonFromMenu() },
       { type: 'separator' },
       { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: onOpenSettings },
       { label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() },
@@ -79,11 +84,14 @@ function macAppMenu(): MenuItemConstructorOptions {
   }
 }
 
-/** Help menu for Windows/Linux, which carries the manual update check there. */
+/** Help menu for Windows/Linux, which carries the manual update check and sharing there. */
 function helpMenu(): MenuItemConstructorOptions {
   return {
     role: 'help',
-    submenu: [{ label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() }]
+    submenu: [
+      { label: 'Share Houston…', click: () => void shareHoustonFromMenu() },
+      { label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() }
+    ]
   }
 }
 

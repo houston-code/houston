@@ -216,6 +216,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'theme', description: 'List or switch the color theme', clients: ['tui'] },
   { name: 'image', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
   { name: 'cwd', description: 'Show the working directory', clients: ['tui'] },
+  { name: 'share', description: 'Copy an invite to Houston to share with a friend', clients: ['tui'] },
   { name: 'help', description: 'List the available slash commands', clients: ['gui', 'tui'] },
   {
     name: 'review',
