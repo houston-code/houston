@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
 }))
 vi.mock('./loop', () => ({ startRun: h.startRun }))
 // Auto-titling has its own tests (title.test.ts); here we only assert drain wires it
-// up on a natural completion, so stub it out rather than reaching the provider/store.
+// up at turn start (plus a natural-completion fallback), so stub it out rather than reaching the provider/store.
 vi.mock('./title', () => ({ maybeGenerateTitle: h.maybeGenerateTitle }))
 vi.mock('../conversations', () => ({
   getConversation: h.getConversation,
@@ -108,7 +108,9 @@ describe('runAndDrain', () => {
 
     expect(h.startRun).toHaveBeenCalledTimes(1)
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
-    expect(h.maybeGenerateTitle).not.toHaveBeenCalled() // no auto-title on error
+    // Titling starts with the turn, so an errored turn is still titled — but the
+    // natural-completion fallback doesn't fire.
+    expect(h.maybeGenerateTitle).toHaveBeenCalledTimes(1)
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A']) // still held
     // The failure is persisted so the Retry banner survives a reload — cleared at
     // run start, then re-set with the error message once the run ends.
@@ -128,13 +130,26 @@ describe('runAndDrain', () => {
 
     expect(h.startRun).toHaveBeenCalledTimes(1)
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
-    expect(h.maybeGenerateTitle).not.toHaveBeenCalled() // no auto-title on abort
+    expect(h.maybeGenerateTitle).toHaveBeenCalledTimes(1) // turn-start only, no fallback
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A'])
     // An abort isn't a failure to retry: the marker is cleared at start and never
     // re-set, so no Retry banner is persisted.
     expect(h.setConversationError).toHaveBeenCalledWith(cid, null)
     expect(h.setConversationError).not.toHaveBeenCalledWith(cid, expect.objectContaining({ message: expect.anything() }))
     clearQueue(cid)
+  })
+
+  it('starts titling before the turn runs, not after it ends', async () => {
+    const cid = 'conv-title-early'
+    let calledBeforeRun = -1
+    h.startRun.mockImplementation(async (req: { runId: string }, send: (e: AgentEvent) => void) => {
+      calledBeforeRun = h.maybeGenerateTitle.mock.calls.length
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    })
+
+    await runAndDrain(io(), cid, runReq(cid))
+
+    expect(calledBeforeRun).toBe(1)
   })
 
   it('does nothing extra when the queue is empty on a natural completion', async () => {
@@ -148,8 +163,9 @@ describe('runAndDrain', () => {
     expect(h.startRun).toHaveBeenCalledTimes(1)
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
     expect(sink.emitQueueChanged).not.toHaveBeenCalled()
-    // The natural completion still triggers a one-shot auto-title for this run.
-    expect(h.maybeGenerateTitle).toHaveBeenCalledTimes(1)
+    // Titling fires at turn start and again as the natural-completion fallback
+    // (maybeGenerateTitle itself makes the second a no-op once titled/in flight).
+    expect(h.maybeGenerateTitle).toHaveBeenCalledTimes(2)
     expect(h.maybeGenerateTitle).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: cid, providerId: 'anthropic', model: 'claude' })
     )

@@ -1,6 +1,22 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
 import type { ChatMessage, Provider, ProviderStreamEvent } from '@shared/agent'
-import { sanitizeTitle, buildTitleMessages, generateTitle } from './title'
+import { sanitizeTitle, buildTitleMessages, generateTitle, maybeGenerateTitle } from './title'
+
+// Only maybeGenerateTitle touches these; the pure helpers and generateTitle don't.
+const h = vi.hoisted(() => ({
+  getProvider: vi.fn(),
+  createProvider: vi.fn(),
+  getConversation: vi.fn(),
+  needsGeneratedTitle: vi.fn(),
+  setGeneratedTitle: vi.fn()
+}))
+vi.mock('../agentHost', () => ({ getProvider: h.getProvider }))
+vi.mock('../providers', () => ({ createProvider: h.createProvider }))
+vi.mock('../conversations', () => ({
+  getConversation: h.getConversation,
+  needsGeneratedTitle: h.needsGeneratedTitle,
+  setGeneratedTitle: h.setGeneratedTitle
+}))
 
 /** A provider that replays one pre-scripted stream of events. */
 function scripted(events: ProviderStreamEvent[]): Provider {
@@ -151,5 +167,69 @@ describe('generateTitle', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('maybeGenerateTitle', () => {
+  const opts = (onTitle = vi.fn()) => ({ conversationId: 'c1', providerId: 'p', model: 'm', onTitle })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // A chat at turn start: only the user message is persisted so far.
+    h.getConversation.mockReturnValue({ id: 'c1', messages: [{ role: 'user', content: 'Add dark mode' }] })
+    h.needsGeneratedTitle.mockReturnValue(true)
+    h.getProvider.mockReturnValue({ id: 'p' })
+    h.setGeneratedTitle.mockReturnValue(true)
+  })
+
+  it('titles from the user message alone and pushes it live', async () => {
+    h.createProvider.mockReturnValue(
+      scripted([{ type: 'text', text: 'Add Dark Mode' }, { type: 'done', stopReason: 'end_turn' }])
+    )
+    const onTitle = vi.fn()
+    await maybeGenerateTitle(opts(onTitle))
+    expect(h.setGeneratedTitle).toHaveBeenCalledWith('c1', 'Add Dark Mode')
+    expect(onTitle).toHaveBeenCalledWith('Add Dark Mode')
+  })
+
+  it('makes one provider call when turn-start and turn-end triggers overlap', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const streamChat = vi.fn(async function* () {
+      await gate
+      yield { type: 'text', text: 'Add Dark Mode' } as ProviderStreamEvent
+    })
+    h.createProvider.mockReturnValue({ streamChat })
+
+    const first = maybeGenerateTitle(opts())
+    await maybeGenerateTitle(opts()) // the fallback, while the first is still in flight
+    release()
+    await first
+
+    expect(streamChat).toHaveBeenCalledTimes(1)
+    expect(h.setGeneratedTitle).toHaveBeenCalledTimes(1)
+  })
+
+  it('tries again once the earlier attempt has settled without a title', async () => {
+    h.createProvider.mockReturnValue(scripted([{ type: 'done', stopReason: 'end_turn' }]))
+    await maybeGenerateTitle(opts())
+    h.createProvider.mockReturnValue(scripted([{ type: 'text', text: 'Add Dark Mode' }]))
+    await maybeGenerateTitle(opts())
+    expect(h.setGeneratedTitle).toHaveBeenCalledTimes(1)
+    expect(h.setGeneratedTitle).toHaveBeenCalledWith('c1', 'Add Dark Mode')
+  })
+
+  it('does not push a title a racing manual rename beat', async () => {
+    h.createProvider.mockReturnValue(scripted([{ type: 'text', text: 'Add Dark Mode' }]))
+    h.setGeneratedTitle.mockReturnValue(false)
+    const onTitle = vi.fn()
+    await maybeGenerateTitle(opts(onTitle))
+    expect(onTitle).not.toHaveBeenCalled()
+  })
+
+  it('skips the provider entirely for an already-titled chat', async () => {
+    h.needsGeneratedTitle.mockReturnValue(false)
+    await maybeGenerateTitle(opts())
+    expect(h.createProvider).not.toHaveBeenCalled()
   })
 })

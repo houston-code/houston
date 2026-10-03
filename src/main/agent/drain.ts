@@ -52,6 +52,18 @@ export async function runAndDrain(
   // marker up front, so a reload mid-run doesn't resurrect a stale banner. It's
   // re-set below only if this run itself ends in an error.
   setConversationError(conversationId, null)
+  // Title the chat in parallel with its first turn rather than after it: the user
+  // message is already persisted, which is all a title needs, and a long agentic turn
+  // would otherwise leave the truncated placeholder up for minutes. Fire-and-forget,
+  // and a no-op once the chat is titled (every later turn).
+  const requestTitle = (): void =>
+    void maybeGenerateTitle({
+      conversationId,
+      providerId: runReq.providerId,
+      model: runReq.model,
+      onTitle: (t) => io.emitTitleChanged?.(conversationId, t)
+    })
+  requestTitle()
   // Tag the run with its conversation so the loop enforces one live run per
   // conversation (a second would interleave its setMessages writes and corrupt
   // the log). The slot is freed when this run ends, before any queue drain below.
@@ -62,14 +74,10 @@ export async function runAndDrain(
     owner
   )
   if (terminal === 'natural') {
-    // Upgrade the placeholder title to a model-written summary (once per chat).
-    // Fire-and-forget: it must not delay the queue drain or the turn's completion.
-    void maybeGenerateTitle({
-      conversationId,
-      providerId: runReq.providerId,
-      model: runReq.model,
-      onTitle: (title) => io.emitTitleChanged?.(conversationId, title)
-    })
+    // Fallback: if the turn-start attempt missed (timeout, blip), try once more now
+    // that the reply is available as extra context. No-op if already titled or the
+    // first attempt is still in flight. Must not delay the queue drain.
+    requestTitle()
     drainQueue(io, conversationId, owner)
   } else if (terminal === 'error') {
     // Persist the failure so the "last turn failed" Retry banner survives a reload.
