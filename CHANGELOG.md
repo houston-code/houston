@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.5.0 - 2026-10-03
+
+Share Houston from anywhere, smarter in-place updates, clearer connection errors, and live review findings.
+
+This release also tightens shell permission matching and tidies saved rules.
+
+### Breaking changes
+- None.
+
+### Required steps
+- If you use shell permission rules, open Settings > Tools & Permissions and click "Clean up rules" to migrate saved rules: pure-scaffolding allows are dropped and keyword-prefixed allows (like `do wc`) unwrap to the real command. This closes a case where loop and subshell bodies could auto-approve or dodge a deny. (#85, #84)
+
+### Added
+- Share Houston: a one-click share action in the sidebar footer, a "Share Houston…" menu item, a command palette entry, and `/share` in the terminal UI. macOS opens the native share menu; Windows and Linux copy the invite and offer email; the TUI copies over OSC 52 (works over SSH) and always prints the link. (#93)
+- Automatic update checks every 6 hours while Houston is open, not just at launch. (#83)
+- The "Check for Updates…" dialog now has an Update button that downloads and restarts into the new version on signed macOS. (#83)
+- A "Check for Updates…" item in a new Help menu on Windows and Linux. (#88)
+- Review findings now appear live under the review row as each reviewer reports, with verification status, skeptic votes, and a severity tally, instead of only in the final report. (#24)
+
+### Fixed
+- Windows connection failures now trust the OS certificate store, so chats and title generation work behind TLS-inspecting proxies and endpoint security. (#87)
+- Connection errors now include the real underlying cause (for example, an unresolved host or missing issuer certificate) instead of a bare "Connection error." (#87)
+- "Clean up rules" now actually removes redundant and dead shell allow rules and shows a status line (removed N / already tidy / error). (#82)
+- Count-only `head`/`tail` allow rules (like `tail -60`, `head -c 4000`) collapse to the bare program, so the Permissions panel no longer fills with near-duplicates. Rules naming a file or using `tail -f` stay exact. (#84)
+- Replaced em dashes in retry, step-limit, output-limit, and verification notices in the chat transcript. (#89)
+
+### Changed
+- Update downloads on Windows and Linux now go to the website instead of the GitHub Releases asset list. (#88)
+- The Updates controls moved out of Settings > Appearance into their own Updates tab. (#88)
+- "What's new" now appears as a non-modal card in the bottom-right corner that does not steal focus, instead of a centered modal. (#83)
+- Restarting to install an update, and quitting with ⌘Q, now ask first when chats or background tasks (terminals, backgrounded shells) are still running. (#83)
+
 ## v0.4.0 - 2026-10-01
 
 Website redesign, plus more reliable shell handling and clearer update and download guidance.
