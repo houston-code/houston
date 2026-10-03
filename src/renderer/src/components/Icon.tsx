@@ -36,6 +36,8 @@ export type IconName =
   | 'tasks'
   | 'gitBranch'
   | 'shield'
+  | 'share'
+  | 'mail'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Funnel.
@@ -207,6 +209,21 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M8 1.8 13 3.7v4.1c0 3.1-2.1 5.4-5 6.4-2.9-1-5-3.3-5-6.4V3.7L8 1.8z" />
       <path d="m5.8 7.8 1.6 1.6 2.8-3" />
+    </>
+  ),
+  // A box with an arrow leaving it: share (the platform share-sheet glyph).
+  share: (
+    <>
+      <path d="M8 10V2.5" />
+      <path d="M5.5 5 8 2.5 10.5 5" />
+      <path d="M5.5 7.5H4v6h8v-6h-1.5" />
+    </>
+  ),
+  // An envelope: send by email.
+  mail: (
+    <>
+      <path d="M2.5 4.5h11v7h-11z" />
+      <path d="m2.5 4.5 5.5 4.2 5.5-4.2" />
     </>
   )
 }

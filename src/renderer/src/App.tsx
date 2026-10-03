@@ -1263,6 +1263,13 @@ export default function App(): JSX.Element {
         run: () => void onImportConversation()
       },
       {
+        id: 'act-share',
+        title: 'Share Houston',
+        section: 'Actions',
+        keywords: 'invite friend email airdrop link',
+        run: () => void window.api.shareFromMenu()
+      },
+      {
         id: 'act-find',
         title: 'Find in conversation',
         section: 'Actions',

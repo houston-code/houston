@@ -33,3 +33,19 @@ describe('Check for Updates menu item', () => {
     expect(all.filter((l) => l === 'Check for Updates…')).toHaveLength(1)
   })
 })
+
+describe('Share Houston menu item', () => {
+  const itemLabels = (menu: { submenu?: unknown }): string[] =>
+    ((menu.submenu ?? []) as { label?: string }[]).map((i) => i.label ?? '')
+
+  it('is in the Help menu on Windows and Linux', () => {
+    const help = appMenuTemplate(false).find((m) => m.role === 'help')
+    expect(itemLabels(help!)).toContain('Share Houston…')
+  })
+
+  it('appears exactly once on macOS, in the app menu', () => {
+    const template = appMenuTemplate(true)
+    expect(itemLabels(template[0])).toContain('Share Houston…')
+    expect(template.flatMap(itemLabels).filter((l) => l === 'Share Houston…')).toHaveLength(1)
+  })
+})

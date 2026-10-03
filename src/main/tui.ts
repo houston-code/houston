@@ -58,7 +58,8 @@ import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
-import { truncateVisible, stripControlChars } from './tui-wrap'
+import { truncateVisible, stripControlChars, osc52Copy } from './tui-wrap'
+import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream } from './markdown-ansi'
 import { renderPreviewView } from './tui-diff'
 import { htmlToAnsi } from './syntax'
@@ -1200,6 +1201,7 @@ export function parseSlashCommand(
     }
     case 'help':
     case 'cwd':
+    case 'share':
     case 'cost':
     case 'model?':
       return { kind: 'handled' }
@@ -1269,6 +1271,7 @@ export const HELP_TEXT = [
   '  /theme [name]         list or switch color theme (default | bright | mono)',
   '  /image [path]         attach an image — from your clipboard, or a file',
   '  /cwd                  show the working directory',
+  '  /share                copy an invite to Houston to send a friend',
   '  /<name>               run a custom command from .houston/commands',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
@@ -3531,6 +3534,14 @@ function handleInfoCommand(
   }
   if (name === 'cwd') {
     deps.io.out(`${state.cwd}\n`)
+    return
+  }
+  if (name === 'share') {
+    // OSC 52 asks the terminal to put the invite on the clipboard; it works over SSH,
+    // and a terminal that blocks it ignores the sequence, so the link is printed too.
+    deps.io.out(osc52Copy(SHARE_MESSAGE))
+    deps.io.out(paint('✓ Invite copied (if your terminal allows clipboard access)\n', 'green'))
+    deps.io.out(`${SHARE_MESSAGE}\n`)
     return
   }
   if (name === 'cost') {
