@@ -6,10 +6,12 @@ import { providerStreamError, withProviderRetry } from './retry'
 
 /**
  * Auto-titling. A fresh chat shows the truncated first message as an instant
- * placeholder; once the first turn finishes we ask the conversation's own model for
- * a short, specific title and quietly replace it. Best-effort throughout — any
- * failure (no key, offline, a weak local model, a timeout) just leaves the
- * placeholder in place. The pure pieces (prompt building, output sanitizing) are
+ * placeholder; as soon as the first turn starts we ask the conversation's own model,
+ * in parallel with the turn, for a short, specific title and quietly replace it (so
+ * the sidebar updates within seconds, not after a long agentic turn). If that attempt
+ * misses, the turn's natural completion tries once more with the reply as extra
+ * context. Best-effort throughout — any failure (no key, offline, a weak local model,
+ * a timeout) just leaves the placeholder in place. The pure pieces (prompt building, output sanitizing) are
  * unit-tested without a provider; {@link maybeGenerateTitle} drives the one impure
  * step and the persistence.
  */
@@ -33,6 +35,13 @@ const TITLE_TIMEOUT_MS = 20_000
  * blip this is actually worth defending against; past that, the placeholder is fine.
  */
 const TITLE_RETRIES = 2
+
+/**
+ * Conversations with a title call already in flight. The turn-start and turn-end
+ * triggers can overlap (a short turn finishes before its title arrives); this keeps
+ * that to one provider call per chat instead of two racing ones.
+ */
+const inFlight = new Set<string>()
 
 /** System prompt for the title call: prose only, short, no decoration. */
 export const titleSystemPrompt = `You write a short, specific title for a coding-assistant conversation from its opening exchange. Reply with ONLY the title — no quotes, no markdown, no trailing punctuation, no preamble or explanation. Use 3 to 6 words in Title Case that name the concrete task or topic (for example: "Fix flaky auth test", "Add dark mode toggle", "Explain the build pipeline"). Never exceed 60 characters.`
@@ -114,10 +123,10 @@ export async function generateTitle(
 }
 
 /**
- * After a turn completes, give a still-auto-titled conversation a concise,
- * model-written title (at most once per chat). Builds its own provider from the
- * run's provider/model and bounds the call with a timeout so a slow model can't
- * leave a request hanging. Entirely best-effort: on any miss the placeholder title
+ * Give a still-auto-titled conversation a concise, model-written title (at most once
+ * per chat; a call already in flight for it makes this a no-op). Builds its own
+ * provider from the run's provider/model and bounds the call with a timeout so a slow
+ * model can't leave a request hanging. Entirely best-effort: on any miss the placeholder title
  * stays. `onTitle` fires only when the new title actually persisted (a racing manual
  * rename wins inside {@link setGeneratedTitle}), so callers can push it live.
  */
@@ -127,6 +136,7 @@ export async function maybeGenerateTitle(opts: {
   model: string
   onTitle?: (title: string) => void
 }): Promise<void> {
+  if (inFlight.has(opts.conversationId)) return
   const conv = getConversation(opts.conversationId)
   if (!conv || !needsGeneratedTitle(conv)) return
 
@@ -139,6 +149,7 @@ export async function maybeGenerateTitle(opts: {
     return // no usable key / unknown provider — keep the placeholder
   }
 
+  inFlight.add(opts.conversationId)
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), TITLE_TIMEOUT_MS)
   try {
@@ -148,5 +159,6 @@ export async function maybeGenerateTitle(opts: {
     // network/abort/provider error — silently keep the placeholder title.
   } finally {
     clearTimeout(timer)
+    inFlight.delete(opts.conversationId)
   }
 }
