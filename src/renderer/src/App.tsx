@@ -255,7 +255,7 @@ export default function App(): JSX.Element {
     if (!chat.running) void refreshConversations()
   }, [chat.running, refreshConversations])
 
-  // A model-generated title lands a beat after the run ends — patch it straight into
+  // A model-generated title lands a few seconds into the first run — patch it straight into
   // the list (and the header, which derives from it) rather than waiting for a refetch.
   useEffect(() => {
     return window.api.onConversationTitleChanged(({ id, title }) => {
