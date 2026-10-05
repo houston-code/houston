@@ -279,6 +279,13 @@ no second `Enter`. Several such messages go together as one.
 - **`/changes`** (also `/diff`) summarizes everything different in the working
   tree: each file with its status and how many lines it gained and lost, plus a
   total. The natural question after a long autonomous run.
+- **Shipping changes (desktop app).** When the working tree has changes, the bar
+  above the composer and the Changes panel offer one button that fits the
+  repository: **Create PR** when it has commits and a GitHub remote, **Publish to
+  GitHub** when it has no remote yet (commit, create the repository, push), **Push
+  first commit** when a remote exists but nothing is committed, and **Commit &
+  push** for a remote that isn't on GitHub. Each hands the work to the agent as a
+  normal turn, so every git and network step goes through your approvals.
 
 `/undo` covers the last turn's file writes only. It does not undo shell commands,
 and it does not touch git history.

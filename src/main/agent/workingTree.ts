@@ -7,6 +7,7 @@ import {
   type FileDiff,
   type WorkingTreeChanges
 } from '@shared/workingTree'
+import { classifyRemoteUrl, type RepoShipState } from '@shared/shipAction'
 import { runGitCapture } from './gitRead'
 
 /** Cap how many untracked files we read so a junk-filled tree can't stall the UI. */
@@ -94,5 +95,39 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
 
   const files = [...tracked, ...untracked]
   const { added, removed } = totalStat(files)
-  return { isRepo: true, branch, files, added, removed, ...(truncated ? { truncated: true } : {}) }
+  const ship = await collectShipState(root)
+  return {
+    isRepo: true,
+    branch,
+    files,
+    added,
+    removed,
+    ship,
+    ...(truncated ? { truncated: true } : {})
+  }
+}
+
+/**
+ * Whether HEAD has a commit and which remote changes would ship to, so the UI can
+ * offer "Publish to GitHub" in a fresh repo instead of a "Create PR" that can only
+ * fail. Prefers `origin`, else the first remote. Only the remote's name and host
+ * class are returned; the URL stays in this process because it can carry a token.
+ */
+export async function collectShipState(root: string): Promise<RepoShipState> {
+  const [head, remotes] = await Promise.all([
+    runGitCapture(['rev-parse', '--verify', '--quiet', 'HEAD'], root),
+    runGitCapture(['remote'], root)
+  ])
+  const hasCommits = head.ok && head.stdout.trim() !== ''
+  const names = remotes.ok
+    ? remotes.stdout
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean)
+    : []
+  const name = names.includes('origin') ? 'origin' : names[0]
+  if (!name) return { hasCommits, remote: null }
+  const url = await runGitCapture(['remote', 'get-url', name], root)
+  const host = url.ok ? classifyRemoteUrl(url.stdout) : 'other'
+  return { hasCommits, remote: { name, host } }
 }

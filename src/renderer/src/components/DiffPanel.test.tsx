@@ -134,21 +134,42 @@ describe('DiffPanel', () => {
 
   it('hands off to the agent when Create PR is clicked', async () => {
     installApi(sampleChanges)
-    const onCreatePr = vi.fn()
-    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onCreatePr={onCreatePr} />)
+    const onShip = vi.fn()
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onShip={onShip} />)
     fireEvent.click(await screen.findByRole('button', { name: /Create PR/ }))
-    expect(onCreatePr).toHaveBeenCalledTimes(1)
+    expect(onShip).toHaveBeenCalledTimes(1)
+    expect(onShip.mock.calls[0][0].kind).toBe('create-pr')
+  })
+
+  it('offers Publish to GitHub instead of Create PR in a repo with no remote', async () => {
+    installApi({ ...sampleChanges, ship: { hasCommits: false, remote: null } })
+    const onShip = vi.fn()
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onShip={onShip} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish to GitHub' }))
+    expect(screen.queryByRole('button', { name: /Create PR/ })).not.toBeInTheDocument()
+    expect(screen.getByText(/No remote yet/)).toBeInTheDocument()
+    expect(onShip.mock.calls[0][0].kind).toBe('publish')
+    expect(onShip.mock.calls[0][0].prompt).toMatch(/gh_repo_create/)
+  })
+
+  it('offers Commit & push for a non-GitHub remote', async () => {
+    installApi({
+      ...sampleChanges,
+      ship: { hasCommits: true, remote: { name: 'origin', host: 'other' } }
+    })
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onShip={vi.fn()} />)
+    expect(await screen.findByRole('button', { name: 'Commit & push' })).toBeInTheDocument()
   })
 
   it('disables Create PR while a run is in progress', async () => {
     installApi(sampleChanges)
-    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onCreatePr={vi.fn()} creating />)
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onShip={vi.fn()} creating />)
     expect(await screen.findByRole('button', { name: /Create PR/ })).toBeDisabled()
   })
 
   it('hides Create PR when there are no changes', async () => {
     installApi({ isRepo: true, branch: 'main', files: [], added: 0, removed: 0 })
-    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onCreatePr={vi.fn()} />)
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} onShip={vi.fn()} />)
     expect(await screen.findByText('No uncommitted changes.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Create PR/ })).not.toBeInTheDocument()
   })
