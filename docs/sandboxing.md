@@ -24,7 +24,15 @@ The macOS and Linux backends give us one specific primitive:
 > writes** outside the project directory and **deny network** by default.
 
 It is path-scoped, write-oriented, per-process, needs no admin, and is cheap to set up
-per command. Seatbelt and bubblewrap both provide exactly that. Windows has no
+per command. Seatbelt and bubblewrap both provide exactly that.
+
+A command may also signal the processes it started (children and grandchildren), because
+build tools stop their own workers: Next.js, webpack, and jest-worker fail with
+`kill EPERM` otherwise. It may not signal anything outside its own sandbox: not the
+host's processes and not another `run_shell` command's. Seatbelt scopes this with
+`(allow signal (target same-sandbox))`, where each `sandbox-exec` launch is its own
+sandbox; bubblewrap gets it from `--unshare-pid`, which hides every other process.
+Conformance tests C5b and C2b pin both halves. Windows has no
 broadly-available primitive with the same shape, which is why its backend runs
 unconfined. The rest of this document records *why* the obvious Windows candidates were
 rejected, so the decision isn't re-litigated from scratch.

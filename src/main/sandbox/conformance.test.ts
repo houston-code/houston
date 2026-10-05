@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { selectBackend } from './select'
 import { runWithBackend } from './shared'
 import { startEgressProxy } from './egress-proxy'
@@ -101,6 +101,17 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
     expect(r.stdout.trim()).toMatch(/^\d+$/)
   })
 
+  it('C5b the command can signal its own children and grandchildren', async () => {
+    // Build tools stop their own workers (Next.js, jest-worker, webpack): a profile
+    // that only lets a process signal itself fails them with `kill EPERM`.
+    const r = await run(
+      '( sleep 30 & echo $! > gc.pid; wait ) & sleep 0.3; ' +
+        'sleep 30 & kill $! && kill "$(cat gc.pid)" && echo SIGNALLED; wait'
+    )
+    expect(r.stdout).toContain('SIGNALLED')
+    expect(r.exitCode).toBe(0)
+  })
+
   it('C6 a timeout kills the command and settles', async () => {
     const r = await run('sleep 30', { timeoutMs: 400 })
     expect(r.timedOut).toBe(true)
@@ -118,6 +129,20 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
     const r = await run(`mkdir -p ${sq(outside)} && printf hi > ${sq(f)}`)
     expect(r.exitCode).not.toBe(0)
     expect(existsSync(f)).toBe(false)
+  })
+
+  itEnforced('C2b processes outside the sandbox cannot be signalled', async () => {
+    // A host process with the same uid: only the sandbox should stop it from dying.
+    const victim = spawn('sleep', ['30'], { stdio: 'ignore' })
+    try {
+      const r = await run(`kill ${victim.pid}`)
+      expect(r.exitCode).not.toBe(0)
+      expect(victim.exitCode).toBeNull()
+      expect(victim.signalCode).toBeNull()
+      expect(() => process.kill(victim.pid!, 0)).not.toThrow()
+    } finally {
+      victim.kill('SIGKILL')
+    }
   })
 
   itEnforced('C4a network is denied when allowNetwork=false', async () => {
