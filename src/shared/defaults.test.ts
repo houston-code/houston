@@ -57,6 +57,17 @@ describe('defaultSettings', () => {
     expect(openai.defaultModel).toBe('gpt-5.6-sol')
   })
 
+  it('seeds the current Gemini lineup with a stable default', () => {
+    const gemini = defaultSettings().providers.find((p) => p.id === 'gemini')!
+    expect(gemini.models.map((m) => m.id)).toEqual([
+      'gemini-3.1-pro-preview',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite'
+    ])
+    // Never a preview id, and never 2.5-pro, which new users can no longer call.
+    expect(gemini.defaultModel).toBe('gemini-3.8-flash')
+  })
+
   it('seeds claude-fable-5 on the Anthropic provider', () => {
     const anthropic = defaultSettings().providers.find((p) => p.id === 'anthropic')!
     expect(anthropic.models.map((m) => m.id)).toContain('claude-fable-5')
@@ -254,7 +265,7 @@ describe('pruneDefaultModels', () => {
         defaultModel: 'gemini-2.5-flash'
       })
     ]
-    expect(pruneDefaultModels(saved, ['gemini-2.5-flash'])[0].defaultModel).toBe('gemini-2.5-pro')
+    expect(pruneDefaultModels(saved, ['gemini-2.5-flash'])[0].defaultModel).toBe('gemini-3.8-flash')
   })
 
   it('keeps a defaultModel that was not pruned', () => {

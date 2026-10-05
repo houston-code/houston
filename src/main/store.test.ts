@@ -155,7 +155,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(6)
+    expect(getSettings().schemaVersion).toBe(7)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -209,7 +209,7 @@ describe('settings migration — retired Gemini models (v6)', () => {
     expect(ids).not.toContain('gemini-2.5-flash')
     expect(ids).not.toContain('gemini-2.0-flash')
     expect(ids).toContain('gemini-2.5-pro')
-    expect(ids).toContain('gemini-3.1-flash-lite')
+    expect(ids).toContain('gemini-3.8-flash') // the current line, via the v7 add
   })
 
   it('falls back to the built-in default when defaultModel pointed at a retired model', async () => {
@@ -220,7 +220,7 @@ describe('settings migration — retired Gemini models (v6)', () => {
     })
     const { getSettings } = await loadStore()
     const gemini = getSettings().providers.find((p) => p.id === 'gemini')!
-    expect(gemini.defaultModel).toBe('gemini-2.5-pro')
+    expect(gemini.defaultModel).toBe('gemini-3.8-flash')
   })
 
   it('leaves a same-named model on a custom endpoint alone', async () => {
@@ -246,9 +246,9 @@ describe('settings migration — retired Gemini models (v6)', () => {
   })
 
   it('does not re-add the retired models on a later load', async () => {
-    // The prune must stick: a v6 install reloading must not resurrect them.
+    // The prune must stick: an up-to-date install reloading must not resurrect them.
     writeSettings({
-      schemaVersion: 6,
+      schemaVersion: 7,
       providers: [geminiProvider(['gemini-2.5-pro'])]
     })
     const { getSettings } = await loadStore()
@@ -256,6 +256,20 @@ describe('settings migration — retired Gemini models (v6)', () => {
       .providers.find((p) => p.id === 'gemini')!
       .models.map((m) => m.id)
     expect(ids).toEqual(['gemini-2.5-pro'])
+  })
+
+  it('adds the current Gemini line on the v7 bump without pruning 2.5-pro', async () => {
+    // 2.5-pro is closed to NEW users only; an account that has it keeps working.
+    writeSettings({ schemaVersion: 6, providers: [geminiProvider(['gemini-2.5-pro'], 'gemini-2.5-pro')] })
+    const { getSettings } = await loadStore()
+    const gemini = getSettings().providers.find((p) => p.id === 'gemini')!
+    expect(gemini.models.map((m) => m.id)).toEqual([
+      'gemini-2.5-pro',
+      'gemini-3.1-pro-preview',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite'
+    ])
+    expect(gemini.defaultModel).toBe('gemini-2.5-pro') // the user's stored choice stands
   })
 })
 
