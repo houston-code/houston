@@ -28,6 +28,31 @@ describe('anthropic thinking', () => {
     expect(anthropicSupportsThinking('claude-3-5-sonnet')).toBe(false)
   })
 
+  // The 5.x Opus / Sonnet lines matched no family in the old 4.x-only gate, so a
+  // fetched Opus 5.5 was silently sent no thinking config at all.
+  it('gates the Claude 5.x generation on every host', () => {
+    for (const id of [
+      'claude-opus-5-5',
+      'claude-opus-5',
+      'claude-sonnet-5-5',
+      'claude-sonnet-5',
+      'claude-fable-5-1',
+      'anthropic.claude-opus-5-5',
+      'claude-sonnet-5-5@20260901'
+    ]) {
+      expect(anthropicSupportsThinking(id)).toBe(true)
+      expect(anthropicUsesLegacyThinking(id)).toBe(false)
+      expect(anthropicSupportsXhigh(id)).toBe(true)
+      expect(anthropicThinking(id, 'xhigh')).toMatchObject({ kind: 'adaptive', effort: 'xhigh' })
+    }
+  })
+
+  it('clamps xhigh on the 4.6 line, which tops out at high', () => {
+    expect(anthropicSupportsXhigh('claude-opus-4-6')).toBe(false)
+    expect(anthropicSupportsXhigh('claude-sonnet-4-6')).toBe(false)
+    expect(anthropicThinking('claude-sonnet-4-6', 'xhigh')).toMatchObject({ effort: 'high' })
+  })
+
   it('routes Fable through adaptive thinking with the xhigh tier', () => {
     // Fable has no legacy budget shape and does expose xhigh, like Opus 4.7/4.8.
     expect(anthropicThinking('claude-fable-5', 'high')).toMatchObject({

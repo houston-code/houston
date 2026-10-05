@@ -40,9 +40,14 @@ const ANTHROPIC_BUDGET: Record<'low' | 'medium' | 'high', number> = {
 /** Extra output tokens to allow on top of the thinking budget for the reply. */
 export const ANTHROPIC_REPLY_HEADROOM = 8192
 
-/** Claude models that support thinking at all (3.7, the 4.x family, and Fable / Mythos). */
+/**
+ * Claude models that support thinking at all: 3.7, the Opus / Sonnet / Haiku lines
+ * from 4.x on (the generation is matched as a range, so Opus 5.5 and Sonnet 5.5 are
+ * covered by the same family rule as 4.x), and Fable / Mythos. A miss here is silent:
+ * the model is sent no thinking config, so reasoning just never shows up.
+ */
 export function anthropicSupportsThinking(model: string): boolean {
-  return /claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-|fable|mythos)/i.test(model)
+  return /claude.*(3-7|(opus|sonnet|haiku)-[4-9]|-4-|fable|mythos)/i.test(model)
 }
 
 /**
@@ -66,11 +71,12 @@ export function anthropicUsesLegacyThinking(model: string): boolean {
 }
 
 /**
- * The `xhigh` effort tier exists only on Opus 4.7+ (and Fable / Mythos); older
- * effort-capable models top out at `high`, so `xhigh` is clamped there.
+ * The `xhigh` effort tier exists on Opus 4.7+, Sonnet 5+ and Fable / Mythos; older
+ * effort-capable models (Opus 4.6, Sonnet 4.6) top out at `high`, so `xhigh` is
+ * clamped there.
  */
 export function anthropicSupportsXhigh(model: string): boolean {
-  return /claude-(opus-4-(7|8)|fable|mythos)/i.test(model)
+  return /claude-(opus-4-[7-9]|opus-[5-9]|sonnet-[5-9]|fable|mythos)/i.test(model)
 }
 
 /**
