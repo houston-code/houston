@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 7
+export const SETTINGS_SCHEMA_VERSION = 8
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -71,18 +71,13 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'openai',
       kind: 'openai',
       label: 'OpenAI (GPT)',
-      // Current GPT-5.x line: the gpt-5.6 flagship family (sol/terra/luna tiers) plus a
-      // couple of recent still-available versions, and o3 for reasoning. Starting points
-      // only — the live list is a Fetch away, and the display name derives from the id.
-      models: [
-        { id: 'gpt-5.6-sol' },
-        { id: 'gpt-5.6-terra' },
-        { id: 'gpt-5.6-luna' },
-        { id: 'gpt-5.5' },
-        { id: 'gpt-5.4' },
-        { id: 'o3' }
-      ],
-      defaultModel: 'gpt-5.6-sol',
+      // The GPT-6 line, one model per codename tier: astra (flagship), sol (near-astra at a
+      // fifth of the price, so the default), luna (efficient). The GPT-5.x and o-series
+      // models it supersedes still serve, so the v8 migration only adds these ids to
+      // existing installs. Starting points only: the live list is a Fetch away, and the
+      // display name derives from the id.
+      models: [{ id: 'gpt-6-astra' }, { id: 'gpt-6.1-sol' }, { id: 'gpt-6-luna' }],
+      defaultModel: 'gpt-6.1-sol',
       requiresKey: true,
       hasKey: false,
       builtIn: true

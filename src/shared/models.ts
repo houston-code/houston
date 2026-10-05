@@ -38,11 +38,10 @@ const ANTHROPIC: FamilyRule[] = [
   { name: 'haiku', test: /haiku/ }
 ]
 const OPENAI: FamilyRule[] = [
-  // GPT minor versions (gpt-5.5, gpt-5.4) match the family rule for their line and sort
-  // by version, exactly like Claude's Opus 4.8/4.7 — so the realistic "next model" case
-  // is already covered without a speculative rule for an integer generation that doesn't
-  // exist. A genuinely new family/generation lands in the curated defaults when it ships.
-  { name: 'gpt-5', test: /gpt-5/ },
+  // The current GPT generations (5.x, 6.x) form one family that sorts by version, exactly
+  // like Claude's Opus 5.5/4.8, so gpt-6.1 precedes gpt-6 precedes gpt-5.6. The range
+  // keeps a later generation in the family instead of the unknown bucket.
+  { name: 'gpt', test: /gpt-([5-9]|[1-9]\d)/ },
   { name: 'gpt-4.1', test: /gpt-4\.1/ },
   { name: 'gpt-4o', test: /gpt-4o/ },
   { name: 'o-series', test: /(^|[^a-z0-9])o\d/ },
@@ -156,12 +155,13 @@ function versionScore(id: string): number {
 
 /**
  * Size/capability tier within a family, smaller = more capable (sorts first):
- * base < mini < lite < nano. Also maps OpenAI's gpt-5.6 codename tiers onto the same
- * scale — sol (flagship) < terra (mid) < luna (efficient) — so the flagship sorts
+ * base < mini < lite < nano. Also maps OpenAI's codename tiers onto the same scale:
+ * astra (GPT-6 flagship) < sol < terra (mid) < luna (efficient), so the flagship sorts
  * first instead of alphabetically (luna, sol, terra). `\b` avoids the "mini" in
  * "gemini". Codenames are volatile; a live Fetch is the source of truth for the list.
  */
 function sizeRank(id: string): number {
+  if (/\bastra\b/.test(id)) return -1
   if (/\bnano\b|\bluna\b/.test(id)) return 3
   if (/\blite\b/.test(id)) return 2
   if (/\bmini\b|\bterra\b/.test(id)) return 1

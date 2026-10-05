@@ -79,7 +79,7 @@ export interface ModelPricing {
   /**
    * Price per 1M cached-input tokens read back from the prompt cache. Cache-read
    * discounts vary by family (Anthropic 0.1x, GPT-4o 0.5x, GPT-4.1/o-series 0.25x,
-   * GPT-5 0.1x, Gemini 0.1x), so it's a price, not a shared multiplier. Absent ⇒
+   * GPT-5+ 0.1x, Gemini 0.1x), so it's a price, not a shared multiplier. Absent ⇒
    * fall back to `input * CACHE_READ_PRICE_MULTIPLIER` (the Anthropic rate).
    */
   cacheRead?: number
@@ -90,6 +90,41 @@ export interface ModelPricing {
    */
   cacheWrite?: number
 }
+
+/** OpenAI rates per 1M tokens: [id pattern, input, output, cached input (absent: none)]. */
+const OPENAI_PRICES: Array<[RegExp, number, number, number?]> = [
+  // GPT-6, by codename tier. A later 6.x release of a tier falls to that tier's rate.
+  [/gpt-6[\d.]*-astra/, 10, 50, 1],
+  [/gpt-6-sol/, 2, 10, 0.2],
+  [/gpt-6[\d.]*-luna/, 0.1, 0.5, 0.01],
+  [/gpt-6/, 2, 10, 0.1], // gpt-6.1-sol and later sol releases
+  // GPT-5.6 is priced per tier; the bare gpt-5.6 alias routes to sol.
+  [/gpt-5\.6-terra/, 2, 12, 0.2],
+  [/gpt-5\.6-luna/, 0.2, 1.2, 0.02],
+  [/gpt-5\.6/, 4, 20, 0.4],
+  [/gpt-5\.5-pro/, 30, 180],
+  [/gpt-5\.5/, 5, 30, 0.5],
+  [/gpt-5\.4-pro/, 30, 180],
+  [/gpt-5\.4-mini/, 0.75, 4.5, 0.075],
+  [/gpt-5\.4-nano/, 0.2, 1.25, 0.02],
+  [/gpt-5\.4/, 2.5, 15, 0.25],
+  [/gpt-5\.2-pro/, 21, 168],
+  [/gpt-5\.2/, 1.75, 14, 0.175],
+  [/gpt-5-pro/, 15, 120],
+  [/gpt-5-mini/, 0.25, 2, 0.025],
+  [/gpt-5-nano/, 0.05, 0.4, 0.005],
+  [/gpt-5/, 1.25, 10, 0.125], // gpt-5, gpt-5.1
+  [/gpt-4o-mini/, 0.15, 0.6, 0.075],
+  [/gpt-4o/, 2.5, 10, 1.25],
+  [/gpt-4\.1-mini/, 0.4, 1.6, 0.1],
+  [/gpt-4\.1/, 2, 8, 0.5],
+  [/(^|[^a-z0-9])o4-mini/, 1.1, 4.4, 0.275],
+  [/(^|[^a-z0-9])o3-mini/, 1.1, 4.4, 0.55],
+  [/(^|[^a-z0-9])o3-pro/, 20, 80],
+  [/(^|[^a-z0-9])o3([^a-z0-9]|$)/, 2, 8, 0.5],
+  [/(^|[^a-z0-9])o1-pro/, 150, 600],
+  [/(^|[^a-z0-9])o1([^a-z0-9]|$)/, 15, 60, 7.5]
+]
 
 /**
  * Best-effort USD price per 1M tokens for a model id, matched by family. Returns
@@ -112,24 +147,15 @@ export function modelPricing(model: string): ModelPricing | null {
   if (/sonnet-[5-9]/.test(m)) return { input: 2, output: 10 }
   if (m.includes('sonnet')) return { input: 3, output: 15 }
   if (m.includes('haiku')) return { input: 1, output: 5 }
-  // OpenAI (GPT / o-series). Cache reads bill at a per-family discount (0.5x on
-  // GPT-4o, 0.25x on GPT-4.1/o-series, 0.1x on GPT-5.x); cache writes are free
-  // (cacheWrite: 0), unlike Anthropic's 1.25x write surcharge.
-  if (m.includes('gpt-4o-mini')) return { input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 }
-  if (m.includes('gpt-4o')) return { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 0 }
-  if (m.includes('gpt-4.1-mini')) return { input: 0.4, output: 1.6, cacheRead: 0.1, cacheWrite: 0 }
-  if (m.includes('gpt-4.1')) return { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 }
-  if (m.includes('o4-mini') || m.includes('o3-mini'))
-    return { input: 1.1, output: 4.4, cacheRead: 0.275, cacheWrite: 0 }
-  if (/(^|[^a-z0-9])o3([^a-z0-9]|$)/.test(m)) return { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 }
-  // The gpt-5.6 family is priced per codename tier; the bare gpt-5.6 alias routes to
-  // sol, so it takes the flagship rate. Earlier gpt-5.x keep the flat family rate.
-  if (m.includes('gpt-5.6')) {
-    if (m.includes('terra')) return { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }
-    if (m.includes('luna')) return { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 }
-    return { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 }
+  // OpenAI (GPT / o-series): the published per-model rates, matched most specific first
+  // (a `-mini` / `-pro` variant before its base id). Cache writes are free (cacheWrite:
+  // 0), unlike Anthropic's 1.25x write surcharge. The `-pro` models offer no cached-input
+  // rate, so a read is priced at the input rate.
+  const openai = OPENAI_PRICES.find(([re]) => re.test(m))
+  if (openai) {
+    const [, input, output, cacheRead] = openai
+    return { input, output, cacheRead: cacheRead ?? input, cacheWrite: 0 }
   }
-  if (m.includes('gpt-5')) return { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 }
   // Google (Gemini). Rates vary by release rather than by tier, so the specific ids are
   // matched before each tier's fallback (lite before flash, which it contains). Cache
   // reads are 0.1x and implicit-cache writes are free. Pro prices are the <=200K-prompt
@@ -265,9 +291,10 @@ export function contextWindowFor(model: string): number | null {
     return 200_000
   }
   if (m.includes('gemini')) return 1_000_000
-  // The gpt-5.6 family (sol/terra/luna tiers, and the bare gpt-5.6 alias) ships a
-  // 1M-token window; the minor-version range keeps future 5.x bumps on it, like the
-  // Claude ranges above. gpt-5 through gpt-5.5 (and their -mini/-nano) stay at 400K.
+  // GPT-6 ships a 1.05M-token window across its tiers; the generation range keeps later
+  // releases on it. The gpt-5.6 family (sol/terra/luna tiers, and the bare gpt-5.6
+  // alias) ships 1M; gpt-5 through gpt-5.5 (and their -mini/-nano) stay at 400K.
+  if (/gpt-([6-9]|[1-9]\d)/.test(m)) return 1_050_000
   if (/gpt-5\.[6-9]/.test(m)) return 1_000_000
   if (m.includes('gpt-5')) return 400_000
   if (m.includes('gpt-4.1')) return 1_000_000
@@ -341,7 +368,7 @@ function hasVision(m: string): boolean {
   }
   // OpenAI: GPT-4o, GPT-4.1, GPT-5, and the reasoning o-series accept images;
   // legacy text-only gpt-4 / gpt-3.5 do not.
-  if (m.includes('gpt-4o') || m.includes('gpt-4.1') || m.includes('gpt-5')) return true
+  if (m.includes('gpt-4o') || m.includes('gpt-4.1') || /gpt-([5-9]|[1-9]\d)/.test(m)) return true
   if (isOSeries(m)) return true
   // Google: Gemini 1.5 and everything from 2.x on are multimodal; 1.0 (gemini-pro) was
   // text-only. The 3.x line has to be listed explicitly — the old `2\.`-only pattern
@@ -351,10 +378,10 @@ function hasVision(m: string): boolean {
 }
 
 function hasReasoning(m: string): boolean {
-  // OpenAI o-series and GPT-5 are reasoning models. Mirrors the heuristic in
-  // main/providers/reasoning.ts (openaiSupportsReasoning): an "o<digit>" or
-  // "gpt-5" at the start of the id.
-  if (/^(o\d|gpt-5)/.test(m)) return true
+  // OpenAI o-series and GPT from gpt-5 on are reasoning models. Mirrors the heuristic
+  // in main/providers/reasoning.ts (openaiSupportsReasoning): an "o<digit>" or a gpt-5+
+  // generation at the start of the id.
+  if (/^(o\d|gpt-([5-9]|[1-9]\d))/.test(m)) return true
   // Anthropic extended thinking — Claude 3.7, Opus / Sonnet / Haiku from 4.x on, and
   // Fable / Mythos. Mirrors anthropicSupportsThinking in main/providers/reasoning.ts.
   if (/claude.*(3-7|(opus|sonnet|haiku)-[4-9]|-4-|fable|mythos)/.test(m)) return true

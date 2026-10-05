@@ -170,6 +170,7 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   // the current OpenAI GPT-5.x line (scoped to the new ids, per the "stays deleted" rule
   // above — older gpt-5/gpt-4o defaults the user kept are left untouched).
   if (fromVersion < 4) {
+    // (The OpenAI add is a no-op since v8 replaced these in the seed with the GPT-6 line.)
     const newOpenAiModels = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4']
     providers = stripBuiltInModelLabels(backfillDefaultModels(providers, newOpenAiModels))
   }
@@ -204,6 +205,10 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
       'gemini-3.8-flash',
       'gemini-3.5-flash-lite'
     ])
+  }
+  // v8: the GPT-6 line. Nothing is pruned: the GPT-5.x models it supersedes still serve.
+  if (fromVersion < 8) {
+    providers = backfillDefaultModels(providers, ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'])
   }
   const merged: AppSettings = {
     ...base,

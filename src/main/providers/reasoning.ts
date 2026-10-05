@@ -150,9 +150,9 @@ export function anthropicThinking(
   }
 }
 
-/** OpenAI reasoning models (o-series and gpt-5) accept `reasoning_effort`. */
+/** OpenAI reasoning models (o-series, and GPT from gpt-5 on) accept `reasoning_effort`. */
 export function openaiSupportsReasoning(model: string): boolean {
-  return /^(o\d|gpt-5)/i.test(model)
+  return /^(o\d|gpt-([5-9]|[1-9]\d))/i.test(model)
 }
 
 /**
