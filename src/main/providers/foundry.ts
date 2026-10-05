@@ -75,7 +75,7 @@ export function createFoundryProvider(opts: FoundryOptions = {}): Provider {
         })
     ))
 
-  return createMessagesProvider(getClient)
+  return createMessagesProvider(getClient, { thinkingBindingControls: false })
 }
 
 /**

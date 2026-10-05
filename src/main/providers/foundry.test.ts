@@ -130,6 +130,16 @@ describe('foundry reuses the Anthropic adapter', () => {
     expect(body.output_config).toEqual({ effort: 'xhigh' })
   })
 
+  it('does not send the thinking-binding beta, which Foundry has not confirmed', async () => {
+    const { body } = await run(
+      { resource: 'r', apiKey: 'k' },
+      { model: 'claude-opus-5-5', reasoningEffort: 'high' }
+    )
+    expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+    const opts = (h.stream.mock.calls.at(-1)![1] ?? {}) as { headers?: Record<string, string> }
+    expect(opts.headers?.['anthropic-beta']).toBeUndefined()
+  })
+
   it('still sets prompt-cache breakpoints', async () => {
     const { body } = await run({ resource: 'r', apiKey: 'k' }, { model: 'claude-opus-4-8', system: 'sys' })
     const system = body.system as Array<{ cache_control?: unknown }>

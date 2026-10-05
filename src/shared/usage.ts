@@ -101,8 +101,15 @@ export function modelPricing(model: string): ModelPricing | null {
   const m = model.toLowerCase()
   // Anthropic (Claude) — current per-MTok rates. Fable / Mythos are the flagship
   // tier and priced above Opus; check them before the opus/sonnet/haiku families.
+  // Cache writes are 1.25x input everywhere (the absent-field default); cache reads
+  // are 0.1x except where a release cut them: Fable / Mythos 5.1 read at 0.025x and
+  // Opus 5.5 at 0.05x. Opus 5.5 and the Sonnet 5 line were also repriced below their
+  // predecessors, so those ids are matched before the family-wide rate.
+  if (/(fable|mythos)-5-1/.test(m)) return { input: 10, output: 50, cacheRead: 0.25 }
   if (m.includes('fable') || m.includes('mythos')) return { input: 10, output: 50 }
+  if (/opus-5-5/.test(m)) return { input: 4, output: 20, cacheRead: 0.2 }
   if (m.includes('opus')) return { input: 5, output: 25 }
+  if (/sonnet-[5-9]/.test(m)) return { input: 2, output: 10 }
   if (m.includes('sonnet')) return { input: 3, output: 15 }
   if (m.includes('haiku')) return { input: 1, output: 5 }
   // OpenAI (GPT / o-series). Cache reads bill at a per-family discount (0.5x on
@@ -331,9 +338,9 @@ function hasReasoning(m: string): boolean {
   // main/providers/reasoning.ts (openaiSupportsReasoning): an "o<digit>" or
   // "gpt-5" at the start of the id.
   if (/^(o\d|gpt-5)/.test(m)) return true
-  // Anthropic extended thinking — Claude 3.7, the 4.x family, and Fable / Mythos.
-  // Mirrors anthropicSupportsThinking in main/providers/reasoning.ts.
-  if (/claude.*(3-7|sonnet-4|opus-4|haiku-4|-4-|fable|mythos)/.test(m)) return true
+  // Anthropic extended thinking — Claude 3.7, Opus / Sonnet / Haiku from 4.x on, and
+  // Fable / Mythos. Mirrors anthropicSupportsThinking in main/providers/reasoning.ts.
+  if (/claude.*(3-7|(opus|sonnet|haiku)-[4-9]|-4-|fable|mythos)/.test(m)) return true
   // Google: the Gemini 2.5 and 3.x lines ("thinking") reason. Mirrors geminiSupportsThinking
   // in main/providers/reasoning.ts — keep the two in lockstep.
   if (m.includes('gemini') && /2\.5|thinking|gemini-3/.test(m)) return true

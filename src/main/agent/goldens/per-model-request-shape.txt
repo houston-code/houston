@@ -9,7 +9,7 @@ host caps: {"reasoning":true}
 reasoning: effort=medium capable=true summary=- verbosity=-
 explicitCacheControl: false
 tools: 42
-usage event: usage {"cost":0.0045,"inputTokens":1000,"model":"claude-sonnet-5","outputTokens":100}
+usage event: usage {"cost":0.003,"inputTokens":1000,"model":"claude-sonnet-5","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 (baseline)
 

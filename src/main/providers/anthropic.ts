@@ -21,6 +21,13 @@ const DEFAULT_MAX_TOKENS = 8192
 const INTERLEAVED_THINKING_BETA = 'interleaved-thinking-2025-05-14'
 
 /**
+ * Beta header that unlocks `thinking.block_binding`, used to opt preserved-thinking
+ * models into dropping thinking blocks whose conversation prefix changed (see
+ * `anthropicPreservesThinking`) rather than rejecting the whole request.
+ */
+const THINKING_BINDING_BETA = 'thinking-binding-controls-2026-08-01'
+
+/**
  * Build the `thinking`/`redacted_thinking` content blocks that must lead an
  * assistant turn when extended thinking is enabled. Returns [] when thinking is
  * off or the turn has no (signed) reasoning to replay.
@@ -202,7 +209,18 @@ export interface MessagesClient {
  * identical on all three, and `req.model` is already in the host's own id
  * convention (the caller stores it that way), so nothing here rewrites it.
  */
-export function createMessagesProvider(getClient: () => Promise<MessagesClient>): Provider {
+export function createMessagesProvider(
+  getClient: () => Promise<MessagesClient>,
+  opts: {
+    /**
+     * Whether the host accepts the thinking-binding-controls beta. True on the
+     * Claude API, Bedrock and Vertex; Foundry's support is unconfirmed, and an
+     * unknown beta there would fail every turn, so it opts out.
+     */
+    thinkingBindingControls?: boolean
+  } = {}
+): Provider {
+  const bindingControls = opts.thinkingBindingControls ?? true
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
       const client = await getClient()
@@ -226,6 +244,13 @@ export function createMessagesProvider(getClient: () => Promise<MessagesClient>)
       // Thinking dictates max_tokens: legacy budget thinking needs room above the
       // budget; adaptive sizing keeps the reply's headroom unchanged (see reasoning.ts).
       const maxTokens = thinking ? thinking.maxTokens : req.maxTokens ?? DEFAULT_MAX_TOKENS
+      // Houston edits history (compaction, tool-result stubbing), which invalidates
+      // prefix-bound thinking blocks; drop those blocks rather than fail the turn.
+      const dropStaleBlocks = thinking?.kind === 'adaptive' && thinking.preserved && bindingControls
+      const betas = [
+        ...(thinking?.kind === 'budget' && thinking.interleaved ? [INTERLEAVED_THINKING_BETA] : []),
+        ...(dropStaleBlocks ? [THINKING_BINDING_BETA] : [])
+      ]
 
       const stream = client.messages.stream(
         {
@@ -238,7 +263,14 @@ export function createMessagesProvider(getClient: () => Promise<MessagesClient>)
           // with a 400 — they require adaptive thinking + output_config.effort.
           ...(thinking?.kind === 'adaptive'
             ? {
-                thinking: { type: 'adaptive' as const, display: thinking.display },
+                thinking: {
+                  type: 'adaptive' as const,
+                  display: thinking.display,
+                  // Not in the SDK's non-beta param types yet; sent as-is on the wire.
+                  ...(dropStaleBlocks
+                    ? { block_binding: { prefix_mismatch_behavior: 'drop_block' as const } }
+                    : {})
+                },
                 output_config: { effort: thinking.effort }
               }
             : thinking?.kind === 'budget'
@@ -249,9 +281,7 @@ export function createMessagesProvider(getClient: () => Promise<MessagesClient>)
           signal: req.signal,
           // Only legacy budget thinking needs the interleaved beta; adaptive
           // models reject/ignore it and interleave on their own.
-          ...(thinking?.kind === 'budget' && thinking.interleaved
-            ? { headers: { 'anthropic-beta': INTERLEAVED_THINKING_BETA } }
-            : {})
+          ...(betas.length ? { headers: { 'anthropic-beta': betas.join(',') } } : {})
         }
       )
 
