@@ -24,6 +24,7 @@ import {
   type CatalogEntry
 } from '@shared/provider-catalog'
 import { providerKeyUrl } from '@shared/provider-keys'
+import { runtimeMissingLine } from '@shared/runtimes'
 import type { FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
@@ -3402,6 +3403,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
           // part of the model's context.
           deps.io.out(paint(`\n· ${e.message}\n`, 'dim'))
+          break
+        case 'runtime_missing':
+          // Display-only: the model already got the hint in the run_shell result.
+          deps.io.out(paint(`\n${runtimeMissingLine(e)}\n`, 'yellow'))
           break
         case 'done':
           // One compact cost summary for the whole turn (this turn + running

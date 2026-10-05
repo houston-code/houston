@@ -533,6 +533,24 @@ describe('reduceEvent — loop-control notices', () => {
     expect(notice?.text).toBe('formatted 2 files')
   })
 
+  it('renders runtime_missing as a notice carrying its install action', () => {
+    const items = reduceEvent([], {
+      runId: RID,
+      type: 'runtime_missing',
+      runtime: 'node',
+      label: 'Node.js',
+      installCommand: 'brew install node',
+      url: 'https://nodejs.org/en/download'
+    })
+    const notice = items.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(notice?.text).toMatch(/Node\.js isn't installed/)
+    expect(notice?.runtime).toEqual({
+      label: 'Node.js',
+      installCommand: 'brew install node',
+      url: 'https://nodejs.org/en/download'
+    })
+  })
+
   it('a notice finalizes a streaming assistant bubble before appending', () => {
     const streaming = reduceEvent([], { runId: RID, type: 'text', delta: 'partial…' })
     const items = reduceEvent(streaming, { runId: RID, type: 'notice', message: 'note' })

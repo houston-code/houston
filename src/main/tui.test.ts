@@ -1792,6 +1792,24 @@ describe('runTui', () => {
     expect(t.text()).toContain('linted 3 files after the edit')
   })
 
+  it('renders a missing runtime with where to get it', async () => {
+    const { d } = deps([
+      {
+        runId: 'x',
+        type: 'runtime_missing',
+        runtime: 'python',
+        label: 'Python',
+        url: 'https://www.python.org/downloads/'
+      },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain("Python isn't installed")
+    expect(t.text()).toContain('https://www.python.org/downloads/')
+  })
+
   it('drives the spinner across a turn: start, relabel on events, stop', async () => {
     const { d } = deps([
       { runId: 'x', type: 'reasoning', delta: 'hmm' },

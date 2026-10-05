@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { EventEmitter } from 'node:events'
 import {
   augmentPath,
+  nvmDefaultBin,
+  versionManagerDirs,
+  type PathFs,
   CappedOutput,
   clampToolResult,
   pkgCacheDir,
@@ -48,6 +51,21 @@ describe('augmentPath', () => {
   it('omits ~/.local/bin when HOME is unset (POSIX)', () => {
     const out = augmentPath({ PATH: '/usr/bin' }, () => true, 'darwin')
     expect(out).not.toMatch(/\.local\/bin/)
+  })
+
+  it('adds version-manager dirs ahead of Homebrew, after the inherited PATH', () => {
+    const fsx = fakeFs({
+      '/Users/me/.nvm/versions/node': ['v20.1.0', 'v22.3.0'],
+      '/Users/me/.nvm/alias/default': '22'
+    })
+    const out = augmentPath({ PATH: minimalPath, HOME: '/Users/me' }, () => true, 'darwin', fsx).split(':')
+    expect(out.slice(0, 4)).toEqual(minimalPath.split(':'))
+    const nvm = out.indexOf('/Users/me/.nvm/versions/node/v22.3.0/bin')
+    expect(nvm).toBeGreaterThan(3)
+    expect(nvm).toBeLessThan(out.indexOf('/opt/homebrew/bin'))
+    expect(out).toContain('/Users/me/.volta/bin')
+    expect(out).toContain('/Users/me/.cargo/bin')
+    expect(new Set(out).size).toBe(out.length)
   })
 
   it('leaves the inherited PATH untouched on Windows (no POSIX dirs, no ~/.local/bin)', () => {
@@ -520,5 +538,76 @@ describe('spawnWithBackend — abort listener cleanup', () => {
     // The internal exit handler (which removes the listener) is also on 'exit'; let it run.
     await new Promise((r) => setImmediate(r))
     expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function))
+  })
+})
+
+/** A PathFs over a literal map: string values are files, arrays are directories. */
+function fakeFs(tree: Record<string, string | string[]>): PathFs {
+  return {
+    readFile: (p) => (typeof tree[p] === 'string' ? (tree[p] as string) : null),
+    readdir: (p) => (Array.isArray(tree[p]) ? (tree[p] as string[]) : [])
+  }
+}
+
+describe('nvmDefaultBin', () => {
+  const dir = '/h/.nvm'
+  const versions = { [`${dir}/versions/node`]: ['v18.20.8', 'v22.13.0', 'v22.22.3', 'v20.19.0', 'junk'] }
+  const bin = (v: string): string => `${dir}/versions/node/${v}/bin`
+
+  it('returns null when nvm has no installed versions', () => {
+    expect(nvmDefaultBin(dir, fakeFs({}))).toBeNull()
+  })
+
+  it('resolves a major-version alias to the newest matching install', () => {
+    expect(nvmDefaultBin(dir, fakeFs({ ...versions, [`${dir}/alias/default`]: '22\n' }))).toBe(
+      bin('v22.22.3')
+    )
+  })
+
+  it('resolves an exact version alias', () => {
+    expect(nvmDefaultBin(dir, fakeFs({ ...versions, [`${dir}/alias/default`]: 'v22.13.0' }))).toBe(
+      bin('v22.13.0')
+    )
+  })
+
+  it('follows lts alias chains', () => {
+    const fsx = fakeFs({
+      ...versions,
+      [`${dir}/alias/default`]: 'lts/*',
+      [`${dir}/alias/lts/*`]: 'lts/iron',
+      [`${dir}/alias/lts/iron`]: 'v20.19.0'
+    })
+    expect(nvmDefaultBin(dir, fsx)).toBe(bin('v20.19.0'))
+  })
+
+  it('falls back to the newest install for node/stable, a missing alias, or a bad one', () => {
+    for (const alias of ['node', 'stable', '', '../../etc/passwd', 'v99']) {
+      expect(nvmDefaultBin(dir, fakeFs({ ...versions, [`${dir}/alias/default`]: alias }))).toBe(
+        bin('v22.22.3')
+      )
+    }
+  })
+
+  it('does not loop forever on a self-referencing alias', () => {
+    const fsx = fakeFs({ ...versions, [`${dir}/alias/default`]: 'a', [`${dir}/alias/a`]: 'a' })
+    expect(nvmDefaultBin(dir, fsx)).toBe(bin('v22.22.3'))
+  })
+})
+
+describe('versionManagerDirs', () => {
+  it('is empty without HOME', () => {
+    expect(versionManagerDirs({}, 'darwin', fakeFs({}))).toEqual([])
+  })
+
+  it('honors NVM_DIR and FNM_DIR, and adds the macOS fnm dir only on darwin', () => {
+    const fsx = fakeFs({ '/custom/nvm/versions/node': ['v22.0.0'] })
+    const env = { HOME: '/h', NVM_DIR: '/custom/nvm', FNM_DIR: '/custom/fnm' }
+    const mac = versionManagerDirs(env, 'darwin', fsx)
+    expect(mac).toContain('/custom/nvm/versions/node/v22.0.0/bin')
+    expect(mac).toContain('/custom/fnm/aliases/default/bin')
+    expect(mac).toContain('/h/Library/Application Support/fnm/aliases/default/bin')
+    expect(versionManagerDirs(env, 'linux', fsx)).not.toContain(
+      '/h/Library/Application Support/fnm/aliases/default/bin'
+    )
   })
 })

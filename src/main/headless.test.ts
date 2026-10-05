@@ -617,6 +617,24 @@ describe('runHeadless', () => {
     expect(out.join('')).not.toContain('coverage report')
   })
 
+  it('prints a missing runtime with its install command to stderr', async () => {
+    const { d, out, err } = deps([
+      {
+        runId: 'run-1',
+        type: 'runtime_missing',
+        runtime: 'node',
+        label: 'Node.js',
+        installCommand: 'brew install node',
+        url: 'https://nodejs.org/en/download'
+      },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    expect(await runHeadless(baseOpts, d)).toBe(0)
+    expect(err.join('')).toContain("Node.js isn't installed")
+    expect(err.join('')).toContain('brew install node')
+    expect(out.join('')).not.toContain('Node.js')
+  })
+
   it('emits the notice event as raw JSON in --json mode without duplicating to stderr', async () => {
     const { d, out, err } = deps([
       { runId: 'run-1', type: 'notice', message: 'note for the user' },

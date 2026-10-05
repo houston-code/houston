@@ -846,6 +846,19 @@ export default function App(): JSX.Element {
     })
   }, [persistTerminal])
 
+  // A missing runtime's one-click install: run the command in a fresh terminal tab,
+  // then show the dock. The tab is created first so the dock's "open an empty
+  // terminal when shown with none" effect doesn't spawn a second one.
+  const runInTerminal = useCallback(
+    async (command: string) => {
+      await terminals.addTab({ run: command, title: 'Install' })
+      setTerminalMounted(true)
+      setTerminalOpen(true)
+      void persistTerminal({ terminalOpen: true })
+    },
+    [terminals, persistTerminal]
+  )
+
   // Open a background task from the title-bar indicator: surface + focus its
   // terminal tab (mounting/showing the dock), or switch to the conversation it
   // belongs to — its own for a chat, the spawning run for a background shell.
@@ -1635,6 +1648,7 @@ export default function App(): JSX.Element {
             onAnswer={chat.answerQuestion}
             onElicit={chat.answerElicitation}
             onOpenPlan={onOpenPlan}
+            onRunInTerminal={(command) => void runInTerminal(command)}
           />
         )}
 

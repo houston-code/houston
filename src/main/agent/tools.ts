@@ -14,6 +14,7 @@ import type {
 } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
+import { missingRuntime, missingRuntimeHint } from '@shared/runtimes'
 import {
   formatSweepList,
   formatSweepSummary,
@@ -1332,6 +1333,10 @@ const runShell: ToolDef = {
         if (opHint) parts.push(opHint)
       }
     }
+    // A missing runtime (exit 127 on `node`, `python3`, …): steer the model away
+    // from improvising a system install; the loop shows the user a one-click fix.
+    const runtime = missingRuntime(body, result.exitCode)
+    if (runtime) parts.push(missingRuntimeHint(runtime))
     // Honest signal: if the command ran unconfined, say so — run_shell's contract
     // promises a sandbox, and approval auto-approves shell on that premise.
     if (!result.sandboxed) parts.push(UNSANDBOXED_SHELL_NOTE)

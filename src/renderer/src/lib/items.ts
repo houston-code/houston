@@ -87,6 +87,8 @@ export interface NoticeItem {
   text: string
   /** `handoff` marks the "spawned from …" banner atop a spawned chat's transcript. */
   tone: 'error' | 'info' | 'handoff'
+  /** A missing language runtime, rendered with a one-click install. */
+  runtime?: { label: string; installCommand?: string; url: string }
 }
 export interface QuestionItem {
   kind: 'question'
@@ -501,6 +503,23 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       // directive) — transcript-only; it was never part of the model's context.
       const finalized = finalizeStreaming(items)
       return [...finalized, { kind: 'notice', id: nextId(), text: e.message, tone: 'info' }]
+    }
+    case 'runtime_missing': {
+      const finalized = finalizeStreaming(items)
+      return [
+        ...finalized,
+        {
+          kind: 'notice',
+          id: nextId(),
+          text: `${e.label} isn't installed, or isn't on the PATH Houston sees.`,
+          tone: 'error',
+          runtime: {
+            label: e.label,
+            url: e.url,
+            ...(e.installCommand ? { installCommand: e.installCommand } : {})
+          }
+        }
+      ]
     }
     case 'done': {
       // Any elicitation card still open when the run ends was answered for the

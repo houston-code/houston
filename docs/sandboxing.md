@@ -32,7 +32,13 @@ build tools stop their own workers: Next.js, webpack, and jest-worker fail with
 host's processes and not another `run_shell` command's. Seatbelt scopes this with
 `(allow signal (target same-sandbox))`, where each `sandbox-exec` launch is its own
 sandbox; bubblewrap gets it from `--unshare-pid`, which hides every other process.
-Conformance tests C5b and C2b pin both halves. Windows has no
+Conformance tests C5b and C2b pin both halves.
+
+The command's PATH is the inherited one plus, when they exist on disk, the bin dirs of
+per-user runtime managers (nvm's default Node, fnm, Volta, mise, asdf, pyenv, rbenv,
+rustup/cargo, Go, Bun, Deno) and Homebrew (`augmentPath` in `shared.ts`). A
+GUI-launched app never sources shell startup files, so without them an installed
+runtime looks missing. Windows has no
 broadly-available primitive with the same shape, which is why its backend runs
 unconfined. The rest of this document records *why* the obvious Windows candidates were
 rejected, so the decision isn't re-litigated from scratch.

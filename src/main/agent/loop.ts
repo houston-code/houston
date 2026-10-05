@@ -35,6 +35,8 @@ import {
 import { modelDisplayName } from '@shared/models'
 import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
+import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
+import { installHost } from './installHost'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
 import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
 import { createSecretRedactor } from './redact'
@@ -1772,6 +1774,23 @@ export async function startRun(
       ceiling: settings.maxIterationsCeiling
     })
     const writeIterations = new Set<number>()
+
+    // A run_shell that failed on a missing runtime (node, python3, …) gets a
+    // one-click install card in the GUI, once per runtime per run.
+    const runtimesAnnounced = new Set<string>()
+    const announceMissingRuntime = (output: string): void => {
+      const runtime = missingRuntime(output, shellExitCode(output))
+      if (!runtime || runtimesAnnounced.has(runtime.id)) return
+      runtimesAnnounced.add(runtime.id)
+      const install = installSuggestion(runtime, installHost())
+      emit({
+        type: 'runtime_missing',
+        runtime: runtime.id,
+        label: runtime.label,
+        url: install.url,
+        ...(install.command ? { installCommand: install.command } : {})
+      })
+    }
     let lastStallNudge: number | null = null
 
     // Stall / loop detection. Watches the per-iteration tool pattern for
@@ -2457,6 +2476,7 @@ export async function startRun(
         // gate is armed more narrowly — only an actual file write (kind 'write')
         // should trigger it, so a read-only shell command (ls/git log) never queues
         // a verify pass.
+        if (r.call.name === 'run_shell') announceMissingRuntime(output)
         const kind = lookupTool(r.call.name)?.kind
         if (!r.ok) iterErrors.push(r.output)
         if (r.ok && kind === 'write') filesModified = true

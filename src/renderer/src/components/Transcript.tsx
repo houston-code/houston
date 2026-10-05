@@ -162,12 +162,62 @@ function AssistantMessage({
   )
 }
 
+/**
+ * A missing-runtime notice with its fix: one click runs the install command in a
+ * new integrated-terminal tab (the user's own shell, outside the sandbox, so the
+ * install can actually work and they can see and answer any prompt), plus the
+ * official download page as the fallback.
+ */
+function RuntimeNotice({
+  text,
+  runtime,
+  onRunInTerminal
+}: {
+  text: string
+  runtime: { label: string; installCommand?: string; url: string }
+  onRunInTerminal?: (command: string) => void
+}): JSX.Element {
+  const [started, setStarted] = useState(false)
+  const command = runtime.installCommand
+  return (
+    <div className="notice notice--error notice--runtime" role="status">
+      <span>{text}</span>
+      <span className="notice__actions">
+        {command && onRunInTerminal && (
+          <button
+            type="button"
+            className="btn btn--sm btn--accent"
+            disabled={started}
+            title={`Runs \`${command}\` in a new terminal tab`}
+            onClick={() => {
+              setStarted(true)
+              onRunInTerminal(command)
+            }}
+          >
+            {started ? 'Installing in terminal…' : `Install ${runtime.label}`}
+          </button>
+        )}
+        <a className="btn btn--sm" href={runtime.url} target="_blank" rel="noreferrer">
+          Download page
+        </a>
+      </span>
+      {command && <code className="notice__command">{command}</code>}
+      {started && (
+        <span className="notice__next">
+          When the install finishes in the terminal, ask me to continue.
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function Transcript({
   items,
   onApprove,
   onAnswer,
   onElicit,
-  onOpenPlan
+  onOpenPlan,
+  onRunInTerminal
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -176,6 +226,8 @@ export function Transcript({
   onElicit: (elicitId: string, result: ElicitationResult) => void
   /** Re-open the review panel for a pending plan marker (clicked in the transcript). */
   onOpenPlan?: (callId: string) => void
+  /** Run a command in a new integrated-terminal tab (a missing runtime's install). */
+  onRunInTerminal?: (command: string) => void
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -268,7 +320,14 @@ export function Transcript({
                   />
                 )
               case 'notice':
-                return (
+                return node.item.runtime ? (
+                  <RuntimeNotice
+                    key={node.id}
+                    text={node.item.text}
+                    runtime={node.item.runtime}
+                    onRunInTerminal={onRunInTerminal}
+                  />
+                ) : (
                   <div key={node.id} className={`notice notice--${node.item.tone}`}>
                     {node.item.text}
                   </div>
