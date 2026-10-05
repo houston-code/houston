@@ -138,8 +138,25 @@ describe('modelPricing', () => {
     expect(modelPricing('claude-mythos-5-1')).toEqual({ input: 10, output: 50, cacheRead: 0.25 })
     // OpenAI / Gemini families carry explicit cache rates: discounted reads, free writes.
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 })
-    expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0 })
-    expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 })
+  })
+
+  it('prices Gemini per release, not just per tier', () => {
+    // Google's paid-tier rates (<=200K prompts). Each line is a distinct published price.
+    const rows: Array<[string, number, number, number]> = [
+      ['gemini-3.1-pro-preview', 2, 12, 0.2],
+      ['gemini-3.8-flash', 0.75, 3.75, 0.075],
+      ['gemini-3.6-flash', 0.75, 3.75, 0.075],
+      ['gemini-3.5-flash', 1.5, 9, 0.15],
+      ['gemini-3-flash-preview', 0.5, 3, 0.05],
+      ['gemini-3.5-flash-lite', 0.3, 2.5, 0.3], // no context caching: reads priced at input
+      ['gemini-3.1-flash-lite', 0.25, 1.5, 0.025],
+      ['gemini-2.5-flash-lite', 0.1, 0.4, 0.01]
+    ]
+    for (const [id, input, output, cacheRead] of rows) {
+      expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite: 0 })
+    }
   })
 
   it('prices the gpt-5.6 codename tiers individually', () => {
@@ -186,9 +203,9 @@ describe('turnCostUsd', () => {
     expect(turnCostUsd('gpt-4o', 1_000_000, 0, { readTokens: 1_000_000 })).toBeCloseTo(1.25, 6)
     // gpt-5 reads at $0.125/M (0.1x input).
     expect(turnCostUsd('gpt-5', 1_000_000, 0, { readTokens: 1_000_000 })).toBeCloseTo(0.125, 6)
-    // Gemini flash reads at $0.075/M (0.25x input).
+    // Gemini flash reads at its listed rate ($0.075/M on 3.8, 0.1x input).
     expect(
-      turnCostUsd('gemini-2.5-flash', 1_000_000, 0, { readTokens: 1_000_000 })
+      turnCostUsd('gemini-3.8-flash', 1_000_000, 0, { readTokens: 1_000_000 })
     ).toBeCloseTo(0.075, 6)
     // Cache writes are free on these families — the explicit 0 must not fall back
     // to Anthropic's 1.25x surcharge.

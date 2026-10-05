@@ -79,7 +79,7 @@ export interface ModelPricing {
   /**
    * Price per 1M cached-input tokens read back from the prompt cache. Cache-read
    * discounts vary by family (Anthropic 0.1x, GPT-4o 0.5x, GPT-4.1/o-series 0.25x,
-   * GPT-5 0.1x, Gemini 0.25x), so it's a price, not a shared multiplier. Absent ⇒
+   * GPT-5 0.1x, Gemini 0.1x), so it's a price, not a shared multiplier. Absent ⇒
    * fall back to `input * CACHE_READ_PRICE_MULTIPLIER` (the Anthropic rate).
    */
   cacheRead?: number
@@ -130,10 +130,27 @@ export function modelPricing(model: string): ModelPricing | null {
     return { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 }
   }
   if (m.includes('gpt-5')) return { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 }
-  // Google (Gemini). Implicit caching: reads at 0.25x, writes free.
-  if (m.includes('gemini') && m.includes('flash'))
-    return { input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0 }
-  if (m.includes('gemini')) return { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 }
+  // Google (Gemini). Rates vary by release rather than by tier, so the specific ids are
+  // matched before each tier's fallback (lite before flash, which it contains). Cache
+  // reads are 0.1x and implicit-cache writes are free. Pro prices are the <=200K-prompt
+  // tier. The 3.6-3.8 Flash rate doubles on 2027-01-01 per Google's pricing page.
+  if (m.includes('gemini')) {
+    if (m.includes('flash-lite')) {
+      // 3.5-flash-lite has no context caching, so a cache read never happens; price it
+      // at the input rate so the field can't undercount.
+      if (m.includes('3.5')) return { input: 0.3, output: 2.5, cacheRead: 0.3, cacheWrite: 0 }
+      if (m.includes('2.5')) return { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 }
+      return { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0 } // 3.1
+    }
+    if (m.includes('flash')) {
+      if (m.includes('3.5')) return { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 }
+      if (/gemini-3-flash/.test(m)) return { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 }
+      if (m.includes('2.5')) return { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 }
+      return { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 } // 3.6-3.8
+    }
+    if (/gemini-3/.test(m)) return { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 }
+    return { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 } // 2.5 Pro
+  }
   return null
 }
 
