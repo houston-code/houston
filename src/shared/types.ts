@@ -504,6 +504,18 @@ export interface AppSettings {
    */
   maxIterations?: number
   /**
+   * Let a turn that is still making progress (successful file edits in several of
+   * its recent steps, no stall) run past `maxIterations` in `maxIterations`-sized
+   * chunks instead of being told to wrap up. Unset: on, unless `maxIterations` is set
+   * (an explicit cap stays a hard stop until opted in). See autoExtendTurnsEnabled.
+   */
+  autoExtendTurns?: boolean
+  /**
+   * Absolute step cap for an auto-extended turn. Defaults to
+   * DEFAULT_ITERATION_CEILING; a value at or below `maxIterations` disables extension.
+   */
+  maxIterationsCeiling?: number
+  /**
    * Cumulative USD cost ceiling for a single run. Once the run's accumulated
    * per-turn cost crosses this, it gets the same one-time "land" nudge as the
    * iteration margin. 0/unset disables the cost-based trigger.

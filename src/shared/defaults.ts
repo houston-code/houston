@@ -30,6 +30,25 @@ export const DEFAULT_SHELL_OUTPUT_MAX_BYTES = 64_000
 export const DEFAULT_MAX_ITERATIONS = 40
 
 /**
+ * Default absolute step cap for a turn that keeps auto-extending past
+ * DEFAULT_MAX_ITERATIONS because it is still making progress.
+ */
+export const DEFAULT_ITERATION_CEILING = 200
+
+/**
+ * Whether a productive turn may run past its step cap. An explicit setting wins.
+ * Unset, it is on only when the cap is also unset: a user who chose a cap before
+ * extension existed chose a hard stop, and keeps one until they opt in. The
+ * Settings UI writes the switch explicitly whenever the cap is edited, so editing
+ * the cap never flips it silently.
+ */
+export function autoExtendTurnsEnabled(
+  settings: Pick<AppSettings, 'autoExtendTurns' | 'maxIterations'>
+): boolean {
+  return settings.autoExtendTurns ?? settings.maxIterations === undefined
+}
+
+/**
  * Resolve the effective shell-output budget: a positive user override, otherwise
  * the default. Guards against 0 / negatives, which would truncate everything.
  */

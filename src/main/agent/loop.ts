@@ -34,7 +34,7 @@ import {
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
 import type { ImageAttachment } from '@shared/images'
-import { resolveShellOutputBudget } from '@shared/defaults'
+import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
 import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
 import { createSecretRedactor } from './redact'
@@ -151,6 +151,10 @@ import { buildPinnedMessages, lastUserTurnIndex } from './workingMemory'
 import { StallDetector, resolveStallThresholds } from './stall'
 import {
   resolveBudgetLimits,
+  resolveExtensionLimits,
+  shouldExtend,
+  PROGRESS_TOOLS,
+  extensionNotice,
   shouldLand,
   landingReminder,
   isFinalStep,
@@ -1761,6 +1765,14 @@ export async function startRun(
     })
     let cumulativeCostUsd = 0
     let landed = false
+    // A run that is still landing file writes gets more room instead of a wrap-up
+    // (see shouldExtend): `budget.maxIterations` grows in place, up to a hard ceiling.
+    const extension = resolveExtensionLimits(budget, {
+      autoExtend: autoExtendTurnsEnabled(settings),
+      ceiling: settings.maxIterationsCeiling
+    })
+    const writeIterations = new Set<number>()
+    let lastStallNudge: number | null = null
 
     // Stall / loop detection. Watches the per-iteration tool pattern for
     // unproductive cycling (same call repeated, or same error repeated) and asks
@@ -1963,6 +1975,20 @@ export async function startRun(
         // already delivered it live either way).
         for (const content of steers) emit({ type: 'steered', text: content })
         persist(messages)
+      }
+
+      // Productive-run extension, checked first so it pre-empts the landing nudge it
+      // would otherwise trigger. Announced as a notice only (never in `messages`).
+      {
+        const ext = shouldExtend(
+          { iteration: iter, writeIterations, lastStallNudge, alreadyLanded: landed },
+          budget,
+          extension
+        )
+        if (ext.extend) {
+          budget.maxIterations = ext.maxIterations
+          emit({ type: 'notice', message: extensionNotice(ext.maxIterations, extension.ceiling) })
+        }
       }
 
       // Landing reminder: once the run is within a small margin of the iteration
@@ -2350,6 +2376,7 @@ export async function startRun(
           errors: iterErrors
         })
         if (action.kind === 'nudge') {
+          lastStallNudge = iter
           messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${action.message}` })
           persist(messages)
         } else if (action.kind === 'stop') {
@@ -2433,6 +2460,7 @@ export async function startRun(
         const kind = lookupTool(r.call.name)?.kind
         if (!r.ok) iterErrors.push(r.output)
         if (r.ok && kind === 'write') filesModified = true
+        if (r.ok && PROGRESS_TOOLS.has(r.call.name)) writeIterations.add(iter)
         // Persist after each append so a mid-turn abort return (which skips the
         // trailing onMessages) still leaves completed results in the saved log.
         persist(messages)

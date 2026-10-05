@@ -6,7 +6,13 @@ import {
   landingReminder,
   resolveBudgetLimits,
   shouldLand,
-  type BudgetLimits
+  resolveExtensionLimits,
+  shouldExtend,
+  extensionNotice,
+  DEFAULT_ITERATION_CEILING,
+  PROGRESS_TOOLS,
+  type BudgetLimits,
+  type ExtensionState
 } from './budget'
 
 describe('resolveBudgetLimits', () => {
@@ -117,5 +123,99 @@ describe('isFinalStep', () => {
 
   it('keeps the user-facing fallback free of em dashes', () => {
     expect(FINAL_STEP_FALLBACK).not.toContain('\u2014')
+  })
+})
+
+describe('PROGRESS_TOOLS', () => {
+  it('counts file edits and writable subagents, not scheduling', () => {
+    for (const t of ['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'notebook_edit', 'dispatch_writable_agent']) {
+      expect(PROGRESS_TOOLS.has(t)).toBe(true)
+    }
+    for (const t of ['schedule_run', 'cancel_scheduled_run', 'run_shell', 'todo_write', 'read_file']) {
+      expect(PROGRESS_TOOLS.has(t)).toBe(false)
+    }
+  })
+})
+
+describe('progress-aware extension', () => {
+  const base = resolveBudgetLimits({ maxIterations: 40 })
+  const ext = resolveExtensionLimits(base)
+  const writesIn = (from: number, to: number): Set<number> => {
+    const s = new Set<number>()
+    for (let i = from; i < to; i++) s.add(i)
+    return s
+  }
+  const at = (iteration: number, over: Partial<ExtensionState> = {}): ExtensionState => ({
+    iteration,
+    writeIterations: writesIn(0, iteration),
+    lastStallNudge: null,
+    alreadyLanded: false,
+    ...over
+  })
+
+  it('defaults to on, stepping by the base cap up to the default ceiling', () => {
+    expect(ext).toEqual({ enabled: true, ceiling: DEFAULT_ITERATION_CEILING, step: 40 })
+  })
+
+  it('is off when disabled, or when the ceiling does not exceed the base cap', () => {
+    expect(resolveExtensionLimits(base, { autoExtend: false }).enabled).toBe(false)
+    expect(resolveExtensionLimits(base, { ceiling: 40 }).enabled).toBe(false)
+    expect(resolveExtensionLimits(base, { ceiling: 10 })).toMatchObject({
+      enabled: false,
+      ceiling: 40
+    })
+    expect(resolveExtensionLimits(resolveBudgetLimits({ maxIterations: 500 })).enabled).toBe(false)
+  })
+
+  it('ignores an invalid ceiling override', () => {
+    expect(resolveExtensionLimits(base, { ceiling: Number.NaN }).ceiling).toBe(
+      DEFAULT_ITERATION_CEILING
+    )
+    expect(resolveExtensionLimits(base, { ceiling: 0 }).ceiling).toBe(DEFAULT_ITERATION_CEILING)
+  })
+
+  it('extends a productive run exactly where the landing nudge would fire', () => {
+    // margin 3: iteration 37 has 3 left
+    expect(shouldExtend(at(36), base, ext)).toEqual({ extend: false })
+    expect(shouldExtend(at(37), base, ext)).toEqual({ extend: true, maxIterations: 80 })
+    expect(shouldLand({ iteration: 37, costUsd: 0, alreadyLanded: false }, base).land).toBe(true)
+  })
+
+  it('does not extend a run without recent writes', () => {
+    expect(shouldExtend(at(37, { writeIterations: new Set() }), base, ext).extend).toBe(false)
+    // Writes long ago, none in the recent window.
+    expect(shouldExtend(at(37, { writeIterations: writesIn(0, 20) }), base, ext).extend).toBe(false)
+    // Two recent productive steps is below the bar; three meets it.
+    expect(shouldExtend(at(37, { writeIterations: writesIn(35, 37) }), base, ext).extend).toBe(false)
+    expect(shouldExtend(at(37, { writeIterations: writesIn(34, 37) }), base, ext).extend).toBe(true)
+  })
+
+  it('does not extend after a recent stall nudge', () => {
+    expect(shouldExtend(at(37, { lastStallNudge: 33 }), base, ext).extend).toBe(false)
+    expect(shouldExtend(at(37, { lastStallNudge: 20 }), base, ext).extend).toBe(true)
+  })
+
+  it('does not extend once the landing nudge has fired (e.g. cost ceiling)', () => {
+    expect(shouldExtend(at(37, { alreadyLanded: true }), base, ext).extend).toBe(false)
+  })
+
+  it('clamps to the ceiling and stops extending there', () => {
+    const limits = { ...base, maxIterations: 180 }
+    expect(shouldExtend(at(177), limits, ext)).toEqual({ extend: true, maxIterations: 200 })
+    expect(shouldExtend(at(197), { ...base, maxIterations: 200 }, ext).extend).toBe(false)
+  })
+
+  it('still extends with a zero landing margin, on the final step', () => {
+    const limits = resolveBudgetLimits({ maxIterations: 40, landingMargin: 0 })
+    const e = resolveExtensionLimits(limits)
+    expect(shouldExtend(at(38), limits, e).extend).toBe(false)
+    expect(shouldExtend(at(39), limits, e).extend).toBe(true)
+  })
+
+  it('words the notice without an em dash and names both limits', () => {
+    const msg = extensionNotice(80, 200)
+    expect(msg).toContain('80')
+    expect(msg).toContain('200')
+    expect(msg).not.toContain('—')
   })
 })

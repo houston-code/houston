@@ -3303,6 +3303,94 @@ describe('loop control — adaptive budget', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  /** A provider that writes a new file every turn and never finishes on its own. */
+  function endlessWriter(): Provider {
+    let n = 0
+    return {
+      async *streamChat() {
+        n++
+        yield {
+          type: 'tool_call',
+          call: {
+            id: `w${n}`,
+            name: 'write_file',
+            arguments: { path: `gen/f${n}.txt`, content: `file ${n}\n` }
+          }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+  }
+
+  it('extends a productive turn past the cap, up to the ceiling', async () => {
+    const r = await withSettings(
+      { maxIterations: 8, maxIterationsCeiling: 20, autoExtendTurns: true },
+      () => run({ provider: endlessWriter(), policy: 'full-auto' })
+    )
+    const notices = r.events.filter((e) => e.type === 'notice') as { message: string }[]
+    expect(notices.map((n) => n.message)).toEqual([
+      expect.stringContaining('up to 16 steps'),
+      expect.stringContaining('up to 20 steps')
+    ])
+    // Iterations 0..18 ran their write; the 20th (final) step drops its call.
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(19)
+    // The extension notice is UI-only: it never reaches the model's context.
+    expect(
+      r.messages.some((m) => typeof m.content === 'string' && m.content.includes('Still making progress'))
+    ).toBe(false)
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('max-steps')
+    expect(orphanedToolUses(r.messages)).toEqual([])
+  })
+
+  it('keeps an explicitly chosen cap as a hard stop unless extension is opted in', async () => {
+    const r = await withSettings({ maxIterations: 8, maxIterationsCeiling: 20 }, () =>
+      run({ provider: endlessWriter(), policy: 'full-auto' })
+    )
+    expect(r.events.some((e) => e.type === 'notice')).toBe(false)
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(7)
+  })
+
+  it('does not count non-file write tools (scheduling) as progress', async () => {
+    h.probeTools = [
+      {
+        kind: 'write',
+        summarize: () => 'probe schedule_run',
+        schema: {
+          name: 'schedule_run',
+          description: 'Schedule a run.',
+          parameters: { type: 'object', properties: {}, additionalProperties: false }
+        },
+        execute: async () => 'scheduled'
+      }
+    ]
+    let n = 0
+    const scheduler: Provider = {
+      async *streamChat() {
+        n++
+        yield { type: 'tool_call', call: { id: `s${n}`, name: 'schedule_run', arguments: { n } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings(
+      { maxIterations: 8, maxIterationsCeiling: 20, autoExtendTurns: true, stallDetection: false },
+      () => run({ provider: scheduler, policy: 'full-auto' })
+    )
+    expect(r.events.some((e) => e.type === 'notice')).toBe(false)
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(7)
+  })
+
+  it('keeps the flat cap when auto-extension is turned off', async () => {
+    const r = await withSettings(
+      { maxIterations: 8, maxIterationsCeiling: 20, autoExtendTurns: false },
+      () => run({ provider: endlessWriter(), policy: 'full-auto' })
+    )
+    expect(r.events.some((e) => e.type === 'notice')).toBe(false)
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(7)
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('max-steps')
+  })
+
   it('ends a capped turn on a text reply, never on an unrun tool call', async () => {
     writeFileSync(join(ws, 'a.txt'), 'x')
     // Ignores every wrap-up note and keeps calling tools, but says something on the way.
