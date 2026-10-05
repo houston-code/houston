@@ -109,7 +109,7 @@ export function DiffPanel({
           <div className="changes-panel__titles">
             <h2 className="changes-panel__title">Changes</h2>
             <p className="changes-panel__scope">
-              All uncommitted changes in the working tree{data?.branch ? ` on ${data.branch}` : ''} —
+              All uncommitted changes in the working tree{data?.branch ? ` on ${data.branch}` : ''},
               not limited to this chat.
             </p>
           </div>
