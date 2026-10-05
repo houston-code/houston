@@ -112,7 +112,6 @@ function page({ title, description, contentTitle, html, slug }) {
       <nav class="nav" aria-label="Primary">
         <a class="nav-link" href="/#why">Security</a>
         <a class="nav-link" href="/#features">Features</a>
-        <a class="nav-link" href="/#download">Download</a>
         <a class="nav-link" href="/#faq">FAQ</a>
         <a class="nav-link" href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
         <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark theme" aria-pressed="false" hidden>
