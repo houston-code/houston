@@ -329,7 +329,7 @@ describe('modelCapabilities', () => {
     ['gemini-pro', false, false], // 1.0 was text-only
     // Gemini 3.x: the old `2\.`-only vision pattern reported these as text-only, and the
     // 2.5-only reasoning mirror reported them as non-reasoning. Both are wrong, and these
-    // are shipped defaults — mirrors geminiSupportsThinking in providers/reasoning.ts.
+    // are shipped defaults — the same geminiSupportsThinking gate the request uses.
     ['gemini-3.5-flash', true, true],
     ['gemini-3.1-flash-lite', true, true],
     ['gemini-3.1-pro-preview', true, true],

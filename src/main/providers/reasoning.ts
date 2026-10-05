@@ -1,18 +1,33 @@
-import type { ReasoningEffort, ReasoningSummary } from '@shared/agent'
-
 /**
  * Per-provider reasoning ("extended thinking") configuration. Each provider only
  * supports it on certain models — sending a thinking/reasoning parameter to a
  * model that lacks it is an API error — so every helper is gated on a model-name
- * heuristic and returns `null`/`undefined` when reasoning shouldn't be sent.
- *
- * The Claude gates match on a substring so they hold for the same model whichever
- * host serves it: Bedrock's vendor-prefixed ids (`anthropic.claude-opus-4-8`) match
- * as-is, and Vertex's `@`-dated snapshots (`claude-sonnet-4@20250514`) are why the
- * snapshot separator below is `[-@]` rather than `-`. Getting that wrong is silent
- * and expensive — a dated 4.0 id that misses the legacy gate is sent adaptive
- * thinking and the API rejects the turn with a 400.
+ * heuristic and returns `null`/`undefined` when reasoning shouldn't be sent. The
+ * gates themselves (which ids think, which take the legacy shape, which have
+ * `xhigh`) are model knowledge and live in shared/model-facts.ts.
  */
+import type { ReasoningEffort, ReasoningSummary } from '@shared/agent'
+import {
+  anthropicPreservesThinking,
+  anthropicSupportsInterleavedThinking,
+  anthropicSupportsThinking,
+  anthropicSupportsXhigh,
+  anthropicUsesLegacyThinking,
+  geminiSupportsThinking,
+  openaiSupportsReasoning
+} from '@shared/model-facts'
+
+// The model-id gates live in shared/model-facts.ts (one definition for the request
+// builders and the UI); re-exported so providers keep importing them from here.
+export {
+  anthropicPreservesThinking,
+  anthropicSupportsInterleavedThinking,
+  anthropicSupportsThinking,
+  anthropicSupportsXhigh,
+  anthropicUsesLegacyThinking,
+  geminiSupportsThinking,
+  openaiSupportsReasoning
+}
 
 type OnEffort = 'low' | 'medium' | 'high' | 'xhigh'
 
@@ -39,72 +54,6 @@ const ANTHROPIC_BUDGET: Record<'low' | 'medium' | 'high', number> = {
 
 /** Extra output tokens to allow on top of the thinking budget for the reply. */
 export const ANTHROPIC_REPLY_HEADROOM = 8192
-
-/**
- * Claude models that support thinking at all: 3.7, the Opus / Sonnet / Haiku lines
- * from 4.x on (the generation is matched as a range, so Opus 5.5 and Sonnet 5.5 are
- * covered by the same family rule as 4.x), and Fable / Mythos. A miss here is silent:
- * the model is sent no thinking config, so reasoning just never shows up.
- */
-export function anthropicSupportsThinking(model: string): boolean {
-  return /claude.*(3-7|(opus|sonnet|haiku)-[4-9]|-4-|fable|mythos)/i.test(model)
-}
-
-/**
- * Claude models that predate adaptive thinking and still take the legacy
- * `{ type: 'enabled', budget_tokens }` API (they also reject `output_config.effort`):
- * Claude 3.7, the 4.0 / 4.1 / 4.5 lines, and Haiku 4.5. Everything newer
- * (Opus 4.6+, Sonnet 4.6+, Fable, Mythos) uses adaptive thinking + effort — and
- * the Opus 4.7/4.8 line *rejects* the legacy shape with a 400, which is the bug
- * this gating exists to prevent. The default is adaptive so a future model is
- * never silently routed onto the removed legacy parameter.
- */
-export function anthropicUsesLegacyThinking(model: string): boolean {
-  return (
-    /claude-3-7/i.test(model) || // Claude 3.7
-    /claude-(opus|sonnet)-4[-@]\d{8}/i.test(model) || // Opus/Sonnet 4.0 (dated snapshots)
-    /claude-opus-4-1\b/i.test(model) || // Opus 4.1
-    /claude-opus-4-5\b/i.test(model) || // Opus 4.5
-    /claude-sonnet-4-5\b/i.test(model) || // Sonnet 4.5
-    /claude-haiku-4-5\b/i.test(model) // Haiku 4.5 (no effort support)
-  )
-}
-
-/**
- * The `xhigh` effort tier exists on Opus 4.7+, Sonnet 5+ and Fable / Mythos; older
- * effort-capable models (Opus 4.6, Sonnet 4.6) top out at `high`, so `xhigh` is
- * clamped there.
- */
-export function anthropicSupportsXhigh(model: string): boolean {
-  return /claude-(opus-4-[7-9]|opus-[5-9]|sonnet-[5-9]|fable|mythos)/i.test(model)
-}
-
-/**
- * Legacy budget-thinking models that support **interleaved thinking** via the
- * `interleaved-thinking-2025-05-14` beta header — the Claude 4.x Opus/Sonnet line
- * (4.0 dated snapshots, 4.1, 4.5). It lets the model reason about each tool
- * result before its next action instead of thinking only once per turn.
- *
- * Excludes Claude 3.7 (predates the feature) and Haiku 4.5 (accepts but ignores
- * the header). Adaptive-thinking models (4.6+, Fable, Mythos) interleave
- * automatically and never take this header, so they're out of scope here.
- */
-export function anthropicSupportsInterleavedThinking(model: string): boolean {
-  return /claude-(opus|sonnet)-4[-@](\d{8}|1|5)\b/i.test(model)
-}
-
-/**
- * Claude models whose thinking blocks are bound to the conversation prefix that
- * produced them ("preserved thinking"): Fable 5.1, Opus 5.5 and Sonnet 5.5. Replaying
- * one of their blocks after any edit to the earlier history is a 400 on accounts
- * created on or after 2026-08-31, and Houston edits history by design (keep-tail
- * compaction, stale tool-result stubbing). Requests to these models opt into the
- * `drop_block` mismatch behavior so an edited prefix drops the stale blocks instead
- * of failing the turn. Mythos 5.1 is excluded: it doesn't run the check.
- */
-export function anthropicPreservesThinking(model: string): boolean {
-  return /claude-((opus|sonnet)-5-[5-9]|fable-5-[1-9])/i.test(model)
-}
 
 /** Anthropic reasoning config: adaptive thinking (4.6+) or legacy budget thinking. */
 export type AnthropicThinking =
@@ -150,11 +99,6 @@ export function anthropicThinking(
   }
 }
 
-/** OpenAI reasoning models (o-series, and GPT from gpt-5 on) accept `reasoning_effort`. */
-export function openaiSupportsReasoning(model: string): boolean {
-  return /^(o\d|gpt-([5-9]|[1-9]\d))/i.test(model)
-}
-
 /**
  * The Chat Completions `reasoning_effort` value, or undefined when off/unsupported.
  * Chat Completions tops out at `high`, so `xhigh` is clamped (only the Responses
@@ -196,17 +140,6 @@ const GEMINI_BUDGET: Record<'low' | 'medium' | 'high', number> = {
   low: 4096,
   medium: 10_000,
   high: 16_000
-}
-
-/**
- * Gemini models that support a configurable thinking budget: the 2.5 line and the 3.x
- * line (plus anything explicitly named "thinking"). The 2.x-only gate this replaces
- * predated Gemini 3 and silently sent NO `thinkingConfig` to 3.x models — reasoning
- * just never happened on them, with no error to notice. Keep this in lockstep with the
- * `hasReasoning` mirror in shared/usage.ts.
- */
-export function geminiSupportsThinking(model: string): boolean {
-  return /2\.5|thinking|gemini-3/i.test(model)
 }
 
 /** Gemini `thinkingBudget`, or undefined when off/unsupported. */
