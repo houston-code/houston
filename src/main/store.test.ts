@@ -135,38 +135,37 @@ describe('settings migration — model backfill', () => {
     ])
   })
 
-  it('seeds claude-fable-5 into a v2 Anthropic provider on the v3 bump', async () => {
-    writeSettings({ schemaVersion: 2, providers: [anthropicProvider(['claude-opus-4-8'])] })
+  it('seeds the Claude 5.x lineup into a v8 Anthropic provider on the v9 bump', async () => {
+    writeSettings({ schemaVersion: 8, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
     expect(ids[0]).toBe('claude-opus-4-8') // user's model kept, in place
-    expect(ids).toContain('claude-fable-5') // new default appended
+    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
   })
 
-  it('scopes the v3 bump to Fable — does not re-add other Claude defaults the user deleted', async () => {
-    // A v2 install that kept only Opus 4.8 gets Fable, but not Sonnet/Haiku/Opus 4.7 back.
-    writeSettings({ schemaVersion: 2, providers: [anthropicProvider(['claude-opus-4-8'])] })
-    const ids = await loadAnthropicModelIds()
-    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5'])
+  it('scopes the v9 bump to the new ids — does not re-add a default the user deleted', async () => {
+    // A v8 install that dropped Haiku gets the 5.x models, but not Haiku back.
+    writeSettings({ schemaVersion: 8, providers: [anthropicProvider(['claude-opus-4-8'])] })
+    expect(await loadAnthropicModelIds()).not.toContain('claude-haiku-4-5')
   })
 
-  it('does not re-add Fable a v3 install has already deleted', async () => {
-    writeSettings({ schemaVersion: 3, providers: [anthropicProvider(['claude-opus-4-8'])] })
-    expect(await loadAnthropicModelIds()).not.toContain('claude-fable-5')
+  it('does not re-add a 5.x model a v9 install has already deleted', async () => {
+    writeSettings({ schemaVersion: 9, providers: [anthropicProvider(['claude-opus-5-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
   })
 
-  it('gives a pre-v2 install both the full backfill and Fable', async () => {
-    // fromVersion 0 runs both gates: the full v2 seed and the scoped v3 Fable add.
+  it('gives a pre-v2 install the full backfill without duplicating the v9 ids', async () => {
+    // fromVersion 0 runs every gate: the full v2 seed and the scoped v9 add.
     writeSettings({ schemaVersion: 1, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
-    expect(ids).toContain('claude-fable-5')
-    expect(ids).toContain('claude-sonnet-4-6') // full backfill also ran
-    expect(ids.filter((id) => id === 'claude-fable-5')).toHaveLength(1) // no duplicate
+    expect(ids).toContain('claude-haiku-4-5') // full backfill ran
+    expect(ids).toContain('claude-opus-5-5')
+    expect(ids.filter((id) => id === 'claude-fable-5-1')).toHaveLength(1) // no duplicate
   })
 
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(8)
+    expect(getSettings().schemaVersion).toBe(9)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -369,7 +368,7 @@ describe('selected-model reconciliation', () => {
 
   it('drops a dangling selection read from a hand-edited settings.json on load', async () => {
     writeSettings({
-      schemaVersion: 4,
+      schemaVersion: 9,
       providers: [anthropicProvider(['claude-opus-4-8'])],
       selected: { providerId: 'anthropic', model: 'a-model-that-was-deleted' }
     })

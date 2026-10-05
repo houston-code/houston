@@ -53,17 +53,18 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
 
     // Advanced-first ordering, regardless of stored order. Names are the lowercase model
     // id (so a curated model reads the same as one added via the provider's Fetch), e.g.
-    // "gpt-6.1-sol", "claude-opus-4.8". Anchor on families and tiers rather than exact
+    // "gpt-6.1-sol", "claude-opus-5.5". Anchor on families and tiers rather than exact
     // ids, since the curated seed is refreshed as each line moves: within GPT, the newest
     // version leads and the efficient luna tier trails the flagship tiers.
     const gpt = info.options.filter((o) => o.startsWith('gpt-'))
     expect(gpt.length).toBeGreaterThan(0)
     expect(gpt.findIndex((o) => o.includes('luna'))).toBe(gpt.length - 1)
-    // Same family grouped, newest version first: opus 4.8 immediately before 4.7.
-    const opus48 = info.options.findIndex((o) => o.startsWith('claude-opus-4.8'))
-    const opus47 = info.options.findIndex((o) => o.startsWith('claude-opus-4.7'))
-    expect(opus48).toBeGreaterThanOrEqual(0)
-    expect(opus47).toBe(opus48 + 1)
+    // Claude families in capability order: Fable, then Opus, Sonnet, Haiku.
+    const claude = ['claude-fable', 'claude-opus', 'claude-sonnet', 'claude-haiku'].map((f) =>
+      info.options.findIndex((o) => o.startsWith(f))
+    )
+    for (const idx of claude) expect(idx).toBeGreaterThanOrEqual(0)
+    expect(claude).toEqual([...claude].sort((a, b) => a - b))
     // Every model is annotated with its context window ("200k", "1M") — asserted across
     // the whole list, since any one model's number moves with the seed.
     for (const o of info.options) expect(o).toMatch(/\b\d+(\.\d+)?[kM]\b/)

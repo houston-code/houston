@@ -163,6 +163,7 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   // v3: seed the newly-added Claude Fable model into installs that already migrated to
   // v2. Scoped to just that id — a full backfill here would re-add other defaults the
   // user has since deleted, breaking the "stays deleted" guarantee above.
+  // (A no-op since v9 dropped Fable 5 from the seed; kept so the ladder reads in order.)
   if (fromVersion < 3) providers = backfillDefaultModels(providers, ['claude-fable-5'])
   // v4: model display names are now derived from the id (one convention per provider),
   // so drop the stale hardcoded labels older versions seeded — they no longer matched
@@ -209,6 +210,12 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   // v8: the GPT-6 line. Nothing is pruned: the GPT-5.x models it supersedes still serve.
   if (fromVersion < 8) {
     providers = backfillDefaultModels(providers, ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'])
+  }
+  // v9: the Claude 5.x lineup (Fable 5.1, Opus 5.5, Sonnet 5.5). Scoped like the v3 Fable
+  // add so a user's deleted defaults stay deleted; nothing is pruned, since the releases
+  // they supersede still serve.
+  if (fromVersion < 9) {
+    providers = backfillDefaultModels(providers, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
   }
   const merged: AppSettings = {
     ...base,
