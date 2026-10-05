@@ -93,9 +93,29 @@ export function anthropicSupportsInterleavedThinking(model: string): boolean {
   return /claude-(opus|sonnet)-4[-@](\d{8}|1|5)\b/i.test(model)
 }
 
+/**
+ * Claude models whose thinking blocks are bound to the conversation prefix that
+ * produced them ("preserved thinking"): Fable 5.1, Opus 5.5 and Sonnet 5.5. Replaying
+ * one of their blocks after any edit to the earlier history is a 400 on accounts
+ * created on or after 2026-08-31, and Houston edits history by design (keep-tail
+ * compaction, stale tool-result stubbing). Requests to these models opt into the
+ * `drop_block` mismatch behavior so an edited prefix drops the stale blocks instead
+ * of failing the turn. Mythos 5.1 is excluded: it doesn't run the check.
+ */
+export function anthropicPreservesThinking(model: string): boolean {
+  return /claude-((opus|sonnet)-5-[5-9]|fable-5-[1-9])/i.test(model)
+}
+
 /** Anthropic reasoning config: adaptive thinking (4.6+) or legacy budget thinking. */
 export type AnthropicThinking =
-  | { kind: 'adaptive'; effort: OnEffort; display: 'summarized'; maxTokens: number }
+  | {
+      kind: 'adaptive'
+      effort: OnEffort
+      display: 'summarized'
+      maxTokens: number
+      /** Thinking blocks are prefix-bound; see {@link anthropicPreservesThinking}. */
+      preserved: boolean
+    }
   | { kind: 'budget'; budgetTokens: number; maxTokens: number; interleaved: boolean }
 
 /**
@@ -125,7 +145,8 @@ export function anthropicThinking(
     kind: 'adaptive',
     effort: anthropicSupportsXhigh(model) ? effort : clampToHigh(effort),
     display: 'summarized',
-    maxTokens
+    maxTokens,
+    preserved: anthropicPreservesThinking(model)
   }
 }
 

@@ -105,6 +105,26 @@ describe('anthropic request reasoning params', () => {
     }
   })
 
+  it('opts preserved-thinking models into drop_block so an edited history does not 400', async () => {
+    for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1']) {
+      const params = await captureRequest({ model, reasoningEffort: 'high' })
+      expect(params.thinking).toEqual({
+        type: 'adaptive',
+        display: 'summarized',
+        block_binding: { prefix_mismatch_behavior: 'drop_block' }
+      })
+      expect(lastRequestOptions().headers?.['anthropic-beta']).toBe('thinking-binding-controls-2026-08-01')
+    }
+  })
+
+  it('leaves models without prefix-bound thinking on the plain adaptive shape', async () => {
+    for (const model of ['claude-opus-4-8', 'claude-opus-5', 'claude-sonnet-5', 'claude-fable-5']) {
+      const params = await captureRequest({ model, reasoningEffort: 'high' })
+      expect(params.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+      expect(lastRequestOptions().headers?.['anthropic-beta']).toBeUndefined()
+    }
+  })
+
   it('omits thinking and output_config when reasoning is off', async () => {
     const params = await captureRequest({ model: 'claude-opus-4-8', reasoningEffort: 'off' })
     expect(params.thinking).toBeUndefined()

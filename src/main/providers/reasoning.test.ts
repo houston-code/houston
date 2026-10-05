@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   anthropicThinking,
+  anthropicPreservesThinking,
   anthropicSupportsThinking,
   anthropicSupportsInterleavedThinking,
   anthropicSupportsXhigh,
@@ -44,6 +45,15 @@ describe('anthropic thinking', () => {
       expect(anthropicUsesLegacyThinking(id)).toBe(false)
       expect(anthropicSupportsXhigh(id)).toBe(true)
       expect(anthropicThinking(id, 'xhigh')).toMatchObject({ kind: 'adaptive', effort: 'xhigh' })
+    }
+  })
+
+  it('flags only the prefix-bound (preserved thinking) releases', () => {
+    for (const id of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'anthropic.claude-opus-5-5']) {
+      expect(anthropicPreservesThinking(id)).toBe(true)
+    }
+    for (const id of ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-mythos-5-1', 'claude-opus-4-8']) {
+      expect(anthropicPreservesThinking(id)).toBe(false)
     }
   })
 
