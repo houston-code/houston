@@ -156,6 +156,7 @@ export function ControlBar({
           {canWorktree && (
             <label
               className="control control--check"
+              data-tour="worktree"
               title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
             >
               <input
@@ -218,6 +219,7 @@ export function ControlBar({
         className="control control--select"
         value={settings.approvalPolicy}
         aria-label="Approval mode"
+        data-tour="approval"
         onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
         title="How much the agent may do without asking"
       >

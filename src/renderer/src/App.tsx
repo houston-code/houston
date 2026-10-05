@@ -74,6 +74,17 @@ import { Composer } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
+import { GetStarted } from './components/GetStarted'
+import { ConnectModel } from './components/ConnectModel'
+import { TourInvite } from './components/TourInvite'
+import { TipHost } from './components/TipHost'
+import { useOnboarding } from './hooks/useOnboarding'
+import {
+  markTipsSeen,
+  onboardingSurfaces,
+  relevantTips,
+  type ChecklistFacts
+} from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import type {
   UpdateCheckResult,
@@ -207,9 +218,19 @@ export default function App(): JSX.Element {
     [previewServers]
   )
 
+  const [conversationsLoaded, setConversationsLoaded] = useState(false)
   const refreshConversations = useCallback(async () => {
     setConversations(await window.api.listConversations())
+    setConversationsLoaded(true)
   }, [])
+  // The get-started checklist's inline "Connect a model" panel.
+  const [connectOpen, setConnectOpen] = useState(false)
+  const onboarding = useOnboarding({
+    settings,
+    setSettings,
+    conversationsLoaded,
+    hasConversation: conversations.length > 0
+  })
 
   useEffect(() => {
     void (async () => {
@@ -729,6 +750,19 @@ export default function App(): JSX.Element {
       selected: sel
     })
     setSettings(fresh)
+  }, [])
+
+  // The get-started "Connect a model" step succeeded: select that provider's default
+  // model, so the step ticks off and the composer is ready without a trip to the picker.
+  const onModelConnected = useCallback(async (fresh: AppSettings, providerId: string) => {
+    setConnectOpen(false)
+    const prov = fresh.providers.find((p) => p.id === providerId)
+    const model = prov ? (pickDefaultModel(prov) ?? prov.models[0]?.id) : undefined
+    if (!model) {
+      setSettings(fresh)
+      return
+    }
+    setSettings(await window.api.saveSettings({ ...fresh, selected: { providerId, model } }))
   }, [])
 
   const onChangePolicy = useCallback(
@@ -1301,6 +1335,13 @@ export default function App(): JSX.Element {
         section: 'Actions',
         hint: shortcutHint('open-settings', mac, shortcuts),
         run: () => setSettingsOpen(true)
+      },
+      {
+        id: 'act-tips',
+        title: 'Show getting-started tips',
+        section: 'Actions',
+        keywords: 'tour onboarding help walkthrough',
+        run: onboarding.startTour
       }
     )
     if (workspace) {
@@ -1384,7 +1425,8 @@ export default function App(): JSX.Element {
     onCompact,
     onChangePolicy,
     onSelectModel,
-    selectConversation
+    selectConversation,
+    onboarding.startTour
   ])
 
   // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
@@ -1527,6 +1569,34 @@ export default function App(): JSX.Element {
         : worktreeBlocked
           ? 'Enter a valid worktree branch name to start…'
           : undefined
+  // First-run onboarding (see @shared/onboarding): the checklist reads real state, so
+  // each step ticks itself off; tips show once each, when their control first matters.
+  const checklistFacts: ChecklistFacts = {
+    modelReady: Boolean(settings.selected && selectionReady),
+    hasWorkspace: Boolean(workspace),
+    hasConversation: conversations.length > 0
+  }
+  const { checklist: checklistVisible, tourInvite: tourInviteVisible } = onboardingSurfaces(
+    onboarding.state,
+    checklistFacts,
+    conversationsLoaded
+  )
+  const tipsRelevant = relevantTips({
+    readyToSend: chat.items.length === 0 && canChat && !chat.running,
+    afterEdit: Boolean(chat.checkpoint && !chat.checkpoint.reverted && !chat.running),
+    touring: onboarding.touring
+  })
+  const tipsSuppressed =
+    settingsOpen ||
+    paletteOpen ||
+    helpOpen ||
+    doctorOpen ||
+    scorecardOpen ||
+    changesOpen ||
+    filesOpen ||
+    findOpen ||
+    connectOpen ||
+    whatsNew !== null
   // Only offer the image-attachment affordance when the selected model can see
   // images. Resolve host-reported capabilities first (same source the model picker
   // uses) so a host-listed vision model isn't denied the attach buttons by the
@@ -1626,6 +1696,13 @@ export default function App(): JSX.Element {
           }}
         />
 
+        {tourInviteVisible && (
+          <TourInvite
+            onTakeTour={onboarding.startTour}
+            onDismiss={() => onboarding.update((s) => ({ ...s, tourInvite: 'done' }))}
+          />
+        )}
+
         {findOpen && (
           <Suspense fallback={null}>
             <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} />
@@ -1636,9 +1713,29 @@ export default function App(): JSX.Element {
           <div className="welcome">
             <h1>Houston</h1>
             <p>A model-agnostic, sandboxed coding agent. Decoupled from your model bill.</p>
-            {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
-            {workspace && !settings.selected && (
-              <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>
+            {checklistVisible && connectOpen ? (
+              <ConnectModel
+                settings={settings}
+                onConnected={(fresh, id) => void onModelConnected(fresh, id)}
+                onBack={() => setConnectOpen(false)}
+              />
+            ) : checklistVisible ? (
+              <GetStarted
+                facts={checklistFacts}
+                onConnectModel={() => setConnectOpen(true)}
+                onChooseFolder={() => void onChangeWorkspace()}
+                onSkip={() => {
+                  setConnectOpen(false)
+                  onboarding.update((s) => ({ ...s, checklistDone: true }))
+                }}
+              />
+            ) : (
+              <>
+                {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
+                {workspace && !settings.selected && (
+                  <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>
+                )}
+              </>
             )}
           </div>
         ) : (
@@ -1694,7 +1791,7 @@ export default function App(): JSX.Element {
                 ↷ Redo
               </button>
             ) : (
-              <button className="btn btn--sm" onClick={onRevert}>
+              <button className="btn btn--sm" onClick={onRevert} data-tour="revert">
                 ↶ Revert
               </button>
             )}
@@ -1863,6 +1960,15 @@ export default function App(): JSX.Element {
           />
         )}
       </Suspense>
+
+      <TipHost
+        relevant={tipsRelevant}
+        seen={onboarding.state.seenTips}
+        suppressed={tipsSuppressed}
+        touring={onboarding.touring}
+        onSeen={(ids) => onboarding.update((s) => markTipsSeen(s, ids))}
+        onTourEnd={onboarding.endTour}
+      />
     </div>
   )
 }

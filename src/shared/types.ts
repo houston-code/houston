@@ -9,6 +9,7 @@
  * main process — see `src/main/store.ts` and `src/main/secrets.ts`.
  */
 
+import type { OnboardingState } from './onboarding'
 import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
 import type { SandboxEgressSettings } from './egress'
 
@@ -619,6 +620,12 @@ export interface AppSettings {
   previewOpen?: boolean
   /** Width (px) of the docked plan-review panel (Plan mode). */
   planWidth?: number
+  /**
+   * First-run onboarding progress: the get-started checklist, which coachmarks have
+   * been seen, and the one-time tour invitation for pre-onboarding installs. See
+   * @shared/onboarding. Absent on a fresh install.
+   */
+  onboarding?: OnboardingState
 }
 
 /** One format-on-save backend and whether its binary is present on this machine. */

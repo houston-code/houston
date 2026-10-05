@@ -29,6 +29,8 @@ import {
   stripBuiltInModelLabels
 } from '@shared/defaults'
 import { SEARCH_PROVIDERS } from '@shared/search'
+import { existingInstallOnboarding } from '@shared/onboarding'
+import { readLastSeenVersion } from './update-state'
 
 /**
  * Persistent app settings (everything except secrets). Stored as JSON in userData.
@@ -217,6 +219,15 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   if (fromVersion < 9) {
     providers = backfillDefaultModels(providers, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
   }
+  // v10: first-run onboarding. Only a settings file written before it shipped reaches
+  // this gate (a fresh install has no file to migrate). Existing desktop users skip the
+  // contextual tips and get a single dismissible tour invitation instead.
+  // The profile is shared with the terminal clients, so "existing" means the desktop
+  // app has run here before (it records its version on every launch, after this
+  // migration). Someone who has only used the terminal is new to the desktop app.
+  if (fromVersion < 10 && upgraded.onboarding === undefined) {
+    upgraded.onboarding = readLastSeenVersion() !== null ? existingInstallOnboarding() : {}
+  }
   const merged: AppSettings = {
     ...base,
     ...upgraded,
@@ -229,14 +240,21 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   return merged
 }
 
-function loadFromDisk(): AppSettings {
+/**
+ * Read settings.json through the migrations. `upgraded` flags that the file was written
+ * by an older schema, so the caller saves the migrated result: a migration that reads
+ * outside state (v10 checks whether the desktop app has run) must be decided once, not
+ * re-run on a later launch after that state has changed.
+ */
+function loadFromDisk(): { settings: AppSettings; upgraded: boolean } {
   const path = settingsPath()
-  if (!existsSync(path)) return defaultSettings()
+  if (!existsSync(path)) return { settings: defaultSettings(), upgraded: false }
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<AppSettings>
-    return migrate(parsed)
+    const fromVersion = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 0
+    return { settings: migrate(parsed), upgraded: fromVersion < SETTINGS_SCHEMA_VERSION }
   } catch {
-    return defaultSettings()
+    return { settings: defaultSettings(), upgraded: false }
   }
 }
 
@@ -393,11 +411,13 @@ function withKeyFlags(settings: AppSettings): AppSettings {
 
 export function getSettings(): AppSettings {
   if (!cache) {
-    const { settings, migrated } = extractHeaderSecrets(loadFromDisk())
+    const loaded = loadFromDisk()
+    const { settings, migrated } = extractHeaderSecrets(loaded.settings)
     cache = settings
     // A legacy settings.json with cleartext header values: rewrite it now (0600, values
     // stripped) so the plaintext doesn't linger on disk until the next explicit save.
-    if (migrated) persist(cache)
+    // Likewise save a schema upgrade, so its one-time decisions stick.
+    if (migrated || loaded.upgraded) persist(cache)
   }
   return withKeyFlags(cache)
 }
