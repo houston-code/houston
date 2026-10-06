@@ -59,10 +59,10 @@
     "dist:unpacked": "npm run build && npm run verify:resources && electron-builder --mac --arm64 --dir"
   },
   "dependencies": {
-    "@anthropic-ai/bedrock-sdk": "^0.33.7",
-    "@anthropic-ai/foundry-sdk": "^0.4.8",
-    "@anthropic-ai/sdk": "^0.127.0",
-    "@anthropic-ai/vertex-sdk": "^0.19.10",
+    "@anthropic-ai/bedrock-sdk": "^0.34.0",
+    "@anthropic-ai/foundry-sdk": "^0.5.0",
+    "@anthropic-ai/sdk": "^0.129.0",
+    "@anthropic-ai/vertex-sdk": "^0.20.0",
     "@google/genai": "^2.24.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -71,7 +71,7 @@
     "highlight.js": "^11.12.0",
     "minimatch": "^10.2.6",
     "node-pty": "^1.1.0",
-    "openai": "^7.21.0"
+    "openai": "^7.23.0"
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.45.3",
