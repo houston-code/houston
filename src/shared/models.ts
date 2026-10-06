@@ -20,60 +20,7 @@
  *   naturalName— final numeric-aware tie-break for full determinism.
  */
 import type { ModelOption, ProviderKind } from './types'
-
-interface FamilyRule {
-  /** Canonical family name, used to keep the family's members grouped. */
-  name: string
-  /** Matches a (lowercased) model id belonging to this family. */
-  test: RegExp
-}
-
-// Family capability order per provider kind — earlier = more advanced. Rules are
-// tried in order, so more specific patterns must precede broader ones (gpt-4o before
-// the legacy gpt-4 catch-all). An id matching no rule sorts after all known families.
-const ANTHROPIC: FamilyRule[] = [
-  { name: 'fable', test: /fable/ },
-  { name: 'opus', test: /opus/ },
-  { name: 'sonnet', test: /sonnet/ },
-  { name: 'haiku', test: /haiku/ }
-]
-const OPENAI: FamilyRule[] = [
-  // The current GPT generations (5.x, 6.x) form one family that sorts by version, exactly
-  // like Claude's Opus 5.5/4.8, so gpt-6.1 precedes gpt-6 precedes gpt-5.6. The range
-  // keeps a later generation in the family instead of the unknown bucket.
-  { name: 'gpt', test: /gpt-([5-9]|[1-9]\d)/ },
-  { name: 'gpt-4.1', test: /gpt-4\.1/ },
-  { name: 'gpt-4o', test: /gpt-4o/ },
-  { name: 'o-series', test: /(^|[^a-z0-9])o\d/ },
-  { name: 'gpt-4', test: /gpt-4/ },
-  { name: 'gpt-3', test: /gpt-3/ }
-]
-const GEMINI: FamilyRule[] = [
-  { name: 'pro', test: /pro/ },
-  { name: 'flash', test: /flash/ }
-]
-
-const FAMILIES: Record<ProviderKind, FamilyRule[]> = {
-  anthropic: ANTHROPIC,
-  openai: OPENAI,
-  // OpenAI-compatible endpoints (proxies, Ollama, LM Studio) often serve GPT/o ids;
-  // those that don't fall through to the generic family grouping below.
-  'openai-compatible': OPENAI,
-  gemini: GEMINI,
-  // Bedrock, Vertex and Foundry serve the Claude line only (their SDKs are Claude
-  // clients — a Bedrock-hosted Llama isn't reachable through this adapter), so they
-  // rank by the Anthropic families. The rules match on a substring, so the host id
-  // prefixes (`anthropic.claude-opus-4-8`) and `@`-dated Vertex snapshots group
-  // correctly.
-  bedrock: ANTHROPIC,
-  vertex: ANTHROPIC,
-  foundry: ANTHROPIC,
-  // Azure OpenAI serves the GPT/o line. Ids here are user-named *deployments*, so
-  // they only group when the user named them after the model (a common convention,
-  // and the reason this isn't the generic fallback); anything else falls through to
-  // generic grouping, exactly like an OpenAI-compatible host serving unknown ids.
-  'azure-openai': OPENAI
-}
+import { FAMILY_RULES, type FamilyRule } from './model-facts'
 
 /** Numeric-aware, case-insensitive compare so `gpt-4o` < `gpt-4o mini` and `9` < `10`. */
 export function naturalCompare(a: string, b: string): number {
@@ -186,7 +133,7 @@ interface SortKey {
 
 function sortKey(kind: ProviderKind, id: string): SortKey {
   const lower = id.toLowerCase()
-  const rules = FAMILIES[kind] ?? OPENAI
+  const rules: readonly FamilyRule[] = FAMILY_RULES[kind] ?? FAMILY_RULES.openai
   for (let i = 0; i < rules.length; i++) {
     if (rules[i].test.test(lower)) {
       return { rank: i, family: rules[i].name, version: versionScore(lower), size: sizeRank(lower) }

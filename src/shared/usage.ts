@@ -5,6 +5,16 @@
  */
 import type { ModelCaps } from './types'
 import type { ModelUsage, ConversationUsage } from './agent'
+import {
+  contextWindowFor,
+  modelHasReasoning,
+  modelHasVision,
+  modelPricing,
+  type ModelPricing
+} from './model-facts'
+
+// Model-id knowledge lives in model-facts.ts; re-exported here for existing callers.
+export { contextWindowFor, modelPricing, type ModelPricing }
 
 /** Per-conversation running token usage (persisted; displayed in the control bar). */
 export interface SessionUsage {
@@ -70,114 +80,6 @@ export function sessionUsageFromConversation(u: ConversationUsage): SessionUsage
     cacheRead: u.cacheReadTokens,
     perModel: u.perModel
   }
-}
-
-/** Per-million-token prices in USD for a model (input vs output tokens). */
-export interface ModelPricing {
-  input: number
-  output: number
-  /**
-   * Price per 1M cached-input tokens read back from the prompt cache. Cache-read
-   * discounts vary by family (Anthropic 0.1x, GPT-4o 0.5x, GPT-4.1/o-series 0.25x,
-   * GPT-5+ 0.1x, Gemini 0.1x), so it's a price, not a shared multiplier. Absent ⇒
-   * fall back to `input * CACHE_READ_PRICE_MULTIPLIER` (the Anthropic rate).
-   */
-  cacheRead?: number
-  /**
-   * Price per 1M tokens that wrote a new cache entry. `0` means writes are free
-   * (OpenAI, Gemini implicit caching) — distinct from absent, which falls back to
-   * `input * CACHE_WRITE_PRICE_MULTIPLIER` (Anthropic's 1.25x surcharge).
-   */
-  cacheWrite?: number
-}
-
-/** OpenAI rates per 1M tokens: [id pattern, input, output, cached input (absent: none)]. */
-const OPENAI_PRICES: Array<[RegExp, number, number, number?]> = [
-  // GPT-6, by codename tier. A later 6.x release of a tier falls to that tier's rate.
-  [/gpt-6[\d.]*-astra/, 10, 50, 1],
-  [/gpt-6-sol/, 2, 10, 0.2],
-  [/gpt-6[\d.]*-luna/, 0.1, 0.5, 0.01],
-  [/gpt-6/, 2, 10, 0.1], // gpt-6.1-sol and later sol releases
-  // GPT-5.6 is priced per tier; the bare gpt-5.6 alias routes to sol.
-  [/gpt-5\.6-terra/, 2, 12, 0.2],
-  [/gpt-5\.6-luna/, 0.2, 1.2, 0.02],
-  [/gpt-5\.6/, 4, 20, 0.4],
-  [/gpt-5\.5-pro/, 30, 180],
-  [/gpt-5\.5/, 5, 30, 0.5],
-  [/gpt-5\.4-pro/, 30, 180],
-  [/gpt-5\.4-mini/, 0.75, 4.5, 0.075],
-  [/gpt-5\.4-nano/, 0.2, 1.25, 0.02],
-  [/gpt-5\.4/, 2.5, 15, 0.25],
-  [/gpt-5\.2-pro/, 21, 168],
-  [/gpt-5\.2/, 1.75, 14, 0.175],
-  [/gpt-5-pro/, 15, 120],
-  [/gpt-5-mini/, 0.25, 2, 0.025],
-  [/gpt-5-nano/, 0.05, 0.4, 0.005],
-  [/gpt-5/, 1.25, 10, 0.125], // gpt-5, gpt-5.1
-  [/gpt-4o-mini/, 0.15, 0.6, 0.075],
-  [/gpt-4o/, 2.5, 10, 1.25],
-  [/gpt-4\.1-mini/, 0.4, 1.6, 0.1],
-  [/gpt-4\.1/, 2, 8, 0.5],
-  [/(^|[^a-z0-9])o4-mini/, 1.1, 4.4, 0.275],
-  [/(^|[^a-z0-9])o3-mini/, 1.1, 4.4, 0.55],
-  [/(^|[^a-z0-9])o3-pro/, 20, 80],
-  [/(^|[^a-z0-9])o3([^a-z0-9]|$)/, 2, 8, 0.5],
-  [/(^|[^a-z0-9])o1-pro/, 150, 600],
-  [/(^|[^a-z0-9])o1([^a-z0-9]|$)/, 15, 60, 7.5]
-]
-
-/**
- * Best-effort USD price per 1M tokens for a model id, matched by family. Returns
- * null for unknown / local models (Ollama, LM Studio), in which case no cost is
- * shown. Approximate — provider prices change over time; this is a rough guide,
- * not a billing source of truth.
- */
-export function modelPricing(model: string): ModelPricing | null {
-  const m = model.toLowerCase()
-  // Anthropic (Claude) — current per-MTok rates. Fable / Mythos are the flagship
-  // tier and priced above Opus; check them before the opus/sonnet/haiku families.
-  // Cache writes are 1.25x input everywhere (the absent-field default); cache reads
-  // are 0.1x except where a release cut them: Fable / Mythos 5.1 read at 0.025x and
-  // Opus 5.5 at 0.05x. Opus 5.5 and the Sonnet 5 line were also repriced below their
-  // predecessors, so those ids are matched before the family-wide rate.
-  if (/(fable|mythos)-5-1/.test(m)) return { input: 10, output: 50, cacheRead: 0.25 }
-  if (m.includes('fable') || m.includes('mythos')) return { input: 10, output: 50 }
-  if (/opus-5-5/.test(m)) return { input: 4, output: 20, cacheRead: 0.2 }
-  if (m.includes('opus')) return { input: 5, output: 25 }
-  if (/sonnet-[5-9]/.test(m)) return { input: 2, output: 10 }
-  if (m.includes('sonnet')) return { input: 3, output: 15 }
-  if (m.includes('haiku')) return { input: 1, output: 5 }
-  // OpenAI (GPT / o-series): the published per-model rates, matched most specific first
-  // (a `-mini` / `-pro` variant before its base id). Cache writes are free (cacheWrite:
-  // 0), unlike Anthropic's 1.25x write surcharge. The `-pro` models offer no cached-input
-  // rate, so a read is priced at the input rate.
-  const openai = OPENAI_PRICES.find(([re]) => re.test(m))
-  if (openai) {
-    const [, input, output, cacheRead] = openai
-    return { input, output, cacheRead: cacheRead ?? input, cacheWrite: 0 }
-  }
-  // Google (Gemini). Rates vary by release rather than by tier, so the specific ids are
-  // matched before each tier's fallback (lite before flash, which it contains). Cache
-  // reads are 0.1x and implicit-cache writes are free. Pro prices are the <=200K-prompt
-  // tier. The 3.6-3.8 Flash rate doubles on 2027-01-01 per Google's pricing page.
-  if (m.includes('gemini')) {
-    if (m.includes('flash-lite')) {
-      // 3.5-flash-lite has no context caching, so a cache read never happens; price it
-      // at the input rate so the field can't undercount.
-      if (m.includes('3.5')) return { input: 0.3, output: 2.5, cacheRead: 0.3, cacheWrite: 0 }
-      if (m.includes('2.5')) return { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 }
-      return { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0 } // 3.1
-    }
-    if (m.includes('flash')) {
-      if (m.includes('3.5')) return { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 }
-      if (/gemini-3-flash/.test(m)) return { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 }
-      if (m.includes('2.5')) return { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 }
-      return { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 } // 3.6-3.8
-    }
-    if (/gemini-3/.test(m)) return { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 }
-    return { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 } // 2.5 Pro
-  }
-  return null
 }
 
 /**
@@ -273,39 +175,6 @@ export function formatUsd(n: number): string {
   return `$${n.toFixed(2)}`
 }
 
-/**
- * Best-effort context-window size (in tokens) for a model id, used to show context
- * usage as a percentage. Matches on the model family; returns null for unknown ids
- * (e.g. local/custom models), in which case the UI shows the raw count instead.
- * Approximate — provider context limits change over time.
- */
-export function contextWindowFor(model: string): number | null {
-  const m = model.toLowerCase()
-  if (m.includes('claude')) {
-    // Opus and Sonnet 4.6+ (incl. 5.x and beyond), plus Fable/Mythos, ship a 1M-token
-    // window as the standard (and default) window — GA, standard-priced, no beta
-    // header required. The version ranges keep future minor/major bumps (Opus 4.9,
-    // Opus 5) on 1M instead of falling back. Haiku and older Claude families (3.x,
-    // and Opus/Sonnet ≤4.5) remain at 200K.
-    if (/opus-(4-[6-9]|[5-9])|sonnet-(4-[6-9]|[5-9])|fable|mythos/.test(m)) return 1_000_000
-    return 200_000
-  }
-  if (m.includes('gemini')) return 1_000_000
-  // GPT-6 ships a 1.05M-token window across its tiers; the generation range keeps later
-  // releases on it. The gpt-5.6 family (sol/terra/luna tiers, and the bare gpt-5.6
-  // alias) ships 1M; gpt-5 through gpt-5.5 (and their -mini/-nano) stay at 400K.
-  if (/gpt-([6-9]|[1-9]\d)/.test(m)) return 1_050_000
-  if (/gpt-5\.[6-9]/.test(m)) return 1_000_000
-  if (m.includes('gpt-5')) return 400_000
-  if (m.includes('gpt-4.1')) return 1_000_000
-  if (m.includes('gpt-4o')) return 128_000
-  if (m.includes('gpt-4')) return 128_000
-  if (m.includes('gpt-3.5')) return 16_385
-  // o-series reasoning models (o1, o3, o4, o5, …); `o\d` so future ones aren't pinned.
-  if (/(^|[^a-z0-9])o\d([^a-z0-9]|$)/.test(m)) return 200_000
-  return null
-}
-
 /** What a model can do beyond plain text, matched by family. */
 export interface ModelCapabilities {
   /** Accepts image inputs (multimodal vision). */
@@ -319,15 +188,12 @@ export interface ModelCapabilities {
  * unknown / local models report no capabilities (all false), so callers gate
  * rather than over-promise. Approximate — provider line-ups change over time.
  *
- * Vision: Claude 3+/4, GPT-4o / GPT-4.1, the o-series, GPT-5, Gemini 1.5 / 2.x.
- * Reasoning: the o-series, GPT-5, Claude thinking-capable (3.7 & 4.x), and
- * Gemini 2.5. The reasoning heuristics intentionally mirror the per-provider
- * gates in main/providers/reasoning.ts so the UI and the API agree on which
- * models actually accept a thinking/reasoning parameter.
+ * The rules live in model-facts.ts; reasoning is the union of the same per-provider
+ * gates the request builders use, so the UI and the API agree on which models
+ * actually accept a thinking/reasoning parameter.
  */
 export function modelCapabilities(model: string): ModelCapabilities {
-  const m = model.toLowerCase()
-  return { vision: hasVision(m), reasoning: hasReasoning(m) }
+  return { vision: modelHasVision(model), reasoning: modelHasReasoning(model) }
 }
 
 /**
@@ -358,42 +224,6 @@ export function resolveToolSupport(caps?: ModelCaps): boolean | null {
 /** Context window, preferring host-provided metadata over the family heuristic. */
 export function resolveContextWindow(model: string, caps?: ModelCaps): number | null {
   return caps?.contextWindow ?? contextWindowFor(model)
-}
-
-function hasVision(m: string): boolean {
-  // Anthropic: Claude 3, 3.5, 3.7, and 4 families are all multimodal. (Claude 2
-  // and earlier were text-only, but those ids are long retired.)
-  if (m.includes('claude')) {
-    return !/claude-(instant|1|2)([^0-9]|$)/.test(m)
-  }
-  // OpenAI: GPT-4o, GPT-4.1, GPT-5, and the reasoning o-series accept images;
-  // legacy text-only gpt-4 / gpt-3.5 do not.
-  if (m.includes('gpt-4o') || m.includes('gpt-4.1') || /gpt-([5-9]|[1-9]\d)/.test(m)) return true
-  if (isOSeries(m)) return true
-  // Google: Gemini 1.5 and everything from 2.x on are multimodal; 1.0 (gemini-pro) was
-  // text-only. The 3.x line has to be listed explicitly — the old `2\.`-only pattern
-  // reported every Gemini 3 model as text-only.
-  if (m.includes('gemini')) return /gemini[^0-9]*(1\.5|2\.|3)/.test(m)
-  return false
-}
-
-function hasReasoning(m: string): boolean {
-  // OpenAI o-series and GPT from gpt-5 on are reasoning models. Mirrors the heuristic
-  // in main/providers/reasoning.ts (openaiSupportsReasoning): an "o<digit>" or a gpt-5+
-  // generation at the start of the id.
-  if (/^(o\d|gpt-([5-9]|[1-9]\d))/.test(m)) return true
-  // Anthropic extended thinking — Claude 3.7, Opus / Sonnet / Haiku from 4.x on, and
-  // Fable / Mythos. Mirrors anthropicSupportsThinking in main/providers/reasoning.ts.
-  if (/claude.*(3-7|(opus|sonnet|haiku)-[4-9]|-4-|fable|mythos)/.test(m)) return true
-  // Google: the Gemini 2.5 and 3.x lines ("thinking") reason. Mirrors geminiSupportsThinking
-  // in main/providers/reasoning.ts — keep the two in lockstep.
-  if (m.includes('gemini') && /2\.5|thinking|gemini-3/.test(m)) return true
-  return false
-}
-
-/** Matches the OpenAI reasoning o-series (o1 / o3 / o4) without false-positiving on words like "llama". */
-function isOSeries(m: string): boolean {
-  return /(^|[^a-z0-9])o[134](-[a-z]+)?([^a-z0-9]|$)/.test(m)
 }
 
 /**
