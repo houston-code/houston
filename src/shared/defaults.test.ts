@@ -64,9 +64,15 @@ describe('defaultSettings', () => {
     expect(gemini.defaultModel).toBe('gemini-3.8-flash')
   })
 
-  it('seeds claude-fable-5 on the Anthropic provider', () => {
+  it('seeds the current Claude lineup with Opus 5.5 as the default', () => {
     const anthropic = defaultSettings().providers.find((p) => p.id === 'anthropic')!
-    expect(anthropic.models.map((m) => m.id)).toContain('claude-fable-5')
+    expect(anthropic.models.map((m) => m.id)).toEqual([
+      'claude-fable-5-1',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-haiku-4-5'
+    ])
+    expect(anthropic.defaultModel).toBe('claude-opus-5-5')
   })
 
   it('seeds built-in models as ids only, with no hardcoded display label', () => {
@@ -135,23 +141,23 @@ describe('backfillDefaultModels', () => {
   })
 
   it('with onlyIds, appends just those ids and leaves other missing defaults out', () => {
-    // The v3-style scoped call: seed Fable without re-adding other Claude defaults the
+    // The scoped call a version bump makes: seed Fable 5.1 without re-adding other Claude defaults the
     // user has since deleted.
     const saved = [
       provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-opus-4-8' }] })
     ]
-    const models = backfillDefaultModels(saved, ['claude-fable-5'])[0].models
-    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5'])
+    const models = backfillDefaultModels(saved, ['claude-fable-5-1'])[0].models
+    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5-1'])
     // The appended model is id-only; its display name is derived, not seeded.
-    expect(models.find((m) => m.id === 'claude-fable-5')).toEqual({ id: 'claude-fable-5' })
+    expect(models.find((m) => m.id === 'claude-fable-5-1')).toEqual({ id: 'claude-fable-5-1' })
   })
 
   it('with onlyIds, does not re-add an already-present scoped id', () => {
     const saved = [
-      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-fable-5' }] })
+      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-fable-5-1' }] })
     ]
-    const ids = backfillDefaultModels(saved, ['claude-fable-5'])[0].models.map((m) => m.id)
-    expect(ids).toEqual(['claude-fable-5'])
+    const ids = backfillDefaultModels(saved, ['claude-fable-5-1'])[0].models.map((m) => m.id)
+    expect(ids).toEqual(['claude-fable-5-1'])
   })
 
   it('leaves custom (non-built-in) providers untouched', () => {

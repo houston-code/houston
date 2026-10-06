@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 8
+export const SETTINGS_SCHEMA_VERSION = 9
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -53,16 +53,18 @@ export function defaultProviders(): ProviderConfig[] {
       // Model ids only — the display name is derived from the id (see
       // `modelDisplayName` in models.ts), so a seeded model reads identically to one
       // added via Fetch. No hardcoded labels to drift out of sync with fetched ids.
+      // The current lineup, one model per tier. Superseded releases (Fable 5, Opus 4.8 /
+      // 4.7, Sonnet 4.6) still serve, so the v9 migration only adds the new ids to
+      // existing installs; it never removes a model a user may be using.
       models: [
-        { id: 'claude-fable-5' },
-        { id: 'claude-opus-4-8' },
-        { id: 'claude-sonnet-4-6' },
-        { id: 'claude-haiku-4-5' },
-        { id: 'claude-opus-4-7' }
+        { id: 'claude-fable-5-1' },
+        { id: 'claude-opus-5-5' },
+        { id: 'claude-sonnet-5-5' },
+        { id: 'claude-haiku-4-5' }
       ],
       // Changing this needs a live eval baseline for the new model in the same PR
       // (src/main/agent/evals/baselines/), or the scheduled eval-live.yml run reds.
-      defaultModel: 'claude-opus-4-8',
+      defaultModel: 'claude-opus-5-5',
       requiresKey: true,
       hasKey: false,
       builtIn: true
