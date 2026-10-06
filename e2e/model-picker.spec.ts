@@ -51,16 +51,14 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
     // The default model set fits without an internal scrollbar.
     expect(info.fitsWithoutScroll).toBe(true)
 
-    // Advanced-first ordering: the GPT-5 family ahead of the older o-series, regardless
-    // of stored order. Names are the lowercase model id (so a curated model reads the
-    // same as one added via the provider's Fetch), e.g. "gpt-5.6-sol", "claude-opus-4.8".
-    // Anchor on families rather than a single id — the curated seed is refreshed as the
-    // line moves, and a dropped id would read here as an ordering regression.
-    const gpt5 = info.options.findIndex((o) => o.startsWith('gpt-5'))
-    const oSeries = info.options.findIndex((o) => /^o\d/.test(o))
-    expect(gpt5).toBeGreaterThanOrEqual(0)
-    expect(oSeries).toBeGreaterThanOrEqual(0)
-    expect(gpt5).toBeLessThan(oSeries)
+    // Advanced-first ordering, regardless of stored order. Names are the lowercase model
+    // id (so a curated model reads the same as one added via the provider's Fetch), e.g.
+    // "gpt-6.1-sol", "claude-opus-4.8". Anchor on families and tiers rather than exact
+    // ids, since the curated seed is refreshed as each line moves: within GPT, the newest
+    // version leads and the efficient luna tier trails the flagship tiers.
+    const gpt = info.options.filter((o) => o.startsWith('gpt-'))
+    expect(gpt.length).toBeGreaterThan(0)
+    expect(gpt.findIndex((o) => o.includes('luna'))).toBe(gpt.length - 1)
     // Same family grouped, newest version first: opus 4.8 immediately before 4.7.
     const opus48 = info.options.findIndex((o) => o.startsWith('claude-opus-4.8'))
     const opus47 = info.options.findIndex((o) => o.startsWith('claude-opus-4.7'))

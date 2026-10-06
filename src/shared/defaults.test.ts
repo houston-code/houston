@@ -47,14 +47,10 @@ describe('defaultSettings', () => {
     expect(defaultSettings().shellOutputMaxBytes).toBe(DEFAULT_SHELL_OUTPUT_MAX_BYTES)
   })
 
-  it('seeds the current GPT-5.x line on the OpenAI provider and defaults to gpt-5.6-sol', () => {
+  it('seeds the GPT-6 line on the OpenAI provider and defaults to gpt-6.1-sol', () => {
     const openai = defaultSettings().providers.find((p) => p.id === 'openai')!
-    expect(openai.models.map((m) => m.id)).toEqual(
-      expect.arrayContaining(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
-    )
-    // Deprecated ids are not seeded on a fresh install.
-    expect(openai.models.map((m) => m.id)).not.toContain('gpt-5')
-    expect(openai.defaultModel).toBe('gpt-5.6-sol')
+    expect(openai.models.map((m) => m.id)).toEqual(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'])
+    expect(openai.defaultModel).toBe('gpt-6.1-sol')
   })
 
   it('seeds the current Gemini lineup with a stable default', () => {
@@ -119,9 +115,9 @@ describe('backfillDefaultModels', () => {
   it('appends new built-in default models a saved provider is missing', () => {
     const saved = [provider({ id: 'openai', models: [{ id: 'gpt-4o', label: 'GPT-4o' }] })]
     const ids = backfillDefaultModels(saved)[0].models.map((m) => m.id)
-    // The pre-existing model stays first; new defaults (incl. gpt-5.6-sol) are appended.
+    // The pre-existing model stays first; new defaults (incl. gpt-6.1-sol) are appended.
     expect(ids[0]).toBe('gpt-4o')
-    expect(ids).toContain('gpt-5.6-sol')
+    expect(ids).toContain('gpt-6.1-sol')
     // No duplicate of the model the user already had.
     expect(ids.filter((id) => id === 'gpt-4o')).toHaveLength(1)
   })

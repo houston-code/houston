@@ -106,22 +106,33 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const ids = await loadOpenAIModelIds()
     expect(ids[0]).toBe('gpt-4o') // user's model kept, in place
-    expect(ids).toContain('gpt-5.6-sol') // new default appended
+    expect(ids).toContain('gpt-6.1-sol') // new default appended
   })
 
   it('treats a settings file with no schemaVersion as pre-v2 and backfills', async () => {
     writeSettings({ providers: [openaiProvider(['gpt-4o'])] })
-    expect(await loadOpenAIModelIds()).toContain('gpt-5.6-sol')
+    expect(await loadOpenAIModelIds()).toContain('gpt-6.1-sol')
   })
 
   it('does not re-add a default model a v2 install has already deleted', async () => {
     // Migration already ran (v2); the user has since removed the old gpt-5 flagship — a
-    // full backfill must not resurrect it. The v4 bump scopes its OpenAI add to the new
-    // gpt-5.x ids (which the user never deleted), leaving gpt-5 gone.
+    // full backfill must not resurrect it. Later bumps scope their OpenAI adds to their
+    // own new ids (which the user never deleted), leaving gpt-5 gone.
     writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])] })
     const ids = await loadOpenAIModelIds()
     expect(ids).not.toContain('gpt-5')
-    expect(ids).toContain('gpt-5.6-sol') // the v4 scoped flagship add still runs
+    expect(ids).toContain('gpt-6.1-sol') // the v8 scoped add still runs
+  })
+
+  it('adds the GPT-6 line on the v8 bump without pruning the 5.x models', async () => {
+    writeSettings({ schemaVersion: 7, providers: [openaiProvider(['gpt-5.6-sol', 'o3'])] })
+    expect(await loadOpenAIModelIds()).toEqual([
+      'gpt-5.6-sol',
+      'o3',
+      'gpt-6-astra',
+      'gpt-6.1-sol',
+      'gpt-6-luna'
+    ])
   })
 
   it('seeds claude-fable-5 into a v2 Anthropic provider on the v3 bump', async () => {
@@ -155,7 +166,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(7)
+    expect(getSettings().schemaVersion).toBe(8)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
