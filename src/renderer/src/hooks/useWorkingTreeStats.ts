@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { RepoShipState } from '@shared/shipAction'
 
 /** Compact working-tree change counts for the Changes button badge. */
 export interface WorkingTreeStats {
@@ -7,6 +8,8 @@ export interface WorkingTreeStats {
   /** Total added / removed lines across every file. */
   added: number
   removed: number
+  /** Commit/remote facts that choose the composer bar's ship action. */
+  ship?: RepoShipState
 }
 
 const EMPTY: WorkingTreeStats = { fileCount: 0, added: 0, removed: 0 }
@@ -37,7 +40,9 @@ export function useWorkingTreeStats(workspace: string | null, running: boolean):
       // Guard against a workspace switch that lands while this fetch is in flight.
       if (wsRef.current !== ws) return
       setStats(
-        c.isRepo ? { fileCount: c.files.length, added: c.added, removed: c.removed } : EMPTY
+        c.isRepo
+          ? { fileCount: c.files.length, added: c.added, removed: c.removed, ship: c.ship }
+          : EMPTY
       )
     } catch {
       // Non-fatal — the badge just keeps its last value.

@@ -56,6 +56,7 @@ import { usePreviewServers } from './hooks/usePreviewServers'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
+import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
 import { itemsFromMessages, lastUserText } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
@@ -120,29 +121,6 @@ const POLICY_COMMANDS: Record<string, ApprovalPolicy> = {
   auto: 'auto-edit',
   full: 'full-auto'
 }
-
-/**
- * The message the Changes panel's "Create PR" button hands to the agent. The
- * renderer never drives git/gh itself — it asks the agent to do the commit →
- * push → open-PR flow with its existing tools, under the normal approval gate.
- *
- * The branch logic is the crux: a fresh change opens an independent PR against
- * the default branch, but when the current branch already has an open PR the new
- * change is stacked on top — head branched off the current tip, base pointed at
- * that PR's branch — so the new PR's diff shows only the increment, never the
- * earlier PR's commits.
- */
-const CREATE_PR_PROMPT = `Create a GitHub pull request for my current changes, using git and the gh_pr_create tool. Never check out or commit to the default branch directly — it may be checked out in another worktree.
-
-1. Run \`git fetch origin\` and identify the repository's default branch (e.g. main).
-2. Choose the PR's head branch:
-   - If I'm currently on the default branch, OR the current branch already has an open PR (check with \`gh pr list --head <current-branch>\`): create a new branch off the current tip and use that as the head.
-   - Otherwise: use the current branch as the head.
-3. Stage and commit the changes on that head branch with a clear, conventional commit message, then push it to origin.
-4. Open the PR with gh_pr_create, choosing the base branch:
-   - If the current branch already had an open PR, this change is stacked on it — set base to that PR's branch, so the new PR's diff shows only these changes and not the earlier PR's.
-   - Otherwise set base to the default branch.
-5. Reply with the PR link and a short summary, and say whether you opened an independent PR or stacked it on top of which PR/branch.`
 
 /** Pick a sensible default model: first provider that has a key and a model. */
 function defaultSelection(settings: AppSettings): SelectedModel | null {
@@ -1094,13 +1072,17 @@ export default function App(): JSX.Element {
     [chat, settings, queue, currentId]
   )
 
-  // Hand off PR creation to the agent: close the panel and send the standing
-  // prompt as a normal turn, so the commit/push/open-PR flow runs through the
+  // Hand shipping off to the agent: close the panel and send the chosen action's
+  // standing prompt (Create PR / Publish to GitHub / Commit & push, see
+  // @shared/shipAction) as a normal turn, so the git and gh work runs through the
   // agent's tools and approval gate rather than the renderer touching git.
-  const onCreatePr = useCallback(() => {
-    setChangesOpen(false)
-    void onSend(CREATE_PR_PROMPT)
-  }, [onSend])
+  const onShip = useCallback(
+    (action: ShipAction) => {
+      setChangesOpen(false)
+      void onSend(action.prompt)
+    },
+    [onSend]
+  )
 
   const onCompact = useCallback(async () => {
     if (!currentId || !settings?.selected) return
@@ -1781,7 +1763,7 @@ export default function App(): JSX.Element {
             lastUserMessage={lastUserText(chat.items)}
             changes={workspace ? workingTreeStats : undefined}
             onShowChanges={() => setChangesOpen(true)}
-            onCreatePr={canChat ? onCreatePr : undefined}
+            onShip={canChat ? onShip : undefined}
             onCommand={onCommand}
             onSend={onSend}
             onSteer={onSteer}
@@ -1843,7 +1825,7 @@ export default function App(): JSX.Element {
           <DiffPanel
             workspace={workspace}
             onClose={() => setChangesOpen(false)}
-            onCreatePr={canChat ? onCreatePr : undefined}
+            onShip={canChat ? onShip : undefined}
             creating={chat.running}
           />
         )}

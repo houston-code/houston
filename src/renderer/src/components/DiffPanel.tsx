@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FileDiff, WorkingTreeChanges } from '@shared/workingTree'
+import { chooseShipAction, type ShipAction } from '@shared/shipAction'
 import { useInitGitRepo } from '../hooks/useInitGitRepo'
 import { DiffView } from './DiffView'
 
@@ -54,19 +55,21 @@ function FileSection({ file, defaultOpen }: { file: FileDiff; defaultOpen: boole
  * tree (tracked diff vs HEAD + untracked files). Working-tree scoped — it shows
  * all uncommitted changes, not only what the current chat touched.
  *
- * `onCreatePr`, when provided, renders a "Create PR" action that hands the work
- * off to the agent (commit → push → open PR via its existing tools) rather than
- * the renderer driving git directly; `creating` disables it while a run is busy.
+ * `onShip`, when provided, renders a ship action that hands the work off to the
+ * agent (commit → push → open PR via its existing tools) rather than the renderer
+ * driving git directly. The action follows the repo's state: "Create PR" needs
+ * commits and a GitHub remote, so a fresh repo gets "Publish to GitHub" instead
+ * (see chooseShipAction). `creating` disables it while a run is busy.
  */
 export function DiffPanel({
   workspace,
   onClose,
-  onCreatePr,
+  onShip,
   creating = false
 }: {
   workspace: string | null
   onClose: () => void
-  onCreatePr?: () => void
+  onShip?: (action: ShipAction) => void
   creating?: boolean
 }): JSX.Element {
   const [data, setData] = useState<WorkingTreeChanges | null>(null)
@@ -95,6 +98,7 @@ export function DiffPanel({
   }, [load])
 
   const files = data?.files ?? []
+  const shipAction = data?.isRepo ? chooseShipAction(data.ship) : null
   const defaultOpen = files.length <= AUTO_EXPAND_LIMIT
 
   return (
@@ -171,23 +175,17 @@ export function DiffPanel({
           )}
         </div>
 
-        {onCreatePr && data?.isRepo && files.length > 0 && (
+        {onShip && shipAction && data?.isRepo && files.length > 0 && (
           <footer className="changes-panel__foot">
-            <span className="changes-panel__foot-hint">
-              Hands off to the agent to commit, push, and open a PR.
-            </span>
+            <span className="changes-panel__foot-hint">{shipAction.hint}</span>
             <button
               type="button"
               className="btn btn--sm btn--accent"
-              onClick={onCreatePr}
+              onClick={() => onShip(shipAction)}
               disabled={creating}
-              title={
-                creating
-                  ? 'Wait for the current run to finish'
-                  : 'Ask the agent to create a pull request from these changes'
-              }
+              title={creating ? 'Wait for the current run to finish' : shipAction.title}
             >
-              Create PR
+              {shipAction.label}
             </button>
           </footer>
         )}
