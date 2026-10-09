@@ -198,6 +198,27 @@ export async function createWorktree(
   if (!repo.isRepo) {
     throw new Error('This folder is not inside a git repository.')
   }
+  if (!input.base) {
+    // A freshly `git init`'d repo has an unborn HEAD: there is no commit to branch
+    // from, and git's own failure ("invalid reference: HEAD" plus --orphan hints)
+    // is opaque. Check first, before creating any directories.
+    try {
+      await exec(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], repo.root)
+    } catch {
+      // Other branches may still have commits (e.g. an earlier chat's worktree
+      // branch), and any of them can serve as the base instead.
+      const others = repo.branches.filter((b) => b !== repo.currentBranch)
+      const hint =
+        others.length > 0
+          ? ` Or pick an existing branch as the base (${others.slice(0, 3).join(', ')}${others.length > 3 ? ', …' : ''}).`
+          : ''
+      throw new Error(
+        'This repository has no commits yet, so there is nothing to branch a worktree from. ' +
+          'Make an initial commit first, or start the chat without a worktree.' +
+          hint
+      )
+    }
+  }
   const path = worktreePath(repo.root, slugifyBranch(branch))
   mkdirSync(join(repo.root, WORKTREES_SUBDIR), { recursive: true })
   await ensureExcluded(repo.root, exec)
