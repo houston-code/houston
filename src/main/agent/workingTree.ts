@@ -1,4 +1,5 @@
 import { realpathSync, statSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   parseUnifiedDiff,
@@ -113,7 +114,10 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
  * fail. Prefers `origin`, else the first remote. Only the remote's name and host
  * class are returned; the URL stays in this process because it can carry a token.
  */
-export async function collectShipState(root: string): Promise<RepoShipState> {
+export async function collectShipState(
+  root: string,
+  githubHosts: readonly string[] = knownGithubHosts()
+): Promise<RepoShipState> {
   const [head, remotes] = await Promise.all([
     runGitCapture(['rev-parse', '--verify', '--quiet', 'HEAD'], root),
     runGitCapture(['remote'], root)
@@ -128,6 +132,51 @@ export async function collectShipState(root: string): Promise<RepoShipState> {
   const name = names.includes('origin') ? 'origin' : names[0]
   if (!name) return { hasCommits, remote: null }
   const url = await runGitCapture(['remote', 'get-url', name], root)
-  const host = url.ok ? classifyRemoteUrl(url.stdout) : 'other'
+  const host = url.ok ? classifyRemoteUrl(url.stdout, githubHosts) : 'other'
   return { hasCommits, remote: { name, host } }
+}
+
+/** Where `gh` keeps `hosts.yml`, following gh's own config-dir lookup order. */
+export function ghHostsFile(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  home: string = homedir()
+): string {
+  if (env.GH_CONFIG_DIR) return join(env.GH_CONFIG_DIR, 'hosts.yml')
+  if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, 'gh', 'hosts.yml')
+  if (platform === 'win32' && env.AppData) return join(env.AppData, 'GitHub CLI', 'hosts.yml')
+  return join(home, '.config', 'gh', 'hosts.yml')
+}
+
+/**
+ * Hosts `gh` can open pull requests on beyond github.com: the GitHub Enterprise
+ * Server hosts it is signed in to (the top-level keys of its `hosts.yml`) plus
+ * `GH_HOST`. Without these an Enterprise remote would be offered "Commit & push"
+ * instead of "Create PR", although `gh` handles it fine. Only host names are
+ * read; tokens in the file are never touched beyond the line scan. Best-effort:
+ * an unreadable file just means no extra hosts.
+ */
+export function knownGithubHosts(
+  env: NodeJS.ProcessEnv = process.env,
+  readFile: (p: string) => string | null = readTextOrNull
+): string[] {
+  const hosts = new Set<string>()
+  if (env.GH_HOST) hosts.add(env.GH_HOST.trim().toLowerCase())
+  const yml = readFile(ghHostsFile(env))
+  if (yml) {
+    for (const line of yml.split(/\r?\n/)) {
+      const m = /^([A-Za-z0-9][A-Za-z0-9.-]*):\s*$/.exec(line)
+      if (m) hosts.add(m[1].toLowerCase())
+    }
+  }
+  hosts.delete('')
+  return [...hosts]
+}
+
+function readTextOrNull(p: string): string | null {
+  try {
+    return readFileSync(p, 'utf8')
+  } catch {
+    return null
+  }
 }

@@ -50,11 +50,19 @@ export interface ShipAction {
  * Host class of a git remote URL. Handles URL forms (`https://`, `ssh://`,
  * `git://`, with optional `user@` and port) and scp-like `[user@]host:path`.
  * Anything unparseable is `other`, which only costs the PR shortcut.
+ *
+ * GitHub is github.com, GitHub Enterprise Cloud with data residency (`*.ghe.com`),
+ * and any host in `githubHosts`: the GitHub Enterprise Server hosts the user's
+ * `gh` is signed in to (collected in the main process), since `gh` can open PRs
+ * on those exactly as on github.com.
  */
-export function classifyRemoteUrl(url: string): RemoteHost {
+export function classifyRemoteUrl(url: string, githubHosts: readonly string[] = []): RemoteHost {
   const host = remoteHostname(url.trim())
   if (!host) return 'other'
-  return host === 'github.com' || host.endsWith('.github.com') ? 'github' : 'other'
+  if (host === 'github.com' || host.endsWith('.github.com') || host.endsWith('.ghe.com')) {
+    return 'github'
+  }
+  return githubHosts.some((h) => h.toLowerCase() === host) ? 'github' : 'other'
 }
 
 function remoteHostname(url: string): string | null {
@@ -83,16 +91,26 @@ function remoteRef(name: string): string | null {
 const GITIGNORE_STEP =
   'Check that `.gitignore` covers dependencies, build output, local databases, uploads, and secrets such as `.env` files, and add whatever is missing. Never commit a secret; if one is already tracked, stop and tell me.'
 
-function createPrPrompt(remote: string): string {
+/**
+ * Name an initial branch `main` without the forcing `-M`, which would overwrite an
+ * existing local `main` (possible in an orphan-branch checkout: HEAD unborn while
+ * other branches have history).
+ */
+const NAME_MAIN_STEP =
+  'If no branch named `main` exists yet, rename the current branch to it with `git branch -m main` (never `-M`, which overwrites an existing branch); otherwise keep the current branch name.'
+
+function createPrPrompt(remote: string | null): string {
+  const r = remote ?? 'the configured remote'
+  const cmd = remote ?? '<remote>'
   return `Create a GitHub pull request for my current changes, using git and the gh_pr_create tool. Never check out or commit to the default branch directly, since it may be checked out in another worktree.
 
-1. Run \`git fetch ${remote}\` and identify the repository's default branch (e.g. main).
+1. Run \`git fetch ${cmd}\` and identify the repository's default branch (e.g. main).
 2. Choose the PR's head branch:
    - If I'm currently on the default branch, OR the current branch already has an open PR (check with \`gh pr list --head <current-branch>\`): create a new branch off the current tip and use that as the head.
    - Otherwise: use the current branch as the head.
-3. Stage and commit the changes on that head branch with a clear, conventional commit message, then push it to ${remote}.
+3. Stage and commit the changes on that head branch with a clear, conventional commit message, then push it to ${r}.
 4. Open the PR with gh_pr_create, choosing the base branch:
-   - If the current branch already had an open PR, this change is stacked on it, so set base to that PR's branch, so the new PR's diff shows only these changes and not the earlier PR's.
+   - If the current branch already had an open PR, this change is stacked on it: set base to that PR's branch, so the new PR's diff shows only these changes and not the earlier PR's.
    - Otherwise set base to the default branch.
 5. Reply with the PR link and a short summary, and say whether you opened an independent PR or stacked it on top of which PR/branch.`
 }
@@ -100,7 +118,7 @@ function createPrPrompt(remote: string): string {
 const PUBLISH_PROMPT = `Publish this project to a new GitHub repository. It has no git remote yet, so a pull request isn't possible until the project is on GitHub.
 
 1. ${GITIGNORE_STEP}
-2. Stage and commit the current changes with a clear, conventional commit message. If the repository has no commits yet, make this the initial commit and name the branch \`main\` (\`git branch -M main\`).
+2. Stage and commit the current changes with a clear, conventional commit message. If the repository has no commits yet, make this the initial commit. ${NAME_MAIN_STEP}
 3. Ask me (ask_user) for the repository name, suggesting this folder's name, and whether it should be private (recommended) or public.
 4. Create it with gh_repo_create from this directory and push. If gh reports I'm not signed in, stop and tell me to run \`gh auth login\`.
 5. Reply with the repository URL, and tell me that from now on the Create PR button opens pull requests for new changes.`
@@ -111,8 +129,8 @@ function firstPushPrompt(remote: string | null): string {
   return `Push this project's first commit to ${r}. The repository has no commits yet, so there is nothing for a pull request to compare against.
 
 1. ${GITIGNORE_STEP}
-2. Stage and commit the current changes as the initial commit with a clear, conventional message, and name the branch \`main\` (\`git branch -M main\`).
-3. Run \`git fetch ${cmd}\`. If the remote already has a default branch with commits, stop and tell me rather than overwriting it; never force-push. Otherwise run \`git push -u ${cmd} main\`.
+2. Stage and commit the current changes as the initial commit with a clear, conventional message. ${NAME_MAIN_STEP}
+3. Run \`git fetch ${cmd}\`. If the remote already has a default branch with commits, stop and tell me rather than overwriting it; never force-push. Otherwise push the branch with \`git push -u ${cmd} <branch>\`.
 4. Reply with what was pushed and where, and tell me that from now on new changes can go up as pull requests.`
 }
 
@@ -153,7 +171,7 @@ export function chooseShipAction(state: RepoShipState | undefined): ShipAction {
       prompt: firstPushPrompt(ref)
     }
   }
-  if (remote.host === 'github') return createPr(ref ?? 'origin')
+  if (remote.host === 'github') return createPr(ref)
   return {
     kind: 'push',
     label: 'Commit & push',
@@ -163,7 +181,7 @@ export function chooseShipAction(state: RepoShipState | undefined): ShipAction {
   }
 }
 
-function createPr(remote: string): ShipAction {
+function createPr(remote: string | null): ShipAction {
   return {
     kind: 'create-pr',
     label: 'Create PR',

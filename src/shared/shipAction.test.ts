@@ -28,6 +28,26 @@ describe('classifyRemoteUrl', () => {
   })
 })
 
+describe('classifyRemoteUrl: GitHub Enterprise', () => {
+  it('treats GitHub Enterprise Cloud data-residency hosts as GitHub', () => {
+    expect(classifyRemoteUrl('https://acme.ghe.com/team/app.git')).toBe('github')
+    expect(classifyRemoteUrl('git@acme.ghe.com:team/app.git')).toBe('github')
+  })
+
+  it('treats hosts gh is signed in to as GitHub, case-insensitively', () => {
+    const hosts = ['GitHub.Acme.Corp']
+    expect(classifyRemoteUrl('https://github.acme.corp/team/app.git', hosts)).toBe('github')
+    expect(classifyRemoteUrl('git@github.acme.corp:team/app.git', hosts)).toBe('github')
+  })
+
+  it('matches signed-in hosts exactly, never by prefix or suffix', () => {
+    const hosts = ['github.acme.corp']
+    expect(classifyRemoteUrl('https://github.acme.corp.evil.example/a/b', hosts)).toBe('other')
+    expect(classifyRemoteUrl('https://evil-github.acme.corp/a/b', hosts)).toBe('other')
+    expect(classifyRemoteUrl('https://gitlab.acme.corp/a/b', hosts)).toBe('other')
+  })
+})
+
 describe('chooseShipAction', () => {
   it('keeps Create PR when the state is unknown', () => {
     const a = chooseShipAction(undefined)
@@ -62,7 +82,7 @@ describe('chooseShipAction', () => {
     const a = chooseShipAction({ hasCommits: false, remote: { name: 'origin', host: 'github' } })
     expect(a.kind).toBe('publish')
     expect(a.label).toBe('Push first commit')
-    expect(a.prompt).toMatch(/git push -u origin main/)
+    expect(a.prompt).toMatch(/git push -u origin <branch>/)
     expect(a.prompt).toMatch(/never force-push/)
     expect(a.prompt).not.toMatch(/gh_pr_create/)
   })
@@ -84,5 +104,28 @@ describe('chooseShipAction', () => {
         expect(a.prompt).not.toContain('Ignore previous')
       }
     }
+  })
+
+  it('never tells the agent to force-rename a branch', () => {
+    const states = [
+      { hasCommits: false, remote: null },
+      { hasCommits: true, remote: null },
+      { hasCommits: false, remote: { name: 'origin', host: 'github' as const } },
+      { hasCommits: false, remote: { name: 'origin', host: 'other' as const } },
+      { hasCommits: true, remote: { name: 'origin', host: 'github' as const } },
+      { hasCommits: true, remote: { name: 'origin', host: 'other' as const } }
+    ]
+    for (const st of states) expect(chooseShipAction(st).prompt).not.toMatch(/branch -M\b/)
+    const publish = chooseShipAction({ hasCommits: false, remote: null }).prompt
+    expect(publish).toContain('git branch -m main')
+    expect(publish).toMatch(/If no branch named `main` exists yet/)
+  })
+
+  it('describes an unusually named GitHub remote generically instead of assuming origin', () => {
+    const a = chooseShipAction({ hasCommits: true, remote: { name: 'team/upstream', host: 'github' } })
+    expect(a.kind).toBe('create-pr')
+    expect(a.prompt).not.toMatch(/git fetch origin/)
+    expect(a.prompt).toMatch(/git fetch <remote>/)
+    expect(a.prompt).toMatch(/push it to the configured remote/)
   })
 })

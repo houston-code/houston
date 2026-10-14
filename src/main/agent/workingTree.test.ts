@@ -3,7 +3,12 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { collectShipState, collectWorkingTreeChanges } from './workingTree'
+import {
+  collectShipState,
+  collectWorkingTreeChanges,
+  ghHostsFile,
+  knownGithubHosts
+} from './workingTree'
 
 const hasGit = (() => {
   try {
@@ -75,10 +80,61 @@ describe.skipIf(!hasGit)('collectShipState', () => {
     expect((await collectShipState(dir)).remote).toEqual({ name: 'gl', host: 'other' })
   })
 
+  it('classifies a GitHub Enterprise remote as GitHub when gh is signed in to it', async () => {
+    const dir = freshRepo()
+    git(dir, 'remote', 'add', 'origin', 'git@github.acme.corp:team/app.git')
+    expect((await collectShipState(dir, ['github.acme.corp'])).remote).toEqual({
+      name: 'origin',
+      host: 'github'
+    })
+    expect((await collectShipState(dir, [])).remote).toEqual({ name: 'origin', host: 'other' })
+  })
+
   it('is carried on the Changes payload', async () => {
     const dir = freshRepo()
     const changes = await collectWorkingTreeChanges(dir)
     expect(changes.isRepo).toBe(true)
     expect(changes.ship).toEqual({ hasCommits: false, remote: null })
+  })
+})
+
+describe('knownGithubHosts', () => {
+  const HOSTS_YML = [
+    'github.com:',
+    '    users:',
+    '        octo:',
+    '            oauth_token: gho_secret',
+    '    git_protocol: ssh',
+    '    user: octo',
+    'GitHub.Acme.Corp:',
+    '    oauth_token: ghp_other',
+    '# comment.example:',
+    ''
+  ].join('\n')
+
+  it('reads the top-level host keys of gh hosts.yml, lowercased', () => {
+    const hosts = knownGithubHosts({ GH_CONFIG_DIR: '/cfg' }, (p) =>
+      p === join('/cfg', 'hosts.yml') ? HOSTS_YML : null
+    )
+    expect(hosts.sort()).toEqual(['github.acme.corp', 'github.com'])
+    expect(hosts.join(' ')).not.toMatch(/gho_|ghp_|octo/)
+  })
+
+  it('adds GH_HOST, and survives a missing file', () => {
+    expect(knownGithubHosts({ GH_HOST: ' GHE.Example.Com ' }, () => null)).toEqual(['ghe.example.com'])
+    expect(knownGithubHosts({}, () => null)).toEqual([])
+  })
+})
+
+describe('ghHostsFile', () => {
+  it('follows gh config-dir precedence', () => {
+    expect(ghHostsFile({ GH_CONFIG_DIR: '/a', XDG_CONFIG_HOME: '/b' }, 'linux', '/h')).toBe(
+      join('/a', 'hosts.yml')
+    )
+    expect(ghHostsFile({ XDG_CONFIG_HOME: '/b' }, 'linux', '/h')).toBe(join('/b', 'gh', 'hosts.yml'))
+    expect(ghHostsFile({ AppData: 'C:/Users/me/AppData/Roaming' }, 'win32', '/h')).toBe(
+      join('C:/Users/me/AppData/Roaming', 'GitHub CLI', 'hosts.yml')
+    )
+    expect(ghHostsFile({}, 'darwin', '/h')).toBe(join('/h', '.config', 'gh', 'hosts.yml'))
   })
 })
