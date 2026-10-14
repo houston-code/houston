@@ -25,7 +25,9 @@ export type NewChatWorkspacePlan =
  * deliberately-picked subdirectory is kept, with the worktree toggle defaulting
  * off: creating a worktree would immediately move the chat to the fresh
  * checkout's root, silently un-scoping the pick. Non-repo folders are kept
- * (toggle off), and a path that vanished from disk is dropped. Pure.
+ * (toggle off), and a path that vanished from disk is dropped. A repo whose
+ * current branch has no commits yet also defaults the toggle off: without a
+ * commit there is nothing to branch from unless another branch is picked. Pure.
  */
 export function planNewChatWorkspace(info: RepoInfo, workspace: string): NewChatWorkspacePlan {
   if (!info.exists) return { action: 'drop' }
@@ -34,7 +36,26 @@ export function planNewChatWorkspace(info: RepoInfo, workspace: string): NewChat
     return { action: 'reanchor', root: info.root }
   }
   const isSubdir = info.isRepo && !!info.root && norm(info.root) !== norm(workspace)
-  return { action: 'keep', worktreeDefault: info.isRepo && !isSubdir }
+  return { action: 'keep', worktreeDefault: info.isRepo && !isSubdir && !info.unborn }
+}
+
+/**
+ * Whether a new worktree can be branched at all: needs some commit to start from,
+ * i.e. a born current branch (or detached HEAD) or another branch with commits.
+ */
+export function canCreateWorktree(info: RepoInfo): boolean {
+  return info.isRepo && (!info.unborn || info.branches.length > 0)
+}
+
+/**
+ * The base the picker starts on. Must be a value the picker actually lists, or the
+ * select shows its first option while sending a different (empty) base. An unborn
+ * current branch isn't listed, so fall back to the newest branch that has commits.
+ * `''` means "the current HEAD" (detached HEAD, listed as its own option).
+ */
+export function defaultBaseBranch(info: RepoInfo): string {
+  if (info.unborn) return info.branches[0] ?? ''
+  return info.currentBranch ?? ''
 }
 
 const ADJECTIVES = ['swift', 'bright', 'calm', 'bold', 'keen', 'brave', 'lucid', 'eager']

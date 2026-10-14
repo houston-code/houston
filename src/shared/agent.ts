@@ -233,6 +233,12 @@ export interface RepoInfo {
   root: string
   /** Branch currently checked out at the queried path (null if detached). */
   currentBranch: string | null
+  /**
+   * True when `currentBranch` has no commits yet (a fresh `git init`). It then
+   * can't be a worktree base, and isn't listed in `branches`; a new worktree is
+   * only possible from another branch that does have commits.
+   */
+  unborn: boolean
   /** Local branch names, newest-committed first, for picking a base. */
   branches: string[]
   /**

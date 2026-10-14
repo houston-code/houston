@@ -70,6 +70,7 @@ describe('getRepoInfo', () => {
       isRepo: true,
       root: '/repo',
       currentBranch: 'feature',
+      unborn: false,
       branches: ['feature', 'main', 'old'],
       isLinkedWorktreeRoot: false,
       exists: true
@@ -100,6 +101,7 @@ describe('getRepoInfo', () => {
       isRepo: false,
       root: '',
       currentBranch: null,
+      unborn: false,
       branches: [],
       isLinkedWorktreeRoot: false,
       exists: true
@@ -116,11 +118,27 @@ describe('getRepoInfo', () => {
       isRepo: false,
       root: '',
       currentBranch: null,
+      unborn: false,
       branches: [],
       isLinkedWorktreeRoot: false,
       exists: false
     })
     expect(called).toBe(false)
+  })
+
+  it('names an unborn current branch and flags it, keeping other branches', async () => {
+    const exec = fakeGit({
+      'worktree list': () => worktreeList('/repo'),
+      'rev-parse --abbrev-ref': () => {
+        throw new Error("fatal: ambiguous argument 'HEAD'")
+      },
+      'symbolic-ref --short': () => 'main\n',
+      'for-each-ref': () => 'lucid-meadow\n'
+    })
+    const info = await getRepoInfo('/repo', exec, onDisk)
+    expect(info.currentBranch).toBe('main')
+    expect(info.unborn).toBe(true)
+    expect(info.branches).toEqual(['lucid-meadow'])
   })
 
   it('treats a detached HEAD as no current branch', async () => {
@@ -131,6 +149,7 @@ describe('getRepoInfo', () => {
     })
     const info = await getRepoInfo('/repo', exec, onDisk)
     expect(info.currentBranch).toBeNull()
+    expect(info.unborn).toBe(false)
   })
 })
 
@@ -201,7 +220,6 @@ describe('createWorktree', () => {
         'rev-parse --abbrev-ref': () => 'main\n',
         'for-each-ref': () => 'main\n',
         'rev-parse --git-common-dir': () => join(repo, '.git'),
-        'rev-parse --verify': () => 'abc123\n',
         'worktree add': () => ''
       },
       calls
@@ -220,7 +238,6 @@ describe('createWorktree', () => {
       'rev-parse --abbrev-ref': () => 'main\n',
       'for-each-ref': () => 'main\n',
       'rev-parse --git-common-dir': () => join(repo, '.git'),
-      'rev-parse --verify': () => 'abc123\n',
       'worktree add': () => ''
     })
     await createWorktree({ workspace: repo, branch: 'second' }, exec)
@@ -235,16 +252,16 @@ describe('createWorktree', () => {
     const exec = fakeGit(
       {
         'worktree list': () => worktreeList(repo),
-        'rev-parse --abbrev-ref': () => 'main\n',
-        'for-each-ref': () => '',
-        'rev-parse --verify': () => {
-          throw new Error('')
-        }
+        'rev-parse --abbrev-ref': () => {
+          throw new Error("fatal: ambiguous argument 'HEAD'")
+        },
+        'symbolic-ref --short': () => 'main\n',
+        'for-each-ref': () => ''
       },
       calls
     )
     await expect(createWorktree({ workspace: repo, branch: 'wip' }, exec)).rejects.toThrow(
-      /no commits yet/
+      /"main" has no commits yet/
     )
     // Never reached `worktree add`, and left no .houston dir behind.
     expect(calls.some((c) => c[1] === 'add')).toBe(false)
@@ -256,11 +273,11 @@ describe('createWorktree', () => {
     mkdirSync(join(repo, '.git'), { recursive: true })
     const exec = fakeGit({
       'worktree list': () => worktreeList(repo),
-      'rev-parse --abbrev-ref': () => 'main\n',
-      'for-each-ref': () => 'lucid-meadow\n',
-      'rev-parse --verify': () => {
-        throw new Error('')
-      }
+      'rev-parse --abbrev-ref': () => {
+        throw new Error("fatal: ambiguous argument 'HEAD'")
+      },
+      'symbolic-ref --short': () => 'main\n',
+      'for-each-ref': () => 'lucid-meadow\n'
     })
     await expect(createWorktree({ workspace: repo, branch: 'wip' }, exec)).rejects.toThrow(
       /pick an existing branch as the base \(lucid-meadow\)/
@@ -385,6 +402,11 @@ describe('worktree integration (real git)', () => {
       execFileSync('git', ['-C', repo, '-c', 'init.defaultBranch=main', 'init'], {
         stdio: 'ignore'
       })
+      // Real git: the unborn branch is still named, and flagged.
+      const info = await getRepoInfo(repo)
+      expect(info.currentBranch).toBe('main')
+      expect(info.unborn).toBe(true)
+      expect(info.branches).toEqual([])
       await expect(createWorktree({ workspace: repo, branch: 'wip' })).rejects.toThrow(
         /no commits yet/
       )
