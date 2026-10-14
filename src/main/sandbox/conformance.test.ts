@@ -104,8 +104,11 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
   it('C5b the command can signal its own children and grandchildren', async () => {
     // Build tools stop their own workers (Next.js, jest-worker, webpack): a profile
     // that only lets a process signal itself fails them with `kill EPERM`.
+    // Wait for the grandchild's pid file (bounded) instead of a fixed sleep, which
+    // races on a slow runner.
     const r = await run(
-      '( sleep 30 & echo $! > gc.pid; wait ) & sleep 0.3; ' +
+      '( sleep 30 & echo $! > gc.pid; wait ) & ' +
+        'for _ in $(seq 100); do [ -s gc.pid ] && break; sleep 0.05; done; ' +
         'sleep 30 & kill $! && kill "$(cat gc.pid)" && echo SIGNALLED; wait'
     )
     expect(r.stdout).toContain('SIGNALLED')
@@ -134,6 +137,9 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
   itEnforced('C2b processes outside the sandbox cannot be signalled', async () => {
     // A host process with the same uid: only the sandbox should stop it from dying.
     const victim = spawn('sleep', ['30'], { stdio: 'ignore' })
+    // Without a real pid, `kill undefined` would fail too and the test would pass
+    // without proving anything.
+    expect(victim.pid).toEqual(expect.any(Number))
     try {
       const r = await run(`kill ${victim.pid}`)
       expect(r.exitCode).not.toBe(0)
