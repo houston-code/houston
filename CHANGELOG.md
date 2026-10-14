@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.7.0 - 2026-10-14
+
+Houston runs smoothly in new repos, picks dependencies that fit your toolchain, and runs longer on productive turns.
+
+This release focuses on fresh `git init` projects, runtime detection, and smarter dependency choices by the agent.
+
+### Breaking changes
+- None.
+
+### Added
+- Houston now detects runtimes installed via nvm, fnm, Volta, mise, asdf, pyenv, rbenv, rustup, Go, Bun and Deno, and offers a one-click Install when a needed runtime is missing (#122)
+- Productive turns can now run past the step cap automatically while they keep making progress, with a new Loop control setting (editing the step count pins the switch) (#116)
+- The ship button now adapts to your repo state: Publish to GitHub, Push first commit, or Commit & push when there is no remote or no commits yet (#100)
+
+### Fixed
+- macOS sandboxed commands can now signal their own child and grandchild processes, fixing `kill EPERM` failures in tools like `next build`, webpack and jest (#115)
+- Git context, diffs and the Changes panel now work in a fresh repo with no commits, including staged files (#113)
+- Starting a chat with a worktree in a repo that has no commits no longer fails silently (#111)
+- The model picker now reads "No models configured" for a provider with no models (#124)
+
+### Changed
+- Before scaffolding a project or adding a dependency, the agent now checks your installed toolchain and looks up current package versions instead of pinning versions from memory, and prefers packages without a native compile step (#125)
+
 ## v0.6.0 - 2026-10-07
 
 Refreshed the Claude, GPT-6, and Gemini model defaults with corrected pricing, plus faster chat titles.
