@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createGeminiProvider } from './gemini'
 import { defaultProviders } from '@shared/defaults'
+import { CANARY_TEST_TIMEOUT_MS, runCanaryProbe } from './canary'
 
 /**
  * Live canary against the real Gemini API.
@@ -42,23 +43,26 @@ describe.skipIf(!API_KEY)('gemini thinking (live API canary)', () => {
     'accepts the request shape for %s',
     async (model) => {
       const provider = createGeminiProvider(API_KEY!)
-      let done = false
       // 'low' effort still sends the exact `thinkingConfig` shape on thinking-capable
       // models while keeping token use minimal. Unlike the Anthropic/Responses
       // providers, gemini.ts never yields an `error` event — a rejected parameter
-      // surfaces as a THROW from the stream, which fails this test on its own. The
-      // error check below is a safety net in case it grows one.
-      for await (const e of provider.streamChat({
-        model,
-        system: 'You are a test fixture. Answer in one short word.',
-        messages: [{ role: 'user', content: 'Reply with the single word: pong' }],
-        reasoningEffort: 'low'
-      })) {
-        if (e.type === 'error') throw new Error(`${model}: ${e.message}`)
-        if (e.type === 'done') done = true
-      }
+      // surfaces as a THROW from the stream, which fails this test on its own
+      // (runCanaryProbe also throws on an `error` event, in case it grows one).
+      // runCanaryProbe bounds each attempt and retries only transient failures
+      // (timeout, 429, 5xx); a 400/404 still fails on the first try. See canary.ts.
+      const done = await runCanaryProbe(
+        (signal) =>
+          provider.streamChat({
+            model,
+            system: 'You are a test fixture. Answer in one short word.',
+            messages: [{ role: 'user', content: 'Reply with the single word: pong' }],
+            reasoningEffort: 'low',
+            signal
+          }),
+        { onRetry: (n, err) => console.warn(`${model}: transient failure, retry ${n}:`, err) }
+      )
       expect(done, `${model} produced no done event`).toBe(true)
     },
-    60_000
+    CANARY_TEST_TIMEOUT_MS
   )
 })
