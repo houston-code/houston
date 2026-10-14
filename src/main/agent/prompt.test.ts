@@ -48,6 +48,18 @@ describe('buildSystemPrompt', () => {
     expect(p).not.toContain('Additional user instructions')
   })
 
+  it('tells the model to fit dependencies to the installed toolchain and current releases', () => {
+    const p = buildSystemPrompt('/tmp/x')
+    // Seen in practice: a scaffold pinned a stale, vulnerable framework version from
+    // memory and a native addon with no prebuild for the installed Node, so
+    // `npm install` failed on a compiler error.
+    expect(p).toMatch(/check the toolchain that is actually installed/)
+    expect(p).toMatch(/Don't pin versions from memory/)
+    expect(p).toMatch(/npm view <pkg> version/)
+    expect(p).toMatch(/keep the versions it already pins/)
+    expect(p).toMatch(/needs no native compile step/)
+  })
+
   it('adds a plan-mode notice only when plan mode is on', () => {
     expect(buildSystemPrompt('/tmp/x')).not.toContain('PLAN MODE')
     expect(buildSystemPrompt('/tmp/x', undefined, undefined, true)).toContain('PLAN MODE IS ON')
