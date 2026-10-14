@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { createResponsesProvider } from './responses'
 import { defaultProviders } from '@shared/defaults'
+import { CANARY_TEST_TIMEOUT_MS, runCanaryProbe } from './canary'
 
 /**
  * Live canary against the real OpenAI API (Responses).
@@ -45,22 +46,25 @@ describe.skipIf(!API_KEY)('openai reasoning (live API canary)', () => {
     'accepts the reasoning request shape for %s',
     async (model) => {
       const provider = createResponsesProvider(API_KEY!)
-      let done = false
       // 'low' effort still sends the exact `reasoning: { effort, summary: 'auto' }`
       // shape while keeping token use minimal. A removed/renamed parameter (or a
       // model that's no longer served) surfaces as a 400/404 — either an `error`
       // event or a throw from the stream iteration — and fails this test.
-      for await (const e of provider.streamChat({
-        model,
-        system: 'You are a test fixture. Answer in one short word.',
-        messages: [{ role: 'user', content: 'Reply with the single word: pong' }],
-        reasoningEffort: 'low'
-      })) {
-        if (e.type === 'error') throw new Error(`${model}: ${e.message}`)
-        if (e.type === 'done') done = true
-      }
+      // runCanaryProbe bounds each attempt and retries only transient failures
+      // (timeout, 429, 5xx); a 400/404 still fails on the first try. See canary.ts.
+      const done = await runCanaryProbe(
+        (signal) =>
+          provider.streamChat({
+            model,
+            system: 'You are a test fixture. Answer in one short word.',
+            messages: [{ role: 'user', content: 'Reply with the single word: pong' }],
+            reasoningEffort: 'low',
+            signal
+          }),
+        { onRetry: (n, err) => console.warn(`${model}: transient failure, retry ${n}:`, err) }
+      )
       expect(done, `${model} produced no done event`).toBe(true)
     },
-    60_000
+    CANARY_TEST_TIMEOUT_MS
   )
 })
