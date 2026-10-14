@@ -62,6 +62,18 @@ describe('gitContext', () => {
     expect(await gitContext('/ws', exec)).toBe('')
   })
 
+  it('names an unborn branch (fresh repo, no commits yet) via symbolic-ref', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') throw new Error("ambiguous argument 'HEAD'")
+      if (args[0] === 'symbolic-ref') return 'master\n'
+      if (args[0] === 'status') return '?? a.ts\n'
+      return ''
+    }
+    const s = await gitContext('/ws', exec)
+    expect(s).toContain('branch "master"')
+    expect(s).toContain('a.ts')
+  })
+
   it('still reports the branch if status fails', async () => {
     const exec = async (args: string[]): Promise<string> => {
       if (args[0] === 'rev-parse') return 'detached\n'
@@ -299,6 +311,36 @@ describe('isSafeGitRef', () => {
     for (const ref of ['--output=/tmp/x', '-O', '', 'a b', '$(id)', 'a;rm -rf', 'a|b']) {
       expect(isSafeGitRef(ref)).toBe(false)
     }
+  })
+})
+
+describe('gitDiff on a repo with no commits (real git)', () => {
+  it('includes staged files, which are neither in `diff HEAD` nor untracked', { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-git-unborn-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'pipe' })
+      writeFileSync(join(dir, 'staged.txt'), 'fresh\n')
+      writeFileSync(join(dir, 'loose.txt'), 'loose\n')
+      execFileSync('git', ['add', 'staged.txt'], { cwd: dir, stdio: 'pipe' })
+      const d = await gitDiff(dir)
+      expect(d.isRepo).toBe(true)
+      expect(d.diff).toContain('+fresh')
+      expect(d.untracked).toEqual(['loose.txt'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves an explicit base alone', async () => {
+    const calls: string[][] = []
+    const exec = async (args: string[]): Promise<string> => {
+      calls.push(args)
+      if (args[0] === 'rev-parse') return 'true\n'
+      return ''
+    }
+    await gitDiff('/ws', 'main', [], exec)
+    expect(calls.find((a) => a[0] === 'diff')?.[1]).toBe('main')
+    expect(calls.some((a) => a.includes('HEAD^{commit}'))).toBe(false)
   })
 })
 

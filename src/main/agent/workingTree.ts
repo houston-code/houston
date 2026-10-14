@@ -7,7 +7,7 @@ import {
   type FileDiff,
   type WorkingTreeChanges
 } from '@shared/workingTree'
-import { runGitCapture } from './gitRead'
+import { runGitCapture, captureTry, uncommittedDiffBase } from './gitRead'
 
 /** Cap how many untracked files we read so a junk-filled tree can't stall the UI. */
 const MAX_UNTRACKED_FILES = 200
@@ -70,14 +70,17 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
   const inside = await runGitCapture(['rev-parse', '--is-inside-work-tree'], root)
   if (!inside.ok || inside.stdout.trim() !== 'true') return NOT_A_REPO
 
+  // symbolic-ref names the branch even when unborn (no commits yet) and fails
+  // only on a detached HEAD, where `rev-parse --abbrev-ref` would say "HEAD".
   let branch: string | null = null
-  const head = await runGitCapture(['rev-parse', '--abbrev-ref', 'HEAD'], root)
+  const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], root)
   if (head.ok) branch = head.stdout.trim() || null
 
-  // Tracked changes vs HEAD. On an unborn HEAD (no commits yet) this fails — the
-  // untracked listing below then carries the whole change set.
+  // Tracked changes (staged + unstaged) vs HEAD, or vs the empty tree on an
+  // unborn HEAD (no commits yet) so staged files still show.
+  const base = await uncommittedDiffBase(captureTry(root))
   const diff = await runGitCapture(
-    ['diff', 'HEAD', '--no-color', '--no-ext-diff', '--no-textconv'],
+    ['diff', base, '--no-color', '--no-ext-diff', '--no-textconv'],
     root
   )
   const tracked = diff.ok ? parseUnifiedDiff(diff.stdout) : []
