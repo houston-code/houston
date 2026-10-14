@@ -265,7 +265,7 @@ export function ModelPicker({
             <div key={provider.id} role="group" aria-label={groupLabel(provider)}>
               <div className="menu__label">{groupLabel(provider)}</div>
               {models.length === 0 ? (
-                <div className="model-menu__empty">— no models configured —</div>
+                <div className="model-menu__empty">No models configured</div>
               ) : (
                 models.map((m) => {
                   const key = `${provider.id}::${m.id}`

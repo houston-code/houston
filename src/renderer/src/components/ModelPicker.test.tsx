@@ -132,7 +132,7 @@ describe('ModelPicker', () => {
     expect(screen.getByRole('combobox')).toHaveTextContent('Select a model…')
     fireEvent.click(screen.getByRole('combobox'))
     const group = screen.getByRole('group', { name: 'OpenAI (GPT)' })
-    expect(within(group).getByText(/no models configured/)).toBeInTheDocument()
+    expect(within(group).getByText('No models configured')).toBeInTheDocument()
     expect(screen.queryByRole('option')).not.toBeInTheDocument()
   })
 
