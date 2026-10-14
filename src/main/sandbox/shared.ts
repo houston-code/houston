@@ -1,6 +1,6 @@
 import { spawn, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
@@ -37,12 +37,106 @@ const EXTRA_PATH_DIRS = [
   '/sbin'
 ]
 
+/** The filesystem reads version-manager discovery needs; injectable for tests. */
+export interface PathFs {
+  /** File contents, or null when unreadable. */
+  readFile: (p: string) => string | null
+  /** Directory entries, or [] when unreadable. */
+  readdir: (p: string) => string[]
+}
+
+const realPathFs: PathFs = {
+  readFile: (p) => {
+    try {
+      return readFileSync(p, 'utf8')
+    } catch {
+      return null
+    }
+  },
+  readdir: (p) => {
+    try {
+      return readdirSync(p)
+    } catch {
+      return []
+    }
+  }
+}
+
+/** Compare `vX.Y.Z` strings numerically, newest first. */
+function byVersionDesc(a: string, b: string): number {
+  const pa = a.slice(1).split('.').map(Number)
+  const pb = b.slice(1).split('.').map(Number)
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pb[i] - pa[i]
+  return 0
+}
+
+/**
+ * The `bin` dir of nvm's default Node, or null. nvm only puts Node on PATH from a
+ * sourced shell function, which a GUI-launched app never runs, so this resolves
+ * the `default` alias the same way: following alias files (`default` → `lts/*` →
+ * `lts/iron` → `v20.19.0`) and matching a version prefix (`22` → newest 22.x).
+ * An unresolvable alias falls back to the newest installed version.
+ */
+export function nvmDefaultBin(nvmDir: string, fsx: PathFs = realPathFs): string | null {
+  const installed = fsx
+    .readdir(`${nvmDir}/versions/node`)
+    .filter((v) => /^v\d+\.\d+\.\d+$/.test(v))
+    .sort(byVersionDesc)
+  if (installed.length === 0) return null
+  let alias = fsx.readFile(`${nvmDir}/alias/default`)?.trim() ?? ''
+  for (let hop = 0; hop < 4 && alias && !/^v?\d/.test(alias); hop++) {
+    if (alias === 'node' || alias === 'stable' || alias.includes('..')) break
+    alias = fsx.readFile(`${nvmDir}/alias/${alias}`)?.trim() ?? ''
+  }
+  const m = /^v?(\d+(?:\.\d+){0,2})$/.exec(alias)
+  const prefix = m ? `v${m[1]}` : null
+  const pick =
+    (prefix && installed.find((v) => v === prefix || v.startsWith(`${prefix}.`))) ?? installed[0]
+  return `${nvmDir}/versions/node/${pick}/bin`
+}
+
+/**
+ * Bin dirs of the common per-user runtime managers (nvm, fnm, Volta, mise, asdf,
+ * pyenv, rbenv) and toolchains that install to the home dir (rustup/cargo, Go,
+ * Bun, Deno). They normally reach PATH through shell startup files, which a
+ * GUI-launched app never sources, so without these a runtime the user has
+ * installed looks missing to the agent.
+ */
+export function versionManagerDirs(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  fsx: PathFs = realPathFs
+): string[] {
+  const home = env.HOME
+  if (!home) return []
+  const dirs = [`${home}/.volta/bin`]
+  const nvm = nvmDefaultBin(env.NVM_DIR || `${home}/.nvm`, fsx)
+  if (nvm) dirs.push(nvm)
+  if (env.FNM_DIR) dirs.push(`${env.FNM_DIR}/aliases/default/bin`)
+  dirs.push(`${home}/.local/share/fnm/aliases/default/bin`)
+  if (platform === 'darwin') dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`)
+  dirs.push(
+    `${home}/.local/share/mise/shims`,
+    `${home}/.asdf/shims`,
+    `${home}/.pyenv/shims`,
+    `${home}/.rbenv/shims`,
+    `${home}/.cargo/bin`,
+    `${home}/go/bin`,
+    `${home}/.bun/bin`,
+    `${home}/.deno/bin`,
+    `${home}/.local/bin`
+  )
+  return dirs
+}
+
 /**
  * A GUI-launched macOS app inherits a minimal PATH (often just
  * `/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew and other user-installed tools
- * the agent reaches for via `run_shell` aren't found. Append the standard developer
- * bin dirs (and `~/.local/bin`) that actually exist on disk, without disturbing the
- * precedence of whatever PATH was already inherited.
+ * the agent reaches for via `run_shell` aren't found. Append the per-user runtime
+ * managers' dirs ({@link versionManagerDirs}, ahead of Homebrew, matching a
+ * typical interactive shell) and the standard developer bin dirs that actually
+ * exist on disk, without disturbing the precedence of whatever PATH was already
+ * inherited.
  *
  * Windows is left untouched: a GUI-launched Windows app inherits the full user PATH
  * from the registry (the macOS minimal-PATH problem doesn't replicate), and the POSIX
@@ -52,18 +146,22 @@ const EXTRA_PATH_DIRS = [
 export function augmentPath(
   env: NodeJS.ProcessEnv = process.env,
   exists: (p: string) => boolean = existsSync,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  fsx: PathFs = realPathFs
 ): string {
   if (platform === 'win32') return env.PATH ?? ''
   // POSIX-only past this point — the PATH delimiter is ':' (node:path's host-dependent
   // delimiter would be ';' when this runs on a Windows CI host, so use the literal).
   const POSIX_DELIM = ':'
-  const candidates = [...EXTRA_PATH_DIRS]
-  // POSIX literal (node:path.join would use backslashes when run on a Windows CI host).
-  if (env.HOME) candidates.push(`${env.HOME}/.local/bin`)
+  const candidates = [...versionManagerDirs(env, platform, fsx), ...EXTRA_PATH_DIRS]
   const current = (env.PATH ?? '').split(POSIX_DELIM).filter(Boolean)
   const seen = new Set(current)
-  const added = candidates.filter((d) => !seen.has(d) && exists(d))
+  const added: string[] = []
+  for (const d of candidates) {
+    if (seen.has(d) || !exists(d)) continue
+    seen.add(d)
+    added.push(d)
+  }
   return [...current, ...added].join(POSIX_DELIM)
 }
 

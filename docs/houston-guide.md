@@ -725,6 +725,21 @@ installs need no cache workaround once network is on. **Additional folders**
 (Settings) can be added to the file tools' allowed roots and the shell sandbox to
 work across more than one repo.
 
+**Finding your toolchain.** An app opened from the Dock doesn't read your shell
+startup files, so Houston adds the usual places runtimes live to the shell's PATH:
+Homebrew, nvm's default Node, fnm, Volta, mise, asdf, pyenv, rbenv, and the
+per-user bin dirs of Rust, Go, Bun, and Deno. A sandboxed command may stop the
+processes it started (build tools do this with their workers), but nothing outside
+its own sandbox.
+
+**When a runtime is missing.** If a command fails because Node.js, Python, Go,
+Rust, Deno, or Bun isn't installed, the transcript says so and offers **Install**,
+which runs the install command (for example `brew install node`) in a new tab of
+the built-in terminal, outside the sandbox, so you can watch it and answer any
+prompt; there's also a link to the official download page. The agent is told not
+to attempt system installs itself and to wait for you rather than write code it
+can't run. The terminal clients print the same install command.
+
 **Egress allowlist.** Granted shell network is not unrestricted: on macOS and
 Linux it is routed through a local proxy Houston controls, and the OS sandbox
 blocks any direct connection, so the proxy is the only road out. The proxy

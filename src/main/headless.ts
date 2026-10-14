@@ -9,6 +9,7 @@ import {
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
 import { missingKeyHint } from '@shared/provider-keys'
+import { runtimeMissingLine } from '@shared/runtimes'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
@@ -503,6 +504,10 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         // A user-addressed note (a hook's systemMessage, a budget extension). Meta output, so stderr —
         // stdout stays the model's answer; --json already emitted the raw event.
         if (!opts.json) deps.err(`· ${e.message}\n`)
+        break
+      case 'runtime_missing':
+        // Meta output like a notice: stderr, so stdout stays the model's answer.
+        if (!opts.json) deps.err(`${runtimeMissingLine(e)}\n`)
         break
       case 'tool_progress':
         // Live progress from a long-running tool (a 16-turn subagent dispatch, a

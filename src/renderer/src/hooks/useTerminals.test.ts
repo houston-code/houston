@@ -11,6 +11,7 @@ function installApi() {
   const api = {
     createTerminal: vi.fn((_opts: { cwd?: string }) => Promise.resolve(`t${++n}`)),
     killTerminal: vi.fn((_id: string) => Promise.resolve(true)),
+    writeTerminal: vi.fn((_id: string, _data: string) => Promise.resolve()),
     onTerminalExit: vi.fn((cb: ExitHandler) => {
       onExit = cb
       return () => {}
@@ -38,6 +39,25 @@ describe('useTerminals', () => {
     expect(api.createTerminal).toHaveBeenCalledWith({ cwd: '/repo' })
     expect(result.current.tabs).toEqual([{ id: 't1', title: 'Terminal 1', exited: false }])
     expect(result.current.activeId).toBe('t1')
+  })
+
+  it('types and runs a command in a new named tab when asked', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useTerminals('/repo'))
+    await act(async () => {
+      await result.current.addTab({ run: 'brew install node', title: 'Install' })
+    })
+    expect(api.writeTerminal).toHaveBeenCalledWith('t1', 'brew install node\r')
+    expect(result.current.tabs).toEqual([{ id: 't1', title: 'Install', exited: false }])
+  })
+
+  it('writes nothing to a plain new tab', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useTerminals('/repo'))
+    await act(async () => {
+      await result.current.addTab()
+    })
+    expect(api.writeTerminal).not.toHaveBeenCalled()
   })
 
   it('passes undefined cwd when there is no workspace', async () => {

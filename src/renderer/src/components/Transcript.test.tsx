@@ -58,12 +58,14 @@ function renderTranscript(
     onAnswer: (callId: string, answer: string) => void
     onElicit: (elicitId: string, result: ElicitationResult) => void
     onOpenPlan: (callId: string) => void
+    onRunInTerminal: (command: string) => void
   }> = {}
 ) {
   const onApprove = handlers.onApprove ?? vi.fn()
   const onAnswer = handlers.onAnswer ?? vi.fn()
   const onElicit = handlers.onElicit ?? vi.fn()
   const onOpenPlan = handlers.onOpenPlan ?? vi.fn()
+  const onRunInTerminal = handlers.onRunInTerminal ?? vi.fn()
   const result = render(
     <Transcript
       items={items}
@@ -71,9 +73,10 @@ function renderTranscript(
       onAnswer={onAnswer}
       onElicit={onElicit}
       onOpenPlan={onOpenPlan}
+      onRunInTerminal={onRunInTerminal}
     />
   )
-  return { ...result, onApprove, onAnswer, onElicit, onOpenPlan }
+  return { ...result, onApprove, onAnswer, onElicit, onOpenPlan, onRunInTerminal }
 }
 
 function planItem(over: Partial<PlanItem> = {}): PlanItem {
@@ -87,6 +90,44 @@ function planItem(over: Partial<PlanItem> = {}): PlanItem {
 }
 
 describe('Transcript', () => {
+  it('offers a one-click install for a missing runtime, once', () => {
+    const { onRunInTerminal } = renderTranscript([
+      {
+        kind: 'notice',
+        id: 'n1',
+        text: "Node.js isn't installed, or isn't on the PATH Houston sees.",
+        tone: 'error',
+        runtime: { label: 'Node.js', installCommand: 'brew install node', url: 'https://nodejs.org/en/download' }
+      }
+    ])
+    expect(screen.getByText('brew install node')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Download page' })).toHaveAttribute(
+      'href',
+      'https://nodejs.org/en/download'
+    )
+    const button = screen.getByRole('button', { name: 'Install Node.js' })
+    fireEvent.click(button)
+    expect(onRunInTerminal).toHaveBeenCalledWith('brew install node')
+    // Disabled after the click so a double-click can't start two installs.
+    expect(screen.getByRole('button', { name: /Installing in terminal/ })).toBeDisabled()
+    // And the user is told what to do once it finishes.
+    expect(screen.getByText(/ask me to continue/)).toBeInTheDocument()
+  })
+
+  it('shows only the download page when there is no install command', () => {
+    renderTranscript([
+      {
+        kind: 'notice',
+        id: 'n1',
+        text: "Python isn't installed, or isn't on the PATH Houston sees.",
+        tone: 'error',
+        runtime: { label: 'Python', url: 'https://www.python.org/downloads/' }
+      }
+    ])
+    expect(screen.queryByRole('button', { name: /Install/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Download page' })).toBeInTheDocument()
+  })
+
   it('renders a user turn as plain text', () => {
     const { container } = renderTranscript([userItem({ text: 'do the thing' })])
     expect(screen.getByText('do the thing')).toBeInTheDocument()

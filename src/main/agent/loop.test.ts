@@ -3269,6 +3269,51 @@ describe('present_plan (Plan mode review)', () => {
   })
 })
 
+describe('missing runtime', () => {
+  // A stand-in registered under the run_shell name, so no real shell runs; the
+  // loop keys the announcement off the tool name and its output.
+  const fakeShell = (output: string): ToolDef => ({
+    kind: 'read',
+    summarize: () => 'probe run_shell',
+    schema: {
+      name: 'run_shell',
+      description: 'Run a command.',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command'],
+        additionalProperties: false
+      }
+    },
+    execute: async () => output
+  })
+  const shellCall = (id: string): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name: 'run_shell', arguments: { command: 'node -v' } } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+
+  it('announces a missing runtime once per run, as a display-only event', async () => {
+    h.probeTools = [fakeShell('/bin/bash: line 1: node: command not found\n[exit code: 127]')]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [shellCall('a'), shellCall('b'), [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    const missing = r.events.filter((e) => e.type === 'runtime_missing')
+    expect(missing).toHaveLength(1)
+    expect(missing[0]).toMatchObject({ runtime: 'node', label: 'Node.js' })
+    expect(r.messages.some((m) => m.role === 'user' && String(m.content).includes('Node.js'))).toBe(false)
+  })
+
+  it('stays quiet for an ordinary failure', async () => {
+    h.probeTools = [fakeShell('bash: frobnicate: command not found\n[exit code: 127]')]
+    const r = await run({
+      policy: 'full-auto',
+      turns: [shellCall('a'), [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    expect(r.events.some((e) => e.type === 'runtime_missing')).toBe(false)
+  })
+})
+
 describe('loop control — adaptive budget', () => {
   /** Temporarily set extra settings on the holder for one test, then restore. */
   async function withSettings<T>(extra: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {

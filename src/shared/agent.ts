@@ -4,6 +4,7 @@
  */
 
 import type { FileDiffPreview } from './diff'
+import type { RuntimeId } from './runtimes'
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -844,6 +845,20 @@ export type AgentEvent =
       runId: string
       type: 'verification'
       passed: boolean
+    }
+  | {
+      // A run_shell command failed because a language runtime (node, python3, go,
+      // …) isn't installed or isn't on PATH. Display-only: the GUI offers a
+      // one-click install in the integrated terminal, the terminal clients print
+      // the install command. The model is told separately, in the tool result.
+      runId: string
+      type: 'runtime_missing'
+      runtime: RuntimeId
+      label: string
+      /** A command for the user's own terminal, when there's a reliable one. */
+      installCommand?: string
+      /** Official download page. */
+      url: string
     }
   | {
       // A note addressed to the user from outside the conversation: a hook's

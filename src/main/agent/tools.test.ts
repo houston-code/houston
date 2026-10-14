@@ -1287,6 +1287,21 @@ describe('backgroundsItself', () => {
   })
 })
 
+describe('run_shell missing-runtime hint', () => {
+  it('tells the model a runtime is missing and not to install it itself', async () => {
+    const out = await run('run_shell', { command: 'export PATH=/houston-no-such-dir; node --version' })
+    expect(out).toContain('[exit code: 127]')
+    expect(out).toMatch(/Node\.js is not installed/)
+    expect(out).toMatch(/Do not install system packages yourself/)
+  })
+
+  it('adds no hint for a command that is not a runtime', async () => {
+    const out = await run('run_shell', { command: 'export PATH=/houston-no-such-dir; frobnicate' })
+    expect(out).toContain('[exit code: 127]')
+    expect(out).not.toMatch(/\[Houston: /)
+  })
+})
+
 describe('background shell tools', () => {
   it('run_shell background returns a shell id message', async () => {
     const out = await run('run_shell', { command: 'echo hi', background: true })
