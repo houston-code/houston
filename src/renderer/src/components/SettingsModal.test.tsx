@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { SettingsModal } from './SettingsModal'
@@ -538,6 +538,24 @@ describe('SettingsModal', () => {
     // useFocusTrap focuses the first focusable control inside the dialog.
     const dialog = screen.getByRole('dialog')
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+  })
+
+  it('shows keep-going off for a previously chosen step cap, and on by default', () => {
+    installApi()
+    renderModal({ maxIterations: 25 })
+    expect(screen.getByRole('checkbox', { name: /keep going while the turn is making progress/i })).not.toBeChecked()
+    cleanup()
+    renderModal()
+    expect(screen.getByRole('checkbox', { name: /keep going while the turn is making progress/i })).toBeChecked()
+  })
+
+  it('editing the step cap never silently turns keep-going off', () => {
+    installApi()
+    renderModal()
+    const box = screen.getByRole('checkbox', { name: /keep going while the turn is making progress/i })
+    expect(box).toBeChecked()
+    fireEvent.change(screen.getByDisplayValue('40'), { target: { value: '60' } })
+    expect(box).toBeChecked()
   })
 
   it('toggles a checkbox option (format on save) under the Tools tab', () => {

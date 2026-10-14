@@ -1,4 +1,6 @@
-import { DEFAULT_MAX_ITERATIONS } from '@shared/defaults'
+import { DEFAULT_ITERATION_CEILING, DEFAULT_MAX_ITERATIONS } from '@shared/defaults'
+
+export { DEFAULT_ITERATION_CEILING }
 
 /**
  * Adaptive turn-budget helper for the agent loop.
@@ -165,4 +167,113 @@ export const FINAL_STEP_FALLBACK =
  */
 export function isFinalStep(iter: number, limits: BudgetLimits): boolean {
   return limits.maxIterations > 1 && iter === limits.maxIterations - 1
+}
+
+/**
+ * Progress-aware extension of the iteration cap.
+ *
+ * A flat cap can't tell a run that is looping from one that is simply big: a
+ * from-scratch scaffold writes one file per step and hit the old 40-step cap
+ * two thirds of the way through, so the user had to type "continue" on work
+ * that was going fine. So when a run reaches the point where it would be told to
+ * land, it instead gets another `step` iterations IF it is demonstrably making
+ * progress: successful file writes in most of its recent steps, no stall nudge
+ * in that window, and no cost-ceiling landing. A hard `ceiling` bounds the total
+ * so a productive-looking runaway still stops.
+ */
+export interface ExtensionLimits {
+  /** Whether a productive run may grow past `maxIterations` at all. */
+  enabled: boolean
+  /** Absolute iteration cap the extensions can never exceed. */
+  ceiling: number
+  /** Iterations granted per extension (the configured base cap). */
+  step: number
+}
+
+/**
+ * Tools whose success counts as progress for {@link shouldExtend}: file edits and a
+ * writable subagent (which edits files itself). Deliberately narrower than every
+ * write-kind tool: scheduling or cancelling a run changes no project file, so a run
+ * doing only that is not getting a big job done.
+ */
+export const PROGRESS_TOOLS: ReadonlySet<string> = new Set([
+  'write_file',
+  'edit_file',
+  'multi_edit',
+  'apply_patch',
+  'notebook_edit',
+  'dispatch_writable_agent'
+])
+
+/** How many recent iterations the progress test looks back over. */
+export const PROGRESS_WINDOW = 10
+
+/** Iterations with a successful file write needed inside the window. */
+export const MIN_PRODUCTIVE_STEPS = 3
+
+/**
+ * Resolve extension limits against the already-resolved base cap. A ceiling at
+ * or below the base cap (including a user who raised `maxIterations` above the
+ * default ceiling) simply means no extension.
+ */
+export function resolveExtensionLimits(
+  base: BudgetLimits,
+  override?: { autoExtend?: boolean; ceiling?: number }
+): ExtensionLimits {
+  const rawCeiling =
+    typeof override?.ceiling === 'number' &&
+    Number.isFinite(override.ceiling) &&
+    override.ceiling >= 1
+      ? Math.floor(override.ceiling)
+      : DEFAULT_ITERATION_CEILING
+  const ceiling = Math.max(rawCeiling, base.maxIterations)
+  return {
+    enabled: override?.autoExtend !== false && ceiling > base.maxIterations,
+    ceiling,
+    step: base.maxIterations
+  }
+}
+
+/** Inputs to the extension decision, evaluated once per iteration before landing. */
+export interface ExtensionState {
+  /** Zero-based index of the iteration about to run. */
+  iteration: number
+  /** Iterations (zero-based) in which at least one file write succeeded. */
+  writeIterations: ReadonlySet<number>
+  /** Iteration of the most recent stall nudge, or null if none fired. */
+  lastStallNudge: number | null
+  /** Whether the landing nudge already fired (e.g. the cost ceiling tripped). */
+  alreadyLanded: boolean
+}
+
+/**
+ * Whether to raise the cap before this iteration, and to what. Only considered
+ * when the run is at the point the landing nudge would fire, so an extension
+ * always pre-empts the wrap-up rather than contradicting one already sent.
+ */
+export function shouldExtend(
+  state: ExtensionState,
+  limits: BudgetLimits,
+  ext: ExtensionLimits
+): { extend: false } | { extend: true; maxIterations: number } {
+  if (!ext.enabled || state.alreadyLanded) return { extend: false }
+  if (limits.maxIterations >= ext.ceiling) return { extend: false }
+  const iterationsLeft = limits.maxIterations - state.iteration
+  if (iterationsLeft > Math.max(limits.landingMargin, 1)) return { extend: false }
+
+  const from = state.iteration - PROGRESS_WINDOW
+  if (state.lastStallNudge !== null && state.lastStallNudge >= from) return { extend: false }
+  let productive = 0
+  for (const i of state.writeIterations) if (i >= from && i < state.iteration) productive++
+  if (productive < MIN_PRODUCTIVE_STEPS) return { extend: false }
+
+  return { extend: true, maxIterations: Math.min(ext.ceiling, limits.maxIterations + ext.step) }
+}
+
+/** The transcript notice shown when a productive turn's budget is extended. User-facing. */
+export function extensionNotice(maxIterations: number, ceiling: number): string {
+  return (
+    `Still making progress, so this turn can run up to ${maxIterations} steps ` +
+    `(hard limit ${ceiling}). Stop it any time.`
+  )
 }

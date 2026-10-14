@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ProviderConfig } from './types'
 import {
   DEFAULT_SHELL_OUTPUT_MAX_BYTES,
+  autoExtendTurnsEnabled,
   backfillDefaultModels,
   defaultProviders,
   defaultSettings,
@@ -292,5 +293,20 @@ describe('pruneDefaultModels', () => {
     const retired = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite']
     const shipped = defaultProviders().flatMap((p) => p.models.map((m) => m.id))
     expect(shipped.filter((id) => retired.includes(id))).toEqual([])
+  })
+})
+
+describe('autoExtendTurnsEnabled', () => {
+  it('is on by default', () => {
+    expect(autoExtendTurnsEnabled({})).toBe(true)
+  })
+
+  it('keeps a previously chosen cap a hard stop until opted in', () => {
+    expect(autoExtendTurnsEnabled({ maxIterations: 10 })).toBe(false)
+    expect(autoExtendTurnsEnabled({ maxIterations: 10, autoExtendTurns: true })).toBe(true)
+  })
+
+  it('honors an explicit off', () => {
+    expect(autoExtendTurnsEnabled({ autoExtendTurns: false })).toBe(false)
   })
 })

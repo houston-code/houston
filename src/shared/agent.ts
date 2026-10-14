@@ -846,8 +846,8 @@ export type AgentEvent =
       passed: boolean
     }
   | {
-      // A note addressed to the user from outside the conversation — today a hook's
-      // `systemMessage` directive. Shown as a transcript notice and never added to
+      // A note addressed to the user from outside the conversation: a hook's
+      // `systemMessage` directive, or the loop extending a productive turn's budget. Shown as a transcript notice and never added to
       // the model's context (the loop only emits it; it never lands in `messages`).
       runId: string
       type: 'notice'

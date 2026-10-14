@@ -25,7 +25,12 @@ import type {
 import { removeFolderTrust } from '@shared/types'
 import type { SandboxEgressSettings } from '@shared/egress'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
-import { DEFAULT_SHELL_OUTPUT_MAX_BYTES, DEFAULT_MAX_ITERATIONS } from '@shared/defaults'
+import {
+  DEFAULT_SHELL_OUTPUT_MAX_BYTES,
+  DEFAULT_MAX_ITERATIONS,
+  DEFAULT_ITERATION_CEILING,
+  autoExtendTurnsEnabled
+} from '@shared/defaults'
 import {
   SEARCH_PROVIDERS,
   DEFAULT_SEARCH_PROVIDER_ID,
@@ -1230,9 +1235,9 @@ export function SettingsModal({
                 >
                   <label className="field">
                     <span>
-                      Stop a single turn after this many steps (tool calls + replies). As the run
-                      nears this cap it&apos;s reminded to finish or summarize, so it lands cleanly
-                      instead of being cut off mid-edit.
+                      Steps per turn (tool calls + replies). As the run nears this cap it&apos;s
+                      reminded to finish or summarize, so it lands cleanly instead of being cut off
+                      mid-edit.
                     </span>
                     <input
                       type="number"
@@ -1242,11 +1247,45 @@ export function SettingsModal({
                       onChange={(e) =>
                         setSettings((s) => ({
                           ...s,
-                          maxIterations: Math.max(1, Math.floor(Number(e.target.value) || 0))
+                          maxIterations: Math.max(1, Math.floor(Number(e.target.value) || 0)),
+                          // Pin the keep-going switch to what it showed, so setting a cap
+                          // never silently turns extension off (see autoExtendTurnsEnabled).
+                          autoExtendTurns: autoExtendTurnsEnabled(s)
                         }))
                       }
                     />
                   </label>
+                  <label className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={autoExtendTurnsEnabled(settings)}
+                      onChange={(e) =>
+                        setSettings((s) => ({ ...s, autoExtendTurns: e.target.checked }))
+                      }
+                    />
+                    <span>
+                      Keep going while the turn is making progress: when it reaches the step cap
+                      while still writing files (and not looping), grant another round of steps
+                      instead of stopping.
+                    </span>
+                  </label>
+                  {autoExtendTurnsEnabled(settings) && (
+                    <label className="field">
+                      <span>Never run a single turn past this many steps, however productive.</span>
+                      <input
+                        type="number"
+                        min={1}
+                        step={10}
+                        value={settings.maxIterationsCeiling ?? DEFAULT_ITERATION_CEILING}
+                        onChange={(e) =>
+                          setSettings((s) => ({
+                            ...s,
+                            maxIterationsCeiling: Math.max(1, Math.floor(Number(e.target.value) || 0))
+                          }))
+                        }
+                      />
+                    </label>
+                  )}
                   <label className="field">
                     <span>
                       Also remind the model to wrap up once a turn&apos;s cumulative cost crosses this
