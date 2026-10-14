@@ -9,6 +9,7 @@ const repo: RepoInfo = {
   isRepo: true,
   root: '/Users/me/projects/houston',
   currentBranch: 'main',
+  unborn: false,
   branches: ['main', 'develop'],
   isLinkedWorktreeRoot: false,
   exists: true
@@ -225,6 +226,40 @@ describe('ControlBar', () => {
     // obvious so the user knows which branch will be touched.
     render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={false} />)
     expect(screen.getByText('⑂ main')).toBeInTheDocument()
+  })
+
+  it('offers no worktree in a fresh repo with no commits anywhere, labeling the branch', () => {
+    const fresh: RepoInfo = { ...repo, currentBranch: 'main', unborn: true, branches: [] }
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={fresh} worktreeMode={true} />)
+    expect(screen.queryByText('⑂ New worktree')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Base branch')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
+    expect(screen.getByText('⑂ main (no commits yet)')).toBeInTheDocument()
+  })
+
+  it('never lists an unborn current branch as a base', () => {
+    const unborn: RepoInfo = { ...repo, currentBranch: 'main', unborn: true, branches: ['lucid'] }
+    render(
+      <ControlBar
+        {...baseProps()}
+        newChat={true}
+        repoInfo={unborn}
+        worktreeMode={true}
+        baseBranch="lucid"
+      />
+    )
+    expect(screen.getByText('⑂ New worktree')).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /main/ })).not.toBeInTheDocument()
+    expect((screen.getByLabelText('Base branch') as HTMLSelectElement).value).toBe('lucid')
+  })
+
+  it('lists detached HEAD as the empty-base option so the select shows what is sent', () => {
+    const detached: RepoInfo = { ...repo, currentBranch: null }
+    render(
+      <ControlBar {...baseProps()} newChat={true} repoInfo={detached} worktreeMode={true} baseBranch="" />
+    )
+    expect((screen.getByLabelText('Base branch') as HTMLSelectElement).value).toBe('')
+    expect(screen.getByRole('option', { name: 'HEAD (detached)' })).toBeInTheDocument()
   })
 
   it('reports branch edits and base selection', () => {

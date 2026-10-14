@@ -380,6 +380,17 @@ describe('git tools', () => {
     expect(out).not.toMatch(/b\.txt/)
   })
 
+  maybe('git_diff shows staged files in a repo with no commits yet', async () => {
+    // Replace the committed repo from beforeEach with an unborn one.
+    rmSync(join(workspace, '.git'), { recursive: true, force: true })
+    git('init', '-q', '--template=')
+    writeFileSync(join(workspace, 'staged.txt'), 'fresh\n')
+    git('add', 'staged.txt')
+    const out = await run('git_diff', {})
+    expect(out).toMatch(/\+fresh/)
+    expect(out).not.toMatch(/fatal/)
+  })
+
   maybe('rejects a path that escapes the workspace', async () => {
     await expect(run('git_status', { path: '../escape' })).rejects.toThrow(/escapes the allowed roots/)
   })

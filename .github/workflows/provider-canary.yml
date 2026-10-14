@@ -64,7 +64,8 @@ env:
 jobs:
   anthropic:
     # One tiny reasoning call per shipped Claude model plus install; 15 min mirrors ci.yml's `test`
-    # job and leaves generous headroom over the test's own 60s-per-model cap.
+    # job. Each model is two 30s-capped attempts at most (src/main/providers/canary.ts), so even a
+    # provider-wide stall reds in ~1 min per model, well inside this.
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:

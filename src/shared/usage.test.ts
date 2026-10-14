@@ -80,6 +80,10 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('gpt-5.6-luna')).toBe(1_000_000)
     expect(contextWindowFor('gpt-5.6')).toBe(1_000_000)
     expect(contextWindowFor('gpt-5.7')).toBe(1_000_000)
+    // GPT-6 ships a 1.05M window on every tier.
+    expect(contextWindowFor('gpt-6-astra')).toBe(1_050_000)
+    expect(contextWindowFor('gpt-6.1-sol')).toBe(1_050_000)
+    expect(contextWindowFor('gpt-6-luna')).toBe(1_050_000)
     expect(contextWindowFor('gpt-4o')).toBe(128_000)
     expect(contextWindowFor('gpt-4o-mini')).toBe(128_000)
     expect(contextWindowFor('gpt-4.1')).toBe(1_000_000)
@@ -138,17 +142,59 @@ describe('modelPricing', () => {
     expect(modelPricing('claude-mythos-5-1')).toEqual({ input: 10, output: 50, cacheRead: 0.25 })
     // OpenAI / Gemini families carry explicit cache rates: discounted reads, free writes.
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 })
-    expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0 })
-    expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 })
   })
 
-  it('prices the gpt-5.6 codename tiers individually', () => {
-    expect(modelPricing('gpt-5.6-sol')).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 })
-    expect(modelPricing('gpt-5.6-terra')).toEqual({ input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 })
-    expect(modelPricing('gpt-5.6-luna')).toEqual({ input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 })
-    // The bare alias routes to sol; earlier 5.x keep the flat family rate.
-    expect(modelPricing('gpt-5.6')).toEqual({ input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 })
-    expect(modelPricing('gpt-5.5')).toEqual({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 })
+  it('prices Gemini per release, not just per tier', () => {
+    // Google's paid-tier rates (<=200K prompts). Each line is a distinct published price.
+    const rows: Array<[string, number, number, number]> = [
+      ['gemini-3.1-pro-preview', 2, 12, 0.2],
+      ['gemini-3.8-flash', 0.75, 3.75, 0.075],
+      ['gemini-3.6-flash', 0.75, 3.75, 0.075],
+      ['gemini-3.5-flash', 1.5, 9, 0.15],
+      ['gemini-3-flash-preview', 0.5, 3, 0.05],
+      ['gemini-3.5-flash-lite', 0.3, 2.5, 0.3], // no context caching: reads priced at input
+      ['gemini-3.1-flash-lite', 0.25, 1.5, 0.025],
+      ['gemini-2.5-flash-lite', 0.1, 0.4, 0.01]
+    ]
+    for (const [id, input, output, cacheRead] of rows) {
+      expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite: 0 })
+    }
+  })
+
+  it('prices each OpenAI model at its published rate', () => {
+    // [id, input, output, cached input]: OpenAI's standard-tier table. Cache writes are free.
+    const rows: Array<[string, number, number, number]> = [
+      ['gpt-6-astra', 10, 50, 1],
+      ['gpt-6.1-sol', 2, 10, 0.1],
+      ['gpt-6-sol', 2, 10, 0.2],
+      ['gpt-6-luna', 0.1, 0.5, 0.01],
+      ['gpt-5.6-sol', 4, 20, 0.4],
+      ['gpt-5.6', 4, 20, 0.4], // the bare alias routes to sol
+      ['gpt-5.6-terra', 2, 12, 0.2],
+      ['gpt-5.6-luna', 0.2, 1.2, 0.02],
+      ['gpt-5.5', 5, 30, 0.5],
+      ['gpt-5.4', 2.5, 15, 0.25],
+      ['gpt-5.4-mini', 0.75, 4.5, 0.075],
+      ['gpt-5.4-nano', 0.2, 1.25, 0.02],
+      ['gpt-5.2', 1.75, 14, 0.175],
+      ['gpt-5.1', 1.25, 10, 0.125],
+      ['gpt-5-mini', 0.25, 2, 0.025],
+      ['gpt-5-nano', 0.05, 0.4, 0.005],
+      ['o3', 2, 8, 0.5],
+      ['o3-mini', 1.1, 4.4, 0.55],
+      ['o4-mini', 1.1, 4.4, 0.275],
+      ['o1', 15, 60, 7.5],
+      // Routed ids carry a host prefix; the rate still applies.
+      ['openai/gpt-6.1-sol', 2, 10, 0.1]
+    ]
+    for (const [id, input, output, cacheRead] of rows) {
+      expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite: 0 })
+    }
+    // The -pro models have no cached-input rate, so a read is billed at input.
+    expect(modelPricing('gpt-5.5-pro')).toEqual({ input: 30, output: 180, cacheRead: 30, cacheWrite: 0 })
+    expect(modelPricing('o3-pro')).toEqual({ input: 20, output: 80, cacheRead: 20, cacheWrite: 0 })
   })
 
   it('returns null for unknown / local models', () => {
@@ -186,9 +232,9 @@ describe('turnCostUsd', () => {
     expect(turnCostUsd('gpt-4o', 1_000_000, 0, { readTokens: 1_000_000 })).toBeCloseTo(1.25, 6)
     // gpt-5 reads at $0.125/M (0.1x input).
     expect(turnCostUsd('gpt-5', 1_000_000, 0, { readTokens: 1_000_000 })).toBeCloseTo(0.125, 6)
-    // Gemini flash reads at $0.075/M (0.25x input).
+    // Gemini flash reads at its listed rate ($0.075/M on 3.8, 0.1x input).
     expect(
-      turnCostUsd('gemini-2.5-flash', 1_000_000, 0, { readTokens: 1_000_000 })
+      turnCostUsd('gemini-3.8-flash', 1_000_000, 0, { readTokens: 1_000_000 })
     ).toBeCloseTo(0.075, 6)
     // Cache writes are free on these families — the explicit 0 must not fall back
     // to Anthropic's 1.25x surcharge.
@@ -268,6 +314,8 @@ describe('modelCapabilities', () => {
     ['gpt-4o-mini', true, false],
     ['gpt-4.1', true, false],
     ['gpt-5', true, true],
+    ['gpt-6.1-sol', true, true],
+    ['gpt-6-luna', true, true],
     ['o1-preview', true, true],
     ['o3', true, true],
     ['o4-mini', true, true],
@@ -281,7 +329,7 @@ describe('modelCapabilities', () => {
     ['gemini-pro', false, false], // 1.0 was text-only
     // Gemini 3.x: the old `2\.`-only vision pattern reported these as text-only, and the
     // 2.5-only reasoning mirror reported them as non-reasoning. Both are wrong, and these
-    // are shipped defaults — mirrors geminiSupportsThinking in providers/reasoning.ts.
+    // are shipped defaults — the same geminiSupportsThinking gate the request uses.
     ['gemini-3.5-flash', true, true],
     ['gemini-3.1-flash-lite', true, true],
     ['gemini-3.1-pro-preview', true, true],

@@ -126,6 +126,18 @@ describe('sortedModels', () => {
     ])
   })
 
+  it('ranks GPT-6 ahead of GPT-5.x as one family, astra first within a version', () => {
+    const stored = m('gpt-5.6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'o3', 'gpt-6-astra', 'gpt-5.5')
+    expect(ids(sortedModels('openai', stored))).toEqual([
+      'gpt-6.1-sol', // newest release
+      'gpt-6-astra', // flagship tier of 6.0
+      'gpt-6-luna', // efficient tier of 6.0
+      'gpt-5.6-sol',
+      'gpt-5.5',
+      'o3'
+    ])
+  })
+
   it('keeps Gemini tiers grouped (pro before flash) and newest version first', () => {
     const stored = m('gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite')
     expect(ids(sortedModels('gemini', stored))).toEqual([

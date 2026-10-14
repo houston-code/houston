@@ -106,56 +106,66 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const ids = await loadOpenAIModelIds()
     expect(ids[0]).toBe('gpt-4o') // user's model kept, in place
-    expect(ids).toContain('gpt-5.6-sol') // new default appended
+    expect(ids).toContain('gpt-6.1-sol') // new default appended
   })
 
   it('treats a settings file with no schemaVersion as pre-v2 and backfills', async () => {
     writeSettings({ providers: [openaiProvider(['gpt-4o'])] })
-    expect(await loadOpenAIModelIds()).toContain('gpt-5.6-sol')
+    expect(await loadOpenAIModelIds()).toContain('gpt-6.1-sol')
   })
 
   it('does not re-add a default model a v2 install has already deleted', async () => {
     // Migration already ran (v2); the user has since removed the old gpt-5 flagship — a
-    // full backfill must not resurrect it. The v4 bump scopes its OpenAI add to the new
-    // gpt-5.x ids (which the user never deleted), leaving gpt-5 gone.
+    // full backfill must not resurrect it. Later bumps scope their OpenAI adds to their
+    // own new ids (which the user never deleted), leaving gpt-5 gone.
     writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])] })
     const ids = await loadOpenAIModelIds()
     expect(ids).not.toContain('gpt-5')
-    expect(ids).toContain('gpt-5.6-sol') // the v4 scoped flagship add still runs
+    expect(ids).toContain('gpt-6.1-sol') // the v8 scoped add still runs
   })
 
-  it('seeds claude-fable-5 into a v2 Anthropic provider on the v3 bump', async () => {
-    writeSettings({ schemaVersion: 2, providers: [anthropicProvider(['claude-opus-4-8'])] })
+  it('adds the GPT-6 line on the v8 bump without pruning the 5.x models', async () => {
+    writeSettings({ schemaVersion: 7, providers: [openaiProvider(['gpt-5.6-sol', 'o3'])] })
+    expect(await loadOpenAIModelIds()).toEqual([
+      'gpt-5.6-sol',
+      'o3',
+      'gpt-6-astra',
+      'gpt-6.1-sol',
+      'gpt-6-luna'
+    ])
+  })
+
+  it('seeds the Claude 5.x lineup into a v8 Anthropic provider on the v9 bump', async () => {
+    writeSettings({ schemaVersion: 8, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
     expect(ids[0]).toBe('claude-opus-4-8') // user's model kept, in place
-    expect(ids).toContain('claude-fable-5') // new default appended
+    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
   })
 
-  it('scopes the v3 bump to Fable — does not re-add other Claude defaults the user deleted', async () => {
-    // A v2 install that kept only Opus 4.8 gets Fable, but not Sonnet/Haiku/Opus 4.7 back.
-    writeSettings({ schemaVersion: 2, providers: [anthropicProvider(['claude-opus-4-8'])] })
-    const ids = await loadAnthropicModelIds()
-    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5'])
+  it('scopes the v9 bump to the new ids — does not re-add a default the user deleted', async () => {
+    // A v8 install that dropped Haiku gets the 5.x models, but not Haiku back.
+    writeSettings({ schemaVersion: 8, providers: [anthropicProvider(['claude-opus-4-8'])] })
+    expect(await loadAnthropicModelIds()).not.toContain('claude-haiku-4-5')
   })
 
-  it('does not re-add Fable a v3 install has already deleted', async () => {
-    writeSettings({ schemaVersion: 3, providers: [anthropicProvider(['claude-opus-4-8'])] })
-    expect(await loadAnthropicModelIds()).not.toContain('claude-fable-5')
+  it('does not re-add a 5.x model a v9 install has already deleted', async () => {
+    writeSettings({ schemaVersion: 9, providers: [anthropicProvider(['claude-opus-5-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
   })
 
-  it('gives a pre-v2 install both the full backfill and Fable', async () => {
-    // fromVersion 0 runs both gates: the full v2 seed and the scoped v3 Fable add.
+  it('gives a pre-v2 install the full backfill without duplicating the v9 ids', async () => {
+    // fromVersion 0 runs every gate: the full v2 seed and the scoped v9 add.
     writeSettings({ schemaVersion: 1, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
-    expect(ids).toContain('claude-fable-5')
-    expect(ids).toContain('claude-sonnet-4-6') // full backfill also ran
-    expect(ids.filter((id) => id === 'claude-fable-5')).toHaveLength(1) // no duplicate
+    expect(ids).toContain('claude-haiku-4-5') // full backfill ran
+    expect(ids).toContain('claude-opus-5-5')
+    expect(ids.filter((id) => id === 'claude-fable-5-1')).toHaveLength(1) // no duplicate
   })
 
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(6)
+    expect(getSettings().schemaVersion).toBe(9)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -209,7 +219,7 @@ describe('settings migration — retired Gemini models (v6)', () => {
     expect(ids).not.toContain('gemini-2.5-flash')
     expect(ids).not.toContain('gemini-2.0-flash')
     expect(ids).toContain('gemini-2.5-pro')
-    expect(ids).toContain('gemini-3.1-flash-lite')
+    expect(ids).toContain('gemini-3.8-flash') // the current line, via the v7 add
   })
 
   it('falls back to the built-in default when defaultModel pointed at a retired model', async () => {
@@ -220,7 +230,7 @@ describe('settings migration — retired Gemini models (v6)', () => {
     })
     const { getSettings } = await loadStore()
     const gemini = getSettings().providers.find((p) => p.id === 'gemini')!
-    expect(gemini.defaultModel).toBe('gemini-2.5-pro')
+    expect(gemini.defaultModel).toBe('gemini-3.8-flash')
   })
 
   it('leaves a same-named model on a custom endpoint alone', async () => {
@@ -246,9 +256,9 @@ describe('settings migration — retired Gemini models (v6)', () => {
   })
 
   it('does not re-add the retired models on a later load', async () => {
-    // The prune must stick: a v6 install reloading must not resurrect them.
+    // The prune must stick: an up-to-date install reloading must not resurrect them.
     writeSettings({
-      schemaVersion: 6,
+      schemaVersion: 7,
       providers: [geminiProvider(['gemini-2.5-pro'])]
     })
     const { getSettings } = await loadStore()
@@ -256,6 +266,20 @@ describe('settings migration — retired Gemini models (v6)', () => {
       .providers.find((p) => p.id === 'gemini')!
       .models.map((m) => m.id)
     expect(ids).toEqual(['gemini-2.5-pro'])
+  })
+
+  it('adds the current Gemini line on the v7 bump without pruning 2.5-pro', async () => {
+    // 2.5-pro is closed to NEW users only; an account that has it keeps working.
+    writeSettings({ schemaVersion: 6, providers: [geminiProvider(['gemini-2.5-pro'], 'gemini-2.5-pro')] })
+    const { getSettings } = await loadStore()
+    const gemini = getSettings().providers.find((p) => p.id === 'gemini')!
+    expect(gemini.models.map((m) => m.id)).toEqual([
+      'gemini-2.5-pro',
+      'gemini-3.1-pro-preview',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite'
+    ])
+    expect(gemini.defaultModel).toBe('gemini-2.5-pro') // the user's stored choice stands
   })
 })
 
@@ -344,7 +368,7 @@ describe('selected-model reconciliation', () => {
 
   it('drops a dangling selection read from a hand-edited settings.json on load', async () => {
     writeSettings({
-      schemaVersion: 4,
+      schemaVersion: 9,
       providers: [anthropicProvider(['claude-opus-4-8'])],
       selected: { providerId: 'anthropic', model: 'a-model-that-was-deleted' }
     })

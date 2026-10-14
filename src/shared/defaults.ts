@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 6
+export const SETTINGS_SCHEMA_VERSION = 9
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -53,16 +53,18 @@ export function defaultProviders(): ProviderConfig[] {
       // Model ids only — the display name is derived from the id (see
       // `modelDisplayName` in models.ts), so a seeded model reads identically to one
       // added via Fetch. No hardcoded labels to drift out of sync with fetched ids.
+      // The current lineup, one model per tier. Superseded releases (Fable 5, Opus 4.8 /
+      // 4.7, Sonnet 4.6) still serve, so the v9 migration only adds the new ids to
+      // existing installs; it never removes a model a user may be using.
       models: [
-        { id: 'claude-fable-5' },
-        { id: 'claude-opus-4-8' },
-        { id: 'claude-sonnet-4-6' },
-        { id: 'claude-haiku-4-5' },
-        { id: 'claude-opus-4-7' }
+        { id: 'claude-fable-5-1' },
+        { id: 'claude-opus-5-5' },
+        { id: 'claude-sonnet-5-5' },
+        { id: 'claude-haiku-4-5' }
       ],
       // Changing this needs a live eval baseline for the new model in the same PR
       // (src/main/agent/evals/baselines/), or the scheduled eval-live.yml run reds.
-      defaultModel: 'claude-opus-4-8',
+      defaultModel: 'claude-opus-5-5',
       requiresKey: true,
       hasKey: false,
       builtIn: true
@@ -71,18 +73,13 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'openai',
       kind: 'openai',
       label: 'OpenAI (GPT)',
-      // Current GPT-5.x line: the gpt-5.6 flagship family (sol/terra/luna tiers) plus a
-      // couple of recent still-available versions, and o3 for reasoning. Starting points
-      // only — the live list is a Fetch away, and the display name derives from the id.
-      models: [
-        { id: 'gpt-5.6-sol' },
-        { id: 'gpt-5.6-terra' },
-        { id: 'gpt-5.6-luna' },
-        { id: 'gpt-5.5' },
-        { id: 'gpt-5.4' },
-        { id: 'o3' }
-      ],
-      defaultModel: 'gpt-5.6-sol',
+      // The GPT-6 line, one model per codename tier: astra (flagship), sol (near-astra at a
+      // fifth of the price, so the default), luna (efficient). The GPT-5.x and o-series
+      // models it supersedes still serve, so the v8 migration only adds these ids to
+      // existing installs. Starting points only: the live list is a Fetch away, and the
+      // display name derives from the id.
+      models: [{ id: 'gpt-6-astra' }, { id: 'gpt-6.1-sol' }, { id: 'gpt-6-luna' }],
+      defaultModel: 'gpt-6.1-sol',
       requiresKey: true,
       hasKey: false,
       builtIn: true
@@ -91,24 +88,24 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'gemini',
       kind: 'gemini',
       label: 'Google (Gemini)',
-      // gemini-2.5-pro is the newest *stable* pro — the 3.x pro line is preview-only, and no
-      // provider here ships preview ids as defaults — paired with the current 3.x flash and
-      // lite tiers. gemini-2.5-flash and gemini-2.0-flash were removed: Google retired them
-      // ("no longer available to new users") and they now 404 on every call, so they were
-      // menu entries that could only fail. The v6 migration in store.ts prunes them from
-      // installs that already have them saved. Starting points only — the live list is a
-      // Fetch away, and the display name derives from the id.
+      // gemini-3.8-flash is the default: Google's newest stable model and its recommended
+      // replacement for gemini-2.5-pro, which is now closed to new users (Google limits the
+      // 2.5 line to accounts that already used it), so a fresh install defaulting to it
+      // could only fail. gemini-3.1-pro-preview is seeded for the strongest reasoning even
+      // though it is preview-only, since no stable 3.x Pro exists; it is a choice, never the
+      // default. gemini-3.5-flash-lite is the current low-cost tier (3.1-flash-lite has an
+      // announced 2027 shutdown). The v7 migration in store.ts adds these to existing
+      // installs without pruning: 2.5-pro keeps working for the accounts that have it.
       //
-      // NB the live /models list is NOT a safe source of truth here: it still lists both
-      // retired ids even though calling them 404s. Only a real call proves a model works,
-      // which is what the gemini leg of provider-canary.yml does nightly.
-      // gemini-3.5-flash is deliberately NOT here: it is real and callable, but it could not
-      // actually serve a trivial request on two consecutive live runs (a 60s hang, then a 503
-      // "experiencing high demand"), while these two answered in under 4s every time. A default
-      // that stalls or 503s is worse than one fewer choice, and the live list can't tell you
-      // this — only repeated real calls can. Worth revisiting when its capacity settles.
-      models: [{ id: 'gemini-2.5-pro' }, { id: 'gemini-3.1-flash-lite' }],
-      defaultModel: 'gemini-2.5-pro',
+      // NB the live /models list is NOT a safe source of truth here: it has listed retired
+      // ids that 404 and models that could not serve under load. Only a real call proves a
+      // model works, which is what the gemini leg of provider-canary.yml does nightly.
+      models: [
+        { id: 'gemini-3.1-pro-preview' },
+        { id: 'gemini-3.8-flash' },
+        { id: 'gemini-3.5-flash-lite' }
+      ],
+      defaultModel: 'gemini-3.8-flash',
       requiresKey: true,
       hasKey: false,
       builtIn: true

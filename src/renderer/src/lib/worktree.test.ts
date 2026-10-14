@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import type { RepoInfo } from '@shared/agent'
-import { suggestBranch, branchNameError, planNewChatWorkspace } from './worktree'
+import {
+  suggestBranch,
+  branchNameError,
+  canCreateWorktree,
+  defaultBaseBranch,
+  planNewChatWorkspace
+} from './worktree'
 
 describe('suggestBranch', () => {
   it('produces an <adjective>-<noun>-<suffix> branch name (no path prefix)', () => {
@@ -42,6 +48,7 @@ describe('planNewChatWorkspace', () => {
     isRepo: true,
     root: '/repo',
     currentBranch: 'main',
+    unborn: false,
     branches: ['main'],
     isLinkedWorktreeRoot: false,
     exists: true,
@@ -85,5 +92,38 @@ describe('planNewChatWorkspace', () => {
 
   it('drops a workspace that no longer exists on disk', () => {
     expect(planNewChatWorkspace(repo({ exists: false }), '/repo')).toEqual({ action: 'drop' })
+  })
+})
+
+describe('unborn repos (no commits on the current branch)', () => {
+  const info = (over: Partial<RepoInfo> = {}): RepoInfo => ({
+    isRepo: true,
+    root: '/repo',
+    currentBranch: 'main',
+    unborn: true,
+    branches: [],
+    isLinkedWorktreeRoot: false,
+    exists: true,
+    ...over
+  })
+
+  it('defaults the worktree toggle off at the repo root', () => {
+    expect(planNewChatWorkspace(info(), '/repo')).toEqual({ action: 'keep', worktreeDefault: false })
+  })
+
+  it('cannot create a worktree with no commit anywhere, but can from another branch', () => {
+    expect(canCreateWorktree(info())).toBe(false)
+    expect(canCreateWorktree(info({ branches: ['lucid'] }))).toBe(true)
+    expect(canCreateWorktree(info({ unborn: false, branches: ['main'] }))).toBe(true)
+    expect(canCreateWorktree(info({ isRepo: false, unborn: false }))).toBe(false)
+  })
+
+  it('starts the base picker on a branch the picker lists', () => {
+    // Unborn current branch: newest branch with commits, never the unborn one.
+    expect(defaultBaseBranch(info({ branches: ['lucid', 'older'] }))).toBe('lucid')
+    expect(defaultBaseBranch(info())).toBe('')
+    // Born branch: itself. Detached HEAD: '' (the "HEAD (detached)" option).
+    expect(defaultBaseBranch(info({ unborn: false, branches: ['main'] }))).toBe('main')
+    expect(defaultBaseBranch(info({ unborn: false, currentBranch: null }))).toBe('')
   })
 })

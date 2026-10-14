@@ -58,6 +58,17 @@ feature.
 See [CONTRIBUTING.md](CONTRIBUTING.md#agent-behavior-goldens) for what this guard does
 and does not catch.
 
+## Model knowledge
+
+Everything Houston infers from a model id (price, context window, vision and
+reasoning, the Claude request-shape gates, display-order families) lives in
+`src/shared/model-facts.ts`, grouped by provider. To support a new model, edit its
+provider's section there, add the id to the corpus in
+`src/main/providers/model-knowledge.test.ts`, and regenerate
+`src/main/providers/goldens/model-knowledge.json` with `-u`; the golden diff is the review
+surface for what changed. Seeding it as a default is separate: `src/shared/defaults.ts`
+plus a scoped `backfillDefaultModels` step in `src/main/store.ts`'s `migrate()`.
+
 ## Task-level evals
 
 `src/main/agent/evals/` grades whether the harness carries a real unit of work to a

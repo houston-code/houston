@@ -200,6 +200,8 @@ describe('openai reasoning_effort', () => {
     expect(openaiSupportsReasoning('o3')).toBe(true)
     expect(openaiSupportsReasoning('o4-mini')).toBe(true)
     expect(openaiSupportsReasoning('gpt-5')).toBe(true)
+    expect(openaiSupportsReasoning('gpt-6.1-sol')).toBe(true)
+    expect(openaiSupportsReasoning('gpt-6-astra')).toBe(true)
     expect(openaiSupportsReasoning('gpt-4o')).toBe(false)
     expect(openaiReasoningEffort('gpt-4o', 'high')).toBeUndefined()
     expect(openaiReasoningEffort('o3', 'medium')).toBe('medium')

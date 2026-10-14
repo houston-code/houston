@@ -1,6 +1,6 @@
 {
   "name": "houston",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A coding agent desktop app for macOS, Windows, and Linux: bring your own model (Claude, GPT, Gemini, or a local LLM).",
   "author": {
     "name": "The Houston Authors",
@@ -59,10 +59,10 @@
     "dist:unpacked": "npm run build && npm run verify:resources && electron-builder --mac --arm64 --dir"
   },
   "dependencies": {
-    "@anthropic-ai/bedrock-sdk": "^0.33.7",
-    "@anthropic-ai/foundry-sdk": "^0.4.8",
-    "@anthropic-ai/sdk": "^0.127.0",
-    "@anthropic-ai/vertex-sdk": "^0.19.10",
+    "@anthropic-ai/bedrock-sdk": "^0.34.0",
+    "@anthropic-ai/foundry-sdk": "^0.5.0",
+    "@anthropic-ai/sdk": "^0.129.0",
+    "@anthropic-ai/vertex-sdk": "^0.20.0",
     "@google/genai": "^2.24.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -71,7 +71,7 @@
     "highlight.js": "^11.12.0",
     "minimatch": "^10.2.6",
     "node-pty": "^1.1.0",
-    "openai": "^7.21.0"
+    "openai": "^7.23.0"
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.45.3",
@@ -82,11 +82,11 @@
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
-    "@vitest/coverage-v8": "^5.0.1",
+    "@vitest/coverage-v8": "^5.0.2",
     "@vscode/ripgrep": "^1.18.0",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
@@ -98,7 +98,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.70.1",
+    "typescript-eslint": "^8.71.0",
     "vite": "^7.3.6",
     "vitest": "^5.0.1"
   },

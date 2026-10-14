@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.6.0 - 2026-10-07
+
+Refreshed the Claude, GPT-6, and Gemini model defaults with corrected pricing, plus faster chat titles.
+
+New installs seed the latest model lineups, and existing installs have the new models appended automatically with nothing removed, so your current default and any models you still use keep working.
+
+### Breaking changes
+- None.
+
+### Added
+- Claude 5.x defaults: new installs seed Fable 5.1, Opus 5.5, Sonnet 5.5, and Haiku 4.5, with Opus 5.5 as the default. Existing installs get the three new models added (#108)
+- GPT-6 line: new installs seed gpt-6-astra, gpt-6.1-sol (default), and gpt-6-luna, with the models added to existing installs too (#103)
+- Gemini defaults: new installs seed Gemini 3.1 Pro Preview, 3.8 Flash (default), and 3.5 Flash Lite, with the models added to existing installs (#99)
+
+### Fixed
+- Fresh installs no longer land on a broken Gemini default: the old 2.5 Pro seed could only fail for new accounts (#99)
+- Claude 5.x models added via fetch from provider now show the reasoning toggle and R chip and send the correct thinking config, and keep working across long sessions (#98)
+- Removed an em dash from the Changes panel scope line (#102)
+
+### Changed
+- Chat titles now generate in parallel with the first turn, so they appear sooner instead of after a long turn finishes. Chats whose first turn errors or is aborted now also get a generated title (#95)
+- Corrected per-model pricing for OpenAI, Gemini, and Claude models to match published rates (#103, #99, #98)
+
 ## v0.5.0 - 2026-10-03
 
 Share Houston from anywhere, smarter in-place updates, clearer connection errors, and live review findings.

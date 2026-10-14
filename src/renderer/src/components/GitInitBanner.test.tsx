@@ -7,7 +7,7 @@ const TITLE = /isn.t a git repository/
 
 /** A RepoInfo with the two fields the banner reads (exists / isRepo) set. */
 function repoInfo(exists: boolean, isRepo: boolean): RepoInfo {
-  return { isRepo, root: '', currentBranch: null, branches: [], isLinkedWorktreeRoot: false, exists }
+  return { isRepo, root: '', currentBranch: null, unborn: false, branches: [], isLinkedWorktreeRoot: false, exists }
 }
 
 /**

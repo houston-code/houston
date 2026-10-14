@@ -63,7 +63,7 @@ import { resolveEdit } from './edit-match'
 import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
-import { runReadGit } from './gitRead'
+import { runReadGit, captureTry, uncommittedDiffBase } from './gitRead'
 import { SPAWN_SESSION_NAME, type SpawnSessionResult } from './spawn'
 import type { ScheduledRunInfo } from './scheduler'
 
@@ -2120,8 +2120,11 @@ const gitDiff: ToolDef = {
     )
   },
   async execute(args, ctx) {
+    const pathArgs = gitPathArgs(args, ctx)
+    // Against the empty tree on a repo with no commits, where `git diff HEAD` fails.
+    const base = await uncommittedDiffBase(captureTry(ctx.workspace))
     return runReadGit(
-      ['diff', 'HEAD', '--no-color', '--no-ext-diff', '--no-textconv', ...gitPathArgs(args, ctx)],
+      ['diff', base, '--no-color', '--no-ext-diff', '--no-textconv', ...pathArgs],
       ctx.workspace
     )
   }

@@ -21,7 +21,13 @@ import {
 import type { ImageAttachment } from '@shared/images'
 import { resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
-import { branchNameError, planNewChatWorkspace, suggestBranch } from './lib/worktree'
+import {
+  branchNameError,
+  canCreateWorktree,
+  defaultBaseBranch,
+  planNewChatWorkspace,
+  suggestBranch
+} from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
 import { useRunningConversations } from './hooks/useRunningConversations'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -402,7 +408,7 @@ export default function App(): JSX.Element {
       setRepoInfo(info)
       setWorktreeMode(plan.worktreeDefault)
       setBranchName(suggestBranch())
-      setBaseBranch(info.currentBranch ?? '')
+      setBaseBranch(defaultBaseBranch(info))
     })
     return () => {
       cancelled = true
@@ -410,7 +416,8 @@ export default function App(): JSX.Element {
   }, [currentId, workspace])
 
   // Whether the first message of this new chat will spin up a worktree.
-  const creatingWorktree = currentId === null && worktreeMode && repoInfo?.isRepo === true
+  const creatingWorktree =
+    currentId === null && worktreeMode && repoInfo !== null && canCreateWorktree(repoInfo)
 
   // Start a turn immediately with the given text/images, creating a conversation
   // first if this is the very first message — in a fresh worktree when set up.

@@ -47,19 +47,32 @@ describe('defaultSettings', () => {
     expect(defaultSettings().shellOutputMaxBytes).toBe(DEFAULT_SHELL_OUTPUT_MAX_BYTES)
   })
 
-  it('seeds the current GPT-5.x line on the OpenAI provider and defaults to gpt-5.6-sol', () => {
+  it('seeds the GPT-6 line on the OpenAI provider and defaults to gpt-6.1-sol', () => {
     const openai = defaultSettings().providers.find((p) => p.id === 'openai')!
-    expect(openai.models.map((m) => m.id)).toEqual(
-      expect.arrayContaining(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])
-    )
-    // Deprecated ids are not seeded on a fresh install.
-    expect(openai.models.map((m) => m.id)).not.toContain('gpt-5')
-    expect(openai.defaultModel).toBe('gpt-5.6-sol')
+    expect(openai.models.map((m) => m.id)).toEqual(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'])
+    expect(openai.defaultModel).toBe('gpt-6.1-sol')
   })
 
-  it('seeds claude-fable-5 on the Anthropic provider', () => {
+  it('seeds the current Gemini lineup with a stable default', () => {
+    const gemini = defaultSettings().providers.find((p) => p.id === 'gemini')!
+    expect(gemini.models.map((m) => m.id)).toEqual([
+      'gemini-3.1-pro-preview',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite'
+    ])
+    // Never a preview id, and never 2.5-pro, which new users can no longer call.
+    expect(gemini.defaultModel).toBe('gemini-3.8-flash')
+  })
+
+  it('seeds the current Claude lineup with Opus 5.5 as the default', () => {
     const anthropic = defaultSettings().providers.find((p) => p.id === 'anthropic')!
-    expect(anthropic.models.map((m) => m.id)).toContain('claude-fable-5')
+    expect(anthropic.models.map((m) => m.id)).toEqual([
+      'claude-fable-5-1',
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-haiku-4-5'
+    ])
+    expect(anthropic.defaultModel).toBe('claude-opus-5-5')
   })
 
   it('seeds built-in models as ids only, with no hardcoded display label', () => {
@@ -108,9 +121,9 @@ describe('backfillDefaultModels', () => {
   it('appends new built-in default models a saved provider is missing', () => {
     const saved = [provider({ id: 'openai', models: [{ id: 'gpt-4o', label: 'GPT-4o' }] })]
     const ids = backfillDefaultModels(saved)[0].models.map((m) => m.id)
-    // The pre-existing model stays first; new defaults (incl. gpt-5.6-sol) are appended.
+    // The pre-existing model stays first; new defaults (incl. gpt-6.1-sol) are appended.
     expect(ids[0]).toBe('gpt-4o')
-    expect(ids).toContain('gpt-5.6-sol')
+    expect(ids).toContain('gpt-6.1-sol')
     // No duplicate of the model the user already had.
     expect(ids.filter((id) => id === 'gpt-4o')).toHaveLength(1)
   })
@@ -128,23 +141,23 @@ describe('backfillDefaultModels', () => {
   })
 
   it('with onlyIds, appends just those ids and leaves other missing defaults out', () => {
-    // The v3-style scoped call: seed Fable without re-adding other Claude defaults the
+    // The scoped call a version bump makes: seed Fable 5.1 without re-adding other Claude defaults the
     // user has since deleted.
     const saved = [
       provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-opus-4-8' }] })
     ]
-    const models = backfillDefaultModels(saved, ['claude-fable-5'])[0].models
-    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5'])
+    const models = backfillDefaultModels(saved, ['claude-fable-5-1'])[0].models
+    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5-1'])
     // The appended model is id-only; its display name is derived, not seeded.
-    expect(models.find((m) => m.id === 'claude-fable-5')).toEqual({ id: 'claude-fable-5' })
+    expect(models.find((m) => m.id === 'claude-fable-5-1')).toEqual({ id: 'claude-fable-5-1' })
   })
 
   it('with onlyIds, does not re-add an already-present scoped id', () => {
     const saved = [
-      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-fable-5' }] })
+      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-fable-5-1' }] })
     ]
-    const ids = backfillDefaultModels(saved, ['claude-fable-5'])[0].models.map((m) => m.id)
-    expect(ids).toEqual(['claude-fable-5'])
+    const ids = backfillDefaultModels(saved, ['claude-fable-5-1'])[0].models.map((m) => m.id)
+    expect(ids).toEqual(['claude-fable-5-1'])
   })
 
   it('leaves custom (non-built-in) providers untouched', () => {
@@ -254,7 +267,7 @@ describe('pruneDefaultModels', () => {
         defaultModel: 'gemini-2.5-flash'
       })
     ]
-    expect(pruneDefaultModels(saved, ['gemini-2.5-flash'])[0].defaultModel).toBe('gemini-2.5-pro')
+    expect(pruneDefaultModels(saved, ['gemini-2.5-flash'])[0].defaultModel).toBe('gemini-3.8-flash')
   })
 
   it('keeps a defaultModel that was not pruned', () => {
