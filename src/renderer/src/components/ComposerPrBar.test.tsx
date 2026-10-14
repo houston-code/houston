@@ -5,7 +5,7 @@ import { ComposerPrBar } from './ComposerPrBar'
 const props = (over = {}) => ({
   changes: { fileCount: 3, added: 42, removed: 7 },
   onShowChanges: vi.fn(),
-  onCreatePr: vi.fn(),
+  onShip: vi.fn(),
   ...over
 })
 
@@ -30,10 +30,42 @@ describe('ComposerPrBar', () => {
   })
 
   it('hands off to the agent when Create PR is clicked', () => {
-    const onCreatePr = vi.fn()
-    render(<ComposerPrBar {...props({ onCreatePr })} />)
+    const onShip = vi.fn()
+    render(<ComposerPrBar {...props({ onShip })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Create PR' }))
-    expect(onCreatePr).toHaveBeenCalledTimes(1)
+    expect(onShip).toHaveBeenCalledTimes(1)
+    expect(onShip.mock.calls[0][0].kind).toBe('create-pr')
+  })
+
+  it('offers Publish to GitHub when the repo has no remote or commits', () => {
+    const onShip = vi.fn()
+    render(
+      <ComposerPrBar
+        {...props({
+          onShip,
+          changes: { fileCount: 3, added: 1, removed: 0, ship: { hasCommits: false, remote: null } }
+        })}
+      />
+    )
+    expect(screen.queryByRole('button', { name: 'Create PR' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Publish to GitHub' }))
+    expect(onShip.mock.calls[0][0].kind).toBe('publish')
+  })
+
+  it('keeps Create PR for a GitHub remote with history', () => {
+    render(
+      <ComposerPrBar
+        {...props({
+          changes: {
+            fileCount: 1,
+            added: 1,
+            removed: 0,
+            ship: { hasCommits: true, remote: { name: 'origin', host: 'github' } }
+          }
+        })}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Create PR' })).toBeInTheDocument()
   })
 
   it('disables Create PR while a run is in progress', () => {

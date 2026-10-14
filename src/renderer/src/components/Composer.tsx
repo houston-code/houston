@@ -53,6 +53,7 @@ import {
   type PickedFile
 } from '@shared/composerContext'
 import { workingTreeToText, type WorkingTreeChanges } from '@shared/workingTree'
+import type { ShipAction } from '@shared/shipAction'
 
 /** Read an image File into a base64 ImageAttachment, or null if unsupported. */
 function readImageFile(file: File): Promise<ImageAttachment | null> {
@@ -140,7 +141,7 @@ export function Composer({
   lastUserMessage,
   changes,
   onShowChanges,
-  onCreatePr,
+  onShip,
   onCommand,
   onSend,
   onSteer,
@@ -164,7 +165,7 @@ export function Composer({
   /** Open the Changes panel (clicking the bar's stat chip). */
   onShowChanges?: () => void
   /** Hand PR creation to the agent (the bar's Create PR button). */
-  onCreatePr?: () => void
+  onShip?: (action: ShipAction) => void
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
   /**
@@ -807,11 +808,11 @@ export function Composer({
             </div>
           </div>
         )}
-        {changes && onShowChanges && onCreatePr && (
+        {changes && onShowChanges && onShip && (
           <ComposerPrBar
             changes={changes}
             onShowChanges={onShowChanges}
-            onCreatePr={onCreatePr}
+            onShip={onShip}
             creating={running}
           />
         )}

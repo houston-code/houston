@@ -1,26 +1,30 @@
+import { chooseShipAction, type ShipAction } from '@shared/shipAction'
 import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
 
 /**
  * A slim bar at the top of the composer, shown only when the working tree has
  * uncommitted changes. The left chip ("N changed files +A −R") is clickable and
- * opens the Changes panel; the right button hands PR creation to the agent (the
+ * opens the Changes panel; the right button hands shipping to the agent (the
  * same action as the Changes-panel footer button — both entry points are kept).
+ * The button follows the repo's state: "Create PR" needs commits and a GitHub
+ * remote, so a fresh repo gets "Publish to GitHub" instead (see chooseShipAction).
  * Renders nothing when there are no changes.
  */
 export function ComposerPrBar({
   changes,
   onShowChanges,
-  onCreatePr,
+  onShip,
   creating = false
 }: {
   changes: WorkingTreeStats
   onShowChanges: () => void
-  onCreatePr: () => void
+  onShip: (action: ShipAction) => void
   /** True while a run is in progress — sending now would clobber it, so disable. */
   creating?: boolean
 }): JSX.Element | null {
   const { fileCount, added, removed } = changes
   if (fileCount === 0) return null
+  const action = chooseShipAction(changes.ship)
   return (
     <div className="composer__pr-bar">
       <button
@@ -42,15 +46,11 @@ export function ComposerPrBar({
       <button
         type="button"
         className="btn btn--sm btn--accent"
-        onClick={onCreatePr}
+        onClick={() => onShip(action)}
         disabled={creating}
-        title={
-          creating
-            ? 'Wait for the current run to finish'
-            : 'Ask the agent to create a pull request from these changes'
-        }
+        title={creating ? 'Wait for the current run to finish' : action.title}
       >
-        Create PR
+        {action.label}
       </button>
     </div>
   )

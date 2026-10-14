@@ -9,6 +9,7 @@
  */
 
 import { diffLines, type DiffLine } from './diff'
+import type { RepoShipState } from './shipAction'
 
 export type FileChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
 
@@ -48,6 +49,12 @@ export interface WorkingTreeChanges {
   removed: number
   /** True when some files were omitted (e.g. an untracked-file cap was hit). */
   truncated?: boolean
+  /**
+   * Commit/remote facts that pick the ship action (Create PR vs Publish to
+   * GitHub vs Commit & push). Absent for non-repos; absent also means "unknown",
+   * which keeps the plain Create PR.
+   */
+  ship?: RepoShipState
 }
 
 /** Undo git's C-style quoting of a path with unusual characters. */
