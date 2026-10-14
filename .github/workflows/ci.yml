@@ -220,7 +220,7 @@ jobs:
         run: npm run test:e2e
       # Playwright's error context and traces, so a red e2e can be diagnosed from the run.
       - if: failure() && runner.os == 'macOS'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-results-${{ matrix.target }}
           retention-days: 7
@@ -228,7 +228,7 @@ jobs:
           if-no-files-found: ignore
       # Inspection-only build of this PR (never a published feed: the updater reads
       # Releases). Lets a reviewer install the PR's app without building it locally.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: houston-${{ matrix.target }}
           retention-days: 3
