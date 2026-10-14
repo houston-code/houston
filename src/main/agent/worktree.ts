@@ -49,6 +49,7 @@ const EMPTY_REPO: RepoInfo = {
   isRepo: false,
   root: '',
   currentBranch: null,
+  unborn: false,
   branches: [],
   isLinkedWorktreeRoot: false,
   exists: false
@@ -125,11 +126,22 @@ export async function getRepoInfo(
     return { ...EMPTY_REPO, exists: true }
   }
   let currentBranch: string | null = null
+  let unborn = false
   try {
     const b = (await exec(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).trim()
     currentBranch = b && b !== 'HEAD' ? b : null
   } catch {
-    // detached or unborn HEAD — leave null
+    // `rev-parse` fails only when HEAD has no commit (detached HEAD prints "HEAD").
+    // The branch still has a name, which symbolic-ref reports.
+    try {
+      const b = (await exec(['symbolic-ref', '--short', '-q', 'HEAD'], workspace)).trim()
+      if (b) {
+        currentBranch = b
+        unborn = true
+      }
+    } catch {
+      // leave null
+    }
   }
   let branches: string[] = []
   try {
@@ -141,7 +153,7 @@ export async function getRepoInfo(
   } catch {
     // best-effort — an empty list just means no base suggestions
   }
-  return { isRepo: true, root, currentBranch, branches, isLinkedWorktreeRoot, exists: true }
+  return { isRepo: true, root, currentBranch, unborn, branches, isLinkedWorktreeRoot, exists: true }
 }
 
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */
@@ -197,6 +209,23 @@ export async function createWorktree(
   const repo = await getRepoInfo(input.workspace, exec)
   if (!repo.isRepo) {
     throw new Error('This folder is not inside a git repository.')
+  }
+  if (!input.base && repo.unborn) {
+    // A freshly `git init`'d repo has an unborn HEAD: there is no commit to branch
+    // from, and git's own failure ("invalid reference: HEAD" plus --orphan hints)
+    // is opaque. Refuse before creating any directories. Other branches may still
+    // have commits (e.g. an earlier chat's worktree branch); suggest them as a base.
+    const others = repo.branches
+    const hint =
+      others.length > 0
+        ? ` Or pick an existing branch as the base (${others.slice(0, 3).join(', ')}${others.length > 3 ? ', …' : ''}).`
+        : ''
+    const what = repo.currentBranch ? `The branch "${repo.currentBranch}"` : 'This repository'
+    throw new Error(
+      `${what} has no commits yet, so there is nothing to branch a worktree from. ` +
+        'Make an initial commit first, or start the chat without a worktree.' +
+        hint
+    )
   }
   const path = worktreePath(repo.root, slugifyBranch(branch))
   mkdirSync(join(repo.root, WORKTREES_SUBDIR), { recursive: true })

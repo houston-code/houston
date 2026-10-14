@@ -490,6 +490,7 @@ export function registerIpc(): void {
         isRepo: false,
         root: '',
         currentBranch: null,
+        unborn: false,
         branches: [],
         isLinkedWorktreeRoot: false,
         exists: false

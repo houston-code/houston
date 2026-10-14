@@ -6,7 +6,7 @@ import {
   resolveContextWindow,
   type SessionUsage
 } from '@shared/usage'
-import { branchNameError } from '../lib/worktree'
+import { branchNameError, canCreateWorktree } from '../lib/worktree'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
 
@@ -84,7 +84,10 @@ export function ControlBar({
 
   // The worktree editor only makes sense for a fresh chat in a git repo.
   const showWorktreeEditor = newChat && repoInfo?.isRepo === true
-  const branchError = showWorktreeEditor && worktreeMode ? branchNameError(branchName, repoInfo.branches) : null
+  // No commit anywhere to branch from (fresh `git init`): offer only the branch badge.
+  const canWorktree = showWorktreeEditor && canCreateWorktree(repoInfo)
+  const worktreeOn = canWorktree && worktreeMode
+  const branchError = worktreeOn ? branchNameError(branchName, repoInfo.branches) : null
 
   // Always label the folder control with the repo (main worktree) name, never the
   // per-chat worktree directory — so it reads "myrepo", not "houston/feat-x".
@@ -115,7 +118,7 @@ export function ControlBar({
 
       {showWorktreeEditor && (
         <div className="control-bar__wt">
-          {worktreeMode ? (
+          {worktreeOn ? (
             <select
               className="control control--select"
               value={baseBranch}
@@ -123,9 +126,14 @@ export function ControlBar({
               aria-label="Base branch"
               onChange={(e) => onChangeBaseBranch(e.target.value)}
             >
-              {repoInfo.currentBranch && !repoInfo.branches.includes(repoInfo.currentBranch) && (
-                <option value={repoInfo.currentBranch}>{repoInfo.currentBranch} (current)</option>
-              )}
+              {/* Detached HEAD: '' means "branch from HEAD", so list it rather than
+                  letting the select display a branch it won't send. */}
+              {!repoInfo.currentBranch && <option value="">HEAD (detached)</option>}
+              {repoInfo.currentBranch &&
+                !repoInfo.unborn &&
+                !repoInfo.branches.includes(repoInfo.currentBranch) && (
+                  <option value={repoInfo.currentBranch}>{repoInfo.currentBranch} (current)</option>
+                )}
               {repoInfo.branches.map((b) => (
                 <option key={b} value={b}>
                   {b}
@@ -141,22 +149,25 @@ export function ControlBar({
               title="No worktree — this chat works directly on the repo's current branch"
             >
               ⑂ {repoInfo.currentBranch ?? 'detached HEAD'}
+              {repoInfo.unborn ? ' (no commits yet)' : ''}
             </span>
           )}
 
-          <label
-            className="control control--check"
-            title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
-          >
-            <input
-              type="checkbox"
-              checked={worktreeMode}
-              onChange={(e) => onToggleWorktree(e.target.checked)}
-            />
-            <span>⑂ New worktree</span>
-          </label>
+          {canWorktree && (
+            <label
+              className="control control--check"
+              title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
+            >
+              <input
+                type="checkbox"
+                checked={worktreeMode}
+                onChange={(e) => onToggleWorktree(e.target.checked)}
+              />
+              <span>⑂ New worktree</span>
+            </label>
+          )}
 
-          {worktreeMode && (
+          {worktreeOn && (
             <input
               className="control control--input"
               value={branchName}
