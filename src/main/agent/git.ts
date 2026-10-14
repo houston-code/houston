@@ -125,7 +125,13 @@ export async function gitContext(workspace: string, exec: GitExec = runGit): Pro
   try {
     branch = (await exec(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).trim()
   } catch {
-    return '' // not a git repo (or git unavailable)
+    // rev-parse also fails on an unborn HEAD (fresh `git init`, no commits yet);
+    // the symbolic ref still names that branch.
+    try {
+      branch = (await exec(['symbolic-ref', '--short', '-q', 'HEAD'], workspace)).trim()
+    } catch {
+      return '' // not a git repo (or git unavailable)
+    }
   }
   if (!branch) return ''
   let status = ''

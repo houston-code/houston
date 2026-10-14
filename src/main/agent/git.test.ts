@@ -62,6 +62,18 @@ describe('gitContext', () => {
     expect(await gitContext('/ws', exec)).toBe('')
   })
 
+  it('names an unborn branch (fresh repo, no commits yet) via symbolic-ref', async () => {
+    const exec = async (args: string[]): Promise<string> => {
+      if (args[0] === 'rev-parse') throw new Error("ambiguous argument 'HEAD'")
+      if (args[0] === 'symbolic-ref') return 'master\n'
+      if (args[0] === 'status') return '?? a.ts\n'
+      return ''
+    }
+    const s = await gitContext('/ws', exec)
+    expect(s).toContain('branch "master"')
+    expect(s).toContain('a.ts')
+  })
+
   it('still reports the branch if status fails', async () => {
     const exec = async (args: string[]): Promise<string> => {
       if (args[0] === 'rev-parse') return 'detached\n'
