@@ -86,6 +86,11 @@ export function buildSeatbeltProfile(
   const tmp = sbplPath(tmpdir())
   const writableRoots = rootList.map((r) => `  (subpath "${sbplPath(r)}")`).join('\n')
 
+  // Signals: `same-sandbox` lets a command stop the processes it started (build tools
+  // stop their own workers; `self` failed them with `kill EPERM`) while still denying
+  // host processes and other run_shell commands, since each sandbox-exec launch is its
+  // own sandbox. `children` misses grandchildren; `others` would reach the host.
+  // Conformance tests C5b and C2b pin both halves.
   return `(version 1)
 (deny default)
 (allow process-exec)
