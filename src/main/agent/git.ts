@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { isSafeGitRef } from '@shared/git'
-import { GIT_ENV, GIT_HARDENING } from './gitRead'
+import { GIT_ENV, GIT_HARDENING, uncommittedDiffBase } from './gitRead'
 
 export { isSafeGitRef }
 
@@ -183,14 +183,19 @@ export async function gitDiff(
   let diff = ''
   // Refuse an option-like base (defence in depth — callers should validate too).
   if (isSafeGitRef(base)) {
+    // On a repo with no commits `git diff HEAD` throws, and staged files are in
+    // neither that diff nor the untracked list: diff against the empty tree instead.
+    const ref =
+      base === 'HEAD'
+        ? await uncommittedDiffBase((args) => exec(args, workspace).catch(() => null))
+        : base
     try {
-      // `--` guards against `base` being read as a path; on a repo with no commits
-      // `git diff HEAD` throws (no HEAD) — the untracked list carries the review then.
+      // `--` guards against `base` being read as a path.
       // `--no-ext-diff`/`--no-textconv` block repo-config diff drivers from running
       // a program (defence in depth atop GIT_HARDENING; matches workingTree.ts).
-      diff = await exec(['diff', base, '--no-ext-diff', '--no-textconv', ...pathspec], workspace)
+      diff = await exec(['diff', ref, '--no-ext-diff', '--no-textconv', ...pathspec], workspace)
     } catch {
-      // invalid base (e.g. unborn HEAD) — fall back to no tracked diff
+      // invalid base — fall back to no tracked diff
     }
   }
   let untracked: string[] = []

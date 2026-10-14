@@ -73,3 +73,34 @@ export function runGitCapture(args: string[], cwd: string): Promise<GitCapture> 
     )
   })
 }
+
+/** Runs a git subcommand, resolving its stdout, or null when it fails. */
+export type GitTry = (args: string[]) => Promise<string | null>
+
+/** A {@link GitTry} over {@link runGitCapture} in `cwd`. */
+export function captureTry(cwd: string): GitTry {
+  return async (args) => {
+    const r = await runGitCapture(args, cwd)
+    return r.ok ? r.stdout : null
+  }
+}
+
+/** git's well-known empty tree, per object format; git resolves it without storing it. */
+const EMPTY_TREE: Record<string, string> = {
+  sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+  sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321'
+}
+
+/**
+ * The base to diff against for "everything uncommitted": `HEAD`, or the empty
+ * tree when HEAD has no commit yet (a fresh `git init`). `git diff HEAD` fails
+ * there, which silently dropped staged files: they are tracked, so the untracked
+ * listing doesn't carry them either. Against the empty tree every tracked file
+ * shows as added. Falls back to `HEAD` when the format can't be read.
+ */
+export async function uncommittedDiffBase(tryGit: GitTry): Promise<string> {
+  if ((await tryGit(['rev-parse', '--verify', '-q', 'HEAD^{commit}'])) !== null) return 'HEAD'
+  // --show-object-format needs git 2.25+; older git is SHA-1 only.
+  const format = (await tryGit(['rev-parse', '--show-object-format']))?.trim() || 'sha1'
+  return EMPTY_TREE[format] ?? 'HEAD'
+}

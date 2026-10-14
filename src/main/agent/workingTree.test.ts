@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectWorkingTreeChanges } from './workingTree'
 
-// Real git in a temp dir: the branch label depends on how git itself resolves
+// Real git in a temp dir: the branch label and diff base depend on how git resolves
 // HEAD in each state, which a mocked runner can't vouch for.
-describe('collectWorkingTreeChanges branch (real git)', () => {
+describe('collectWorkingTreeChanges (real git)', () => {
   let gitOk = true
   try {
     execFileSync('git', ['--version'], { stdio: 'ignore' })
@@ -47,6 +47,19 @@ describe('collectWorkingTreeChanges branch (real git)', () => {
       expect(res.isRepo).toBe(true)
       expect(res.branch).toBe('master')
       expect(res.files.map((f) => f.path)).toContain('a.txt')
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
+
+  maybe('includes staged files in a repo with no commits', async () => {
+    const repo = initUnborn('main')
+    try {
+      writeFileSync(join(repo, 'staged.txt'), 'fresh\n')
+      git(repo, 'add', 'staged.txt')
+      const res = await collectWorkingTreeChanges(repo)
+      expect(res.files.map((f) => f.path)).toContain('staged.txt')
+      expect(res.added).toBeGreaterThan(0)
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }

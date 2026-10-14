@@ -314,6 +314,36 @@ describe('isSafeGitRef', () => {
   })
 })
 
+describe('gitDiff on a repo with no commits (real git)', () => {
+  it('includes staged files, which are neither in `diff HEAD` nor untracked', { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-git-unborn-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'pipe' })
+      writeFileSync(join(dir, 'staged.txt'), 'fresh\n')
+      writeFileSync(join(dir, 'loose.txt'), 'loose\n')
+      execFileSync('git', ['add', 'staged.txt'], { cwd: dir, stdio: 'pipe' })
+      const d = await gitDiff(dir)
+      expect(d.isRepo).toBe(true)
+      expect(d.diff).toContain('+fresh')
+      expect(d.untracked).toEqual(['loose.txt'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves an explicit base alone', async () => {
+    const calls: string[][] = []
+    const exec = async (args: string[]): Promise<string> => {
+      calls.push(args)
+      if (args[0] === 'rev-parse') return 'true\n'
+      return ''
+    }
+    await gitDiff('/ws', 'main', [], exec)
+    expect(calls.find((a) => a[0] === 'diff')?.[1]).toBe('main')
+    expect(calls.some((a) => a.includes('HEAD^{commit}'))).toBe(false)
+  })
+})
+
 describe('git config-driven execution hardening (real repo)', () => {
   // gitContext/gitDiff run automatically and unapproved on workspace open. A repo
   // ships its own .git/config, so core.fsmonitor (run by `git status`) and
