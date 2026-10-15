@@ -102,7 +102,7 @@ describe('CI runs everything on every PR', () => {
 
   it('packages and tests on every platform it ships on', () => {
     const pkg = job('package')
-    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-latest']) {
+    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) {
       expect(pkg).toContain(`os: ${os}`)
     }
     // The macOS unit suite (real Seatbelt), the Windows sandbox suite, and the
@@ -114,8 +114,8 @@ describe('CI runs everything on every PR', () => {
 })
 
 describe('CI gates merge on the whole matrix', () => {
-  it('makes the required `build` check depend on every platform leg and the SBOM gate', () => {
-    expect(job('build')).toContain('needs: [package, sbom-conformance]')
+  it('makes the required `build` check depend on every platform leg, the SBOM gate, and workflow-lint', () => {
+    expect(job('build')).toContain('needs: [package, sbom-conformance, workflow-lint]')
   })
 
   it('fails `build` when a dependency fails, instead of skipping it to a pass', () => {
@@ -164,5 +164,33 @@ describe('CI validates every PR before it can merge', () => {
     // Queue merges are real pushes, so this trigger fires and main is checked after the
     // fact — the backstop for a broken two-PR combination that per-PR CI cannot see.
     expect(workflow).toMatch(/push:\n {4}branches: \[main\]/)
+  })
+})
+
+describe('CI lints its own workflows', () => {
+  it('runs actionlint and zizmor with pinned, verified installs', () => {
+    const lint = job('workflow-lint')
+    expect(lint).toContain('sha256sum -c -')
+    expect(lint).toContain('--require-hashes')
+    expect(lint).toMatch(/run: actionlint/)
+    expect(lint).toMatch(/run: zizmor .*--min-severity low --config \.github\/zizmor\.yml \.github\/workflows/)
+  })
+
+  it('lints queue candidates too, so the required `build` check never sees it skipped', () => {
+    expect(job('workflow-lint')).toContain("if: github.event_name != 'push'")
+  })
+})
+
+describe('CI alerts on a red main', () => {
+  it('files an issue when the post-merge run fails, since its actor is a bot', () => {
+    const alert = job('alert')
+    expect(alert).toContain("github.event_name == 'push'")
+    expect(alert).toContain('uses: ./.github/workflows/alert-on-failure.yml')
+    expect(alert).toContain('needs: [test, linux-sandbox]')
+    expect(alert).toContain("failed: ${{ contains(needs.*.result, 'failure') }}")
+  })
+
+  it('grants the alert only issue access', () => {
+    expect(job('alert')).toMatch(/permissions:\n {6}issues: write\n/)
   })
 })

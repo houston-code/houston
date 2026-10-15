@@ -27,41 +27,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Vulnerability gate. Runs BEFORE build (build `needs` it), so a known-vulnerable
-  # production closure aborts the release before anything is built or published, rather than
-  # failing mid-matrix after some legs already uploaded. Scans the same production SBOM the
-  # release ships (syft's lockfile scan), failing on a High/Critical with a fix available.
-  # only-fixed avoids dead-ending on an unpatchable finding; a finding assessed as
-  # not-exploitable is suppressed via the VEX document (.github/vex/houston.openvex.json).
-  scan:
-    timeout-minutes: 10
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
-          syft-version: v1.46.0
-      - name: Generate production SBOM for scanning
-        run: syft scan file:./package-lock.json -o cyclonedx-json@1.6=sbom.cyclonedx.json
-      - name: Scan SBOM for vulnerabilities (fail on fixable High/Critical)
-        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-        with:
-          sbom: sbom.cyclonedx.json
-          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
-          grype-version: v0.115.0
-          # Findings assessed as not-exploitable are suppressed via the VEX document
-          # (.github/vex/houston.openvex.json — see .github/vex/README.md).
-          vex: .github/vex/houston.openvex.json
-          severity-cutoff: high
-          only-fixed: true
-          output-format: table
-
-  # Native-layer gate, pre-build: scans the Electron runtime the lockfile pins (and the Chromium +
-  # Node it embeds) before anything is built. A runtime that a stable Electron already fixes fails
-  # the release here, in about a minute, rather than on the Linux leg's post-build scan after the
-  # serialized macOS and Windows legs have built and uploaded. Findings only a pre-release fixes
-  # are tracked in code scanning, not blocking. See native-vuln-scan.yml.
+  # Vulnerability gates. Run BEFORE build (build `needs` them), so a known-vulnerable
+  # production closure or Electron runtime aborts the release before anything is built or
+  # published, rather than failing mid-matrix after some legs already uploaded. The called
+  # workflow's `deps` job scans the npm closure the release ships; its `scan` job scans the
+  # native runtime. The same jobs run daily, so a finding rarely first appears here.
   native-scan:
     uses: ./.github/workflows/native-vuln-scan.yml
     permissions:
@@ -91,7 +61,7 @@ jobs:
       - run: echo "Release approval gate passed."
 
   build:
-    needs: [scan, native-scan, sbom-conformance, approve]
+    needs: [native-scan, sbom-conformance, approve]
     timeout-minutes: 40
     # The signing credentials (Apple notarization, the Developer ID .p12, and the GPG
     # release key) live in the `release` environment, not as repository secrets, so they
@@ -139,7 +109,7 @@ jobs:
             mac_x64_manual: true
             sbom_app: release/mac/Houston.app
             sbom_label: darwin-x64
-          - os: windows-latest
+          - os: windows-2025
             dist: dist:win
             sbom_app: release/win-unpacked
             sbom_label: win32-x64
@@ -160,6 +130,7 @@ jobs:
       # environment only admits runs on main, so github.sha is always a main commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -204,7 +175,7 @@ jobs:
           APPLE_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
-        # This step is a bash script (if/elif/else/fi). On windows-latest the default `run:`
+        # This step is a bash script (if/elif/else/fi). On Windows the default `run:`
         # shell is PowerShell, which can't parse it ("Missing '(' after 'if'"); force bash so
         # the one script runs identically on every matrix leg. Git Bash ships on the Windows
         # runner, and macOS/Linux already default to bash, so their behavior is unchanged.
@@ -383,9 +354,11 @@ jobs:
           grype-version: v0.115.0
       - name: Scan binary SBOM + apply native-layer policy
         if: matrix.os == 'ubuntu-22.04'
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
         run: |
           curl -fsSL --retry 3 https://releases.electronjs.org/releases.json -o electron-releases.json
-          "${{ steps.grype.outputs.cmd }}" sbom:sbom.binary.linux-x64.cyclonedx.json \
+          "$GRYPE" sbom:sbom.binary.linux-x64.cyclonedx.json \
             --only-fixed --vex .github/vex/houston.openvex.json -o table -o json=grype.binary.json
           mkdir -p release-vex
           node scripts/native-vuln-policy.mjs evaluate --report grype.binary.json \
@@ -579,6 +552,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -650,7 +624,7 @@ jobs:
     steps:
       # Same commit the build legs packaged and attested, so the tag marks what actually
       # shipped rather than whatever main has become by the end of the run.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1  # zizmor: ignore[artipacked] pushes with this token
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -669,8 +643,9 @@ jobs:
       - name: Put the Download table above the notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          tag="v${{ steps.meta.outputs.version }}"
+          tag="v$VERSION"
           {
             node scripts/release-downloads.mjs houston-code/houston "$tag"
             printf "\n## What's changed\n\n"
@@ -678,10 +653,12 @@ jobs:
           } > release-body.md
           cat release-body.md
       - name: Tag source repo at released commit
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          tag="v${{ steps.meta.outputs.version }}"
+          tag="v$VERSION"
           if git rev-parse "$tag" >/dev/null 2>&1; then
             # A re-run may find its own tag; a tag on any other commit means the release
             # would publish assets built from one commit under a tag naming another.
@@ -698,8 +675,9 @@ jobs:
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          tag="v${{ steps.meta.outputs.version }}"
+          tag="v$VERSION"
           # The build legs filled this draft; attach the notes, un-draft, mark latest.
           gh release edit "$tag" -R houston-code/houston \
             --draft=false --latest --notes-file release-body.md

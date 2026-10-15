@@ -26,12 +26,10 @@ on:
 
 permissions:
   contents: read
-  # cosign keyless signing (below) mints an OIDC token to get a short-lived Fulcio cert and
-  # records the signature in the public Rekor log. Unlike GitHub artifact attestation, this
-  # needs no attestation store, so it works on any user-owned repo, and anyone can
-  # verify against the public log with no repo access. Dispatching this workflow doubles as
-  # the end-to-end test of that signing path before the release pipeline relies on it.
-  id-token: write
+
+concurrency:
+  group: sbom
+  cancel-in-progress: true
 
 jobs:
   # Run the same conformance suite (NTIA / CISA FSCT3 / CycloneDX / Google-EO) the release
@@ -44,8 +42,18 @@ jobs:
   sbom:
     timeout-minutes: 10
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # cosign keyless signing (below) mints an OIDC token to get a short-lived Fulcio cert and
+      # records the signature in the public Rekor log. Unlike GitHub artifact attestation, this
+      # needs no attestation store, so it works on any user-owned repo, and anyone can
+      # verify against the public log with no repo access. Dispatching this workflow doubles as
+      # the end-to-end test of that signing path before the release pipeline relies on it.
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'

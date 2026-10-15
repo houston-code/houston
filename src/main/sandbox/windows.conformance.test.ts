@@ -4,7 +4,7 @@ import { runWithBackend } from './shared'
 import type { SandboxRunOptions } from './contract'
 
 /**
- * Windows backend conformance — runs ONLY on a real `windows-latest` CI host (skipped
+ * Windows backend conformance — runs ONLY on a real Windows CI host (skipped
  * everywhere else, including the macOS developer machine). It asserts the DECLARED
  * contract, never a confinement Windows can't deliver: the backend reports
  * `sandboxed: false`, a command actually runs with the right exit code, and a timeout

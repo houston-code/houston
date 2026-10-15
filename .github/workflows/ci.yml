@@ -55,6 +55,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
@@ -127,6 +129,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
@@ -163,7 +167,7 @@ jobs:
     # Not on push:[main]. The merge-queue candidate already ran this on the exact tree
     # that landed, so a second macOS/Windows pass after the merge would only repeat it.
     if: github.event_name != 'push'
-    # windows-latest defaults `run:` steps to PowerShell; force bash for the whole matrix so a
+    # Windows defaults `run:` steps to PowerShell; force bash for the whole matrix so a
     # bash step can't silently behave differently on the Windows leg.
     defaults:
       run:
@@ -196,11 +200,13 @@ jobs:
             os: macos-15-intel
             dist: dist:mac:x64
           - target: win-x64
-            os: windows-latest
+            os: windows-2025
             dist: dist:win
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
@@ -248,27 +254,79 @@ jobs:
     if: github.event_name != 'push'
     uses: ./.github/workflows/sbom-conformance.yml
 
-  # The required `build` check: one stable name over the whole platform matrix and the SBOM
-  # gate, so adding or renaming a matrix leg never needs a ruleset change.
+  # Lints the workflows themselves: actionlint (syntax, expressions, and shellcheck over every
+  # `run:` script) and zizmor (Actions security: template injection, credential persistence,
+  # over-broad permissions, impostor or known-vulnerable action commits). Both are pinned and
+  # hash-verified. Gated through `build`, so it is required without a ruleset change.
+  workflow-lint:
+    if: github.event_name != 'push'
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        env:
+          VERSION: 1.7.12
+          SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/${tarball}"
+          echo "${SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install zizmor
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check --require-hashes \
+            --only-binary :all: -r .github/workflow-lint/requirements.txt
+      - name: actionlint
+        run: actionlint -color
+      # Online mode (a token) adds the impostor-commit and known-vulnerable-actions audits,
+      # which check every pinned SHA against its upstream repository.
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --format github --min-severity low --config .github/zizmor.yml .github/workflows
+
+  # The required `build` check: one stable name over the whole platform matrix, the SBOM
+  # gate, and workflow-lint, so adding or renaming a matrix leg never needs a ruleset change.
   #
   # `always()` is load-bearing. A job whose dependency failed is SKIPPED by default, and a
   # skipped required check reports a PASS, so without it a red macOS leg would let the PR
   # merge. Here the job always runs and fails unless every dependency actually succeeded
   # (a skipped or cancelled dependency fails it too).
   build:
-    needs: [package, sbom-conformance]
+    needs: [package, sbom-conformance, workflow-lint]
     if: ${{ always() && github.event_name != 'push' }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every platform leg and the SBOM gate to pass
+      - name: Require every platform leg, the SBOM gate, and workflow-lint to pass
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           echo "dependency results: $RESULTS"
           for r in $RESULTS; do
-            [ "$r" = success ] || { echo "::error::a package leg or the SBOM gate did not succeed ($r)"; exit 1; }
+            [ "$r" = success ] || { echo "::error::a package leg, the SBOM gate, or workflow-lint did not succeed ($r)"; exit 1; }
           done
+
+  # Post-merge alert. Queue merges are pushed by github-merge-queue[bot], so GitHub's own
+  # failure notification for this run reaches no one, and a broken main would stay silent.
+  # Files (or closes) one issue through the same reusable alert the scheduled workflows use.
+  alert:
+    needs: [test, linux-sandbox]
+    if: >-
+      always() && github.event_name == 'push'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: CI on main
+      failed: ${{ contains(needs.*.result, 'failure') }}
 
   # Silent-clobber guard. A PR branched off an out-of-date main can, when merged,
   # delete files and revert code that landed while it was open — and CI does not
@@ -300,6 +358,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # The guard scans main's recent commits to decide whether a removal collides
           # with work that landed while this branch was open, so it needs real history,
           # not the default depth-1 checkout.

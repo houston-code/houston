@@ -16,12 +16,21 @@ on:
 permissions:
   contents: read
 
+# Called from CI, release-prepare and release-publish, `github.workflow` is the caller's name and
+# the PR number or run id keeps each caller run in its own group, so a call never waits on or
+# cancels another caller. Only a superseded run of the same PR (or a repeat dispatch) is dropped.
+concurrency:
+  group: sbom-conformance-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   conformance:
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
@@ -95,11 +104,19 @@ jobs:
 
       # Tool 3 — Google SBOM Conformance: EO + SPDX specs. (The Google spec hard-codes
       # "Organization: Google LLC" as the creator, so it is intentionally excluded.)
+      # A pinned Go, not whatever the runner image ships, so an image update can't change the
+      # toolchain under the checker. No cache: there is no go.sum in this workspace.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          cache: false
+      # -mod=readonly: build exactly what the pinned commit's go.mod and go.sum describe, and
+      # fail rather than resolve or upgrade a module on the fly.
       - name: Google SBOM conformance (EO + SPDX specs)
         run: |
           git clone --quiet https://github.com/google/sbom-conformance /tmp/gsc
           git -C /tmp/gsc -c advice.detachedHead=false checkout --quiet 22e1df80b49461d04733c3fc625429420618f563
-          out=$(cd /tmp/gsc && GOFLAGS=-mod=mod go run . --sbom "$GITHUB_WORKSPACE/sbom.spdx.json" --specs eo,spdx)
+          out=$(cd /tmp/gsc && GOFLAGS=-mod=readonly go run . --sbom "$GITHUB_WORKSPACE/sbom.spdx.json" --specs eo,spdx)
           echo "$out"
           echo "$out" | grep -q "The EO spec passed" || { echo "::error::Google EO spec failed"; exit 1; }
           echo "$out" | grep -q "The SPDX spec passed" || { echo "::error::Google SPDX spec failed"; exit 1; }

@@ -113,6 +113,8 @@ jobs:
           set -euo pipefail
 
           if [ -z "${NOTICES_PAT}" ]; then
+            # The backticks are literal Markdown in the annotation, not a substitution.
+            # shellcheck disable=SC2016
             echo '::error::THIRD-PARTY-NOTICES.md is out of date and no NOTICES_PAT Dependabot secret is set, so it cannot be committed back. Add one with `gh secret set NOTICES_PAT --app dependabot`, or regenerate the file locally with `npm run notices` and push it to this branch.'
             exit 1
           fi
