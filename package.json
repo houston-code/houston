@@ -47,6 +47,7 @@
     "eval": "vitest run --project evals",
     "eval:baseline": "HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_RECORD=1 vitest run --project evals",
     "notices": "node scripts/generate-notices.mjs",
+    "notices:check": "node scripts/generate-notices.mjs --check",
     "license-gate": "node scripts/license-gate.mjs",
     "test:e2e": "npm run build && playwright test",
     "icon": "node scripts/make-icon.mjs && bash scripts/make-icns.sh",

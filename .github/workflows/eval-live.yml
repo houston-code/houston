@@ -86,13 +86,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
       # The suite itself throws on a missing key rather than skipping, so this can't go green
-      # empty-handed. Assert it here anyway so a misconfigured secret reds the job at an obvious
+      # empty-handed. Assert it here, before the install, so a misconfigured secret reds the job at an obvious
       # step instead of surfacing as eight identical provider errors that read like a regression.
       - name: Require the model API key
         env:
@@ -100,9 +95,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::ANTHROPIC_API_KEY is empty/unset — the live eval suite cannot run. Set the repo secret."
+            echo "::error::ANTHROPIC_API_KEY is empty or unset, so the live eval suite cannot run. Set the repo secret."
             exit 1
           fi
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
       # Drives the real model against every fixture, grades each task against the recorded baseline,
       # and prints the scorecard (per-task pass rate, baseline delta, the tools each run reached for,
       # wall-clock, and estimated spend) to the job log. Fails on a regression, on an unrecorded

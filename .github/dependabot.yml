@@ -35,7 +35,11 @@ updates:
         versions: ['>=7']
   # Keep GitHub Actions pinned-SHAs up to date.
   - package-ecosystem: github-actions
-    directory: /
+    # The workflows, plus the composite actions under .github/actions/, which pin their own
+    # action SHAs.
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     # Same reasoning as npm above: a retagged or compromised action release gets a week
