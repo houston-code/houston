@@ -77,10 +77,7 @@ jobs:
           # shadow the token in the push URL below and the push would use the wrong
           # identity, which is a silent failure that looks like a permissions error.
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
+      - uses: ./.github/actions/setup-node
       # --ignore-scripts is load-bearing, not hygiene. This job exists to process a PR
       # that changes dependency versions, in a run that can reach a repo-write token; a
       # lifecycle script from a newly bumped package is the one place that token could

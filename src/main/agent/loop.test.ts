@@ -4359,7 +4359,7 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
     const r = await run({ provider, policy: 'full-auto', conversationId: 'conv-tier' })
     const results = r.events.filter((e) => e.type === 'tool_result')
     expect(results[1]?.type === 'tool_result' && results[1].output).toContain(
-      'read-only — resume it with dispatch_agent'
+      'read-only; resume it with dispatch_agent'
     )
   })
 

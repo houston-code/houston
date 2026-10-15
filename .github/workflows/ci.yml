@@ -57,11 +57,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: ./.github/actions/setup-node
         with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
+          install: full
       # License gate: no AGPL/copyleft/source-available license anywhere in the
       # installed dependency tree, and everything that ships must satisfy the
       # permissive allowlist. Policy + exceptions live in scripts/license-gate.mjs
@@ -71,10 +69,7 @@ jobs:
       # dependency closure, so this reuses the `npm ci` already done. Run unconditionally
       # rather than gated on a package-lock.json diff: the generator takes ~1s.
       - name: Check THIRD-PARTY-NOTICES.md is current
-        run: |
-          npm run notices
-          git diff --exit-code THIRD-PARTY-NOTICES.md \
-            || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
+        run: npm run notices:check
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
@@ -131,10 +126,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
+      - uses: ./.github/actions/setup-node
       - name: Set up bubblewrap + unprivileged user namespaces
         run: |
           sudo apt-get update
@@ -207,11 +199,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: ./.github/actions/setup-node
         with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
+          install: full
       - if: matrix.target == 'mac-arm64'
         run: npm test
       - if: runner.os == 'Windows'
@@ -289,7 +279,7 @@ jobs:
       - name: zizmor
         env:
           GH_TOKEN: ${{ github.token }}
-        run: zizmor --format github --min-severity low --config .github/zizmor.yml .github/workflows
+        run: zizmor --format github --min-severity low --config .github/zizmor.yml .github/workflows .github/actions
 
   # The required `build` check: one stable name over the whole platform matrix, the SBOM
   # gate, and workflow-lint, so adding or renaming a matrix leg never needs a ruleset change.

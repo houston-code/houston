@@ -1,0 +1,36 @@
+name: Set up Node and install dependencies
+description: >-
+  Node from .nvmrc, an optional npm download cache, and one of the repo's npm ci variants.
+  Every workflow uses this so the Node source, cache policy and install flags change in one
+  place. Run actions/checkout first.
+
+inputs:
+  install:
+    description: >-
+      full (npm ci, lifecycle scripts run), no-scripts (npm ci --ignore-scripts), production
+      (npm ci --omit=dev --ignore-scripts), or none.
+    default: none
+  cache:
+    description: Restore and save the ~/.npm download cache, keyed on package-lock.json.
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: '.nvmrc'
+        cache: ${{ inputs.cache == 'true' && 'npm' || '' }}
+    - name: npm ci (${{ inputs.install }})
+      if: inputs.install != 'none'
+      shell: bash
+      env:
+        INSTALL: ${{ inputs.install }}
+      run: |
+        set -euo pipefail
+        case "$INSTALL" in
+          full) npm ci ;;
+          no-scripts) npm ci --ignore-scripts ;;
+          production) npm ci --omit=dev --ignore-scripts ;;
+          *) echo "::error::unknown install mode '$INSTALL' (expected full, no-scripts, production or none)"; exit 1 ;;
+        esac

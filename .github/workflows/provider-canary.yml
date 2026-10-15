@@ -62,118 +62,83 @@ env:
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
 jobs:
-  anthropic:
-    # One tiny reasoning call per shipped Claude model plus install; 15 min mirrors ci.yml's `test`
-    # job. Each model is two 30s-capped attempts at most (src/main/providers/canary.ts), so even a
+  canary:
+    name: canary (${{ matrix.provider }})
+    # One tiny reasoning call per shipped model plus install; 15 min mirrors ci.yml's `test` job.
+    # Each model is two 30s-capped attempts at most (src/main/providers/canary.ts), so even a
     # provider-wide stall reds in ~1 min per model, well inside this.
     timeout-minutes: 15
     runs-on: ubuntu-24.04
+    strategy:
+      # Independent on purpose, so any provider can red without the others masking it.
+      fail-fast: false
+      matrix:
+        include:
+          # Anthropic: for every shipped Claude model, the exact thinking/output_config shape
+          # Houston builds; fails on a 400 (a removed/renamed param) or any stream error.
+          - provider: anthropic
+            key: ANTHROPIC_API_KEY
+            test: src/main/providers/anthropic.integration.test.ts
+          # OpenAI Responses API: for every shipped GPT-5/o-series model, the exact
+          # `reasoning: { effort, summary }` shape; fails on a 400, a 404 (a default model that
+          # is no longer served), or any stream error.
+          - provider: openai
+            key: OPENAI_API_KEY
+            test: src/main/providers/responses.integration.test.ts
+          # Gemini: the exact `thinkingConfig` shape on the 2.5 models (and deliberately none on
+          # 2.0-flash). gemini.ts throws rather than yielding an error event, so a rejected
+          # parameter surfaces as a thrown stream error.
+          - provider: gemini
+            key: GEMINI_API_KEY
+            test: src/main/providers/gemini.integration.test.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      # Fail LOUDLY instead of silently skipping. The canary is `describe.skipIf(!API_KEY)`, so a
-      # missing or empty secret would make it SKIP and the job go GREEN — a false green that hides
-      # exactly the drift this workflow exists to catch. Assert the key is present up front so a
-      # misconfigured secret reds the job instead.
-      - name: Require the Anthropic API key
+      # Fail LOUDLY instead of silently skipping, and before spending the install on it. Each
+      # canary is `describe.skipIf(!API_KEY)`, so a missing or empty secret would make it SKIP
+      # and the job go GREEN: a false green that hides exactly the drift this workflow exists to
+      # catch. The key is selected by literal name (no dynamic `secrets[...]` index), so each leg
+      # can only ever see its own secret.
+      - name: Require the API key
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          KEY_NAME: ${{ matrix.key }}
+          API_KEY: >-
+            ${{ matrix.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY
+            || matrix.provider == 'openai' && secrets.OPENAI_API_KEY
+            || matrix.provider == 'gemini' && secrets.GEMINI_API_KEY
+            || '' }}
         run: |
-          set -euo pipefail
-          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::ANTHROPIC_API_KEY is empty/unset — the live provider canary would silently skip (false green). Set the repo secret."
+          if [ -z "${API_KEY:-}" ]; then
+            echo "::error::${KEY_NAME} is empty or unset, so the live provider canary would silently skip (false green). Set the repo secret."
             exit 1
           fi
-      # Live call against the real Anthropic API: for every shipped Claude model it sends the exact
-      # thinking/output_config shape Houston builds and fails on a 400 (a removed/renamed param) or
-      # any stream error. The file self-skips without the key, but the guard step above already
-      # ensured it's set, so a skip here would itself be a bug.
-      - name: Anthropic live-API canary
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+      - name: Live-API canary
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: npx vitest run --project node src/main/providers/anthropic.integration.test.ts
+          KEY_NAME: ${{ matrix.key }}
+          TEST_FILE: ${{ matrix.test }}
+          API_KEY: >-
+            ${{ matrix.provider == 'anthropic' && secrets.ANTHROPIC_API_KEY
+            || matrix.provider == 'openai' && secrets.OPENAI_API_KEY
+            || matrix.provider == 'gemini' && secrets.GEMINI_API_KEY
+            || '' }}
+        run: |
+          set -euo pipefail
+          export "${KEY_NAME}=${API_KEY}"
+          unset API_KEY
+          npx vitest run --project node "$TEST_FILE"
 
-  openai:
-    # Same shape as the `anthropic` job above; see its comments. Independent on purpose — no
-    # `needs` — so either provider can red without the other masking it.
-    timeout-minutes: 15
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      # Same false-green guard as the Anthropic leg: the canary self-skips without the key, so a
-      # misconfigured secret must red the job rather than pass as a no-op.
-      - name: Require the OpenAI API key
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::OPENAI_API_KEY is empty/unset — the live provider canary would silently skip (false green). Set the repo secret."
-            exit 1
-          fi
-      # Live call against the real OpenAI Responses API: for every shipped GPT-5/o-series model it
-      # sends the exact `reasoning: { effort, summary }` shape Houston builds and fails on a 400
-      # (removed/renamed param), a 404 (a default model that's no longer served), or any stream error.
-      - name: OpenAI live-API canary
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: npx vitest run --project node src/main/providers/responses.integration.test.ts
-
-  gemini:
-    # Same shape as the legs above; see the `anthropic` job's comments. Independent on purpose — no
-    # `needs` — so any provider can red without the others masking it.
-    timeout-minutes: 15
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      # Same false-green guard as the other legs: the canary self-skips without the key, so a
-      # misconfigured secret must red the job rather than pass as a no-op.
-      - name: Require the Gemini API key
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GEMINI_API_KEY:-}" ]; then
-            echo "::error::GEMINI_API_KEY is empty/unset — the live provider canary would silently skip (false green). Set the repo secret."
-            exit 1
-          fi
-      # Live call against the real Gemini API: sends the exact `thinkingConfig` shape Houston builds
-      # on the 2.5 models (and deliberately none on 2.0-flash), so a removed/renamed param or a
-      # broken thinking gate fails here. gemini.ts throws rather than yielding an error event, so a
-      # rejected parameter surfaces as a thrown stream error.
-      - name: Gemini live-API canary
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: npx vitest run --project node src/main/providers/gemini.integration.test.ts
   # Tell a human when the canary breaks — GitHub's own failure notification for a scheduled
   # run goes to github-actions[bot]. A provider retiring a param is exactly the drift this
   # canary exists to catch, so a silent red one defeats the point. Scheduled runs only; a
   # hand-dispatched run already notifies whoever started it. See alert-on-failure.yml.
   alert:
-    # MUST list every canary leg: `contains(needs.*.result, 'failure')` only sees jobs named
-    # here, so a leg missing from this list reds silently — the exact outcome this job exists
-    # to prevent. Add new provider legs here as well as above.
-    needs: [anthropic, openai, gemini]
+    # A failed matrix leg fails the `canary` job as a whole, so a new provider added to the
+    # matrix above is covered here without listing it.
+    needs: [canary]
     if: >-
       always() && github.event_name == 'schedule'
       && !cancelled() && !contains(needs.*.result, 'cancelled')
