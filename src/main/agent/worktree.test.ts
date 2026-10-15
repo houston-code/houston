@@ -297,15 +297,38 @@ describe('removeWorktree', () => {
     expect(calls).toContainEqual(['branch', '-d', 'feat/x'])
   })
 
-  it('keeps a dirty worktree instead of forcing it', async () => {
+  it('keeps a dirty worktree instead of forcing it, with a readable message', async () => {
+    const calls: string[][] = []
     const exec: GitRun = async (args) => {
-      if (args[1] === 'remove') throw new Error('contains modified or untracked files')
+      calls.push(args)
+      if (args[1] === 'remove') {
+        throw new Error(
+          `fatal: '${wt.path}' contains modified or untracked files, use --force to delete it`
+        )
+      }
       return ''
     }
     const res = await removeWorktree(wt, {}, exec)
     expect(res.removed).toBe(false)
     expect(res.branchDeleted).toBe(false)
-    expect(res.message).toMatch(/modified or untracked/)
+    expect(res.message).toMatch(/uncommitted or untracked changes/)
+    expect(res.message).toContain('feat/x')
+    expect(res.message).toContain(wt.path)
+    // Never echo git's raw "fatal:" text or its --force hint at the user.
+    expect(res.message).not.toMatch(/fatal:|--force/)
+    // And never touch the branch when the worktree stayed.
+    expect(calls.some((a) => a[0] === 'branch')).toBe(false)
+  })
+
+  it('strips git’s fatal: prefix from other removal failures', async () => {
+    const exec: GitRun = async () => {
+      throw new Error(`fatal: '${wt.path}' is not a working tree`)
+    }
+    const res = await removeWorktree(wt, {}, exec)
+    expect(res.removed).toBe(false)
+    expect(res.message).toBe(
+      `Couldn't remove the worktree for branch "feat/x": '${wt.path}' is not a working tree`
+    )
   })
 
   it('keeps an unmerged branch but still removes the worktree', async () => {
@@ -441,6 +464,9 @@ describe('worktree integration (real git)', () => {
       const res = await removeWorktree(wt)
       expect(res.removed).toBe(false)
       expect(existsSync(wt.path)).toBe(true)
+      // Real git's refusal maps to the readable message, not raw stderr.
+      expect(res.message).toMatch(/uncommitted or untracked changes/)
+      expect(res.message).not.toMatch(/fatal:|--force/)
       // ...but a forced removal does tear it down.
       const forced = await removeWorktree(wt, { force: true })
       expect(forced.removed).toBe(true)
