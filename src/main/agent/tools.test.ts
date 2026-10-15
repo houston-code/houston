@@ -14,7 +14,7 @@ import {
   utimesSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import {
   getTool,
@@ -43,7 +43,7 @@ import {
 } from './tools'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
-import { registerShell } from './shells'
+import { readShellOutput, registerShell } from './shells'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
 import { prNoticeFromToolResult } from '@shared/prNotice'
@@ -57,7 +57,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  rmSync(workspace, { recursive: true, force: true })
+  // Retries: Windows refuses to remove a directory a just-exited process still has as
+  // its cwd (EBUSY) for a few milliseconds; rmSync's retry is the documented remedy.
+  rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 const run = (name: string, args: Record<string, unknown>): Promise<string> =>
@@ -614,10 +616,11 @@ describe('apply_patch rollback on a phase-2 failure', () => {
     ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
 
   // These drive a REAL write failure by making a directory unwritable, which is the
-  // only honest way to exercise the commit phase. Root ignores the permission bits,
-  // so there is nothing to trigger there.
+  // only honest way to exercise the commit phase. Root ignores the permission bits, and
+  // Windows does not apply POSIX mode bits to directories at all, so there is nothing to
+  // trigger on either. The rollback code is platform-independent and runs on Linux/macOS.
   const asRoot = typeof process.getuid === 'function' && process.getuid() === 0
-  const maybe = asRoot ? it.skip : it
+  const maybe = asRoot || process.platform === 'win32' ? it.skip : it
 
   /** A directory the patch can compute a write into but not actually perform one in. */
   const lockedDir = (): string => {
@@ -895,7 +898,8 @@ describe('list and search', () => {
     try {
       await run('write_file', { path: 'src/app.ts', content: 'console.log(1)\nconst y = 2\n' })
       const out = await run('ast_grep', { pattern: 'console.log($A)', lang: 'ts' })
-      expect(out).toContain('src/app.ts:1:')
+      // Native separators: ast-grep prints `src\\app.ts` on Windows.
+      expect(out).toContain(`${join('src', 'app.ts')}:1:`)
     } finally {
       if (prev === undefined) delete process.env.HOUSTON_AST_GREP
       else process.env.HOUSTON_AST_GREP = prev
@@ -984,16 +988,16 @@ describe('glob', () => {
     await run('write_file', { path: 'src/nested/b.ts', content: 'y' })
     await run('write_file', { path: 'src/notes.md', content: 'z' })
     const out = (await run('glob', { pattern: '**/*.ts' })).split('\n')
-    expect(out).toContain('src/a.ts')
-    expect(out).toContain('src/nested/b.ts')
-    expect(out).not.toContain('src/notes.md')
+    expect(out).toContain(join('src', 'a.ts'))
+    expect(out).toContain(join('src', 'nested', 'b.ts'))
+    expect(out).not.toContain(join('src', 'notes.md'))
   })
 
   it('matches the pattern relative to a scoped path', async () => {
     await run('write_file', { path: 'src/top.json', content: '{}' })
     await run('write_file', { path: 'src/deep/inner.json', content: '{}' })
     const out = (await run('glob', { pattern: '*.json', path: 'src' })).split('\n')
-    expect(out).toEqual(['src/top.json']) // *.json is shallow; inner.json needs **
+    expect(out).toEqual([join('src', 'top.json')]) // *.json is shallow; inner.json needs **
   })
 
   it('skips build dirs and dotfiles', async () => {
@@ -1636,7 +1640,11 @@ describe('run_shell missing-runtime hint', () => {
 describe('background shell tools', () => {
   it('run_shell background returns a shell id message', async () => {
     const out = await run('run_shell', { command: 'echo hi', background: true })
-    expect(out).toMatch(/Started background shell \w+/)
+    const id = /Started background shell (\w+)/.exec(out)?.[1]
+    expect(id).toBeDefined()
+    // Let it finish before cleanup: a shell still running in the workspace holds it as
+    // its cwd, and Windows won't remove the directory under it.
+    await vi.waitFor(() => expect(readShellOutput(id!).running).toBe(false), { timeout: 10_000 })
   })
 
   it('read_shell_output reports an unknown id', async () => {
@@ -1730,15 +1738,15 @@ describe('workspace containment', () => {
 
 describe('resolveInRoots (multi-root containment)', () => {
   it('allows relative paths within the primary root', () => {
-    expect(resolveInRoots(['/ws'], 'src/a.ts')).toBe('/ws/src/a.ts')
+    expect(resolveInRoots(['/ws'], 'src/a.ts')).toBe(resolve('/ws/src/a.ts'))
   })
 
   it('allows an absolute path inside any allowed root', () => {
-    expect(resolveInRoots(['/ws', '/other'], '/other/lib/x.ts')).toBe('/other/lib/x.ts')
+    expect(resolveInRoots(['/ws', '/other'], '/other/lib/x.ts')).toBe(resolve('/other/lib/x.ts'))
   })
 
   it('allows a root directory itself', () => {
-    expect(resolveInRoots(['/ws', '/other'], '/other')).toBe('/other')
+    expect(resolveInRoots(['/ws', '/other'], '/other')).toBe(resolve('/other'))
   })
 
   it('rejects a path outside every root', () => {

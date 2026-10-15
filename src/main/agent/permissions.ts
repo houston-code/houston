@@ -1,5 +1,5 @@
 import { homedir, tmpdir } from 'node:os'
-import { resolve, relative, isAbsolute } from 'node:path'
+import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
 import type { PermissionRule } from '@shared/types'
 
 /**
@@ -163,7 +163,10 @@ function scratchDirs(): string[] {
  * so `/tmp/../etc/passwd` normalizes to `/etc/passwd` and is not exempt.
  */
 function isScratchTarget(abs: string): boolean {
-  if (STDIO_DEVICE_RE.test(resolve(abs))) return true
+  // POSIX-normalized, not host-resolved: on Windows `resolve('/dev/null')` is
+  // `D:\\dev\\null`, yet `/dev/null` is what Git Bash (and every POSIX shell) means.
+  // normalize still collapses `..`, so `/dev/null/../../etc/passwd` is not exempt.
+  if (STDIO_DEVICE_RE.test(posix.normalize(abs.replaceAll('\\', '/')))) return true
   return isWithinRoots(abs, scratchDirs())
 }
 
@@ -326,8 +329,10 @@ function pathPatternMatches(rawPattern: string, roots: string[], subject: string
   if (/^[*/]+$/.test(raw)) return true
   for (const cand of candidatePatternPaths(raw, roots)) {
     if (globMatches(cand, subject)) return true
-    // Bare directory prefix: `src` (→ `<root>/src`) covers `<root>/src/a.ts`.
-    if (subject === cand || subject.startsWith(`${cand}/`)) return true
+    // Bare directory prefix: `src` (→ `<root>/src`) covers `<root>/src/a.ts`. Both the
+    // host separator and `/`: resolved paths use `\\` on Windows, and a deny on a
+    // directory must still fire for the files inside it there.
+    if (subject === cand || subject.startsWith(`${cand}${sep}`) || subject.startsWith(`${cand}/`)) return true
   }
   return false
 }

@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { posix, win32 } from 'node:path'
 import { APP_NAME } from '@shared/constants'
 import type { PermissionRule } from '@shared/types'
 import { parseTightenOnlyRules } from './permissions'
@@ -66,13 +66,13 @@ export interface ManagedPathDeps {
 export function resolveManagedPolicyPath(deps: ManagedPathDeps = {}): string {
   const platform = deps.platform ?? process.platform
   if (platform === 'darwin') {
-    return join('/Library', 'Application Support', APP_NAME, MANAGED_SETTINGS_FILE)
+    return posix.join('/Library', 'Application Support', APP_NAME, MANAGED_SETTINGS_FILE)
   }
   if (platform === 'win32') {
-    return join('C:\\ProgramData', APP_NAME, MANAGED_SETTINGS_FILE)
+    return win32.join('C:\\ProgramData', APP_NAME, MANAGED_SETTINGS_FILE)
   }
   // Linux / other POSIX: the conventional lowercase name under /etc.
-  return join('/etc', APP_NAME.toLowerCase(), MANAGED_SETTINGS_FILE)
+  return posix.join('/etc', APP_NAME.toLowerCase(), MANAGED_SETTINGS_FILE)
 }
 
 export interface ManagedPolicy {

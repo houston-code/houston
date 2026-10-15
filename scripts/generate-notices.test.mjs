@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { join } from 'node:path'
 import {
   normalizeLicense,
   homepageOf,
@@ -51,20 +52,20 @@ describe('homepageOf', () => {
 describe('readLicenseText', () => {
   const dir = '/pkg'
   it('returns the first non-empty license file found', () => {
-    const exists = (p) => p === '/pkg/LICENSE'
+    const exists = (p) => p === join(dir, 'LICENSE')
     const read = () => '  MIT License\n(c) X  '
     expect(readLicenseText(dir, { exists, read })).toBe('MIT License\n(c) X')
   })
 
   it('skips an empty file and keeps looking', () => {
     const seen = []
-    const exists = (p) => p === '/pkg/LICENSE' || p === '/pkg/COPYING'
+    const exists = (p) => p === join(dir, 'LICENSE') || p === join(dir, 'COPYING')
     const read = (p) => {
       seen.push(p)
       return p.endsWith('COPYING') ? 'real text' : '   '
     }
     expect(readLicenseText(dir, { exists, read })).toBe('real text')
-    expect(seen).toContain('/pkg/LICENSE')
+    expect(seen).toContain(join(dir, 'LICENSE'))
   })
 
   it('returns null when no license file exists', () => {

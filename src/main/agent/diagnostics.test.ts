@@ -31,16 +31,16 @@ describe('diagnostics: extension → checker mapping', () => {
   })
 
   it('is case-insensitive on the extension', () => {
-    const c = checkerFor('Main.PY', { env: { PATH: '/b' }, exists: (p) => p === '/b/ruff' })
+    const c = checkerFor('Main.PY', { platform: 'linux', env: { PATH: '/b' }, exists: (p) => p === '/b/ruff' })
     expect(c?.bin).toBe('ruff')
   })
 
   it('checkerFor prefers ruff but falls back to pyflakes', () => {
-    expect(checkerFor('a.py', { env: { PATH: '' }, exists: () => false })).toBeNull()
+    expect(checkerFor('a.py', { platform: 'linux', env: { PATH: '' }, exists: () => false })).toBeNull()
     expect(
-      checkerFor('a.py', { env: { PATH: '/b' }, exists: (p) => p === '/b/pyflakes' })?.bin
+      checkerFor('a.py', { platform: 'linux', env: { PATH: '/b' }, exists: (p) => p === '/b/pyflakes' })?.bin
     ).toBe('pyflakes')
-    expect(checkerFor('a.py', { env: { PATH: '/b' }, exists: (p) => p.endsWith('/ruff') })?.bin).toBe(
+    expect(checkerFor('a.py', { platform: 'linux', env: { PATH: '/b' }, exists: (p) => p.endsWith('/ruff') })?.bin).toBe(
       'ruff'
     )
   })

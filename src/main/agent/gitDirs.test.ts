@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { gitWritableRoots, type GitDirsIo } from './gitDirs'
 
 /**
@@ -11,15 +11,23 @@ import { gitWritableRoots, type GitDirsIo } from './gitDirs'
  * anything else is 'other' (missing). realpath is identity (no symlinks to model).
  */
 function fakeIo(files: Record<string, string>, dirs: string[] = []): GitDirsIo {
+  // Keyed by `resolve`, so a POSIX-literal fixture and the host-native paths the code builds
+  // (on Windows: `D:\repo\.git` for `/repo/.git`) name the same entry.
+  const f = new Map(Object.entries(files).map(([k, v]) => [resolve(k), v]))
+  const d = new Set(dirs.map((x) => resolve(x)))
   return {
-    kindOf: (p) => (p in files ? 'file' : dirs.includes(p) ? 'dir' : 'other'),
+    kindOf: (p) => (f.has(resolve(p)) ? 'file' : d.has(resolve(p)) ? 'dir' : 'other'),
     readText: (p) => {
-      if (!(p in files)) throw new Error(`ENOENT: ${p}`)
-      return files[p]
+      const t = f.get(resolve(p))
+      if (t === undefined) throw new Error(`ENOENT: ${p}`)
+      return t
     },
     realpath: (p) => p
   }
 }
+
+/** Compare paths as the filesystem would: host-resolved (a no-op on POSIX). */
+const norm = (paths: string[]): string[] => paths.map((p) => resolve(p))
 
 describe('gitWritableRoots (injected io)', () => {
   it('returns the worktree git dir AND the common dir for a linked worktree', () => {
@@ -36,7 +44,7 @@ describe('gitWritableRoots (injected io)', () => {
       ['/repo/.git/objects']
     )
     // commondir `../..` resolved against the git dir = the main repo's `.git`.
-    expect(gitWritableRoots(ws, io)).toEqual([gitDir, '/repo/.git'])
+    expect(norm(gitWritableRoots(ws, io))).toEqual(norm([gitDir, '/repo/.git']))
   })
 
   it('returns [] for a plain checkout (.git is a real directory)', () => {
@@ -60,7 +68,7 @@ describe('gitWritableRoots (injected io)', () => {
       },
       [join(gitDir, 'objects')]
     )
-    expect(gitWritableRoots(ws, io)).toEqual([gitDir])
+    expect(norm(gitWritableRoots(ws, io))).toEqual(norm([gitDir]))
   })
 
   it('resolves a relative gitdir pointer against the workspace', () => {
@@ -75,7 +83,7 @@ describe('gitWritableRoots (injected io)', () => {
       },
       ['/repo/.git/objects']
     )
-    expect(gitWritableRoots(ws, io)).toEqual([gitDir, '/repo/.git'])
+    expect(norm(gitWritableRoots(ws, io))).toEqual(norm([gitDir, '/repo/.git']))
   })
 
   it('honors an absolute commondir pointer', () => {
@@ -90,7 +98,7 @@ describe('gitWritableRoots (injected io)', () => {
       },
       ['/elsewhere/git/objects']
     )
-    expect(gitWritableRoots(ws, io)).toEqual([gitDir, '/elsewhere/git'])
+    expect(norm(gitWritableRoots(ws, io))).toEqual(norm([gitDir, '/elsewhere/git']))
   })
 
   it('drops a git dir that already lives inside the workspace', () => {
@@ -125,7 +133,7 @@ describe('gitWritableRoots (injected io)', () => {
       },
       [join(gitDir, 'objects')]
     )
-    expect(gitWritableRoots(ws, io)).toEqual([gitDir])
+    expect(norm(gitWritableRoots(ws, io))).toEqual(norm([gitDir]))
   })
 
   // --- SECURITY: hostile `.git` pointer files must not widen the writable roots
@@ -172,7 +180,7 @@ describe('gitWritableRoots (injected io)', () => {
       [join(gitDir, 'HEAD')]: 'ref: refs/heads/wt\n',
       [join(gitDir, 'commondir')]: '/\n'
     })
-    expect(gitWritableRoots(ws, io)).toEqual([gitDir])
+    expect(norm(gitWritableRoots(ws, io))).toEqual(norm([gitDir]))
   })
 })
 
@@ -194,7 +202,9 @@ describe('gitWritableRoots (real git worktree)', () => {
   })()
 
   it.runIf(hasGit)('resolves the real per-worktree dir and common dir', () => {
-    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitdirs-')))
+    // .native: on Windows plain realpathSync keeps 8.3 short names (RUNNER~1), while git
+    // writes the long name into the worktree pointer.
+    const tmp = realpathSync.native(mkdtempSync(join(tmpdir(), 'houston-gitdirs-')))
     try {
       const main = join(tmp, 'main')
       const git = (args: string[], cwd: string): void => {
@@ -207,8 +217,8 @@ describe('gitWritableRoots (real git worktree)', () => {
       const wt = join(tmp, 'wt')
       git(['worktree', 'add', '-q', '-b', 'feat', wt], main)
 
-      const roots = gitWritableRoots(realpathSync(wt))
-      const commonDir = realpathSync(join(main, '.git'))
+      const roots = gitWritableRoots(realpathSync.native(wt)).map((p) => resolve(p))
+      const commonDir = realpathSync.native(join(main, '.git'))
       const worktreeDir = join(commonDir, 'worktrees', 'wt')
       expect(roots).toContain(worktreeDir)
       expect(roots).toContain(commonDir)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { delimiter, join } from 'node:path'
+import { win32 } from 'node:path'
 import { resolveGh, runGh, githubContext } from './github'
 
 describe('resolveGh', () => {
@@ -15,8 +15,9 @@ describe('resolveGh', () => {
 
   it('ignores the override when it does not exist and falls back to PATH', () => {
     const got = resolveGh({
-      env: { HOUSTON_GH: '/missing/gh', PATH: ['/a', '/b'].join(delimiter) },
-      exists: has(['/b/gh'])
+      env: { HOUSTON_GH: '/missing/gh', PATH: '/a:/b' },
+      exists: has(['/b/gh']),
+      platform: 'linux'
     })
     expect(got).toBe('/b/gh')
   })
@@ -35,16 +36,16 @@ describe('resolveGh', () => {
     const got = resolveGh({
       platform: 'win32',
       env: { PATH: dir },
-      exists: has([join(dir, 'gh.exe')])
+      exists: has([win32.join(dir, 'gh.exe')])
     })
-    expect(got).toBe(join(dir, 'gh.exe'))
+    expect(got).toBe(win32.join(dir, 'gh.exe'))
   })
 })
 
 describe('runGh', () => {
   it('maps a successful command to ok + stdout', async () => {
-    // /bin/echo stands in for gh: a real binary that exits 0 with stdout.
-    const r = await runGh('/bin/echo')(['hello world'], process.cwd())
+    // Node stands in for gh: a real binary on every platform that exits 0 with stdout.
+    const r = await runGh(process.execPath)(['-e', 'console.log("hello world")'], process.cwd())
     expect(r.ok).toBe(true)
     expect(r.code).toBe(0)
     expect(r.stdout.trim()).toBe('hello world')
@@ -57,7 +58,7 @@ describe('runGh', () => {
   })
 
   it('maps a non-zero exit to ok:false with a numeric code', async () => {
-    const r = await runGh('/bin/sh')(['-c', 'exit 3'], process.cwd())
+    const r = await runGh(process.execPath)(['-e', 'process.exit(3)'], process.cwd())
     expect(r.ok).toBe(false)
     expect(r.code).toBe(3)
   })

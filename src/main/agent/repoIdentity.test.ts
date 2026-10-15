@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { resolveRepo } from './repoIdentity'
 import type { GitDirsIo } from './gitDirs'
 
@@ -18,15 +18,25 @@ function fakeIo(
   dirs: string[] = [],
   links: Record<string, string> = {}
 ): GitDirsIo {
+  // Keyed by `resolve`, and realpath returns a resolved path like the real one does, so
+  // POSIX-literal fixtures match the host-native paths the code builds (on Windows,
+  // `D:\repo\.git` for `/repo/.git`).
+  const f = new Map(Object.entries(files).map(([k, v]) => [resolve(k), v]))
+  const d = new Set(dirs.map((x) => resolve(x)))
+  const l = new Map(Object.entries(links).map(([k, v]) => [resolve(k), resolve(v)]))
   return {
-    kindOf: (p) => (p in files ? 'file' : dirs.includes(p) ? 'dir' : 'other'),
+    kindOf: (p) => (f.has(resolve(p)) ? 'file' : d.has(resolve(p)) ? 'dir' : 'other'),
     readText: (p) => {
-      if (!(p in files)) throw new Error(`ENOENT: ${p}`)
-      return files[p]
+      const t = f.get(resolve(p))
+      if (t === undefined) throw new Error(`ENOENT: ${p}`)
+      return t
     },
-    realpath: (p) => links[p] ?? p
+    realpath: (p) => l.get(resolve(p)) ?? resolve(p)
   }
 }
+
+/** A fixture path as the host resolves it (a no-op on POSIX). */
+const R = (p: string): string => resolve(p)
 
 /** The expected 16-hex key for a given anchor, mirroring the module's derivation. */
 function keyOf(anchor: string): string {
@@ -39,10 +49,10 @@ describe('resolveRepo (injected io)', () => {
     const id = resolveRepo('/repo', io)
     expect(id).toEqual({
       kind: 'git',
-      workspace: '/repo',
-      root: '/repo',
-      commonDir: '/repo/.git',
-      key: keyOf('/repo/.git')
+      workspace: R('/repo'),
+      root: R('/repo'),
+      commonDir: R('/repo/.git'),
+      key: keyOf(R('/repo/.git'))
     })
   })
 
@@ -58,18 +68,18 @@ describe('resolveRepo (injected io)', () => {
     const main = resolveRepo('/repo', io)
     const worktree = resolveRepo('/repo/.houston/worktrees/feat', io)
 
-    expect(main.key).toBe(keyOf('/repo/.git'))
+    expect(main.key).toBe(keyOf(R('/repo/.git')))
     expect(worktree.key).toBe(main.key) // the headline property
-    expect(worktree.commonDir).toBe('/repo/.git')
-    expect(worktree.root).toBe('/repo')
+    expect(worktree.commonDir).toBe(R('/repo/.git'))
+    expect(worktree.root).toBe(R('/repo'))
     expect(worktree.kind).toBe('git')
   })
 
   it('maps a subdirectory of a plain repo up to the repo', () => {
     const io = fakeIo({}, ['/repo/.git'])
     const sub = resolveRepo('/repo/src/main', io)
-    expect(sub.commonDir).toBe('/repo/.git')
-    expect(sub.root).toBe('/repo')
+    expect(sub.commonDir).toBe(R('/repo/.git'))
+    expect(sub.root).toBe(R('/repo'))
     expect(sub.key).toBe(resolveRepo('/repo', io).key)
   })
 
@@ -82,7 +92,7 @@ describe('resolveRepo (injected io)', () => {
       ['/repo/.git']
     )
     const deep = resolveRepo('/repo/.houston/worktrees/feat/src/lib', io)
-    expect(deep.commonDir).toBe('/repo/.git')
+    expect(deep.commonDir).toBe(R('/repo/.git'))
     expect(deep.key).toBe(resolveRepo('/repo', io).key)
   })
 
@@ -92,8 +102,8 @@ describe('resolveRepo (injected io)', () => {
       '/repo/.git/worktrees/wt/commondir': '../..\n'
     })
     const id = resolveRepo('/repo/wt', io)
-    expect(id.commonDir).toBe('/repo/.git')
-    expect(id.key).toBe(keyOf('/repo/.git'))
+    expect(id.commonDir).toBe(R('/repo/.git'))
+    expect(id.key).toBe(keyOf(R('/repo/.git')))
   })
 
   it('honors an absolute commondir pointer', () => {
@@ -102,18 +112,18 @@ describe('resolveRepo (injected io)', () => {
       '/elsewhere/git/worktrees/wt/commondir': '/elsewhere/git\n'
     })
     const id = resolveRepo('/a/wt', io)
-    expect(id.commonDir).toBe('/elsewhere/git')
-    expect(id.root).toBe('/elsewhere')
-    expect(id.key).toBe(keyOf('/elsewhere/git'))
+    expect(id.commonDir).toBe(R('/elsewhere/git'))
+    expect(id.root).toBe(R('/elsewhere'))
+    expect(id.key).toBe(keyOf(R('/elsewhere/git')))
   })
 
   it('treats a submodule (.git file, no commondir) as its own common dir', () => {
     const io = fakeIo({ '/super/sub/.git': 'gitdir: /super/.git/modules/sub\n' })
     const id = resolveRepo('/super/sub', io)
     expect(id.kind).toBe('git')
-    expect(id.commonDir).toBe('/super/.git/modules/sub')
-    expect(id.root).toBe('/super/sub')
-    expect(id.key).toBe(keyOf('/super/.git/modules/sub'))
+    expect(id.commonDir).toBe(R('/super/.git/modules/sub'))
+    expect(id.root).toBe(R('/super/sub'))
+    expect(id.key).toBe(keyOf(R('/super/.git/modules/sub')))
   })
 
   it('falls back to the git dir when the commondir file is blank', () => {
@@ -122,15 +132,15 @@ describe('resolveRepo (injected io)', () => {
       '/repo/.git/worktrees/wt/commondir': '\n'
     })
     const id = resolveRepo('/repo/wt', io)
-    expect(id.commonDir).toBe('/repo/.git/worktrees/wt')
+    expect(id.commonDir).toBe(R('/repo/.git/worktrees/wt'))
   })
 
   it('collapses symlink aliases of one folder to a single identity', () => {
     const io = fakeIo({}, ['/real/repo/.git'], { '/link/repo': '/real/repo' })
     const viaLink = resolveRepo('/link/repo', io)
     const viaReal = resolveRepo('/real/repo', io)
-    expect(viaLink.workspace).toBe('/real/repo')
-    expect(viaLink.commonDir).toBe('/real/repo/.git')
+    expect(viaLink.workspace).toBe(R('/real/repo'))
+    expect(viaLink.commonDir).toBe(R('/real/repo/.git'))
     expect(viaLink.key).toBe(viaReal.key)
   })
 
@@ -138,8 +148,8 @@ describe('resolveRepo (injected io)', () => {
     const io = fakeIo({ '/repo/wt/.git': 'this is not a gitdir pointer\n' }, ['/repo/.git'])
     const id = resolveRepo('/repo/wt', io)
     expect(id.kind).toBe('git')
-    expect(id.commonDir).toBe('/repo/.git')
-    expect(id.root).toBe('/repo')
+    expect(id.commonDir).toBe(R('/repo/.git'))
+    expect(id.root).toBe(R('/repo'))
   })
 
   it('returns a plain identity for a non-git folder', () => {
@@ -147,9 +157,9 @@ describe('resolveRepo (injected io)', () => {
     const id = resolveRepo('/plain/dir', io)
     expect(id).toEqual({
       kind: 'plain',
-      workspace: '/plain/dir',
-      root: '/plain/dir',
-      key: keyOf('/plain/dir')
+      workspace: R('/plain/dir'),
+      root: R('/plain/dir'),
+      key: keyOf(R('/plain/dir'))
     })
     expect(id.commonDir).toBeUndefined()
   })
@@ -158,7 +168,7 @@ describe('resolveRepo (injected io)', () => {
     const io = fakeIo({ '/lonely/.git': 'garbage\n' })
     const id = resolveRepo('/lonely', io)
     expect(id.kind).toBe('plain')
-    expect(id.key).toBe(keyOf('/lonely'))
+    expect(id.key).toBe(keyOf(R('/lonely')))
   })
 
   it('is deterministic and distinguishes distinct repos', () => {
@@ -186,6 +196,8 @@ describe('resolveRepo (injected io)', () => {
 const REAL_GIT_TIMEOUT = 30_000
 
 describe('resolveRepo (real git)', () => {
+  // realpathSync.native throughout: on Windows plain realpathSync can keep 8.3 short names
+  // (RUNNER~1) that the module's canonical paths expand.
   const hasGit = (() => {
     try {
       execFileSync('git', ['--version'], { stdio: 'ignore' })
@@ -196,7 +208,7 @@ describe('resolveRepo (real git)', () => {
   })()
 
   it.runIf(hasGit)('gives a real worktree the same key as its main checkout', () => {
-    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'houston-repoid-')))
+    const tmp = realpathSync.native(mkdtempSync(join(tmpdir(), 'houston-repoid-')))
     try {
       const main = join(tmp, 'main')
       const git = (args: string[], cwd: string): void => {
@@ -209,12 +221,12 @@ describe('resolveRepo (real git)', () => {
       const wt = join(tmp, 'wt')
       git(['worktree', 'add', '-q', '-b', 'feat', wt], main)
 
-      const mainId = resolveRepo(realpathSync(main))
-      const wtId = resolveRepo(realpathSync(wt))
+      const mainId = resolveRepo(realpathSync.native(main))
+      const wtId = resolveRepo(realpathSync.native(wt))
 
       expect(mainId.kind).toBe('git')
       expect(wtId.kind).toBe('git')
-      expect(mainId.commonDir).toBe(realpathSync(join(main, '.git')))
+      expect(mainId.commonDir).toBe(realpathSync.native(join(main, '.git')))
       expect(wtId.commonDir).toBe(mainId.commonDir)
       expect(wtId.key).toBe(mainId.key)
     } finally {
@@ -223,7 +235,7 @@ describe('resolveRepo (real git)', () => {
   }, REAL_GIT_TIMEOUT)
 
   it.runIf(hasGit)('gives a subdirectory the same key as the repo root', () => {
-    const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'houston-repoid-')))
+    const tmp = realpathSync.native(mkdtempSync(join(tmpdir(), 'houston-repoid-')))
     try {
       execFileSync('git', ['init', '-q', tmp], { stdio: 'ignore' })
       const sub = join(tmp, 'src', 'main')

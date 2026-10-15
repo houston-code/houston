@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import { withExeSuffix } from '../binaries'
+import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
 
 /**
  * First-class GitHub integration via the `gh` CLI. Houston never stores a GitHub
@@ -35,11 +34,12 @@ export function resolveGh(opts: ResolveGhOptions = {}): string | null {
   const candidates = opts.candidates ?? GH_CANDIDATES
   const platform = opts.platform ?? process.platform
   const name = withExeSuffix('gh', platform) // gh.exe on Windows
-  const pathDelim = platform === 'win32' ? ';' : ':' // not node:path delimiter (host-dependent)
+  const pathDelim = pathDelimiter(platform)
+  const joinP = joinFor(platform)
   const override = env.HOUSTON_GH
   if (override && exists(override)) return override
   for (const dir of (env.PATH ?? '').split(pathDelim)) {
-    if (dir && exists(join(dir, name))) return join(dir, name)
+    if (dir && exists(joinP(dir, name))) return joinP(dir, name)
   }
   for (const c of candidates) if (exists(c)) return c
   return null

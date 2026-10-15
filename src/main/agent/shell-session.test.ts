@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, realpathSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, realpathSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
+import { resolveWindowsBash } from '../sandbox/windows'
 import {
   applySessionResult,
   buildSessionCommand,
@@ -13,11 +14,14 @@ import {
   type ShellSession
 } from './shell-session'
 
+/** The bash the sandbox backend would use: Git for Windows' bash.exe there, else /bin/bash. */
+const BASH = process.platform === 'win32' ? resolveWindowsBash() : '/bin/bash'
+
 /** A non-sandboxed runner that executes the wrapped command with plain bash, so
  * these tests run on Linux CI (no sandbox-exec) yet exercise the real wrapper. */
 function bashRunner(opts: SandboxRunOptions): Promise<SandboxRunResult> {
   return new Promise((resolve) => {
-    const child = spawn('/bin/bash', ['-c', opts.command], { cwd: opts.cwd })
+    const child = spawn(BASH!, ['-c', opts.command], { cwd: opts.cwd })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (c) => (stdout += c.toString()))
@@ -51,7 +55,7 @@ describe('buildSessionCommand', () => {
     const out = buildSessionCommand('make', { cwd: '/proj', env: '' }, paths)
     expect(out).toContain(`cd '/proj' 2>/dev/null`)
     expect(out).toContain('make')
-    expect(out).toContain(`pwd > '/t/c'`)
+    expect(out).toContain(`(pwd -W 2>/dev/null || pwd) > '/t/c'`)
     expect(out).toContain(`export -p > '/t/e'`)
     expect(out).toContain('exit $__houston_ec')
   })
@@ -65,7 +69,7 @@ describe('buildSessionCommand', () => {
 
   it('captures cwd/env under a private umask so the temp files are 0600', () => {
     const out = buildSessionCommand('make', { cwd: '/proj', env: '' }, paths)
-    expect(out).toContain(`(umask 077; pwd > '/t/c')`)
+    expect(out).toContain(`(umask 077; (pwd -W 2>/dev/null || pwd) > '/t/c')`)
     expect(out).toContain(`(umask 077; export -p > '/t/e')`)
   })
 })
@@ -85,21 +89,42 @@ describe('applySessionResult', () => {
   })
 })
 
-describe('runInSession (end to end with real bash)', () => {
+// .native: on Windows plain realpathSync can keep 8.3 short names (RUNNER~1).
+const canon = (p: string): string => realpathSync.native(p)
+
+describe.skipIf(!BASH)('runInSession (end to end with real bash)', () => {
   it('persists cwd across calls', async () => {
     mkdirSync(join(ws, 'sub'))
     const session = createShellSession(ws)
     await runInSession({ command: 'cd sub', session, workspace: ws, allowNetwork: false, run: bashRunner })
-    expect(realpathSync(session.cwd)).toBe(realpathSync(join(ws, 'sub')))
+    expect(canon(session.cwd)).toBe(canon(join(ws, 'sub')))
 
     const res = await runInSession({
-      command: 'pwd',
+      command: 'pwd -W 2>/dev/null || pwd',
       session,
       workspace: ws,
       allowNetwork: false,
       run: bashRunner
     })
-    expect(realpathSync(res.stdout.trim())).toBe(realpathSync(join(ws, 'sub')))
+    expect(canon(res.stdout.trim())).toBe(canon(join(ws, 'sub')))
+  })
+
+  it('hands the next command a cwd the OS can spawn in', async () => {
+    // Git Bash's plain `pwd` prints `/c/Users/…`; used as the next spawn's cwd, that
+    // fails on Windows before the command even starts. The captured cwd must be a real
+    // directory path on every OS.
+    mkdirSync(join(ws, 'sub'))
+    const session = createShellSession(ws)
+    const cwds: string[] = []
+    const recording = (o: SandboxRunOptions): Promise<SandboxRunResult> => {
+      cwds.push(o.cwd)
+      return bashRunner(o)
+    }
+    await runInSession({ command: 'cd sub', session, workspace: ws, allowNetwork: false, run: recording })
+    const res = await runInSession({ command: 'echo ok', session, workspace: ws, allowNetwork: false, run: recording })
+    expect(res.stdout.trim()).toBe('ok')
+    expect(existsSync(cwds[1])).toBe(true)
+    expect(canon(cwds[1])).toBe(canon(join(ws, 'sub')))
   })
 
   it('persists exported environment variables across calls', async () => {

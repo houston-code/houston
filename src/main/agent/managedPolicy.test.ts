@@ -17,7 +17,7 @@ describe('resolveManagedPolicyPath', () => {
 
   it('uses a hardcoded C:\\ProgramData on Windows (no env, so it can\'t be repointed)', () => {
     expect(resolveManagedPolicyPath({ platform: 'win32' })).toBe(
-      join('C:\\ProgramData', 'Houston', MANAGED_SETTINGS_FILE)
+      `C:\\ProgramData\\Houston\\${MANAGED_SETTINGS_FILE}`
     )
   })
 

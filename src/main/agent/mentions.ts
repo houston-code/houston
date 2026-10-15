@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { SKIP_DIRS } from './search'
 import { runGitCapture } from './gitRead'
 
@@ -69,7 +69,9 @@ async function walkListing(workspace: string): Promise<string[]> {
         if (SKIP_DIRS.has(e.name)) continue
         await walk(full)
       } else if (e.isFile()) {
-        out.push(relative(workspace, full))
+        // '/' on every OS, like the `git ls-files` listing: the directory entries and the
+        // filename scoring below split on '/'.
+        out.push(relative(workspace, full).split(sep).join('/'))
       }
     }
   }

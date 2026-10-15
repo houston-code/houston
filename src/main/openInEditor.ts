@@ -2,7 +2,7 @@ import { shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, posix } from 'node:path'
 import { resolveBinaryPath } from './agent/format'
 import { resolveInWorkspace } from './agent/tools'
 import { log } from './logger'
@@ -17,12 +17,13 @@ import { EDITORS, editorById, type EditorDef, type EditorStatus, type OpenResult
 
 /** Standard macOS app dirs probed for the `open -a` fallback. */
 function macAppDirs(): string[] {
-  return ['/Applications', join(homedir(), 'Applications')]
+  // macOS-only locations: posix.join, so the probe is the same on any build host.
+  return ['/Applications', posix.join(homedir(), 'Applications')]
 }
 
 /** Whether an editor's macOS .app bundle is installed (enables the open -a fallback). */
 function macAppPresent(app: string, exists: (p: string) => boolean): boolean {
-  return macAppDirs().some((d) => exists(join(d, `${app}.app`)))
+  return macAppDirs().some((d) => exists(posix.join(d, `${app}.app`)))
 }
 
 export interface DetectDeps {

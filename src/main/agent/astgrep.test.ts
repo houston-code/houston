@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import {
   resolveAstGrep,
   parseAstGrepStream,
@@ -29,16 +29,16 @@ describe('resolveAstGrep', () => {
 
   it('finds ast-grep on PATH', () => {
     const exists = (p: string): boolean => p === '/usr/local/bin/ast-grep'
-    expect(resolveAstGrep({ env: { PATH: '/nope:/usr/local/bin' }, exists, candidates: [] })).toBe(
+    expect(resolveAstGrep({ env: { PATH: '/nope:/usr/local/bin' }, exists, candidates: [], platform: 'linux' })).toBe(
       '/usr/local/bin/ast-grep'
     )
   })
 
   it('looks for ast-grep.exe on PATH on Windows', () => {
     const dir = 'C:\\tools'
-    const exists = (p: string): boolean => p === join(dir, 'ast-grep.exe')
+    const exists = (p: string): boolean => p === win32.join(dir, 'ast-grep.exe')
     expect(resolveAstGrep({ platform: 'win32', env: { PATH: dir }, exists, candidates: [] })).toBe(
-      join(dir, 'ast-grep.exe')
+      win32.join(dir, 'ast-grep.exe')
     )
   })
 
@@ -209,7 +209,8 @@ describe('runAstGrep / searchStructural (ast-grep binary)', { timeout: 30_000 },
       binPath: ag,
       max: 100
     })
-    expect(out).toContain('src/app.ts:2:')
+    // ast-grep prints native separators (`src\\app.ts` on Windows).
+    expect(out).toContain(`${join('src', 'app.ts')}:2:`)
     expect(out).not.toContain('node_modules')
   })
 

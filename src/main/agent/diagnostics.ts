@@ -179,7 +179,10 @@ export function formatDiagnosticsBlock(args: {
   maxChars: number
 }): string {
   const { bin, timedOut, workspace, maxChars } = args
-  let output = workspace ? args.output.split(`${workspace}/`).join('') : args.output
+  // Strip the workspace prefix with either separator: checkers print native paths, and
+  // Windows tools may use `\` or `/`.
+  let output = args.output
+  if (workspace) for (const sep of ['/', '\\']) output = output.split(`${workspace}${sep}`).join('')
   if (output.length > maxChars) {
     const dropped = output.length - maxChars
     output = `${output.slice(0, maxChars)}\n… (truncated, ${dropped} more characters)`

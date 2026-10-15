@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { existsSync } from 'node:fs'
 
 /**
@@ -18,6 +18,20 @@ export interface ResolveBundledOptions {
   exists?: (p: string) => boolean
   /** Platform override (defaults to process.platform); injected in tests. */
   platform?: NodeJS.Platform
+}
+
+/**
+ * `path.join` for `platform`'s separator. node:path's `join` uses the host's, so a lookup
+ * that takes an injected platform must use this to build the paths it probes, or a test of
+ * POSIX behavior fails on a Windows host (and vice versa).
+ */
+export function joinFor(platform: NodeJS.Platform): (...parts: string[]) => string {
+  return platform === 'win32' ? win32.join : posix.join
+}
+
+/** PATH entry separator for `platform` (node:path's `delimiter` is the host's). */
+export function pathDelimiter(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? ';' : ':'
 }
 
 /** Append the Windows `.exe` suffix when needed (the bundled binaries carry it on win32). */

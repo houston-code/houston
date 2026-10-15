@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { SKIP_DIRS } from './search'
-import { withExeSuffix } from '../binaries'
+import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
 
 /**
  * Structural (AST-aware) code search for the `ast_grep` tool, backed by the
@@ -37,11 +36,12 @@ export function resolveAstGrep(opts: ResolveAgOptions = {}): string | null {
   const candidates = opts.candidates ?? AG_CANDIDATES
   const platform = opts.platform ?? process.platform
   const name = withExeSuffix('ast-grep', platform) // ast-grep.exe on Windows
-  const pathDelim = platform === 'win32' ? ';' : ':' // not node:path delimiter (host-dependent)
+  const pathDelim = pathDelimiter(platform)
+  const joinP = joinFor(platform)
   const override = env.HOUSTON_AST_GREP
   if (override && exists(override)) return override
   for (const dir of (env.PATH ?? '').split(pathDelim)) {
-    if (dir && exists(join(dir, name))) return join(dir, name)
+    if (dir && exists(joinP(dir, name))) return joinP(dir, name)
   }
   for (const c of candidates) if (exists(c)) return c
   return null

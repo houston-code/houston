@@ -214,8 +214,8 @@ describe('loadProjectRules', () => {
 
       const rules = await loadProjectRules(workspace, opts())
       expect(rules.files).toContain('AGENTS.md')
-      expect(rules.files.some((f) => f.includes('packages/api/AGENTS.md'))).toBe(true)
-      expect(rules.files.some((f) => f.includes('packages/api/deep/CLAUDE.md'))).toBe(true)
+      expect(rules.files.some((f) => f.includes(join('packages', 'api', 'AGENTS.md')))).toBe(true)
+      expect(rules.files.some((f) => f.includes(join('packages', 'api', 'deep', 'CLAUDE.md')))).toBe(true)
       // Root first, then shallower nested, then deeper nested (precedence order).
       expect(rules.text.indexOf('Root rules.')).toBeLessThan(rules.text.indexOf('API package rules.'))
       expect(rules.text.indexOf('API package rules.')).toBeLessThan(rules.text.indexOf('Deep rules.'))
