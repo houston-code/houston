@@ -132,6 +132,7 @@ import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skill
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
+import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
 import { gitWritableRoots } from './gitDirs'
 import { githubContext, resolveGh, runGh } from './github'
 import {
@@ -148,7 +149,7 @@ import {
   resolveCompactionThreshold,
   summarizationSystemPrompt
 } from './compaction'
-import { getConversation, setCompaction } from '../conversations'
+import { getConversation, setCompaction, setPromptSnapshot } from '../conversations'
 import { buildPinnedMessages, lastUserTurnIndex } from './workingMemory'
 import { StallDetector, resolveStallThresholds } from './stall'
 import {
@@ -527,7 +528,7 @@ function planDecisionResult(run: RunState, decision: PlanDecision): string {
       // The user edited the plan by hand; it supersedes what the agent presented.
       return (
         'The user ACCEPTED the plan but EDITED it first, and switched off Plan mode. Carry out ' +
-        'EXACTLY the following edited plan — it replaces the plan you presented, so follow it precisely ' +
+        'EXACTLY the following edited plan. It replaces the plan you presented, so follow it precisely ' +
         `even where it differs from yours:\n\n${edited}\n\n${how}`
       )
     }
@@ -538,7 +539,7 @@ function planDecisionResult(run: RunState, decision: PlanDecision): string {
       'The user wants changes before you proceed:\n\n' +
       `${decision.note}\n\n` +
       'Revise the plan accordingly and call present_plan again with the updated plan. ' +
-      'Do not make any changes yet — you are still in Plan mode.'
+      'Do not make any changes yet; you are still in Plan mode.'
     )
   }
   return 'The user REJECTED this plan. Do not make any changes. Briefly acknowledge and wait for their next instruction.'
@@ -887,9 +888,17 @@ export async function startRun(
       skills,
       providerConfig.models.map((m) => m.id)
     )
-    // Git + GitHub awareness folded into the prompt. githubContext is a pure PATH
-    // probe (no network), so the run start never triggers unapproved egress.
-    const gitStatus = [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
+    // Date + git/GitHub awareness folded into the prompt, captured once per
+    // conversation and reused on later runs so the system prompt (and with it the
+    // provider's cached history) survives the agent's own edits between turns; it is
+    // retaken only when the local date changes. githubContext is a pure PATH probe
+    // (no network), so the run start never triggers unapproved egress.
+    const { snapshot: promptSnapshot, fresh: freshSnapshot } = await resolvePromptSnapshot(
+      conversationId ? getConversation(conversationId)?.promptSnapshot : undefined,
+      localDateStamp(new Date()),
+      async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
+    )
+    if (freshSnapshot && conversationId) setPromptSnapshot(conversationId, promptSnapshot)
     // view_localhost screenshots via an offscreen browser the Electron shell wires
     // at startup. The standalone CLI wires none, so drop the tool from the schema
     // set and the prompt rather than offering one that fails after an approval.
@@ -907,7 +916,7 @@ export async function startRun(
       rules.text,
       planMode,
       capabilities,
-      gitStatus,
+      formatPromptSnapshot(promptSnapshot),
       req.providerId,
       req.model,
       localhostCaptureAvailable,
@@ -1184,12 +1193,12 @@ export async function startRun(
       // continued context reads consistently to the model.
       const resumed = opts.resume ? getSubAgent(subagentKey, opts.resume) : undefined
       if (opts.resume && !resumed) {
-        return `Unknown subagent id "${opts.resume}" — ids cover the ${MAX_SUBAGENT_SESSIONS} most recent dispatches of this chat and last for the app session. Dispatch a fresh agent instead.`
+        return `Unknown subagent id "${opts.resume}". Ids cover the ${MAX_SUBAGENT_SESSIONS} most recent dispatches of this chat and last for the app session. Dispatch a fresh agent instead.`
       }
       if (resumed && resumed.writable !== writable) {
         return resumed.writable
-          ? `Subagent ${resumed.id} is writable — resume it with dispatch_writable_agent (its write authority needs that tool's approval).`
-          : `Subagent ${resumed.id} is read-only — resume it with dispatch_agent.`
+          ? `Subagent ${resumed.id} is writable; resume it with dispatch_writable_agent (its write authority needs that tool's approval).`
+          : `Subagent ${resumed.id} is read-only; resume it with dispatch_agent.`
       }
 
       const modelRes = resolveDispatchModel(opts.model, agent)
@@ -1446,7 +1455,7 @@ export async function startRun(
       // aborted/errored run isn't resumable, and nested dispatches never are.
       if (storedId) {
         const tool = writable ? 'dispatch_writable_agent' : 'dispatch_agent'
-        return `${result}\n\n[subagent ${storedId} — pass resume: "${storedId}" to ${tool} to continue this agent with its context intact]`
+        return `${result}\n\n[subagent ${storedId}: pass resume: "${storedId}" to ${tool} to continue this agent with its context intact]`
       }
       return result
     }

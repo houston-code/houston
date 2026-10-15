@@ -92,7 +92,7 @@ export function isSchedulerConfigured(): boolean {
 function requireBackend(): SchedulerBackend {
   if (!backend) {
     throw new Error(
-      'Scheduler backend not configured — call setSchedulerBackend() during startup (see src/main/schedulerService.ts).'
+      'Scheduler backend not configured: call setSchedulerBackend() during startup (see src/main/schedulerService.ts).'
     )
   }
   return backend

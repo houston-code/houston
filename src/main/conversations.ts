@@ -11,7 +11,8 @@ import type {
   ConversationError,
   ConversationMeta,
   ConversationUsage,
-  ConversationWorktree
+  ConversationWorktree,
+  PromptSnapshot
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 import { accumulateModelUsage } from '@shared/usage'
@@ -272,6 +273,7 @@ function toMeta(conv: Conversation): ConversationMeta {
     lastError,
     schemaVersion: _schemaVersion,
     compaction: _compaction,
+    promptSnapshot: _promptSnapshot,
     ...rest
   } = conv
   return { ...rest, errored: !!lastError }
@@ -455,6 +457,18 @@ export function setCompaction(id: string, compaction: ConversationCompaction | n
     if (conv.compaction === undefined) return
     delete conv.compaction
   }
+  write(conv)
+}
+
+/**
+ * Persist the system-prompt snapshot (see PromptSnapshot), so later runs, including
+ * after an app restart, rebuild a byte-identical prompt. Bookkeeping like
+ * compaction: never bumps `updatedAt`.
+ */
+export function setPromptSnapshot(id: string, snapshot: PromptSnapshot): void {
+  const conv = read(id)
+  if (!conv) return
+  conv.promptSnapshot = snapshot
   write(conv)
 }
 

@@ -1,11 +1,11 @@
 name: Release - publish
 
 # Manual trigger — run AFTER the `release/vX.Y.Z` PR from "Release - prepare" has merged to
-# main. Builds the full signed matrix (macOS arm64, Windows x64, Linux x64) and publishes a
-# GitHub Release, which is what electron-updater reads. The first build leg creates the
-# release as a draft (scripts/release-draft.mjs), every leg uploads into it, then the finalize
-# job attaches the CHANGELOG notes, un-drafts it, and marks it `latest` so the updater picks
-# it up.
+# main. Builds the full matrix (macOS arm64 and x64, Windows x64, Linux x64) and publishes a
+# GitHub Release, which is what electron-updater reads. The `draft` job creates the release
+# as a draft (scripts/release-draft.mjs), every build leg (release-build.yml) uploads into it,
+# the `checksums` job signs everything, then the finalize job attaches the CHANGELOG notes,
+# un-drafts it, and marks it `latest` so the updater picks it up.
 #
 # The repo is public, so the app fetches updates with no embedded token and the release is
 # published here alongside the source. The workflow's own GITHUB_TOKEN carries the
@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Vulnerability gates. Run BEFORE build (build `needs` them), so a known-vulnerable
+  # Vulnerability gates. Run BEFORE the build (the build legs `need` them), so a known-vulnerable
   # production closure or Electron runtime aborts the release before anything is built or
   # published, rather than failing mid-matrix after some legs already uploaded. The called
   # workflow's `deps` job scans the npm closure the release ships; its `scan` job scans the
@@ -43,16 +43,15 @@ jobs:
       issues: write
 
   # SBOM conformance gate: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass before we
-  # build or publish anything (build `needs` it), so a release can't ship a regressed SBOM.
+  # build or publish anything (the build legs `need` it), so a release can't ship a regressed SBOM.
   sbom-conformance:
     uses: ./.github/workflows/sbom-conformance.yml
 
   # The single human approval for a release. The `release-approval` environment carries the
-  # required reviewer; this job holds no secrets and does nothing but pass the gate. Build
-  # `needs` it, so one approval covers every matrix leg. (Putting the reviewer on `release`
-  # instead gates each leg separately, and `max-parallel: 1` below means each leg reaches the
-  # gate on its own: four platforms, four approvals.) Runs alongside the scans, so the
-  # approval can be given while they run.
+  # required reviewer; this job holds no secrets and does nothing but pass the gate. The
+  # `draft` job `needs` it, so one approval covers every build leg. (Putting the reviewer on
+  # `release` instead gates each leg separately: four platforms, four approvals.) Runs
+  # alongside the scans, so the approval can be given while they run.
   approve:
     timeout-minutes: 5
     runs-on: ubuntu-24.04
@@ -60,55 +59,91 @@ jobs:
     steps:
       - run: echo "Release approval gate passed."
 
-  build:
+  # Create the draft release once, before any leg runs (or reuse the one a previous attempt
+  # made), so legs that build in parallel never race to create it. Each leg still runs
+  # `release-draft.mjs ensure` (a reuse by then) and `check`, so a duplicate from any source
+  # stops the run. Skipped on a dry run, which publishes nothing.
+  draft:
     needs: [native-scan, sbom-conformance, approve]
-    timeout-minutes: 40
-    # The signing credentials (Apple notarization, the Developer ID .p12, and the GPG
-    # release key) live in the `release` environment, not as repository secrets, so they
-    # are unreadable by any job that does not declare it. The environment restricts
-    # deployment to protected branches, so a fork or a feature branch cannot reach them
-    # even by editing this file. It has no required reviewer: the human approval is the
-    # `approve` job above.
-    environment: release
+    if: ${{ !inputs.dry_run }}
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
     permissions:
-      # the release is created and uploaded from this job, in this repo
       contents: write
-      # cosign keyless signing (below) needs an OIDC token for Fulcio; Rekor is public, so
-      # this works whatever the repo's visibility, and signatures verify with no repo access.
-      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      - name: Ensure a single draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"
+
+  # The build legs (release-build.yml). The two macOS legs run one after another because the
+  # Intel leg merges its files into the update feed the arm64 leg published; Windows and Linux
+  # are independent of both and of each other, so they build in parallel alongside them.
+  #
+  # `!failure() && !cancelled()` rather than the default: on a dry run `draft` is skipped, and
+  # a skipped dependency would otherwise skip the legs too.
+  build-mac:
+    needs: [native-scan, sbom-conformance, approve, draft]
+    if: ${{ !failure() && !cancelled() }}
+    permissions:
+      contents: write
     strategy:
       # A real publish stops at the first failed leg: the release can't be finalized without
-      # every platform, so the remaining legs would only burn ~40 min of macOS/Windows time
-      # each and add more assets to a draft that has to be deleted anyway. A dry run keeps
-      # going, so one run reports every platform's failure (release-prepare does the same).
+      # every platform. A dry run keeps going, so one run reports every platform's failure
+      # (release-prepare does the same).
       fail-fast: ${{ !inputs.dry_run }}
-      # Serialize so the legs upload into the draft one after another, in the order below
-      # (the Intel leg merges into the arm64 feed). Releases are infrequent, so the extra
-      # wall-clock is fine in exchange for a deterministic publish.
+      # arm64 MUST run first: its `--publish always` owns the single `latest-mac.yml` update
+      # feed. The Intel leg then uploads only its .dmg/.zip INTO that draft and merges its
+      # files into the arm64 feed, never publishing its own latest-mac.yml, which would
+      # clobber arm64's and break the updater (electron-builder#5592).
       max-parallel: 1
       matrix:
         include:
-          # macos-14 (arm64) MUST be first: its `--publish always` owns the single
-          # `latest-mac.yml` update feed. The macos-15-intel (Intel) leg
-          # then uploads only its .dmg/.zip INTO that existing draft — never its own
-          # latest-mac.yml, which would clobber arm64's and break the updater
-          # (electron-builder#5592). max-parallel:1 (above) keeps this order deterministic.
           # macos-15-intel replaces the retired macos-13 image (shut down 2025-12-04); GitHub
           # sunsets x64 macOS after macos-15 (~Fall 2027). Keep the Intel label in lockstep
           # with ci.yml's `package` matrix / release-prepare.
           # sbom_app / sbom_label: the packaged-app dir this leg produces + the platform tag for
           # its deep binary SBOM (scripts/binary-sbom.mjs). Each leg emits its OWN
-          # sbom.binary.<label>.* so the hashes match the binaries a user of THAT platform actually
-          # downloads (the mac legs also enumerate the macOS-only Squirrel.Mac framework stack).
+          # sbom.binary.<label>.* so the hashes match the binaries a user of THAT platform
+          # actually downloads (the mac legs also enumerate the macOS-only Squirrel.Mac
+          # framework stack).
           - os: macos-14
             dist: dist:mac
             sbom_app: release/mac-arm64/Houston.app
             sbom_label: darwin-arm64
+            mac_x64_manual: false
           - os: macos-15-intel
             dist: dist:mac:x64
-            mac_x64_manual: true
             sbom_app: release/mac/Houston.app
             sbom_label: darwin-x64
+            mac_x64_manual: true
+    uses: ./.github/workflows/release-build.yml
+    with:
+      os: ${{ matrix.os }}
+      dist: ${{ matrix.dist }}
+      sbom_app: ${{ matrix.sbom_app }}
+      sbom_label: ${{ matrix.sbom_label }}
+      mac_x64_manual: ${{ matrix.mac_x64_manual }}
+      dry_run: ${{ inputs.dry_run }}
+
+  build-other:
+    needs: [native-scan, sbom-conformance, approve, draft]
+    if: ${{ !failure() && !cancelled() }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: ${{ !inputs.dry_run }}
+      matrix:
+        include:
           - os: windows-2025
             dist: dist:win
             sbom_app: release/win-unpacked
@@ -120,430 +155,49 @@ jobs:
             dist: dist:linux
             sbom_app: release/linux-unpacked
             sbom_label: linux-x64
-    runs-on: ${{ matrix.os }}
-    steps:
-      # Build the commit this run was dispatched on (github.sha), never a fresh `main`. The
-      # legs run one after another (max-parallel: 1) for up to ~40 min each, after the approval
-      # wait, and main keeps moving under the merge queue meanwhile: checking out `main` here
-      # let each platform build a different commit while the SLSA provenance
-      # (scripts/slsa-provenance.mjs reads GITHUB_SHA) named yet another. The `release`
-      # environment only admits runs on main, so github.sha is always a main commit.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      # Fail the release if THIRD-PARTY-NOTICES.md drifted from the shipped closure — it's
-      # attached to the release, so it must not ship stale versions next to a fresh SBOM.
-      - name: Check THIRD-PARTY-NOTICES.md is current
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          npm run notices
-          git diff --exit-code THIRD-PARTY-NOTICES.md \
-            || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
-      # Create the draft release up front (or reuse the one a previous attempt made) so
-      # electron-builder never creates it. Left to itself, it creates the release lazily from
-      # each target's upload, and the arm64 leg's zip and dmg uploads raced: both saw no
-      # release and both created one, splitting the assets across two drafts. Every leg runs
-      # this, so a duplicate from any source stops the run before more uploads scatter.
-      - name: Ensure a single draft release
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"
-      - name: Package and publish
-        # electron-builder's github publisher reads GH_TOKEN; the job's own GITHUB_TOKEN
-        # (contents: write) is enough, since the release lives in this repo (per
-        # electron-builder.yml `publish`). The gh calls in this step use it too.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS code-signing + notarization. SCOPED to the macOS legs via startsWith():
-          # CSC_LINK/CSC_KEY_PASSWORD are ALSO electron-builder's Windows Authenticode vars,
-          # so leaking the mac .p12 to the Windows leg would make it try to sign the installer
-          # with an Apple cert and fail. An empty value on non-mac legs = signing skipped there
-          # (Windows/Linux stay unsigned until they get their own certs). electron-builder v26
-          # auto-notarizes when APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID are set.
-          CSC_LINK: ${{ startsWith(matrix.os, 'macos') && secrets.CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ startsWith(matrix.os, 'macos') && secrets.CSC_KEY_PASSWORD || '' }}
-          APPLE_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ startsWith(matrix.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
-        # This step is a bash script (if/elif/else/fi). On Windows the default `run:`
-        # shell is PowerShell, which can't parse it ("Missing '(' after 'if'"); force bash so
-        # the one script runs identically on every matrix leg. Git Bash ships on the Windows
-        # runner, and macOS/Linux already default to bash, so their behavior is unchanged.
-        shell: bash
-        run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            # Dry run: build only, never publish. The explicit `--publish never` also silences
-            # electron-builder's deprecated implicit-publish-on-CI detection (removed in v27).
-            npm run ${{ matrix.dist }} -- --publish never
-          elif [ "${{ matrix.mac_x64_manual }}" = "true" ]; then
-            # Intel mac: build WITHOUT electron-builder's publisher (its latest-mac.yml lists
-            # only x64 — publishing it as-is would clobber the arm64 feed: electron-builder#5592).
-            # Instead, MERGE this build's x64 files INTO the arm64 feed the macos-14 leg already
-            # published, so one latest-mac.yml auto-updates BOTH arches — MacUpdater self-selects
-            # per arch from the `files` list. max-parallel:1 guarantees the arm64 leg ran first.
-            # `--publish never` is REQUIRED here: without it, electron-builder's implicit
-            # publish-on-CI detection uploads this x64 latest-mac.yml and clobbers the arm64
-            # feed — the exact failure this manual-merge path exists to avoid.
-            npm run ${{ matrix.dist }} -- --publish never
-            tag="v$(node -p "require('./package.json').version")"
-            mkdir -p arm64-feed merged-feed
-            # Pull the arm64-only feed the arm64 leg uploaded to the draft, then merge x64 into it.
-            gh release download "$tag" -R houston-code/houston -p latest-mac.yml -D arm64-feed --clobber
-            node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml > merged-feed/latest-mac.yml
-            # Upload every x64 binary (dmg/zip/blockmaps, whatever electron-builder named them),
-            # then replace the feed with the merged one. Exclude *.yml from the binary upload so
-            # the x64-only latest-mac.yml is never published.
-            find release -maxdepth 1 -type f ! -name '*.yml' -print0 \
-              | xargs -0 gh release upload "$tag" -R houston-code/houston --clobber
-            gh release upload "$tag" merged-feed/latest-mac.yml -R houston-code/houston --clobber
-          else
-            # Appends to the dist script's electron-builder invocation: --publish always
-            # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
-            npm run ${{ matrix.dist }} -- --publish always
-          fi
-      # electron-builder must have uploaded into the existing draft, not made another one.
-      # Checked before the signing steps below, which upload to the draft by tag.
-      - name: Check the release is still a single draft
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          node scripts/release-draft.mjs check houston-code/houston "$tag"
-      # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
-      # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
-      # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
-      # flaky on CI runners — the reason electron-builder's gatekeeperAssess is off — so it
-      # runs last, INFORMATIONAL only, and never fails the job.
-      - name: Verify code signature + notarization
-        if: startsWith(matrix.os, 'macos')
-        shell: bash
-        run: |
-          app=$(find release -maxdepth 2 -name 'Houston.app' -type d | head -1)
-          if [ -z "$app" ]; then echo "::error::no packaged Houston.app found in release/"; exit 1; fi
-          echo "Verifying $app"
-          # Signature integrity across the whole bundle (helpers, frameworks, binaries).
-          codesign --verify --deep --strict --verbose=2 "$app"
-          # Assert a Developer ID Application cert, not ad-hoc/unsigned — codesign --verify
-          # passes on an ad-hoc signature, so this catches a build where signing secrets were
-          # absent.
-          codesign -dvv "$app" 2>&1 | grep -q 'Authority=Developer ID Application' \
-            || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
-          # The notarization ticket must be stapled to the bundle (offline Gatekeeper proof).
-          xcrun stapler validate "$app"
-          # Informational only — never fail the release on spctl's flakiness.
-          spctl --assess --type exec --verbose=4 "$app" \
-            || echo "::warning::spctl assessment did not pass (informational only — codesign + stapler are the gates)"
-      # Packaged-app smoke on BOTH macOS legs — arm64 (macos-14) and Intel (macos-15-intel) —
-      # so the x64 artifact's packaged .app (its own node-pty + rg/ast-grep) is launch-tested,
-      # not just arm64. resolveLaunch() picks release/mac-arm64 or release/mac accordingly.
-      - if: startsWith(matrix.os, 'macos')
-        run: npm run test:e2e
-      # Standalone CLI (README "Standalone CLI" section): one platform-independent
-      # houston-cli.cjs per release. Built on the Linux leg only — the bundle is
-      # pure JS, so any leg would produce the same bytes; Linux runs LAST in the
-      # serialized matrix, so the draft release is guaranteed to exist before the
-      # upload. On dry_run it's built (not published) and lands in the artifact.
-      - name: Build standalone CLI
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          npm run build:cli
-          # No separate houston-cli.cjs.sha256: the signed SHA256SUMS (the `checksums`
-          # job) already lists the CLI, and an unsigned per-file checksum proved nothing
-          # a tamperer couldn't also replace.
-      # Software Bill of Materials (CycloneDX + SPDX) for the production dependency
-      # closure, generated with Syft scanning package-lock.json directly. npm's built-in
-      # `npm sbom --omit dev` was tried first but SILENTLY UNDER-REPORTS: it emitted 56 of
-      # the 73 production packages, dropping genuine runtime transitives (builder-util-
-      # runtime, graceful-fs, zod, https-proxy-agent, minimatch...) because npm dev-flags
-      # shared packages during hoisting and then omits them — a vulnerability scanner fed
-      # that SBOM would get false negatives on ~23% of the surface. Syft reads the lockfile's
-      # own dev flags, excludes dev by default, and emits BOTH formats from one scan so they
-      # describe an identical closure. Built on the Linux leg only (the closure is platform-
-      # independent; Linux runs LAST in the serialized matrix so the draft release exists
-      # before upload). This is THE per-release SBOM path: it attaches the SBOM to the
-      # published Release deterministically, regardless of how the release commit landed. The
-      # push-triggered sbom.yml can't be relied on for this: it yields a transient 90-day
-      # Actions artifact, not a durable Release asset. (It also has no push trigger today; see
-      # the note at the top of sbom.yml.)
-      - name: Install Syft
-        if: matrix.os == 'ubuntu-22.04'
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
-          syft-version: v1.46.0
-      - name: Generate SBOMs (production dependency closure)
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          # Scan the lockfile, not node_modules: syft honors its dev flags and needs no
-          # install. One scan emits all three formats over the same closure. SPDX 3.0 is the
-          # format that can carry the CISA SBOM type + per-package supplier for FSCT3 minimum
-          # conformance (SPDX 2.3 has no field for either).
-          syft scan file:./package-lock.json \
-            -o cyclonedx-json@1.6=sbom.cyclonedx.json \
-            -o spdx-json=sbom.spdx.json \
-            -o spdx-json@3.0=sbom.spdx3.json
-          # The lockfile carries no per-component hashes/author/supplier, so enrich each
-          # document in place from its own integrity (sha512) and each package's installed
-          # manifest. Only ADDS fields — the complete closure syft produced is preserved.
-          node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json
-          # Fail closed on a truncated document, or one enrichment left without hashes, rather
-          # than attaching a hollow SBOM (same stance as scripts/verify-bundled-binaries.mjs).
-          # The entry floor guards against a silent regression to a partial closure like npm
-          # sbom's 56 (full production set is ~73); the hash floor catches enrichment no-op'ing.
-          for f in sbom.cyclonedx.json sbom.spdx.json; do
-            node -e "const j=JSON.parse(require('node:fs').readFileSync('$f','utf8')); const items=j.components||j.packages||[]; const n=items.length; const h=items.filter(x=>(x.hashes||x.checksums||[]).length).length; if(n<60){console.error('::error::'+process.argv[1]+' has only '+n+' entries (<60) — closure looks truncated'); process.exit(1)} if(h<60){console.error('::error::'+process.argv[1]+' has only '+h+' hashed entries (<60) — enrichment did not run'); process.exit(1)} console.log(process.argv[1]+' OK ('+n+' entries, '+h+' hashed)')" "$f"
-          done
-          # SPDX 3.0 (JSON-LD graph): verify package count + that every package got a supplier.
-          node -e "const g=(JSON.parse(require('node:fs').readFileSync('sbom.spdx3.json','utf8'))['@graph']||[]); const pk=g.filter(e=>e.type==='software_Package'); const sup=pk.filter(p=>p.suppliedBy).length; if(pk.length<60){console.error('::error::sbom.spdx3.json has only '+pk.length+' packages (<60)');process.exit(1)} if(sup<pk.length){console.error('::error::sbom.spdx3.json: '+(pk.length-sup)+' packages missing suppliedBy');process.exit(1)} console.log('sbom.spdx3.json OK ('+pk.length+' packages, all supplied)')"
-      # Deep binary SBOM (native/runtime layer), generated PER LEG from that platform's real
-      # packaged app. The lockfile SBOMs above enumerate the JavaScript closure; they
-      # structurally CANNOT see the components that ship as real binaries rather than npm
-      # tarballs: the Electron runtime and the Chromium + Node it embeds, the node-pty native
-      # addon, the vendored rg/ast-grep CLIs, and (macOS only) the Squirrel.Mac updater
-      # frameworks. A calibration run of Syft against a packaged app found ~none of these (Syft
-      # has no Electron/Chromium classifier, and the Rust CLIs carry no metadata it reads), so
-      # scripts/binary-sbom.mjs CONSTRUCTS the set and reads each version from the ACTUAL shipped
-      # binary (Electron's compiled-in user-agent + node banner, `rg`/`ast-grep --version`,
-      # node-pty's manifest, each mac framework's Info.plist) — versions a manifest never
-      # reveals: the shipped Node differs from the build Node, and ripgrep 15.x hides behind the
-      # @vscode/ripgrep@1.18.0 wrapper. It fail-closes if any expected native component or its
-      # version is missing, the same stance as the lockfile floor above. Each leg execs its OWN
-      # native binaries (so the rg/ast-grep versions come from that platform's build) and hashes
-      # the exact files it ships, so a user of any platform can verify the SBOM's hashes against
-      # the binaries inside their own download. bash on every leg (the Windows runner defaults to
-      # PowerShell, which can't parse the line-continuations). This step runs after e2e, which
-      # only rebuilds out/ — it never repackages release/, so the app dir persists.
-      - name: Generate deep binary SBOM (native/runtime layer)
-        shell: bash
-        run: |
-          node scripts/binary-sbom.mjs --app "${{ matrix.sbom_app }}" --platform "${{ matrix.sbom_label }}" \
-            -o cyclonedx-json="sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json" \
-            -o spdx-json="sbom.binary.${{ matrix.sbom_label }}.spdx.json"
-      # Vulnerability gate for the NATIVE layer, the coverage the lockfile scan can't provide:
-      # without it a Chromium/Node/ripgrep CVE is invisible to the release (the calibration run
-      # flagged fixable High + a Critical in the shipped Chromium, matched via its CPE). Runs ONCE,
-      # on the Linux leg: the six vuln-relevant components are identical across platforms (the
-      # mac-only Squirrel frameworks carry no NVD coordinates). Post-build because it scans the
-      # packaged app; the pre-build native-scan job has already checked the runtime, so what this
-      # adds is node-pty, rg and ast-grep, read from the shipped binaries.
-      #
-      # Policy (scripts/native-vuln-policy.mjs), unlike the lockfile gate's "block every fixable
-      # High/Critical": a finding only BLOCKS when we could ship the fix today (a stable Electron
-      # carries it, or the component isn't Electron's). One that only a pre-release Electron fixes
-      # ships as an `affected` statement in this release's VEX document, which is generated
-      # here (repo assessments + those statements) into release-vex/ and is the copy attached,
-      # signed and checksummed below. A failure fails the build job, so finalize never un-drafts.
-      - name: Install grype
-        if: matrix.os == 'ubuntu-22.04'
-        id: grype
-        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
-        with:
-          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
-          grype-version: v0.115.0
-      - name: Scan binary SBOM + apply native-layer policy
-        if: matrix.os == 'ubuntu-22.04'
-        env:
-          GRYPE: ${{ steps.grype.outputs.cmd }}
-        run: |
-          curl -fsSL --retry 3 https://releases.electronjs.org/releases.json -o electron-releases.json
-          "$GRYPE" sbom:sbom.binary.linux-x64.cyclonedx.json \
-            --only-fixed --vex .github/vex/houston.openvex.json -o table -o json=grype.binary.json
-          mkdir -p release-vex
-          node scripts/native-vuln-policy.mjs evaluate --report grype.binary.json \
-            --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY" \
-            --vex-in .github/vex/houston.openvex.json --vex-out release-vex/houston.openvex.json \
-            --release "$(node -p "require('./package.json').version")"
-      - name: Attach standalone CLI + SBOMs to the release
-        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          # Upload the bundle, its checksum, and the attribution notices together:
-          # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
-          # travel with the redistributed code (the .cjs ships no node_modules). The
-          # lockfile SBOMs ship alongside so each released version carries a verifiable
-          # production dependency manifest in CycloneDX + SPDX. (The per-platform deep
-          # binary SBOMs are attached + signed separately, per leg — see "Attach + sign
-          # the binary SBOM".) The VEX travels with them so consumers get the
-          # exploitability assessment, not just the list.
-          gh release upload "$tag" \
-            out/cli/houston-cli.cjs \
-            THIRD-PARTY-NOTICES.md \
-            sbom.cyclonedx.json \
-            sbom.spdx.json \
-            sbom.spdx3.json \
-            release-vex/houston.openvex.json \
-            -R houston-code/houston --clobber
-      # Keyless-sign the shipped artifacts with cosign and attach a sigstore bundle (sig +
-      # Fulcio cert + Rekor proof) beside each. This is the customer-verifiable
-      # alternative to GitHub attestation, and it needs no attestation store. Each leg
-      # signs its own release/* binaries; the Linux leg also signs the CLI, SBOMs, and the
-      # third-party notices (so the notices carry the same verifiable provenance as the code
-      # they attribute — closing the gap where the loose .md was the only unsigned sibling
-      # and could look like an untrusted stray download). Skipped on
-      # dry_run (nothing published) and placed AFTER publish so a signing hiccup can't strand a
-      # half-published release. Verify a download with:
-      #   cosign verify-blob <file> --bundle <file>.cosign.bundle \
-      #     --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
-      #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
-      - name: Install cosign
-        if: ${{ !inputs.dry_run }}
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: 'v2.6.3'
-      - name: Sign release binaries + attach bundles
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          shopt -s nullglob
-          # Sign the downloadable installers/packages this leg produced (skip .yml feeds and
-          # .blockmaps — not artifacts a user downloads and verifies).
-          for f in release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb; do
-            cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
-            gh release upload "$tag" "$f.cosign.bundle" -R houston-code/houston --clobber
-          done
-      # This leg's own deep binary SBOM (generated above from its packaged app): attach it and its
-      # cosign bundle. Runs on EVERY leg — the platform-tagged filename means the four legs never
-      # collide, and each ships the SBOM whose hashes match that platform's binaries. The Linux
-      # leg's pair, like every platform's, is also listed in the signed SHA256SUMS manifest
-      # (the `checksums` job).
-      - name: Attach + sign the binary SBOM
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          for f in sbom.binary.${{ matrix.sbom_label }}.cyclonedx.json sbom.binary.${{ matrix.sbom_label }}.spdx.json; do
-            gh release upload "$tag" "$f" -R houston-code/houston --clobber
-            cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
-            gh release upload "$tag" "$f.cosign.bundle" -R houston-code/houston --clobber
-          done
-      - name: Sign standalone CLI + SBOMs + notices + attach bundles
-        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          for f in out/cli/houston-cli.cjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json release-vex/houston.openvex.json THIRD-PARTY-NOTICES.md; do
-            cosign sign-blob --yes "$f" --bundle "$f.cosign.bundle"
-            gh release upload "$tag" "$f.cosign.bundle" -R houston-code/houston --clobber
-          done
-      # GPG signing (Linux leg only) — the offline, sigstore-independent verification path Linux
-      # users and distro packagers expect: `gpg --verify` against a pinned key fingerprint, no
-      # cosign install and no Fulcio/Rekor round-trip. Complements (does not replace) the cosign
-      # bundles above. NOTE: this does NOT gate electron-updater — the AppImage auto-update path
-      # verifies sha512 over HTTPS from latest-linux.yml; these signatures are for a human (or
-      # packaging pipeline) verifying a download. This step puts a detached ASCII-armored
-      # signature (.asc) beside each Linux artifact (AppImage, deb); the whole-release
-      # SHA256SUMS manifest is signed with the same key by the `checksums` job, once every leg
-      # has uploaded. The public key is published beside them so a verifier needs no keyserver. Runs AFTER
-      # publish so a signing hiccup can't strand a half-published release; skipped on dry_run. If
-      # GPG_PRIVATE_KEY is unset it SOFT-skips (release still publishes unsigned) rather than
-      # failing — GPG is additive, mirroring how the macOS signing gate degrades without certs.
-      # The key is imported into an ephemeral GNUPGHOME (mktemp) so nothing persists on the runner,
-      # with loopback pinentry so the passphrase is supplied non-interactively.
-      - name: GPG-sign Linux artifacts
-        if: ${{ matrix.os == 'ubuntu-22.04' && !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        shell: bash
-        run: |
-          if [ -z "$GPG_PRIVATE_KEY" ]; then
-            echo "::warning::GPG_PRIVATE_KEY not set — skipping GPG signing (release still publishes; add the GPG_PRIVATE_KEY + GPG_PASSPHRASE secrets to enable it)."
-            exit 0
-          fi
-          tag="v$(node -p "require('./package.json').version")"
-          # Ephemeral, throwaway keyring — imported key never touches the runner's default home.
-          GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
-          chmod 700 "$GNUPGHOME"
-          # Allow the passphrase to be supplied via --pinentry-mode loopback (no TTY on CI).
-          echo 'allow-loopback-pinentry' > "$GNUPGHOME/gpg-agent.conf"
-          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-          # The primary key id; gpg auto-selects its signing-capable subkey for --detach-sign.
-          key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
-          sign() {
-            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-                --local-user "$key_id" --armor --detach-sign --output "$1.asc" "$1"
-          }
-          shopt -s nullglob
-          # Detached signature beside each Linux artifact built on this leg.
-          for f in release/*.AppImage release/*.deb; do
-            sign "$f"
-            gh release upload "$tag" "$f.asc" -R houston-code/houston --clobber
-          done
-          # Publish the committed public key so a downloader can verify with no keyserver.
-          # houston-signing-key.asc is the repo-root file checked out at the released commit,
-          # so what users get is exactly what's committed to source.
-          gh release upload "$tag" houston-signing-key.asc -R houston-code/houston --clobber
-      # Build provenance is not made per file here: the `checksums` job signs one statement
-      # for the whole release once every leg has uploaded.
-      # On a REAL publish the assets live on the published GitHub Release, so no Actions
-      # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
-      # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
-      # leg; upload-artifact errors only when a leg matches NOTHING, so the desktop
-      # patterns keep the other legs green.)
-      - if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-dryrun-${{ matrix.os }}
-          retention-days: 14
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*-setup.exe
-            release/*.AppImage
-            release/*.deb
-            release/latest*.yml
-            out/cli/houston-cli.cjs
-            THIRD-PARTY-NOTICES.md
-            sbom.cyclonedx.json
-            sbom.spdx.json
-            sbom.spdx3.json
-            sbom.binary.*.cyclonedx.json
-            sbom.binary.*.spdx.json
-            release-vex/houston.openvex.json
-          if-no-files-found: error
+    uses: ./.github/workflows/release-build.yml
+    with:
+      os: ${{ matrix.os }}
+      dist: ${{ matrix.dist }}
+      sbom_app: ${{ matrix.sbom_app }}
+      sbom_label: ${{ matrix.sbom_label }}
+      dry_run: ${{ inputs.dry_run }}
 
-  # The whole-release SHA256SUMS manifest. It runs once every build leg has uploaded, and
-  # hashes the files as downloaded FROM THE DRAFT, so it covers every platform (the Linux leg
-  # used to build it from its own runner, which left out the mac and Windows downloads) and
-  # lists exactly the bytes a user gets. scripts/release-checksums.mjs picks the assets and
-  # fails if any platform's installer is missing. The manifest is signed with the GPG release
-  # key (SHA256SUMS.asc) and keyless with cosign (SHA256SUMS.cosign.bundle), like every other
-  # release file. Without GPG_PRIVATE_KEY it still ships SHA256SUMS, cosign-signed only.
+  # Signs the release and builds its manifests, once every build leg has uploaded. This is the
+  # ONLY job that holds the signing identity (cosign's OIDC token) and the GPG release key, and
+  # it installs no dependencies: nothing here runs third-party package code, unlike the build
+  # legs, which run `npm ci` and the build.
   #
-  # It also makes the release's SLSA v1.0 build provenance: ONE in-toto statement whose
-  # subjects are every file in SHA256SUMS (scripts/slsa-provenance.mjs --subjects), signed
-  # keyless (Fulcio + Rekor) into provenance.slsa.bundle. That replaces a .slsa.bundle per
-  # file. verify-blob-attestation accepts any file whose SHA-256 is one of the subjects:
-  #   cosign verify-blob-attestation <file> --bundle provenance.slsa.bundle --type slsaprovenance1 \
-  #     --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
-  #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+  # It works from the files as downloaded FROM THE DRAFT, so everything it signs and hashes is
+  # exactly the bytes a user gets. scripts/release-checksums.mjs picks the assets and fails if
+  # any platform's installer is missing.
+  #
+  #   - cosign: a keyless sigstore bundle (sig + Fulcio cert + Rekor proof) beside every asset
+  #     and SHA256SUMS. Verify a download with:
+  #       cosign verify-blob <file> --bundle <file>.cosign.bundle \
+  #         --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+  #         --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+  #   - GPG: detached .asc signatures for the Linux artifacts and SHA256SUMS, the offline path
+  #     Linux users and distro packagers expect, plus the public key. Soft-skips (with a
+  #     warning) when GPG_PRIVATE_KEY is unset: GPG is additive to cosign.
+  #   - SHA256SUMS: the whole-release manifest, covering every platform.
+  #   - SLSA v1.0 build provenance: ONE in-toto statement whose subjects are every file in
+  #     SHA256SUMS (scripts/slsa-provenance.mjs --subjects), signed keyless into
+  #     provenance.slsa.bundle. verify-blob-attestation accepts any file whose SHA-256 is one
+  #     of the subjects:
+  #       cosign verify-blob-attestation <file> --bundle provenance.slsa.bundle --type slsaprovenance1 \
+  #         --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
+  #         --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+  #
+  # None of this gates electron-updater, which verifies sha512 from latest*.yml over HTTPS;
+  # the signatures are for a person or a packaging pipeline verifying a download.
   checksums:
-    needs: build
+    needs: [build-mac, build-other]
     if: ${{ !inputs.dry_run }}
     timeout-minutes: 20
     runs-on: ubuntu-24.04
-    # GPG_PRIVATE_KEY / GPG_PASSPHRASE live in the `release` environment (see `build`).
+    # GPG_PRIVATE_KEY / GPG_PASSPHRASE live in the `release` environment, readable only by
+    # jobs that declare it and only on protected branches.
     environment: release
     permissions:
       contents: write
@@ -554,9 +208,11 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Node for the repo's own dependency-free scripts. No install, so no package code runs
+      # next to the signing key.
+      - uses: ./.github/actions/setup-node
         with:
-          node-version-file: '.nvmrc'
+          cache: 'false'
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: 'v2.6.3'
@@ -575,29 +231,50 @@ jobs:
           # Bare filenames, so `sha256sum -c SHA256SUMS` works in a folder of downloads.
           ( cd assets && sha256sum -- "${names[@]}" ) > SHA256SUMS
           cat SHA256SUMS
-      - name: Sign + attach SHA256SUMS
+      - name: Sign every asset and SHA256SUMS with cosign
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v$(node -p "require('./package.json').version")"
+          bundles=()
+          while IFS= read -r name; do
+            cosign sign-blob --yes "assets/$name" --bundle "assets/$name.cosign.bundle"
+            bundles+=("assets/$name.cosign.bundle")
+          done < checksummed.txt
+          cosign sign-blob --yes SHA256SUMS --bundle SHA256SUMS.cosign.bundle
+          gh release upload "$tag" SHA256SUMS SHA256SUMS.cosign.bundle "${bundles[@]}" \
+            -R houston-code/houston --clobber
+      # The key is imported into an ephemeral GNUPGHOME (mktemp), so nothing persists on the
+      # runner, with loopback pinentry so the passphrase is supplied non-interactively.
+      - name: GPG-sign the Linux artifacts and SHA256SUMS
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          tag="v$(node -p "require('./package.json').version")"
-          cosign sign-blob --yes SHA256SUMS --bundle SHA256SUMS.cosign.bundle
-          files=(SHA256SUMS SHA256SUMS.cosign.bundle)
+          set -euo pipefail
           if [ -z "$GPG_PRIVATE_KEY" ]; then
-            echo "::warning::GPG_PRIVATE_KEY not set: SHA256SUMS ships without SHA256SUMS.asc (cosign-signed only)."
-          else
-            # Ephemeral keyring and loopback pinentry, as in the build job's GPG step.
-            GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
-            chmod 700 "$GNUPGHOME"
-            echo 'allow-loopback-pinentry' > "$GNUPGHOME/gpg-agent.conf"
-            echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-            key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
-            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
-                --local-user "$key_id" --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
-            files+=(SHA256SUMS.asc)
+            echo "::warning::GPG_PRIVATE_KEY not set: skipping GPG signing (the release still publishes, cosign-signed; add the GPG_PRIVATE_KEY + GPG_PASSPHRASE secrets to enable it)."
+            exit 0
           fi
-          gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber
+          tag="v$(node -p "require('./package.json').version")"
+          GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
+          chmod 700 "$GNUPGHOME"
+          echo 'allow-loopback-pinentry' > "$GNUPGHOME/gpg-agent.conf"
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          # The primary key id; gpg auto-selects its signing-capable subkey for --detach-sign.
+          key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          sigs=()
+          shopt -s nullglob
+          for f in assets/*.AppImage assets/*.deb SHA256SUMS; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+                --local-user "$key_id" --armor --detach-sign --output "$f.asc" "$f"
+            sigs+=("$f.asc")
+          done
+          # houston-signing-key.asc is the committed public key at the released commit, so a
+          # downloader can verify with no keyserver.
+          gh release upload "$tag" "${sigs[@]}" houston-signing-key.asc -R houston-code/houston --clobber
       - name: Attest the release (SLSA provenance, one statement)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -614,7 +291,7 @@ jobs:
           gh release upload "$tag" provenance.slsa.bundle -R houston-code/houston --clobber
 
   finalize:
-    needs: [build, checksums]
+    needs: [build-mac, build-other, checksums]
     if: ${{ !inputs.dry_run }}
     timeout-minutes: 10
     runs-on: ubuntu-24.04
