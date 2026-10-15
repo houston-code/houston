@@ -1,5 +1,7 @@
 import { basename } from 'node:path'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { isBlockedByPlan } from './approval'
+import { builtinToolset, getTool } from './tools'
 
 /**
  * A short, factual addendum tailored to the model family in use, or '' for
@@ -111,29 +113,31 @@ export function buildSystemPrompt(
   gitStatus?: string,
   providerId?: string,
   model?: string,
-  // Defaults true (desktop). The standalone CLI has no browser engine to screenshot
-  // with, so it passes false and the view_localhost line is dropped, matching the
-  // toolset, which omits the tool there too (see loop.ts).
-  viewLocalhostAvailable = true,
-  // Defaults true (desktop). A host that wires no spawn backend passes false and
-  // the spawn_session line is dropped, matching the toolset.
-  spawnSessionAvailable = true,
-  // Defaults true (desktop). A host that wires no scheduler backend passes false
-  // and the schedule-tools line is dropped, matching the toolset.
-  schedulerAvailable = true,
+  // The built-in tool names the run advertises (loop.ts passes the names of the
+  // schemas it sends). Lines about a backend-dependent tool appear only when the
+  // tool is offered, so the prompt never names one the model can't call. The
+  // default is the desktop toolset, where every backend is wired.
+  tools: readonly string[] = builtinToolset({
+    localhostCapture: true,
+    spawn: true,
+    scheduler: true,
+    planMode: planMode === true
+  }).map((t) => t.schema.name),
   // The OS and sandbox backend this run's shell commands execute under (loop.ts
   // passes the live values). The default keeps the original macOS wording.
   host: PromptHost = DEFAULT_HOST
 ): string {
-  const viewLocalhostLine = !viewLocalhostAvailable
+  const offered = new Set(tools)
+  const offers = (...names: string[]): boolean => names.every((n) => offered.has(n))
+  const viewLocalhostLine = !offers('run_shell', 'view_localhost')
     ? ''
     : host.sandboxBackend === 'bubblewrap'
       ? LINUX_VIEW_LOCALHOST_LINE
       : '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot plus console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps (fill the form, click submit, wait_for what should appear next) with test data, and check the step results and the final screenshot.'
-  const spawnSessionLine = spawnSessionAvailable
+  const spawnSessionLine = offers('spawn_session')
     ? ' spawn_session is different: it starts a separate, persistent background session (optionally on its own git branch/worktree) for independent work that should run in parallel with this one. It does not report back here, so give it a self-contained prompt.'
     : ''
-  const scheduleLine = schedulerAvailable
+  const scheduleLine = offers('schedule_run', 'list_scheduled_runs', 'cancel_scheduled_run')
     ? '\n- When the user wants something done on a schedule or later ("every morning...", "tomorrow at 9..."), use schedule_run (list_scheduled_runs and cancel_scheduled_run manage existing ones). Each occurrence starts a fresh session with the stored prompt under the current approval policy, so make that prompt self-contained. Schedules fire while Houston is running and persist across restarts.'
     : ''
   const base = `You are Houston, a coding agent working on the user's ${osName(host)} machine. You help with software engineering tasks in a single project directory.
@@ -208,8 +212,17 @@ ${environmentSection(host)}
   }
 
   if (planMode) {
+    // Named from the same predicate the loop enforces, over the tools this run
+    // offers, so the list can't drift from what plan mode actually refuses.
+    const refused = tools.filter((name) => {
+      const tool = getTool(name)
+      return tool !== undefined && isBlockedByPlan('plan', tool)
+    })
+    const refusedList = refused.length
+      ? `these tools: ${refused.join(', ')}, and any MCP tool`
+      : 'any MCP tool'
     sections.push(
-      `PLAN MODE IS ON. You are read-only: write_file, edit_file, multi_edit, and run_shell are blocked and will be refused. Investigate with read_file, list_dir, glob, search_files, and ast_grep (and web_fetch/web_search if needed), and use ask_user to settle open questions that would change the plan. Then call present_plan with the full plan as markdown in its \`plan\` field and the files it will touch in \`files\`; don't edit files or run commands. Make the plan concrete: what changes in which files, the approach and why, and how you will verify it. The review panel renders the plan in full, so put it there rather than in a chat message. present_plan lets the user accept the plan (you then carry it out), request changes (revise it and call present_plan again), or reject it. Follow the decision it returns, and don't start work until the plan is accepted.`
+      `PLAN MODE IS ON. You are read-only, so Houston refuses ${refusedList}. Investigate with read_file, list_dir, glob, search_files, and ast_grep (and web_fetch/web_search if needed), and use ask_user to settle open questions that would change the plan. Then call present_plan with the full plan as markdown in its \`plan\` field and the files it will touch in \`files\`; don't edit files or run commands. Make the plan concrete: what changes in which files, the approach and why, and how you will verify it. The review panel renders the plan in full, so put it there rather than in a chat message. present_plan lets the user accept the plan (you then carry it out), request changes (revise it and call present_plan again), or reject it. Follow the decision it returns, and don't start work until the plan is accepted.`
     )
   }
 

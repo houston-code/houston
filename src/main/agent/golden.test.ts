@@ -41,8 +41,10 @@ import type {
 import type { ApprovalPolicy } from '@shared/types'
 import { resetCaptureBackend, setCaptureBackend } from './viewlocalhost'
 import { resetSpawnBackend, setSpawnBackend } from './spawn'
+import { resetSchedulerBackend, setSchedulerBackend } from './scheduler'
 import type { CaptureDeps } from './viewlocalhost'
 import type { SpawnBackend } from './spawn'
+import type { SchedulerBackend } from './scheduler'
 
 // Hoisted holders the mocks read, so each scenario can vary the fixed inputs.
 const h = vi.hoisted(() => ({
@@ -181,6 +183,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true })
   resetCaptureBackend()
   resetSpawnBackend()
+  resetSchedulerBackend()
   vi.restoreAllMocks()
 })
 
@@ -529,5 +532,136 @@ describe('agent behavior goldens', () => {
       ...blocks
     ].join('\n')
     await expect(doc).toMatchFileSnapshot('goldens/per-model-request-shape.txt')
+  })
+})
+
+// ---- prompt/toolset drift guard ----
+
+/** Every snake_case identifier in a text: the shape of every multi-word tool and parameter name. */
+function snakeCaseIdentifiers(text: string): string[] {
+  return [...new Set(text.match(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g) ?? [])].sort()
+}
+
+/**
+ * Every name a JSON schema lets the model write: each property name and each string
+ * enum value, nested objects and array items included (e.g. view_localhost's
+ * `steps[].action` value `wait_for`).
+ */
+function schemaVocabulary(schema: unknown, out: Set<string>): void {
+  if (Array.isArray(schema)) {
+    for (const s of schema) schemaVocabulary(s, out)
+  } else if (schema && typeof schema === 'object') {
+    for (const [key, value] of Object.entries(schema)) {
+      if (key === 'properties' && value && typeof value === 'object') {
+        for (const name of Object.keys(value)) out.add(name)
+      }
+      if (key === 'enum' && Array.isArray(value)) {
+        for (const v of value) if (typeof v === 'string') out.add(v)
+      }
+      schemaVocabulary(value, out)
+    }
+  }
+}
+
+/**
+ * The snake_case identifiers a system prompt mentions that are neither a tool the
+ * same request advertises nor a parameter (or enum value) of one: in practice, a
+ * tool the prompt tells the model to use that this run doesn't offer.
+ */
+function unadvertisedMentions(system: string, tools: ToolSchema[]): string[] {
+  const known = new Set(tools.map((t) => t.name))
+  for (const t of tools) schemaVocabulary(t.parameters, known)
+  return snakeCaseIdentifiers(system).filter((id) => !known.has(id))
+}
+
+interface BackendConfig {
+  label: string
+  capture: boolean
+  spawn: boolean
+  scheduler: boolean
+}
+
+/**
+ * Every combination of the optional host backends. The Electron shell wires all
+ * three (desktop); the terminal entries wire spawn and the scheduler but have no
+ * browser engine for view_localhost (CLI).
+ */
+const BACKEND_CONFIGS: BackendConfig[] = [true, false].flatMap((capture) =>
+  [true, false].flatMap((spawn) =>
+    [true, false].map((scheduler) => ({
+      label:
+        capture && spawn && scheduler
+          ? 'desktop'
+          : !capture && spawn && scheduler
+            ? 'CLI'
+            : `capture=${capture} spawn=${spawn} scheduler=${scheduler}`,
+      capture,
+      spawn,
+      scheduler
+    }))
+  )
+)
+
+function wireBackends(c: Omit<BackendConfig, 'label'>): void {
+  if (c.capture) setCaptureBackend({} as CaptureDeps)
+  if (c.spawn) setSpawnBackend({} as SpawnBackend)
+  if (c.scheduler) setSchedulerBackend({} as SchedulerBackend)
+}
+
+/** The first request of a plain one-turn run under the given config. */
+async function firstRequest(opts: {
+  policy?: ApprovalPolicy
+  providerId?: string
+  model?: string
+}): Promise<CapturedRequest> {
+  const r = await runScenario({ turns: [[{ type: 'text', text: 'ok' }, doneTurn()]], ...opts })
+  return r.requests[0]
+}
+
+describe('system prompt names only tools the run offers', () => {
+  for (const config of BACKEND_CONFIGS) {
+    for (const policy of ['ask', 'plan'] as const) {
+      it(`${config.label}, ${policy === 'plan' ? 'plan mode' : 'ask'}`, async () => {
+        wireBackends(config)
+        const req = await firstRequest({ policy })
+        const system = norm(req.system)
+        // Guard against a vacuous pass if the extractor ever stops matching.
+        expect(snakeCaseIdentifiers(system)).toContain('read_file')
+        expect(unadvertisedMentions(system, req.tools)).toEqual([])
+      })
+    }
+  }
+
+  for (const family of [
+    { providerId: 'openai', model: 'gpt-5.2' },
+    { providerId: 'gemini', model: 'gemini-2.5-pro' },
+    { providerId: 'ollama', model: 'llama3.3' }
+  ]) {
+    it(`desktop with the ${family.providerId} addendum`, async () => {
+      wireBackends({ capture: true, spawn: true, scheduler: true })
+      const req = await firstRequest(family)
+      expect(unadvertisedMentions(norm(req.system), req.tools)).toEqual([])
+    })
+  }
+
+  it('flags a tool or parameter the prompt still names after it is dropped or renamed', async () => {
+    wireBackends({ capture: true, spawn: true, scheduler: true })
+    const req = await firstRequest({})
+    const system = norm(req.system)
+    expect(unadvertisedMentions(system, req.tools)).toEqual([])
+
+    const dropped = req.tools.filter((t) => t.name !== 'apply_patch')
+    expect(unadvertisedMentions(system, dropped)).toEqual(['apply_patch'])
+
+    const renamed = req.tools.map((t) => (t.name === 'view_localhost' ? { ...t, name: 'view_page' } : t))
+    expect(unadvertisedMentions(system, renamed)).toEqual(['view_localhost'])
+
+    const runView = req.tools.find((t) => t.name === 'gh_run_view')!
+    const { log_failed: _logFailed, ...rest } = (runView.parameters as { properties: Record<string, unknown> })
+      .properties
+    const paramDropped = req.tools.map((t) =>
+      t === runView ? { ...t, parameters: { ...t.parameters, properties: rest } } : t
+    )
+    expect(unadvertisedMentions(system, paramDropped)).toEqual(['log_failed'])
   })
 })

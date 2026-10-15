@@ -70,20 +70,26 @@ describe('needsApproval', () => {
 })
 
 describe('isBlockedByPlan', () => {
-  it('blocks writes and shell in plan mode', () => {
-    expect(isBlockedByPlan('plan', 'write')).toBe(true)
-    expect(isBlockedByPlan('plan', 'shell')).toBe(true)
+  it('blocks writes, shell, and MCP in plan mode', () => {
+    expect(isBlockedByPlan('plan', { kind: 'write' })).toBe(true)
+    expect(isBlockedByPlan('plan', { kind: 'shell' })).toBe(true)
+    expect(isBlockedByPlan('plan', { kind: 'mcp' })).toBe(true)
   })
 
   it('allows reads and network (no mutation) in plan mode', () => {
-    expect(isBlockedByPlan('plan', 'read')).toBe(false)
-    expect(isBlockedByPlan('plan', 'network')).toBe(false)
+    expect(isBlockedByPlan('plan', { kind: 'read' })).toBe(false)
+    expect(isBlockedByPlan('plan', { kind: 'network' })).toBe(false)
+  })
+
+  it('blocks a network tool flagged blockedInPlan (it changes remote state)', () => {
+    expect(isBlockedByPlan('plan', { kind: 'network', blockedInPlan: true })).toBe(true)
   })
 
   it('blocks nothing under other policies', () => {
     for (const policy of ['ask', 'auto-edit', 'full-auto'] as const) {
-      for (const kind of ['read', 'write', 'shell', 'network'] as const) {
-        expect(isBlockedByPlan(policy, kind)).toBe(false)
+      for (const kind of ['read', 'write', 'shell', 'network', 'mcp'] as const) {
+        expect(isBlockedByPlan(policy, { kind })).toBe(false)
+        expect(isBlockedByPlan(policy, { kind, blockedInPlan: true })).toBe(false)
       }
     }
   })

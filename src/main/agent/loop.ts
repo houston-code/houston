@@ -49,11 +49,9 @@ import { loadProjectConfig, mergeProjectMcpServers } from './projectConfig'
 import { loadManagedPolicy } from './managedPolicy'
 import {
   ASK_USER_NAME,
-  PRESENT_PLAN_NAME,
-  VIEW_LOCALHOST_NAME,
+  builtinToolset,
   getTool,
   resolveInRoots,
-  toolSchemas,
   type DispatchAgentOptions,
   type ToolDef,
   type ToolContext,
@@ -114,13 +112,8 @@ import {
 } from './subagentSessions'
 import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
+import { isSpawnBackendConfigured, spawnSession as engineSpawnSession } from './spawn'
 import {
-  isSpawnBackendConfigured,
-  spawnSession as engineSpawnSession,
-  SPAWN_SESSION_NAME
-} from './spawn'
-import {
-  SCHEDULE_TOOL_NAMES,
   isSchedulerConfigured,
   scheduleCancel,
   scheduleCreate,
@@ -899,17 +892,22 @@ export async function startRun(
       async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
     )
     if (freshSnapshot && conversationId) setPromptSnapshot(conversationId, promptSnapshot)
-    // view_localhost screenshots via an offscreen browser the Electron shell wires
-    // at startup. The standalone CLI wires none, so drop the tool from the schema
-    // set and the prompt rather than offering one that fails after an approval.
+    // Backend-dependent tools appear only when the host wired their backend at
+    // startup: view_localhost screenshots via an offscreen browser only the Electron
+    // shell wires, and spawn_session and the schedule tools need the spawn and
+    // scheduler backends (the desktop shell and the terminal entries wire both).
     const localhostCaptureAvailable = isCaptureBackendConfigured()
-    // Hosts wire a spawn backend at startup (the desktop shell and the terminal
-    // entries both do); a host that didn't gets spawn_session dropped from the
-    // toolset and the prompt, mirroring view_localhost.
     const spawnAvailable = isSpawnBackendConfigured()
-    // Same seam pattern for scheduled runs: hosts that wire a scheduler backend
-    // get the schedule tools; others have them dropped from toolset + prompt.
     const schedulerAvailable = isSchedulerConfigured()
+    // The built-in tools this run offers (present_plan only in plan mode). The
+    // prompt is built from the same list, so it never names a tool the model
+    // can't call.
+    const builtinSchemas = builtinToolset({
+      localhostCapture: localhostCaptureAvailable,
+      spawn: spawnAvailable,
+      scheduler: schedulerAvailable,
+      planMode
+    }).map((t) => t.schema)
     let system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
@@ -919,9 +917,7 @@ export async function startRun(
       formatPromptSnapshot(promptSnapshot),
       req.providerId,
       req.model,
-      localhostCaptureAvailable,
-      spawnAvailable,
-      schedulerAvailable,
+      builtinSchemas.map((s) => s.name),
       // The prompt states the OS and whether run_shell is confined, so a host
       // without an OS sandbox is never told its commands are sandboxed.
       { platform: hostPlatform(), sandboxBackend: activeBackendId() }
@@ -955,14 +951,7 @@ export async function startRun(
     // MCP schema (small setups) or just find_tools + already-revealed MCP tools
     // (lazy). Recomputed each turn so tools revealed via find_tools then appear.
     const buildTools = (): ToolSchema[] => [
-      ...toolSchemas().filter(
-        (s) =>
-          (localhostCaptureAvailable || s.name !== VIEW_LOCALHOST_NAME) &&
-          (spawnAvailable || s.name !== SPAWN_SESSION_NAME) &&
-          (schedulerAvailable || !(SCHEDULE_TOOL_NAMES as readonly string[]).includes(s.name)) &&
-          // present_plan is the "exit Plan mode" tool; only offer it in Plan mode.
-          (planMode || s.name !== PRESENT_PLAN_NAME)
-      ),
+      ...builtinSchemas,
       ...(findTools ? [findTools.schema] : []),
       ...mcpToolDefs
         .filter((d) => !lazyMcp || revealedMcp.has(d.schema.name))
@@ -2655,10 +2644,7 @@ export async function startRun(
             ? "Denied by your organization's managed policy."
             : 'Denied by a permission rule.'
           ok = false
-        } else if (
-          isBlockedByPlan(run.policy, tool.kind) ||
-          (run.policy === 'plan' && tool.blockedInPlan === true)
-        ) {
+        } else if (isBlockedByPlan(run.policy, tool)) {
           output =
             'Blocked: Houston is in Plan mode (read-only). Do not modify files, run commands, or change remote/PR state. Finish your plan and present it; the user will switch off Plan mode to let you carry it out.'
           ok = false
