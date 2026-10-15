@@ -101,10 +101,10 @@ jobs:
       # every platform. A dry run keeps going, so one run reports every platform's failure
       # (release-prepare does the same).
       fail-fast: ${{ !inputs.dry_run }}
-      # arm64 MUST run first: its `--publish always` owns the single `latest-mac.yml` update
-      # feed. The Intel leg then uploads only its .dmg/.zip INTO that draft and merges its
-      # files into the arm64 feed, never publishing its own latest-mac.yml, which would
-      # clobber arm64's and break the updater (electron-builder#5592).
+      # arm64 MUST run first: it uploads the single `latest-mac.yml` update feed. The Intel
+      # leg then uploads only its .dmg/.zip INTO that draft and merges its files into the
+      # arm64 feed, never publishing its own latest-mac.yml, which would clobber arm64's and
+      # break the updater (electron-builder#5592).
       max-parallel: 1
       matrix:
         include:

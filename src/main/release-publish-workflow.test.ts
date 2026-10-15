@@ -256,3 +256,44 @@ describe('release-publish SLSA provenance', () => {
     expect(buildJob).not.toContain('.slsa.bundle')
   })
 })
+
+describe('release legs verify before they upload', () => {
+  /** Index of a step by its `- name:` (or, for unnamed steps, its run line) in the leg. */
+  const at = (marker: string) => {
+    const i = leg.indexOf(marker)
+    expect(i, marker).toBeGreaterThan(-1)
+    return i
+  }
+
+  it('never lets electron-builder publish', () => {
+    // Its publisher uploads as it builds, before any check below has run.
+    expect(leg).not.toContain('--publish always')
+    expect(leg).toContain('run: npm run "$DIST" -- --publish never')
+  })
+
+  it('uploads installers only after the signature, e2e and binary vulnerability checks', () => {
+    const upload = at("- name: Upload this leg's installers to the draft")
+    for (const check of [
+      '- name: Verify code signature + notarization',
+      'run: npm run test:e2e',
+      '- name: Generate deep binary SBOM (native/runtime layer)',
+      '- name: Scan binary SBOM + apply native-layer policy'
+    ]) {
+      expect(at(check)).toBeLessThan(upload)
+    }
+    // And the single-draft check runs on what was just uploaded.
+    expect(upload).toBeLessThan(at('- name: Check the release is still a single draft'))
+  })
+
+  it('uploads exactly one update feed per leg, last, merging the Intel feed into arm64', () => {
+    const start = at("- name: Upload this leg's installers to the draft")
+    const step = leg.slice(start, leg.indexOf('\n      - ', start + 1))
+    expect(step).toContain('if: ${{ !inputs.dry_run }}')
+    expect(step).toContain('node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml')
+    expect(step).toContain('feeds=(release/latest*.yml)')
+    expect(step).toContain('if [ "${#feeds[@]}" -ne 1 ]; then')
+    expect(step.indexOf('gh release upload "$tag" "${files[@]}"')).toBeLessThan(
+      step.indexOf('gh release upload "$tag" "${feeds[@]}"')
+    )
+  })
+})

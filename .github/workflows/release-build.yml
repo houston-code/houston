@@ -1,9 +1,9 @@
 name: Release - build leg
 
 # One platform leg of a release, called by release-publish.yml: build and package the app
-# (macOS legs are code-signed and notarized by electron-builder), publish its installers and
-# update feed into the draft release, run the packaged-app e2e on macOS, and generate this
-# platform's binary SBOM. The Linux leg also builds the standalone CLI, the lockfile SBOMs and
+# (macOS legs are code-signed and notarized by electron-builder), verify it (signature and
+# notarization, the packaged-app e2e on macOS, this platform's binary SBOM and its
+# vulnerability policy), and only then upload its installers and update feed into the draft. The Linux leg also builds the standalone CLI, the lockfile SBOMs and
 # the release VEX, and attaches them.
 #
 # NOTHING HERE SIGNS with cosign or GPG, and the job cannot mint an OIDC token. This job runs
@@ -86,11 +86,8 @@ jobs:
       - name: Check THIRD-PARTY-NOTICES.md is current
         if: inputs.os == 'ubuntu-22.04'
         run: npm run notices:check
-      # Create the draft release up front (or reuse the one a previous attempt made) so
-      # electron-builder never creates it. Left to itself, it creates the release lazily from
-      # each target's upload, and the arm64 leg's zip and dmg uploads raced: both saw no
-      # release and both created one, splitting the assets across two drafts. Every leg runs
-      # this, so a duplicate from any source stops the run before more uploads scatter.
+      # The `draft` job created the release; this reuses it and fails if there is more than
+      # one, so a duplicate from any source stops the leg before it builds for 40 minutes.
       - name: Ensure a single draft release
         if: ${{ !inputs.dry_run }}
         env:
@@ -98,12 +95,12 @@ jobs:
         run: |
           tag="v$(node -p "require('./package.json').version")"
           node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"
-      - name: Package and publish
-        # electron-builder's github publisher reads GH_TOKEN; the job's own GITHUB_TOKEN
-        # (contents: write) is enough, since the release lives in this repo (per
-        # electron-builder.yml `publish`). The gh calls in this step use it too.
+      # Build only. Nothing reaches the draft until this leg's checks below have passed
+      # (signature + notarization, the packaged-app e2e, the binary SBOM and its vulnerability
+      # policy), so a failed leg leaves no half-uploaded installers behind. The explicit
+      # `--publish never` also stops electron-builder's implicit publish-on-CI detection.
+      - name: Package
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code-signing + notarization. SCOPED to the macOS legs via startsWith():
           # CSC_LINK/CSC_KEY_PASSWORD are ALSO electron-builder's Windows Authenticode vars,
           # so leaking the mac .p12 to the Windows leg would make it try to sign the installer
@@ -115,54 +112,8 @@ jobs:
           APPLE_ID: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_ID || '' }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
-          DRY_RUN: ${{ inputs.dry_run }}
           DIST: ${{ inputs.dist }}
-          MAC_X64_MANUAL: ${{ inputs.mac_x64_manual }}
-        run: |
-          if [ "$DRY_RUN" = "true" ]; then
-            # Dry run: build only, never publish. The explicit `--publish never` also silences
-            # electron-builder's deprecated implicit-publish-on-CI detection (removed in v27).
-            npm run "$DIST" -- --publish never
-          elif [ "$MAC_X64_MANUAL" = "true" ]; then
-            # Intel mac: build WITHOUT electron-builder's publisher (its latest-mac.yml lists
-            # only x64 — publishing it as-is would clobber the arm64 feed: electron-builder#5592).
-            # Instead, MERGE this build's x64 files INTO the arm64 feed the macos-14 leg already
-            # published, so one latest-mac.yml auto-updates BOTH arches — MacUpdater self-selects
-            # per arch from the `files` list. release-publish's `build-mac` job runs the arm64 leg first.
-            # `--publish never` is REQUIRED here: without it, electron-builder's implicit
-            # publish-on-CI detection uploads this x64 latest-mac.yml and clobbers the arm64
-            # feed — the exact failure this manual-merge path exists to avoid.
-            npm run "$DIST" -- --publish never
-            tag="v$(node -p "require('./package.json').version")"
-            mkdir -p arm64-feed merged-feed
-            # Pull the arm64-only feed the arm64 leg uploaded to the draft, then merge x64 into it.
-            gh release download "$tag" -R houston-code/houston -p latest-mac.yml -D arm64-feed --clobber
-            node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml > merged-feed/latest-mac.yml
-            # Upload every x64 binary (dmg/zip/blockmaps, whatever electron-builder named them),
-            # then replace the feed with the merged one. Exclude *.yml from the binary upload so
-            # the x64-only latest-mac.yml is never published.
-            find release -maxdepth 1 -type f ! -name '*.yml' -print0 \
-              | xargs -0 gh release upload "$tag" -R houston-code/houston --clobber
-            gh release upload "$tag" merged-feed/latest-mac.yml -R houston-code/houston --clobber
-          else
-            # Appends to the dist script's electron-builder invocation: --publish always
-            # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
-            npm run "$DIST" -- --publish always
-          fi
-      # electron-builder must have uploaded into the existing draft, not made another one.
-      # Checked before the signing steps below, which upload to the draft by tag.
-      - name: Check the release is still a single draft
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          node scripts/release-draft.mjs check houston-code/houston "$tag"
-      # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
-      # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
-      # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
-      # flaky on CI runners — the reason electron-builder's gatekeeperAssess is off — so it
-      # runs last, INFORMATIONAL only, and never fails the job.
+        run: npm run "$DIST" -- --publish never
       - name: Verify code signature + notarization
         if: startsWith(inputs.os, 'macos')
         run: |
@@ -274,6 +225,58 @@ jobs:
             --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY" \
             --vex-in .github/vex/houston.openvex.json --vex-out release-vex/houston.openvex.json \
             --release "$(node -p "require('./package.json').version")"
+      # Upload this leg's installers and update feed, now that every check above passed. The
+      # same files electron-builder's own publisher used to upload: installers, their blockmaps (the
+      # updaters' differential downloads), and the one latest*.yml feed this platform reads.
+      #
+      # Intel mac: its own latest-mac.yml lists only x64, and publishing it would clobber the
+      # arm64 feed (electron-builder#5592). Instead MERGE this build's x64 files INTO the feed
+      # the arm64 leg already uploaded, so one latest-mac.yml auto-updates BOTH arches
+      # (MacUpdater self-selects per arch from the `files` list). release-publish's `build-mac`
+      # job runs the arm64 leg first. The feed goes up last, so it never names a file that is
+      # not on the draft yet.
+      - name: Upload this leg's installers to the draft
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAC_X64_MANUAL: ${{ inputs.mac_x64_manual }}
+        run: |
+          set -euo pipefail
+          tag="v$(node -p "require('./package.json').version")"
+          shopt -s nullglob
+          files=(release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb release/*.blockmap)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no installers found in release/"
+            exit 1
+          fi
+          if [ "$MAC_X64_MANUAL" = "true" ]; then
+            mkdir -p arm64-feed merged-feed
+            gh release download "$tag" -R houston-code/houston -p latest-mac.yml -D arm64-feed --clobber
+            node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml > merged-feed/latest-mac.yml
+            feeds=(merged-feed/latest-mac.yml)
+          else
+            feeds=(release/latest*.yml)
+          fi
+          if [ "${#feeds[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one update feed, found ${#feeds[@]}: ${feeds[*]:-none}"
+            exit 1
+          fi
+          printf 'uploading %s\n' "${files[@]}" "${feeds[@]}"
+          gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber
+          gh release upload "$tag" "${feeds[@]}" -R houston-code/houston --clobber
+      # The uploads above must have landed in the existing draft, not made another one.
+      - name: Check the release is still a single draft
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/release-draft.mjs check houston-code/houston "$tag"
+      # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
+      # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
+      # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
+      # flaky on CI runners — the reason electron-builder's gatekeeperAssess is off — so it
+      # runs last, INFORMATIONAL only, and never fails the job.
       - name: Attach standalone CLI + SBOMs to the release
         if: ${{ inputs.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
