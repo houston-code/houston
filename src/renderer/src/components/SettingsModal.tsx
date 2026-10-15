@@ -871,7 +871,11 @@ export function SettingsModal({
         ? 'ok'
         : 'warn'
   const formatterTone =
-    integrations != null && integrations.formatters.some((f) => f.installed) ? 'ok' : 'warn'
+    integrations != null &&
+    !integrations.formattersNeedGitBash &&
+    integrations.formatters.some((f) => f.installed)
+      ? 'ok'
+      : 'warn'
 
   return (
     <div className="modal-backdrop" onClick={requestClose}>
@@ -1711,20 +1715,37 @@ export function SettingsModal({
                         <span
                           className={`integration__status pill integration__status--${formatterTone} pill--${formatterTone}`}
                         >
-                          {integrations.formatters.filter((f) => f.installed).length} of{' '}
-                          {integrations.formatters.length} found
+                          {integrations.formattersNeedGitBash ? (
+                            'Needs Git for Windows'
+                          ) : (
+                            <>
+                              {integrations.formatters.filter((f) => f.installed).length} of{' '}
+                              {integrations.formatters.length} found
+                            </>
+                          )}
                         </span>
                       </div>
-                      <p className="field__hint">
-                        {integrations.formatters.map((f, i) => (
-                          <span key={f.bin}>
-                            {i > 0 && ', '}
-                            <code>{f.bin}</code> {f.installed ? '✓' : '✗'}
-                          </span>
-                        ))}
-                        . Install the ones you want on your <code>PATH</code>; the matching formatter
-                        runs only when present.
-                      </p>
+                      {integrations.formattersNeedGitBash ? (
+                        <p className="field__hint">
+                          Format on save and post-edit diagnostics need Git for Windows (Git
+                          Bash). Install it from{' '}
+                          <a href="https://gitforwindows.org" target="_blank" rel="noreferrer">
+                            gitforwindows.org
+                          </a>
+                          , then restart Houston.
+                        </p>
+                      ) : (
+                        <p className="field__hint">
+                          {integrations.formatters.map((f, i) => (
+                            <span key={f.bin}>
+                              {i > 0 && ', '}
+                              <code>{f.bin}</code> {f.installed ? '✓' : '✗'}
+                            </span>
+                          ))}
+                          . Install the ones you want on your <code>PATH</code>; the matching formatter
+                          runs only when present.
+                        </p>
+                      )}
                     </>
                   )}
                 </SettingsSection>

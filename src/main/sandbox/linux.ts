@@ -243,6 +243,7 @@ export const BubblewrapBackend: SandboxBackend = {
   // Honest: the bash session prelude only runs when bash is the resolved shell. On the
   // (near-impossible) bash-less host bwrap falls back to /bin/sh and callers skip it.
   supportsSession: resolvePosixShell().isBash,
+  shellSyntax: 'posix',
   buildLaunch({ command, roots, allowNetwork, egressProxy, cwd }): ShellLaunch {
     const { shell, isBash } = resolvePosixShell()
     const writableRoots = dedupeExisting(roots.length ? roots : [cwd])

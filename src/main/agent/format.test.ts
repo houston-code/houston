@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SandboxRunResult } from '../sandbox'
-import { FORMATTERS, formatterFor, hasBinary, formatFile } from './format'
+import {
+  FORMATTERS,
+  WIN_BASH_EXTENSIONS,
+  canRunTool,
+  formatterFor,
+  hasBinary,
+  formatFile,
+  planToolRun,
+  resolveBinaryPath
+} from './format'
 
 describe('format: extension → formatter mapping', () => {
   it('maps web/text extensions to prettier', () => {
@@ -225,5 +235,156 @@ describe.skipIf(!canExec)('formatFile (real sandbox exec)', () => {
     const out = readFileSync(f, 'utf8')
     expect(out).toContain('\tx := 1') // re-indented with a tab
     expect(out).not.toContain('func main()  {') // double space collapsed
+  })
+})
+
+// Windows behavior, exercised on every host through the platform / exists / env /
+// shellSyntax seams (paths are built with literal backslashes, not the host's join).
+describe('format: Windows binary lookup', () => {
+  const env = { PATH: 'C:\\Tools;C:\\Users\\me\\AppData\\Roaming\\npm' }
+  const npm = 'C:\\Users\\me\\AppData\\Roaming\\npm'
+
+  it('finds native executables by their .exe / .com suffix', () => {
+    const files = new Set(['C:\\Tools\\ruff.exe', `${npm}\\gofmt.com`])
+    const exists = (p: string): boolean => files.has(p)
+    expect(resolveBinaryPath('ruff', { platform: 'win32', env, exists })).toBe('C:\\Tools\\ruff.exe')
+    expect(resolveBinaryPath('gofmt', { platform: 'win32', env, exists })).toBe(`${npm}\\gofmt.com`)
+  })
+
+  it('never resolves a .cmd / .bat shim, even under the Git Bash extension set', () => {
+    const exists = (p: string): boolean => p.endsWith('.cmd') || p.endsWith('.bat')
+    expect(resolveBinaryPath('prettier', { platform: 'win32', env, exists })).toBeNull()
+    expect(
+      resolveBinaryPath('prettier', { platform: 'win32', env, exists, extensions: WIN_BASH_EXTENSIONS })
+    ).toBeNull()
+  })
+
+  it('finds the extensionless npm sh shim only with the Git Bash extension set', () => {
+    const exists = (p: string): boolean => p === `${npm}\\prettier` || p === `${npm}\\prettier.cmd`
+    expect(resolveBinaryPath('prettier', { platform: 'win32', env, exists })).toBeNull()
+    expect(
+      resolveBinaryPath('prettier', { platform: 'win32', env, exists, extensions: WIN_BASH_EXTENSIONS })
+    ).toBe(`${npm}\\prettier`)
+  })
+
+  it('searches dir-major: an earlier PATH dir wins over a better suffix later', () => {
+    const files = new Set([`${npm}\\ruff.exe`, 'C:\\Tools\\ruff'])
+    expect(
+      resolveBinaryPath('ruff', {
+        platform: 'win32',
+        env,
+        exists: (p) => files.has(p),
+        extensions: WIN_BASH_EXTENSIONS
+      })
+    ).toBe('C:\\Tools\\ruff')
+  })
+
+  it('skips the POSIX install dirs and rejects drive-relative names', () => {
+    const probed: string[] = []
+    resolveBinaryPath('gofmt', { platform: 'win32', env: { PATH: '' }, exists: (p) => (probed.push(p), false) })
+    expect(probed).toEqual([])
+    expect(hasBinary('C:ruff', { platform: 'win32', env, exists: () => true })).toBe(false)
+  })
+
+  it('formatterFor uses the Git Bash extension set on Windows', () => {
+    const f = formatterFor('a.ts', { platform: 'win32', env, exists: (p) => p === `${npm}\\prettier` })
+    expect(f?.bin).toBe('prettier')
+  })
+})
+
+describe('format: building the tool command', () => {
+  const tool = { bin: 'prettier', args: (p: string) => ['--write', p] }
+  // Every character cmd.exe or bash could treat specially.
+  const nasty = "C:\\repo\\it's a & b ^ %PATH% $(x) `y` !z.ts"
+
+  it('runs the resolved file in forward-slash form under Git Bash, every argv element single-quoted', () => {
+    const plan = planToolRun([tool], nasty, {
+      platform: 'win32',
+      shellSyntax: 'posix',
+      resolveBin: () => 'C:\\Program Files\\nodejs\\prettier'
+    })
+    expect(plan?.command).toBe(
+      `'C:/Program Files/nodejs/prettier' '--write' 'C:\\repo\\it'\\''s a & b ^ %PATH% $(x) \`y\` !z.ts'`
+    )
+  })
+
+  it('keeps running by the bare name on POSIX', () => {
+    const plan = planToolRun([tool], '/w/a.ts', {
+      platform: 'linux',
+      shellSyntax: 'posix',
+      resolveBin: () => '/opt/homebrew/bin/prettier'
+    })
+    expect(plan?.command).toBe(`'prettier' '--write' '/w/a.ts'`)
+  })
+
+  it('is disabled under the cmd.exe fallback, without even probing for the binary', () => {
+    let probed = false
+    const resolveBin = (): string => ((probed = true), 'C:\\Tools\\ruff.exe')
+    expect(planToolRun([tool], 'C:\\a.ts', { platform: 'win32', shellSyntax: 'cmd', resolveBin })).toBeNull()
+    expect(canRunTool('ruff', { platform: 'win32', shellSyntax: 'cmd', resolveBin })).toBe(false)
+    expect(probed).toBe(false)
+  })
+
+  it('canRunTool reflects the lookup when the shell is bash-compatible', () => {
+    const env = { PATH: 'C:\\npm' }
+    const opts = { platform: 'win32' as const, shellSyntax: 'posix' as const, env }
+    expect(canRunTool('prettier', { ...opts, exists: (p) => p === 'C:\\npm\\prettier' })).toBe(true)
+    expect(canRunTool('prettier', { ...opts, exists: (p) => p === 'C:\\npm\\prettier.cmd' })).toBe(false)
+  })
+
+  // The quoting proven against a real shell: the path comes back as ONE argv element,
+  // byte for byte, with nothing expanded or executed.
+  it.runIf(process.platform !== 'win32')('round-trips a hostile path through a real POSIX shell', () => {
+    const echo = { bin: 'printf', args: (p: string) => ['%s', p] }
+    for (const platform of ['linux', 'win32'] as const) {
+      const plan = planToolRun([echo], nasty, { platform, shellSyntax: 'posix', resolveBin: (b) => b })
+      expect(execFileSync('/bin/sh', ['-c', plan!.command], { encoding: 'utf8' })).toBe(nasty)
+    }
+  })
+
+  it('formatFile does not run under the cmd.exe fallback', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'houston-fmt-cmd-'))
+    try {
+      writeFileSync(join(ws, 'a.ts'), 'const x=1')
+      let ran = false
+      const res = await formatFile('a.ts', {
+        workspace: ws,
+        roots: [ws],
+        shellSyntax: 'cmd',
+        hasBin: () => true,
+        run: async () => {
+          ran = true
+          return { stdout: '', stderr: '', exitCode: 0, timedOut: false, sandboxed: false }
+        }
+      })
+      expect(res.formatted).toBe(false)
+      expect(ran).toBe(false)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
+  })
+
+  it('formatFile on Windows (Git Bash) runs the resolved formatter path', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'houston-fmt-win-'))
+    try {
+      writeFileSync(join(ws, 'a.py'), 'x=1')
+      let cmd = ''
+      const res = await formatFile('a.py', {
+        workspace: ws,
+        roots: [ws],
+        platform: 'win32',
+        shellSyntax: 'posix',
+        env: { PATH: 'C:\\Py\\Scripts' },
+        exists: (p) => p === 'C:\\Py\\Scripts\\black.exe',
+        run: async (o) => {
+          cmd = o.command
+          return { stdout: '', stderr: '', exitCode: 0, timedOut: false, sandboxed: false }
+        }
+      })
+      expect(res).toMatchObject({ formatted: true, bin: 'black' })
+      expect(cmd).toBe(`'C:/Py/Scripts/black.exe' '-q' '${join(ws, 'a.py')}'`)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+    }
   })
 })

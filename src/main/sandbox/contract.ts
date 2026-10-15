@@ -128,6 +128,9 @@ export interface ShellLaunch {
   env?: NodeJS.ProcessEnv
 }
 
+/** How a backend's shell parses its command string (see {@link SandboxBackend.shellSyntax}). */
+export type ShellSyntax = 'posix' | 'cmd'
+
 /**
  * A platform confinement strategy. Exactly one is selected per host (see select.ts).
  * `sandboxed` is the source of truth for honesty: a backend that cannot enforce the
@@ -142,6 +145,13 @@ export interface SandboxBackend {
   readonly confinesNetwork: boolean
   /** Whether this backend's shell supports the bash session prelude (see ShellLaunch). */
   readonly supportsSession: boolean
+  /**
+   * The quoting syntax `command` is parsed with. 'posix' for bash and `/bin/sh` (single
+   * quotes are literal); 'cmd' for the Windows `cmd.exe` fallback, which has no quote
+   * that suppresses `%VAR%` expansion, so callers that embed untrusted strings (file
+   * paths) in a command must not build one for it.
+   */
+  readonly shellSyntax: ShellSyntax
   /**
    * Build the argv + spawn flags to launch `command` under this backend. `cwd` is the
    * working directory (some backends, e.g. bubblewrap, must set it inside the sandbox);

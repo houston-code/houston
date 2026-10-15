@@ -130,6 +130,7 @@ export const SeatbeltBackend: SandboxBackend = {
   sandboxed: true,
   confinesNetwork: true,
   supportsSession: true,
+  shellSyntax: 'posix',
   buildLaunch({ command, roots, allowNetwork, egressProxy }): ShellLaunch {
     const mode = seatbeltNetworkMode(allowNetwork, egressProxy)
     const profile = buildSeatbeltProfile(roots, mode)

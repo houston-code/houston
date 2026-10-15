@@ -5,7 +5,8 @@ import type {
   SandboxRunOptions,
   SandboxRunResult,
   SandboxSpawnOptions,
-  RunSandboxedDeps
+  RunSandboxedDeps,
+  ShellSyntax
 } from './contract'
 
 /**
@@ -23,6 +24,7 @@ export type {
   RunSandboxedDeps,
   SandboxBackend,
   ShellLaunch,
+  ShellSyntax,
   EgressProxyEndpoints
 } from './contract'
 export {
@@ -88,6 +90,11 @@ export function isSandboxed(): boolean {
 /** Whether the active backend's shell supports the bash session prelude (cmd.exe → false). */
 export function backendSupportsSession(): boolean {
   return backend.supportsSession
+}
+
+/** How the active backend's shell parses a command string (cmd.exe fallback → 'cmd'). */
+export function backendShellSyntax(): ShellSyntax {
+  return backend.shellSyntax
 }
 
 /** Stable id of the active backend (for startup logging / diagnostics). */
