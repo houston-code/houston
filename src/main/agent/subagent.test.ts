@@ -435,7 +435,7 @@ describe('runSubAgent', () => {
       })
       expect(report).toContain('Reported.')
       // The subagent is told shell is unavailable on this host…
-      expect(sink.system).toContain('run_shell is NOT available')
+      expect(sink.system).toContain('run_shell is not available')
       // …and the run_shell call was answered with the refusal note, never executed.
       const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 's1')
       expect(toolMsg?.content).toContain('run_shell is unavailable')
@@ -490,8 +490,8 @@ describe('runSubAgent', () => {
       // The command went through the gate exactly once…
       expect(gated).toEqual(['echo gated-ok'])
       // …the system prompt describes per-command approval instead of refusing shell…
-      expect(sink.system).toContain('EACH run_shell command first asks the user for approval')
-      expect(sink.system).not.toContain('run_shell is NOT available')
+      expect(sink.system).toContain('each run_shell command first asks the user for approval')
+      expect(sink.system).not.toContain('run_shell is not available')
       // …and the subagent saw the command's real output as the tool result.
       const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 's1')
       expect(toolMsg?.content).toContain('gated-ok')
@@ -733,7 +733,7 @@ describe('progress, resume, and nesting', () => {
       const toolMsg = sink.messages[1].find((m) => m.role === 'tool' && m.toolCallId === 'n1')
       expect(toolMsg?.content).toBe('GATED-BODY')
       // …and the system prompt states the per-request approval contract.
-      expect(sink.system).toContain('EACH network request first asks the user for approval')
+      expect(sink.system).toContain('Each network request first asks the user for approval')
     })
 
     it('a declared allow-list can exclude the web tools', async () => {

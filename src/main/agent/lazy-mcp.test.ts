@@ -61,7 +61,7 @@ describe('searchMcpDefs', () => {
 describe('mcpCatalog', () => {
   it('lists each tool with a one-line summary', () => {
     const cat = mcpCatalog(defs)
-    expect(cat).toContain('- srv:create_issue — Create a new issue in the tracker.')
+    expect(cat).toContain('- srv:create_issue: Create a new issue in the tracker.')
     expect(cat.split('\n')).toHaveLength(defs.length)
   })
 

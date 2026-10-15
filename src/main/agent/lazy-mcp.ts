@@ -36,7 +36,7 @@ function shortDesc(desc: string): string {
 export function mcpCatalog(defs: ToolDef[]): string {
   const lines = defs
     .slice(0, MAX_CATALOG)
-    .map((d) => `- ${d.schema.name} — ${shortDesc(d.schema.description)}`)
+    .map((d) => `- ${d.schema.name}: ${shortDesc(d.schema.description)}`)
   if (defs.length > MAX_CATALOG) lines.push(`- …and ${defs.length - MAX_CATALOG} more`)
   return lines.join('\n')
 }
@@ -90,7 +90,7 @@ export function makeFindToolsDef(defs: ToolDef[], revealed: Set<string>): ToolDe
       name: FIND_TOOLS_NAME,
       description:
         `${defs.length} MCP tools are connected, but their full schemas aren't preloaded (to save context). ` +
-        `Call this with a keyword query — matched against tool names and descriptions, or "*" for all — to load ` +
+        `Call this with a keyword query (matched against tool names and descriptions, or "*" for all) to load ` +
         `the ones you need; loaded tools become callable on the next step. Search here before calling any tool ` +
         `listed below.\n\nAvailable MCP tools:\n${mcpCatalog(defs)}`,
       parameters: {
