@@ -70,6 +70,11 @@ describe('makeWindowsBackend', () => {
     expect(makeWindowsBackend({ bashPath: null }).supportsSession).toBe(false)
   })
 
+  it('reports the shell syntax: posix under Git Bash, cmd under the cmd.exe fallback', () => {
+    expect(makeWindowsBackend({ bashPath: 'C:\\Git\\bin\\bash.exe' }).shellSyntax).toBe('posix')
+    expect(makeWindowsBackend({ bashPath: null }).shellSyntax).toBe('cmd')
+  })
+
   it('builds a launch via the resolved shell', () => {
     const b = makeWindowsBackend({ bashPath: null, env: { ComSpec: 'cmd.exe' } })
     const launch = b.buildLaunch({ command: 'dir', roots: [], allowNetwork: false, cwd: 'C:\\ws' })

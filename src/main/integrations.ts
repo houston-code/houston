@@ -1,5 +1,5 @@
 import { resolveGh, runGh } from './agent/github'
-import { FORMATTERS, hasBinary, type Formatter } from './agent/format'
+import { FORMATTERS, canRunTool, type Formatter } from './agent/format'
 import type { FormatterStatus, IntegrationsInfo } from '@shared/types'
 
 /**
@@ -15,7 +15,7 @@ export interface IntegrationsDeps {
   resolveGh?: () => string | null
   /** Whether `gh auth status` succeeds for a resolved gh path (default: runs it). */
   ghAuthOk?: (ghPath: string) => Promise<boolean>
-  /** Whether a formatter binary is present (default: the real PATH probe). */
+  /** Whether a formatter can run here (default: the real PATH probe + shell check). */
   hasBin?: (bin: string) => boolean
   /** The extension→formatters registry (default: the real one). */
   formatters?: Record<string, Formatter[]>
@@ -53,7 +53,7 @@ export function formatterStatuses(
 export async function getIntegrations(deps: IntegrationsDeps = {}): Promise<IntegrationsInfo> {
   const resolve = deps.resolveGh ?? (() => resolveGh())
   const authOk = deps.ghAuthOk ?? defaultGhAuthOk
-  const hasBin = deps.hasBin ?? ((b: string) => hasBinary(b))
+  const hasBin = deps.hasBin ?? ((b: string) => canRunTool(b))
   const registry = deps.formatters ?? FORMATTERS
 
   const ghPath = resolve()

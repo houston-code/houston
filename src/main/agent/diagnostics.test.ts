@@ -238,4 +238,48 @@ describe('runPostEditDiagnostics gating', () => {
     })
     expect(cmd).toContain(`'${join(ws, 'a b.ts')}'`)
   })
+
+  it('does not run under the Windows cmd.exe fallback (no cmd errors reported as problems)', async () => {
+    writeFileSync(join(ws, 'a.ts'), 'const x = 1')
+    let ran = false
+    const res = await runPostEditDiagnostics('a.ts', {
+      workspace: ws,
+      roots: [ws],
+      platform: 'win32',
+      shellSyntax: 'cmd',
+      hasBin: () => true,
+      run: async () => {
+        ran = true
+        return { ...clean, stderr: "'eslint' is not recognized as an internal or external command", exitCode: 1 }
+      }
+    })
+    expect(res.ran).toBe(false)
+    expect(res.block).toBeUndefined()
+    expect(ran).toBe(false)
+  })
+
+  it('runs the npm sh shim for eslint on Windows under Git Bash, never the .cmd', async () => {
+    writeFileSync(join(ws, 'a.ts'), 'const x = 1')
+    const npm = 'C:\\Users\\me\\AppData\\Roaming\\npm'
+    let cmd = ''
+    const res = await runPostEditDiagnostics('a.ts', {
+      workspace: ws,
+      roots: [ws],
+      platform: 'win32',
+      shellSyntax: 'posix',
+      env: { PATH: npm },
+      exists: (p) => p === `${npm}\\eslint.cmd` || p === `${npm}\\eslint`,
+      run: async (o) => {
+        cmd = o.command
+        return clean
+      }
+    })
+    expect(res.ran).toBe(true)
+    expect(cmd).toBe(`'C:/Users/me/AppData/Roaming/npm/eslint' '${join(ws, 'a.ts')}'`)
+  })
+
+  it('checkerFor finds ruff.exe on Windows', () => {
+    const c = checkerFor('a.py', { platform: 'win32', env: { PATH: 'C:\\Py' }, exists: (p) => p === 'C:\\Py\\ruff.exe' })
+    expect(c?.bin).toBe('ruff')
+  })
 })

@@ -347,6 +347,7 @@ describe('runWithBackend — honest sandboxed flag', () => {
     sandboxed,
     confinesNetwork: sandboxed,
     supportsSession: true,
+    shellSyntax: 'posix',
     buildLaunch: ({ command }) => ({
       file,
       args: ['-c', command],
@@ -517,6 +518,7 @@ describe('spawnWithBackend — abort listener cleanup', () => {
       sandboxed: false,
       confinesNetwork: false,
       supportsSession: true,
+      shellSyntax: 'posix',
       // A real, immediately-exiting process (spawnWithBackend uses the real spawn).
       buildLaunch: () => ({
         file: process.execPath,
