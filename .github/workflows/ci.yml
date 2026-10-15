@@ -260,6 +260,51 @@ jobs:
             release/latest*.yml
           if-no-files-found: error
 
+
+  # Refresh the macOS and Windows dependency caches from main. A cache saved by a PR or a
+  # merge-queue run is scoped to that ref and no other PR can restore it, and `package`
+  # (the only job on these runners) doesn't run on push. So without this, every new PR
+  # started these legs cold: a full npm download, the Electron runtime and headers, and
+  # electron-builder's tools, about 3 minutes of npm ci alone on Windows. A main-scoped
+  # entry is readable by every PR. It packages too, because electron-builder fetches its
+  # tools (NSIS, dmg-builder) only while packaging, and a cache is saved only on a miss.
+  # Linux needs no warming: `test` runs on push with the same cache keys.
+  warm-caches:
+    name: warm-caches (${{ matrix.target }})
+    if: github.event_name == 'push'
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: mac-arm64
+            os: macos-14
+            dist: dist:mac
+          - target: mac-x64
+            os: macos-15-intel
+            dist: dist:mac:x64
+          - target: win-x64
+            os: windows-2025
+            dist: dist:win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+          electron-cache: 'true'
+      - name: Package (fills the electron-builder tool cache)
+        env:
+          DIST: ${{ matrix.dist }}
+        run: npm run "$DIST" -- --publish never
+
   # SBOM conformance (NTIA / CISA FSCT3 / CycloneDX / Google-EO) on every PR, so a
   # dependency change that drops the shipped SBOMs below the bar fails the PR that made it
   # rather than the next release.
