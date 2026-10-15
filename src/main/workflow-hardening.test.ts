@@ -80,4 +80,17 @@ describe('workflow hardening', () => {
       expect(text, name).not.toMatch(/^\s*syft scan file:/m)
     }
   })
+
+  it('never restores a cache in a workflow that publishes a release', () => {
+    // A poisoned cache entry would flow into signed, shipped artifacts.
+    for (const name of ['release-publish.yml', 'release-build.yml']) {
+      const text = workflows.find((w) => w.name === name)?.text ?? ''
+      expect(text, name).not.toContain('uses: actions/cache@')
+      expect(text, name).not.toContain("electron-cache: 'true'")
+      // The shared setup action caches ~/.npm unless told not to.
+      for (const m of text.matchAll(/uses: \.\/\.github\/actions\/setup-node\n((?: {8,}.*\n)*)/g)) {
+        expect(m[1], name).toContain("cache: 'false'")
+      }
+    }
+  })
 })

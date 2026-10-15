@@ -105,10 +105,10 @@ describe('CI runs everything on every PR', () => {
     for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) {
       expect(pkg).toContain(`os: ${os}`)
     }
-    // The macOS unit suite (real Seatbelt), the Windows sandbox suite, and the
-    // packaged-app e2e on the macOS legs.
-    expect(pkg).toMatch(/if: matrix\.target == 'mac-arm64'\n {8}run: npm test/)
-    expect(pkg).toMatch(/if: runner\.os == 'Windows'\n {8}run: npx vitest run src\/main\/sandbox/)
+    // The full unit suite on every non-Linux leg (macOS against the real Seatbelt backend,
+    // Windows against its own; Linux runs it in `test`), and the packaged-app e2e on macOS.
+    expect(pkg).toMatch(/if: runner\.os != 'Linux'\n {8}run: npm test /)
+    expect(pkg).not.toContain('npx vitest run src/main/sandbox')
     expect(pkg).toMatch(/if: runner\.os == 'macOS'\n {8}run: npm run test:e2e/)
   })
 })
@@ -192,5 +192,49 @@ describe('CI alerts on a red main', () => {
 
   it('grants the alert only issue access', () => {
     expect(job('alert')).toMatch(/permissions:\n {6}issues: write\n/)
+  })
+})
+
+describe('CI reports and caches', () => {
+  it('uploads JUnit results from every leg that runs the unit suite, even when it fails', () => {
+    for (const name of ['test', 'package']) {
+      const block = job(name)
+      expect(block).toContain('--reporter=junit --outputFile.junit=reports/junit.xml')
+      expect(block).toContain('--reporter=github-actions')
+      expect(block).toMatch(/- name: Upload test results\n {8}if: \$\{\{ !cancelled\(\)/)
+    }
+  })
+
+  it('caches the Electron downloads in every job that installs dependencies', () => {
+    // npm ci's postinstall downloads Electron and its node-gyp headers; a CDN timeout there
+    // once failed `test` on main, so every installing job restores them first.
+    for (const name of ['test', 'linux-sandbox', 'package']) {
+      expect(job(name)).toMatch(/uses: \.\/\.github\/actions\/setup-node\n {8}with:\n(?: {10}.*\n)* {10}electron-cache: 'true'\n/)
+    }
+  })
+
+  it('restores the Electron cache before npm ci, including the node-gyp headers', () => {
+    const action = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../.github/actions/setup-node/action.yml'),
+      'utf8'
+    )
+    expect(action).toContain('~/.electron-gyp')
+    expect(action).toContain("key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}")
+    expect(action.indexOf('uses: actions/cache@')).toBeLessThan(action.indexOf('npm ci ;;'))
+  })
+})
+
+describe('CI is the release gate', () => {
+  it('is callable as a reusable workflow', () => {
+    expect(workflow).toMatch(/^ {2}workflow_call:$/m)
+  })
+
+  it('is what release-prepare verifies the release tree with', () => {
+    const prepare = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../.github/workflows/release-prepare.yml'),
+      'utf8'
+    )
+    expect(prepare).toMatch(/\n {2}verify:\n {4}uses: \.\/\.github\/workflows\/ci\.yml\n/)
+    expect(prepare).toContain('needs: [verify]')
   })
 })
