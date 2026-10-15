@@ -212,7 +212,7 @@ export function isCaptureBackendConfigured(): boolean {
 function requireCaptureBackend(): CaptureDeps {
   if (!captureBackend) {
     throw new Error(
-      'Localhost capture backend not configured — call setCaptureBackend() during startup (see localhostCapture.ts).'
+      'Localhost capture backend not configured: call setCaptureBackend() during startup (see localhostCapture.ts).'
     )
   }
   return captureBackend

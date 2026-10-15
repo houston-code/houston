@@ -66,4 +66,18 @@ describe('workflow hardening', () => {
       expect(top, name).not.toContain('id-token: write')
     }
   })
+
+  it('sets up Node only through the shared composite action', () => {
+    // One place for the Node version source, cache policy and npm ci flags.
+    for (const { name, text } of workflows) {
+      expect(text, name).not.toMatch(/uses: actions\/setup-node@/)
+    }
+  })
+
+  it('generates the lockfile SBOMs only through the shared composite action', () => {
+    // sbom.yml, the conformance gate and the release must describe the same closure.
+    for (const { name, text } of workflows) {
+      expect(text, name).not.toMatch(/^\s*syft scan file:/m)
+    }
+  })
 })

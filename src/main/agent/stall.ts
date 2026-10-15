@@ -233,7 +233,7 @@ export class StallDetector {
         reason: 'repeated the same tool call',
         message:
           'You appear to be repeating the same tool call with the same arguments, and you ' +
-          'already have that result. Do not run it again — use the result you already have and ' +
+          'already have that result. Do not run it again. Use the result you already have and ' +
           'change your approach. If you genuinely cannot make progress this way, stop and ' +
           'summarize what you found and what is blocking you.'
       }

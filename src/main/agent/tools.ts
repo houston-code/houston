@@ -387,24 +387,24 @@ const readFile: ToolDef = {
     if (imageType) {
       const buf = await fs.readFile(abs)
       if (buf.byteLength > MAX_ATTACH_IMAGE_BYTES) {
-        return `[image: ${rel} (${humanSize(buf.byteLength)}) — too large to attach; limit is ${humanSize(MAX_ATTACH_IMAGE_BYTES)}]`
+        return `[image: ${rel} (${humanSize(buf.byteLength)}): too large to attach; limit is ${humanSize(MAX_ATTACH_IMAGE_BYTES)}]`
       }
       if (!ctx.attachImage) {
-        return `[image: ${rel} (${humanSize(buf.byteLength)}) — cannot be displayed in this context]`
+        return `[image: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context]`
       }
       ctx.attachImage({ mediaType: imageType, data: buf.toString('base64') })
-      return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}) — attached below for viewing]`
+      return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}): attached below for viewing]`
     }
     if (isPdfPath(rel)) {
       const buf = await fs.readFile(abs)
       if (buf.byteLength > MAX_PDF_BYTES) {
-        return `[pdf: ${rel} (${humanSize(buf.byteLength)}) — too large to attach; limit is ${humanSize(MAX_PDF_BYTES)}. Extract its text with run_shell (e.g. pdftotext) instead.]`
+        return `[pdf: ${rel} (${humanSize(buf.byteLength)}): too large to attach; limit is ${humanSize(MAX_PDF_BYTES)}. Extract its text with run_shell (e.g. pdftotext) instead.]`
       }
       if (!ctx.attachDocument) {
-        return `[pdf: ${rel} (${humanSize(buf.byteLength)}) — cannot be displayed in this context; extract its text with run_shell (e.g. pdftotext)]`
+        return `[pdf: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context; extract its text with run_shell (e.g. pdftotext)]`
       }
       ctx.attachDocument({ mediaType: 'application/pdf', data: buf.toString('base64'), name: rel })
-      return `[pdf: ${rel} (${humanSize(buf.byteLength)}) — attached below for viewing]`
+      return `[pdf: ${rel} (${humanSize(buf.byteLength)}): attached below for viewing]`
     }
 
     // Everything else is read as bytes first so a non-text file can be recognized
@@ -413,7 +413,7 @@ const readFile: ToolDef = {
     // handed a wall of mojibake and left to infer that the file was never text.
     const buf = await fs.readFile(abs)
     if (looksBinary(buf)) {
-      return `[binary file: ${rel} (${humanSize(buf.byteLength)}) — not text, so there is nothing to show. Inspect it with run_shell (e.g. file, xxd, strings).]`
+      return `[binary file: ${rel} (${humanSize(buf.byteLength)}): not text, so there is nothing to show. Inspect it with run_shell (e.g. file, xxd, strings).]`
     }
 
     // A notebook is JSON, so it would "read" fine as text — as a wall of escaped
@@ -773,7 +773,7 @@ const applyPatch: ToolDef = {
     const claimWrite = (target: string, display: string): void => {
       if (writeTargets.has(target)) {
         throw new Error(
-          `apply_patch: ${display} is written by more than one operation in this patch. Each block reads the original file independently, so a later one would discard the earlier change — combine them into a single block.`
+          `apply_patch: ${display} is written by more than one operation in this patch. Each block reads the original file independently, so a later one would discard the earlier change. Combine them into a single block.`
         )
       }
       writeTargets.add(target)
@@ -854,7 +854,7 @@ const applyPatch: ToolDef = {
       )
       if (restoreFailures.length > 0) {
         throw new Error(
-          `Apply patch failed${where}: ${(e as Error).message}. Rolling back also failed for ${restoreFailures.join(', ')}, so the working tree is PARTIALLY PATCHED — inspect those files before retrying.`,
+          `Apply patch failed${where}: ${(e as Error).message}. Rolling back also failed for ${restoreFailures.join(', ')}, so the working tree is PARTIALLY PATCHED. Inspect those files before retrying.`,
           { cause: e }
         )
       }
@@ -1056,7 +1056,7 @@ const NETWORK_ERROR_RE =
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
   '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
-  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible — choose "Allow for run" on the approval ' +
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: choose "Allow for run" on the approval ' +
   'prompt, or switch the run to full-auto, to grant network for the rest of the run, then retry.]'
 
 /**
@@ -1126,12 +1126,12 @@ const SANDBOX_WRITE_ERROR_RE = /\beperm\b|\beacces\b|permission denied|read-only
  * silence would let it (and the user) assume confinement that isn't there.
  */
 export const UNSANDBOXED_SHELL_NOTE =
-  '[warning: this command did NOT run inside a sandbox — it executed with your full user ' +
+  '[warning: this command did NOT run inside a sandbox. It executed with your full user ' +
   'privileges, not confined to the project directory. No OS-enforced sandbox was available on this host.]'
 
 /** The hint appended to a failure that looks like the sandbox denied a write. */
 export const SANDBOX_WRITE_BLOCKED_HINT =
-  '[note: the sandbox only allows writes inside the project and temp dirs. A write was denied — usually a ' +
+  '[note: the sandbox only allows writes inside the project and temp dirs. A write was denied, usually by a ' +
   'tool writing to your home dir (e.g. ~/.npm, ~/.cache, ~/.config). Package-manager caches (npm/pip/yarn) ' +
   'are already redirected to a writable temp dir; if a tool still needs to write elsewhere, point it at a ' +
   'path inside the project.]'
@@ -1205,7 +1205,7 @@ export function shellTimeoutHint(timeoutMs: number): string {
     `[command timed out after ${seconds}s and was stopped (SIGTERM, then SIGKILL). ` +
     'For a slow one-shot (e.g. a cold dependency install) retry with a larger timeout_seconds (max 600). ' +
     'For a long-running or open-ended process (dev server, watcher) rerun with background:true and poll it ' +
-    'with read_shell_output — do not wrap it in `timeout` (unavailable) or a trailing `&`.]'
+    'with read_shell_output. Do not wrap it in `timeout` (unavailable) or a trailing `&`.]'
   )
 }
 
@@ -1572,7 +1572,7 @@ const viewLocalhost: ToolDef = {
     })
 
     const lines: string[] = []
-    lines.push(`Loaded ${cap.finalUrl}${cap.title ? ` — "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
+    lines.push(`Loaded ${cap.finalUrl}${cap.title ? `: "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
     if (cap.loadError) lines.push(`[load warning: ${cap.loadError}]`)
     if (cap.steps) {
       lines.push('Steps:')
@@ -1584,7 +1584,7 @@ const viewLocalhost: ToolDef = {
     if (selector) {
       lines.push(
         cap.selectorMissed
-          ? `[selector "${selector}" matched nothing — captured the full viewport]`
+          ? `[selector "${selector}" matched nothing; captured the full viewport]`
           : `[captured element matching "${selector}"]`
       )
     }
@@ -1592,10 +1592,10 @@ const viewLocalhost: ToolDef = {
     const bytes = cap.png.byteLength
     if (bytes > MAX_ATTACH_IMAGE_BYTES) {
       lines.push(
-        `[screenshot ${humanSize(bytes)} exceeds the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit — not shown]`
+        `[screenshot ${humanSize(bytes)} exceeds the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit, so it is not shown]`
       )
     } else if (!ctx.attachImage) {
-      lines.push(`[screenshot ${humanSize(bytes)} captured — cannot be displayed in this context]`)
+      lines.push(`[screenshot ${humanSize(bytes)} captured; it cannot be displayed in this context]`)
     } else {
       ctx.attachImage({ mediaType: 'image/png', data: cap.png.toString('base64') })
       lines.push(`[screenshot (${humanSize(bytes)}) attached below for viewing]`)
@@ -1884,7 +1884,7 @@ function firstLine(s: string): string {
 
 /** The tool-result text for a completed spawn — shown in the card and read by the model. */
 function formatSpawnResult(r: SpawnSessionResult): string {
-  const lines = [`Started session "${r.title}" — now running in the background.`]
+  const lines = [`Started session "${r.title}", now running in the background.`]
   lines.push(
     r.worktree
       ? `Worktree: branch ${r.worktree.branch} at ${r.worktree.path}`
@@ -1945,7 +1945,7 @@ const spawnSessionTool: ToolDef = {
   },
   async execute(args, ctx) {
     const prompt = str(args, 'prompt').trim()
-    if (!prompt) throw new Error("prompt is required — it becomes the new session's first message.")
+    if (!prompt) throw new Error("prompt is required: it becomes the new session's first message.")
     if (!ctx.spawnSession) throw new Error('Spawning sessions is not available in this context.')
     const title = str(args, 'title').trim()
 
@@ -2014,11 +2014,11 @@ const scheduleRun: ToolDef = {
     const prompt = str(args, 'prompt').trim()
     if (!name) throw new Error('name is required.')
     if (!spec) throw new Error('spec is required.')
-    if (!prompt) throw new Error('prompt is required — each fired run starts with only this text.')
+    if (!prompt) throw new Error('prompt is required: each fired run starts with only this text.')
     if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
     const info = ctx.scheduler.create({ name, spec, prompt })
     return (
-      `Scheduled "${info.name}" (id ${info.id}) — ${info.spec}; next run ${formatFireTime(info.nextRunAt)}.\n` +
+      `Scheduled "${info.name}" (id ${info.id}): ${info.spec}; next run ${formatFireTime(info.nextRunAt)}.\n` +
       `Each occurrence starts a fresh background session with the stored prompt (model ${info.model}, ` +
       `"${info.approvalPolicy}" approvals). Schedules fire while Houston is running; cancel with ` +
       `cancel_scheduled_run({ id: "${info.id}" }).`
@@ -2046,7 +2046,7 @@ const listScheduledRuns: ToolDef = {
               s.lastResult === 'error' ? ` (failed: ${s.lastError ?? 'unknown error'})` : ''
             }`
           : ''
-        return `- ${s.id}: "${s.name}" — ${s.spec}; next run ${formatFireTime(s.nextRunAt)}${last}`
+        return `- ${s.id}: "${s.name}", ${s.spec}; next run ${formatFireTime(s.nextRunAt)}${last}`
       })
       .join('\n')
   }
@@ -2073,7 +2073,7 @@ const cancelScheduledRun: ToolDef = {
     if (!ctx.scheduler) throw new Error('Scheduled runs are not available in this context.')
     return ctx.scheduler.cancel(id)
       ? `Cancelled scheduled run ${id}.`
-      : `No scheduled run with id ${id} — it may already be cancelled. Use list_scheduled_runs to see current ids.`
+      : `No scheduled run with id ${id}; it may already be cancelled. Use list_scheduled_runs to see current ids.`
   }
 }
 
@@ -3069,7 +3069,7 @@ const presentPlan: ToolDef = {
     const title = str(args, 'title').trim()
     if (!title) throw new Error('title is required.')
     const body = str(args, 'plan').trim()
-    if (!body) throw new Error('plan is required — pass the full plan as markdown.')
+    if (!body) throw new Error('plan is required: pass the full plan as markdown.')
     const files = parseStringList(args.files)
     const plan: PlanPayload = {
       title,

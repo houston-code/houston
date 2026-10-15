@@ -855,11 +855,13 @@ and notarized by Apple. Windows and Linux installers are not OS-code-signed yet,
 Linux downloads are GPG-signed for verification (see
 [Verifying downloads](#verifying-downloads)). Signing and
 notarization are driven entirely by CI environment variables (see
+[`release-build.yml`](.github/workflows/release-build.yml), called by
 [`release-publish.yml`](.github/workflows/release-publish.yml)), so no certificate or
-credential is committed to the repo.
+credential is committed to the repo. The cosign and GPG signatures are made afterwards by
+a separate job that installs no dependencies.
 
-The macOS build reads five repo secrets, set under **Settings → Secrets and
-variables → Actions** on the source repo:
+The macOS build reads five secrets of the `release` environment, set under **Settings →
+Environments → release** on the source repo:
 
 | Secret | Purpose |
 |--------|---------|

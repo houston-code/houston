@@ -100,7 +100,7 @@ export function isSpawnBackendConfigured(): boolean {
 export function spawnSession(input: SpawnSessionInput): Promise<SpawnSessionResult> {
   if (!backend) {
     throw new Error(
-      'Spawn backend not configured — call setSpawnBackend() during startup (see src/main/spawnSession.ts).'
+      'Spawn backend not configured: call setSpawnBackend() during startup (see src/main/spawnSession.ts).'
     )
   }
   return backend.spawn(input)

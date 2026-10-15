@@ -173,10 +173,29 @@ function render(deps) {
   return header + bins + npm
 }
 
+// `--check` compares instead of writing: exit 1 (with a CI annotation) when the committed
+// file differs from what the installed closure renders. CI and both release workflows run it.
+export function run(argv, { rendered, out = OUT, exists = existsSync, read = readFileSync, write = writeFileSync, log = (m) => process.stdout.write(m) }) {
+  if (argv.includes('--check')) {
+    const current = exists(out) ? read(out, 'utf8') : null
+    if (current === rendered) {
+      log("THIRD-PARTY-NOTICES.md is current.\n")
+      return 0
+    }
+    log("::error::THIRD-PARTY-NOTICES.md is out of date. Run 'npm run notices' and commit it.\n")
+    return 1
+  }
+  write(out, rendered)
+  return 0
+}
+
 function main() {
   const deps = collectEntries()
-  writeFileSync(OUT, render(deps))
-  process.stdout.write(`Wrote ${OUT} (${deps.length} npm dependencies + ${VENDORED_BINARIES.length} vendored binaries)\n`)
+  const code = run(process.argv.slice(2), { rendered: render(deps) })
+  if (code === 0 && !process.argv.includes('--check')) {
+    process.stdout.write(`Wrote ${OUT} (${deps.length} npm dependencies + ${VENDORED_BINARIES.length} vendored binaries)\n`)
+  }
+  process.exitCode = code
 }
 
 // Run only when invoked directly, so the test can import the helpers cleanly.
