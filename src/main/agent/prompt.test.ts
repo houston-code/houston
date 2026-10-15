@@ -81,6 +81,18 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/needs no native compile step/)
   })
 
+  it('asks for flows exercised, values read back, and user config left alone', () => {
+    const p = buildSystemPrompt('/tmp/x')
+    // Seen in practice: a build check overwrote .env, the dev server was "verified"
+    // with page loads and screenshots only, and the user was told a password that
+    // was no longer in the file, so they couldn't log in.
+    expect(p).toMatch(/A page that loads or a server that starts doesn't verify an app/)
+    expect(p).toMatch(/name any flow you couldn't exercise/)
+    expect(p).toMatch(/read it from the file or output as it is now/)
+    expect(p).toMatch(/For a secret such as a password, say where it is set instead of repeating it/)
+    expect(p).toMatch(/Don't change the user's local configuration \(\.env files/)
+  })
+
   it('adds a plan-mode notice only when plan mode is on', () => {
     expect(buildSystemPrompt('/tmp/x')).not.toContain('PLAN MODE')
     expect(buildSystemPrompt('/tmp/x', undefined, undefined, true)).toContain('PLAN MODE IS ON')
