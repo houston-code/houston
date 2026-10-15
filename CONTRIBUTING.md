@@ -228,9 +228,13 @@ Every PR and every merge-queue candidate runs the full set; nothing is skipped b
 `build` is a single required check that passes only when every leg of the `package`
 matrix (Linux x64, macOS arm64, macOS x64, Windows x64), the SBOM conformance gate, and
 `workflow-lint` succeeded. `workflow-lint` runs actionlint and zizmor over
-`.github/workflows`; zizmor's suppressions live in `.github/zizmor.yml`. Each `package` leg builds the app on its own runner; the macOS arm64 leg also
-runs the full unit suite against the real Seatbelt sandbox, the Windows leg runs the
-sandbox backend suite, and both macOS legs run the packaged-app Playwright e2e. Each leg
+`.github/workflows`; zizmor's suppressions live in `.github/zizmor.yml`. Each `package`
+leg builds the app on its own runner and runs the full unit suite there: both macOS legs
+against the real Seatbelt sandbox, the Windows leg against its own backend (Git Bash) and
+its path semantics. Both macOS legs also run the packaged-app Playwright e2e.
+
+Tests run on Windows too, so build expected paths with `join`/`resolve` (or `normalize` a
+POSIX literal) rather than hard-coding `/`, and pin `platform` on anything that takes one. Each leg
 uploads its build as a short-lived Actions artifact, so you can install a PR's app without
 building it.
 

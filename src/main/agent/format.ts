@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
-import { delimiter, extname, join } from 'node:path'
+import { extname } from 'node:path'
+import { joinFor, pathDelimiter } from '../binaries'
 import { resolveInRoots } from './tools'
 import { runSandboxed, type SandboxRunResult } from '../sandbox'
 
@@ -55,6 +56,8 @@ const EXTRA_BIN_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin
 export interface BinLookupOptions {
   env?: NodeJS.ProcessEnv
   exists?: (p: string) => boolean
+  /** Platform override (defaults to process.platform); injected in tests. */
+  platform?: NodeJS.Platform
 }
 
 /**
@@ -67,11 +70,13 @@ export interface BinLookupOptions {
 export function resolveBinaryPath(bin: string, opts: BinLookupOptions = {}): string | null {
   const env = opts.env ?? process.env
   const exists = opts.exists ?? existsSync
-  if (!bin || bin.includes('/')) return null
-  for (const dir of (env.PATH ?? '').split(delimiter)) {
-    if (dir && exists(join(dir, bin))) return join(dir, bin)
+  const platform = opts.platform ?? process.platform
+  const joinP = joinFor(platform)
+  if (!bin || bin.includes('/') || bin.includes('\\')) return null
+  for (const dir of (env.PATH ?? '').split(pathDelimiter(platform))) {
+    if (dir && exists(joinP(dir, bin))) return joinP(dir, bin)
   }
-  for (const dir of EXTRA_BIN_DIRS) if (exists(join(dir, bin))) return join(dir, bin)
+  for (const dir of EXTRA_BIN_DIRS) if (exists(joinP(dir, bin))) return joinP(dir, bin)
   return null
 }
 

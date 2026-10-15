@@ -26,7 +26,8 @@ function images(dir) {
   return readdirSync(abs).flatMap((name) => {
     const p = join(abs, name)
     if (statSync(p).isDirectory()) return name === 'screens' ? [] : images(relative(ROOT, p))
-    return IMAGE.test(name) ? [relative(ROOT, p)] : []
+    // NOTICE lists repo paths with '/', so compare in that form on every OS.
+    return IMAGE.test(name) ? [relative(ROOT, p).replaceAll('\\', '/')] : []
   })
 }
 

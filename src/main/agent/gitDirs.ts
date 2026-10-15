@@ -48,10 +48,13 @@ export const defaultIo: GitDirsIo = {
   }
 }
 
-/** Absolutize a git pointer path: absolute as-is, else resolved against `base`. */
+/**
+ * Absolutize a git pointer path: relative ones resolve against `base`. Absolute ones are
+ * resolved too, which only normalizes them: git on Windows writes `C:/…` with forward
+ * slashes, and without this the same directory could hash to two repo keys.
+ */
 export function absolutize(p: string, base: string): string {
-  const trimmed = p.trim()
-  return isAbsolute(trimmed) ? trimmed : resolve(base, trimmed)
+  return resolve(base, p.trim())
 }
 
 /**

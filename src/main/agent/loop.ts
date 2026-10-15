@@ -36,7 +36,7 @@ import { modelDisplayName } from '@shared/models'
 import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
-import { installHost } from './installHost'
+import { hostPlatform, installHost } from './installHost'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
 import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
 import { createSecretRedactor } from './redact'
@@ -924,7 +924,7 @@ export async function startRun(
       schedulerAvailable,
       // The prompt states the OS and whether run_shell is confined, so a host
       // without an OS sandbox is never told its commands are sandboxed.
-      { platform: process.platform, sandboxBackend: activeBackendId() }
+      { platform: hostPlatform(), sandboxBackend: activeBackendId() }
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // When a lot of MCP tools are connected, sending every schema on every turn

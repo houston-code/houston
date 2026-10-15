@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import {
   slugifyBranch,
   worktreePath,
@@ -46,11 +46,11 @@ describe('slugifyBranch', () => {
 
 describe('worktreePath', () => {
   it('nests under .houston/worktrees in the repo root', () => {
-    expect(worktreePath('/repo', 'feat-x', () => false)).toBe('/repo/.houston/worktrees/feat-x')
+    expect(worktreePath('/repo', 'feat-x', () => false)).toBe(normalize('/repo/.houston/worktrees/feat-x'))
   })
   it('appends a numeric suffix until the path is free', () => {
-    const taken = new Set(['/repo/.houston/worktrees/x', '/repo/.houston/worktrees/x-2'])
-    expect(worktreePath('/repo', 'x', (p) => taken.has(p))).toBe('/repo/.houston/worktrees/x-3')
+    const taken = new Set([normalize('/repo/.houston/worktrees/x'), normalize('/repo/.houston/worktrees/x-2')])
+    expect(worktreePath('/repo', 'x', (p) => taken.has(p))).toBe(normalize('/repo/.houston/worktrees/x-3'))
   })
 })
 
@@ -395,7 +395,7 @@ describe('worktree integration (real git)', () => {
       const wt = await createWorktree({ workspace: repo, branch: 'feature/login' })
       // git normalizes paths to the realpath (e.g. /var → /private/var on macOS),
       // so compare the suffix rather than an exact prefix.
-      expect(wt.path.endsWith('/.houston/worktrees/feature-login')).toBe(true)
+      expect(wt.path.endsWith(join('.houston', 'worktrees', 'feature-login'))).toBe(true)
       expect(wt.path).toBe(join(wt.repoRoot, '.houston/worktrees/feature-login'))
       expect(existsSync(wt.path)).toBe(true)
       // The branch is checked out in the worktree.

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { resolveRipgrep, runRipgrep, searchContents } from './search'
 
 describe('resolveRipgrep', () => {
@@ -14,17 +14,17 @@ describe('resolveRipgrep', () => {
 
   it('finds rg on PATH', () => {
     const exists = (p: string): boolean => p === '/usr/local/bin/rg'
-    expect(resolveRipgrep({ env: { PATH: '/nope:/usr/local/bin' }, exists, candidates: [] })).toBe(
+    expect(resolveRipgrep({ env: { PATH: '/nope:/usr/local/bin' }, exists, candidates: [], platform: 'linux' })).toBe(
       '/usr/local/bin/rg'
     )
   })
 
   it('looks for rg.exe on PATH on Windows', () => {
     const dir = 'C:\\tools'
-    const exists = (p: string): boolean => p === join(dir, 'rg.exe')
+    const exists = (p: string): boolean => p === win32.join(dir, 'rg.exe')
     expect(
       resolveRipgrep({ platform: 'win32', env: { PATH: dir }, exists, candidates: [] })
-    ).toBe(join(dir, 'rg.exe'))
+    ).toBe(win32.join(dir, 'rg.exe'))
   })
 
   it('falls back to a known candidate dir', () => {

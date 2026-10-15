@@ -107,6 +107,8 @@ describe('shellReferencesExternalPath', () => {
     expect(ext('echo hi >/dev/stderr')).toBe(false)
     expect(ext('cat /dev/fd/3')).toBe(false)
     expect(ext('npm run dev > /tmp/vite.log 2>&1')).toBe(false)
+    // The device exemption is lexical: climbing out of /dev/null is still an escape.
+    expect(ext('cat /dev/null/../../etc/passwd')).toBe(true)
     expect(ext('cat /tmp/vite.log')).toBe(false)
     expect(ext('cat /private/tmp/django.log')).toBe(false)
     expect(ext(`cat ${join(tmpdir(), 'out.txt')}`)).toBe(false)

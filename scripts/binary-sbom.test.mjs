@@ -1,3 +1,4 @@
+import { normalize } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   parseElectronVersions,
@@ -16,6 +17,9 @@ import {
   EXPECTED_BINARIES,
   MAC_FRAMEWORKS
 } from './binary-sbom.mjs'
+
+// The code joins paths with the host separator; the in-memory fs below keys on '/'.
+const posix = (p) => p.replaceAll('\\', '/')
 
 describe('parseElectronVersions', () => {
   it('pulls electron/chromium/node from a real compiled-in user-agent + node banner', () => {
@@ -83,12 +87,12 @@ describe('findVersionCarriers', () => {
     }
     return {
       readdirSync: (dir, _opts) =>
-        (dirs.get(dir) || []).map((x) => ({
+        (dirs.get(posix(dir)) || []).map((x) => ({
           name: x.name,
           isDirectory: () => x.kind === 'dir',
           isFile: () => x.kind === 'file'
         })),
-      statSync: (p) => ({ size: sizes.get(p) ?? 0 })
+      statSync: (p) => ({ size: sizes.get(posix(p)) ?? 0 })
     }
   }
 
@@ -101,8 +105,8 @@ describe('findVersionCarriers', () => {
       '/app/Resources/icon.icns': 120_000
     })
     expect(findVersionCarriers('/app', { fs })).toEqual([
-      '/app/Frameworks/Electron Framework',
-      '/app/Resources/app.asar'
+      normalize('/app/Frameworks/Electron Framework'),
+      normalize('/app/Resources/app.asar')
     ])
   })
 })
@@ -154,7 +158,7 @@ describe('findVendoredBinary', () => {
     }
     return {
       readdirSync: (dir) =>
-        (dirs.get(dir) || []).map((x) => ({
+        (dirs.get(posix(dir)) || []).map((x) => ({
           name: x.name,
           isDirectory: () => x.kind === 'dir',
           isFile: () => x.kind === 'file'
@@ -166,12 +170,12 @@ describe('findVendoredBinary', () => {
 
   it('finds rg under Resources/bin', () => {
     const fs = mkFs(['/app/Resources/bin/rg', '/app/Resources/bin/ast-grep'])
-    expect(findVendoredBinary('/app', 'rg', { fs })).toBe('/app/Resources/bin/rg')
+    expect(findVendoredBinary('/app', 'rg', { fs })).toBe(normalize('/app/Resources/bin/rg'))
   })
 
   it('finds the .exe variant on Windows layouts', () => {
     const fs = mkFs(['/app/resources/bin/rg.exe'])
-    expect(findVendoredBinary('/app', 'rg', { fs })).toBe('/app/resources/bin/rg.exe')
+    expect(findVendoredBinary('/app', 'rg', { fs })).toBe(normalize('/app/resources/bin/rg.exe'))
   })
 
   it('returns null when absent', () => {
@@ -390,12 +394,12 @@ describe('detectMacFrameworks', () => {
   const fw = (name) => `/app/Contents/Frameworks/${name}.framework`
   const macFs = {
     // All three frameworks present with a version + binary.
-    exists: (p) => /\.framework\/(Resources\/Info\.plist|Versions\/A\/\w+)$/.test(p),
+    exists: (p) => /\.framework[\\/](Resources[\\/]Info\.plist|Versions[\\/]A[\\/]\w+)$/.test(p),
     read: (p) => {
       const ver = p.includes('ReactiveObjC') ? '3.1.0' : '1.0'
       return `<key>CFBundleShortVersionString</key>\n\t<string>${ver}</string>`
     },
-    hash: (p) => `hash-of-${p.split('/').pop()}`
+    hash: (p) => `hash-of-${p.split(/[\\/]/).pop()}`
   }
 
   it('records Squirrel.Mac + ReactiveObjC + Mantle with versions, purls, and hashes', () => {

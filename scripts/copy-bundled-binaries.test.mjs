@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { normalize } from 'node:path'
 import { BINARY_MAP, ARCH_NAMES, planCopies, resourcesDirFor } from './copy-bundled-binaries.mjs'
 
 describe('BINARY_MAP', () => {
@@ -38,15 +39,15 @@ describe('planCopies', () => {
   it('resolves the right sub-package paths for a Linux x64 build', () => {
     const plan = planCopies('linux', 'x64', { root: '/repo', resourcesDir: '/out/resources' })
     expect(plan).toEqual([
-      { from: '/repo/node_modules/@vscode/ripgrep-linux-x64/bin/rg', to: '/out/resources/bin/rg' },
-      { from: '/repo/node_modules/@ast-grep/cli-linux-x64-gnu/ast-grep', to: '/out/resources/bin/ast-grep' }
+      { from: normalize('/repo/node_modules/@vscode/ripgrep-linux-x64/bin/rg'), to: normalize('/out/resources/bin/rg') },
+      { from: normalize('/repo/node_modules/@ast-grep/cli-linux-x64-gnu/ast-grep'), to: normalize('/out/resources/bin/ast-grep') }
     ])
   })
 
   it('resolves .exe binaries for a Windows x64 build', () => {
     const plan = planCopies('win32', 'x64', { root: '/repo', resourcesDir: '/out/resources' })
-    expect(plan.map((p) => p.to)).toEqual(['/out/resources/bin/rg.exe', '/out/resources/bin/ast-grep.exe'])
-    expect(plan[1].from).toBe('/repo/node_modules/@ast-grep/cli-win32-x64-msvc/ast-grep.exe')
+    expect(plan.map((p) => p.to)).toEqual([normalize('/out/resources/bin/rg.exe'), normalize('/out/resources/bin/ast-grep.exe')])
+    expect(plan[1].from).toBe(normalize('/repo/node_modules/@ast-grep/cli-win32-x64-msvc/ast-grep.exe'))
   })
 
   it('throws for an unmapped (platform, arch) so a build never ships wrong/missing binaries', () => {
@@ -58,12 +59,12 @@ describe('planCopies', () => {
 describe('resourcesDirFor', () => {
   it('nests under the .app bundle on macOS (using productFilename)', () => {
     expect(resourcesDirFor('darwin', '/out/mac-arm64', 'Houston')).toBe(
-      '/out/mac-arm64/Houston.app/Contents/Resources'
+      normalize('/out/mac-arm64/Houston.app/Contents/Resources')
     )
   })
 
   it('uses <appOutDir>/resources on Windows and Linux', () => {
-    expect(resourcesDirFor('win32', '/out/win', 'Houston')).toBe('/out/win/resources')
-    expect(resourcesDirFor('linux', '/out/linux', 'Houston')).toBe('/out/linux/resources')
+    expect(resourcesDirFor('win32', '/out/win', 'Houston')).toBe(normalize('/out/win/resources'))
+    expect(resourcesDirFor('linux', '/out/linux', 'Houston')).toBe(normalize('/out/linux/resources'))
   })
 })

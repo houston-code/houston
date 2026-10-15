@@ -97,6 +97,12 @@ vi.mock('../sandbox', async (importActual) => ({
   ...(await importActual<typeof import('../sandbox')>()),
   activeBackendId: () => 'seatbelt'
 }))
+// The prompt names the host OS (Windows gets a different shell line); pin it so the
+// goldens are the same on every CI runner.
+vi.mock('./installHost', async (importActual) => ({
+  ...(await importActual<typeof import('./installHost')>()),
+  hostPlatform: () => 'darwin'
+}))
 // The prompt carries today's date (promptSnapshot.ts); pin it so goldens don't
 // change with the calendar.
 vi.mock('./promptSnapshot', async (importActual) => ({

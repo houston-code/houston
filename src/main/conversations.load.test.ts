@@ -95,7 +95,9 @@ describe('current-version round-trip', () => {
     expect('schemaVersion' in meta).toBe(false)
   })
 
-  it('writes the transcript 0o600 (owner-only — transcripts can capture echoed secrets)', async () => {
+  // POSIX mode bits: Windows reports every writable file as 0o666 and protects the user
+  // profile with ACLs instead, so there is no mode to assert there.
+  it.skipIf(process.platform === 'win32')('writes the transcript 0o600 (owner-only — transcripts can capture echoed secrets)', async () => {
     const { createConversation } = await import('./conversations')
     const created = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
     const mode = statSync(convPath(created.id)).mode & 0o777

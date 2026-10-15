@@ -162,9 +162,9 @@ jobs:
   # Package the app on every platform it ships on, each on its own runner (cross-compilation
   # is impossible: native node-pty + per-(os,arch) rg/ast-grep binaries), and run the
   # platform-specific suites there:
-  #   - Both macOS legs run the full unit suite against the real Seatbelt sandbox backend
-  #     (Linux runs it in `test`). Windows runs the execution-backend suite (scoped to
-  #     src/main/sandbox) until the rest of the suite is Windows-clean.
+  #   - Every non-Linux leg runs the full unit suite (Linux runs it in `test`): both macOS
+  #     legs against the real Seatbelt sandbox backend, Windows against its own backend
+  #     (Git Bash) and its path and permission semantics.
   #   - Both macOS legs run the packaged-app e2e (Playwright driving the built .app), the
   #     only check that the asar archive, the afterPack vendored binaries, and the
   #     main/preload/renderer bridge work together in the real artifact.
@@ -219,12 +219,8 @@ jobs:
         with:
           install: full
           electron-cache: 'true'
-      - if: runner.os == 'macOS'
+      - if: runner.os != 'Linux'
         run: npm test -- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
-      # Windows runs the execution-backend suite only, for now: the rest of the suite still
-      # has POSIX path and permission assumptions (and a few real Windows gaps) to fix first.
-      - if: runner.os == 'Windows'
-        run: npx vitest run src/main/sandbox --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
       - name: Upload test results
         if: ${{ !cancelled() && runner.os != 'Linux' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

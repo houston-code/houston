@@ -563,7 +563,9 @@ describe('trusted folders — consent for project elevating config', () => {
 })
 
 describe('settings.json file permissions', () => {
-  it('writes settings.json 0o600 (owner read/write only)', async () => {
+  // POSIX mode bits: Windows reports every writable file as 0o666 and protects the user
+  // profile with ACLs instead, so there is no mode to assert there.
+  it.skipIf(process.platform === 'win32')('writes settings.json 0o600 (owner read/write only)', async () => {
     const { updateSettings } = await loadStore()
     updateSettings({ theme: 'dark' })
     const mode = statSync(join(state.userData, 'settings.json')).mode & 0o777

@@ -27,7 +27,7 @@ describe('format: extension → formatter mapping', () => {
   })
 
   it('is case-insensitive on the extension', () => {
-    const f = formatterFor('README.MD', { env: { PATH: '/b' }, exists: (p) => p === '/b/prettier' })
+    const f = formatterFor('README.MD', { platform: 'linux', env: { PATH: '/b' }, exists: (p) => p === '/b/prettier' })
     expect(f?.bin).toBe('prettier')
   })
 
@@ -42,6 +42,7 @@ describe('format: extension → formatter mapping', () => {
 describe('format: binary gating', () => {
   it('hasBinary finds a binary on PATH', () => {
     const has = hasBinary('prettier', {
+      platform: 'linux',
       env: { PATH: '/opt/tools:/usr/bin' },
       exists: (p) => p === '/opt/tools/prettier'
     })
@@ -50,32 +51,34 @@ describe('format: binary gating', () => {
 
   it('hasBinary checks the standard install dirs too', () => {
     expect(
-      hasBinary('gofmt', { env: { PATH: '' }, exists: (p) => p === '/opt/homebrew/bin/gofmt' })
+      hasBinary('gofmt', { platform: 'linux', env: { PATH: '' }, exists: (p) => p === '/opt/homebrew/bin/gofmt' })
     ).toBe(true)
   })
 
   it('hasBinary is false when the binary is absent everywhere', () => {
-    expect(hasBinary('rustfmt', { env: { PATH: '/x:/y' }, exists: () => false })).toBe(false)
+    expect(hasBinary('rustfmt', { platform: 'linux', env: { PATH: '/x:/y' }, exists: () => false })).toBe(false)
   })
 
   it('hasBinary rejects path-like names', () => {
     expect(hasBinary('../evil', { exists: () => true })).toBe(false)
     expect(hasBinary('/abs/bin', { exists: () => true })).toBe(false)
+    expect(hasBinary('..\\evil', { exists: () => true })).toBe(false)
+    expect(hasBinary('C:\\tools\\bin', { exists: () => true })).toBe(false)
     expect(hasBinary('', { exists: () => true })).toBe(false)
   })
 
   it('formatterFor prefers ruff but falls back to black', () => {
-    expect(formatterFor('a.py', { env: { PATH: '' }, exists: () => false })).toBeNull()
-    expect(formatterFor('a.py', { env: { PATH: '/b' }, exists: (p) => p === '/b/black' })?.bin).toBe(
+    expect(formatterFor('a.py', { platform: 'linux', env: { PATH: '' }, exists: () => false })).toBeNull()
+    expect(formatterFor('a.py', { platform: 'linux', env: { PATH: '/b' }, exists: (p) => p === '/b/black' })?.bin).toBe(
       'black'
     )
     expect(
-      formatterFor('a.py', { env: { PATH: '/b' }, exists: (p) => p.endsWith('/ruff') })?.bin
+      formatterFor('a.py', { platform: 'linux', env: { PATH: '/b' }, exists: (p) => p.endsWith('/ruff') })?.bin
     ).toBe('ruff')
   })
 
   it('formatterFor returns null when no mapped binary is installed', () => {
-    expect(formatterFor('a.ts', { env: { PATH: '/b' }, exists: () => false })).toBeNull()
+    expect(formatterFor('a.ts', { platform: 'linux', env: { PATH: '/b' }, exists: () => false })).toBeNull()
   })
 })
 

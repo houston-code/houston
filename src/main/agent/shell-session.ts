@@ -65,7 +65,10 @@ export function buildSessionCommand(
   // Capture in a `umask 077` subshell so the cwd/env snapshot files (the env one
   // can carry secrets the command exported) are created 0600 — private to the user
   // — on a shared temp dir, without changing the umask of the command itself.
-  lines.push(`(umask 077; pwd > ${singleQuote(paths.cwdOut)}) 2>/dev/null`)
+  // `pwd -W` first: Git Bash on Windows otherwise prints an MSYS path (`/c/Users/…`),
+  // which Node cannot use as the next command's spawn cwd. Elsewhere `-W` is an invalid
+  // option, so the silenced failure falls through to plain `pwd`.
+  lines.push(`(umask 077; (pwd -W 2>/dev/null || pwd) > ${singleQuote(paths.cwdOut)}) 2>/dev/null`)
   lines.push(`(umask 077; export -p > ${singleQuote(paths.envOut)}) 2>/dev/null`)
   lines.push('exit $__houston_ec')
   return lines.join('\n')

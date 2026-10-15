@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/agent'
 import { isSafeGitRef } from '@shared/git'
 import { parseWorktreePorcelain } from './git'
@@ -161,7 +161,8 @@ function ensureExcluded(repoRoot: string, exec: GitRun): Promise<void> {
   return exec(['rev-parse', '--git-common-dir'], repoRoot)
     .then((out) => {
       const commonDir = out.trim()
-      const dir = commonDir.startsWith('/') ? commonDir : join(repoRoot, commonDir)
+      // isAbsolute, not a leading '/': on Windows git prints `C:/…/.git`.
+      const dir = isAbsolute(commonDir) ? commonDir : join(repoRoot, commonDir)
       const infoDir = join(dir, 'info')
       const excludePath = join(infoDir, 'exclude')
       let current = ''
