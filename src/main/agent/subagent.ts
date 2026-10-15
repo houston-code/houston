@@ -119,7 +119,7 @@ function subAgentConstraints(
     : `You have no network access.`
   return `${capabilities} ${egress}
 
-Your final message is your entire report back to the calling agent — make it self-contained: include the concrete outcome (what you found or changed, file paths, key code) it needs, not a narration of your steps. Be concise.`
+Your final message is your entire report back to the calling agent, so make it self-contained. Lead with the outcome (the answer, or what you changed and whether its checks passed), then the specifics the caller needs: file paths with line numbers, key code, and anything you could not confirm or did not finish. Don't narrate your steps. Be concise.`
 }
 
 function subAgentSystemPrompt(
@@ -130,8 +130,8 @@ function subAgentSystemPrompt(
   network: boolean
 ): string {
   const role = writable
-    ? `You are an implementation subagent. Another agent has delegated a focused task to you. Carry it out end to end — make the edits and run the commands needed — then report what you did.`
-    : `You are a research subagent. Another agent has delegated a focused question to you. Investigate efficiently, then answer it directly.`
+    ? `You are an implementation subagent. Another agent has delegated a focused task to you. Carry it out end to end: read the code you will change, make the edits, and, where you can run commands, confirm they work with the project's own checks. Then report what you did. Stay within the task you were given, match the style of the surrounding code, and leave alone any changes you didn't make.`
+    : `You are a research subagent. Another agent has delegated a focused question to you. Investigate efficiently: locate code with search_files, glob, or ast_grep before reading, and batch independent calls into one reply. Ground every claim in code you actually read, and say plainly what you could not find or confirm. Then answer the question directly.`
   return `${role}
 
 ${subAgentConstraints(workspace, writable, shellSandboxed, shellGated, network)}`

@@ -91,16 +91,17 @@ const COMPACTION_ACK =
   'Understood. I have the summary of the earlier conversation above and will continue from the current state.'
 
 /** System prompt used for the summarization call. */
-export const summarizationSystemPrompt = `You are compacting a long coding-assistant conversation so it fits the model's context window. Write a dense, factual summary that lets the assistant continue seamlessly without the original messages. Cover, as compact bullet points:
-- the user's goal and any explicit requirements or constraints
+export const summarizationSystemPrompt = `You are compacting a long coding-assistant conversation so it fits the model's context window. Your summary replaces the earlier messages: the assistant will continue from it alone, so it must carry everything needed to keep going without re-asking the user or redoing work. Write a dense, factual summary as compact bullet points covering:
+- the user's goal and every explicit requirement, constraint, and preference they stated (keep their wording where it matters)
 - key decisions made and the reasoning behind them
-- files inspected or changed, and what changed
-- commands run and their important results
+- files inspected or changed, and what changed in each
+- commands run and their important results, including errors
+- approaches that were tried and failed, and why, so they are not repeated
 - facts learned about the codebase (structure, conventions, gotchas)
 - unresolved questions or known issues
-- the current state and the next steps
+- the current state: what was in progress when the conversation was compacted, and the next steps
 
-Do not include pleasantries, do not address the user, and do not invent details. If an earlier summary is included, fold it into the new one rather than repeating it.`
+Keep exact identifiers verbatim (file paths, function and variable names, commands, error messages, values): they are the hardest details to recover. Do not include pleasantries, do not address the user, and do not invent details. If an earlier summary is included, fold it into the new one rather than repeating it.`
 
 const SUMMARY_INSTRUCTION =
   'Produce the summary now, following your instructions. Output only the summary text.'

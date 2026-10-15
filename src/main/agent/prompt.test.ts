@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildSystemPrompt } from './prompt'
+import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { buildSystemPrompt, type PromptHost } from './prompt'
 
 describe('buildSystemPrompt', () => {
   it('includes the workspace path and project name', () => {
@@ -42,6 +43,26 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('be terse')
   })
 
+  it('puts the git snapshot last, after rules and user extra', () => {
+    // The snapshot changes between turns; everything before it stays a stable prefix.
+    const p = buildSystemPrompt(
+      '/tmp/x',
+      'be terse',
+      '### AGENTS.md\nUse tabs.',
+      true,
+      'Skills available for this project.',
+      'Git: on branch main, 2 files modified.'
+    )
+    expect(p.endsWith('Git: on branch main, 2 files modified.')).toBe(true)
+    expect(p.indexOf('Additional user instructions')).toBeLessThan(p.indexOf('Git: on branch main'))
+    expect(p.indexOf('PLAN MODE IS ON')).toBeLessThan(p.indexOf('Skills available'))
+  })
+
+  it('tells the model how to recognize Houston\'s own automated notes', () => {
+    // Pinned to the constant the loop prefixes its notes with, so the two can't drift.
+    expect(buildSystemPrompt('/tmp/x')).toContain(`Messages that begin "${SYSTEM_NOTE_PREFIX}"`)
+  })
+
   it('ignores blank rules / extra strings', () => {
     const p = buildSystemPrompt('/tmp/x', '   ', '  \n ')
     expect(p).not.toContain('Project instructions')
@@ -79,9 +100,9 @@ describe('buildSystemPrompt', () => {
       false
     )
     expect(noCapture).not.toContain('view_localhost')
-    // The neighbouring tool bullets must survive the removal.
-    expect(noCapture).toContain('- web_fetch:')
-    expect(noCapture).toContain('- web_search:')
+    // The neighbouring verification bullets must survive the removal.
+    expect(noCapture).toContain('Never describe unverified work as tested or working.')
+    expect(noCapture).toContain('- For a large or security-sensitive change, review_changes')
   })
 
   it('lists spawn_session by default but omits it when no spawn backend is wired', () => {
@@ -99,8 +120,9 @@ describe('buildSystemPrompt', () => {
       false
     )
     expect(noSpawn).not.toContain('spawn_session')
-    // The neighbouring tool bullet must survive the removal.
-    expect(noSpawn).toContain('- dispatch_agent:')
+    // The delegation guidance it extends must survive the removal.
+    expect(noSpawn).toContain("don't dispatch agents just to double-check your own work.")
+    expect(noSpawn).toContain('schedule_run')
   })
 
   it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
@@ -120,12 +142,17 @@ describe('buildSystemPrompt', () => {
     )
     expect(noScheduler).not.toContain('schedule_run')
     // The neighbouring tool bullets must survive the removal.
-    expect(noScheduler).toContain('- dispatch_agent:')
+    expect(noScheduler).toContain('dispatch_agent suits')
     expect(noScheduler).toContain('spawn_session')
+    expect(noScheduler).toContain('use web_search or web_fetch rather than guessing.')
   })
 
   describe('per-model addendum', () => {
     const base = buildSystemPrompt('/tmp/x')
+    const OPENAI_ADDENDUM =
+      'apply_patch is available for multi-file edits: prefer it when a single change spans several files. When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.'
+    const GEMINI_ADDENDUM =
+      'After every tool result, either make the next tool call or reply to the user. Never end a reply with no text and no tool call.'
 
     it('appends the apply_patch line for the OpenAI provider', () => {
       const p = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'openai', 'gpt-4o')
@@ -148,13 +175,20 @@ describe('buildSystemPrompt', () => {
       }
     })
 
-    it('adds no addendum for Anthropic / Gemini families', () => {
+    it('adds no addendum for the Anthropic family', () => {
       const anthropic = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'anthropic', 'claude-opus-4-8')
-      const gemini = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'gemini', 'gemini-2.5-pro')
-      expect(anthropic).not.toContain('apply_patch is available')
-      expect(anthropic).not.toContain('prefer concise, deliberate tool use')
-      expect(gemini).not.toContain('apply_patch is available')
-      expect(gemini).not.toContain('prefer concise, deliberate tool use')
+      expect(anthropic).toBe(base)
+    })
+
+    it('appends the no-empty-reply line for Gemini models on any provider', () => {
+      for (const [id, model] of [
+        ['gemini', 'gemini-2.5-pro'],
+        ['vertex', 'gemini-2.5-flash'],
+        ['openrouter', 'google/gemini-2.5-pro']
+      ]) {
+        const p = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, id, model)
+        expect(p, `${id}/${model}`).toBe(`${base}\n\n${GEMINI_ADDENDUM}`)
+      }
     })
 
     it('leaves the base prompt byte-for-byte identical when no provider/model is given', () => {
@@ -164,9 +198,74 @@ describe('buildSystemPrompt', () => {
 
     it('only adds the addendum — the base prompt is otherwise unchanged', () => {
       const openai = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'openai', 'gpt-4o')
-      const addendum = 'apply_patch is available for multi-file edits: prefer it when a single change spans several files.'
       // Stripping the appended section (and its separator) recovers the unmodified base.
-      expect(openai).toBe(`${base}\n\n${addendum}`)
+      expect(openai).toBe(`${base}\n\n${OPENAI_ADDENDUM}`)
+    })
+  })
+
+  describe('host awareness', () => {
+    const withHost = (host: PromptHost): string =>
+      buildSystemPrompt(
+        '/tmp/x',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        host
+      )
+    const CONFINED = 'Shell commands run inside an OS sandbox confined to the project'
+    const UNCONFINED = 'This host has no OS sandbox, so run_shell commands run unconfined'
+    const EGRESS = 'Granted network is limited to an allowlist'
+
+    it('defaults to a sandboxed macOS host', () => {
+      expect(buildSystemPrompt('/tmp/x')).toBe(withHost({ platform: 'darwin', sandboxBackend: 'seatbelt' }))
+    })
+
+    it('describes a Seatbelt host as sandboxed macOS, with the egress allowlist', () => {
+      const p = withHost({ platform: 'darwin', sandboxBackend: 'seatbelt' })
+      expect(p).toContain("working on the user's macOS machine")
+      expect(p).toContain(CONFINED)
+      expect(p).toContain(EGRESS)
+      expect(p).toContain('BSD variants')
+      expect(p).not.toContain(UNCONFINED)
+    })
+
+    it('describes a bubblewrap host as sandboxed Linux, without macOS tool notes', () => {
+      const p = withHost({ platform: 'linux', sandboxBackend: 'bubblewrap' })
+      expect(p).toContain("working on the user's Linux machine")
+      expect(p).toContain(CONFINED)
+      expect(p).toContain(EGRESS)
+      expect(p).not.toContain('macOS')
+    })
+
+    it('never claims a sandbox or an egress allowlist on Windows', () => {
+      // Regression: the prompt once said "macOS sandbox" on every host, telling the
+      // model its commands were confined on hosts where they run with full privileges.
+      const p = withHost({ platform: 'win32', sandboxBackend: 'windows' })
+      expect(p).toContain("working on the user's Windows machine")
+      expect(p).toContain(UNCONFINED)
+      expect(p).toContain('cmd.exe')
+      expect(p).not.toContain(CONFINED)
+      expect(p).not.toContain(EGRESS)
+      expect(p).not.toContain('macOS')
+    })
+
+    it('names the OS from the platform when no sandbox backend is available', () => {
+      // Linux without a usable bubblewrap falls back to the unconfined backend.
+      const p = withHost({ platform: 'linux', sandboxBackend: 'none' })
+      expect(p).toContain("working on the user's Linux machine")
+      expect(p).toContain(UNCONFINED)
+      expect(p).not.toContain(CONFINED)
+      expect(p).not.toContain(EGRESS)
+      const mac = withHost({ platform: 'darwin', sandboxBackend: 'none' })
+      expect(mac).toContain("working on the user's macOS machine")
+      expect(mac).toContain(UNCONFINED)
     })
   })
 })

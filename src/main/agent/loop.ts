@@ -102,7 +102,7 @@ import {
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
 import { isSensitivePath } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
-import { isSandboxed, type EgressProxyEndpoints } from '../sandbox'
+import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun } from './egress'
 import { formatFile } from './format'
 import { MAX_SUBAGENT_DEPTH, runSubAgent } from './subagent'
@@ -912,7 +912,10 @@ export async function startRun(
       req.model,
       localhostCaptureAvailable,
       spawnAvailable,
-      schedulerAvailable
+      schedulerAvailable,
+      // The prompt states the OS and whether run_shell is confined, so a host
+      // without an OS sandbox is never told its commands are sandboxed.
+      { platform: process.platform, sandboxBackend: activeBackendId() }
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // When a lot of MCP tools are connected, sending every schema on every turn
