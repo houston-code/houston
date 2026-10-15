@@ -98,6 +98,7 @@ export function buildSystemPrompt(
   rules?: string,
   planMode?: boolean,
   capabilities?: string,
+  // The conversation's date + git snapshot section (see promptSnapshot.ts).
   gitStatus?: string,
   providerId?: string,
   model?: string,
@@ -212,9 +213,10 @@ ${environmentSection(host)}
     sections.push(`Additional user instructions:\n${extra.trim()}`)
   }
 
-  // Last: the git snapshot changes between turns (a run that edits files dirties
-  // the tree), so keeping it after the stable sections leaves the longest possible
-  // unchanged prefix for providers that cache by prefix.
+  // Last: the date + git snapshot is the only section that depends on the outside
+  // world. It is held fixed per conversation and retaken only when the date changes,
+  // so keeping it after the stable sections leaves the longest possible unchanged
+  // prefix for providers that cache by prefix when it does.
   if (gitStatus && gitStatus.trim()) {
     sections.push(gitStatus.trim())
   }
