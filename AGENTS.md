@@ -143,9 +143,11 @@ for the *denied* path, not only the allowed one, and a security pass before the 
 - `src/main/agent/egress.ts`, `redact.ts`, and `src/main/secrets.ts` — per-destination
   network consent, and the scrub that keeps credentials out of transcripts, logs, and
   subagent output.
-- `src/main/agent/untrusted.ts` — fetched web content is attacker-controlled data that
-  lands in a context holding file, shell, and network tools. The nonce fence and the
-  classifier around it are not advisory; keep them non-optional.
+- `src/main/agent/untrusted.ts` — text outsiders wrote (fetched pages, web search results,
+  GitHub issue and pull request text, MCP results) is attacker-controlled data that lands
+  in a context holding file, shell, and network tools. The nonce fence and the classifier
+  around it are not advisory; keep them non-optional, and route any new tool that returns
+  such text through `presentUntrusted` / `presentUntrustedInline`.
 
 `SECURITY.md` and `docs/sandboxing.md` describe the guarantees these modules are meant to
 provide. If a change alters one, update them in the same PR.

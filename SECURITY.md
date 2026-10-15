@@ -52,9 +52,9 @@ current code.
 
 ## Scope and security model
 
-Houston's security model — the shell sandbox (per platform), workspace path
-containment for file tools, the approval flow for writes / commands / network egress,
-and encrypted-at-rest key storage — is described in the
+Houston's security model (the shell sandbox per platform, workspace path containment
+for file tools, the approval flow for writes / commands / network egress, and
+encrypted-at-rest key storage) is described in the
 [Security model](README.md#security-model) section of the README and in
 [docs/sandboxing.md](docs/sandboxing.md). Reports that account for that model are
 especially helpful.
@@ -84,9 +84,23 @@ not eliminate it. Egress bodies over TLS are not inspected (the proxy sees hostn
 content), an allowlisted collaborative host still accepts authenticated writes, and on
 Windows (no OS sandbox) the allowlist cannot be enforced.
 
+Text that outsiders write and Houston's tools pull into the agent's context (fetched web
+pages, web search results, GitHub issue and pull request titles, bodies, comments, and
+diffs, and MCP tool results and resources) is treated as **data, not instructions**. It
+arrives inside a fence tagged with a **fresh random nonce per call**, so the text cannot
+close the fence and pose as Houston's own framing, and only fields the platform
+guarantees (such as an issue's number, state, author, and URL) render outside it. A web
+page or MCP result that scores as a prompt-injection attempt is read by an **isolated
+model call with no tools and no history**, and only that call's report reaches the agent;
+if the isolated read fails, the content is withheld. GitHub text and search results that
+score as an attempt stay inline with a warning, because the agent needs their exact text.
+The scoring is a heuristic that can be worded around, so this is defense in depth behind
+the approval flow, not a guarantee that a model never acts on injected text.
+
 Reports that demonstrate a way to **bypass** a control that is supposed to hold (for
 example, escaping the shell sandbox, writing outside the workspace without approval,
 reaching a private/metadata network address through a network tool, sending network
 egress to a destination the run was never granted, exfiltrating a stored key through one
-of Houston's own network tools, or leaking stored keys to the renderer or disk in
-plaintext) are in scope and very welcome.
+of Houston's own network tools, getting outsider-written tool output to close its
+untrusted-content fence or render outside it, or leaking stored keys to the renderer or
+disk in plaintext) are in scope and very welcome.
