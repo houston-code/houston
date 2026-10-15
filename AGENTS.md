@@ -144,7 +144,7 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   network consent, and the scrub that keeps credentials out of transcripts, logs, and
   subagent output.
 - `src/main/agent/untrusted.ts` — text outsiders wrote (fetched pages, web search results,
-  GitHub issue and pull request text, MCP results) is attacker-controlled data that lands
+  GitHub issue, pull request, and CI text, MCP results) is attacker-controlled data that lands
   in a context holding file, shell, and network tools. The nonce fence and the classifier
   around it are not advisory; keep them non-optional, and route any new tool that returns
   such text through `presentUntrusted` / `presentUntrustedInline`.

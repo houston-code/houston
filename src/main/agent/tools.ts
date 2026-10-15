@@ -2279,7 +2279,7 @@ function ghRawUntrusted(raw: string): string {
     parts: [{ text: capGh(text), source: 'gh output' }],
     preamble: untrustedPreamble(
       'raw GitHub CLI output',
-      'It can include issue and pull request text that anyone able to open one wrote, not the user'
+      'It can include issue, pull request, and CI text that anyone able to open an issue or pull request wrote, not the user'
     ),
     subject: 'gh output',
     toolNames: builtinToolNames()
@@ -2942,33 +2942,49 @@ interface CheckRun {
 }
 
 /**
- * Render `gh pr checks --json` output into a rollup + one line per check. Pure.
- * `gh pr checks` exits non-zero when checks are pending/failing, so the caller
- * passes stdout here regardless of exit code — a fail/pending state is data.
+ * Render `gh pr checks --json` output: a rollup and one trusted line per check
+ * (`[<bucket>] check <n> <link>`), then the check and workflow names, fenced, keyed by
+ * the same n. Names are fenced because a fork PR's CI runs the fork's workflow files,
+ * so the PR author writes them. `gh pr checks` exits non-zero when checks are
+ * pending/failing, so the caller passes stdout here regardless of exit code: a
+ * fail/pending state is data.
  */
 export function formatChecks(json: string): string {
-  let checks: CheckRun[]
+  let parsed: unknown
   try {
-    checks = JSON.parse(json) as CheckRun[]
+    parsed = JSON.parse(json)
   } catch {
-    return json.trim() || '[no output]'
+    return ghRawUntrusted(json)
   }
-  if (!Array.isArray(checks) || checks.length === 0) return 'No checks reported for this pull request.'
+  if (!Array.isArray(parsed)) return ghRawUntrusted(json)
+  const checks = parsed.filter(isRecord) as Partial<CheckRun>[]
+  if (checks.length === 0) return 'No checks reported for this pull request.'
+  const bucketOf = (c: Partial<CheckRun>): string => ghEnum(c.bucket) || ghEnum(c.state) || 'unknown'
   const counts: Record<string, number> = {}
-  for (const c of checks) {
-    const b = (c.bucket || c.state || 'unknown').toLowerCase()
-    counts[b] = (counts[b] ?? 0) + 1
-  }
+  for (const c of checks) counts[bucketOf(c)] = (counts[bucketOf(c)] ?? 0) + 1
   const rollup = Object.entries(counts)
     .map(([k, v]) => `${v} ${k}`)
     .join(', ')
-  const lines = checks.map((c) => {
-    const status = (c.bucket || c.state || 'unknown').toLowerCase()
-    const name = c.name || c.workflow || 'check'
-    const link = c.link ? ` ${c.link}` : ''
-    return `[${status}] ${name}${link}`
+  const envelope = [
+    `Checks: ${rollup}`,
+    ...checks.map((c, i) => `[${bucketOf(c)}] check ${i + 1} ${ghUrl(c.link)}`.trimEnd())
+  ].join('\n')
+  const names = checks
+    .map((c, i) => {
+      const workflow = oneLine(c.workflow)
+      return `check ${i + 1}: ${oneLine(c.name) || 'check'}${workflow ? ` (workflow: ${workflow})` : ''}`
+    })
+    .join('\n')
+  return presentUntrustedInline({
+    envelope,
+    parts: [{ text: capGh(names), source: 'GitHub check and workflow names' }],
+    preamble: untrustedPreamble(
+      'CI check and workflow names',
+      "A pull request's CI can run workflow files from the pull request itself, so its author may have chosen them, not the user"
+    ),
+    subject: 'check list',
+    toolNames: builtinToolNames()
   })
-  return [`Checks: ${rollup}`, ...lines].join('\n')
 }
 
 const ghPrChecks: ToolDef = {
@@ -2977,7 +2993,7 @@ const ghPrChecks: ToolDef = {
   schema: {
     name: 'gh_pr_checks',
     description:
-      "Show the CI check (status) rollup for a pull request via the gh CLI. Omit number to use the current branch's PR. Use it to see whether CI passed before relying on a PR. Read-only, but requires approval (network).",
+      "Show the CI check (status) rollup for a pull request via the gh CLI. Omit number to use the current branch's PR. Returns the rollup and \"[<status>] check <n> <link>\" per check, then the check and workflow names inside an untrusted-content fence keyed by n. Use it to see whether CI passed before relying on a PR. Read-only, but requires approval (network).",
     parameters: objectSchema(
       { number: { type: 'number', description: 'PR number. Omit to use the current branch\'s PR.' } },
       []
@@ -3091,22 +3107,51 @@ interface RunSummary {
   event?: string
 }
 
-/** Render `gh run list --json` output into compact one-line-per-run text. Pure. */
+/** A run's or job's outcome: its conclusion once completed, else its status. */
+function runOutcome(r: { status?: unknown; conclusion?: unknown }): string {
+  const status = ghEnum(r.status)
+  return status === 'completed' ? ghEnum(r.conclusion) || 'completed' : status || 'unknown'
+}
+
+/** CI text is fenced like PR text: a fork PR's run uses the fork's workflow files. */
+const CI_ORIGIN =
+  "A pull request's CI runs workflow files and code from the pull request itself, possibly from a fork, so its author may have written them, not the user"
+
+/**
+ * Render `gh run list --json` output: one trusted line per run (id, outcome, event),
+ * then each run's workflow name, title, and branch, fenced, keyed by run id. The title
+ * is a PR title or commit message, and the workflow and branch names can come from a
+ * fork, so all three are attacker-chosen.
+ */
 export function formatRunList(json: string): string {
-  let runs: RunSummary[]
+  let parsed: unknown
   try {
-    runs = JSON.parse(json) as RunSummary[]
+    parsed = JSON.parse(json)
   } catch {
-    return json.trim() || '[no output]'
+    return ghRawUntrusted(json)
   }
-  if (!Array.isArray(runs) || runs.length === 0) return 'No workflow runs found.'
-  return runs
+  if (!Array.isArray(parsed)) return ghRawUntrusted(json)
+  const runs = parsed.filter(isRecord) as Partial<RunSummary>[]
+  if (runs.length === 0) return 'No workflow runs found.'
+  const envelope = runs
     .map((r) => {
-      const outcome = r.status === 'completed' ? r.conclusion || 'completed' : r.status || 'unknown'
-      const wf = r.workflowName ? `${r.workflowName}: ` : ''
-      return `${r.databaseId ?? '?'} [${outcome}] ${wf}${r.displayTitle ?? ''} (${r.headBranch ?? ''})`
+      const event = ghEnum(r.event)
+      return `${ghInt(r.databaseId)} [${runOutcome(r)}]${event ? ` (${event})` : ''}`
     })
     .join('\n')
+  const titles = runs
+    .map((r) => {
+      const wf = oneLine(r.workflowName)
+      return `${ghInt(r.databaseId)} ${wf ? `${wf}: ` : ''}${oneLine(r.displayTitle)} (branch: ${oneLine(r.headBranch)})`
+    })
+    .join('\n')
+  return presentUntrustedInline({
+    envelope,
+    parts: [{ text: capGh(titles), source: 'GitHub Actions run titles, workflow names, and branch names' }],
+    preamble: untrustedPreamble('CI run titles, workflow names, and branch names', CI_ORIGIN),
+    subject: 'run list',
+    toolNames: builtinToolNames()
+  })
 }
 
 const ghRunList: ToolDef = {
@@ -3115,7 +3160,7 @@ const ghRunList: ToolDef = {
   schema: {
     name: 'gh_run_list',
     description:
-      'List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns "<run-id> [status] <workflow>: <title> (<branch>)" per run; use a run-id with gh_run_view to inspect it. Requires approval (network).',
+      'List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns "<run-id> [status] (<event>)" per run, then each run\'s workflow, title, and branch inside an untrusted-content fence keyed by run id. Use a run-id with gh_run_view to inspect it. Requires approval (network).',
     parameters: objectSchema(
       {
         limit: { type: 'number', description: 'Max runs to return (1–50, default 20).' },
@@ -3151,13 +3196,108 @@ const ghRunList: ToolDef = {
   }
 }
 
+interface RunStep {
+  number?: number
+  name?: string
+  status?: string
+  conclusion?: string
+}
+
+interface RunJob {
+  databaseId?: number
+  name?: string
+  status?: string
+  conclusion?: string
+  url?: string
+  steps?: RunStep[]
+}
+
+interface RunDetail extends RunSummary {
+  headSha?: string
+  attempt?: number
+  url?: string
+  jobs?: RunJob[]
+}
+
+/**
+ * Render `gh run view --json` output. Outside the fence: the run's id, outcome, event,
+ * attempt, commit, and URL, and per job its id, outcome, URL, and the numbers of its
+ * failed steps. Inside: the workflow name, title, branch, and every job and step name,
+ * which a fork PR's author can write.
+ */
+export function formatRunView(json: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(json)
+  } catch {
+    return ghRawUntrusted(json)
+  }
+  if (!isRecord(parsed)) return ghRawUntrusted(json)
+  const r = parsed as Partial<RunDetail>
+  const id = ghInt(r.databaseId)
+  const event = ghEnum(r.event)
+  const sha = typeof r.headSha === 'string' && /^[0-9a-f]{7,64}$/.test(r.headSha) ? r.headSha : ''
+  const jobs = (Array.isArray(r.jobs) ? r.jobs : []).filter(isRecord) as Partial<RunJob>[]
+  const stepsOf = (j: Partial<RunJob>): Partial<RunStep>[] =>
+    (Array.isArray(j.steps) ? j.steps : []).filter(isRecord) as Partial<RunStep>[]
+  const envelope = [
+    `Run ${id} [${runOutcome(r)}]${event ? ` (${event})` : ''}${r.attempt !== undefined ? `, attempt ${ghInt(r.attempt)}` : ''}${sha ? `, commit ${sha}` : ''}`,
+    ghUrl(r.url),
+    jobs.length ? `Jobs (${jobs.length}):` : 'No jobs reported.',
+    ...jobs.map((j) => {
+      const failed = stepsOf(j)
+        .filter((s) => ghEnum(s.conclusion) === 'failure')
+        .map((s) => ghInt(s.number))
+      return `job ${ghInt(j.databaseId)} [${runOutcome(j)}]${failed.length ? ` failed step(s): ${failed.join(', ')}` : ''} ${ghUrl(j.url)}`.trimEnd()
+    })
+  ]
+    .filter(Boolean)
+    .join('\n')
+  const head = `Workflow: ${oneLine(r.workflowName)}\nTitle: ${oneLine(r.displayTitle)}\nBranch: ${oneLine(r.headBranch)}`
+  const jobText = jobs.map((j) =>
+    [
+      `job ${ghInt(j.databaseId)}: ${oneLine(j.name)}`,
+      ...stepsOf(j).map((s) => `  step ${ghInt(s.number)} [${runOutcome(s)}]: ${oneLine(s.name)}`)
+    ].join('\n')
+  )
+  return presentUntrustedInline({
+    envelope,
+    parts: [{ text: capGh([head, ...jobText].join('\n\n')), source: ghUrl(r.url) || `workflow run ${id}` }],
+    preamble: untrustedPreamble('CI run, job, and step names', CI_ORIGIN),
+    subject: 'workflow run',
+    toolNames: builtinToolNames()
+  })
+}
+
+/**
+ * Render `gh run view --log-failed` output, fenced whole. A fork PR's run executes the
+ * fork's code and workflow steps, so every log line can be the PR author's text.
+ *
+ * Fenced but not scored, like a diff. CI logs are tool output: piped installers, secret
+ * names, base64 blobs, and tool names after "run" are routine there, so scoring them
+ * would warn on ordinary failures and teach the agent to ignore the warning. The fence
+ * and the preamble are the protection; the run's title and names stay scored through
+ * gh_run_view's summary.
+ */
+export function formatRunLog(runId: string, log: string): string {
+  const text = log.trim()
+  if (!text) return '[no output]'
+  return presentUntrustedInline({
+    envelope: `Logs of the failed steps of run ${runId}.`,
+    parts: [{ text: capGh(text), source: `workflow run ${runId} (failed-step logs)`, score: false }],
+    preamble: untrustedPreamble('CI log output', CI_ORIGIN),
+    subject: 'CI log',
+    toolNames: builtinToolNames()
+  })
+}
+
 const ghRunView: ToolDef = {
   kind: 'network',
   summarize: (a) => `View CI run ${str(a, 'run_id')}`,
   schema: {
     name: 'gh_run_view',
     description:
-      'View a GitHub Actions workflow run (its jobs and their status) via the gh CLI. Set log_failed:true to print the logs of only the failed steps, the fastest way to diagnose a CI failure. Get run ids from gh_run_list. Read-only, but requires approval (network).',
+      'View a GitHub Actions workflow run via the gh CLI. Returns the run\'s id, outcome, URL, and each job\'s id, outcome, and failed step numbers, then the workflow, title, branch, and job and step names inside an untrusted-content fence. Set log_failed:true to print the logs of only the failed steps instead, fenced (the fastest way to diagnose a CI failure). Get run ids from gh_run_list. Read-only, but requires approval (network).',
     parameters: objectSchema(
       {
         run_id: { type: 'number', description: 'The run id (databaseId from gh_run_list).' },
@@ -3170,9 +3310,26 @@ const ghRunView: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const argv = ['run', 'view', ...intArg(args, 'run_id', 'run_id (the run id)', true)]
-    if (args.log_failed === true) argv.push('--log-failed')
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    const [runId] = intArg(args, 'run_id', 'run_id (the run id)', true)
+    const run = ghRunner(ctx)
+    if (args.log_failed === true) {
+      const r = await run(['run', 'view', runId, '--log-failed'], ctx.workspace, ctx.signal)
+      if (!r.ok) return ghOutput(r)
+      return formatRunLog(runId, r.stdout)
+    }
+    const r = await run(
+      [
+        'run',
+        'view',
+        runId,
+        '--json',
+        'databaseId,displayTitle,workflowName,headBranch,headSha,event,status,conclusion,attempt,url,jobs'
+      ],
+      ctx.workspace,
+      ctx.signal
+    )
+    if (!r.ok) return ghOutput(r)
+    return formatRunView(r.stdout)
   }
 }
 
