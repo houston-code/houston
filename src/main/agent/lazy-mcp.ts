@@ -116,7 +116,7 @@ export function makeFindToolsDef(defs: ToolDef[], revealed: Set<string>): ToolDe
       }
       for (const m of matches) revealed.add(m.schema.name)
       return Promise.resolve(
-        `Loaded ${matches.length} tool(s) — now callable on your next step:\n\n${describeLoaded(matches)}`
+        `Loaded ${matches.length} tool(s), now callable on your next step:\n\n${describeLoaded(matches)}`
       )
     }
   }

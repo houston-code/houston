@@ -4,6 +4,7 @@ import {
   homepageOf,
   readLicenseText,
   renderEntry,
+  run,
   VENDORED_BINARIES
 } from './generate-notices.mjs'
 
@@ -97,5 +98,47 @@ describe('VENDORED_BINARIES', () => {
     const rg = VENDORED_BINARIES.find((b) => b.name === 'ripgrep')
     expect(rg.license).toBe('MIT OR Unlicense')
     expect(VENDORED_BINARIES.every((b) => b.homepage && b.note)).toBe(true)
+  })
+})
+
+describe('run', () => {
+  const io = (current) => {
+    const writes = []
+    const logs = []
+    return {
+      writes,
+      logs,
+      opts: {
+        out: 'NOTICES.md',
+        exists: () => current !== undefined,
+        read: () => current,
+        write: (p, t) => writes.push([p, t]),
+        log: (m) => logs.push(m)
+      }
+    }
+  }
+
+  it('writes the rendered file by default', () => {
+    const { writes, opts } = io('old')
+    expect(run([], { rendered: 'new', ...opts })).toBe(0)
+    expect(writes).toEqual([['NOTICES.md', 'new']])
+  })
+
+  it('--check passes without writing when the committed file is current', () => {
+    const { writes, opts } = io('same')
+    expect(run(['--check'], { rendered: 'same', ...opts })).toBe(0)
+    expect(writes).toEqual([])
+  })
+
+  it('--check fails with an annotation when the committed file is stale', () => {
+    const { writes, logs, opts } = io('stale')
+    expect(run(['--check'], { rendered: 'fresh', ...opts })).toBe(1)
+    expect(writes).toEqual([])
+    expect(logs.join('')).toContain('::error::THIRD-PARTY-NOTICES.md is out of date')
+  })
+
+  it('--check fails when the file is missing', () => {
+    const { opts } = io(undefined)
+    expect(run(['--check'], { rendered: 'fresh', ...opts })).toBe(1)
   })
 })

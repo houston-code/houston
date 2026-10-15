@@ -180,8 +180,8 @@ export function renderNotebook(
   const version = `nbformat ${nb.nbformat}${typeof nb.nbformat_minor === 'number' ? `.${nb.nbformat_minor}` : ''}`
   const header =
     nb.cells.length === 0
-      ? `[notebook: ${opts.path} — no cells, ${version}]`
-      : `[notebook: ${opts.path} — ${nb.cells.length} cell${nb.cells.length === 1 ? '' : 's'} (${summary}), ${version}. Cell numbers below are the "cell" argument to notebook_edit.]`
+      ? `[notebook: ${opts.path}: no cells, ${version}]`
+      : `[notebook: ${opts.path}: ${nb.cells.length} cell${nb.cells.length === 1 ? '' : 's'} (${summary}), ${version}. Cell numbers below are the "cell" argument to notebook_edit.]`
 
   const body = nb.cells.map((cell, i) => {
     const n = i + 1

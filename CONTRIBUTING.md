@@ -338,3 +338,6 @@ fails the build if anything in the installed tree carries AGPL, SSPL, BUSL, or a
 copyleft or source-available license, since none of those can be redistributed inside
 an Apache-2.0 binary. If you vendor code from another project, keep its license header
 intact and add it to the notices.
+
+A dependency change also changes `THIRD-PARTY-NOTICES.md`. Regenerate it with
+`npm run notices` and commit it; `npm run notices:check` is the read-only check CI runs.

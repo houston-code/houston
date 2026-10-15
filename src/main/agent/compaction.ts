@@ -329,7 +329,7 @@ function byteLength(text: string): number {
 export function evictionStub(toolName: string | undefined, subject: string, bytes: number): string {
   const tool = toolName?.trim() || 'tool'
   const subj = subject.trim() ? ` on ${subject.trim()}` : ''
-  return `[earlier ${tool} result${subj}, ${bytes} bytes elided — recall_history or re-run to view]`
+  return `[earlier ${tool} result${subj}, ${bytes} bytes elided; recall_history or re-run to view]`
 }
 
 /**
