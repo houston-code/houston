@@ -1,0 +1,336 @@
+name: Release - build leg
+
+# One platform leg of a release, called by release-publish.yml: build and package the app
+# (macOS legs are code-signed and notarized by electron-builder), publish its installers and
+# update feed into the draft release, run the packaged-app e2e on macOS, and generate this
+# platform's binary SBOM. The Linux leg also builds the standalone CLI, the lockfile SBOMs and
+# the release VEX, and attaches them.
+#
+# NOTHING HERE SIGNS with cosign or GPG, and the job cannot mint an OIDC token. This job runs
+# `npm ci` and the build, which execute third-party dependency code; the keyless signing
+# identity and the GPG release key live only in release-publish.yml's `checksums` job, which
+# installs no dependencies. What this job still holds is the macOS signing material
+# (step-scoped to "Package and publish" on the macOS legs): electron-builder is itself a
+# dependency and signs inside the build, so that one cannot be separated from it.
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: Runner image for this leg.
+        required: true
+        type: string
+      dist:
+        description: The package.json dist script that builds this leg.
+        required: true
+        type: string
+      sbom_app:
+        description: The packaged-app directory this leg produces, for scripts/binary-sbom.mjs.
+        required: true
+        type: string
+      sbom_label:
+        description: Platform tag for this leg's binary SBOM, e.g. darwin-arm64.
+        required: true
+        type: string
+      mac_x64_manual:
+        description: Intel mac only. Merge into the arm64 update feed instead of publishing its own.
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: Build artifacts but publish nothing.
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  leg:
+    name: ${{ inputs.sbom_label }}
+    timeout-minutes: 40
+    # The macOS signing credentials (Apple notarization and the Developer ID .p12) live in
+    # the `release` environment, not as repository secrets, so they are unreadable by any job
+    # that does not declare it. The environment restricts deployment to protected branches,
+    # so a fork or a feature branch cannot reach them even by editing this file. It has no
+    # required reviewer: the human approval is release-publish's `approve` job.
+    environment: release
+    permissions:
+      # electron-builder and gh upload into the draft release in this repo.
+      contents: write
+    runs-on: ${{ inputs.os }}
+    # bash on every leg: the Windows runner defaults to PowerShell, which can't parse the
+    # scripts below (if/elif/fi, line continuations). Git Bash ships on the Windows runner.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Build the commit this run was dispatched on (github.sha), never a fresh `main`. The
+      # legs run for up to ~40 min each (the macOS pair one after another), after the approval
+      # wait, and main keeps moving under the merge queue meanwhile: checking out `main` here
+      # let each platform build a different commit while the SLSA provenance
+      # (scripts/slsa-provenance.mjs reads GITHUB_SHA) named yet another. The `release`
+      # environment only admits runs on main, so github.sha is always a main commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+      # Fail the release if THIRD-PARTY-NOTICES.md drifted from the shipped closure — it's
+      # attached to the release, so it must not ship stale versions next to a fresh SBOM.
+      - name: Check THIRD-PARTY-NOTICES.md is current
+        if: inputs.os == 'ubuntu-22.04'
+        run: npm run notices:check
+      # Create the draft release up front (or reuse the one a previous attempt made) so
+      # electron-builder never creates it. Left to itself, it creates the release lazily from
+      # each target's upload, and the arm64 leg's zip and dmg uploads raced: both saw no
+      # release and both created one, splitting the assets across two drafts. Every leg runs
+      # this, so a duplicate from any source stops the run before more uploads scatter.
+      - name: Ensure a single draft release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"
+      - name: Package and publish
+        # electron-builder's github publisher reads GH_TOKEN; the job's own GITHUB_TOKEN
+        # (contents: write) is enough, since the release lives in this repo (per
+        # electron-builder.yml `publish`). The gh calls in this step use it too.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code-signing + notarization. SCOPED to the macOS legs via startsWith():
+          # CSC_LINK/CSC_KEY_PASSWORD are ALSO electron-builder's Windows Authenticode vars,
+          # so leaking the mac .p12 to the Windows leg would make it try to sign the installer
+          # with an Apple cert and fail. An empty value on non-mac legs = signing skipped there
+          # (Windows/Linux stay unsigned until they get their own certs). electron-builder v26
+          # auto-notarizes when APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID are set.
+          CSC_LINK: ${{ startsWith(inputs.os, 'macos') && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ startsWith(inputs.os, 'macos') && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          DIST: ${{ inputs.dist }}
+          MAC_X64_MANUAL: ${{ inputs.mac_x64_manual }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            # Dry run: build only, never publish. The explicit `--publish never` also silences
+            # electron-builder's deprecated implicit-publish-on-CI detection (removed in v27).
+            npm run "$DIST" -- --publish never
+          elif [ "$MAC_X64_MANUAL" = "true" ]; then
+            # Intel mac: build WITHOUT electron-builder's publisher (its latest-mac.yml lists
+            # only x64 — publishing it as-is would clobber the arm64 feed: electron-builder#5592).
+            # Instead, MERGE this build's x64 files INTO the arm64 feed the macos-14 leg already
+            # published, so one latest-mac.yml auto-updates BOTH arches — MacUpdater self-selects
+            # per arch from the `files` list. release-publish's `build-mac` job runs the arm64 leg first.
+            # `--publish never` is REQUIRED here: without it, electron-builder's implicit
+            # publish-on-CI detection uploads this x64 latest-mac.yml and clobbers the arm64
+            # feed — the exact failure this manual-merge path exists to avoid.
+            npm run "$DIST" -- --publish never
+            tag="v$(node -p "require('./package.json').version")"
+            mkdir -p arm64-feed merged-feed
+            # Pull the arm64-only feed the arm64 leg uploaded to the draft, then merge x64 into it.
+            gh release download "$tag" -R houston-code/houston -p latest-mac.yml -D arm64-feed --clobber
+            node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml > merged-feed/latest-mac.yml
+            # Upload every x64 binary (dmg/zip/blockmaps, whatever electron-builder named them),
+            # then replace the feed with the merged one. Exclude *.yml from the binary upload so
+            # the x64-only latest-mac.yml is never published.
+            find release -maxdepth 1 -type f ! -name '*.yml' -print0 \
+              | xargs -0 gh release upload "$tag" -R houston-code/houston --clobber
+            gh release upload "$tag" merged-feed/latest-mac.yml -R houston-code/houston --clobber
+          else
+            # Appends to the dist script's electron-builder invocation: --publish always
+            # uploads the artifacts + latest*.yml to a DRAFT release (finalize un-drafts).
+            npm run "$DIST" -- --publish always
+          fi
+      # electron-builder must have uploaded into the existing draft, not made another one.
+      # Checked before the signing steps below, which upload to the draft by tag.
+      - name: Check the release is still a single draft
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          node scripts/release-draft.mjs check houston-code/houston "$tag"
+      # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
+      # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
+      # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
+      # flaky on CI runners — the reason electron-builder's gatekeeperAssess is off — so it
+      # runs last, INFORMATIONAL only, and never fails the job.
+      - name: Verify code signature + notarization
+        if: startsWith(inputs.os, 'macos')
+        run: |
+          app=$(find release -maxdepth 2 -name 'Houston.app' -type d | head -1)
+          if [ -z "$app" ]; then echo "::error::no packaged Houston.app found in release/"; exit 1; fi
+          echo "Verifying $app"
+          # Signature integrity across the whole bundle (helpers, frameworks, binaries).
+          codesign --verify --deep --strict --verbose=2 "$app"
+          # Assert a Developer ID Application cert, not ad-hoc/unsigned — codesign --verify
+          # passes on an ad-hoc signature, so this catches a build where signing secrets were
+          # absent.
+          codesign -dvv "$app" 2>&1 | grep -q 'Authority=Developer ID Application' \
+            || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
+          # The notarization ticket must be stapled to the bundle (offline Gatekeeper proof).
+          xcrun stapler validate "$app"
+          # Informational only — never fail the release on spctl's flakiness.
+          spctl --assess --type exec --verbose=4 "$app" \
+            || echo "::warning::spctl assessment did not pass (informational only — codesign + stapler are the gates)"
+      # Packaged-app smoke on BOTH macOS legs — arm64 (macos-14) and Intel (macos-15-intel) —
+      # so the x64 artifact's packaged .app (its own node-pty + rg/ast-grep) is launch-tested,
+      # not just arm64. resolveLaunch() picks release/mac-arm64 or release/mac accordingly.
+      - if: startsWith(inputs.os, 'macos')
+        run: npm run test:e2e
+      # Standalone CLI (README "Standalone CLI" section): one platform-independent
+      # houston-cli.cjs per release. Built on the Linux leg only — the bundle is
+      # pure JS, so any leg would produce the same bytes. The release-publish `draft` job
+      # created the draft before any leg started. On dry_run it's built (not published) and lands in the artifact.
+      - name: Build standalone CLI
+        if: inputs.os == 'ubuntu-22.04'
+        run: |
+          npm run build:cli
+          # No separate houston-cli.cjs.sha256: the signed SHA256SUMS (the `checksums`
+          # job) already lists the CLI, and an unsigned per-file checksum proved nothing
+          # a tamperer couldn't also replace.
+      # Software Bill of Materials (CycloneDX + SPDX) for the production dependency
+      # closure, generated with Syft scanning package-lock.json directly. npm's built-in
+      # `npm sbom --omit dev` was tried first but SILENTLY UNDER-REPORTS: it emitted 56 of
+      # the 73 production packages, dropping genuine runtime transitives (builder-util-
+      # runtime, graceful-fs, zod, https-proxy-agent, minimatch...) because npm dev-flags
+      # shared packages during hoisting and then omits them — a vulnerability scanner fed
+      # that SBOM would get false negatives on ~23% of the surface. Syft reads the lockfile's
+      # own dev flags, excludes dev by default, and emits BOTH formats from one scan so they
+      # describe an identical closure. Built on the Linux leg only (the closure is platform-
+      # independent). This is THE per-release SBOM path: it attaches the SBOM to the
+      # published Release deterministically, regardless of how the release commit landed. The
+      # push-triggered sbom.yml can't be relied on for this: it yields a transient 90-day
+      # Actions artifact, not a durable Release asset. (It also has no push trigger today; see
+      # the note at the top of sbom.yml.)
+      - name: Generate SBOMs (production dependency closure)
+        if: inputs.os == 'ubuntu-22.04'
+        uses: ./.github/actions/sbom-generate
+      # Deep binary SBOM (native/runtime layer), generated PER LEG from that platform's real
+      # packaged app. The lockfile SBOMs above enumerate the JavaScript closure; they
+      # structurally CANNOT see the components that ship as real binaries rather than npm
+      # tarballs: the Electron runtime and the Chromium + Node it embeds, the node-pty native
+      # addon, the vendored rg/ast-grep CLIs, and (macOS only) the Squirrel.Mac updater
+      # frameworks. A calibration run of Syft against a packaged app found ~none of these (Syft
+      # has no Electron/Chromium classifier, and the Rust CLIs carry no metadata it reads), so
+      # scripts/binary-sbom.mjs CONSTRUCTS the set and reads each version from the ACTUAL shipped
+      # binary (Electron's compiled-in user-agent + node banner, `rg`/`ast-grep --version`,
+      # node-pty's manifest, each mac framework's Info.plist) — versions a manifest never
+      # reveals: the shipped Node differs from the build Node, and ripgrep 15.x hides behind the
+      # @vscode/ripgrep@1.18.0 wrapper. It fail-closes if any expected native component or its
+      # version is missing, the same stance as the lockfile floor above. Each leg execs its OWN
+      # native binaries (so the rg/ast-grep versions come from that platform's build) and hashes
+      # the exact files it ships, so a user of any platform can verify the SBOM's hashes against
+      # the binaries inside their own download. bash on every leg (the Windows runner defaults to
+      # PowerShell, which can't parse the line-continuations). This step runs after e2e, which
+      # only rebuilds out/ — it never repackages release/, so the app dir persists.
+      - name: Generate deep binary SBOM (native/runtime layer)
+        env:
+          SBOM_APP: ${{ inputs.sbom_app }}
+          SBOM_LABEL: ${{ inputs.sbom_label }}
+        run: |
+          node scripts/binary-sbom.mjs --app "$SBOM_APP" --platform "$SBOM_LABEL" \
+            -o cyclonedx-json="sbom.binary.${SBOM_LABEL}.cyclonedx.json" \
+            -o spdx-json="sbom.binary.${SBOM_LABEL}.spdx.json"
+      # Vulnerability gate for the NATIVE layer, the coverage the lockfile scan can't provide:
+      # without it a Chromium/Node/ripgrep CVE is invisible to the release (the calibration run
+      # flagged fixable High + a Critical in the shipped Chromium, matched via its CPE). Runs ONCE,
+      # on the Linux leg: the six vuln-relevant components are identical across platforms (the
+      # mac-only Squirrel frameworks carry no NVD coordinates). Post-build because it scans the
+      # packaged app; the pre-build native-scan job has already checked the runtime, so what this
+      # adds is node-pty, rg and ast-grep, read from the shipped binaries.
+      #
+      # Policy (scripts/native-vuln-policy.mjs), unlike the lockfile gate's "block every fixable
+      # High/Critical": a finding only BLOCKS when we could ship the fix today (a stable Electron
+      # carries it, or the component isn't Electron's). One that only a pre-release Electron fixes
+      # ships as an `affected` statement in this release's VEX document, which is generated
+      # here (repo assessments + those statements) into release-vex/ and is the copy attached,
+      # signed and checksummed below. A failure fails the build job, so finalize never un-drafts.
+      - name: Install grype
+        if: inputs.os == 'ubuntu-22.04'
+        id: grype
+        uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          # Pin a Grype new enough to read the CycloneDX the pinned Syft emits.
+          grype-version: v0.115.0
+      - name: Scan binary SBOM + apply native-layer policy
+        if: inputs.os == 'ubuntu-22.04'
+        env:
+          GRYPE: ${{ steps.grype.outputs.cmd }}
+        run: |
+          curl -fsSL --retry 3 https://releases.electronjs.org/releases.json -o electron-releases.json
+          "$GRYPE" sbom:sbom.binary.linux-x64.cyclonedx.json \
+            --only-fixed --vex .github/vex/houston.openvex.json -o table -o json=grype.binary.json
+          mkdir -p release-vex
+          node scripts/native-vuln-policy.mjs evaluate --report grype.binary.json \
+            --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY" \
+            --vex-in .github/vex/houston.openvex.json --vex-out release-vex/houston.openvex.json \
+            --release "$(node -p "require('./package.json').version")"
+      - name: Attach standalone CLI + SBOMs to the release
+        if: ${{ inputs.os == 'ubuntu-22.04' && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          # Upload the bundle, its checksum, and the attribution notices together:
+          # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
+          # travel with the redistributed code (the .cjs ships no node_modules). The
+          # lockfile SBOMs ship alongside so each released version carries a verifiable
+          # production dependency manifest in CycloneDX + SPDX. (The per-platform deep
+          # binary SBOMs are attached + signed separately, per leg — see "Attach + sign
+          # the binary SBOM".) The VEX travels with them so consumers get the
+          # exploitability assessment, not just the list.
+          gh release upload "$tag" \
+            out/cli/houston-cli.cjs \
+            THIRD-PARTY-NOTICES.md \
+            sbom.cyclonedx.json \
+            sbom.spdx.json \
+            sbom.spdx3.json \
+            release-vex/houston.openvex.json \
+            -R houston-code/houston --clobber
+      # This leg's own deep binary SBOM (generated above from its packaged app). The
+      # platform-tagged filename means the four legs never collide, and each ships the SBOM
+      # whose hashes match that platform's binaries. Signing happens later, in
+      # release-publish.yml's `checksums` job, which holds the signing identity and installs no
+      # dependencies.
+      - name: Attach the binary SBOM
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SBOM_LABEL: ${{ inputs.sbom_label }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          gh release upload "$tag" \
+            "sbom.binary.${SBOM_LABEL}.cyclonedx.json" "sbom.binary.${SBOM_LABEL}.spdx.json" \
+            -R houston-code/houston --clobber
+      # On a REAL publish the assets live on the published GitHub Release, so no Actions
+      # artifact is uploaded. dry_run builds WITHOUT publishing, so upload an inspectable
+      # artifact only in that case. (out/cli/houston-cli.cjs exists only on the Linux
+      # leg; upload-artifact errors only when a leg matches NOTHING, so the desktop
+      # patterns keep the other legs green.)
+      - if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dryrun-${{ inputs.sbom_label }}
+          retention-days: 14
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*-setup.exe
+            release/*.AppImage
+            release/*.deb
+            release/latest*.yml
+            out/cli/houston-cli.cjs
+            THIRD-PARTY-NOTICES.md
+            sbom.cyclonedx.json
+            sbom.spdx.json
+            sbom.spdx3.json
+            sbom.binary.*.cyclonedx.json
+            sbom.binary.*.spdx.json
+            release-vex/houston.openvex.json
+          if-no-files-found: error

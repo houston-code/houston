@@ -4,19 +4,29 @@ import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * Guards the Linux GPG-signing and source-commit invariants in the release-publish workflow, not application
- * code — but it lives in the node test project so it runs in the same `npm test` that gates
- * every PR. release-publish.yml is workflow_dispatch-only, so its GPG step never executes on a
- * normal PR; these assertions are the only automated check that the signing contract stays
- * intact (correct gating, non-interactive signing, and that a missing key degrades safely
- * instead of stranding a release).
+ * Guards the signing, build-order and source-commit invariants in the release workflows
+ * (release-publish.yml and the release-build.yml legs it calls), not application code — but it
+ * lives in the node test project so it runs in the same `npm test` that gates every PR. Both
+ * are workflow_dispatch-only, so their signing steps never execute on a normal PR; these
+ * assertions are the only automated check that the signing contract stays intact (correct
+ * gating, non-interactive signing, a missing key degrading safely instead of stranding a
+ * release, and signing kept out of the jobs that run dependency code).
  */
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const workflow = readFileSync(resolve(repoRoot, '.github/workflows/release-publish.yml'), 'utf8')
+const leg = readFileSync(resolve(repoRoot, '.github/workflows/release-build.yml'), 'utf8')
+
+/** A top-level job's block in release-publish.yml, from its key to the next job key. */
+function job(name: string): string {
+  const start = workflow.indexOf(`\n  ${name}:\n`)
+  expect(start).toBeGreaterThan(-1)
+  const next = workflow.slice(start + 1).search(/\n {2}[a-z][a-z-]*:\n/)
+  return next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next)
+}
 
 // The single GPG step's body: from its `- name:` marker to the start of the next step.
 const gpgStep = (() => {
-  const start = workflow.indexOf('- name: GPG-sign Linux artifacts')
+  const start = workflow.indexOf('- name: GPG-sign the Linux artifacts and SHA256SUMS')
   const rest = workflow.slice(start + 1)
   const next = rest.indexOf('\n      - ') // next step at the same indent
   return next === -1 ? rest : rest.slice(0, next)
@@ -29,15 +39,14 @@ const checksumsJob = (() => {
 })()
 
 describe('release-publish GPG signing', () => {
-  it('defines a GPG signing step', () => {
-    expect(workflow).toContain('- name: GPG-sign Linux artifacts')
+  it('defines one GPG signing step, in the checksums job', () => {
+    expect(workflow.match(/gpg --batch --import/g)).toHaveLength(1)
+    expect(job('checksums')).toContain('- name: GPG-sign the Linux artifacts and SHA256SUMS')
   })
 
-  it('runs only on the Linux leg and never on a dry run', () => {
-    // The AppImage and deb exist only on the Linux leg; dry_run publishes nothing, so there
-    // is nothing to sign or attach.
-    expect(gpgStep).toContain("matrix.os == 'ubuntu-22.04'")
-    expect(gpgStep).toContain('!inputs.dry_run')
+  it('never runs on a dry run', () => {
+    // dry_run publishes nothing, so there is nothing to sign or attach.
+    expect(job('checksums')).toContain('if: ${{ !inputs.dry_run }}')
   })
 
   it('soft-skips when the signing key is absent, so a missing secret never fails a release', () => {
@@ -60,27 +69,87 @@ describe('release-publish GPG signing', () => {
     expect(workflow).toContain('GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}')
   })
 
-  it('emits a detached signature beside each Linux artifact', () => {
-    expect(gpgStep).toMatch(/for f in release\/\*\.AppImage release\/\*\.deb/)
-    expect(gpgStep).toContain('--detach-sign')
-    expect(gpgStep).toMatch(/gh release upload "\$tag" "\$f\.asc"/)
+  it('signs each Linux artifact, as downloaded from the draft, and the manifest', () => {
+    expect(gpgStep).toContain('for f in assets/*.AppImage assets/*.deb SHA256SUMS; do')
+    expect(gpgStep).toContain('--detach-sign --output "$f.asc" "$f"')
+    expect(gpgStep).toContain('gh release upload "$tag" "${sigs[@]}" houston-signing-key.asc')
   })
 
   it('publishes the public key so a downloader needs no keyserver', () => {
-    expect(gpgStep).toMatch(/gh release upload "\$tag" houston-signing-key\.asc/)
+    expect(gpgStep).toContain('houston-signing-key.asc -R houston-code/houston --clobber')
+  })
+})
+
+describe('release signing is kept away from dependency code', () => {
+  it('never signs in a build leg, which runs npm ci and the build', () => {
+    // A dependency's install script or build-time code runs in the leg; it must not be able to
+    // mint the signing identity (OIDC) or read the GPG key. Comments may still explain why.
+    const code = leg
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .join('\n')
+    expect(code).not.toContain('id-token')
+    expect(code).not.toContain('cosign')
+    expect(code).not.toContain('GPG_PRIVATE_KEY')
+    expect(code).not.toContain('GPG_PASSPHRASE')
   })
 
-  it('leaves the whole-release manifest to the checksums job', () => {
-    // Built on the Linux leg it could only hash that runner's files, so it missed every mac
-    // and Windows download.
-    expect(gpgStep).not.toContain('SHA256SUMS')
+  it('signs only in the checksums job, which installs no dependencies', () => {
+    const checksums = job('checksums')
+    expect(checksums).toContain('id-token: write')
+    expect(checksums).not.toMatch(/npm (ci|install)/)
+    expect(checksums).not.toMatch(/install: (full|no-scripts|production)/)
+    for (const name of ['draft', 'build-mac', 'build-other', 'finalize']) {
+      expect(job(name)).not.toContain('id-token')
+    }
+  })
+
+  it('cosign-signs every checksummed asset and the manifest', () => {
+    const checksums = job('checksums')
+    expect(checksums).toContain('cosign sign-blob --yes "assets/$name" --bundle "assets/$name.cosign.bundle"')
+    expect(checksums).toContain('done < checksummed.txt')
+    expect(checksums).toContain('cosign sign-blob --yes SHA256SUMS --bundle SHA256SUMS.cosign.bundle')
+  })
+})
+
+describe('release build order', () => {
+  it('creates the draft once, before any leg', () => {
+    expect(job('draft')).toContain('node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"')
+    for (const name of ['build-mac', 'build-other']) {
+      expect(job(name)).toContain('needs: [native-scan, sbom-conformance, approve, draft]')
+      // A dry run skips `draft`; the legs must still run.
+      expect(job(name)).toContain('if: ${{ !failure() && !cancelled() }}')
+      expect(job(name)).toContain('uses: ./.github/workflows/release-build.yml')
+    }
+  })
+
+  it('runs the macOS legs one at a time, arm64 first, so the Intel leg can merge its feed', () => {
+    const mac = job('build-mac')
+    expect(mac).toContain('max-parallel: 1')
+    expect(mac.indexOf('os: macos-14')).toBeGreaterThan(-1)
+    expect(mac.indexOf('os: macos-14')).toBeLessThan(mac.indexOf('os: macos-15-intel'))
+    expect(mac).toMatch(/os: macos-15-intel\n(.*\n){3} {12}mac_x64_manual: true/)
+  })
+
+  it('builds Windows and Linux in parallel, outside the macOS ordering', () => {
+    const other = job('build-other')
+    expect(other).not.toContain('max-parallel')
+    expect(other).toContain('os: windows-2025')
+    expect(other).toContain('os: ubuntu-22.04')
+  })
+
+  it('never interpolates inputs straight into a leg script', () => {
+    // Inputs reach run scripts through env, so an input can never become shell syntax.
+    const runs = leg.split('\n').filter((l) => !l.trim().startsWith('#'))
+    const script = runs.join('\n').match(/run: \|\n([\s\S]*?)(?=\n {6}- |\n {0,4}\S|$)/g) ?? []
+    for (const block of script) expect(block).not.toContain('${{ inputs.')
   })
 })
 
 describe('release-publish SHA256SUMS manifest', () => {
   it('runs after every build leg and before finalize publishes', () => {
-    expect(checksumsJob).toContain('needs: build')
-    expect(workflow).toContain('\n  finalize:\n    needs: [build, checksums]\n')
+    expect(checksumsJob).toContain('needs: [build-mac, build-other]')
+    expect(workflow).toContain('\n  finalize:\n    needs: [build-mac, build-other, checksums]\n')
   })
 
   it('never runs on a dry run', () => {
@@ -95,11 +164,11 @@ describe('release-publish SHA256SUMS manifest', () => {
 
   it('signs the manifest with cosign always and GPG when the key is set', () => {
     expect(checksumsJob).toContain('cosign sign-blob --yes SHA256SUMS --bundle SHA256SUMS.cosign.bundle')
+    expect(checksumsJob).toContain('gh release upload "$tag" SHA256SUMS SHA256SUMS.cosign.bundle "${bundles[@]}"')
     expect(checksumsJob).toMatch(/if \[ -z "\$GPG_PRIVATE_KEY" \]/)
     expect(checksumsJob).toMatch(/GNUPGHOME="\$\(mktemp -d\)"/)
     expect(checksumsJob).toContain('--pinentry-mode loopback --passphrase "$GPG_PASSPHRASE"')
-    expect(checksumsJob).toContain('--detach-sign --output SHA256SUMS.asc SHA256SUMS')
-    expect(checksumsJob).toContain('gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber')
+    expect(checksumsJob).toContain('for f in assets/*.AppImage assets/*.deb SHA256SUMS; do')
   })
 
   it('reads the signing secrets from the release environment', () => {
@@ -116,9 +185,11 @@ describe('release-publish source commit', () => {
     expect(workflow).not.toMatch(/^\s*ref:\s*main\s*$/m)
   })
 
-  it('pins the build, checksums and finalize checkouts to github.sha', () => {
+  it('pins the draft, checksums and finalize checkouts, and the build leg, to github.sha', () => {
     const pinned = workflow.match(/^\s*ref: \$\{\{ github\.sha \}\}\s*$/gm) ?? []
     expect(pinned).toHaveLength(3)
+    expect(leg.match(/^\s*ref: \$\{\{ github\.sha \}\}\s*$/gm) ?? []).toHaveLength(1)
+    expect(leg).not.toMatch(/^\s*ref:\s*main\s*$/m)
   })
 
   it('refuses to publish under a version tag that names a different commit', () => {
@@ -162,10 +233,8 @@ describe('release-publish SLSA provenance', () => {
     const start = workflow.indexOf('\n  checksums:\n')
     return workflow.slice(start, workflow.indexOf('\n  finalize:\n', start))
   })()
-  // The build job's commands only: comments (including the checksums job's header, which
-  // sits just above `checksums:`) may still describe provenance.
-  const buildJob = workflow
-    .slice(workflow.indexOf('\n  build:\n'), workflow.indexOf('\n  checksums:\n'))
+  // The build leg's commands only: comments may still describe provenance.
+  const buildJob = leg
     .split('\n')
     .filter((l) => !l.trim().startsWith('#'))
     .join('\n')
