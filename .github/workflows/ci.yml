@@ -63,7 +63,7 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           install: full
-          electron-cache: 'true'
+          electron-cache: headers
       # License gate: no AGPL/copyleft/source-available license anywhere in the
       # installed dependency tree, and everything that ships must satisfy the
       # permissive allowlist. Policy + exceptions live in scripts/license-gate.mjs
@@ -142,7 +142,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-node
         with:
-          electron-cache: 'true'
+          electron-cache: headers
       - name: Set up bubblewrap + unprivileged user namespaces
         run: |
           sudo apt-get update
@@ -218,7 +218,7 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           install: full
-          electron-cache: 'true'
+          electron-cache: full
       - if: runner.os != 'Linux'
         run: npm test -- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
       - name: Upload test results
@@ -261,14 +261,15 @@ jobs:
           if-no-files-found: error
 
 
-  # Refresh the macOS and Windows dependency caches from main. A cache saved by a PR or a
+  # Refresh the package legs' dependency caches from main. A cache saved by a PR or a
   # merge-queue run is scoped to that ref and no other PR can restore it, and `package`
   # (the only job on these runners) doesn't run on push. So without this, every new PR
   # started these legs cold: a full npm download, the Electron runtime and headers, and
   # electron-builder's tools, about 3 minutes of npm ci alone on Windows. A main-scoped
   # entry is readable by every PR. It packages too, because electron-builder fetches its
   # tools (NSIS, dmg-builder) only while packaging, and a cache is saved only on a miss.
-  # Linux needs no warming: `test` runs on push with the same cache keys.
+  # Linux is included: `test` runs on push too, but it only installs, so it caches the
+  # npm downloads and Electron headers, not what packaging needs.
   warm-caches:
     name: warm-caches (${{ matrix.target }})
     if: github.event_name == 'push'
@@ -282,6 +283,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - target: linux-x64
+            os: ubuntu-22.04
+            dist: dist:linux
           - target: mac-arm64
             os: macos-14
             dist: dist:mac
@@ -299,7 +303,7 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           install: full
-          electron-cache: 'true'
+          electron-cache: full
       - name: Package (fills the electron-builder tool cache)
         env:
           DIST: ${{ matrix.dist }}
