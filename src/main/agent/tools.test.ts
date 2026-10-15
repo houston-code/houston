@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   mkdtempSync,
   rmSync,
@@ -42,7 +42,7 @@ import {
 } from './tools'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
-import { registerShell } from './shells'
+import { readShellOutput, registerShell } from './shells'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
 
@@ -55,7 +55,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  rmSync(workspace, { recursive: true, force: true })
+  // Retries: Windows refuses to remove a directory a just-exited process still has as
+  // its cwd (EBUSY) for a few milliseconds; rmSync's retry is the documented remedy.
+  rmSync(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 const run = (name: string, args: Record<string, unknown>): Promise<string> =>
@@ -1393,7 +1395,11 @@ describe('run_shell missing-runtime hint', () => {
 describe('background shell tools', () => {
   it('run_shell background returns a shell id message', async () => {
     const out = await run('run_shell', { command: 'echo hi', background: true })
-    expect(out).toMatch(/Started background shell \w+/)
+    const id = /Started background shell (\w+)/.exec(out)?.[1]
+    expect(id).toBeDefined()
+    // Let it finish before cleanup: a shell still running in the workspace holds it as
+    // its cwd, and Windows won't remove the directory under it.
+    await vi.waitFor(() => expect(readShellOutput(id!).running).toBe(false), { timeout: 10_000 })
   })
 
   it('read_shell_output reports an unknown id', async () => {
