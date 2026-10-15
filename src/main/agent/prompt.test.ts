@@ -88,6 +88,9 @@ describe('buildSystemPrompt', () => {
     // was no longer in the file, so they couldn't log in.
     expect(p).toMatch(/A page that loads or a server that starts doesn't verify an app/)
     expect(p).toMatch(/name any flow you couldn't exercise/)
+    // Linux sandboxes give each command its own network namespace, so a curl from a
+    // later run_shell call can't reach a server started in the background.
+    expect(p).toMatch(/Send the requests from the same run_shell command that starts the server/)
     expect(p).toMatch(/read it from the file or output as it is now/)
     expect(p).toMatch(/For a secret such as a password, say where it is set instead of repeating it/)
     expect(p).toMatch(/Don't change the user's local configuration \(\.env files/)
