@@ -73,5 +73,5 @@ Use two-space indentation.
 
 Today's date: 2026-01-15.
 
-Git snapshot (taken earlier in this conversation and not updated as files change; run git status for the current state):
+Git snapshot (taken earlier in this conversation and not updated as files change; use git_status for the current state):
 Git: on branch main, working tree clean.

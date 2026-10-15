@@ -35,8 +35,16 @@ export async function resolvePromptSnapshot(
   today: string,
   captureGit: () => Promise<string>
 ): Promise<{ snapshot: PromptSnapshot; fresh: boolean }> {
-  if (stored && stored.date === today) return { snapshot: stored, fresh: false }
+  // The stored value comes from the conversation file on disk, which the load-time
+  // shape check doesn't cover; a malformed one is retaken rather than trusted.
+  if (isPromptSnapshot(stored) && stored.date === today) return { snapshot: stored, fresh: false }
   return { snapshot: { date: today, gitStatus: await captureGit() }, fresh: true }
+}
+
+function isPromptSnapshot(v: unknown): v is PromptSnapshot {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.date === 'string' && typeof o.gitStatus === 'string'
 }
 
 /** Render the snapshot as the system-prompt section. Pure. */
@@ -45,7 +53,7 @@ export function formatPromptSnapshot(snapshot: PromptSnapshot): string {
   const git = snapshot.gitStatus.trim()
   if (git) {
     sections.push(
-      `Git snapshot (taken earlier in this conversation and not updated as files change; run git status for the current state):\n${git}`
+      `Git snapshot (taken earlier in this conversation and not updated as files change; use git_status for the current state):\n${git}`
     )
   }
   return sections.join('\n\n')

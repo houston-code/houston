@@ -32,13 +32,32 @@ describe('resolvePromptSnapshot', () => {
     const r = await resolvePromptSnapshot(stored, '2026-10-15', async () => 'NEW STATUS')
     expect(r).toEqual({ snapshot: { date: '2026-10-15', gitStatus: 'NEW STATUS' }, fresh: true })
   })
+
+  it('retakes a malformed stored snapshot instead of trusting it', async () => {
+    // The conversation file's load-time shape check doesn't cover this field, so a
+    // hand-edited or corrupt value must not reach formatPromptSnapshot (which would
+    // throw on a non-string gitStatus and fail every run of the chat).
+    for (const stored of [
+      { date: '2026-10-15', gitStatus: 42 },
+      { date: '2026-10-15' },
+      { gitStatus: 'x' },
+      'garbage',
+      null
+    ]) {
+      const r = await resolvePromptSnapshot(stored as never, '2026-10-15', async () => 'FRESH')
+      expect(r, JSON.stringify(stored)).toEqual({
+        snapshot: { date: '2026-10-15', gitStatus: 'FRESH' },
+        fresh: true
+      })
+    }
+  })
 })
 
 describe('formatPromptSnapshot', () => {
   it('always states the date, and labels git context as a snapshot', () => {
     const out = formatPromptSnapshot({ date: '2026-10-15', gitStatus: 'Git: on branch "main".\n' })
     expect(out).toBe(
-      "Today's date: 2026-10-15.\n\nGit snapshot (taken earlier in this conversation and not updated as files change; run git status for the current state):\nGit: on branch \"main\"."
+      "Today's date: 2026-10-15.\n\nGit snapshot (taken earlier in this conversation and not updated as files change; use git_status for the current state):\nGit: on branch \"main\"."
     )
   })
 
