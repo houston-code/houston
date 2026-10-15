@@ -1,15 +1,24 @@
 import type { ApprovalPolicy } from '@shared/types'
-import type { ToolKind } from './tools'
+import type { ToolDef, ToolKind } from './tools'
 
 /**
  * In plan mode the agent is read-only: it researches and proposes a plan but may
- * not change anything. Writes and shell commands are blocked outright (not merely
- * prompted) until the user switches off plan mode. Reads and network fetches
- * (which don't mutate the workspace) are still allowed, network via its usual
- * approval prompt.
+ * not change anything. Writes, shell commands, MCP calls, and network tools flagged
+ * `blockedInPlan` (the ones that change remote or repo state) are blocked outright
+ * (not merely prompted) until the user switches off plan mode. Reads and other
+ * network fetches (which don't mutate anything) are still allowed, network via its
+ * usual approval prompt.
+ *
+ * The single source for what plan mode refuses: the loop enforces it per call, and
+ * the system prompt derives its plan-mode list of refused tools from it.
  */
-export function isBlockedByPlan(policy: ApprovalPolicy, kind: ToolKind): boolean {
-  return policy === 'plan' && (kind === 'write' || kind === 'shell' || kind === 'mcp')
+export function isBlockedByPlan(
+  policy: ApprovalPolicy,
+  tool: Pick<ToolDef, 'kind' | 'blockedInPlan'>
+): boolean {
+  if (policy !== 'plan') return false
+  const { kind } = tool
+  return kind === 'write' || kind === 'shell' || kind === 'mcp' || tool.blockedInPlan === true
 }
 
 /**
