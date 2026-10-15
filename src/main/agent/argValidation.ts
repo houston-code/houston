@@ -333,5 +333,5 @@ function expectedShapeSummary(schema: JSONSchema | undefined): string {
 
   if (!propList) return ''
   const requiredNote = required.length ? ` Required: ${required.join(', ')}.` : ''
-  return `Expected shape — ${propList}.${requiredNote}`
+  return `Expected shape: ${propList}.${requiredNote}`
 }
