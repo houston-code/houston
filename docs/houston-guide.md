@@ -762,10 +762,12 @@ through the proxy, so other protocols (for example SSH) are blocked under the
 allowlist; use HTTPS remotes inside the sandbox, or switch the egress mode to
 "All domains" (Settings) to restore unrestricted granted network. On Windows,
 where no OS sandbox exists, the allowlist cannot be enforced. One Linux note:
-under the allowlist each command runs in its own network namespace, so a dev
-server started inside the sandbox is reachable only from that same command, not
-from the Preview panel or later commands; "All domains" restores the shared
-network there.
+each command runs in its own network namespace whenever shell network isn't
+granted, and also under the allowlist, so a dev server started inside the sandbox
+is reachable only from that same command: not from the Preview panel,
+`view_localhost`, or later commands. Granting shell network with "All domains"
+restores the shared network there. The agent is told this on Linux and checks web
+apps with requests from the command that starts the server.
 
 **Credential masking on egress.** Houston's own network tools refuse to *send* a
 credential: before a `web_fetch` or `web_search` leaves the machine, its URL or

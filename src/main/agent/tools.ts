@@ -42,6 +42,7 @@ import {
   type NotebookEditMode
 } from './notebook'
 import {
+  activeBackendId,
   backendSupportsSession,
   clampToolResult,
   DEFAULT_TIMEOUT_MS,
@@ -1512,6 +1513,29 @@ function assertNoEgressSecret(value: string, ctx: ToolContext, field: string): v
 /** Tool name for the localhost screenshot tool — shared so the loop can gate it on capture availability. */
 export const VIEW_LOCALHOST_NAME = 'view_localhost'
 
+/**
+ * Why a refused connection is expected on Linux: bubblewrap gives each run_shell
+ * command its own network namespace (when network is denied, and under the egress
+ * allowlist), so a server started in the sandbox isn't on the host's loopback.
+ * Without this the model just sees "connection refused" and tends to restart the
+ * server or chase the port.
+ */
+export function sandboxedLoopbackHint(
+  loadError: string,
+  backendId: string,
+  shell: { allowNetwork: boolean; proxied: boolean }
+): string | null {
+  // Granted network without the allowlist shares the host's network, so a refusal
+  // there just means nothing is listening; don't blame the sandbox for it.
+  const isolated = !shell.allowNetwork || shell.proxied
+  if (backendId !== 'bubblewrap' || !isolated || !/CONNECTION_REFUSED/i.test(loadError)) return null
+  return (
+    '[Houston: on Linux each sandboxed run_shell command has its own network, so a dev server it ' +
+    'started is not reachable here. Check it with HTTP requests from the same command that starts it, ' +
+    'or ask the user to set Sandbox egress to "All domains" in Settings.]'
+  )
+}
+
 const viewLocalhost: ToolDef = {
   kind: 'network',
   summarize: (a) => {
@@ -1573,7 +1597,14 @@ const viewLocalhost: ToolDef = {
 
     const lines: string[] = []
     lines.push(`Loaded ${cap.finalUrl}${cap.title ? `: "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
-    if (cap.loadError) lines.push(`[load warning: ${cap.loadError}]`)
+    if (cap.loadError) {
+      lines.push(`[load warning: ${cap.loadError}]`)
+      const hint = sandboxedLoopbackHint(cap.loadError, activeBackendId(), {
+        allowNetwork: ctx.allowNetwork === true,
+        proxied: ctx.egressProxy !== undefined
+      })
+      if (hint) lines.push(hint)
+    }
     if (cap.steps) {
       lines.push('Steps:')
       for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)

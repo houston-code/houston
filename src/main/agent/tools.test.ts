@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import {
   getTool,
+  sandboxedLoopbackHint,
   toolSchemas,
   resolveInRoots,
   formatPrList,
@@ -1220,6 +1221,19 @@ describe('view_localhost', () => {
     expect(getTool('view_localhost')!.summarize({ url: 'http://localhost:3000' })).toBe(
       'View http://localhost:3000'
     )
+  })
+
+  it('explains a refused connection on Linux, and only there', () => {
+    const refused = 'net::ERR_CONNECTION_REFUSED (-102)'
+    const denied = { allowNetwork: false, proxied: false }
+    const allowlisted = { allowNetwork: true, proxied: true }
+    const allDomains = { allowNetwork: true, proxied: false }
+    expect(sandboxedLoopbackHint(refused, 'bubblewrap', denied)).toMatch(/its own network/)
+    expect(sandboxedLoopbackHint(refused, 'bubblewrap', allowlisted)).toMatch(/"All domains"/)
+    // Shared network: a refusal means nothing is listening, not the sandbox.
+    expect(sandboxedLoopbackHint(refused, 'bubblewrap', allDomains)).toBeNull()
+    expect(sandboxedLoopbackHint(refused, 'seatbelt', denied)).toBeNull()
+    expect(sandboxedLoopbackHint('ERR_NAME_NOT_RESOLVED (-105)', 'bubblewrap', denied)).toBeNull()
   })
 
   it('errors without a capture implementation in context', async () => {

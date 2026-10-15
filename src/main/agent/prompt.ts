@@ -40,6 +40,15 @@ export interface PromptHost {
 }
 
 /** What the prompt assumed before it was host-aware: a sandboxed macOS machine. */
+/**
+ * Under bubblewrap each run_shell command gets its own network namespace (always
+ * when network is denied, and under the egress allowlist), so a dev server started
+ * by one command isn't reachable from view_localhost, the Preview panel, or a later
+ * command. Say so, rather than steering the model at a tool that will be refused.
+ */
+const LINUX_VIEW_LOCALHOST_LINE =
+  '\n- On this Linux sandbox each run_shell command has its own network, so view_localhost (and the Preview panel) usually cannot reach a dev server started by a separate run_shell command: it reports the connection as refused. Check a web UI with HTTP requests from the same command that starts the server instead, and tell the user that view_localhost needs Sandbox egress set to "All domains" in Settings on Linux.'
+
 const DEFAULT_HOST: PromptHost = { platform: 'darwin', sandboxBackend: 'seatbelt' }
 
 function osName(host: PromptHost): string {
@@ -115,9 +124,11 @@ export function buildSystemPrompt(
   // passes the live values). The default keeps the original macOS wording.
   host: PromptHost = DEFAULT_HOST
 ): string {
-  const viewLocalhostLine = viewLocalhostAvailable
-    ? '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot plus console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps (fill the form, click submit, wait_for what should appear next) with test data, and check the step results and the final screenshot.'
-    : ''
+  const viewLocalhostLine = !viewLocalhostAvailable
+    ? ''
+    : host.sandboxBackend === 'bubblewrap'
+      ? LINUX_VIEW_LOCALHOST_LINE
+      : '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot plus console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps (fill the form, click submit, wait_for what should appear next) with test data, and check the step results and the final screenshot.'
   const spawnSessionLine = spawnSessionAvailable
     ? ' spawn_session is different: it starts a separate, persistent background session (optionally on its own git branch/worktree) for independent work that should run in parallel with this one. It does not report back here, so give it a self-contained prompt.'
     : ''

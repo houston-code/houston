@@ -251,6 +251,16 @@ describe('buildSystemPrompt', () => {
       expect(p).not.toContain(UNCONFINED)
     })
 
+    it('on Linux, says view_localhost cannot reach a sandboxed dev server instead of steering to it', () => {
+      const linux = withHost({ platform: 'linux', sandboxBackend: 'bubblewrap' })
+      expect(linux).toContain('each run_shell command has its own network')
+      expect(linux).toContain('"All domains"')
+      expect(linux).not.toContain('pass view_localhost steps')
+      const mac = withHost({ platform: 'darwin', sandboxBackend: 'seatbelt' })
+      expect(mac).toContain('pass view_localhost steps')
+      expect(mac).not.toContain('each run_shell command has its own network')
+    })
+
     it('describes a bubblewrap host as sandboxed Linux, without macOS tool notes', () => {
       const p = withHost({ platform: 'linux', sandboxBackend: 'bubblewrap' })
       expect(p).toContain("working on the user's Linux machine")
