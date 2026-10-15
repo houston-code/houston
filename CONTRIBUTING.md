@@ -238,8 +238,8 @@ POSIX literal) rather than hard-coding `/`, and pin `platform` on anything that 
 uploads its build as a short-lived Actions artifact, so you can install a PR's app without
 building it.
 
-After a PR lands, CI runs again on `main`. That run also refreshes the macOS and Windows
-dependency caches (`warm-caches`): caches saved by PR runs are visible only to that PR, so
+After a PR lands, CI runs again on `main`. That run also refreshes the package legs'
+dependency caches (`warm-caches`, one job per package leg): caches saved by PR runs are visible only to that PR, so
 this is what lets a new PR's `package` legs start warm. The run is pushed by the merge queue's bot, so
 GitHub notifies nobody when it fails; instead it opens (and later closes) a
 `scheduled-failure` issue assigned to the repository owner, the same way the scheduled
