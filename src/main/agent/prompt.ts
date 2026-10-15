@@ -116,7 +116,7 @@ export function buildSystemPrompt(
   host: PromptHost = DEFAULT_HOST
 ): string {
   const viewLocalhostLine = viewLocalhostAvailable
-    ? '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot plus console output) rather than assuming it renders correctly.'
+    ? '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot plus console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps (fill the form, click submit, wait_for what should appear next) with test data, and check the step results and the final screenshot.'
     : ''
   const spawnSessionLine = spawnSessionAvailable
     ? ' spawn_session is different: it starts a separate, persistent background session (optionally on its own git branch/worktree) for independent work that should run in parallel with this one. It does not report back here, so give it a self-contained prompt.'

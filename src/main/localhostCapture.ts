@@ -4,6 +4,7 @@ import {
   setCaptureBackend,
   VIEWPORT,
   type CaptureDeps,
+  type CaptureStep,
   type CaptureSession,
   type ConsoleEntry,
   type Rect
@@ -21,6 +22,76 @@ import {
 
 /** Give the offscreen compositor a beat to paint after load before capturing. */
 const PAINT_SETTLE_MS = 350
+/** Longest a click waits for the navigation it started (a form post, a link). */
+const CLICK_NAV_TIMEOUT_MS = 15_000
+/** Poll interval while waiting on navigation or a `wait_for` selector. */
+const POLL_MS = 100
+
+/**
+ * Prepended to every step script. The capture window is hidden, so a native
+ * alert/confirm/prompt would block the page with no one to answer it: record the
+ * message on the console instead (the model sees it) and answer confirm with OK,
+ * since the agent chose to click whatever asked. Idempotent per document.
+ */
+const DIALOG_GUARD = `if (!window.__houstonDialogs) {
+  window.__houstonDialogs = true;
+  window.alert = (m) => console.log('[alert] ' + String(m));
+  window.confirm = (m) => { console.log('[confirm] ' + String(m) + ' (answered OK)'); return true; };
+  window.prompt = (m) => { console.log('[prompt] ' + String(m) + ' (answered cancel)'); return null; };
+}`
+
+/**
+ * The page-side script for a fill or click step. The selector and value are
+ * embedded as JSON string literals so they can't break out of the expression.
+ * Returns 'ok' or a reason the step could not run.
+ */
+export function stepScript(step: Extract<CaptureStep, { action: 'fill' | 'click' }>): string {
+  const sel = JSON.stringify(step.selector)
+  const find = `let el;
+    try { el = document.querySelector(${sel}); } catch { return 'invalid CSS selector'; }
+    if (!el) return 'no element matches the selector';
+    if (el instanceof HTMLInputElement && el.type === 'file') return 'file inputs are not supported';`
+  if (step.action === 'click') {
+    return `(() => { ${DIALOG_GUARD}
+    ${find}
+    el.scrollIntoView({ block: 'center' });
+    if (el instanceof HTMLElement) el.click();
+    else el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return 'ok';
+  })()`
+  }
+  return `(() => { ${DIALOG_GUARD}
+    ${find}
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement)) {
+      return 'the element is not an input, textarea, or select';
+    }
+    el.focus();
+    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+    if (desc && desc.set) desc.set.call(el, ${JSON.stringify(step.value)});
+    else el.value = ${JSON.stringify(step.value)};
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'ok';
+  })()`
+}
+
+/**
+ * Page-side check for a `wait_for` step: does the selector match a visible
+ * element? Returns 'invalid' for a selector the page can't parse, so the step
+ * fails at once instead of polling until its timeout.
+ */
+export function visibleScript(selector: string): string {
+  return `(() => {
+    let el;
+    try { el = document.querySelector(${JSON.stringify(selector)}); } catch { return 'invalid'; }
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+  })()`
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /** Normalize a console-message level (number in old Electron, string in new) to a name. */
 function consoleLevelName(level: unknown): string {
@@ -83,6 +154,10 @@ function captureSession(): Session {
       }
       callback({ cancel: isBlockedSubresourceHost(host) })
     })
+    // Steps can click links and buttons: never let one save a file to the user's
+    // disk, and never grant a page camera, microphone, location, or notifications.
+    ses.on('will-download', (event) => event.preventDefault())
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
     captureFilterInstalled = true
   }
   return ses
@@ -175,6 +250,42 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
       return image.toPNG()
     },
     consoleEntries: () => entries,
+    async runStep(step) {
+      try {
+        if (step.action === 'wait') {
+          await sleep(step.ms)
+          return { ok: true }
+        }
+        if (step.action === 'wait_for') {
+          const deadline = Date.now() + step.timeoutMs
+          for (;;) {
+            try {
+              const seen = await wc.executeJavaScript(visibleScript(step.selector), true)
+              if (seen === 'invalid') return { ok: false, error: 'invalid CSS selector' }
+              if (seen === true) return { ok: true }
+            } catch {
+              // Evaluation can fail transiently mid-navigation; keep polling until the deadline.
+            }
+            if (Date.now() >= deadline) {
+              return { ok: false, error: `no visible element matched within ${step.timeoutMs}ms` }
+            }
+            await sleep(POLL_MS)
+          }
+        }
+        const result = (await wc.executeJavaScript(stepScript(step), true)) as string
+        if (result !== 'ok') return { ok: false, error: result }
+        if (step.action === 'click') {
+          // Give a navigation (form post, link) a moment to start, then let it finish.
+          await sleep(POLL_MS)
+          const deadline = Date.now() + CLICK_NAV_TIMEOUT_MS
+          while (wc.isLoading() && Date.now() < deadline) await sleep(POLL_MS)
+        }
+        await sleep(PAINT_SETTLE_MS)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    },
     close: () => {
       if (!win.isDestroyed()) win.destroy()
     }

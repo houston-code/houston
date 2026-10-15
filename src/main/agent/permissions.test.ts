@@ -35,6 +35,15 @@ describe('networkDestination', () => {
     expect(networkDestination('view_localhost', { url: 'http://localhost:3000/' })).toBe('localhost')
   })
 
+  it('gives an interactive view_localhost its own key, so a view grant never covers clicking', () => {
+    const steps = [{ action: 'click', selector: 'button' }]
+    expect(networkDestination('view_localhost', { url: 'http://localhost:3000/', steps })).toBe(
+      'localhost (interactive)'
+    )
+    expect(networkDestination('view_localhost', { url: 'http://localhost:3000/', steps: [] })).toBe('localhost')
+    expect(networkDestination('web_fetch', { url: 'https://example.com', steps })).toBe('example.com')
+  })
+
   it('collapses every gh_* call onto github.com (one grant covers them all)', () => {
     expect(networkDestination('gh_pr_create', { title: 'x' })).toBe('github.com')
     expect(networkDestination('gh_run_view', { run_id: 1 })).toBe('github.com')

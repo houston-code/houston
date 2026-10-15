@@ -19,7 +19,8 @@ import type { PermissionRule } from '@shared/types'
  * this key, not the whole `network` kind, so approving a fetch to `api.github.com`
  * no longer silently also allows egress to an attacker's host.
  *
- * - `web_fetch` / `view_localhost` (any `url` arg) → the URL's lowercased hostname.
+ * - `web_fetch` / `view_localhost` (any `url` arg) → the URL's lowercased hostname;
+ *   a `view_localhost` with `steps` → `<host> (interactive)`, a separate grant.
  * - `gh_*` → `github.com` (every gh call targets GitHub; one grant covers them all).
  * - `web_search` → `web_search` (the query goes to the one configured search provider,
  *   which the user selected; a stable key means a single grant per run).
@@ -36,6 +37,12 @@ export function networkDestination(toolName: string, args: Record<string, unknow
   if (url) {
     try {
       const host = new URL(url).hostname.toLowerCase()
+      // Clicking and typing can change a local app's data in a way a screenshot
+      // can't, so an interactive view_localhost is its own destination: allowing
+      // views of a host for the run never also allows interacting with it.
+      if (host && toolName === 'view_localhost' && Array.isArray(args.steps) && args.steps.length) {
+        return `${host} (interactive)`
+      }
       if (host) return host
     } catch {
       // Malformed URL — fall through to the tool-name key; the fetch tool's own
