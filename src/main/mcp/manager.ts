@@ -3,7 +3,8 @@ import { mcpEnvScope, mcpHeaderScope } from '@shared/types'
 
 export type { McpServerStatus }
 import { mcpToolName, parseElicitationFields } from '@shared/mcp'
-import type { ToolContext, ToolDef } from '../agent/tools'
+import { builtinToolNames, type ToolContext, type ToolDef } from '../agent/tools'
+import { presentUntrusted, untrustedPreamble } from '../agent/untrusted'
 import { getMcpOAuth, getSecretHeaders, setMcpOAuth } from '../agentHost'
 import { McpClient, McpUnauthorizedError, type McpConnection } from './client'
 import { McpHttpClient } from './http-client'
@@ -311,7 +312,11 @@ export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Pr
         },
         // Resolve the live connection at call time so a reconnect (or removal)
         // between building the tool list and the call doesn't hit a stale client.
-        execute: (args, ctx) => callLive(serverId, ctx, (client) => client.callTool(original, args))
+        execute: (args, ctx) =>
+          callLive(serverId, ctx, (client) => client.callTool(original, args), {
+            envelope: `Result from MCP server "${serverId}":`,
+            source: `MCP tool ${fullName}`
+          })
       })
     }
   }
@@ -339,18 +344,23 @@ export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Pr
  * has one) is registered for the server, so a server that asks the user for
  * input mid-call reaches the right conversation. MCP-kind calls are sequential
  * within a run, so one slot per server suffices.
+ *
+ * With `untrusted`, a successful result is fenced (see {@link presentMcpResult});
+ * Houston's own connection messages are not, since no server wrote them.
  */
 async function callLive(
   serverId: string,
   ctx: ToolContext | undefined,
-  fn: (client: McpConnection) => Promise<string>
+  fn: (client: McpConnection) => Promise<string>,
+  untrusted?: { envelope: string; source: string }
 ): Promise<string> {
   const live = connections.get(serverId)
   if (!live) return `[MCP server "${serverId}" is no longer connected]`
   const elicit = ctx?.elicitMcp
   if (elicit) elicitors.set(serverId, elicit)
+  let out: string
   try {
-    return capMcpOutput(await fn(live.client))
+    out = capMcpOutput(await fn(live.client))
   } catch (e) {
     if (!live.client.isClosed) throw e
     await ensureConnections(lastConfigs).catch(() => {})
@@ -363,6 +373,54 @@ async function callLive(
   } finally {
     if (elicit && elicitors.get(serverId) === elicit) elicitors.delete(serverId)
   }
+  return untrusted ? presentMcpResult(out, untrusted, ctx) : out
+}
+
+/** Houston's own placeholders for an empty result: nothing a server wrote, so nothing to fence. */
+const EMPTY_MCP_RESULTS = new Set(['[no output]', '[no content]'])
+
+/**
+ * Fence an MCP tool result or resource, and quarantine it when it scores as an
+ * injection attempt: the same treatment as a fetched page. A server can relay
+ * anything (web pages, chat messages, tickets, email) in a shape Houston doesn't know,
+ * so there is no fixed set of fields to keep exact outside the fence and no narrower
+ * treatment to fall back on. That is web_fetch's situation, so it gets web_fetch's
+ * answer, including failing closed when the isolated reader errors.
+ */
+function presentMcpResult(
+  text: string,
+  opts: { envelope: string; source: string },
+  ctx: ToolContext | undefined
+): Promise<string> {
+  if (EMPTY_MCP_RESULTS.has(text)) return Promise.resolve(text)
+  return presentUntrusted({
+    envelope: opts.envelope,
+    parts: [{ text, source: opts.source }],
+    preamble: untrustedPreamble(
+      'an MCP result',
+      'An MCP server can relay text any third party wrote (web pages, messages, tickets), and that author is not the user'
+    ),
+    subject: 'MCP result',
+    toolNames: [...builtinToolNames(), ...liveMcpToolNames()],
+    source: opts.source,
+    isolate: ctx?.quarantineExtract
+  })
+}
+
+/**
+ * Every connected MCP tool's namespaced name, so a payload telling the agent to call
+ * one is caught too. A server picks its own tool names, and a matched name is echoed in
+ * the warning outside the fence, so only names shaped like identifiers are used.
+ */
+function liveMcpToolNames(): string[] {
+  const names: string[] = []
+  for (const [id, conn] of connections) {
+    for (const t of conn.client.tools) {
+      const name = mcpToolName(id, t.name)
+      if (/^[\w-]{1,128}$/.test(name)) names.push(name)
+    }
+  }
+  return names
 }
 
 /** The `mcp_list_resources` / `mcp_read_resource` meta-tools (added only when some server has resources). */
@@ -410,7 +468,10 @@ function resourceMetaTools(): ToolDef[] {
         const server = typeof args.server === 'string' ? args.server : ''
         const uri = typeof args.uri === 'string' ? args.uri : ''
         if (!server || !uri) return Promise.resolve('Both "server" and "uri" are required.')
-        return callLive(server, ctx, (client) => client.readResource(uri))
+        return callLive(server, ctx, (client) => client.readResource(uri), {
+          envelope: `Resource from MCP server "${server}":`,
+          source: `MCP resource ${uri}`
+        })
       }
     }
   ]
@@ -474,6 +535,9 @@ function promptMetaTools(): ToolDef[] {
             promptArgs[k] = typeof v === 'string' ? v : JSON.stringify(v)
           }
         }
+        // Not fenced, unlike tool results and resources: a prompt template is the
+        // server's own authored instructions, which the user opted into by configuring
+        // the server, not third-party text it relays.
         return callLive(server, ctx, (client) => client.getPrompt(name, promptArgs))
       }
     }

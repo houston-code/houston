@@ -768,32 +768,48 @@ in), so a prompt-injected agent cannot exfiltrate a key by pasting it into a
 request. Note this covers Houston-mediated egress; a raw `curl` inside
 `run_shell` is bounded by the shell-network consent above, not by masking.
 
-**Untrusted web content.** A fetched page is written by whoever runs the site,
-so `web_fetch` treats every page as data rather than instructions, and it does
-not rely on the agent simply choosing to see it that way:
+**Untrusted content.** A fetched page is written by whoever runs the site, an
+issue comment by whoever posted it, and an MCP result by whoever wrote what the
+server relays. So Houston treats the text these tools return as data rather than
+instructions, and it does not rely on the agent simply choosing to see it that
+way. The tools covered are `web_fetch`, `web_search`, the GitHub tools that read
+issue and pull request text (`gh_issue_view`, `gh_issue_list`, `gh_pr_view`,
+`gh_pr_list`), and MCP tool results and resources:
 
-- **Fencing.** Page text is wrapped in an `<untrusted-content-NONCE>` fence with
-  a fresh random nonce per fetch, and the system prompt tells the agent that
+- **Fencing.** That text is wrapped in an `<untrusted-content-NONCE>` fence with
+  a fresh random nonce per call, and the system prompt tells the agent that
   anything inside it is attacker-controlled. The nonce is what makes the fence
-  hold: with a fixed tag, a page could close the fence itself and carry on as if
-  its text were trusted.
-- **Isolation.** Each page is scored for injection signals: text telling the
+  hold: with a fixed tag, the text could close the fence itself and carry on as
+  if it were trusted. Fields GitHub guarantees (an issue's number, state, author,
+  and URL) stay outside the fence so the agent can rely on them, while titles,
+  bodies, labels, branch names, and diffs go inside. Each comment gets its own
+  fence with its author shown outside it, so one comment cannot pass itself off
+  as a maintainer's reply.
+- **Isolation.** Content is scored for injection signals: text telling the
   reader to ignore prior instructions, a new persona, an instruction to send data
   to a URL, references to key material, text telling the reader to call Houston's
-  own tools, characters hidden from a human reader. A page that looks like an
-  attempt is not inlined at all. Instead a separate model call with no tools and
-  no conversation history reads it and reports what it says, and only that report
-  reaches the agent. The isolation is structural: there is nothing for the page to
-  act through, and no earlier instructions to talk it out of.
-- **Cost.** Ordinary pages are unaffected and arrive verbatim, so documentation
-  and code samples stay byte-exact. Only a flagged page pays for the extra call.
+  own tools, characters hidden from a human reader. A web page or MCP result that
+  looks like an attempt is not inlined at all. Instead a separate model call with
+  no tools and no conversation history reads it and reports what it says, and
+  only that report reaches the agent. The isolation is structural: there is
+  nothing for the content to act through, and no earlier instructions to talk it
+  out of. If that call fails, the content is withheld rather than passed through.
+- **Warning.** GitHub text and web search results that look like an attempt stay
+  inline and fenced, with a warning naming the signals. The agent needs an
+  issue's exact repro steps or a pull request's exact diff to do its job, and a
+  summary would not do. Search results are short snippets, and any page the agent
+  then opens goes through `web_fetch` and its isolation. Diffs are fenced but not
+  scored, because code routinely contains the phrases the scoring looks for.
+- **Cost.** Ordinary content is unaffected and arrives verbatim, so documentation
+  and code samples stay byte-exact. Only flagged content pays for the extra call.
   The score is deliberately loose, because a false positive costs one model call
-  and some fidelity rather than a failed fetch.
+  and some fidelity rather than a failed call.
 
 Bidirectional text controls, which can make text render in a different order than
-it reads, are stripped from every page. This is defense in depth behind the
-approval gate (you still see and approve each URL), not a replacement for it: the
-classifier is a heuristic, and anyone who knows it is there can word around it.
+it reads, are stripped from all fenced content. This is defense in depth behind
+the approval gate (you still approve network and MCP calls), not a replacement
+for it: the classifier is a heuristic, and anyone who knows it is there can word
+around it.
 
 ## GitHub tools
 

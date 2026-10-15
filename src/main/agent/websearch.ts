@@ -39,9 +39,12 @@ async function failIfNotOk(res: { ok: boolean; status: number; text: () => Promi
   throw new Error(`Web search failed: ${res.status}${hint} ${detail.slice(0, 200)}`.trim())
 }
 
+/** What every adapter returns when there is nothing to show. */
+export const NO_RESULTS = 'No results.'
+
 /** Shared rendering so every provider's output reads the same to the model. */
 function formatHits(hits: SearchHit[], answer?: string): string {
-  if (hits.length === 0 && !answer) return 'No results.'
+  if (hits.length === 0 && !answer) return NO_RESULTS
   const lines: string[] = []
   if (answer) lines.push(`Answer: ${answer.trim()}`, '')
   for (const r of hits) {

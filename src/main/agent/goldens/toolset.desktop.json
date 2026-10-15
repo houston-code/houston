@@ -388,7 +388,7 @@
   },
   {
     "name": "web_search",
-    "description": "Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a search-provider API key set in Settings.",
+    "description": "Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one, inside an untrusted-content fence. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a search-provider API key set in Settings.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -803,7 +803,7 @@
   },
   {
     "name": "gh_pr_list",
-    "description": "List pull requests in the current repository via the gh CLI. Returns \"#<number> [state] <title> (<headBranch> by <author>) <url>\" per PR. Requires approval (network).",
+    "description": "List pull requests in the current repository via the gh CLI. Returns \"#<number> [state] by <author> <url>\" per PR, then each PR's title and head branch inside an untrusted-content fence. Requires approval (network).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1018,7 +1018,7 @@
   },
   {
     "name": "gh_issue_list",
-    "description": "List issues in the current repository via the gh CLI. Returns \"#<number> [state] <title> {labels} by <author> <url>\" per issue. Requires approval (network).",
+    "description": "List issues in the current repository via the gh CLI. Returns \"#<number> [state] by <author> <url>\" per issue, then each issue's title and labels inside an untrusted-content fence. Requires approval (network).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1054,7 +1054,7 @@
   },
   {
     "name": "gh_issue_view",
-    "description": "View a GitHub issue (title, state, author, labels, body) via the gh CLI. Set comments:true to include the comment thread. Read-only, but requires approval (network).",
+    "description": "View a GitHub issue (title, state, author, labels, body) via the gh CLI. Set comments:true to include the comment thread. Issue and comment text arrives inside untrusted-content fences, since anyone who can open or comment on an issue wrote it. Read-only, but requires approval (network).",
     "parameters": {
       "type": "object",
       "properties": {
