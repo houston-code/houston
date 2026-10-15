@@ -56,7 +56,7 @@ import { classifyUntrusted, fenceUntrusted, untrustedNonce } from './untrusted'
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument } from './webfetch'
 import { findSecret } from './redact'
-import type { CaptureInput, LocalhostCapture } from './viewlocalhost'
+import { describeStep, parseSteps, type CaptureInput, type LocalhostCapture } from './viewlocalhost'
 import { getSearchAdapter } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
@@ -1514,11 +1514,21 @@ export const VIEW_LOCALHOST_NAME = 'view_localhost'
 
 const viewLocalhost: ToolDef = {
   kind: 'network',
-  summarize: (a) => `View ${str(a, 'url')}`,
+  summarize: (a) => {
+    // Interactive calls list their steps (never the filled values) so the approval
+    // prompt says exactly what will be clicked and typed into.
+    let steps: string[]
+    try {
+      steps = parseSteps(a.steps).map(describeStep)
+    } catch {
+      steps = Array.isArray(a.steps) ? [`${a.steps.length} step(s), invalid`] : []
+    }
+    return steps.length ? `View ${str(a, 'url')}, then: ${steps.join(', ')}` : `View ${str(a, 'url')}`
+  },
   schema: {
     name: VIEW_LOCALHOST_NAME,
     description:
-      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval.',
+      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step\'s result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Use test data, not the user\'s real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.',
     parameters: objectSchema(
       {
         url: { type: 'string', description: 'A loopback URL to load, e.g. "http://localhost:3000".' },
@@ -1526,6 +1536,23 @@ const viewLocalhost: ToolDef = {
           type: 'string',
           description:
             'Optional CSS selector: screenshot just that element\'s bounding box instead of the whole viewport (e.g. "#app", ".hero").'
+        },
+        steps: {
+          type: 'array',
+          description:
+            'Optional interactions run in order after the page loads and before the screenshot (at most 20). fill sets an input, textarea, or select value; click clicks an element and waits for any page load it starts; wait_for waits until a selector matches a visible element (timeout_ms, default and max 10000); wait pauses (ms, max 5000).',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['fill', 'click', 'wait_for', 'wait'] },
+              selector: { type: 'string', description: 'CSS selector (fill, click, wait_for).' },
+              value: { type: 'string', description: 'Text to enter (fill).' },
+              timeout_ms: { type: 'number', description: 'How long wait_for waits.' },
+              ms: { type: 'number', description: 'How long wait pauses.' }
+            },
+            required: ['action'],
+            additionalProperties: false
+          }
         }
       },
       ['url']
@@ -1536,11 +1563,24 @@ const viewLocalhost: ToolDef = {
     if (!url) throw new Error('url is required.')
     if (!ctx.captureLocalhost) throw new Error('view_localhost is not available in this context.')
     const selector = str(args, 'selector') || undefined
-    const cap = await ctx.captureLocalhost({ url, selector, signal: ctx.signal })
+    const steps = parseSteps(args.steps)
+    const cap = await ctx.captureLocalhost({
+      url,
+      selector,
+      ...(steps.length ? { steps } : {}),
+      signal: ctx.signal
+    })
 
     const lines: string[] = []
     lines.push(`Loaded ${cap.finalUrl}${cap.title ? `: "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
     if (cap.loadError) lines.push(`[load warning: ${cap.loadError}]`)
+    if (cap.steps) {
+      lines.push('Steps:')
+      for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)
+      const notRun = steps.length - cap.steps.length
+      if (notRun > 0) lines.push(`  (${notRun} later step${notRun === 1 ? '' : 's'} not run)`)
+      lines.push(`Now at ${cap.finalUrl}`)
+    }
     if (selector) {
       lines.push(
         cap.selectorMissed

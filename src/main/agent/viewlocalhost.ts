@@ -33,6 +33,39 @@ const LOAD_TIMEOUT_MS = 30_000
 /** Cap on console lines returned, so a chatty page can't flood the transcript. */
 const MAX_CONSOLE_LINES = 200
 
+/** Most interaction steps one call may run (a login or a form is a handful). */
+export const MAX_STEPS = 20
+/** Wall-clock budget for all of a call's steps, after the page has loaded. */
+export const STEPS_BUDGET_MS = 60_000
+/** Longest a single `wait` step may pause. */
+export const MAX_WAIT_MS = 5_000
+/** Longest a `wait_for` step may wait for its selector (also its default). */
+export const MAX_WAIT_FOR_MS = 10_000
+const MAX_SELECTOR_CHARS = 500
+const MAX_VALUE_CHARS = 10_000
+
+/**
+ * One interaction run in the page before the screenshot, so the agent can
+ * exercise a flow (log in, fill and submit a form) instead of only looking at a
+ * page. `fill` sets a field's value the way typing would (input and change
+ * events, so framework-controlled inputs see it); `click` clicks the element and
+ * waits for any navigation it starts; `wait_for` waits until a selector matches
+ * a visible element; `wait` pauses.
+ */
+export type CaptureStep =
+  | { action: 'fill'; selector: string; value: string }
+  | { action: 'click'; selector: string }
+  | { action: 'wait_for'; selector: string; timeoutMs: number }
+  | { action: 'wait'; ms: number }
+
+export interface StepResult {
+  /** The step, described without any filled value (see {@link describeStep}). */
+  step: string
+  ok: boolean
+  /** Why the step failed (e.g. no element matched). */
+  error?: string
+}
+
 export interface Rect {
   x: number
   y: number
@@ -50,6 +83,8 @@ export interface CaptureInput {
   url: string
   /** Optional CSS selector — capture just that element's bounding box. */
   selector?: string
+  /** Interactions to run after the page loads and before the screenshot. */
+  steps?: CaptureStep[]
   /** Cancels the capture (wired to the run's abort signal). */
   signal?: AbortSignal
 }
@@ -67,6 +102,8 @@ export interface LocalhostCapture {
   loadError?: string
   /** True when a `selector` was given but matched nothing — the full viewport was captured instead. */
   selectorMissed?: boolean
+  /** One entry per step that ran, in order; stops after the first failure. */
+  steps?: StepResult[]
 }
 
 /** Format collected console entries into capped "LEVEL: text" lines. */
@@ -94,6 +131,8 @@ export interface CaptureSession {
   /** Capture the full viewport (no rect) or a sub-rect, as PNG bytes. */
   screenshot(rect?: Rect): Promise<Buffer>
   consoleEntries(): ConsoleEntry[]
+  /** Run one interaction step in the loaded page. Never throws for a page-level failure. */
+  runStep(step: CaptureStep): Promise<{ ok: true } | { ok: false; error: string }>
   close(): void
 }
 
@@ -196,6 +235,8 @@ export async function captureLocalhost(
     const { loadError } = await loadWithDeadline(session, url.toString(), LOAD_TIMEOUT_MS, input.signal)
     throwIfAborted(input.signal)
 
+    const steps = input.steps?.length ? await runSteps(session, input.steps, input.signal) : undefined
+
     let rect: Rect | undefined
     let selectorMissed = false
     if (input.selector) {
@@ -213,9 +254,105 @@ export async function captureLocalhost(
       width: rect ? rect.width : VIEWPORT.width,
       height: rect ? rect.height : VIEWPORT.height,
       ...(loadError ? { loadError } : {}),
-      ...(selectorMissed ? { selectorMissed: true } : {})
+      ...(selectorMissed ? { selectorMissed: true } : {}),
+      ...(steps ? { steps } : {})
     }
   } finally {
     session.close()
   }
+}
+
+/** A step as shown to the user and the model. Never includes a filled value. */
+export function describeStep(step: CaptureStep): string {
+  switch (step.action) {
+    case 'fill':
+      return `fill ${JSON.stringify(step.selector)}`
+    case 'click':
+      return `click ${JSON.stringify(step.selector)}`
+    case 'wait_for':
+      return `wait for ${JSON.stringify(step.selector)}`
+    case 'wait':
+      return `wait ${step.ms}ms`
+  }
+}
+
+/**
+ * Validate the model's raw `steps` argument into typed steps, throwing a message
+ * the model can act on. Selectors and values are bounded; waits are clamped to
+ * their caps rather than refused, since a too-long wait is a harmless mistake.
+ */
+export function parseSteps(raw: unknown): CaptureStep[] {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw new Error('steps must be an array.')
+  if (raw.length > MAX_STEPS) throw new Error(`steps allows at most ${MAX_STEPS} entries.`)
+  return raw.map((item, i): CaptureStep => {
+    const where = `steps[${i}]`
+    if (!item || typeof item !== 'object') throw new Error(`${where} must be an object.`)
+    const o = item as Record<string, unknown>
+    const selector = (): string => {
+      if (typeof o.selector !== 'string' || !o.selector.trim()) {
+        throw new Error(`${where}.selector is required for "${String(o.action)}".`)
+      }
+      if (o.selector.length > MAX_SELECTOR_CHARS) {
+        throw new Error(`${where}.selector is longer than ${MAX_SELECTOR_CHARS} characters.`)
+      }
+      return o.selector
+    }
+    const ms = (v: unknown, max: number, dflt: number): number =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.min(Math.max(0, Math.floor(v)), max) : dflt
+    switch (o.action) {
+      case 'fill': {
+        if (typeof o.value !== 'string') throw new Error(`${where}.value is required for "fill".`)
+        if (o.value.length > MAX_VALUE_CHARS) {
+          throw new Error(`${where}.value is longer than ${MAX_VALUE_CHARS} characters.`)
+        }
+        return { action: 'fill', selector: selector(), value: o.value }
+      }
+      case 'click':
+        return { action: 'click', selector: selector() }
+      case 'wait_for':
+        return {
+          action: 'wait_for',
+          selector: selector(),
+          timeoutMs: ms(o.timeout_ms, MAX_WAIT_FOR_MS, MAX_WAIT_FOR_MS)
+        }
+      case 'wait':
+        return { action: 'wait', ms: ms(o.ms, MAX_WAIT_MS, 500) }
+      default:
+        throw new Error(`${where}.action must be one of fill, click, wait_for, wait.`)
+    }
+  })
+}
+
+/**
+ * Run steps in order, stopping at the first failure (later steps would act on a
+ * page in an unexpected state) or when the overall budget runs out. The capture
+ * still takes its screenshot afterwards, so the model sees where the flow stopped.
+ */
+export async function runSteps(
+  session: CaptureSession,
+  steps: CaptureStep[],
+  signal?: AbortSignal,
+  budgetMs: number = STEPS_BUDGET_MS,
+  now: () => number = Date.now
+): Promise<StepResult[]> {
+  const results: StepResult[] = []
+  const deadline = now() + budgetMs
+  for (const step of steps) {
+    throwIfAborted(signal)
+    const label = describeStep(step)
+    if (now() > deadline) {
+      results.push({ step: label, ok: false, error: `step budget of ${budgetMs / 1000}s used up` })
+      break
+    }
+    let outcome: { ok: true } | { ok: false; error: string }
+    try {
+      outcome = await session.runStep(step)
+    } catch (e) {
+      outcome = { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+    results.push(outcome.ok ? { step: label, ok: true } : { step: label, ok: false, error: outcome.error })
+    if (!outcome.ok) break
+  }
+  return results
 }

@@ -592,6 +592,14 @@ an occurrence missed while Houston was closed fires once at the next launch.
   transcript.
 - **`pr_sweep`** tracks batch pull-request work (author new PRs from a task list,
   or process a batch of existing open PRs).
+- **`view_localhost`** (desktop app) loads a page from a dev server running on
+  your computer in a hidden browser and shows the agent a screenshot plus the
+  page's console output. It can also run steps first (fill a field, click, wait
+  for an element), so the agent can try a flow such as logging in or submitting
+  a form and see where it ends up. Every call asks for approval. A call with steps
+  is approved separately from plain views, and the approval lists each step
+  (never the text being typed). Steps can't download files, upload files, or use
+  your camera, microphone, or location, and the page can't leave localhost.
 
 ## Hooks
 

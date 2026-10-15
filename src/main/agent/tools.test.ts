@@ -1136,6 +1136,92 @@ describe('view_localhost', () => {
     expect(out).toContain('exceeds')
   })
 
+  it('passes validated steps through and reports each result', async () => {
+    let seen: CaptureInput | null = null
+    const out = await getTool('view_localhost')!.execute(
+      {
+        url: 'http://localhost:3000/login',
+        steps: [
+          { action: 'fill', selector: '#password', value: 'test-only-pass' },
+          { action: 'click', selector: 'button' },
+          { action: 'wait_for', selector: '.dashboard' }
+        ]
+      },
+      {
+        ...ctx,
+        attachImage: () => {},
+        captureLocalhost: async (input) => {
+          seen = input
+          return fakeCapture({
+            finalUrl: 'http://localhost:3000/login?error=1',
+            steps: [
+              { step: 'fill "#password"', ok: true },
+              { step: 'click "button"', ok: true },
+              { step: 'wait for ".dashboard"', ok: false, error: 'no visible element matched within 10000ms' }
+            ]
+          })(input)
+        }
+      }
+    )
+    expect(seen!.steps).toHaveLength(3)
+    expect(out).toContain('✓ fill "#password"')
+    expect(out).toContain('✗ wait for ".dashboard": no visible element matched')
+    expect(out).toContain('Now at http://localhost:3000/login?error=1')
+    // The filled value is never echoed back.
+    expect(out).not.toContain('test-only-pass')
+  })
+
+  it('reports steps that did not run after a failure', async () => {
+    const out = await getTool('view_localhost')!.execute(
+      {
+        url: 'http://localhost:3000',
+        steps: [
+          { action: 'click', selector: '#a' },
+          { action: 'click', selector: '#b' },
+          { action: 'click', selector: '#c' }
+        ]
+      },
+      {
+        ...ctx,
+        attachImage: () => {},
+        captureLocalhost: fakeCapture({ steps: [{ step: 'click "#a"', ok: false, error: 'nope' }] })
+      }
+    )
+    expect(out).toContain('(2 later steps not run)')
+  })
+
+  it('rejects malformed steps before opening anything', async () => {
+    let opened = false
+    await expect(
+      getTool('view_localhost')!.execute(
+        { url: 'http://localhost:3000', steps: [{ action: 'hover', selector: 'a' }] },
+        {
+          ...ctx,
+          captureLocalhost: async () => {
+            opened = true
+            throw new Error('should not run')
+          }
+        }
+      )
+    ).rejects.toThrow(/action must be one of/)
+    expect(opened).toBe(false)
+  })
+
+  it('lists steps (never values) in the approval summary', () => {
+    const summary = getTool('view_localhost')!.summarize({
+      url: 'http://localhost:3000',
+      steps: [
+        { action: 'fill', selector: '#password', value: 'secret-ish' },
+        { action: 'click', selector: 'button' }
+      ]
+    })
+    expect(summary).toBe('View http://localhost:3000, then: fill "#password", click "button"')
+    expect(summary).not.toContain('secret-ish')
+    expect(getTool('view_localhost')!.summarize({ url: 'http://localhost:3000' })).toBe(
+      'View http://localhost:3000'
+    )
+  })
+
   it('errors without a capture implementation in context', async () => {
     await expect(run('view_localhost', { url: 'http://localhost:3000' })).rejects.toThrow(/not available/)
   })
