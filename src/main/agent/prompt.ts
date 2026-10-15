@@ -98,6 +98,7 @@ export function buildSystemPrompt(
   rules?: string,
   planMode?: boolean,
   capabilities?: string,
+  // The conversation's date + git snapshot section (see promptSnapshot.ts).
   gitStatus?: string,
   providerId?: string,
   model?: string,
