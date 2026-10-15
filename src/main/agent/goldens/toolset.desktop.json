@@ -743,6 +743,60 @@
     }
   },
   {
+    "name": "schedule_run",
+    "description": "Schedule a recurring (or one-time) background agent run. At each occurrence, a fresh session is started with the stored prompt; it appears alongside the other chats and runs autonomously under your current approval policy (never more permissive). Use it for routine, self-contained jobs the user wants repeated, e.g. \"daily at 09:00, run the test suite and summarize any failures\". The fired session sees only the stored prompt, so make it self-contained. Schedules fire while Houston is running (this is an in-app scheduler, not OS cron) and persist across restarts; an occurrence missed while Houston was closed fires once at the next launch.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "A short human name (a few words); becomes each fired session's title."
+        },
+        "spec": {
+          "type": "string",
+          "description": "When to run: \"every <N>m|h|d\" (minimum 5 minutes), \"daily at HH:MM\", \"weekdays at HH:MM\", \"weekly on <day> at HH:MM\", or \"once at YYYY-MM-DD HH:MM\". Times are local, 24-hour."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The full task each fired run starts with. Self-contained: the fired session sees nothing from this chat."
+        }
+      },
+      "required": [
+        "name",
+        "spec",
+        "prompt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "list_scheduled_runs",
+    "description": "List the scheduled background runs configured on this machine: id, name, recurrence, next/last fire time, and whether the last fire succeeded.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "cancel_scheduled_run",
+    "description": "Cancel a scheduled background run by id (from list_scheduled_runs or the schedule_run confirmation). Already-started sessions are unaffected; the schedule simply stops firing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The schedule id to cancel."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "review_changes",
     "description": "Run an adversarial, multi-agent review of the current uncommitted changes for correctness, security, and quality. It spawns an independent read-only reviewer per dimension (each in its own fresh context, so they don't inherit your blind spots), then a skeptical verifier that re-checks every candidate finding against the real code and drops false positives, and returns the confirmed findings. Use it to self-review after completing a substantial change, before telling the user you are done, then fix what it confirms and verify the fixes directly. One review plus targeted fixes is usually enough: re-run it only if you make further substantial changes, and pass paths to scope the re-review to what changed rather than re-reviewing the whole diff. Reviews uncommitted changes (vs HEAD) by default; pass base to review against another commit or branch, and paths to limit the review to specific files.",
     "parameters": {

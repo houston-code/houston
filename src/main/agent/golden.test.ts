@@ -187,10 +187,17 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-/** Wire the desktop-only backends so the toolset/prompt match the Electron shell. */
+/** Wire the host backends the Electron shell sets (capture, spawn, scheduler) so the toolset/prompt match it. */
 function configureDesktopBackends(): void {
   setCaptureBackend({} as CaptureDeps)
   setSpawnBackend({} as SpawnBackend)
+  setSchedulerBackend({} as SchedulerBackend)
+}
+
+/** Wire the backends the terminal entry sets (spawn, scheduler; no browser engine for capture). */
+function configureCliBackends(): void {
+  setSpawnBackend({} as SpawnBackend)
+  setSchedulerBackend({} as SchedulerBackend)
 }
 
 interface ScenarioResult {
@@ -468,8 +475,9 @@ describe('agent behavior goldens', () => {
     await expect(transcript('ask-user', r)).toMatchFileSnapshot('goldens/transcript.ask-user.txt')
   })
 
-  it('CLI (no desktop backends): view_localhost and spawn_session are absent', async () => {
-    // No configureDesktopBackends(): this is the standalone CLI configuration.
+  it('CLI (spawn + scheduler, no capture): view_localhost is absent', async () => {
+    // The terminal entry wires spawn and the scheduler but has no browser engine for view_localhost.
+    configureCliBackends()
     const r = await runScenario({
       turns: [[{ type: 'text', text: 'hi' }, doneTurn()]]
     })
