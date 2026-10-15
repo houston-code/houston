@@ -284,13 +284,16 @@ jobs:
   # The required `build` check: one stable name over the whole platform matrix, the SBOM
   # gate, and workflow-lint, so adding or renaming a matrix leg never needs a ruleset change.
   #
-  # `always()` is load-bearing. A job whose dependency failed is SKIPPED by default, and a
-  # skipped required check reports a PASS, so without it a red macOS leg would let the PR
-  # merge. Here the job always runs and fails unless every dependency actually succeeded
-  # (a skipped or cancelled dependency fails it too).
+  # `!cancelled()` is load-bearing. A job whose dependency failed is SKIPPED by default, and
+  # a skipped required check reports a PASS, so without it a red macOS leg would let the PR
+  # merge. Here the job runs whenever the run itself was not cancelled, and fails unless
+  # every dependency actually succeeded (a skipped or cancelled dependency fails it too).
+  # It is not `always()`: when the concurrency group cancels a superseded run (Dependabot
+  # opens and labels a PR in the same second), `always()` ran this job anyway and posted a
+  # red `build` that kept the PR blocked after the newer run went green.
   build:
     needs: [package, sbom-conformance, workflow-lint]
-    if: ${{ always() && github.event_name != 'push' }}
+    if: ${{ !cancelled() && github.event_name != 'push' }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     steps:

@@ -119,13 +119,20 @@ describe('CI gates merge on the whole matrix', () => {
   })
 
   it('fails `build` when a dependency fails, instead of skipping it to a pass', () => {
-    // Without always(), a failed leg skips `build`, and a skipped required check reports
-    // a PASS: a red macOS e2e would let the PR merge. With it, the job must check every
-    // result itself, and anything but success (failure, skipped, cancelled) fails it.
+    // Without a status function, a failed leg skips `build`, and a skipped required check
+    // reports a PASS: a red macOS e2e would let the PR merge. With one, the job must check
+    // every result itself, and anything but success (failure, skipped, cancelled) fails it.
     const build = job('build')
-    expect(build).toMatch(/if: \$\{\{ always\(\) && /)
+    expect(build).toMatch(/if: \$\{\{ !cancelled\(\) && /)
     expect(build).toContain("join(needs.*.result, ' ')")
     expect(build).toContain('[ "$r" = success ] ||')
+  })
+
+  it('skips `build` in a cancelled run, so a superseded run cannot leave a red required check', () => {
+    // always() runs the job even after the concurrency group cancels the run; it then sees
+    // its cancelled dependencies, fails, and that stale failure blocks the PR although the
+    // newer run passed. Real failures still run it, since only cancellation stops it.
+    expect(job('build')).not.toContain('always()')
   })
 })
 
