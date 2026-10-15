@@ -105,10 +105,10 @@ describe('CI runs everything on every PR', () => {
     for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) {
       expect(pkg).toContain(`os: ${os}`)
     }
-    // The full unit suite on every non-Linux leg (macOS against the real Seatbelt backend,
-    // Windows against its own; Linux runs it in `test`), and the packaged-app e2e on macOS.
-    expect(pkg).toMatch(/if: runner\.os != 'Linux'\n {8}run: npm test /)
-    expect(pkg).not.toContain('npx vitest run src/main/sandbox')
+    // The full unit suite on both macOS legs (the real Seatbelt backend; Linux runs it in
+    // `test`), the sandbox suite on Windows, and the packaged-app e2e on macOS.
+    expect(pkg).toMatch(/if: runner\.os == 'macOS'\n {8}run: npm test /)
+    expect(pkg).toMatch(/if: runner\.os == 'Windows'\n {8}run: npx vitest run src\/main\/sandbox /)
     expect(pkg).toMatch(/if: runner\.os == 'macOS'\n {8}run: npm run test:e2e/)
   })
 })
