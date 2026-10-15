@@ -22,20 +22,28 @@ inputs:
 runs:
   using: composite
   steps:
+    # Pin where Electron and electron-builder keep their downloads, for this step and every
+    # later one in the job (npm ci, packaging). Their defaults come from env-paths and differ
+    # per runner image: on the Ubuntu runners they missed `~/.cache`, so the cache captured
+    # only the node-gyp headers (0 MB of Electron). One explicit directory is the same on
+    # every OS.
+    - if: inputs.electron-cache == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo "electron_config_cache=${RUNNER_TEMP}/electron-cache/electron"
+          echo "ELECTRON_BUILDER_CACHE=${RUNNER_TEMP}/electron-cache/electron-builder"
+        } >> "$GITHUB_ENV"
     # Before npm ci, whose postinstall downloads Electron and (via electron-rebuild) its
     # headers: a download that times out fails the whole install, so a warm cache keeps a
-    # flaky CDN from turning a job red. Paths for all three OSes; missing ones are ignored.
+    # flaky CDN from turning a job red.
     - if: inputs.electron-cache == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.cache/electron
-          ~/.cache/electron-builder
+          ${{ runner.temp }}/electron-cache
           ~/.electron-gyp
-          ~/Library/Caches/electron
-          ~/Library/Caches/electron-builder
-          ~/AppData/Local/electron/Cache
-          ~/AppData/Local/electron-builder/Cache
         key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
         restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

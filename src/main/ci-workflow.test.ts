@@ -226,6 +226,12 @@ describe('CI reports and caches', () => {
       'utf8'
     )
     expect(action).toContain('~/.electron-gyp')
+    // An explicit download dir for Electron and electron-builder, exported for the whole job
+    // and cached: their per-OS defaults missed the cache on the Ubuntu runners.
+    expect(action).toContain('echo "electron_config_cache=${RUNNER_TEMP}/electron-cache/electron"')
+    expect(action).toContain('echo "ELECTRON_BUILDER_CACHE=${RUNNER_TEMP}/electron-cache/electron-builder"')
+    expect(action).toContain('${{ runner.temp }}/electron-cache')
+    expect(action.indexOf('>> "$GITHUB_ENV"')).toBeLessThan(action.indexOf('uses: actions/cache@'))
     expect(action).toContain("key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}")
     expect(action.indexOf('uses: actions/cache@')).toBeLessThan(action.indexOf('npm ci ;;'))
   })
