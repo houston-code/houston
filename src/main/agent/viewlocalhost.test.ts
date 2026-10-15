@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  MAX_STEPS,
+  MAX_WAIT_FOR_MS,
+  MAX_WAIT_MS,
   captureLocalhost,
+  describeStep,
   formatConsole,
+  parseSteps,
+  runSteps,
+  type CaptureStep,
   isBlockedSubresourceHost,
   isLoopbackHost,
   loadWithDeadline,
@@ -126,6 +133,7 @@ function fakeSession(over: Partial<CaptureSession> = {}): {
     rectForSelector: over.rectForSelector ?? (async () => null),
     screenshot: over.screenshot ?? (async () => Buffer.from('PNGBYTES')),
     consoleEntries: over.consoleEntries ?? (() => []),
+    runStep: over.runStep ?? (async () => ({ ok: true as const })),
     close: () => {
       closed = true
       over.close?.()
@@ -257,5 +265,183 @@ describe('capture backend injection', () => {
     const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
     expect(wired).not.toHaveBeenCalled()
     expect(cap.png.toString()).toBe('explicit')
+  })
+})
+
+describe('parseSteps', () => {
+  it('accepts the four actions and fills in defaults', () => {
+    expect(
+      parseSteps([
+        { action: 'fill', selector: '#email', value: 'a@b.c' },
+        { action: 'click', selector: 'button[type=submit]' },
+        { action: 'wait_for', selector: '.dashboard' },
+        { action: 'wait' }
+      ])
+    ).toEqual([
+      { action: 'fill', selector: '#email', value: 'a@b.c' },
+      { action: 'click', selector: 'button[type=submit]' },
+      { action: 'wait_for', selector: '.dashboard', timeoutMs: MAX_WAIT_FOR_MS },
+      { action: 'wait', ms: 500 }
+    ])
+  })
+
+  it('treats a missing steps argument as no steps', () => {
+    expect(parseSteps(undefined)).toEqual([])
+    expect(parseSteps(null)).toEqual([])
+  })
+
+  it('clamps waits to their caps instead of refusing', () => {
+    expect(parseSteps([{ action: 'wait', ms: 60_000 }])).toEqual([{ action: 'wait', ms: MAX_WAIT_MS }])
+    expect(parseSteps([{ action: 'wait', ms: -5 }])).toEqual([{ action: 'wait', ms: 0 }])
+    expect(parseSteps([{ action: 'wait_for', selector: 'x', timeout_ms: 99_999 }])).toEqual([
+      { action: 'wait_for', selector: 'x', timeoutMs: MAX_WAIT_FOR_MS }
+    ])
+  })
+
+  it('rejects malformed steps with a message naming the step', () => {
+    expect(() => parseSteps('click')).toThrow(/must be an array/)
+    expect(() => parseSteps([{ action: 'hover', selector: 'a' }])).toThrow(/steps\[0\]\.action/)
+    expect(() => parseSteps([{ action: 'click' }])).toThrow(/steps\[0\]\.selector is required/)
+    expect(() => parseSteps([{ action: 'click', selector: '  ' }])).toThrow(/selector is required/)
+    expect(() => parseSteps([{ action: 'fill', selector: '#a' }])).toThrow(/value is required/)
+    expect(() => parseSteps([null])).toThrow(/must be an object/)
+    expect(() => parseSteps([{ action: 'click', selector: 'a'.repeat(501) }])).toThrow(/longer than/)
+    expect(() => parseSteps([{ action: 'fill', selector: '#a', value: 'v'.repeat(10_001) }])).toThrow(/longer than/)
+  })
+
+  it('caps the number of steps', () => {
+    const many = Array.from({ length: MAX_STEPS + 1 }, () => ({ action: 'wait' }))
+    expect(() => parseSteps(many)).toThrow(/at most 20/)
+    expect(parseSteps(many.slice(0, MAX_STEPS))).toHaveLength(MAX_STEPS)
+  })
+})
+
+describe('describeStep', () => {
+  it('never includes a filled value', () => {
+    const d = describeStep({ action: 'fill', selector: '#password', value: 'hunter2' })
+    expect(d).toBe('fill "#password"')
+    expect(d).not.toContain('hunter2')
+  })
+})
+
+describe('runSteps', () => {
+  const steps: CaptureStep[] = [
+    { action: 'fill', selector: '#u', value: 'x' },
+    { action: 'click', selector: 'button' },
+    { action: 'wait_for', selector: '.ok', timeoutMs: 100 }
+  ]
+
+  it('runs every step in order and reports each', async () => {
+    const seen: string[] = []
+    const { session } = fakeSession({
+      runStep: async (s) => {
+        seen.push(s.action)
+        return { ok: true }
+      }
+    })
+    const r = await runSteps(session, steps)
+    expect(seen).toEqual(['fill', 'click', 'wait_for'])
+    expect(r.every((x) => x.ok)).toBe(true)
+  })
+
+  it('stops at the first failure', async () => {
+    const seen: string[] = []
+    const { session } = fakeSession({
+      runStep: async (s) => {
+        seen.push(s.action)
+        return s.action === 'click' ? { ok: false, error: 'no element matches the selector' } : { ok: true }
+      }
+    })
+    const r = await runSteps(session, steps)
+    expect(seen).toEqual(['fill', 'click'])
+    expect(r).toEqual([
+      { step: 'fill "#u"', ok: true },
+      { step: 'click "button"', ok: false, error: 'no element matches the selector' }
+    ])
+  })
+
+  it('turns a thrown step into a failure instead of failing the capture', async () => {
+    const { session } = fakeSession({
+      runStep: async () => {
+        throw new Error('renderer gone')
+      }
+    })
+    expect(await runSteps(session, steps.slice(0, 1))).toEqual([
+      { step: 'fill "#u"', ok: false, error: 'renderer gone' }
+    ])
+  })
+
+  it('stops once the overall budget is used up', async () => {
+    let t = 0
+    const { session } = fakeSession({
+      runStep: async () => {
+        t += 40
+        return { ok: true }
+      }
+    })
+    const r = await runSteps(session, steps, undefined, 50, () => t)
+    expect(r.map((x) => x.ok)).toEqual([true, true, false])
+    expect(r[2].error).toMatch(/budget/)
+  })
+
+  it('honors an abort between steps', async () => {
+    const ac = new AbortController()
+    const { session } = fakeSession({
+      runStep: async () => {
+        ac.abort()
+        return { ok: true }
+      }
+    })
+    await expect(runSteps(session, steps, ac.signal)).rejects.toThrow(/cancelled/)
+  })
+})
+
+describe('captureLocalhost with steps', () => {
+  it('runs steps after load and before the screenshot, and returns their results', async () => {
+    const order: string[] = []
+    const { session, closed } = fakeSession({
+      load: async () => {
+        order.push('load')
+        return {}
+      },
+      runStep: async (s) => {
+        order.push(s.action)
+        return { ok: true }
+      },
+      screenshot: async () => {
+        order.push('screenshot')
+        return Buffer.from('PNG')
+      }
+    })
+    const cap = await captureLocalhost(
+      { url: 'http://localhost:3000', steps: [{ action: 'click', selector: '#go' }] },
+      { open: async () => session }
+    )
+    expect(order).toEqual(['load', 'click', 'screenshot'])
+    expect(cap.steps).toEqual([{ step: 'click "#go"', ok: true }])
+    expect(closed()).toBe(true)
+  })
+
+  it('still screenshots after a failed step', async () => {
+    let shot = false
+    const { session } = fakeSession({
+      runStep: async () => ({ ok: false, error: 'no element matches the selector' }),
+      screenshot: async () => {
+        shot = true
+        return Buffer.from('PNG')
+      }
+    })
+    const cap = await captureLocalhost(
+      { url: 'http://localhost:3000', steps: [{ action: 'click', selector: '#missing' }] },
+      { open: async () => session }
+    )
+    expect(shot).toBe(true)
+    expect(cap.steps?.[0].ok).toBe(false)
+  })
+
+  it('omits step results when no steps were given', async () => {
+    const { session } = fakeSession()
+    const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    expect(cap.steps).toBeUndefined()
   })
 })
