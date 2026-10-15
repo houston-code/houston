@@ -590,7 +590,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const candidates = reports.filter((r) => !isErrorReport(r.report) && !isClean(r.report))
 
   if (candidates.length === 0) {
-    const clean = `Review complete — no issues found across ${dimsLabel}.`
+    const clean = `Review complete: no issues found across ${dimsLabel}.`
     return assemble(clean, notes.length ? notes.join('\n') : null, costLine())
   }
 
@@ -667,7 +667,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       const tally = `Confirmed ${confirmed.length} of ${toVerify.length} candidate findings (each checked by ${VOTES_PER_FINDING} independent verifiers).`
 
       if (confirmed.length === 0) {
-        const clean = `Adversarial review (${dimsLabel}) — no findings survived independent verification. ${tally}`
+        const clean = `Adversarial review (${dimsLabel}): no findings survived independent verification. ${tally}`
         return assemble(clean, notes.length ? notes.join('\n') : null, costLine())
       }
       const header = `Adversarial review of the current changes (${dimsLabel}), each finding independently verified by ${VOTES_PER_FINDING} skeptics:`

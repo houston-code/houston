@@ -343,11 +343,11 @@ function windowWithLargeToolResults(totalTurns: number): ChatMessage[] {
 describe('evictionStub', () => {
   it('names the tool, subject, and byte count and points at recall', () => {
     const stub = evictionStub('read_file', 'src/big.ts', 12345)
-    expect(stub).toBe('[earlier read_file result on src/big.ts, 12345 bytes elided — recall_history or re-run to view]')
+    expect(stub).toBe('[earlier read_file result on src/big.ts, 12345 bytes elided; recall_history or re-run to view]')
   })
 
   it('omits the subject clause when there is none, and falls back to "tool"', () => {
-    expect(evictionStub(undefined, '', 10)).toBe('[earlier tool result, 10 bytes elided — recall_history or re-run to view]')
+    expect(evictionStub(undefined, '', 10)).toBe('[earlier tool result, 10 bytes elided; recall_history or re-run to view]')
   })
 })
 
@@ -400,7 +400,7 @@ describe('evictStaleToolResults', () => {
     const oldToolIdx = window.findIndex((m) => m.role === 'tool')
     window[oldToolIdx] = {
       ...window[oldToolIdx],
-      content: '[earlier read_file result on f0.ts, 3000 bytes elided — recall_history or re-run to view]'
+      content: '[earlier read_file result on f0.ts, 3000 bytes elided; recall_history or re-run to view]'
     }
     const out = evictStaleToolResults(window)
     expect(out[oldToolIdx].content).toBe(window[oldToolIdx].content)

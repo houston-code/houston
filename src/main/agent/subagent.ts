@@ -425,7 +425,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
             : undefined
         if (call.arguments.resume !== undefined && call.arguments.resume !== null) {
           output =
-            'resume is not available from within a subagent — dispatch a fresh nested agent instead.'
+            'resume is not available from within a subagent; dispatch a fresh nested agent instead.'
         } else if (!nestedPrompt) {
           output = 'prompt is required.'
         } else {
