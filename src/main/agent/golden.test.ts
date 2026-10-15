@@ -91,6 +91,12 @@ vi.mock('./github', async (importActual) => ({
   ...(await importActual<typeof import('./github')>()),
   githubContext: () => ''
 }))
+// The system prompt names the host OS and whether run_shell is confined, both read
+// from the active sandbox backend. Pin it so the goldens match on every CI host.
+vi.mock('../sandbox', async (importActual) => ({
+  ...(await importActual<typeof import('../sandbox')>()),
+  activeBackendId: () => 'seatbelt'
+}))
 vi.mock('./plugins', () => {
   const inert = { has: () => false, size: 0, emit: async () => {} }
   return { loadPlugins: async () => inert, loadPluginsIfEnabled: async () => inert }

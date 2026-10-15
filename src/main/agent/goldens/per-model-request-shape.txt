@@ -21,7 +21,7 @@ tools: 42
 usage event: usage {"cost":0.00315,"inputTokens":1000,"model":"gpt-5.2","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 + 
-+ apply_patch is available for multi-file edits: prefer it when a single change spans several files.
++ apply_patch is available for multi-file edits: prefer it when a single change spans several files. When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.
 
 ## ollama / llama3.3
 host caps: -
@@ -31,4 +31,4 @@ tools: 42
 usage event: usage {"cost":0,"inputTokens":1000,"model":"llama3.3","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 + 
-+ You are running on a local model: prefer concise, deliberate tool use — one focused call at a time over many speculative ones.
++ You are running on a local model: prefer concise, deliberate tool use, one focused call at a time over many speculative ones.
