@@ -989,7 +989,7 @@
   },
   {
     "name": "gh_pr_checks",
-    "description": "Show the CI check (status) rollup for a pull request via the gh CLI. Omit number to use the current branch's PR. Use it to see whether CI passed before relying on a PR. Read-only, but requires approval (network).",
+    "description": "Show the CI check (status) rollup for a pull request via the gh CLI. Omit number to use the current branch's PR. Returns the rollup and \"[<status>] check <n> <link>\" per check, then the check and workflow names inside an untrusted-content fence keyed by n. Use it to see whether CI passed before relying on a PR. Read-only, but requires approval (network).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1218,7 +1218,7 @@
   },
   {
     "name": "gh_run_list",
-    "description": "List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns \"<run-id> [status] <workflow>: <title> (<branch>)\" per run; use a run-id with gh_run_view to inspect it. Requires approval (network).",
+    "description": "List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns \"<run-id> [status] (<event>)\" per run, then each run's workflow, title, and branch inside an untrusted-content fence keyed by run id. Use a run-id with gh_run_view to inspect it. Requires approval (network).",
     "parameters": {
       "type": "object",
       "properties": {
@@ -1253,7 +1253,7 @@
   },
   {
     "name": "gh_run_view",
-    "description": "View a GitHub Actions workflow run (its jobs and their status) via the gh CLI. Set log_failed:true to print the logs of only the failed steps, the fastest way to diagnose a CI failure. Get run ids from gh_run_list. Read-only, but requires approval (network).",
+    "description": "View a GitHub Actions workflow run via the gh CLI. Returns the run's id, outcome, URL, and each job's id, outcome, and failed step numbers, then the workflow, title, branch, and job and step names inside an untrusted-content fence. Set log_failed:true to print the logs of only the failed steps instead, fenced (the fastest way to diagnose a CI failure). Get run ids from gh_run_list. Read-only, but requires approval (network).",
     "parameters": {
       "type": "object",
       "properties": {

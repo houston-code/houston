@@ -86,7 +86,8 @@ Windows (no OS sandbox) the allowlist cannot be enforced.
 
 Text that outsiders write and Houston's tools pull into the agent's context (fetched web
 pages, web search results, GitHub issue and pull request titles, bodies, comments, and
-diffs, and MCP tool results and resources) is treated as **data, not instructions**. It
+diffs, GitHub Actions run, job, step, and check names and failed-step logs, and MCP tool
+results and resources) is treated as **data, not instructions**. It
 arrives inside a fence tagged with a **fresh random nonce per call**, so the text cannot
 close the fence and pose as Houston's own framing, and only fields the platform
 guarantees (such as an issue's number, state, author, and URL) render outside it. A web

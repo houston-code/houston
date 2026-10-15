@@ -784,17 +784,21 @@ server relays. So Houston treats the text these tools return as data rather than
 instructions, and it does not rely on the agent simply choosing to see it that
 way. The tools covered are `web_fetch`, `web_search`, the GitHub tools that read
 issue and pull request text (`gh_issue_view`, `gh_issue_list`, `gh_pr_view`,
-`gh_pr_list`), and MCP tool results and resources:
+`gh_pr_list`), the GitHub tools that read CI (`gh_run_view`, `gh_run_list`,
+`gh_pr_checks`), and MCP tool results and resources. A pull request from a fork
+runs the fork's own workflow files, so its author writes the job and step names
+and everything its steps print to the log:
 
 - **Fencing.** That text is wrapped in an `<untrusted-content-NONCE>` fence with
   a fresh random nonce per call, and the system prompt tells the agent that
   anything inside it is attacker-controlled. The nonce is what makes the fence
   hold: with a fixed tag, the text could close the fence itself and carry on as
   if it were trusted. Fields GitHub guarantees (an issue's number, state, author,
-  and URL) stay outside the fence so the agent can rely on them, while titles,
-  bodies, labels, branch names, and diffs go inside. Each comment gets its own
-  fence with its author shown outside it, so one comment cannot pass itself off
-  as a maintainer's reply.
+  and URL, or a CI run's id, outcome, and URL) stay outside the fence so the
+  agent can rely on them, while titles, bodies, labels, branch names, diffs,
+  workflow, job, step, and check names, and CI logs go inside. Each comment gets
+  its own fence with its author shown outside it, so one comment cannot pass
+  itself off as a maintainer's reply.
 - **Isolation.** Content is scored for injection signals: text telling the
   reader to ignore prior instructions, a new persona, an instruction to send data
   to a URL, references to key material, text telling the reader to call Houston's
@@ -808,8 +812,9 @@ issue and pull request text (`gh_issue_view`, `gh_issue_list`, `gh_pr_view`,
   inline and fenced, with a warning naming the signals. The agent needs an
   issue's exact repro steps or a pull request's exact diff to do its job, and a
   summary would not do. Search results are short snippets, and any page the agent
-  then opens goes through `web_fetch` and its isolation. Diffs are fenced but not
-  scored, because code routinely contains the phrases the scoring looks for.
+  then opens goes through `web_fetch` and its isolation. Diffs and CI logs are
+  fenced but not scored, because code and build output routinely contain the
+  phrases the scoring looks for.
 - **Cost.** Ordinary content is unaffected and arrives verbatim, so documentation
   and code samples stay byte-exact. Only flagged content pays for the extra call.
   The score is deliberately loose, because a false positive costs one model call

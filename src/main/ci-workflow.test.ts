@@ -212,22 +212,34 @@ describe('CI reports and caches', () => {
     }
   })
 
-  it('caches the Electron downloads in every job that installs dependencies', () => {
-    // npm ci's postinstall downloads Electron and its node-gyp headers; a CDN timeout there
-    // once failed `test` on main, so every installing job restores them first.
-    for (const name of ['test', 'linux-sandbox', 'package']) {
-      expect(job(name)).toMatch(/uses: \.\/\.github\/actions\/setup-node\n {8}with:\n(?: {10}.*\n)* {10}electron-cache: 'true'\n/)
+  it('caches only the Electron headers in install-only jobs', () => {
+    // npm ci's postinstall rebuilds node-pty against the Electron headers; a CDN timeout
+    // there once failed `test` on main. These jobs never package, so they never download
+    // the Electron runtime.
+    for (const name of ['test', 'linux-sandbox']) {
+      expect(job(name)).toMatch(/uses: \.\/\.github\/actions\/setup-node\n {8}with:\n(?: {10}.*\n)* {10}electron-cache: headers\n/)
     }
   })
 
-  it('restores the Electron cache before npm ci, including the node-gyp headers', () => {
+  it('caches the Electron runtime and builder tools in every job that packages', () => {
+    for (const name of ['package', 'warm-caches']) {
+      expect(job(name)).toMatch(/electron-cache: full\n/)
+    }
+  })
+
+  it('keeps the two cache kinds under separate keys, restored before npm ci', () => {
+    // A shared key let an install-only job save a near-empty entry that the packaging job
+    // then hit and never replaced (Linux cached 0 MB of Electron).
     const action = readFileSync(
       resolve(dirname(fileURLToPath(import.meta.url)), '../../.github/actions/setup-node/action.yml'),
       'utf8'
     )
-    expect(action).toContain('~/.electron-gyp')
-    expect(action).toContain("key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}")
-    expect(action.indexOf('uses: actions/cache@')).toBeLessThan(action.indexOf('npm ci ;;'))
+    expect(action).toContain("key: electron-headers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}")
+    expect(action).toContain("key: electron-full-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}")
+    expect(action).not.toContain('GITHUB_ENV')
+    // A typo (e.g. `electron-cache: true`) must fail, not silently cache nothing.
+    expect(action).toContain("unknown electron-cache '$MODE' (expected false, headers or full)")
+    expect(action.lastIndexOf('uses: actions/cache@')).toBeLessThan(action.indexOf('npm ci ;;'))
   })
 })
 
@@ -247,12 +259,12 @@ describe('CI is the release gate', () => {
 })
 
 describe('CI keeps PR caches warm', () => {
-  it('refreshes the macOS and Windows caches from main, where every PR can read them', () => {
+  it('refreshes every package leg\'s caches from main, where every PR can read them', () => {
     // PR- and queue-scoped caches are invisible to other PRs, and `package` skips push.
     const warm = job('warm-caches')
     expect(warm).toContain("if: github.event_name == 'push'")
-    for (const os of ['macos-14', 'macos-15-intel', 'windows-2025']) expect(warm).toContain(`os: ${os}`)
-    expect(warm).toMatch(/install: full\n {10}electron-cache: 'true'/)
+    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) expect(warm).toContain(`os: ${os}`)
+    expect(warm).toMatch(/install: full\n {10}electron-cache: full/)
   })
 
   it('packages without publishing, so the tool downloads are cached too', () => {
@@ -261,7 +273,7 @@ describe('CI keeps PR caches warm', () => {
 
   it('uses the same runners as the package legs, so the cache keys match', () => {
     const pkg = job('package')
-    for (const os of ['macos-14', 'macos-15-intel', 'windows-2025']) expect(pkg).toContain(`os: ${os}`)
+    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) expect(pkg).toContain(`os: ${os}`)
   })
 
   it('never gates a merge: it runs only after the merge, and `build` does not need it', () => {
