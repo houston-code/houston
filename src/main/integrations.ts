@@ -1,5 +1,6 @@
 import { resolveGh, runGh } from './agent/github'
 import { FORMATTERS, canRunTool, type Formatter } from './agent/format'
+import { backendShellSyntax, type ShellSyntax } from './sandbox'
 import type { FormatterStatus, IntegrationsInfo } from '@shared/types'
 
 /**
@@ -19,6 +20,8 @@ export interface IntegrationsDeps {
   hasBin?: (bin: string) => boolean
   /** The extension→formatters registry (default: the real one). */
   formatters?: Record<string, Formatter[]>
+  /** The sandbox shell's syntax (default: the active backend's). */
+  shellSyntax?: ShellSyntax
 }
 
 /** Default auth probe: `gh auth status` exits 0 iff at least one account is logged in. */
@@ -62,6 +65,8 @@ export async function getIntegrations(deps: IntegrationsDeps = {}): Promise<Inte
 
   return {
     gh: { installed, authenticated },
-    formatters: formatterStatuses(registry, hasBin)
+    formatters: formatterStatuses(registry, hasBin),
+    // cmd.exe can't be handed a safely quoted formatter command (see planToolRun).
+    formattersNeedGitBash: (deps.shellSyntax ?? backendShellSyntax()) === 'cmd'
   }
 }

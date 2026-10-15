@@ -269,6 +269,28 @@ describe('SettingsModal', () => {
     expect(screen.getByText('1 of 2 found')).toBeInTheDocument()
   })
 
+  it('says formatters need Git for Windows when the shell is the cmd.exe fallback', async () => {
+    installApi({
+      getIntegrations: vi.fn(() =>
+        Promise.resolve({
+          gh: { installed: true, authenticated: true },
+          formatters: [{ bin: 'prettier', installed: false, languages: ['ts'] }],
+          formattersNeedGitBash: true
+        })
+      )
+    })
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+
+    await waitFor(() => expect(screen.getByText('Needs Git for Windows')).toBeInTheDocument())
+    expect(screen.getByRole('link', { name: 'gitforwindows.org' })).toHaveAttribute(
+      'href',
+      'https://gitforwindows.org'
+    )
+    // The per-formatter list (all ✗ here) would mislead, so it's replaced.
+    expect(screen.queryByText(/of 1 found/)).not.toBeInTheDocument()
+  })
+
   it('reports gh as signed in when installed and authenticated', async () => {
     installApi({
       getIntegrations: vi.fn(() =>

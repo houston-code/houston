@@ -646,4 +646,9 @@ export interface IntegrationsInfo {
   }
   /** Format-on-save backends and whether each is installed. */
   formatters: FormatterStatus[]
+  /**
+   * True when formatters can't run on this host whatever is installed: Windows without
+   * Git for Windows, where the shell is the cmd.exe fallback.
+   */
+  formattersNeedGitBash?: boolean
 }
