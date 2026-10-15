@@ -239,6 +239,26 @@ export async function createWorktree(
 }
 
 /**
+ * Turn a failed `git worktree remove` into text fit for the user. git's own stderr
+ * ("fatal: '<path>' contains modified or untracked files, use --force to delete it")
+ * reads as a crash and points at a flag the user can't pass from the app.
+ */
+function removalFailureMessage(wt: ConversationWorktree, e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e ?? '')
+  if (/modified or untracked files/i.test(raw)) {
+    return (
+      `Kept the worktree for branch "${wt.branch}" because it has uncommitted or ` +
+      `untracked changes, so nothing was lost. Commit or discard them, then remove ` +
+      `it from ${wt.path}.`
+    )
+  }
+  const detail = raw.replace(/^(fatal|error):\s*/i, '').trim()
+  return detail
+    ? `Couldn't remove the worktree for branch "${wt.branch}": ${detail}`
+    : `Couldn't remove the worktree for branch "${wt.branch}"; left it in place at ${wt.path}.`
+}
+
+/**
  * Tear down a conversation's worktree. Without `force`, this is safe: the worktree
  * is only removed when it has no uncommitted changes, and the branch only when
  * it's fully merged — so work is never silently destroyed. With `force`, both are
@@ -256,13 +276,7 @@ export async function removeWorktree(
     await exec(args, wt.repoRoot)
   } catch (e) {
     // `git worktree remove` refuses a dirty worktree without --force; keep the work.
-    return {
-      removed: false,
-      branchDeleted: false,
-      message:
-        (e as Error).message ||
-        `Worktree at ${wt.path} has uncommitted changes; left it in place.`
-    }
+    return { removed: false, branchDeleted: false, message: removalFailureMessage(wt, e) }
   }
   let branchDeleted = false
   try {
