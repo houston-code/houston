@@ -75,4 +75,10 @@ describe('getIntegrations', () => {
     expect(info.formatters.find((f) => f.bin === 'prettier')!.installed).toBe(true)
     expect(info.formatters.find((f) => f.bin === 'gofmt')!.installed).toBe(false)
   })
+
+  it('flags that formatters need Git for Windows only under the cmd.exe fallback', async () => {
+    const base = { resolveGh: () => null, hasBin: () => false, formatters: REGISTRY }
+    expect((await getIntegrations({ ...base, shellSyntax: 'cmd' })).formattersNeedGitBash).toBe(true)
+    expect((await getIntegrations({ ...base, shellSyntax: 'posix' })).formattersNeedGitBash).toBe(false)
+  })
 })

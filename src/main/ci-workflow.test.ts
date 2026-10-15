@@ -245,3 +245,26 @@ describe('CI is the release gate', () => {
     expect(prepare).toContain('needs: [verify]')
   })
 })
+
+describe('CI keeps PR caches warm', () => {
+  it('refreshes the macOS and Windows caches from main, where every PR can read them', () => {
+    // PR- and queue-scoped caches are invisible to other PRs, and `package` skips push.
+    const warm = job('warm-caches')
+    expect(warm).toContain("if: github.event_name == 'push'")
+    for (const os of ['macos-14', 'macos-15-intel', 'windows-2025']) expect(warm).toContain(`os: ${os}`)
+    expect(warm).toMatch(/install: full\n {10}electron-cache: 'true'/)
+  })
+
+  it('packages without publishing, so the tool downloads are cached too', () => {
+    expect(job('warm-caches')).toContain('run: npm run "$DIST" -- --publish never')
+  })
+
+  it('uses the same runners as the package legs, so the cache keys match', () => {
+    const pkg = job('package')
+    for (const os of ['macos-14', 'macos-15-intel', 'windows-2025']) expect(pkg).toContain(`os: ${os}`)
+  })
+
+  it('never gates a merge: it runs only after the merge, and `build` does not need it', () => {
+    expect(job('build')).not.toContain('warm-caches')
+  })
+})

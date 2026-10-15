@@ -38,6 +38,7 @@ export function makeUnsandboxedBackend(
     sandboxed: false,
     confinesNetwork: false,
     supportsSession: isBash,
+    shellSyntax: 'posix',
     buildLaunch({ command }): ShellLaunch {
       return unsandboxedLaunch(command, shell, isBash)
     }

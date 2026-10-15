@@ -1,6 +1,33 @@
 import { describe, expect, it } from 'vitest'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { buildSystemPrompt, type PromptHost } from './prompt'
+import { builtinToolset, type BuiltinToolsetOptions } from './tools'
+
+/** The built-in tool names a run offers: the desktop set, with any overrides applied. */
+function toolNames(over: Partial<BuiltinToolsetOptions> = {}): string[] {
+  return builtinToolset({
+    localhostCapture: true,
+    spawn: true,
+    scheduler: true,
+    planMode: false,
+    ...over
+  }).map((t) => t.schema.name)
+}
+
+/** The prompt for a toolset (all other arguments at their defaults). */
+function promptFor(tools: string[], planMode?: boolean): string {
+  return buildSystemPrompt(
+    '/tmp/x',
+    undefined,
+    undefined,
+    planMode,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    tools
+  )
+}
 
 describe('buildSystemPrompt', () => {
   it('includes the workspace path and project name', () => {
@@ -103,19 +130,60 @@ describe('buildSystemPrompt', () => {
     expect(buildSystemPrompt('/tmp/x', undefined, undefined, true)).toContain('PLAN MODE IS ON')
   })
 
+  describe('plan-mode refused tools', () => {
+    const refusedLine = (p: string): string => {
+      const m = p.match(/PLAN MODE IS ON\. You are read-only, so Houston refuses ([^.]*)\./)
+      expect(m, 'plan-mode refusal sentence').not.toBeNull()
+      return m![1]
+    }
+
+    it('names every offered tool plan mode refuses, and only those', () => {
+      // Regression: the notice once named four tools while plan mode refused more
+      // (apply_patch, notebook_edit, dispatch_writable_agent, the mutating gh_* tools).
+      const line = refusedLine(promptFor(toolNames({ planMode: true }), true))
+      for (const name of [
+        'write_file',
+        'edit_file',
+        'multi_edit',
+        'apply_patch',
+        'notebook_edit',
+        'run_shell',
+        'dispatch_writable_agent',
+        'spawn_session',
+        'schedule_run',
+        'cancel_scheduled_run',
+        'gh_pr_create',
+        'gh_pr_comment',
+        'gh_pr_checkout',
+        'gh_pr_review',
+        'gh_pr_merge',
+        'gh_repo_create',
+        'gh_issue_create',
+        'gh_issue_comment'
+      ]) {
+        expect(line, name).toMatch(new RegExp(`\\b${name}\\b`))
+      }
+      for (const name of ['read_file', 'search_files', 'web_fetch', 'gh_pr_view', 'gh_run_view', 'present_plan']) {
+        expect(line, name).not.toMatch(new RegExp(`\\b${name}\\b`))
+      }
+      expect(line).toContain('any MCP tool')
+    })
+
+    it('leaves out refused tools the run does not offer', () => {
+      const line = refusedLine(promptFor(toolNames({ planMode: true, spawn: false, scheduler: false }), true))
+      expect(line).toContain('apply_patch')
+      expect(line).not.toContain('spawn_session')
+      expect(line).not.toContain('schedule_run')
+    })
+
+    it('still names MCP tools when no built-in the run offers is refused', () => {
+      expect(refusedLine(promptFor(['read_file', 'present_plan'], true))).toBe('any MCP tool')
+    })
+  })
+
   it('lists view_localhost by default but omits it when capture is unavailable', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('view_localhost')
-    const noCapture = buildSystemPrompt(
-      '/tmp/x',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false
-    )
+    const noCapture = promptFor(toolNames({ localhostCapture: false }))
     expect(noCapture).not.toContain('view_localhost')
     // The neighbouring verification bullets must survive the removal.
     expect(noCapture).toContain('Never describe unverified work as tested or working.')
@@ -124,18 +192,7 @@ describe('buildSystemPrompt', () => {
 
   it('lists spawn_session by default but omits it when no spawn backend is wired', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('spawn_session')
-    const noSpawn = buildSystemPrompt(
-      '/tmp/x',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false
-    )
+    const noSpawn = promptFor(toolNames({ spawn: false }))
     expect(noSpawn).not.toContain('spawn_session')
     // The delegation guidance it extends must survive the removal.
     expect(noSpawn).toContain("don't dispatch agents just to double-check your own work.")
@@ -144,19 +201,7 @@ describe('buildSystemPrompt', () => {
 
   it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('schedule_run')
-    const noScheduler = buildSystemPrompt(
-      '/tmp/x',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      false
-    )
+    const noScheduler = promptFor(toolNames({ scheduler: false }))
     expect(noScheduler).not.toContain('schedule_run')
     // The neighbouring tool bullets must survive the removal.
     expect(noScheduler).toContain('dispatch_agent suits')
@@ -224,8 +269,6 @@ describe('buildSystemPrompt', () => {
     const withHost = (host: PromptHost): string =>
       buildSystemPrompt(
         '/tmp/x',
-        undefined,
-        undefined,
         undefined,
         undefined,
         undefined,

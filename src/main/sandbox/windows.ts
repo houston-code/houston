@@ -79,6 +79,7 @@ export function makeWindowsBackend(deps: WindowsShellDeps & { bashPath?: string 
     sandboxed: false,
     confinesNetwork: false,
     supportsSession: bashPath !== null,
+    shellSyntax: bashPath !== null ? 'posix' : 'cmd',
     buildLaunch({ command }): ShellLaunch {
       return windowsLaunch(command, bashPath, env)
     }

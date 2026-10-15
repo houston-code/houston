@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { extname } from 'node:path'
 import { resolveInRoots } from './tools'
-import { hasBinary, type BinLookupOptions } from './format'
+import { hasBinary, planToolRun, WIN_BASH_EXTENSIONS, type BinLookupOptions, type ToolRunOptions } from './format'
 import { runSandboxed, type SandboxRunResult } from '../sandbox'
 
 /**
@@ -72,10 +72,10 @@ function extKey(path: string): string {
 export function checkerFor(path: string, opts: BinLookupOptions = {}): Checker | null {
   const candidates = CHECKERS[extKey(path)]
   if (!candidates) return null
-  return candidates.find((c) => hasBinary(c.bin, opts)) ?? null
+  return candidates.find((c) => hasBinary(c.bin, { extensions: WIN_BASH_EXTENSIONS, ...opts })) ?? null
 }
 
-export interface DiagnosticsOptions {
+export interface DiagnosticsOptions extends ToolRunOptions {
   /** The canonical workspace root (primary directory). */
   workspace: string
   /** All allowed roots (workspace + added directories). */
@@ -85,8 +85,6 @@ export interface DiagnosticsOptions {
   maxChars?: number
   /** Injectable for tests; defaults to the real sandbox runner. */
   run?: (opts: Parameters<typeof runSandboxed>[0]) => Promise<SandboxRunResult>
-  /** Injectable binary-presence check (tests). */
-  hasBin?: (bin: string) => boolean
 }
 
 export interface DiagnosticsResult {
@@ -107,7 +105,7 @@ export interface DiagnosticsResult {
  * Run the matching checker on the file at `relPath`, if one is applicable and
  * installed, and return a block describing any problems for the model. Returns
  * `{ ran: false }` (never throws) when there's no checker, the binary is absent,
- * or the path escapes the roots — the caller treats diagnostics as best-effort.
+ * the shell is the Windows cmd.exe fallback, or the path escapes the roots — the caller treats diagnostics as best-effort.
  * The checker runs sandboxed with no network, exactly like run_shell, and never
  * modifies the file.
  */
@@ -126,14 +124,14 @@ export async function runPostEditDiagnostics(
   }
   if (!existsSync(abs)) return { ran: false }
 
-  const hasBin = opts.hasBin ?? ((b: string) => hasBinary(b))
   const candidates = CHECKERS[extKey(abs)]
   if (!candidates) return { ran: false }
-  const checker = candidates.find((c) => hasBin(c.bin))
-  if (!checker) return { ran: false }
+  // Null under the Windows cmd.exe fallback too: see planToolRun.
+  const plan = planToolRun(candidates, abs, opts)
+  if (!plan) return { ran: false }
+  const { tool: checker, command } = plan
 
   const run = opts.run ?? runSandboxed
-  const command = [checker.bin, ...checker.args(abs)].map(shellQuote).join(' ')
   const result = await run({
     command,
     cwd: opts.workspace,
@@ -191,9 +189,4 @@ export function formatDiagnosticsBlock(args: {
     ? `[diagnostics: ${bin} timed out after ${DEFAULT_TIMEOUT_MS / 1000}s]`
     : `[diagnostics: ${bin} reported problems]`
   return `\n\n${header}${output ? `\n${output}` : ''}`
-}
-
-/** Single-quote an argv element for safe embedding in a `/bin/bash -c` string. */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`
 }

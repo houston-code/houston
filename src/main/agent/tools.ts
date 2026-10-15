@@ -72,7 +72,7 @@ import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
 import { runReadGit, captureTry, uncommittedDiffBase } from './gitRead'
 import { SPAWN_SESSION_NAME, type SpawnSessionResult } from './spawn'
-import type { ScheduledRunInfo } from './scheduler'
+import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -3655,4 +3655,33 @@ export function toolSchemas(): ToolSchema[] {
 
 export function getTool(name: string): ToolDef | undefined {
   return TOOLS.find((t) => t.schema.name === name)
+}
+
+/** What decides which built-ins a run offers: the host backends it has wired, and plan mode. */
+export interface BuiltinToolsetOptions {
+  /** A localhost capture backend is wired (desktop only); backs view_localhost. */
+  localhostCapture: boolean
+  /** A spawn backend is wired; backs spawn_session. */
+  spawn: boolean
+  /** A scheduler backend is wired; backs the schedule tools. */
+  scheduler: boolean
+  /** The run starts in plan mode; present_plan (the "exit plan mode" tool) is offered only then. */
+  planMode: boolean
+}
+
+/**
+ * The built-in tools a run advertises to the model, in registry order. The single
+ * source for both the schemas the loop sends and the tool names the system prompt
+ * may mention, so the two can't disagree. A tool whose backend isn't wired is left
+ * out rather than offered and failing after an approval.
+ */
+export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
+  return TOOLS.filter((t) => {
+    const name = t.schema.name
+    if (name === VIEW_LOCALHOST_NAME) return opts.localhostCapture
+    if (name === SPAWN_SESSION_NAME) return opts.spawn
+    if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler
+    if (name === PRESENT_PLAN_NAME) return opts.planMode
+    return true
+  })
 }
