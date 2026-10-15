@@ -1242,10 +1242,10 @@ const runShell: ToolDef = {
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command inside the OS sandbox, confined to the project directory. Writes are limited to the project and temp dirs, and network is gated by approval; granted network is restricted to an egress allowlist of dev-infrastructure domains (package registries, VCS hosts, plus domains the user adds in Settings), so a refused destination is policy, not an outage. On a host without an OS-enforced sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Returns combined stdout/stderr and the exit code. Foreground commands share a persistent session within a turn: `cd` and exported environment variables carry over to later run_shell calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command is capped at 300s (raise it with `timeout_seconds` for a slow one-shot like a cold `npm install`); on timeout the process tree is stopped gracefully (SIGTERM, then SIGKILL). GNU `timeout` is not available — do not wrap commands in it. Set background:true for anything long-running or open-ended (a dev server, watcher, or a build whose duration you cannot bound): it returns immediately with a shell id you can poll with read_shell_output and stop with kill_shell — do NOT background a foreground command with a trailing `&`, which discards its exit status. A background:true command must not contain `&` itself (it is refused: the shell would exit and orphan the process); run the server as its last foreground command and leave its output on stdout rather than redirecting it to a file, so read_shell_output and the Preview pane can see it.',
+      'Run a shell command in the project directory and return its combined stdout/stderr and exit code. Where the host has an OS sandbox, the command can write only to the project and temp dirs, and network is off until the user grants it (granted network reaches only an allowlist of dev-infrastructure domains, so a refused destination is policy, not an outage). On a host without an OS sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Foreground commands share a session within a turn, so `cd` and exported variables carry over to later calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command stops after 300s by default (raise `timeout_seconds` for a slow one-shot such as a cold `npm install`); GNU `timeout` is not available, so don\'t wrap commands in it. Use background:true for anything open-ended (a dev server, a watcher, a build of unknown length): it returns a shell id at once for read_shell_output and kill_shell. Never background with `&`: a trailing `&` on a foreground command loses its exit status, and a background:true command containing `&` is refused because the process would be orphaned. In a background command, make the server the last command and keep its output on stdout rather than in a file, so read_shell_output and the Preview pane can see it.',
     parameters: objectSchema(
       {
-        command: { type: 'string', description: 'The shell command to run (executed with /bin/bash -c).' },
+        command: { type: 'string', description: 'The shell command to run (with bash -c, or cmd.exe on a Windows host without Git Bash).' },
         background: {
           type: 'boolean',
           description: 'Run without waiting and return a shell id (default false). Use for long-running processes.'
@@ -1518,14 +1518,14 @@ const viewLocalhost: ToolDef = {
   schema: {
     name: VIEW_LOCALHOST_NAME,
     description:
-      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s console output. The screenshot is returned as an image you can view directly — so you can SEE the web UI you built and iterate on it, instead of guessing. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval.',
+      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval.',
     parameters: objectSchema(
       {
         url: { type: 'string', description: 'A loopback URL to load, e.g. "http://localhost:3000".' },
         selector: {
           type: 'string',
           description:
-            'Optional CSS selector — screenshot just that element\'s bounding box instead of the whole viewport (e.g. "#app", ".hero").'
+            'Optional CSS selector: screenshot just that element\'s bounding box instead of the whole viewport (e.g. "#app", ".hero").'
         }
       },
       ['url']
@@ -1583,7 +1583,7 @@ const todoWrite: ToolDef = {
   schema: {
     name: 'todo_write',
     description:
-      'Record or update your task list — a scratchpad for planning and tracking multi-step work. Pass the FULL list every time (it replaces the previous one). Use it to break a complex task into steps and to track progress; keep exactly one item "in_progress" while you work on it and mark items "completed" as you finish. Has no side effects on the project.',
+      'Record or update your task list, a scratchpad for planning and tracking multi-step work. Pass the full list every time (it replaces the previous one). Use it to break a complex task into steps and to track progress; keep exactly one item "in_progress" while you work on it and mark items "completed" as you finish. Has no side effects on the project.',
     parameters: objectSchema(
       {
         todos: {
@@ -1626,7 +1626,7 @@ const prSweep: ToolDef = {
   schema: {
     name: 'pr_sweep',
     description:
-      'Plan and track a multi-PR sweep — a board, like todo_write but specialized for working a batch of pull requests. Pass the FULL list of items every time (it replaces the previous one); keep exactly one item "in_progress" and advance each item\'s status as you go. This tool only records state — it has no side effects; you do the real work with the other tools.\n\nTwo modes:\n- "author": turn each task into its own PR. For each item: create a branch (e.g. `git worktree add` or `git checkout -b` via run_shell), make the change, commit, push the branch (`git push -u origin <branch>`), then gh_pr_create. Status flow: pending → in_progress → pushed → pr_open → done (or failed). Record the branch and the PR url as you get them.\n- "process": work a list of existing open PRs (find them with gh_pr_list). For each item: gh_pr_checkout the PR, review/fix it (run_shell/review_changes), commit, push, gh_pr_comment if needed, then mark done. Record the PR reference.\n\nWork items one at a time, update this board after each meaningful step, and put a short note on anything that fails or needs the user.',
+      'Plan and track a multi-PR sweep: a board like todo_write, specialized for working a batch of pull requests. Pass the full list of items every time (it replaces the previous one); keep exactly one item "in_progress" and advance each item\'s status as you go. This tool only records state and has no side effects; you do the real work with the other tools.\n\nTwo modes:\n- "author": turn each task into its own PR. For each item: create a branch (e.g. `git worktree add` or `git checkout -b` via run_shell), make the change, commit, push the branch (`git push -u origin <branch>`), then gh_pr_create. Status flow: pending → in_progress → pushed → pr_open → done (or failed). Record the branch and the PR url as you get them.\n- "process": work a list of existing open PRs (find them with gh_pr_list). For each item: gh_pr_checkout the PR, review/fix it (run_shell/review_changes), commit, push, gh_pr_comment if needed, then mark done. Record the PR reference.\n\nWork items one at a time, update this board after each meaningful step, and put a short note on anything that fails or needs the user.',
     parameters: objectSchema(
       {
         mode: {
@@ -1642,7 +1642,7 @@ const prSweep: ToolDef = {
             properties: {
               task: {
                 type: 'string',
-                description: 'What this item is — the task to author, or the existing PR to process.'
+                description: 'What this item is: the task to author, or the existing PR to process.'
               },
               status: {
                 type: 'string',
@@ -1653,7 +1653,7 @@ const prSweep: ToolDef = {
                 type: 'string',
                 description: 'The branch worked on (author) or the PR head branch (process).'
               },
-              pr: { type: 'string', description: 'PR reference once known — a number, "#123", or a URL.' },
+              pr: { type: 'string', description: 'PR reference once known: a number, "#123", or a URL.' },
               note: { type: 'string', description: 'Short note: a blocker, what was done, or why it failed.' }
             },
             required: ['task', 'status'],
@@ -1711,7 +1711,7 @@ const skillTool: ToolDef = {
   schema: {
     name: 'skill',
     description:
-      "Load a project skill's full instructions by name and follow them. Skills are reusable procedures defined for this project (they're listed in your context when any exist). The moment a task matches a listed skill, invoke this — before doing the work — to get the complete SKILL.md, then follow it exactly. Returns the instructions, or the list of available skills if the name is unknown.",
+      "Load a project skill's full instructions by name and follow them. Skills are reusable procedures defined for this project (they're listed in your context when any exist). When a task matches a listed skill, invoke this before doing the work to get the complete SKILL.md, then follow it. Returns the instructions, or the list of available skills if the name is unknown.",
     parameters: objectSchema(
       {
         name: {
@@ -1736,7 +1736,7 @@ const dispatchAgent: ToolDef = {
   schema: {
     name: 'dispatch_agent',
     description:
-      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project, and can fetch public URLs and search the web (each network request asks the user for approval first); it cannot edit files or run commands. It returns a written report. Use it to investigate a question or locate code without filling your own context with the search — e.g. "find where auth tokens are validated and summarize the flow". Do your own editing based on its report. Each report ends with the subagent\'s id — pass it as `resume` (with your follow-up as `prompt`) to continue that agent with its context intact instead of re-dispatching from scratch.',
+      'Delegate a focused, read-only research task to a subagent with its own fresh context. The subagent can read, list, glob, and search the project, and can fetch public URLs and search the web (each network request asks the user for approval first); it cannot edit files or run commands. It returns a written report. Use it to investigate a question or locate code without filling your own context with the search (e.g. "find where auth tokens are validated and summarize the flow"). Do your own editing based on its report. Each report ends with the subagent\'s id: pass it as `resume` (with your follow-up as `prompt`) to continue that agent with its context intact instead of re-dispatching from scratch.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },
@@ -1757,7 +1757,7 @@ const dispatchAgent: ToolDef = {
         resume: {
           type: 'string',
           description:
-            'Optional: the id of a subagent from an earlier dispatch in this chat (shown at the end of its report, e.g. "ag1"). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session.'
+            'Optional: the id of a subagent from an earlier dispatch in this chat (shown at the end of its report, e.g. "ag1"). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session.'
         }
       },
       ['description', 'prompt']
@@ -1789,7 +1789,7 @@ const dispatchWritableAgent: ToolDef = {
   schema: {
     name: 'dispatch_writable_agent',
     description:
-      'Delegate a self-contained task to a subagent that can EDIT files and RUN shell commands in its own fresh context, then returns a written report. Edits and commands are confined to the project, and its shell commands have no network; it can also fetch public URLs and search the web, with each network request asking the user for approval first. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; on a host without an OS sandbox (e.g. Windows), each shell command it runs also asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end — e.g. "add pagination to the users endpoint and update its tests". For read-only investigation, use dispatch_agent instead.',
+      'Delegate a self-contained task to a subagent that can edit files and run shell commands in its own fresh context, then returns a written report. Edits and commands are confined to the project, and its shell commands have no network; it can also fetch public URLs and search the web, with each network request asking the user for approval first. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; on a host without an OS sandbox (e.g. Windows), each shell command it runs also asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end (e.g. "add pagination to the users endpoint and update its tests"). For read-only investigation, use dispatch_agent instead.',
     parameters: objectSchema(
       {
         description: { type: 'string', description: 'A short label for the task (a few words).' },
@@ -1811,7 +1811,7 @@ const dispatchWritableAgent: ToolDef = {
         resume: {
           type: 'string',
           description:
-            'Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent — `prompt` becomes your follow-up message to it. Ids last for the app session.'
+            'Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session.'
         }
       },
       ['description', 'prompt']
@@ -1869,13 +1869,13 @@ const spawnSessionTool: ToolDef = {
   schema: {
     name: SPAWN_SESSION_NAME,
     description:
-      'Spawn a SEPARATE chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into THIS turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it to run work in parallel — e.g. hand off an independent feature onto its own git branch/worktree while you continue here. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. It starts fresh with no view of this conversation, so put everything it needs in `prompt`.',
+      'Spawn a separate chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into this turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it to run work in parallel, e.g. to hand off an independent feature onto its own git branch/worktree while you continue here. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. It starts fresh with no view of this conversation, so put everything it needs in `prompt`.',
     parameters: objectSchema(
       {
         prompt: {
           type: 'string',
           description:
-            "The full task and context for the new session — it becomes the first message and is all the session sees, so include every detail it needs to work on its own."
+            "The full task and context for the new session. It becomes the first message and is all the session sees, so include every detail it needs to work on its own."
         },
         title: {
           type: 'string',
@@ -1885,7 +1885,7 @@ const spawnSessionTool: ToolDef = {
         worktree: {
           type: 'object',
           description:
-            'Optional: run the session on a FRESH git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.',
+            'Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.',
           properties: {
             branch: {
               type: 'string',
@@ -1947,7 +1947,7 @@ const scheduleRun: ToolDef = {
   schema: {
     name: 'schedule_run',
     description:
-      'Schedule a recurring (or one-time) background agent run. At each occurrence, a fresh session is started with the stored prompt — it appears alongside the other chats and runs autonomously under your current approval policy (never more permissive). Use it for routine, self-contained jobs the user wants repeated — e.g. "daily at 09:00, run the test suite and summarize any failures". The fired session sees ONLY the stored prompt, so make it self-contained. Schedules fire while Houston is running (this is an in-app scheduler, not OS cron) and persist across restarts; an occurrence missed while Houston was closed fires once at the next launch.',
+      'Schedule a recurring (or one-time) background agent run. At each occurrence, a fresh session is started with the stored prompt; it appears alongside the other chats and runs autonomously under your current approval policy (never more permissive). Use it for routine, self-contained jobs the user wants repeated, e.g. "daily at 09:00, run the test suite and summarize any failures". The fired session sees only the stored prompt, so make it self-contained. Schedules fire while Houston is running (this is an in-app scheduler, not OS cron) and persist across restarts; an occurrence missed while Houston was closed fires once at the next launch.',
     parameters: objectSchema(
       {
         name: {
@@ -1957,7 +1957,7 @@ const scheduleRun: ToolDef = {
         spec: {
           type: 'string',
           description:
-            'When to run: "every <N>m|h|d" (minimum 5 minutes), "daily at HH:MM", "weekdays at HH:MM", "weekly on <day> at HH:MM", or "once at YYYY-MM-DD HH:MM" — times are local, 24-hour.'
+            'When to run: "every <N>m|h|d" (minimum 5 minutes), "daily at HH:MM", "weekdays at HH:MM", "weekly on <day> at HH:MM", or "once at YYYY-MM-DD HH:MM". Times are local, 24-hour.'
         },
         prompt: {
           type: 'string',
@@ -2061,7 +2061,7 @@ const reviewChanges: ToolDef = {
           type: 'string',
           enum: ['normal', 'high'],
           description:
-            "Verification depth. 'high' verifies each finding with several independent skeptics and keeps only the majority-confirmed ones (more thorough, more model calls); 'normal' uses a single verifier. Default 'normal' — use 'high' for security-sensitive or high-stakes changes."
+            "Verification depth. 'high' verifies each finding with several independent skeptics and keeps only the majority-confirmed ones (more thorough, more model calls); 'normal' uses a single verifier. Default 'normal'; use 'high' for security-sensitive or high-stakes changes."
         },
         model: {
           type: 'string',
@@ -2412,7 +2412,7 @@ const ghPrCheckout: ToolDef = {
   schema: {
     name: 'gh_pr_checkout',
     description:
-      'Check out a GitHub pull request branch locally via the gh CLI (fetches the branch and switches the working tree to it). Use it to review or update an existing PR. Requires approval (network) and is refused in plan mode. Note: this switches the current checkout — commit or stash your work first.',
+      'Check out a GitHub pull request branch locally via the gh CLI (fetches the branch and switches the working tree to it). Use it to review or update an existing PR. Requires approval (network) and is refused in plan mode. Note: this switches the current checkout, so commit or stash your work first.',
     parameters: objectSchema(
       { number: { type: 'number', description: 'The PR number to check out.' } },
       ['number']
@@ -2441,8 +2441,8 @@ const ghRepoCreate: ToolDef = {
   schema: {
     name: 'gh_repo_create',
     description:
-      'Create a new GitHub repository via the gh CLI. By default it creates a PRIVATE repo from the current ' +
-      'project directory (adds it as the "origin" remote) and pushes the existing commits — so commit your work ' +
+      'Create a new GitHub repository via the gh CLI. By default it creates a private repo from the current ' +
+      'project directory (adds it as the "origin" remote) and pushes the existing commits, so commit your work ' +
       'first (the directory must be a git repo with at least one commit; run `git init && git add -A && git commit` ' +
       'via run_shell if needed). Set source:false to instead create an empty remote repo with no local wiring. ' +
       'Requires approval (network) and is refused in plan mode. Returns the new repository URL.',
@@ -2825,7 +2825,7 @@ const ghRunList: ToolDef = {
   schema: {
     name: 'gh_run_list',
     description:
-      'List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns "<run-id> [status] <workflow>: <title> (<branch>)" per run — use a run-id with gh_run_view to inspect it. Requires approval (network).',
+      'List recent GitHub Actions workflow runs in the repo via the gh CLI. Returns "<run-id> [status] <workflow>: <title> (<branch>)" per run; use a run-id with gh_run_view to inspect it. Requires approval (network).',
     parameters: objectSchema(
       {
         limit: { type: 'number', description: 'Max runs to return (1–50, default 20).' },
@@ -2867,7 +2867,7 @@ const ghRunView: ToolDef = {
   schema: {
     name: 'gh_run_view',
     description:
-      'View a GitHub Actions workflow run (its jobs and their status) via the gh CLI. Set log_failed:true to print the logs of only the failed steps — the fastest way to diagnose a CI failure. Get run ids from gh_run_list. Read-only, but requires approval (network).',
+      'View a GitHub Actions workflow run (its jobs and their status) via the gh CLI. Set log_failed:true to print the logs of only the failed steps, the fastest way to diagnose a CI failure. Get run ids from gh_run_list. Read-only, but requires approval (network).',
     parameters: objectSchema(
       {
         run_id: { type: 'number', description: 'The run id (databaseId from gh_run_list).' },
@@ -2922,7 +2922,7 @@ const askUser: ToolDef = {
     description:
       'Ask the user a question and wait for their answer before continuing. Use this to resolve a ' +
       'genuine ambiguity or get a decision only the user can make (which option, which approach, a ' +
-      'missing detail) — not for routine narration or confirmations you can infer. Offer 2–4 concise ' +
+      'missing detail), not for routine narration or confirmations you can infer. Offer 2–4 concise ' +
       'options; the user may also type their own answer. Returns the user’s answer as text. Available ' +
       'in Plan mode, so use it to settle open questions before presenting a plan.',
     parameters: objectSchema(
@@ -2992,12 +2992,12 @@ const presentPlan: ToolDef = {
     name: PRESENT_PLAN_NAME,
     description:
       'Present a finished implementation plan to the user for review, then wait for their decision. Use ' +
-      'this ONLY in Plan mode, once your research is done and you are ready to propose the change: it opens ' +
-      'a dedicated review panel that renders your `plan` markdown in full, where the user can ACCEPT the ' +
-      'plan (you then carry it out), request CHANGES (you revise it and call present_plan again), or REJECT ' +
-      'it. Returns the user’s decision as text — follow it exactly. This is how you leave Plan mode: put the ' +
-      'entire plan in the `plan` field and call this INSTEAD of also writing the plan as a chat message ' +
-      '(that would just duplicate it). Do not edit files or run commands before it — that is what the plan ' +
+      'this only in Plan mode, once your research is done and you are ready to propose the change: it opens ' +
+      'a dedicated review panel that renders your `plan` markdown in full, where the user can accept the ' +
+      'plan (you then carry it out), request changes (you revise it and call present_plan again), or reject ' +
+      'it. Returns the user’s decision as text; follow it exactly. This is how you leave Plan mode: put the ' +
+      'entire plan in the `plan` field and call this instead of also writing the plan as a chat message ' +
+      '(that would just duplicate it). Do not edit files or run commands before it; that is what the plan ' +
       'is for.',
     parameters: objectSchema(
       {
@@ -3008,15 +3008,15 @@ const presentPlan: ToolDef = {
         plan: {
           type: 'string',
           description:
-            'The FULL plan as markdown — this is the primary content, shown in the review panel exactly as ' +
+            'The full plan as markdown. This is the primary content, shown in the review panel exactly as ' +
             'written. Structure it however communicates best: an overview, the rationale / key decisions, ' +
-            'a step-by-step breakdown, code snippets, tables — whatever fits. Reference files as `path`. ' +
+            'a step-by-step breakdown, code snippets, tables, whatever fits. Reference files as `path`. ' +
             'Put everything here rather than in a separate chat message.'
         },
         files: {
           type: 'array',
           description:
-            'Repo-relative paths the plan will create or change. Optional but recommended — shown as a ' +
+            'Repo-relative paths the plan will create or change. Optional but recommended: shown as a ' +
             'collapsible list of chips beneath the plan for quick scanning.',
           items: { type: 'string' }
         }
@@ -3075,7 +3075,7 @@ const recallHistory: ToolDef = {
   schema: {
     name: 'recall_history',
     description:
-      'Page back into the EARLIER conversation after older turns have been compacted or their large tool ' +
+      'Page back into the earlier conversation after older turns have been compacted or their large tool ' +
       'outputs elided from your context. This reads your own full, un-summarized message log (read-only, no ' +
       'side effects). Filter by a substring `query` (case-insensitive; matches message text and tool-call ' +
       'arguments) and/or a message-index range (`from`/`to`, 0-based, as shown in the `#N` labels of a prior ' +

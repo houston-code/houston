@@ -21,17 +21,17 @@ export function buildCapabilities(
     const lines = agents
       .map(
         (a) =>
-          `- ${a.name}: ${a.description}${a.write ? ' [writable — can edit files & run commands]' : ''}${a.model ? ` [runs on ${a.model}]` : ''}`
+          `- ${a.name}: ${a.description}${a.write ? ' [writable: can edit files & run commands]' : ''}${a.model ? ` [runs on ${a.model}]` : ''}`
       )
       .join('\n')
     parts.push(
-      `Custom subagents:\n${lines}\n\nDispatch a read-only one with dispatch_agent({ agent: "<name>", ... }). Dispatch a [writable] one with dispatch_writable_agent({ agent: "<name>", ... }) — that call is approval-gated since it grants the subagent write access.`
+      `Custom subagents:\n${lines}\n\nDispatch a read-only one with dispatch_agent({ agent: "<name>", ... }). Dispatch a [writable] one with dispatch_writable_agent({ agent: "<name>", ... }); that call is approval-gated since it grants the subagent write access.`
     )
   }
 
   if (dispatchModels && dispatchModels.length > 1) {
     parts.push(
-      `Models configured on this provider — usable as the \`model\` override on dispatch_agent / dispatch_writable_agent / review_changes to run delegated work on a cheaper/faster sibling: ${dispatchModels.join(', ')}`
+      `Models configured on this provider, usable as the \`model\` override on dispatch_agent / dispatch_writable_agent / review_changes to run delegated work on a cheaper/faster sibling: ${dispatchModels.join(', ')}`
     )
   }
 

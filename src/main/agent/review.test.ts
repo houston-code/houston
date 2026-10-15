@@ -36,7 +36,7 @@ function fakeAgent(handler: (opts: SubAgentOptions) => string): {
 const isVerifier = (o: SubAgentOptions): boolean =>
   (o.systemOverride ?? '').includes('skeptical verification')
 const isSkeptic = (o: SubAgentOptions): boolean =>
-  (o.systemOverride ?? '').includes('checking ONE candidate finding')
+  (o.systemOverride ?? '').includes('checking one candidate finding')
 const dimensionOf = (o: SubAgentOptions): string | undefined =>
   ['CORRECTNESS', 'SECURITY', 'QUALITY'].find((d) => (o.systemOverride ?? '').includes(d))
 

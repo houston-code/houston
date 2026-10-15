@@ -42,7 +42,7 @@ const DIMENSION_FOCUS: Record<ReviewDimension, string> = {
   security:
     'injection (command, SQL, path traversal), SSRF and unsafe outbound requests, missing authentication/authorization checks, secret or credential leakage, unsafe deserialization, missing input validation at trust boundaries, unsafe file permissions, and the rest of the OWASP top 10',
   quality:
-    'unnecessary complexity, logic duplicated instead of reusing existing helpers, dead or unreachable code, poor or inconsistent naming, weak error handling, and missing test coverage for new logic — judged against the conventions of the surrounding code'
+    'unnecessary complexity, logic duplicated instead of reusing existing helpers, dead or unreachable code, poor or inconsistent naming, weak error handling, and missing test coverage for new logic, judged against the conventions of the surrounding code'
 }
 
 /** The adversarial system prompt for a single-dimension reviewer. */
@@ -51,10 +51,10 @@ export function reviewerSystem(dimension: ReviewDimension): string {
 
 Look specifically for: ${DIMENSION_FOCUS[dimension]}.
 
-The change is given as a diff, but a diff lacks surrounding context — read the actual files (read_file, search_files, glob, list_dir) to confirm each suspicion before reporting it. A finding you cannot ground in the real code is noise; leave it out.
+The change is given as a diff, but a diff lacks surrounding context, so read the actual files (read_file, search_files, glob, list_dir) to confirm each suspicion before reporting it. A finding you cannot ground in the real code is noise; leave it out.
 
 Report each finding as its own block:
-- [SEVERITY: critical|high|medium|low] path:line — one-line problem statement
+- [SEVERITY: critical|high|medium|low] path:line - one-line problem statement
   Why it's a real problem: ...
   Suggested fix: ...
 
@@ -70,12 +70,12 @@ ${diff}`
 
 /** The adversarial system prompt for the verification pass. */
 export function verifierSystem(): string {
-  return `You are a skeptical verification reviewer working in a fresh context. You are given a change (as a diff) and a list of CANDIDATE findings raised by other reviewers. Many candidates are false positives — wrong, already handled elsewhere in the code, not actually reachable, or based on a misreading of the diff without its surrounding context.
+  return `You are a skeptical verification reviewer working in a fresh context. You are given a change (as a diff) and a list of candidate findings raised by other reviewers. Many candidates are false positives: wrong, already handled elsewhere in the code, not actually reachable, or based on a misreading of the diff without its surrounding context.
 
-For EACH candidate, independently verify it against the actual code (read the files) and decide CONFIRMED or REJECTED. Reject anything you cannot reproduce or are unsure about — a false alarm wastes the author's time, so when in doubt, drop it. When several candidates describe the same underlying problem (same file, line, and root cause — reviewers of different dimensions often overlap), merge them into a single finding rather than repeating it.
+For each candidate, independently verify it against the actual code (read the files) and decide CONFIRMED or REJECTED. Reject anything you cannot reproduce or are unsure about; a false alarm wastes the author's time, so when in doubt, drop it. When several candidates describe the same underlying problem (same file, line, and root cause — reviewers of different dimensions often overlap), merge them into a single finding rather than repeating it.
 
 Output only the CONFIRMED findings, most severe first, each as:
-- [SEVERITY] path:line — problem statement
+- [SEVERITY] path:line - problem statement
   Fix: ...
   Verified: how you confirmed it against the code.
 
@@ -95,9 +95,9 @@ ${candidates}`
 
 /** The system prompt for a single-finding skeptic (high-effort verification). */
 export function skepticSystem(): string {
-  return `You are a skeptical verifier checking ONE candidate finding from a code review, in a fresh context. Decide whether it describes a real, reproducible problem in the actual code — not a misreading, not something already handled elsewhere, not a hypothetical.
+  return `You are a skeptical verifier checking one candidate finding from a code review, in a fresh context. Decide whether it describes a real, reproducible problem in the actual code: not a misreading, not something already handled elsewhere, not a hypothetical.
 
-Read the referenced files (read_file, search_files, glob, list_dir) to check; do not trust the finding's wording. Be conservative: if you cannot reproduce the problem or are unsure, REJECT — a false alarm wastes the author's time.
+Read the referenced files (read_file, search_files, glob, list_dir) to check; do not trust the finding's wording. Be conservative: if you cannot reproduce the problem or are unsure, REJECT, because a false alarm wastes the author's time.
 
 Reply with CONFIRMED or REJECTED as the very first word, then one sentence of justification.`
 }
@@ -121,13 +121,13 @@ export function formatReviewInput(d: WorkspaceDiff): string {
   if (d.diff) {
     const body =
       d.diff.length > MAX_DIFF_CHARS
-        ? `${d.diff.slice(0, MAX_DIFF_CHARS)}\n[diff truncated at ${MAX_DIFF_CHARS} chars — read the files directly for the rest]`
+        ? `${d.diff.slice(0, MAX_DIFF_CHARS)}\n[diff truncated at ${MAX_DIFF_CHARS} chars; read the files directly for the rest]`
         : d.diff
     parts.push(`Diff of changes to tracked files (git diff):\n\n${body}`)
   }
   if (d.untracked.length) {
     const list = d.untracked.map((f) => `- ${f}`).join('\n')
-    parts.push(`New (untracked) files — read them in full to review their contents:\n${list}`)
+    parts.push(`New (untracked) files; read them in full to review their contents:\n${list}`)
   }
   return parts.join('\n\n')
 }
@@ -136,7 +136,7 @@ export function formatReviewInput(d: WorkspaceDiff): string {
 function untrackedSection(untracked: string[]): string {
   if (!untracked.length) return ''
   const list = untracked.map((f) => `- ${f}`).join('\n')
-  return `New (untracked) files — read them in full to review their contents:\n${list}`
+  return `New (untracked) files; read them in full to review their contents:\n${list}`
 }
 
 /** Split a unified diff into per-file sections (each starting at `diff --git`). */
@@ -154,7 +154,7 @@ function packDiffChunks(fileDiffs: string[], maxChars: number): string[] {
   for (const fd of fileDiffs) {
     const piece =
       fd.length > maxChars
-        ? `${fd.slice(0, maxChars)}\n[file diff truncated — read the file directly for the rest]`
+        ? `${fd.slice(0, maxChars)}\n[file diff truncated; read the file directly for the rest]`
         : fd
     if (cur && cur.length + 2 + piece.length > maxChars) {
       chunks.push(cur)

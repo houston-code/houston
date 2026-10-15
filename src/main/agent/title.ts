@@ -44,7 +44,7 @@ const TITLE_RETRIES = 2
 const inFlight = new Set<string>()
 
 /** System prompt for the title call: prose only, short, no decoration. */
-export const titleSystemPrompt = `You write a short, specific title for a coding-assistant conversation from its opening exchange. Reply with ONLY the title — no quotes, no markdown, no trailing punctuation, no preamble or explanation. Use 3 to 6 words in Title Case that name the concrete task or topic (for example: "Fix flaky auth test", "Add dark mode toggle", "Explain the build pipeline"). Never exceed 60 characters.`
+export const titleSystemPrompt = `You write a short, specific title for a coding-assistant conversation from its opening exchange. Reply with only the title: no quotes, no markdown, no trailing punctuation, no preamble or explanation. Use 3 to 6 words in Title Case that name the concrete task or topic (for example: "Fix flaky auth test", "Add dark mode toggle", "Explain the build pipeline"). Never exceed 60 characters.`
 
 const TITLE_INSTRUCTION = 'Write the title now. Output only the title text.'
 

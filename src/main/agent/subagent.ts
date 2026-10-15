@@ -101,21 +101,21 @@ function subAgentConstraints(
 ): string {
   let capabilities: string
   if (!writable) {
-    capabilities = `You are working inside the project at ${workspace}. You can only READ: read_file, list_dir, glob, search_files, ast_grep. You cannot edit files or run commands.`
+    capabilities = `You are working inside the project at ${workspace}. You can only read: read_file, list_dir, glob, search_files, ast_grep. You cannot edit files or run commands.`
   } else if (shellSandboxed) {
-    capabilities = `You are working inside the project at ${workspace}. You can READ (read_file, list_dir, glob, search_files, ast_grep) and make CHANGES: edit files (write_file, edit_file, multi_edit, apply_patch) and run shell commands (run_shell). Edits and commands are confined to the project sandbox — you cannot write outside the workspace, and your shell commands cannot reach the network.`
+    capabilities = `You are working inside the project at ${workspace}. You can read (read_file, list_dir, glob, search_files, ast_grep) and make changes: edit files (write_file, edit_file, multi_edit, apply_patch) and run shell commands (run_shell). Edits and commands are confined to the project sandbox: you cannot write outside the workspace, and your shell commands cannot reach the network.`
   } else if (shellGated) {
     // No OS sandbox, but the dispatcher wired a consent gate: each command is
     // propagated to the user as an approval prompt before it runs unconfined.
-    capabilities = `You are working inside the project at ${workspace}. You can READ (read_file, list_dir, glob, search_files, ast_grep) and make CHANGES: edit files (write_file, edit_file, multi_edit, apply_patch), confined to the project, and run shell commands (run_shell, which cannot reach the network). This host has no OS sandbox, so EACH run_shell command first asks the user for approval — that happens automatically when you call it, and a denial comes back as the tool result. Prefer edits over commands, batch related commands into one call where reasonable, and if a command is denied do not retry it: work around it or note it in your report.`
+    capabilities = `You are working inside the project at ${workspace}. You can read (read_file, list_dir, glob, search_files, ast_grep) and make changes: edit files (write_file, edit_file, multi_edit, apply_patch), confined to the project, and run shell commands (run_shell, which cannot reach the network). This host has no OS sandbox, so each run_shell command first asks the user for approval. That happens automatically when you call it, and a denial comes back as the tool result. Prefer edits over commands, batch related commands into one call where reasonable, and if a command is denied do not retry it: work around it or note it in your report.`
   } else {
     // No OS sandbox and no consent gate, so run_shell is refused (see runSubAgent):
     // without a gate a background subagent can't prompt for the consent an
     // unconfined command needs.
-    capabilities = `You are working inside the project at ${workspace}. You can READ (read_file, list_dir, glob, search_files, ast_grep) and EDIT files (write_file, edit_file, multi_edit, apply_patch), confined to the project. This host has no OS sandbox, so run_shell is NOT available to you — make the edits you can and note in your report anything that still needs a command run (the main agent can run it with approval).`
+    capabilities = `You are working inside the project at ${workspace}. You can read (read_file, list_dir, glob, search_files, ast_grep) and edit files (write_file, edit_file, multi_edit, apply_patch), confined to the project. This host has no OS sandbox, so run_shell is not available to you: make the edits you can and note in your report anything that still needs a command run (the main agent can run it with approval).`
   }
   const egress = network
-    ? `You can also fetch public URLs with web_fetch and search the web with web_search. EACH network request first asks the user for approval (automatically, when you call the tool) unless they already granted that destination — a denial comes back as the tool result; do not retry a denied request.`
+    ? `You can also fetch public URLs with web_fetch and search the web with web_search. Each network request first asks the user for approval (automatically, when you call the tool) unless they already granted that destination; a denial comes back as the tool result; do not retry a denied request.`
     : `You have no network access.`
   return `${capabilities} ${egress}
 
@@ -282,7 +282,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     ? `${opts.systemOverride}\n\n${subAgentConstraints(workspace, writable, shellSandboxed, shellGated, network)}`
     : subAgentSystemPrompt(workspace, writable, shellSandboxed, shellGated, network)
   if (opts.dispatchNested) {
-    system += `\n\nYou may also delegate a focused read-only sub-search to your own nested subagent via dispatch_agent — useful to explore several areas in parallel without filling your context. Nested agents are always read-only and cannot dispatch further.`
+    system += `\n\nYou may also delegate a focused read-only sub-search to your own nested subagent via dispatch_agent, useful to explore several areas in parallel without filling your context. Nested agents are always read-only and cannot dispatch further.`
   }
   // Tool-execution context. Reads default their roots to [workspace]; the writable
   // tier passes the real roots (for edits) and a shell session. `allowNetwork` stays
