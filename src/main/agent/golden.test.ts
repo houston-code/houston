@@ -20,7 +20,7 @@
  * files — the golden diff then documents the behavior change in the PR.
  *
  * Everything environment-dependent is mocked or fixed (global rules file, git
- * context, gh probe, MCP, managed policy, workspace path), so the goldens are
+ * context, gh probe, today's date, MCP, managed policy, workspace path), so the goldens are
  * byte-identical across machines and CI.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -96,6 +96,12 @@ vi.mock('./github', async (importActual) => ({
 vi.mock('../sandbox', async (importActual) => ({
   ...(await importActual<typeof import('../sandbox')>()),
   activeBackendId: () => 'seatbelt'
+}))
+// The prompt carries today's date (promptSnapshot.ts); pin it so goldens don't
+// change with the calendar.
+vi.mock('./promptSnapshot', async (importActual) => ({
+  ...(await importActual<typeof import('./promptSnapshot')>()),
+  localDateStamp: () => '2026-01-15'
 }))
 vi.mock('./plugins', () => {
   const inert = { has: () => false, size: 0, emit: async () => {} }

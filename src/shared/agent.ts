@@ -418,6 +418,19 @@ export interface ConversationCompaction {
   summary: string
 }
 
+/**
+ * The world-dependent part of the system prompt (date + git/GitHub context),
+ * captured at a conversation's first run and reused until the local date changes,
+ * so the prompt stays byte-identical across turns and provider caches keep the
+ * history. See src/main/agent/promptSnapshot.ts.
+ */
+export interface PromptSnapshot {
+  /** Local calendar date (YYYY-MM-DD) the snapshot was taken on. */
+  date: string
+  /** The git + GitHub context section as captured then ('' outside a repo). */
+  gitStatus: string
+}
+
 export interface Conversation extends ConversationMeta {
   /** Absent only in legacy (pre-versioning) files on disk; stamped on every write. */
   schemaVersion?: number
@@ -427,6 +440,8 @@ export interface Conversation extends ConversationMeta {
   lastError?: ConversationError
   /** Present once the loop has compacted this chat; see {@link ConversationCompaction}. */
   compaction?: ConversationCompaction
+  /** Present once the chat has run; see {@link PromptSnapshot}. */
+  promptSnapshot?: PromptSnapshot
 }
 
 /** Internal input to the agent loop. */

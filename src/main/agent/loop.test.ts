@@ -29,7 +29,13 @@ import {
 } from './checkpoints'
 import { toAnthropicMessages } from '../providers/anthropic'
 import { resetUserDataDir, setUserDataDir } from '../userData'
-import { createConversation, getConversation, setCompaction, setMessages } from '../conversations'
+import {
+  createConversation,
+  getConversation,
+  setCompaction,
+  setMessages,
+  setPromptSnapshot
+} from '../conversations'
 import { resetSubAgentSessions } from './subagentSessions'
 import {
   resetSchedulerBackend,
@@ -41,6 +47,9 @@ import {
 // Hoisted holders the mocks read, so each test can swap the fake provider/settings.
 const h = vi.hoisted(() => ({
   provider: null as Provider | null,
+  // What the mocked gitContext reports; prompt-stability tests change it between
+  // runs to stand in for the agent's edits.
+  gitContext: '',
   // Extra providers keyed by id, for fallback-chain tests that need more than one
   // model to exist. Empty (the default) keeps every id resolving to the single
   // `provider` above, so existing tests are unaffected.
@@ -142,7 +151,7 @@ vi.mock('./tools', async (importActual) => {
     getTool: (name: string): unknown => h.probeTools.find((t) => t.schema.name === name) ?? actual.getTool(name)
   }
 })
-vi.mock('./git', () => ({ gitContext: async () => '' }))
+vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 // Partial mock of the sandbox status so the writable-subagent unconfined-shell gate
 // can be exercised deterministically on any platform. Only isSandboxed is overridden
@@ -235,6 +244,7 @@ beforeEach(() => {
   h.extraConfigs = {}
   h.extraClients = {}
   h.unusable = []
+  h.gitContext = ''
   delete h.settings.fallbackModels
 })
 afterEach(() => {
@@ -1461,6 +1471,74 @@ describe('startRun', () => {
     } finally {
       h.settings = original
     }
+  })
+})
+
+describe('system prompt stability across runs', () => {
+  // Real conversation store; the mocked gitContext changes between runs the way
+  // the agent's own edits change `git status`. Those edits must not change the
+  // system prompt, or the provider's cached history is re-billed on every turn.
+  let userData: string
+
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
+    setUserDataDir(userData)
+    h.gitContext = 'Git: on branch "main", working tree clean.'
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(userData, { recursive: true, force: true })
+  })
+
+  /** A provider that records the system prompt of every request. */
+  function recordingProvider(systems: string[]): Provider {
+    return {
+      async *streamChat(req) {
+        systems.push(req.system ?? '')
+        yield { type: 'text', text: 'ok' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+  }
+
+  it('sends a byte-identical system prompt after the working tree changes', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const systems: string[] = []
+
+    await run({ provider: recordingProvider(systems), conversationId: conv.id })
+    expect(systems[0]).toContain('working tree clean')
+    expect(systems[0]).toContain("Today's date: ")
+
+    // What the agent's edits look like to git between user turns.
+    h.gitContext = 'Git: on branch "main", 1 uncommitted change.\n?? edited.ts'
+    await run({ provider: recordingProvider(systems), conversationId: conv.id })
+
+    expect(systems).toHaveLength(2)
+    expect(systems[1]).toBe(systems[0])
+    expect(getConversation(conv.id)!.promptSnapshot!.gitStatus).toContain('working tree clean')
+  })
+
+  it('retakes the snapshot when the stored one is from an earlier day', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    setPromptSnapshot(conv.id, { date: '2000-01-01', gitStatus: 'STALE GIT' })
+    h.gitContext = 'Git: on branch "main", 1 uncommitted change.\n?? edited.ts'
+    const systems: string[] = []
+
+    await run({ provider: recordingProvider(systems), conversationId: conv.id })
+
+    expect(systems[0]).not.toContain('STALE GIT')
+    expect(systems[0]).not.toContain('2000-01-01')
+    expect(systems[0]).toContain('edited.ts')
+    expect(getConversation(conv.id)!.promptSnapshot!.date).not.toBe('2000-01-01')
+  })
+
+  it('captures fresh context for a headless run with no conversation', async () => {
+    const systems: string[] = []
+    await run({ provider: recordingProvider(systems) })
+    h.gitContext = 'Git: on branch "main", 1 uncommitted change.\n?? edited.ts'
+    await run({ provider: recordingProvider(systems) })
+    expect(systems[0]).toContain('working tree clean')
+    expect(systems[1]).toContain('edited.ts')
   })
 })
 
