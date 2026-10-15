@@ -219,19 +219,25 @@ again on the queue's candidate before it lands:
 | --- | --- |
 | `test` | `license-gate`, notices freshness, lint, typecheck, the full vitest suite, and the standalone-CLI smoke |
 | `linux-sandbox` | the real bubblewrap backend, which the `test` job can only skip |
-| `build` | packaging on Linux, macOS (arm64 and x64), and Windows, the macOS and Windows unit suites, the packaged-app e2e, and SBOM conformance |
+| `build` | packaging on Linux, macOS (arm64 and x64), and Windows, the macOS and Windows unit suites, the packaged-app e2e, SBOM conformance, and workflow lint |
 | `revert-guard` | that merging would not delete or roll back work already on `main` |
 
 ### What runs
 
 Every PR and every merge-queue candidate runs the full set; nothing is skipped by path.
 `build` is a single required check that passes only when every leg of the `package`
-matrix (Linux x64, macOS arm64, macOS x64, Windows x64) and the SBOM conformance gate
-succeeded. Each `package` leg builds the app on its own runner; the macOS arm64 leg also
+matrix (Linux x64, macOS arm64, macOS x64, Windows x64), the SBOM conformance gate, and
+`workflow-lint` succeeded. `workflow-lint` runs actionlint and zizmor over
+`.github/workflows`; zizmor's suppressions live in `.github/zizmor.yml`. Each `package` leg builds the app on its own runner; the macOS arm64 leg also
 runs the full unit suite against the real Seatbelt sandbox, the Windows leg runs the
 sandbox backend suite, and both macOS legs run the packaged-app Playwright e2e. Each leg
 uploads its build as a short-lived Actions artifact, so you can install a PR's app without
 building it.
+
+After a PR lands, CI runs again on `main`. That run is pushed by the merge queue's bot, so
+GitHub notifies nobody when it fails; instead it opens (and later closes) a
+`scheduled-failure` issue assigned to the repository owner, the same way the scheduled
+workflows report.
 
 ### The merge queue
 

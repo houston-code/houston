@@ -1,0 +1,15 @@
+# zizmor config. CI runs it in the `workflow-lint` job of ci.yml.
+rules:
+  bot-conditions:
+    ignore:
+      # Both jobs AND the actor check with `github.event.pull_request.user.login ==
+      # 'dependabot[bot]'` (and the notices job also with a same-repo head check). The actor
+      # check is an extra restriction there, so a spoofed actor cannot widen who runs the
+      # job: the PR author check alone already requires Dependabot. It stays because it stops
+      # the job firing after a human pushes to a Dependabot branch.
+      - dependabot-auto-queue.yml
+      - dependabot-notices.yml
+  # Style only: `./.github/workflows/x.yml` and the newer `$/...` spelling resolve the same
+  # file in this repository.
+  self-repository:
+    disable: true
