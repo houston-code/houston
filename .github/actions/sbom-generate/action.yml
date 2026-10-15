@@ -1,0 +1,36 @@
+name: Generate the lockfile SBOMs
+description: >-
+  Syft scans package-lock.json into CycloneDX 1.6, SPDX 2.3 and SPDX 3.0, enrich-sbom.mjs adds
+  hashes and suppliers, and verify-sbom.mjs fails closed on a truncated or unenriched result.
+  The SBOM workflow, the conformance gate and the release all use this, so they describe the
+  same closure by construction. Needs a checkout and an install that has each production
+  package's manifest (the enrichment reads supplier and copyright from it).
+
+runs:
+  using: composite
+  steps:
+    - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      with:
+        # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
+        syft-version: v1.46.0
+    # Scan the lockfile, not node_modules: syft honors its dev flags and needs no install to
+    # enumerate. npm's built-in `npm sbom --omit dev` was tried first and silently
+    # under-reported (56 of 73 production packages): npm dev-flags shared packages during
+    # hoisting and then omits them. One scan emits all three formats over the same closure;
+    # SPDX 3.0 is the format that can carry the CISA SBOM type and per-package supplier that
+    # CISA FSCT3 minimum conformance requires (SPDX 2.3 has no field for either).
+    - name: Generate and enrich
+      shell: bash
+      run: |
+        set -euo pipefail
+        syft scan file:./package-lock.json \
+          -o cyclonedx-json@1.6=sbom.cyclonedx.json \
+          -o spdx-json=sbom.spdx.json \
+          -o spdx-json@3.0=sbom.spdx3.json
+        # The lockfile carries no per-component hashes/author/supplier, so enrich each document
+        # in place from its own integrity (sha512) and each package's installed manifest. Only
+        # ADDS fields: the complete closure syft produced is preserved.
+        node scripts/enrich-sbom.mjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json
+    - name: Verify completeness
+      shell: bash
+      run: node scripts/verify-sbom.mjs sbom.cyclonedx.json sbom.spdx.json sbom.spdx3.json

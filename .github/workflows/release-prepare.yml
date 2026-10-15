@@ -67,11 +67,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: ./.github/actions/setup-node
         with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
+          install: full
       - run: npm run lint
       - run: npm run typecheck
       # Full unit suite on every non-Windows leg (the macOS legs exercise the real Seatbelt
@@ -111,10 +109,7 @@ jobs:
           ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
+      - uses: ./.github/actions/setup-node
       - name: Compute release version
         id: ver
         run: |
@@ -132,10 +127,7 @@ jobs:
       # Fail the prepare (so the release PR is never opened) if THIRD-PARTY-NOTICES.md drifted
       # from the current closure — catches staleness before the release rather than shipping it.
       - name: Check THIRD-PARTY-NOTICES.md is current
-        run: |
-          npm run notices
-          git diff --exit-code THIRD-PARTY-NOTICES.md \
-            || { echo "::error::THIRD-PARTY-NOTICES.md is out of date — run 'npm run notices' and commit it."; exit 1; }
+        run: npm run notices:check
       - name: Generate release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
