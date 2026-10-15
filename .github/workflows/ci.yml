@@ -26,6 +26,9 @@ on:
   # N sequential rebase-and-full-CI cycles. The queue keeps the same guarantee (the tree
   # that is tested is the tree that lands) while doing the sequencing itself.
   merge_group:
+  # Release - prepare calls this workflow as its verification gate, so a release is cut only
+  # from a tree that passes exactly what a PR must pass.
+  workflow_call:
 
 permissions:
   contents: read
@@ -60,6 +63,7 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           install: full
+          electron-cache: 'true'
       # License gate: no AGPL/copyleft/source-available license anywhere in the
       # installed dependency tree, and everything that ships must satisfy the
       # permissive allowlist. Policy + exceptions live in scripts/license-gate.mjs
@@ -72,7 +76,17 @@ jobs:
         run: npm run notices:check
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      # JUnit for the uploaded report; github-actions for inline failure annotations (naming
+      # any reporter turns off vitest's automatic one, so it is listed explicitly).
+      - run: npm test -- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-linux
+          retention-days: 7
+          path: reports/junit.xml
+          if-no-files-found: ignore
       # Standalone CLI: bundle + smoke (seconds). build-cli.mjs fails if electron
       # reaches the CLI bundle graph, so this gates the no-electron boundary on
       # every PR.
@@ -127,6 +141,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-node
+        with:
+          electron-cache: 'true'
       - name: Set up bubblewrap + unprivileged user namespaces
         run: |
           sudo apt-get update
@@ -146,9 +162,9 @@ jobs:
   # Package the app on every platform it ships on, each on its own runner (cross-compilation
   # is impossible: native node-pty + per-(os,arch) rg/ast-grep binaries), and run the
   # platform-specific suites there:
-  #   - macOS arm64 runs the full unit suite against the real Seatbelt sandbox backend.
-  #   - Windows runs the execution-backend suite (scoped to src/main/sandbox: the broader
-  #     suite has macOS-shaped tests that don't run on Windows).
+  #   - Both macOS legs run the full unit suite against the real Seatbelt sandbox backend
+  #     (Linux runs it in `test`). Windows runs the execution-backend suite (scoped to
+  #     src/main/sandbox) until the rest of the suite is Windows-clean.
   #   - Both macOS legs run the packaged-app e2e (Playwright driving the built .app), the
   #     only check that the asar archive, the afterPack vendored binaries, and the
   #     main/preload/renderer bridge work together in the real artifact.
@@ -202,10 +218,21 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           install: full
-      - if: matrix.target == 'mac-arm64'
-        run: npm test
+          electron-cache: 'true'
+      - if: runner.os == 'macOS'
+        run: npm test -- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
+      # Windows runs the execution-backend suite only, for now: the rest of the suite still
+      # has POSIX path and permission assumptions (and a few real Windows gaps) to fix first.
       - if: runner.os == 'Windows'
-        run: npx vitest run src/main/sandbox
+        run: npx vitest run src/main/sandbox --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
+      - name: Upload test results
+        if: ${{ !cancelled() && runner.os != 'Linux' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-results-${{ matrix.target }}
+          retention-days: 7
+          path: reports/junit.xml
+          if-no-files-found: ignore
       # `--publish never` is load-bearing on merge_group. Without an explicit policy,
       # electron-builder publishes implicitly whenever it detects CI and the run is not a
       # PR, and it recognises a PR only by GITHUB_BASE_REF, which a merge-queue candidate

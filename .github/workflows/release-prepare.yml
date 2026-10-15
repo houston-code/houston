@@ -1,12 +1,11 @@
 name: Release - prepare
 
-# Manual trigger. Runs the ultra-thorough gate (full test + packaging matrix on all three
-# platforms), then opens a `release/vX.Y.Z` PR that bumps the MINOR (or MAJOR) version and
+# Manual trigger. Runs CI itself as the gate (ci.yml, called as a reusable workflow: the full
+# test + packaging matrix on all three platforms), then opens a `release/vX.Y.Z` PR that bumps the MINOR (or MAJOR) version and
 # carries a generated, user-facing CHANGELOG section. You review/sharpen the notes in that
 # PR and merge to approve. After it merges, run "Release - publish" to build + ship.
 #
-# Every PR already ran this matrix (ci.yml's `package`); `verify` re-runs it on the exact
-# tree being released, so a release is never cut from main without a green run of its own.
+# Every PR already ran CI; `verify` re-runs it on the exact tree being released, so a release is never cut from main without a green run of its own.
 
 on:
   workflow_dispatch:
@@ -26,75 +25,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Ultra-thorough gate: lint + typecheck + the full unit suite AND a full signed-less
-  # package build on every target platform. A release is only cut from a tree that is
-  # green and buildable everywhere.
+  # The gate is CI itself (ci.yml, called as a reusable workflow): lint, typecheck, license and
+  # notices, the full unit suite on Linux, both macOS legs and Windows, an unsigned package
+  # build on every target platform, the packaged-app e2e on macOS, SBOM conformance, and
+  # workflow lint. A release is only cut from a tree that passes exactly what a PR must pass.
   verify:
-    timeout-minutes: 30
-    # Windows defaults `run:` steps to PowerShell; force bash for the whole matrix so a
-    # bash step (e.g. a future multi-line if/else) can't silently fail only on the Windows leg.
-    # Git Bash ships on the Windows runner, and macOS/Linux already default to bash.
-    defaults:
-      run:
-        shell: bash
-    # This is a pre-release GATE, not a publish: the mac legs package but must stay unsigned
-    # (no signing secrets are in scope). Force electron-builder to skip signing rather than
-    # probing the keychain, so the gate can't behave differently from a fresh runner. Real
-    # signing + notarization happen only in release-publish.yml.
-    env:
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Pinned to ubuntu-22.04 (glibc 2.35 = our documented Linux floor), not
-          # ubuntu-latest: node-pty compiles here, so the runner's glibc sets the shipped
-          # app's minimum. Matches the other workflows' Linux legs. See ci.yml's `build`.
-          - os: ubuntu-22.04
-            dist: dist:linux
-          - os: macos-14
-            dist: dist:mac
-          # macos-15-intel is GitHub's Intel (x64) runner — the only place the x64 mac app can
-          # be built natively (node-pty + per-arch rg/ast-grep don't cross-compile). GitHub
-          # sunsets x64 macOS after macos-15 (~Fall 2027). Keep in lockstep with ci.yml's
-          # `package` matrix / release-publish.
-          - os: macos-15-intel
-            dist: dist:mac:x64
-          - os: windows-2025
-            dist: dist:win
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-node
-        with:
-          install: full
-      - run: npm run lint
-      - run: npm run typecheck
-      # Full unit suite on every non-Windows leg (the macOS legs exercise the real Seatbelt
-      # backend). Windows runs only the execution-backend suite: the broader suite has
-      # macOS-shaped tests that don't run on Windows.
-      - if: runner.os != 'Windows'
-        run: npm test
-      - if: runner.os == 'Windows'
-        run: npx vitest run src/main/sandbox
-      # `--publish never` (like ci.yml) — this is a pre-release GATE, not a publish.
-      # Without it, electron-builder tries to resolve the `github` publisher from
-      # electron-builder.yml and fails demanding GH_TOKEN, which is intentionally absent here.
-      - run: npm run ${{ matrix.dist }} -- --publish never
-      # The packaged-app e2e (built .app via Playwright), on BOTH macOS legs (arm64 + Intel)
-      # so the x64 packaged app is gated too.
-      - if: startsWith(matrix.os, 'macos')
-        run: npm run test:e2e
-
-  # SBOM conformance gate: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass, or the
-  # release PR is never opened (prepare `needs` it).
-  sbom-conformance:
-    uses: ./.github/workflows/sbom-conformance.yml
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      # Not used here: ci.yml's `alert` job only runs on a push to main. But GitHub checks
+      # every nested job's permissions against the caller's grant at startup, even one whose
+      # `if` is false, and refuses to start the whole run if one asks for more.
+      issues: write
 
   prepare:
-    needs: [verify, sbom-conformance]
+    needs: [verify]
     timeout-minutes: 10
     runs-on: ubuntu-24.04
     # RELEASE_PR_TOKEN lives in the `release-pr` environment (deployment branches: main only), so
