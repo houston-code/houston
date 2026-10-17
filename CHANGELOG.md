@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.8.0 - 2026-10-17
+
+Windows and Linux fixes, a host-aware system prompt, cheaper prompt caching, and defenses against injected text.
+
+This release focuses on cross-platform parity, agent prompt quality, and hardening the agent against attacker-written content from GitHub, the web, and MCP servers.
+
+### Breaking changes
+- None.
+
+### Added
+- New system prompt guidance: the agent now verifies web apps by exercising real flows (log in, submit a form, call an endpoint) instead of just loading a page, reads values back from files or output rather than from what it meant to write, and never changes your local config (`.env`, credentials, tool or editor settings) to run a check. (#133)
+
+### Fixed
+- Windows: format-on-save and post-edit diagnostics now run, so formatters and checkers like ruff, gofmt, prettier, and eslint are found and executed correctly. (#147)
+- Windows: `run_shell` commands after the first in a session no longer fail to start. (#146)
+- Windows: a deny permission rule on a directory now correctly covers the files inside it. (#146)
+- Windows: routine commands using `2>/dev/null` are no longer wrongly flagged as escaping the workspace and forced through approval. (#146)
+- Windows: new git worktrees no longer show up as untracked. (#146)
+- Windows: @-mentions now give correct directory suggestions and filename ranking in non-git folders. (#146)
+- Linux: the agent is now told that `view_localhost` and the Preview panel usually cannot reach a dev server started by a separate `run_shell` command, and what to do instead, preventing wasted steps. (#143)
+- Prompt caching: the system prompt now stays stable for the life of a conversation, so editing files no longer re-writes the whole history to cache on every turn (a significant cost reduction on coding sessions). (#134)
+- Deleting a chat with "Delete & remove worktree" now shows a readable message when the worktree has uncommitted or untracked files, naming the branch and telling you the work was kept. (#127)
+- Plan mode's refused-tools notice now names every tool it actually refuses, instead of an outdated short list. (#149)
+
+### Changed
+- The system prompt is now host-aware: it names the actual OS and states whether shell commands run confined, with Git Bash / cmd.exe notes on Windows and BSD-tools notes on macOS, and gives clearer guidance on tool choice, scope, and verification. (#128)
+- GitHub CI tools (`gh_run_view`, `gh_run_list`, `gh_pr_checks`) now isolate attacker-controllable text (job, step, check, and workflow names, and logs) behind a safety fence, so a fork's workflow cannot pose as trusted instructions to the agent. (#150)
+- GitHub issue and pull request text, `web_search` results, and MCP tool results are now fenced as untrusted content, closing a path for injected text to steer the agent. (#139)
+- Tool results, agent notices, tool descriptions, and prompts now use plain punctuation and wording, which read more cleanly in transcripts. (#131, #129)
+
 ## v0.7.0 - 2026-10-14
 
 Houston runs smoothly in new repos, picks dependencies that fit your toolchain, and runs longer on productive turns.
