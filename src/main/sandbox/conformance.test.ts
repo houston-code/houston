@@ -219,6 +219,24 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
         timeoutMs: PROXIED_COMMAND_TIMEOUT
       })
 
+    // On the busy macOS CI leg, one sandboxed connect to the live loopback proxy
+    // occasionally fails instantly (curl exit 7, "Couldn't connect to server") while the
+    // probes before and after it pass, so the proxy was up. That is not what C8 tests, so
+    // retry only a connect that got no answer at all: exit 7 with no HTTP or CONNECT
+    // response code. Exit 7 alone is not enough, since some curl builds also exit 7 for a
+    // CONNECT the proxy refused with 403. Every answered request returns on the first
+    // attempt. Each retry leaves PROXY_CONNECT_RETRY on stderr so it stays visible.
+    const PROXY_CONNECT_RETRY = 'PROXY_CONNECT_RETRY'
+    const proxiedCurl = (args: string, proxyUrl = '"$HTTP_PROXY"') =>
+      proxied(
+        'for attempt in 1 2 3; do ' +
+          `codes=$(curl -sS -o curl.body -w '%{http_code}%{http_connect}' --proxy ${proxyUrl} --noproxy '' ${args}); rc=$?; ` +
+          'cat curl.body 2>/dev/null; rm -f curl.body; ' +
+          '{ [ "$rc" -ne 7 ] || [ "$codes" != 000000 ]; } && break; ' +
+          `echo "${PROXY_CONNECT_RETRY} attempt=$attempt" >&2; sleep 0.2; ` +
+          'done; exit "$rc"'
+      )
+
     itEnforced('C8a direct egress stays denied in proxied mode', async () => {
       const r = await proxied('exec 3<>/dev/tcp/192.0.2.1/80')
       expect(r.stderr).toMatch(NETWORK_DENIED_RE)
@@ -251,26 +269,36 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
       // forwarder's inner port on Linux) — the same road a real command takes.
       // --noproxy '' overrides the NO_PROXY loopback exemption: the test target IS
       // loopback, and forcing it through the proxy is exactly what proves the chain.
-      const r = await proxied(
-        `curl -s --proxy "$HTTP_PROXY" --noproxy '' http://127.0.0.1:${targetPort}/ok`
-      )
+      const r = await proxiedCurl(`http://127.0.0.1:${targetPort}/ok`)
       expect(r.stdout).toContain('TARGET_REACHED')
       expect(r.exitCode).toBe(0)
     }, PROXIED_TEST_TIMEOUT)
 
     itProxied('C8c a denied destination gets the EGRESS_BLOCKED refusal, not a connection', async () => {
-      const r = await proxied(
-        `curl -s --proxy "$HTTP_PROXY" --noproxy '' http://denied.invalid/steal`
-      )
+      const r = await proxiedCurl('http://denied.invalid/steal')
       expect(r.stdout).toContain('EGRESS_BLOCKED')
       expect(r.stdout).toContain('denied.invalid')
     }, PROXIED_TEST_TIMEOUT)
 
     itProxied('C8d a denied CONNECT (https-style) fails with the proxy 403', async () => {
-      const r = await proxied(
-        `curl -sS --proxy "$HTTP_PROXY" --noproxy '' https://denied.invalid/ 2>&1; exit 0`
-      )
+      const r = await proxiedCurl('https://denied.invalid/')
       expect(`${r.stdout}\n${r.stderr}`).toMatch(/403/)
+      // The 403 is the proxy answering, not a failed connect: it must not be retried.
+      expect(r.stderr).not.toContain(PROXY_CONNECT_RETRY)
+    }, PROXIED_TEST_TIMEOUT)
+
+    itProxied('C8e the probe retries a failed proxy connect, then reports it', async () => {
+      // A closed loopback port refuses every attempt, so the retry loop must run out and
+      // surface curl's own exit 7 rather than masking the failure.
+      const closed = createServer()
+      await new Promise<void>((done) => closed.listen(0, '127.0.0.1', () => done()))
+      const port = (closed.address() as { port: number }).port
+      await new Promise<void>((done) => closed.close(() => done()))
+
+      const r = await proxiedCurl(`http://127.0.0.1:${targetPort}/ok`, `http://127.0.0.1:${port}`)
+      expect(r.exitCode).toBe(7)
+      expect(r.stdout).not.toContain('TARGET_REACHED')
+      expect(r.stderr.split(PROXY_CONNECT_RETRY).length - 1).toBe(3)
     }, PROXIED_TEST_TIMEOUT)
   })
 })
