@@ -124,6 +124,17 @@ export function appMenuTemplate(isMac: boolean): MenuItemConstructorOptions[] {
   ]
 }
 
+/**
+ * Window-chrome options for a platform. macOS hides the native title bar and insets
+ * the traffic lights over the renderer's own titlebar strip. On Windows and Linux
+ * Electron treats any non-default `titleBarStyle` as a frameless window, which has
+ * no menu bar, so the Help menu (and its Check for Updates… item) would never be
+ * drawn. Those platforms keep the default frame.
+ */
+export function windowChromeOptions(isMac: boolean): { titleBarStyle?: 'hiddenInset' } {
+  return isMac ? { titleBarStyle: 'hiddenInset' } : {}
+}
+
 export function buildAppMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform === 'darwin')))
 }

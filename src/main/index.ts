@@ -7,7 +7,7 @@ import { openExternalSafely } from './safeExternal'
 import { isAllowedNavigation } from './navigation'
 import { loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { registerIpc } from './ipc'
-import { buildAppMenu } from './menu'
+import { buildAppMenu, windowChromeOptions } from './menu'
 import { killAllShells } from './agent/shells'
 import { attachPreviewHost, destroyAllPreviewPanes } from './preview'
 import { killAllTerminals } from './terminal'
@@ -89,7 +89,7 @@ function createWindow(): void {
     minHeight: 560,
     show: false,
     title: APP_NAME,
-    titleBarStyle: 'hiddenInset',
+    ...windowChromeOptions(process.platform === 'darwin'),
     backgroundColor: '#0e0f12',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

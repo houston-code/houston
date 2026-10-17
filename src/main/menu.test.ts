@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { appMenuTemplate, resolveCloseAction, setTerminalFocused, isTerminalFocused } from './menu'
+import {
+  appMenuTemplate,
+  resolveCloseAction,
+  windowChromeOptions,
+  setTerminalFocused,
+  isTerminalFocused
+} from './menu'
 
 describe('menu close routing', () => {
   it('routes Cmd+W to the active tab when the terminal is focused, else the window', () => {
@@ -47,5 +53,15 @@ describe('Share Houston menu item', () => {
     const template = appMenuTemplate(true)
     expect(itemLabels(template[0])).toContain('Share Houston…')
     expect(template.flatMap(itemLabels).filter((l) => l === 'Share Houston…')).toHaveLength(1)
+  })
+})
+
+describe('window chrome', () => {
+  it('hides the native title bar only on macOS', () => {
+    expect(windowChromeOptions(true)).toEqual({ titleBarStyle: 'hiddenInset' })
+  })
+
+  it('keeps the default frame on Windows and Linux so the menu bar is drawn', () => {
+    expect(windowChromeOptions(false)).not.toHaveProperty('titleBarStyle')
   })
 })
