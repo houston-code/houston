@@ -41,6 +41,22 @@ on:
         description: Build artifacts but publish nothing.
         required: true
         type: boolean
+    # The macOS signing + notarization credentials. Declared because a reusable workflow's
+    # `secrets` context holds only what it declares: the leg's `environment: release` alone
+    # left all five empty, and electron-builder then failed on an empty CSC_LINK. They live
+    # in the `release` environment; since this job declares it, GitHub supplies the
+    # environment's values for these names. Optional so the non-mac legs pass none.
+    secrets:
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
 
 permissions:
   contents: read
