@@ -134,6 +134,15 @@ jobs:
       sbom_label: ${{ matrix.sbom_label }}
       mac_x64_manual: ${{ matrix.mac_x64_manual }}
       dry_run: ${{ inputs.dry_run }}
+    # Named explicitly, not `secrets: inherit`, so the leg never sees the repo's other
+    # secrets (the model API keys). This job has no environment, so these read empty here;
+    # the called job declares `environment: release`, and GitHub resolves them there.
+    secrets:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
   build-other:
     needs: [native-scan, sbom-conformance, approve, draft]

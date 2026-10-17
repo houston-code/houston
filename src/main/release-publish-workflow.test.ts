@@ -297,3 +297,32 @@ describe('release legs verify before they upload', () => {
     )
   })
 })
+
+describe('release legs receive the macOS signing secrets', () => {
+  const MAC_SECRETS = ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']
+
+  it('declares each one on the reusable leg, which reads only declared secrets', () => {
+    // Without the declarations the leg's `secrets` context was empty and the v0.8.0
+    // arm64 leg failed on an empty CSC_LINK ("not a file").
+    const declared = leg.slice(leg.indexOf('    secrets:\n'), leg.indexOf('\npermissions:'))
+    for (const name of MAC_SECRETS) expect(declared).toMatch(new RegExp(`\\n {6}${name}:\\n {8}required: false`))
+  })
+
+  it('passes each one from the macOS caller by name, never `secrets: inherit`', () => {
+    const mac = job('build-mac')
+    for (const name of MAC_SECRETS) expect(mac).toContain(`${name}: \${{ secrets.${name} }}`)
+    const code = workflow
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .join('\n')
+    expect(code).not.toContain('secrets: inherit')
+  })
+
+  it('keeps the Apple credentials away from the Windows and Linux legs', () => {
+    expect(job('build-other')).not.toMatch(/CSC_LINK|APPLE_ID/)
+  })
+
+  it('still reads them in the leg only on macOS', () => {
+    expect(leg).toContain("CSC_LINK: ${{ startsWith(inputs.os, 'macos') && secrets.CSC_LINK || '' }}")
+  })
+})
