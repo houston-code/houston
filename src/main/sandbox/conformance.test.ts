@@ -222,14 +222,17 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
     // On the busy macOS CI leg, one sandboxed connect to the live loopback proxy
     // occasionally fails instantly (curl exit 7, "Couldn't connect to server") while the
     // probes before and after it pass, so the proxy was up. That is not what C8 tests, so
-    // retry exit 7 only: every other outcome, the proxy's own 403s included, returns on the
-    // first attempt. Each retry leaves PROXY_CONNECT_RETRY on stderr so it stays visible.
+    // retry only a connect that got no answer at all: exit 7 with no HTTP or CONNECT
+    // response code. Exit 7 alone is not enough, since some curl builds also exit 7 for a
+    // CONNECT the proxy refused with 403. Every answered request returns on the first
+    // attempt. Each retry leaves PROXY_CONNECT_RETRY on stderr so it stays visible.
     const PROXY_CONNECT_RETRY = 'PROXY_CONNECT_RETRY'
     const proxiedCurl = (args: string, proxyUrl = '"$HTTP_PROXY"') =>
       proxied(
         'for attempt in 1 2 3; do ' +
-          `curl -sS --proxy ${proxyUrl} --noproxy '' ${args}; rc=$?; ` +
-          '[ "$rc" -ne 7 ] && break; ' +
+          `codes=$(curl -sS -o curl.body -w '%{http_code}%{http_connect}' --proxy ${proxyUrl} --noproxy '' ${args}); rc=$?; ` +
+          'cat curl.body 2>/dev/null; rm -f curl.body; ' +
+          '{ [ "$rc" -ne 7 ] || [ "$codes" != 000000 ]; } && break; ' +
           `echo "${PROXY_CONNECT_RETRY} attempt=$attempt" >&2; sleep 0.2; ` +
           'done; exit "$rc"'
       )
