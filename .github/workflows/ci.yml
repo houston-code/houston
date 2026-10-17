@@ -198,7 +198,7 @@ jobs:
             os: ubuntu-22.04
             dist: dist:linux
           - target: mac-arm64
-            os: macos-14
+            os: macos-15
             dist: dist:mac
           # macos-15-intel is GitHub's Intel (x64) runner, the only place the x64 mac app
           # builds natively. GitHub sunsets x64 macOS runners after macos-15 (~Fall 2027), at
@@ -287,7 +287,7 @@ jobs:
             os: ubuntu-22.04
             dist: dist:linux
           - target: mac-arm64
-            os: macos-14
+            os: macos-15
             dist: dist:mac
           - target: mac-x64
             os: macos-15-intel
