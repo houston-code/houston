@@ -48,7 +48,8 @@ import {
   openWorkspacePath,
   revealInFileManager
 } from './openInEditor'
-import { setKey, deleteKey, setMcpOAuthTokens } from './secrets'
+import { relaunchApp } from './quit-confirm'
+import { setKey, deleteKey, setMcpOAuthTokens, secureStorageStatus } from './secrets'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
@@ -595,6 +596,10 @@ export function registerIpc(): void {
     deleteKey(providerId)
     return getSettings()
   })
+
+  ipcMain.handle(IPC.secureStorageStatus, () => secureStorageStatus())
+
+  ipcMain.handle(IPC.appRelaunch, () => relaunchApp())
 
   ipcMain.handle(IPC.settingsListModels, async (_event, providerId: string) => {
     const provider = getProvider(providerId)

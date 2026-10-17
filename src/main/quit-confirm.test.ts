@@ -11,11 +11,12 @@ const h = vi.hoisted(() => ({
   terminals: 0,
   response: 1,
   dialogs: [] as Array<Record<string, unknown>>,
-  quits: 0
+  quits: 0,
+  relaunches: 0
 }))
 
 vi.mock('electron', () => ({
-  app: { quit: () => h.quits++ },
+  app: { quit: () => h.quits++, relaunch: () => h.relaunches++ },
   BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => [] },
   dialog: {
     showMessageBox: async (...args: unknown[]) => {
@@ -46,6 +47,40 @@ beforeEach(() => {
   h.response = 1
   h.dialogs = []
   h.quits = 0
+  h.relaunches = 0
+})
+
+describe('relaunchApp', () => {
+  it('relaunches straight away when nothing is running', async () => {
+    const { relaunchApp } = await load()
+    expect(await relaunchApp()).toBe(true)
+    expect(h.dialogs).toHaveLength(0)
+    expect(h.relaunches).toBe(1)
+    expect(h.quits).toBe(1)
+  })
+
+  it('asks first when work is live, and does nothing on Cancel', async () => {
+    h.runs = 1
+    const { relaunchApp } = await load()
+    expect(await relaunchApp()).toBe(false)
+    expect(h.dialogs[0]).toMatchObject({
+      buttons: ['Restart anyway', 'Cancel'],
+      detail: 'Restarting Houston now will stop it and discard any unsaved progress.'
+    })
+    expect(h.relaunches).toBe(0)
+    expect(h.quits).toBe(0)
+  })
+
+  it('relaunches on Restart anyway, and the quit guard lets that quit through', async () => {
+    h.runs = 1
+    h.response = 0
+    const { relaunchApp, guardQuitWithLiveWork } = await load()
+    expect(await relaunchApp()).toBe(true)
+    expect(h.relaunches).toBe(1)
+    const e = quitEvent()
+    guardQuitWithLiveWork(e as never, undefined)
+    expect(e.prevented).toBe(false)
+  })
 })
 
 describe('confirmRestartForUpdate', () => {

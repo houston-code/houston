@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyTheme } from '../hooks/useApplyTheme'
 import { applyTheme } from '../lib/theme'
@@ -523,6 +524,8 @@ export function SettingsModal({
   const [newUrl, setNewUrl] = useState('')
   // A key/model action error, shown inline in the footer (vs a blocking alert()).
   const [formError, setFormError] = useState<string | null>(null)
+  // Set to the platform when a key save failed because the OS secure store is unusable.
+  const [storageBlocked, setStorageBlocked] = useState<string | null>(null)
   // True once a close is requested while there are unsaved edits — the footer then
   // asks to confirm rather than discarding silently.
   const [confirmingClose, setConfirmingClose] = useState(false)
@@ -781,13 +784,16 @@ export function SettingsModal({
     if (!key) return
     setBusy(id)
     setFormError(null)
+    setStorageBlocked(null)
     try {
       applyKeyResult(await window.api.setKey(id, key), id, true)
       setKeyInputs((k) => ({ ...k, [id]: '' }))
     } catch (e) {
-      // Surface storage failures (e.g. OS Keychain unavailable) instead of
-      // letting the key silently vanish.
-      setFormError(`Could not save API key: ${(e as Error).message}`)
+      // Surface storage failures instead of letting the key silently vanish. When the
+      // OS secure store is the cause (a denied Keychain prompt), say how to recover.
+      const blocked = await secureStorageBlocked()
+      if (blocked) setStorageBlocked(blocked)
+      else setFormError(`Could not save API key: ${(e as Error).message}`)
     } finally {
       setBusy(null)
     }
@@ -2168,6 +2174,7 @@ export function SettingsModal({
         </div>
 
         <div className="modal__foot">
+          {storageBlocked && <SecureStorageNotice platform={storageBlocked} />}
           {formError && (
             <span
               role="alert"

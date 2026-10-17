@@ -16,8 +16,11 @@ export interface LiveWork {
   tasks: number
 }
 
-/** Why the app is about to go away: a plain quit, or a restart to install an update. */
-export type QuitReason = 'quit' | 'restart'
+/**
+ * Why the app is about to go away: a plain quit, a restart to install an update, or a
+ * plain relaunch (e.g. so macOS asks for Keychain access again).
+ */
+export type QuitReason = 'quit' | 'restart' | 'relaunch'
 
 /** Whether a quit/restart should pause for confirmation given what's live. */
 export function shouldConfirmQuit(work: LiveWork): boolean {
@@ -46,11 +49,16 @@ export function quitConfirmMessage(work: LiveWork): string {
 /** The confirmation dialog's body: what quitting/restarting now will do. Plural-aware. */
 export function quitConfirmDetail(work: LiveWork, reason: QuitReason = 'quit'): string {
   const object = work.chats + work.tasks === 1 ? 'it' : 'them'
-  const action = reason === 'restart' ? 'Restarting to install the update' : 'Quitting'
+  const action =
+    reason === 'restart'
+      ? 'Restarting to install the update'
+      : reason === 'relaunch'
+        ? 'Restarting Houston'
+        : 'Quitting'
   return `${action} now will stop ${object} and discard any unsaved progress.`
 }
 
 /** The confirming button's label. */
 export function quitConfirmButton(reason: QuitReason): string {
-  return reason === 'restart' ? 'Restart anyway' : 'Quit anyway'
+  return reason === 'quit' ? 'Quit anyway' : 'Restart anyway'
 }

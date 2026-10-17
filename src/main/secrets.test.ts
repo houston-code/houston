@@ -48,6 +48,7 @@ import {
   mcpOAuthKeyId,
   setCredential,
   setKey,
+  secureStorageStatus,
   setMcpOAuthTokens,
   setSecretHeaders
 } from './secrets'
@@ -150,6 +151,21 @@ describe('secrets store', () => {
   it('setKey writes a credential that getCredential reads back as api-key', () => {
     setKey('openai', 'sk-y')
     expect(getCredential('openai')).toEqual({ type: 'api-key', key: 'sk-y' })
+  })
+})
+
+describe('secure storage unavailable (e.g. a denied Keychain prompt)', () => {
+  it('refuses to store a key, with a message that says how to recover', () => {
+    state.encryptionAvailable = false
+    expect(() => setKey('anthropic', 'sk-x')).toThrow(/restart Houston/i)
+    expect(hasStoredKey('anthropic')).toBe(false)
+  })
+
+  it('reports the status the renderer uses to offer a restart', () => {
+    state.encryptionAvailable = false
+    expect(secureStorageStatus()).toEqual({ available: false, platform: process.platform })
+    state.encryptionAvailable = true
+    expect(secureStorageStatus().available).toBe(true)
   })
 })
 

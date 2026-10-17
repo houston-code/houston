@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { SecureStorageStatus } from '@shared/secureStorage'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
 import type {
@@ -114,6 +115,11 @@ const api = {
     ipcRenderer.invoke(IPC.settingsDeleteKey, providerId),
   listModels: (providerId: string): Promise<ModelOption[]> =>
     ipcRenderer.invoke(IPC.settingsListModels, providerId),
+  /** Whether credentials can be stored right now (false after a denied Keychain prompt). */
+  getSecureStorageStatus: (): Promise<SecureStorageStatus> =>
+    ipcRenderer.invoke(IPC.secureStorageStatus),
+  /** Relaunch Houston; resolves false if the user kept running work instead. */
+  relaunchApp: (): Promise<boolean> => ipcRenderer.invoke(IPC.appRelaunch),
   /** Whether a local model supports tool calling: true / false / null (unknown). */
   ollamaSupportsTools: (providerId: string, model: string): Promise<boolean | null> =>
     ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),

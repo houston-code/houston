@@ -62,8 +62,14 @@ describe('quitConfirmDetail', () => {
     )
   })
 
+  it('describes a plain relaunch', () => {
+    expect(quitConfirmDetail({ chats: 1, tasks: 0 }, 'relaunch')).toBe(
+      'Restarting Houston now will stop it and discard any unsaved progress.'
+    )
+  })
+
   it('never uses an em dash (user-visible copy)', () => {
-    for (const reason of ['quit', 'restart'] as const) {
+    for (const reason of ['quit', 'restart', 'relaunch'] as const) {
       expect(quitConfirmDetail({ chats: 2, tasks: 2 }, reason)).not.toContain('—')
     }
     expect(quitConfirmMessage({ chats: 2, tasks: 2 })).not.toContain('—')
@@ -74,5 +80,6 @@ describe('quitConfirmButton', () => {
   it('labels the confirming button for the action', () => {
     expect(quitConfirmButton('quit')).toBe('Quit anyway')
     expect(quitConfirmButton('restart')).toBe('Restart anyway')
+    expect(quitConfirmButton('relaunch')).toBe('Restart anyway')
   })
 })
