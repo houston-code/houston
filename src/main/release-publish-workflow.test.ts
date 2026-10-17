@@ -126,8 +126,8 @@ describe('release build order', () => {
   it('runs the macOS legs one at a time, arm64 first, so the Intel leg can merge its feed', () => {
     const mac = job('build-mac')
     expect(mac).toContain('max-parallel: 1')
-    expect(mac.indexOf('os: macos-14')).toBeGreaterThan(-1)
-    expect(mac.indexOf('os: macos-14')).toBeLessThan(mac.indexOf('os: macos-15-intel'))
+    expect(mac.indexOf('os: macos-15\n')).toBeGreaterThan(-1)
+    expect(mac.indexOf('os: macos-15\n')).toBeLessThan(mac.indexOf('os: macos-15-intel'))
     expect(mac).toMatch(/os: macos-15-intel\n(.*\n){3} {12}mac_x64_manual: true/)
   })
 

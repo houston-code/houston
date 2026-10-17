@@ -116,7 +116,7 @@ jobs:
           # sbom.binary.<label>.* so the hashes match the binaries a user of THAT platform
           # actually downloads (the mac legs also enumerate the macOS-only Squirrel.Mac
           # framework stack).
-          - os: macos-14
+          - os: macos-15
             dist: dist:mac
             sbom_app: release/mac-arm64/Houston.app
             sbom_label: darwin-arm64

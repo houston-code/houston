@@ -102,8 +102,8 @@ describe('CI runs everything on every PR', () => {
 
   it('packages and tests on every platform it ships on', () => {
     const pkg = job('package')
-    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) {
-      expect(pkg).toContain(`os: ${os}`)
+    for (const os of ['ubuntu-22.04', 'macos-15', 'macos-15-intel', 'windows-2025']) {
+      expect(pkg).toContain(`os: ${os}\n`)
     }
     // The full unit suite on every non-Linux leg (both macOS legs against the real Seatbelt
     // backend, Windows against its own; Linux runs it in `test`), and the e2e on macOS.
@@ -263,7 +263,7 @@ describe('CI keeps PR caches warm', () => {
     // PR- and queue-scoped caches are invisible to other PRs, and `package` skips push.
     const warm = job('warm-caches')
     expect(warm).toContain("if: github.event_name == 'push'")
-    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) expect(warm).toContain(`os: ${os}`)
+    for (const os of ['ubuntu-22.04', 'macos-15', 'macos-15-intel', 'windows-2025']) expect(warm).toContain(`os: ${os}\n`)
     expect(warm).toMatch(/install: full\n {10}electron-cache: full/)
   })
 
@@ -273,7 +273,7 @@ describe('CI keeps PR caches warm', () => {
 
   it('uses the same runners as the package legs, so the cache keys match', () => {
     const pkg = job('package')
-    for (const os of ['ubuntu-22.04', 'macos-14', 'macos-15-intel', 'windows-2025']) expect(pkg).toContain(`os: ${os}`)
+    for (const os of ['ubuntu-22.04', 'macos-15', 'macos-15-intel', 'windows-2025']) expect(pkg).toContain(`os: ${os}\n`)
   })
 
   it('never gates a merge: it runs only after the merge, and `build` does not need it', () => {
