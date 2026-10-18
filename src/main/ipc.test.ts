@@ -8,6 +8,10 @@ import { MAX_APPROVAL_NOTE } from '@shared/agent'
 // Hoisted holders the mocks close over, so each test can steer run ownership and
 // observe the loop resolvers the handlers call.
 const h = vi.hoisted(() => ({
+  // The native delete-confirmation dialog and the worktree probe/teardown it drives.
+  showMessageBox: vi.fn(),
+  isWorktreeDisposable: vi.fn(),
+  removeWorktree: vi.fn(),
   // channel -> the handler registered via ipcMain.handle, captured at registerIpc().
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   cancelRun: vi.fn(),
@@ -51,7 +55,7 @@ vi.mock('electron', () => ({
     on: () => {}
   },
   app: { getVersion: () => '0.0.0-test', getPath: () => '/tmp', getName: () => 'Houston', on: () => {} },
-  dialog: {},
+  dialog: { showMessageBox: h.showMessageBox },
   clipboard: h.clipboard,
   nativeImage: h.nativeImage,
   shell: {},
@@ -79,6 +83,13 @@ vi.mock('./agent/drain', () => ({
   runAndDrain: h.runAndDrain,
   drainQueue: vi.fn()
 }))
+// Keep the real worktree module, but stub the probe and teardown the delete
+// handler calls so its dialog choice can be tested without real git.
+vi.mock('./agent/worktree', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./agent/worktree')>()),
+  isWorktreeDisposable: h.isWorktreeDisposable,
+  removeWorktree: h.removeWorktree
+}))
 // Don't touch the real filesystem for the `#`-capture handler.
 vi.mock('./memory', () => ({ saveMemory: h.saveMemory }))
 
@@ -103,32 +114,106 @@ setUserDataDir(MODULE_USER_DIR)
 /**
  * The delete-confirmation dialog used to be a two-button `window.confirm` whose
  * "Cancel" still deleted the chat (it only governed the worktree). These guard
- * the replacement: button 0 is always Cancel, so a cancel never deletes, and only
- * the worktree dialog's button 2 tears the worktree down.
+ * the replacement: button 0 is always Cancel, so a cancel never deletes; only the
+ * worktree dialog's button 2 tears a worktree with work in it down; and a clean,
+ * merged worktree goes with the chat.
  */
 describe('resolveDeleteAction', () => {
-  it('treats button 0 as Cancel — never deletes — for a plain chat', () => {
-    expect(resolveDeleteAction(false, 0)).toEqual({ delete: false, removeWorktree: false })
-  })
-
-  it('treats button 0 as Cancel — never deletes — for a worktree chat', () => {
-    expect(resolveDeleteAction(true, 0)).toEqual({ delete: false, removeWorktree: false })
+  it('treats button 0 as Cancel — never deletes — in every dialog', () => {
+    for (const kind of ['plain', 'worktree', 'disposableWorktree'] as const) {
+      expect(resolveDeleteAction(kind, 0)).toEqual({ delete: false, removeWorktree: false })
+    }
   })
 
   it('deletes a plain chat on button 1, leaving no worktree to remove', () => {
-    expect(resolveDeleteAction(false, 1)).toEqual({ delete: true, removeWorktree: false })
+    expect(resolveDeleteAction('plain', 1)).toEqual({ delete: true, removeWorktree: false })
   })
 
   it('deletes a worktree chat but keeps the worktree on button 1', () => {
-    expect(resolveDeleteAction(true, 1)).toEqual({ delete: true, removeWorktree: false })
+    expect(resolveDeleteAction('worktree', 1)).toEqual({ delete: true, removeWorktree: false })
   })
 
   it('deletes and removes the worktree on button 2', () => {
-    expect(resolveDeleteAction(true, 2)).toEqual({ delete: true, removeWorktree: true })
+    expect(resolveDeleteAction('worktree', 2)).toEqual({ delete: true, removeWorktree: true })
   })
 
   it('never removes a worktree that does not exist, even on button 2', () => {
-    expect(resolveDeleteAction(false, 2)).toEqual({ delete: true, removeWorktree: false })
+    expect(resolveDeleteAction('plain', 2)).toEqual({ delete: true, removeWorktree: false })
+  })
+
+  it('removes a disposable worktree along with the chat on Delete', () => {
+    expect(resolveDeleteAction('disposableWorktree', 1)).toEqual({
+      delete: true,
+      removeWorktree: true
+    })
+  })
+})
+
+/**
+ * The delete handler probes the worktree before asking: an untouched worktree gets
+ * the plain two-button confirmation and is removed with the chat, while one with
+ * work in it still gets the keep/remove choice.
+ */
+describe('conversationDelete dialog', () => {
+  const wt = { path: '/repo/.houston/worktrees/x', branch: 'brave-falcon', repoRoot: '/repo' }
+  const del = (id: string): Promise<{ deleted: boolean; worktree: unknown }> =>
+    h.handlers.get(IPC.conversationDelete)!({ sender: {} }, id) as Promise<{
+      deleted: boolean
+      worktree: unknown
+    }>
+
+  registerIpc()
+  beforeEach(() => {
+    h.showMessageBox.mockReset()
+    h.isWorktreeDisposable.mockReset()
+    h.removeWorktree.mockReset()
+    h.removeWorktree.mockResolvedValue({ removed: true, branchDeleted: true })
+  })
+
+  it('skips the keep/remove choice and removes a clean, merged worktree', async () => {
+    const conv = createConversation({ workspace: wt.path, providerId: 'p', model: 'm', worktree: wt })
+    h.isWorktreeDisposable.mockResolvedValue(true)
+    h.showMessageBox.mockResolvedValue({ response: 1 })
+    const res = await del(conv.id)
+    const opts = h.showMessageBox.mock.calls[0][1] as { buttons: string[]; detail: string }
+    expect(opts.buttons).toEqual(['Cancel', 'Delete'])
+    expect(opts.detail).toMatch(/will be removed too/)
+    expect(opts.detail).not.toMatch(/—/)
+    expect(h.removeWorktree).toHaveBeenCalledWith(wt)
+    expect(res.deleted).toBe(true)
+    expect(getConversation(conv.id)).toBeNull()
+  })
+
+  it('touches nothing when a clean worktree delete is cancelled', async () => {
+    const conv = createConversation({ workspace: wt.path, providerId: 'p', model: 'm', worktree: wt })
+    h.isWorktreeDisposable.mockResolvedValue(true)
+    h.showMessageBox.mockResolvedValue({ response: 0 })
+    expect((await del(conv.id)).deleted).toBe(false)
+    expect(h.removeWorktree).not.toHaveBeenCalled()
+    expect(getConversation(conv.id)).not.toBeNull()
+  })
+
+  it('still offers keep/remove for a worktree with work in it', async () => {
+    const conv = createConversation({ workspace: wt.path, providerId: 'p', model: 'm', worktree: wt })
+    h.isWorktreeDisposable.mockResolvedValue(false)
+    h.showMessageBox.mockResolvedValue({ response: 1 })
+    const res = await del(conv.id)
+    const opts = h.showMessageBox.mock.calls[0][1] as { buttons: string[]; detail: string }
+    expect(opts.buttons).toEqual(['Cancel', 'Delete, keep worktree', 'Delete & remove worktree'])
+    expect(opts.detail).not.toMatch(/—/)
+    expect(h.removeWorktree).not.toHaveBeenCalled()
+    expect(res.deleted).toBe(true)
+  })
+
+  it('does not probe git for a chat without a worktree', async () => {
+    const conv = createConversation({ workspace: '/repo', providerId: 'p', model: 'm' })
+    h.showMessageBox.mockResolvedValue({ response: 1 })
+    await del(conv.id)
+    expect(h.isWorktreeDisposable).not.toHaveBeenCalled()
+    expect((h.showMessageBox.mock.calls[0][1] as { buttons: string[] }).buttons).toEqual([
+      'Cancel',
+      'Delete'
+    ])
   })
 })
 
