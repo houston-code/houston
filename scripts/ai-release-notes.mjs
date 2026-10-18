@@ -22,7 +22,26 @@ import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import { summaryProblems, SUMMARY_MAX } from './check-changelog-summary.mjs'
 
-const MODEL = 'claude-opus-4-8'
+const MODEL = 'claude-opus-5-5'
+
+/**
+ * The Messages request for one turn. Opus 5.5 always thinks (adaptive is the only mode) and
+ * defaults to medium effort, so effort is set explicitly. Its safety classifiers can decline
+ * with `stop_reason: "refusal"`; the server-side fallback re-runs a declined request on a
+ * model chosen by refusal category inside the same call, so a release isn't blocked on it.
+ */
+export function buildRequest(messages) {
+  return {
+    model: MODEL,
+    max_tokens: 8000,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'high' },
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    system: SYSTEM_PROMPT,
+    messages
+  }
+}
 
 export const SYSTEM_PROMPT = `You are writing release notes for Houston, a desktop app, for an audience of end users.
 
@@ -105,18 +124,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
 
   // new Anthropic() reads ANTHROPIC_API_KEY from the env.
   const client = new Anthropic()
-  const ask = async (messages) =>
-    extractText(
-      (
-        await client.messages.create({
-          model: MODEL,
-          max_tokens: 8000,
-          thinking: { type: 'adaptive' },
-          system: SYSTEM_PROMPT,
-          messages
-        })
-      ).content
-    )
+  const ask = async (messages) => {
+    const res = await client.beta.messages.create(buildRequest(messages))
+    if (res.stop_reason === 'refusal') {
+      console.error(`ai-release-notes: the model declined (${res.stop_details?.category ?? 'no category'})`)
+      return ''
+    }
+    return extractText(res.content)
+  }
 
   const prompt = { role: 'user', content: buildPrompt({ version, date, prs }) }
   let text = await ask([prompt])

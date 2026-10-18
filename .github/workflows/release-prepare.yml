@@ -77,7 +77,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
-          # When set, notes are AI-generated (claude-opus-4-8) from the PR bodies; otherwise
+          # When set, notes are AI-generated (claude-opus-5-5) from the PR bodies; otherwise
           # (or if the call fails) we fall back to the deterministic title-bucketing generator.
           # Either way the notes land in the human-reviewed release PR before they ship.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -96,7 +96,7 @@ jobs:
               --json number,title,labels,body > prs.json
           fi
           if [ -n "$ANTHROPIC_API_KEY" ]; then
-            echo "Generating AI release notes (claude-opus-4-8)…"
+            echo "Generating AI release notes (claude-opus-5-5)…"
             if ! node scripts/ai-release-notes.mjs < prs.json > .release-section.md; then
               echo "::warning::AI note generation failed; falling back to the deterministic generator."
               node scripts/gen-release-notes.mjs < prs.json > .release-section.md
