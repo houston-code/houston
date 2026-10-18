@@ -47,9 +47,10 @@ website/
       app.js            Live release data + applies the platform recommendation
       platform.js       Which download card fits the visitor (pure, tested in tools/)
       icon.png          App icon (copied from build/icon.png)
+      icon-60.png       Header/footer logo, 60 px for 30 px CSS (generated from icon.png)
       og.svg            Social-card source (real icon composited at render time)
       og.png            Social-card render (1200×630), generated from og.svg
-      screens/          Real product screenshots (see capture tool below)
+      screens/          Real product screenshots (see capture tool below), PNG + WebP widths
     _headers            Cloudflare Pages security + cache headers
     _redirects          /download, /releases, /github short links
     robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
@@ -64,7 +65,9 @@ website/
     headers.test.mjs      assets revalidate on every use (no fixed cache lifetime; files keep their names)
     palette.test.mjs      no colors outside the design tokens; every text pairing clears WCAG AA
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
-    build-favicons.mjs    assets/icon.png → favicon.ico, apple-touch-icon.png
+    build-favicons.mjs    assets/icon.png → favicon.ico, apple-touch-icon.png, assets/icon-60.png
+    build-screens.mjs     screens/models-*.png → 800/1200/1600 px WebP for the hero srcset
+    screens.test.mjs      fails CI if the hero srcset and the WebP files drift apart
     favicons.test.mjs     fails CI if a page's icon links or icon files drift
     capture-screens.mjs   real app screenshots against a local model + demo workspace
 ```
@@ -86,8 +89,9 @@ node website/tools/capture-screens.mjs       # needs `npm run build` first
 Then downsize the retina PNGs for the web (`sips -Z 1600 in.png --out out.png`).
 The landing page shows `screens/models-dark.png` or `screens/models-light.png` to
 match the page's theme (from `shot-modelpicker-dark.png` / `-light.png`), so
-regenerate both together; `assets/og.png` embeds the dark one, so re-run
-`build-og.mjs` after it changes.
+regenerate both together. Then re-run `build-screens.mjs` to re-encode the WebP
+widths the hero's `srcset` serves (the PNGs stay as the fallback), and re-run
+`build-og.mjs`, since `assets/og.png` embeds the dark one.
 A populated "agent running tools" shot needs a frontier model key — local models
 emit text but don't drive Houston's native tool execution.
 
@@ -127,5 +131,5 @@ The header, footer, and theme script are repeated in `index.html`, `404.html`,
   `node website/tools/build-legal.mjs` and commit the updated HTML.
 - **Social card:** after editing `public/assets/og.svg`, re-run `node website/tools/build-og.mjs`.
 - **App icon:** if `build/icon.png` changes, `cp build/icon.png website/public/assets/icon.png`,
-  then re-run `node website/tools/build-favicons.mjs` to regenerate `favicon.ico` (16/32/48)
-  and `apple-touch-icon.png` from it.
+  then re-run `node website/tools/build-favicons.mjs` to regenerate `favicon.ico` (16/32/48),
+  `apple-touch-icon.png`, and the 60 px header logo `assets/icon-60.png` from it.

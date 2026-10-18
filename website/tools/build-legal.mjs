@@ -105,7 +105,7 @@ function page({ title, description, contentTitle, html, slug }) {
   <header class="site-header">
     <div class="wrap">
       <a class="brand" href="/" aria-label="Houston home">
-        <img src="/assets/icon.png" alt="" width="30" height="30" />
+        <img src="/assets/icon-60.png" alt="" width="30" height="30" />
         <span>Houston</span>
         <span class="beta-badge">Beta</span>
       </a>
@@ -135,7 +135,7 @@ function page({ title, description, contentTitle, html, slug }) {
       <div class="footer-grid">
         <div class="footer-brand">
           <a class="brand" href="/" aria-label="Houston home">
-            <img src="/assets/icon.png" alt="" width="30" height="30" />
+            <img src="/assets/icon-60.png" alt="" width="30" height="30" />
             <span>Houston</span>
           </a>
           <p>A cross-platform coding agent. Bring your own model.</p>
