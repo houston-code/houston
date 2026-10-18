@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isSensitivePath } from './sensitive-paths'
+import { isSensitivePath, isSensitiveRead } from './sensitive-paths'
 
 describe('isSensitivePath', () => {
   it('flags dotenv files', () => {
@@ -65,5 +65,20 @@ describe('isSensitivePath', () => {
     expect(isSensitivePath('env.ts')).toBe(false)
     expect(isSensitivePath('environment.ts')).toBe(false)
     expect(isSensitivePath('')).toBe(false)
+  })
+})
+
+describe('isSensitiveRead', () => {
+  it('flags a read-kind call whose path is a credential file', () => {
+    expect(isSensitiveRead('read', { path: '.env' })).toBe(true)
+    expect(isSensitiveRead('read', { path: 'keys/server.pem', pattern: 'BEGIN' })).toBe(true)
+  })
+
+  it('ignores ordinary paths, non-string paths, and non-read kinds', () => {
+    expect(isSensitiveRead('read', { path: 'src/index.ts' })).toBe(false)
+    expect(isSensitiveRead('read', { path: ['.env'] })).toBe(false)
+    expect(isSensitiveRead('read', {})).toBe(false)
+    // A write to .env is gated by the write path's own approval, not this check.
+    expect(isSensitiveRead('write', { path: '.env' })).toBe(false)
   })
 })

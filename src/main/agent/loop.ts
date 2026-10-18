@@ -98,7 +98,7 @@ import {
   overrideForConversation
 } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
-import { isSensitivePath } from './sensitive-paths'
+import { isSensitiveRead } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun } from './egress'
@@ -1176,6 +1176,165 @@ export async function startRun(
       return { model: req.model }
     }
 
+    // ---- Subagent consent seams ---------------------------------------------
+    // A subagent's gated calls (unconfined shell, network egress, and local calls a
+    // permission rule or the sensitive-read check stops) are propagated to the user
+    // as normal tool_approvals on callIds minted under the dispatching call. Deny
+    // rules win without a prompt, an existing grant (the per-run unconfined-shell
+    // consent, a per-destination network grant, an allow rule, a read override)
+    // skips the prompt exactly as in the main loop, and every prompted call's
+    // start/result is emitted so what the user consented to is never invisible.
+
+    // Minted as `${callId}.${tag}.${n}`, counted per (callId, tag) for the whole run:
+    // several agents can share one parent callId (a dispatch and its nested agents,
+    // a review's parallel reviewers), and two rows under one id would collide.
+    const subCallSeq = new Map<string, number>()
+    const mintSubCallId = (callId: string, tag: string): string => {
+      const key = `${callId}.${tag}`
+      const n = (subCallSeq.get(key) ?? 0) + 1
+      subCallSeq.set(key, n)
+      return `${key}.${n}`
+    }
+
+    // The refusal for a call a permission rule denies. Attributed to the managed tier
+    // when it originates there: the admin block is checked first, so if it matches at
+    // all it IS the winning rule. Gives the user an honest reason (their org, not a
+    // stray local rule) and signals the deny is not one they can lift from Settings.
+    const ruleDenialText = (name: string, args: Record<string, unknown>): string =>
+      managedPolicy.permissionRules.length > 0 &&
+      matchRule(managedPolicy.permissionRules, name, permissionSubject(name, args), roots) === 'deny'
+        ? "Denied by your organization's managed policy."
+        : 'Denied by a permission rule.'
+
+    const promptGatedCall = async (input: {
+      subCallId: string
+      name: string
+      args: Record<string, unknown>
+      kind: ToolKind
+      mustApprove: boolean
+      unsandboxedShell: boolean
+      /** A credential-file read: the card carries the same warning the main loop's does. */
+      sensitiveRead?: boolean
+      /** A write's per-file diffs, for the approval card and the live row. */
+      preview?: FileDiffPreview[] | null
+      denyNote: string
+      runCall: () => Promise<string>
+    }): Promise<string> => {
+      const { subCallId, name, args, kind, mustApprove, unsandboxedShell, sensitiveRead, preview, denyNote, runCall } =
+        input
+      const summary = `Subagent: ${getTool(name)!.summarize(args)}`
+      if (mustApprove) {
+        // Track + emit like any approval so re-adopt replay and cancelRun
+        // (which resolves pending approvals as deny) cover this prompt too.
+        run.pendingApprovals.set(subCallId, {
+          name,
+          summary,
+          args,
+          kind,
+          ...(preview ? { preview } : {}),
+          ...(unsandboxedShell ? { sandboxed: false } : {}),
+          ...(sensitiveRead ? { sensitiveRead: true } : {})
+        })
+        emit({
+          type: 'tool_approval',
+          callId: subCallId,
+          name,
+          summary,
+          args,
+          kind,
+          ...(preview ? { preview } : {}),
+          ...(unsandboxedShell ? { sandboxed: false } : {}),
+          ...(sensitiveRead ? { sensitiveRead: true } : {})
+        })
+        const { decision, note } = await waitForApproval(run, subCallId)
+        run.pendingApprovals.delete(subCallId)
+        const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
+        if (!approved) {
+          emit({
+            type: 'tool_result',
+            callId: subCallId,
+            name,
+            ok: false,
+            output: denialText('Denied by the user.', note)
+          })
+          return denialText(denyNote, note)
+        }
+      }
+      emit({ type: 'tool_start', callId: subCallId, name, args, kind, ...(preview ? { preview } : {}) })
+      try {
+        const output = redact(await runCall())
+        emit({ type: 'tool_result', callId: subCallId, name, ok: true, output })
+        return output
+      } catch (e) {
+        const output = redact(`Error: ${(e as Error).message}`)
+        emit({ type: 'tool_result', callId: subCallId, name, ok: false, output })
+        return output
+      }
+    }
+
+    /**
+     * The permission gate for a subagent's LOCAL calls (reads, edits, shell on a
+     * confining host), handed to runSubAgent as `gateLocal`. Without it a subagent
+     * ran these with no rule check at all, so a managed or project `deny` (tiers that
+     * must only ever tighten) and the credential-file prompt were silently skipped.
+     *
+     * - Rules are matched in the main loop's precedence (`permissionRules` is already
+     *   tier-ordered), and a deny refuses without a prompt.
+     * - A read goes through decideApproval exactly like the main loop's: an `ask` rule
+     *   prompts, and a credential-file read prompts unless an allow rule or this run's
+     *   read override covers it.
+     * - An edit or a confined command prompts for an `ask` rule. Its tier's default
+     *   prompt was already answered by the dispatch's own approval (a writable
+     *   subagent is consent to edit autonomously), but a rule that mandates a prompt
+     *   was not, and only the user can answer it.
+     * - A confined command that references a path outside the workspace also prompts
+     *   unless an allow rule covers it, as it does in the main loop: the sandbox may
+     *   still let it read `~/.ssh` or `/etc`, so the dispatch's consent to work in
+     *   the project does not extend to it.
+     */
+    const gateSubagentLocal =
+      (callId: string) =>
+      async (
+        name: string,
+        kind: ToolKind,
+        gateArgs: Record<string, unknown>,
+        runCall: () => Promise<string>
+      ): Promise<string> => {
+        const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
+        if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
+        const sensitiveRead = isSensitiveRead(kind, gateArgs)
+        const shellEscapesWorkspace =
+          kind === 'shell' &&
+          name === 'run_shell' &&
+          typeof gateArgs.command === 'string' &&
+          shellReferencesExternalPath(gateArgs.command, roots)
+        const mustApprove =
+          kind === 'read'
+            ? decideApproval({
+                ruleAction,
+                policy: run.policy,
+                kind,
+                override: run.override.has('read'),
+                shellSandboxed: isSandboxed(),
+                shellUnsandboxedOverride: run.shellUnsandboxedOverride,
+                sensitiveRead
+              }).mustApprove
+            : ruleAction === 'ask' || (shellEscapesWorkspace && ruleAction !== 'allow')
+        if (!mustApprove) return runCall()
+        return promptGatedCall({
+          subCallId: mintSubCallId(callId, kind),
+          name,
+          args: gateArgs,
+          kind,
+          mustApprove: true,
+          unsandboxedShell: false,
+          sensitiveRead,
+          preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
+          denyNote: 'Denied by the user. Do not retry this call; work around it or note it in your report.',
+          runCall
+        })
+      }
+
     const runDispatch = async (input: {
       /** The dispatch tool call this agent belongs to — progress events attach to it. */
       callId: string
@@ -1213,72 +1372,10 @@ export async function startRun(
       const systemOverride = resumed ? resumed.systemOverride : agent?.systemPrompt
       const allowedTools = resumed ? resumed.tools : agent?.tools
 
-      // Consent seams for a dispatched subagent's gated calls: UNCONFINED shell
-      // (writable tier on a host with no OS sandbox) and NETWORK egress (any tier).
-      // A background subagent can't prompt, so without these the calls are refused;
-      // with them, each is propagated to the user as a normal tool_approval on a
-      // minted callId under the dispatch. Deny rules still win without a prompt, an
-      // existing grant (the per-run unconfined-shell consent, a per-destination
-      // network grant, an allow rule) skips the prompt exactly as in the main loop,
-      // and every gated call's start/result is emitted so what runs unconfined — or
-      // leaves the machine — is never invisible.
-      const gateSeq = { shell: 0, net: 0 }
-      const promptGatedCall = async (input: {
-        subCallId: string
-        name: string
-        args: Record<string, unknown>
-        kind: ToolKind
-        mustApprove: boolean
-        unsandboxedShell: boolean
-        denyNote: string
-        runCall: () => Promise<string>
-      }): Promise<string> => {
-        const { subCallId, name, args, kind, mustApprove, unsandboxedShell, denyNote, runCall } = input
-        const summary = `Subagent: ${getTool(name)!.summarize(args)}`
-        if (mustApprove) {
-          // Track + emit like any approval so re-adopt replay and cancelRun
-          // (which resolves pending approvals as deny) cover this prompt too.
-          run.pendingApprovals.set(subCallId, {
-            name,
-            summary,
-            args,
-            kind,
-            ...(unsandboxedShell ? { sandboxed: false } : {})
-          })
-          emit({
-            type: 'tool_approval',
-            callId: subCallId,
-            name,
-            summary,
-            args,
-            kind,
-            ...(unsandboxedShell ? { sandboxed: false } : {})
-          })
-          const { decision, note } = await waitForApproval(run, subCallId)
-          run.pendingApprovals.delete(subCallId)
-          const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
-          if (!approved) {
-            emit({
-              type: 'tool_result',
-              callId: subCallId,
-              name,
-              ok: false,
-              output: denialText('Denied by the user.', note)
-            })
-            return denialText(denyNote, note)
-          }
-        }
-        emit({ type: 'tool_start', callId: subCallId, name, args, kind })
-        try {
-          const output = redact(await runCall())
-          emit({ type: 'tool_result', callId: subCallId, name, ok: true, output })
-          return output
-        } catch (e) {
-          const output = redact(`Error: ${(e as Error).message}`)
-          emit({ type: 'tool_result', callId: subCallId, name, ok: false, output })
-          return output
-        }
-      }
+      // Consent seams for this subagent's gated calls: UNCONFINED shell (writable tier
+      // on a host with no OS sandbox), NETWORK egress (any tier), and the permission
+      // rules on its LOCAL calls (see gateSubagentLocal). Unconfined shell and network
+      // are refused without their seams, since a background subagent can't prompt.
       // Only consulted by runSubAgent when the host lacks an OS sandbox.
       const gateUnconfinedShell = async (
         gateArgs: Record<string, unknown>,
@@ -1286,11 +1383,9 @@ export async function startRun(
       ): Promise<string> => {
         const subject = permissionSubject('run_shell', gateArgs)
         const ruleAction = matchRule(permissionRules, 'run_shell', subject, roots)
-        if (ruleAction === 'deny') {
-          return 'Denied by a permission rule.'
-        }
+        if (ruleAction === 'deny') return ruleDenialText('run_shell', gateArgs)
         return promptGatedCall({
-          subCallId: `${callId}.shell.${++gateSeq.shell}`,
+          subCallId: mintSubCallId(callId, 'shell'),
           name: 'run_shell',
           args: gateArgs,
           kind: 'shell',
@@ -1312,7 +1407,7 @@ export async function startRun(
         runCall: () => Promise<string>
       ): Promise<string> => {
         const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
-        if (ruleAction === 'deny') return 'Denied by a permission rule.'
+        if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
         const { mustApprove } = decideApproval({
           ruleAction,
           policy: run.policy,
@@ -1322,7 +1417,7 @@ export async function startRun(
           shellUnsandboxedOverride: run.shellUnsandboxedOverride
         })
         return promptGatedCall({
-          subCallId: `${callId}.net.${++gateSeq.net}`,
+          subCallId: mintSubCallId(callId, 'net'),
           name,
           args: gateArgs,
           kind: 'network',
@@ -1369,6 +1464,8 @@ export async function startRun(
               gateUnconfinedShell
             }
           : {}),
+        // Permission rules + the sensitive-read prompt on every local call, either tier.
+        gateLocal: gateSubagentLocal(callId),
         // Web access for either tier, every call gated per destination (the
         // subagent's shell stays offline regardless). getSecret/searchProvider let
         // web_search resolve its key; collectSecrets masks credentials on egress —
@@ -1596,6 +1693,9 @@ export async function startRun(
           // prompts) ship to the provider without passing flushResult — scrub them
           // with the same run-scoped redactor.
           redact,
+          // ...and whose reads answer to the same permission rules and credential-file
+          // prompt as a dispatched subagent's.
+          gateLocal: gateSubagentLocal(callId),
           onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
           onSubAgent: (ev) =>
             emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
@@ -1685,7 +1785,11 @@ export async function startRun(
         : {})
     })
 
-    /** True if a call is a read-only tool with no gating — safe to run concurrently. */
+    /**
+     * True if a call is a read-only tool with no gating, safe to run concurrently.
+     * The concurrent batch skips the approval gate entirely, so anything that gate
+     * could stop (a deny/ask rule, a hook, a credential-file read) stays sequential.
+     */
     const isParallelCall = (call: ToolCall): boolean => {
       // ask_user blocks on a human; keep it sequential so its prompt never appears
       // in the middle of a concurrent read batch.
@@ -1698,7 +1802,12 @@ export async function startRun(
         permissionSubject(call.name, call.arguments),
         roots
       )
-      return isParallelizableRead(tool.kind, ruleAction, hasMatchingHook(call.name))
+      return isParallelizableRead(
+        tool.kind,
+        ruleAction,
+        hasMatchingHook(call.name),
+        isSensitiveRead(tool.kind, call.arguments)
+      )
     }
 
     // Context compaction state. `messages` is always the full, persisted log; what
@@ -2717,21 +2826,8 @@ export async function startRun(
           output = invalid.output
           ok = false
         } else if (ruleAction === 'deny') {
-          // Attribute a deny to the managed tier when it originates there — the admin
-          // block is checked first, so if it matches at all it IS the winning rule.
-          // Gives the user an honest reason (their org, not a stray local rule) and
-          // signals the deny is not one they can lift from Settings.
-          const byManaged =
-            managedPolicy.permissionRules.length > 0 &&
-            matchRule(
-              managedPolicy.permissionRules,
-              call.name,
-              permissionSubject(call.name, call.arguments),
-              roots
-            ) === 'deny'
-          output = byManaged
-            ? "Denied by your organization's managed policy."
-            : 'Denied by a permission rule.'
+          // Attributed to the managed tier when it originates there (see ruleDenialText).
+          output = ruleDenialText(call.name, call.arguments)
           ok = false
         } else if (isBlockedByPlan(run.policy, tool)) {
           output =
@@ -2810,10 +2906,7 @@ export async function startRun(
             // isSensitivePath): reads normally never prompt, so this is the one gate
             // that keeps a committed `.env` or private key from flowing into the
             // transcript unasked.
-            const sensitiveRead =
-              tool.kind === 'read' &&
-              typeof execArgs.path === 'string' &&
-              isSensitivePath(execArgs.path)
+            const sensitiveRead = isSensitiveRead(tool.kind, execArgs)
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.

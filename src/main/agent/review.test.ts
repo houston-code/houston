@@ -393,6 +393,20 @@ describe('runReview redaction', () => {
   })
 })
 
+describe('runReview permission gate', () => {
+  it("threads the dispatcher's gateLocal into every nested subagent", async () => {
+    const gateLocal: NonNullable<SubAgentOptions['gateLocal']> = async (_n, _k, _a, run) => run()
+    const { fn, calls } = fakeAgent((o) => {
+      if (isVerifier(o)) return 'No confirmed issues.'
+      return dimensionOf(o) === 'CORRECTNESS' ? '- [SEVERITY: high] a.ts:1 — bug' : 'No issues found.'
+    })
+    await runReview(base({ runAgent: fn, gateLocal }))
+    expect(calls.length).toBe(4) // three reviewers + the verifier
+    // Reviewers read the project too, so each answers to the same rules and prompts.
+    for (const c of calls) expect(c.gateLocal).toBe(gateLocal)
+  })
+})
+
 describe('reviewWorkspaceChanges', () => {
   const gitExecOf =
     (map: Record<string, string | Error>): GitExec =>

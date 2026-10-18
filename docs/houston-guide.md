@@ -516,7 +516,11 @@ ids fall back to the chat's model). By default a subagent is read-only (it canno
 edit files or run commands); a subagent marked `write: true` gets a writable tier
 and is dispatched with `dispatch_writable_agent`, which is approval-gated because
 it grants write access: one approval covers the whole delegated task's local
-actions, confined to the project. Either tier can also reach the web with
+actions, confined to the project. Your permission rules still apply inside
+either tier: a `deny` (including a managed-policy or project guardrail one)
+refuses the subagent's call outright, and an `ask` rule, a credential-file read
+(a `.env`, a private key), or a shell command that names a path outside the project
+asks you first, exactly as for the main agent. Either tier can also reach the web with
 `web_fetch` and `web_search`, and every network request first asks you for
 approval, per destination, exactly like the main agent's own network calls (a
 denial comes back to the subagent as its tool result). A subagent's shell

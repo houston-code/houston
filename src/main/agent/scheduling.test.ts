@@ -6,23 +6,29 @@ const call = (id: string, name: string): ToolCall => ({ id, name, arguments: {} 
 
 describe('isParallelizableRead', () => {
   it('parallelizes plain reads', () => {
-    expect(isParallelizableRead('read', null, false)).toBe(true)
-    expect(isParallelizableRead('read', 'allow', false)).toBe(true)
+    expect(isParallelizableRead('read', null, false, false)).toBe(true)
+    expect(isParallelizableRead('read', 'allow', false, false)).toBe(true)
   })
 
   it('never parallelizes side-effecting kinds', () => {
     for (const kind of ['write', 'shell', 'network', 'mcp'] as const) {
-      expect(isParallelizableRead(kind, null, false)).toBe(false)
+      expect(isParallelizableRead(kind, null, false, false)).toBe(false)
     }
   })
 
   it('does not parallelize a read gated by a deny/ask rule', () => {
-    expect(isParallelizableRead('read', 'deny', false)).toBe(false)
-    expect(isParallelizableRead('read', 'ask', false)).toBe(false)
+    expect(isParallelizableRead('read', 'deny', false, false)).toBe(false)
+    expect(isParallelizableRead('read', 'ask', false, false)).toBe(false)
   })
 
   it('does not parallelize a read wrapped by a hook', () => {
-    expect(isParallelizableRead('read', null, true)).toBe(false)
+    expect(isParallelizableRead('read', null, true, false)).toBe(false)
+  })
+
+  it('does not parallelize a read of a credential file, so it reaches the approval gate', () => {
+    expect(isParallelizableRead('read', null, false, true)).toBe(false)
+    // Even an allow rule leaves it sequential: the gate is where the allow is honored.
+    expect(isParallelizableRead('read', 'allow', false, true)).toBe(false)
   })
 })
 
