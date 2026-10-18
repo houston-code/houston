@@ -319,6 +319,67 @@ describe('responses usage reporting', () => {
   })
 })
 
+describe('responses truncated replies', () => {
+  beforeEach(() => h.create.mockReset())
+
+  it('reports a reply that ended on response.incomplete as max_tokens, with its usage', async () => {
+    // A reply that runs out of output budget never gets `response.completed`: the
+    // stream ends on `response.incomplete`, which carries the usage and the reason.
+    h.create.mockResolvedValue(
+      streamOf([
+        { type: 'response.output_text.delta', delta: 'partial answ' },
+        {
+          type: 'response.incomplete',
+          response: {
+            usage: { input_tokens: 900, output_tokens: 64 },
+            incomplete_details: { reason: 'max_output_tokens' }
+          }
+        }
+      ])
+    )
+    const provider = createResponsesProvider('k')
+    const events: ProviderStreamEvent[] = []
+    for await (const ev of provider.streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest)) {
+      events.push(ev)
+    }
+    expect(events.at(-1)).toEqual({
+      type: 'done',
+      stopReason: 'max_tokens',
+      usage: { inputTokens: 900, outputTokens: 64 }
+    })
+  })
+
+  it('keeps the usage of a reply stopped by a content filter, without calling it truncated', async () => {
+    h.create.mockResolvedValue(
+      streamOf([
+        {
+          type: 'response.incomplete',
+          response: {
+            usage: { input_tokens: 50, output_tokens: 3 },
+            incomplete_details: { reason: 'content_filter' }
+          }
+        }
+      ])
+    )
+    const provider = createResponsesProvider('k')
+    let done: ProviderStreamEvent | undefined
+    for await (const ev of provider.streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest)) {
+      if (ev.type === 'done') done = ev
+    }
+    expect(done).toEqual({
+      type: 'done',
+      stopReason: 'end_turn',
+      usage: { inputTokens: 50, outputTokens: 3 }
+    })
+  })
+})
+
 describe('reasoning-summary org gate', () => {
   beforeEach(() => h.create.mockReset())
 

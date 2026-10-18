@@ -121,6 +121,49 @@ describe('toGeminiContents', () => {
       }
     ])
   })
+
+  it('keeps parallel tool results in one turn when an earlier one produced an image', () => {
+    // The responses to one model turn's calls must all sit in the next turn. An image
+    // turn spliced in after the first result split them (a 400: the response parts no
+    // longer match the call parts), so the images wait for the run to end.
+    const msgs: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'c1', name: 'view_localhost', arguments: {} },
+          { id: 'c2', name: 'run', arguments: {} }
+        ]
+      },
+      {
+        role: 'tool',
+        content: 'Loaded',
+        toolCallId: 'c1',
+        toolName: 'view_localhost',
+        images: [{ mediaType: 'image/png', data: 'SHOT' }]
+      },
+      { role: 'tool', content: 'r2', toolCallId: 'c2', toolName: 'run' },
+      { role: 'user', content: 'Wrap up.' }
+    ]
+    expect(toGeminiContents(msgs)).toEqual([
+      {
+        role: 'model',
+        parts: [
+          { functionCall: { name: 'view_localhost', args: {} } },
+          { functionCall: { name: 'run', args: {} } }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'view_localhost', response: { result: 'Loaded' } } },
+          { functionResponse: { name: 'run', response: { result: 'r2' } } }
+        ]
+      },
+      { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: 'SHOT' } }] },
+      { role: 'user', parts: [{ text: 'Wrap up.' }] }
+    ])
+  })
 })
 
 describe('gemini maxOutputTokens', () => {

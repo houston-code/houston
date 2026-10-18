@@ -2,7 +2,7 @@ import type OpenAI from 'openai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent, StopReason } from '@shared/agent'
 import type { ModelCaps, ModelOption } from '@shared/types'
-import { imageDataUrl } from '@shared/images'
+import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import { openaiReasoningEffort, openaiSupportsReasoning } from './reasoning'
 import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
@@ -14,7 +14,26 @@ export function toOpenAIMessages(system: string | undefined, messages: ChatMessa
   const out: OpenAIMessage[] = []
   if (system) out.push({ role: 'system', content: system })
 
+  // A tool message's content is text-only, so images a tool produced (e.g. a
+  // view_localhost screenshot) follow as a user turn for vision-capable models. They
+  // wait until the run of tool messages ends: every tool message answering an
+  // assistant's tool_calls must come straight after it, so a user turn between two
+  // parallel results is a 400.
+  let toolImages: ImageAttachment[] = []
+  const flushToolImages = (): void => {
+    if (!toolImages.length) return
+    out.push({
+      role: 'user',
+      content: toolImages.map((img) => ({
+        type: 'image_url' as const,
+        image_url: { url: imageDataUrl(img) }
+      }))
+    })
+    toolImages = []
+  }
+
   for (const m of messages) {
+    if (m.role !== 'tool') flushToolImages()
     if (m.role === 'user') {
       if (m.images?.length) {
         const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = []
@@ -41,19 +60,10 @@ export function toOpenAIMessages(system: string | undefined, messages: ChatMessa
       out.push(msg)
     } else if (m.role === 'tool') {
       out.push({ role: 'tool', tool_call_id: m.toolCallId ?? '', content: m.content })
-      // A tool message's content is text-only, so images a tool produced (e.g. a
-      // view_localhost screenshot) follow as a user turn for vision-capable models.
-      if (m.images?.length) {
-        out.push({
-          role: 'user',
-          content: m.images.map((img) => ({
-            type: 'image_url' as const,
-            image_url: { url: imageDataUrl(img) }
-          }))
-        })
-      }
+      if (m.images?.length) toolImages.push(...m.images)
     }
   }
+  flushToolImages()
   return out
 }
 
