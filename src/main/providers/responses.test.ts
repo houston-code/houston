@@ -542,3 +542,98 @@ describe('responses in-band failures', () => {
     expect(ev.status).toBeUndefined()
   })
 })
+
+describe('responses tool calls cut off at the output limit', () => {
+  beforeEach(() => h.create.mockReset())
+
+  async function eventsFor(events: unknown[]): Promise<ProviderStreamEvent[]> {
+    h.create.mockResolvedValue(streamOf(events))
+    const out: ProviderStreamEvent[] = []
+    for await (const ev of createResponsesProvider('k').streamChat({
+      model: 'gpt-5.2',
+      messages: [{ role: 'user', content: 'hi' }]
+    })) {
+      out.push(ev)
+    }
+    return out
+  }
+
+  const added = (call_id: string, name = 'write_file'): unknown => ({
+    type: 'response.output_item.added',
+    item: { type: 'function_call', call_id, name, arguments: '' }
+  })
+  const done = (call_id: string, args: string, extra: Record<string, unknown> = {}, name = 'write_file'): unknown => ({
+    type: 'response.output_item.done',
+    item: { type: 'function_call', call_id, name, arguments: args, ...extra }
+  })
+  const incomplete = {
+    type: 'response.incomplete',
+    response: {
+      usage: { input_tokens: 100, output_tokens: 32 },
+      incomplete_details: { reason: 'max_output_tokens' }
+    }
+  }
+
+  it('reads usage and the cut-off from response.incomplete', async () => {
+    const out = await eventsFor([{ type: 'response.output_text.delta', delta: 'long answ' }, incomplete])
+    // `response.incomplete` used to fall through unhandled: no usage, and a cut-off
+    // reply reported as finished.
+    expect(out.at(-1)).toEqual({
+      type: 'done',
+      stopReason: 'max_tokens',
+      usage: { inputTokens: 100, outputTokens: 32 }
+    })
+  })
+
+  it('marks the function call being written, and keeps max_tokens though calls are present', async () => {
+    const out = await eventsFor([
+      added('call_1', 'read_file'),
+      done('call_1', '{"path":"a.ts"}', {}, 'read_file'),
+      added('call_2'),
+      done('call_2', '{"path":"b.ts","content":"ex', { status: 'incomplete' }),
+      incomplete
+    ])
+    expect(out.filter((e) => e.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'call_1', name: 'read_file', arguments: { path: 'a.ts' } } },
+      { type: 'tool_call', call: { id: 'call_2', name: 'write_file', arguments: {}, incomplete: true } }
+    ])
+    expect(out.at(-1)).toMatchObject({ type: 'done', stopReason: 'max_tokens' })
+  })
+
+  it('answers a call the stream opened but never finished', async () => {
+    const out = await eventsFor([added('call_1'), incomplete])
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'call_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+  })
+
+  it('marks the last call at the limit even when its JSON parses', async () => {
+    const out = await eventsFor([added('call_1'), done('call_1', '{}'), incomplete])
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'call_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+  })
+
+  it('marks malformed JSON incomplete on a completed response', async () => {
+    const out = await eventsFor([added('call_1'), done('call_1', '{"path":'), { type: 'response.completed', response: {} }])
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'call_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+    expect(out.at(-1)).toMatchObject({ type: 'done', stopReason: 'tool_use' })
+  })
+
+  it('passes a whole call through unmarked', async () => {
+    const out = await eventsFor([
+      added('call_1'),
+      done('call_1', '{"path":"a.ts","content":"x"}'),
+      { type: 'response.completed', response: {} }
+    ])
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'call_1', name: 'write_file', arguments: { path: 'a.ts', content: 'x' } }
+    })
+  })
+})

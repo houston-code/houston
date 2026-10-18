@@ -6,10 +6,12 @@ import type {
   Provider,
   ProviderStreamEvent,
   ReasoningBlock,
-  StopReason
+  StopReason,
+  ToolCall
 } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { openaiResponsesReasoning } from './reasoning'
+import { parseToolArguments } from './tool-args'
 
 /**
  * Adapter for OpenAI's **Responses API** (`client.responses.create`), the path
@@ -132,6 +134,8 @@ interface ResponsesEvent {
     call_id?: string
     name?: string
     arguments?: string
+    /** `incomplete` on an item the reply's output limit cut off. */
+    status?: string
     /** Reasoning items: `rs_...` id, encrypted state, and the display summary. */
     id?: string
     encrypted_content?: string | null
@@ -263,7 +267,12 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         stream = await create({ ...params, reasoning: withoutSummary(reasoning) })
       }
 
-      let hadToolCalls = false
+      // Function calls are held until the stream ends, when the stop reason says whether
+      // the last one was cut off. `pending` keeps the calls the stream opened but hasn't
+      // finished, so one the limit cut off before its `done` event is still answered.
+      const calls: ToolCall[] = []
+      const pending = new Map<string, { name: string }>()
+      let lastItem: { type?: string; callId?: string } | undefined
       let inputTokens: number | undefined
       let outputTokens: number | undefined
       let cacheReadTokens: number | undefined
@@ -279,8 +288,17 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
           case 'response.reasoning_summary_text.delta':
             if (ev.delta) yield { type: 'reasoning', text: ev.delta }
             break
+          case 'response.output_item.added': {
+            const item = ev.item
+            lastItem = { type: item?.type, callId: item?.call_id }
+            if (item?.type === 'function_call' && item.call_id) {
+              pending.set(item.call_id, { name: item.name || '' })
+            }
+            break
+          }
           case 'response.output_item.done': {
             const item = ev.item
+            lastItem = { type: item?.type, callId: item?.call_id }
             if (item?.type === 'reasoning') {
               // Keep the item only if it carries replayable state; the summary is
               // for display. An id with no encrypted_content can't be sent back
@@ -294,17 +312,11 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
                 })
               }
             } else if (item?.type === 'function_call') {
-              hadToolCalls = true
-              let args: Record<string, unknown>
-              try {
-                args = item.arguments ? JSON.parse(item.arguments) : {}
-              } catch {
-                args = {}
-              }
-              yield {
-                type: 'tool_call',
-                call: { id: item.call_id || randomUUID(), name: item.name || '', arguments: args }
-              }
+              if (item.call_id) pending.delete(item.call_id)
+              const args = item.status === 'incomplete' ? null : parseToolArguments(item.arguments)
+              const id = item.call_id || randomUUID()
+              const name = item.name || ''
+              calls.push(args ? { id, name, arguments: args } : { id, name, arguments: {}, incomplete: true })
             }
             break
           }
@@ -342,9 +354,19 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         }
       }
 
+      for (const [id, { name }] of pending) calls.push({ id, name, arguments: {}, incomplete: true })
+      // At the output limit, the reply's last item is what the model was still writing: if
+      // that's a function call, its arguments are cut off whatever they parse to.
+      if (stopReason === 'max_tokens' && lastItem?.type === 'function_call') {
+        const i = calls.findIndex((c) => c.id === lastItem!.callId)
+        if (i >= 0) calls[i] = { ...calls[i], arguments: {}, incomplete: true }
+      }
+      for (const call of calls) yield { type: 'tool_call', call }
+
       yield {
         type: 'done',
-        stopReason: hadToolCalls ? 'tool_use' : stopReason,
+        // A cut-off reply keeps `max_tokens` even when it carries calls, so the loop knows.
+        stopReason: stopReason === 'max_tokens' ? stopReason : calls.length ? 'tool_use' : stopReason,
         usage: {
           inputTokens,
           outputTokens,

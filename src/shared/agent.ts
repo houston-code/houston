@@ -16,6 +16,13 @@ export interface ToolCall {
   id: string
   name: string
   arguments: Record<string, unknown>
+  /**
+   * Set by a provider adapter when the call's arguments didn't arrive whole: the reply
+   * stopped at its output limit while this call was still being written, or the JSON
+   * didn't parse. `arguments` is then an empty placeholder, so the call must be answered
+   * without being run. Adapters never send it back to a provider.
+   */
+  incomplete?: true
 }
 
 /**

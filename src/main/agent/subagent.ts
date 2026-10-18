@@ -1,5 +1,19 @@
-import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
+import {
+  systemNoteMessage,
+  type ChatMessage,
+  type Provider,
+  type StopReason,
+  type TokenUsage,
+  type ToolCall
+} from '@shared/agent'
 import { getTool, type ToolContext, type ToolKind } from './tools'
+import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
+import {
+  MAX_OUTPUT_CONTINUATIONS,
+  continuationNote,
+  incompleteCallResult,
+  raisedOutputCap
+} from './output-limit'
 import { runQuarantineExtraction } from './untrusted'
 import { providerStreamError, withProviderRetry } from './retry'
 import { recordOriginal, recordResult, writeTargets } from './checkpoints'
@@ -88,7 +102,6 @@ function resolveSubAgentTools(
 }
 
 const MAX_SUBAGENT_ITERATIONS = 16
-const SUBAGENT_MAX_TOKENS = 4096
 
 /**
  * How deep dispatches may nest: the main agent (depth 0) can dispatch subagents
@@ -363,6 +376,13 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     ? [...opts.priorMessages, { role: 'user', content: prompt }]
     : [{ role: 'user', content: prompt }]
   let lastText = ''
+  // Output-limit recovery, as in the main loop (see output-limit.ts): after a reply hits
+  // the limit, later requests ask for the model's full ceiling, and a cut-off answer is
+  // continued. `carried` holds the text of the continued turns, since the report is the
+  // whole answer, not just its last piece.
+  let outputCapRaised = false
+  let outputContinuations = 0
+  let carried = ''
 
   // Clean-completion exit: hand the transcript back (for resumability) and return.
   const finish = (text: string): string => {
@@ -388,7 +408,9 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     if (signal.aborted) return lastText.trim() || '[subagent aborted]'
 
     let text = ''
-    let calls: { id: string; name: string; arguments: Record<string, unknown> }[] = []
+    let calls: ToolCall[] = []
+    // Widened by the cast: it's assigned inside the retry callback, which narrowing can't see.
+    let stopReason = 'end_turn' as StopReason
     try {
       // One turn of the subagent's own loop, retried on a transient failure. Retrying
       // the whole turn is safe here even though the parent run streams: a subagent's
@@ -399,18 +421,20 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         async () => {
           text = ''
           calls = []
+          stopReason = 'end_turn'
           for await (const ev of provider.streamChat({
             model,
             system,
             messages,
             tools,
-            maxTokens: SUBAGENT_MAX_TOKENS,
+            ...(outputCapRaised ? raisedOutputCap(model) : {}),
             ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
             signal
           })) {
             if (ev.type === 'text') text += ev.text
             else if (ev.type === 'tool_call') calls.push(ev.call)
             else if (ev.type === 'done') {
+              stopReason = ev.stopReason
               if (ev.usage) opts.onUsage?.(ev.usage)
             } else if (ev.type === 'error') throw providerStreamError(ev)
           }
@@ -427,16 +451,61 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       return `[subagent error: ${(e as Error).message}]`
     }
 
-    if (text.trim()) lastText = text
-    messages.push({ role: 'assistant', content: text, ...(calls.length ? { toolCalls: calls } : {}) })
+    const outputLimited = stopReason === 'max_tokens'
+    if (outputLimited) outputCapRaised = true
+    else outputContinuations = 0
 
-    if (calls.length === 0) return finish(text.trim() || '[subagent returned no answer]')
+    const answer = carried + text
+    if (answer.trim()) lastText = answer
+    // A cut-off answer with no text at all isn't kept: an empty assistant turn is one some
+    // providers reject, and the continuation note carries on from the previous turn.
+    const continueCutOff =
+      calls.length === 0 &&
+      outputLimited &&
+      outputContinuations < MAX_OUTPUT_CONTINUATIONS &&
+      iter + 1 < MAX_SUBAGENT_ITERATIONS
+    if (!continueCutOff || text.trim()) {
+      messages.push({ role: 'assistant', content: text, ...(calls.length ? { toolCalls: calls } : {}) })
+    }
+
+    if (continueCutOff) {
+      outputContinuations++
+      carried = answer
+      messages.push(systemNoteMessage(continuationNote(text.trim() !== '')))
+      opts.onProgress?.(`turn ${iter + 1}/${MAX_SUBAGENT_ITERATIONS} · continuing past the output limit`)
+      continue
+    }
+
+    if (calls.length === 0) {
+      const report = answer.trim() || '[subagent returned no answer]'
+      return finish(
+        outputLimited ? `${report}\n\n[subagent report cut off at the model's output limit]` : report
+      )
+    }
+    // The continued text was an interim message ahead of these calls, not the report.
+    carried = ''
 
     for (const call of calls) {
       progress(iter, call)
       const tool = allowedToolSet.has(call.name) ? getTool(call.name) : undefined
+      // The schema the call is checked against: the tool's own, or the nested-dispatch
+      // tool's when that capability is wired. Unknown and unavailable tools are refused
+      // below and have nothing to check.
+      const schema =
+        call.name === 'dispatch_agent' && opts.dispatchNested
+          ? getTool('dispatch_agent')?.schema.parameters
+          : tool?.schema.parameters
+      // Fix obvious argument-shape slips first, as the main loop does, so validation and
+      // execution see the same corrected arguments the transcript records.
+      if (schema && !call.incomplete) call.arguments = coerceToolArgs(call.arguments, schema)
+      const issues = schema && !call.incomplete ? validateToolArgs(call.arguments, schema) : []
       let output: string
-      if (call.name === 'dispatch_agent' && opts.dispatchNested) {
+      if (call.incomplete) {
+        // The arguments didn't arrive whole: nothing can run, but the call is answered.
+        output = incompleteCallResult(call, outputLimited)
+      } else if (schema && issues.length) {
+        output = validationError(call.name, schema, issues)
+      } else if (call.name === 'dispatch_agent' && opts.dispatchNested) {
         // Nested dispatch is handled here (not via toolCtx) so the loop's injected
         // handler — which carries the depth cap and the read-only nested tier —
         // is the only path to it.

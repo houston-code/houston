@@ -152,6 +152,14 @@ import { getConversation, setCompaction, setPromptSnapshot } from '../conversati
 import { buildPinnedMessages, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
 import { StallDetector, resolveStallThresholds } from './stall'
 import {
+  MAX_OUTPUT_CONTINUATIONS,
+  continuationNote,
+  continuationNotice,
+  incompleteCallResult,
+  incompleteCallsNotice,
+  raisedOutputCap
+} from './output-limit'
+import {
   resolveBudgetLimits,
   resolveExtensionLimits,
   shouldExtend,
@@ -2149,6 +2157,11 @@ export async function startRun(
     // How many times a Stop hook has forced the turn to continue, bounded so a
     // misbehaving hook can't loop forever.
     let stopContinuations = 0
+    // Output-limit recovery (see output-limit.ts). Once a reply has hit the limit, every
+    // later request asks for the model's full ceiling; a cut-off text reply is continued
+    // automatically, at most MAX_OUTPUT_CONTINUATIONS times in a row.
+    let outputCapRaised = false
+    let outputContinuations = 0
 
     for (let iter = 0; iter < budget.maxIterations; iter++) {
       if (abort.signal.aborted) {
@@ -2296,6 +2309,7 @@ export async function startRun(
             reasoningSummary,
             verbosity,
             explicitCacheControl: route.explicitCacheControl,
+            ...(outputCapRaised ? raisedOutputCap(route.model) : {}),
             signal: abort.signal
           })) {
             if (ev.type === 'text') {
@@ -2446,6 +2460,12 @@ export async function startRun(
         })
       }
 
+      // A reply that stopped at the output limit had more to say than the cap allowed, so
+      // ask for the model's full ceiling from here on: the redo of a cut-off call, or the
+      // continuation of a cut-off answer, then has room the first attempt didn't.
+      if (stopReason === 'max_tokens') outputCapRaised = true
+      else outputContinuations = 0
+
       // On the last iteration a tool call can't be run (the cap is reached), and
       // persisting it would end the turn on a tool_use with nothing after it. Drop the
       // calls, keep whatever the model said, and make sure the user gets some text.
@@ -2461,13 +2481,26 @@ export async function startRun(
         }
       }
 
-      messages.push({
-        role: 'assistant',
-        content: assistantText,
-        ...(toolCalls.length ? { toolCalls } : {}),
-        ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
-      })
-      persist(messages)
+      // A text reply cut off at the output limit is continued rather than presented as
+      // complete: the model is asked to pick up exactly where it stopped. A reply with no
+      // visible text at all (the limit went on reasoning) isn't kept, since an empty
+      // assistant turn is one some providers reject; the note alone carries on from the
+      // user's turn. Not on the final step, which has no iteration left to continue in.
+      const continueCutOff =
+        !finalStep &&
+        toolCalls.length === 0 &&
+        stopReason === 'max_tokens' &&
+        outputContinuations < MAX_OUTPUT_CONTINUATIONS
+      const hadText = assistantText.trim() !== ''
+      if (!continueCutOff || hadText) {
+        messages.push({
+          role: 'assistant',
+          content: assistantText,
+          ...(toolCalls.length ? { toolCalls } : {}),
+          ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
+        })
+        persist(messages)
+      }
 
       if (cutAtCap) {
         emit({ type: 'limit', reason: 'max-steps' })
@@ -2475,10 +2508,18 @@ export async function startRun(
         return
       }
 
+      if (continueCutOff) {
+        outputContinuations++
+        emit({ type: 'notice', message: continuationNotice(outputContinuations) })
+        messages.push(systemNoteMessage(continuationNote(hadText)))
+        persist(messages)
+        continue
+      }
+
       if (toolCalls.length === 0) {
-        // The model's reply was cut off at its output limit — say so rather than
-        // presenting a truncated answer as complete. A truncated reply isn't a
-        // clean stop, so neither the Stop hooks nor the verification gate run for it.
+        // Still cut off after the automatic continuations: say so rather than presenting
+        // a truncated answer as complete. A truncated reply isn't a clean stop, so neither
+        // the Stop hooks nor the verification gate run for it.
         if (stopReason === 'max_tokens') {
           emit({ type: 'limit', reason: 'max-output' })
           emit({ type: 'done', stopReason })
@@ -2692,6 +2733,17 @@ export async function startRun(
       // (or the tool is unknown, which the caller reports separately). Applied in
       // both the parallel and the sequential path.
       const validationFailure = (call: ToolCall): CallResult | null => {
+        // A call whose arguments didn't arrive whole (see ToolCall.incomplete) has only a
+        // placeholder to validate. Answer it without running anything.
+        if (call.incomplete) {
+          return {
+            call,
+            output: incompleteCallResult(call, stopReason === 'max_tokens'),
+            ok: false,
+            images: [],
+            documents: []
+          }
+        }
         const tool = lookupTool(call.name)
         if (!tool) return null
         const issues = validateToolArgs(call.arguments, tool.schema.parameters)
@@ -2712,8 +2764,13 @@ export async function startRun(
       // event, execution, and the persisted log all agree on the fixed shape.
       for (const call of toolCalls) {
         const tool = lookupTool(call.name)
-        if (tool) call.arguments = coerceToolArgs(call.arguments, tool.schema.parameters)
+        if (tool && !call.incomplete) call.arguments = coerceToolArgs(call.arguments, tool.schema.parameters)
       }
+
+      // A refused call never gets a tool row in the transcript, so say in a notice that
+      // the output limit cut a call off and nothing ran.
+      const cutOffCalls = stopReason === 'max_tokens' ? toolCalls.filter((c) => c.incomplete) : []
+      if (cutOffCalls.length) emit({ type: 'notice', message: incompleteCallsNotice(cutOffCalls) })
 
       // Partition this turn's calls into the CONTIGUOUS LEADING run of unencumbered
       // reads and the sequential rest (the first encumbered call and everything
