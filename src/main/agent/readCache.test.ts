@@ -354,6 +354,16 @@ describe('invalidatePaths', () => {
     expect(await c.get('list_dir', { path: 'src' })).toBeUndefined()
   })
 
+  it('invalidates a list_dir when a file inside it is written, with Windows separators', async () => {
+    // resolveInRoots spells paths with backslashes on Windows; the overlap check has to
+    // treat those as segment boundaries too, or the stale listing stays cached.
+    const winResolve = (rel: string): string => `C:\\w\\${rel.replace(/\//g, '\\')}`
+    const c = new ReadCache({ stat: fakeFs({ 'C:\\w\\src': 'a.ts\nb.ts' }).stat })
+    await c.set('list_dir', { path: 'src' }, hit('a.ts\nb.ts'), readDeps('list_dir', { path: 'src' }, winResolve))
+    c.invalidatePaths(['C:\\w\\src\\c.ts'])
+    expect(await c.get('list_dir', { path: 'src' })).toBeUndefined()
+  })
+
   it('always invalidates tree-spanning reads on any write', async () => {
     const c = new ReadCache({ stat: fakeFs().stat })
     await c.set('search_files', { pattern: 'foo' }, hit('hits'), readDeps('search_files', { pattern: 'foo' }, resolve))

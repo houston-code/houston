@@ -2459,7 +2459,9 @@ export async function startRun(
           inputTokens: turnInput,
           outputTokens: turnOutput,
           cost: turnCost,
-          model: req.model,
+          // The model that billed the round. After a fallback hop that is the backup,
+          // and filing its tokens under the primary hid the hop from the cost breakdown.
+          model: route.model,
           ...(turnCacheRead ? { cacheReadTokens: turnCacheRead } : {}),
           ...(turnCacheWrite ? { cacheWriteTokens: turnCacheWrite } : {})
         })

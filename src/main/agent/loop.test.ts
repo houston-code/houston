@@ -1012,6 +1012,22 @@ describe('startRun', () => {
       expect(types(r).at(-1)).toBe('done')
     }, 30_000)
 
+    it('bills the turn to the fallback model that served it', async () => {
+      registerFallback(
+        scripted([
+          [
+            { type: 'text', text: 'from backup' },
+            { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 1000, outputTokens: 20 } }
+          ]
+        ])
+      )
+      const r = await run({ provider: alwaysOverloaded() })
+      const usage = r.events.filter((e) => e.type === 'usage') as { model?: string }[]
+      expect(usage.length).toBeGreaterThan(0)
+      // The per-model cost breakdown keys on this; filing it under the primary hid the hop.
+      expect(usage.map((u) => u.model)).toEqual(usage.map(() => 'm2'))
+    }, 30_000)
+
     it('sends the turn to the fallback model, not the primary model id', async () => {
       const seen: string[] = []
       const backup: Provider = {
