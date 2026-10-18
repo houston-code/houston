@@ -244,6 +244,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   // v11: the local providers' seeded names changed ("Local — Ollama" → "Ollama (local)"). The
   // name is saved with the provider, so rename the ones still carrying the old seed.
   if (fromVersion < 11) providers = renameBuiltInProviderLabels(providers)
+  // v12: Claude Haiku 5.5. Scoped like the other adds; Haiku 4.5 still serves, so it stays.
+  if (fromVersion < 12) providers = backfillDefaultModels(providers, ['claude-haiku-5-5'])
   const merged: AppSettings = {
     ...base,
     ...upgraded,

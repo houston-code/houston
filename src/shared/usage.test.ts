@@ -61,8 +61,9 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('claude-opus-5')).toBe(1_000_000)
     expect(contextWindowFor('claude-sonnet-4-7')).toBe(1_000_000)
     expect(contextWindowFor('claude-sonnet-5')).toBe(1_000_000)
-    // But a new Haiku, and Opus/Sonnet at/below 4.5, stay at 200K.
-    expect(contextWindowFor('claude-haiku-5')).toBe(200_000)
+    // Haiku moved to 1M with 5.x; Haiku 4.x and Opus/Sonnet at/below 4.5 stay at 200K.
+    expect(contextWindowFor('claude-haiku-5-5')).toBe(1_000_000)
+    expect(contextWindowFor('claude-haiku-4-5')).toBe(200_000)
     expect(contextWindowFor('claude-sonnet-4-5')).toBe(200_000)
   })
 
@@ -137,13 +138,13 @@ describe('modelPricing', () => {
     expect(modelPricing('claude-opus-5-5')).toEqual({ input: 4, output: 20, cacheRead: 0.2 })
     expect(modelPricing('anthropic.claude-opus-5-5')).toEqual({ input: 4, output: 20, cacheRead: 0.2 })
     expect(modelPricing('claude-sonnet-5')).toEqual({ input: 2, output: 10 })
-    expect(modelPricing('claude-sonnet-5-5')).toEqual({ input: 2, output: 10 })
+    expect(modelPricing('claude-sonnet-5-5')).toEqual({ input: 2, output: 10, cacheRead: 0.1 })
     expect(modelPricing('claude-fable-5-1')).toEqual({ input: 10, output: 50, cacheRead: 0.25 })
     expect(modelPricing('claude-mythos-5-1')).toEqual({ input: 10, output: 50, cacheRead: 0.25 })
     // OpenAI / Gemini families carry explicit cache rates: discounted reads, free writes.
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 })
     expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 })
-    expect(modelPricing('gemini-2.5-pro')).toEqual({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-pro')).toMatchObject({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 })
   })
 
   it('prices Gemini per release, not just per tier', () => {
@@ -159,8 +160,24 @@ describe('modelPricing', () => {
       ['gemini-2.5-flash-lite', 0.1, 0.4, 0.01]
     ]
     for (const [id, input, output, cacheRead] of rows) {
-      expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite: 0 })
+      expect(modelPricing(id), id).toMatchObject({ input, output, cacheRead, cacheWrite: 0 })
     }
+    // Pro bills prompts over 200K tokens at a higher tier.
+    expect(modelPricing('gemini-3.1-pro-preview')?.longContext).toEqual({
+      above: 200_000,
+      input: 4,
+      output: 18,
+      cacheRead: 0.4,
+      cacheWrite: 0
+    })
+  })
+
+  it('prices Claude Haiku 5.5 by prompt length', () => {
+    expect(modelPricing('claude-haiku-5-5')).toEqual({
+      input: 0.1,
+      output: 0.5,
+      longContext: { above: 100_000, input: 0.5, output: 2.5 }
+    })
   })
 
   it('prices each OpenAI model at its published rate', () => {
@@ -422,6 +439,25 @@ describe('resolveCapabilities', () => {
       vision: false,
       reasoning: true
     })
+  })
+})
+
+describe('turnCostUsd long-context tier', () => {
+  it('bills a whole request at the higher tier once its prompt passes the threshold', () => {
+    // Haiku 5.5: $0.10/$0.50 up to 100K prompt tokens, $0.50/$2.50 above.
+    expect(turnCostUsd('claude-haiku-5-5', 100_000, 1_000_000)).toBeCloseTo(0.01 + 0.5, 6)
+    expect(turnCostUsd('claude-haiku-5-5', 100_001, 1_000_000)).toBeCloseTo(0.0500005 + 2.5, 6)
+  })
+
+  it('counts cache reads toward the threshold and prices them at the tier', () => {
+    // 150K prompt, 120K of it from cache: over the threshold, so cache reads bill at 0.1x of $0.50.
+    const cost = turnCostUsd('claude-haiku-5-5', 150_000, 0, { readTokens: 120_000 })
+    expect(cost).toBeCloseTo((30_000 * 0.5 + 120_000 * 0.05) / 1_000_000, 9)
+  })
+
+  it('ignores the tier when the host lists its own flat price', () => {
+    const cost = turnCostUsd('claude-haiku-5-5', 500_000, 0, undefined, { inputPrice: 1, outputPrice: 2 })
+    expect(cost).toBeCloseTo(0.5, 9)
   })
 })
 
