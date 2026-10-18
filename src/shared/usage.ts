@@ -11,6 +11,7 @@ import {
   modelHasTools,
   modelHasVision,
   modelPricing,
+  pricingAt,
   type ModelPricing
 } from './model-facts'
 
@@ -91,8 +92,10 @@ export function sessionUsageFromConversation(u: ConversationUsage): SessionUsage
  * heuristics don't know (deepseek, qwen, …). Returns null only when neither side
  * can supply an input+output rate.
  */
-export function resolvePricing(model: string, caps?: ModelCaps): ModelPricing | null {
-  const h = modelPricing(model)
+export function resolvePricing(model: string, caps?: ModelCaps, at: Date = new Date()): ModelPricing | null {
+  const listed = modelPricing(model)
+  // Scheduled price changes resolve to the rates in force on `at` (today, by default).
+  const h = listed ? pricingAt(listed, at) : null
   const input = caps?.inputPrice ?? h?.input
   const output = caps?.outputPrice ?? h?.output
   if (input === undefined || output === undefined) return null
@@ -148,9 +151,10 @@ export function turnCostUsd(
   inputTokens: number,
   outputTokens: number,
   cache?: CacheTokens,
-  caps?: ModelCaps
+  caps?: ModelCaps,
+  at: Date = new Date()
 ): number {
-  const base = resolvePricing(model, caps)
+  const base = resolvePricing(model, caps, at)
   if (!base) return 0
   const inTok = clampTokens(inputTokens)
   // A prompt past the long-context threshold bills every token of the request at that tier.

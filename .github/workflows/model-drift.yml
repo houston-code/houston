@@ -110,40 +110,61 @@ jobs:
 
           sections=""
           ids=""
+          price_rows=""
+          price_ids=""
           for report in "$ANTHROPIC" "$OPENAI" "$GEMINI"; do
             json=$(decode "$report")
             section=$(jq -r '.section' <<<"$json")
             [ -z "$section" ] || sections+="$section"$'\n\n'
             ids+=$(jq -r '.ids[]' <<<"$json")$'\n'
+            rows=$(jq -r '.priceRows // ""' <<<"$json")
+            [ -z "$rows" ] || price_rows+="$rows"$'\n'
+            price_ids+=$(jq -r '(.priceIds // [])[]' <<<"$json")$'\n'
           done
           ids=$(printf '%s' "$ids" | sed '/^$/d' | sort -u)
           # printf '%s\n' so the last id is newline-terminated; wc -l counts newlines.
           count=$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')
           [ "$count" = 1 ] && noun=model || noun=models
+          # Scheduled price changes coming due join the marker, so a new one notifies too.
+          all_ids=$(printf '%s\n%s\n' "$ids" "$price_ids" | sed '/^$/d' | sort -u)
 
           gh label create "$LABEL" --color 1D76DB \
             --description 'A provider lists models Houston does not ship yet' --force > /dev/null
           existing=$(gh issue list --label "$LABEL" --state open --limit 20 --json number,title,body \
             | jq -c --arg t "$TITLE" 'map(select(.title == $t)) | .[0] // empty')
 
-          if [ "$count" = 0 ]; then
+          if [ -z "$all_ids" ]; then
             if [ -n "$existing" ]; then
               gh issue close "$(jq -r .number <<<"$existing")" \
-                --comment "Every listed model is now shipped or ignored as of $RUN_URL. Closing."
+                --comment "Every listed model is now shipped or ignored, and no price change is due, as of $RUN_URL. Closing."
             fi
             echo "No drift."
             exit 0
           fi
 
-          marker="<!-- model-drift ids: $(printf '%s' "$ids" | paste -sd, -) -->"
+          marker="<!-- model-drift ids: $(printf '%s' "$all_ids" | paste -sd, -) -->"
           body_file="$RUNNER_TEMP/body.md"
           {
             echo "$marker"
-            echo "**$count $noun the providers list that Houston doesn't ship yet.** Checked $(date -u +%Y-%m-%d): $RUN_URL"
+            if [ "$count" != 0 ]; then
+              echo "**$count $noun the providers list that Houston doesn't ship yet.** Checked $(date -u +%Y-%m-%d): $RUN_URL"
+            else
+              echo "**No new models; a scheduled price change is coming due.** Checked $(date -u +%Y-%m-%d): $RUN_URL"
+            fi
             echo
             echo "To add one: give it rules in \`src/shared/model-facts.ts\` if the table says it needs any, seed it in \`src/shared/defaults.ts\` with a scoped migration in \`src/main/store.ts\`, and run the provider canary on the branch. To stop flagging one on purpose, add it with a reason to \`src/main/providers/model-drift-ignore.json\`."
             echo
             printf '%s' "$sections"
+            if [ -n "$price_rows" ]; then
+              echo "### Scheduled price changes: still happening?"
+              echo
+              echo "Houston switches to these rates on the date by itself. If a provider has cancelled or moved one, update its \`scheduled\` entry in \`src/shared/model-facts.ts\` before then."
+              echo
+              echo "| Model | From | New price |"
+              echo "|---|---|---|"
+              printf '%s' "$price_rows"
+              echo
+            fi
             echo
             echo "_Updated weekly by \`.github/workflows/model-drift.yml\`; it closes itself once nothing is pending._"
           } > "$body_file"
@@ -163,7 +184,7 @@ jobs:
           gh issue edit "$number" --body-file "$body_file"
           # Comment only when something new appeared: the assignee is notified on a comment, not
           # on a body edit, so an unchanged list stays quiet week to week.
-          new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$ids") | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')
+          new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$all_ids") | sed '/^$/d' | sed 's/^price:\(.*\)@\(.*\)$/\1 price change on \2/' | paste -sd, - | sed 's/,/, /g')
           if [ -n "$new" ]; then
             gh issue comment "$number" --body "New since the last check: $new. See the table above."
           fi

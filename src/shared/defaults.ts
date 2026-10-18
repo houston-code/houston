@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 12
+export const SETTINGS_SCHEMA_VERSION = 13
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -107,20 +107,19 @@ export function defaultProviders(): ProviderConfig[] {
       id: 'gemini',
       kind: 'gemini',
       label: 'Google (Gemini)',
-      // gemini-3.8-flash is the default: Google's newest stable model and its recommended
-      // replacement for gemini-2.5-pro, which is now closed to new users (Google limits the
-      // 2.5 line to accounts that already used it), so a fresh install defaulting to it
-      // could only fail. gemini-3.1-pro-preview is seeded for the strongest reasoning even
-      // though it is preview-only, since no stable 3.x Pro exists; it is a choice, never the
-      // default. gemini-3.5-flash-lite is the current low-cost tier (3.1-flash-lite has an
-      // announced 2027 shutdown). The v7 migration in store.ts adds these to existing
-      // installs without pruning: 2.5-pro keeps working for the accounts that have it.
+      // gemini-3.8-flash is the default: Google's newest stable Flash, fast and cheap for
+      // agent turns. gemini-4-argon is Google's flagship reasoning model, seeded for hard
+      // work but not the default: it costs more (introductory $2/$10, then $4/$20 from
+      // 2026-12-01) and Google warns hard prompts can take minutes. It replaced
+      // gemini-3.1-pro-preview in the seed. gemini-3.5-flash-lite is the low-cost tier.
+      // Migrations only add ids to existing installs (v7, v13); nothing is pruned, since
+      // the models they supersede still serve, except 2.5-pro for new users.
       //
       // NB the live /models list is NOT a safe source of truth here: it has listed retired
       // ids that 404 and models that could not serve under load. Only a real call proves a
       // model works, which is what the gemini leg of provider-canary.yml does nightly.
       models: [
-        { id: 'gemini-3.1-pro-preview' },
+        { id: 'gemini-4-argon' },
         { id: 'gemini-3.8-flash' },
         { id: 'gemini-3.5-flash-lite' }
       ],

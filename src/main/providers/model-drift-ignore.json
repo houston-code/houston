@@ -14,6 +14,8 @@
     { "id": "gemini-3.7-flash", "reason": "Superseded by gemini-3.8-flash at the same price." },
     { "id": "gemini-3.6-flash", "reason": "Superseded by gemini-3.8-flash at the same price." },
     { "id": "gemini-3.5-flash", "reason": "Superseded by gemini-3.8-flash, which is cheaper." },
-    { "id": "gemini-3.1-flash-lite", "reason": "Superseded by gemini-3.5-flash-lite; shutdown announced for 2027-05-07." }
+    { "id": "gemini-3.1-flash-lite", "reason": "Superseded by gemini-3.5-flash-lite; shutdown announced for 2027-05-07." },
+    { "id": "gemini-3.1-pro-preview", "reason": "Superseded by gemini-4-argon as the Gemini flagship." },
+    { "id": "gemini-3.1-pro", "reason": "Superseded by gemini-4-argon as the Gemini flagship." }
   ]
 }

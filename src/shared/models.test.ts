@@ -228,10 +228,18 @@ describe('knownModelFamily', () => {
     expect(knownModelFamily('bedrock', 'anthropic.claude-sonnet-5-5')).toBe('sonnet')
     expect(knownModelFamily('openai', 'gpt-6.1-sol')).toBe('gpt')
     expect(knownModelFamily('gemini', 'gemini-3.8-flash')).toBe('flash')
+    expect(knownModelFamily('gemini', 'gemini-4-argon')).toBe('argon')
   })
 
   it('is null for an id that would fall into the generic bucket', () => {
     expect(knownModelFamily('openai-compatible', 'llama3.1:latest')).toBeNull()
     expect(knownModelFamily('anthropic', 'claude-2.1')).toBeNull()
+  })
+})
+
+describe('Gemini 4 ordering', () => {
+  it('ranks the Argon flagship ahead of the 3.x Pro and Flash tiers', () => {
+    const out = sortedModels('gemini', [{ id: 'gemini-3.8-flash' }, { id: 'gemini-3.1-pro-preview' }, { id: 'gemini-4-argon' }])
+    expect(out.map((m) => m.id)).toEqual(['gemini-4-argon', 'gemini-3.1-pro-preview', 'gemini-3.8-flash'])
   })
 })
