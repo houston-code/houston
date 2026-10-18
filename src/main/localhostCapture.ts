@@ -1,5 +1,6 @@
 import { BrowserWindow, session, type Session } from 'electron'
-import { isBlockedSubresourceHost, isLoopbackHost } from './agent/loopback'
+import { isLoopbackHost } from './agent/loopback'
+import { hardenUntrustedSession } from './hardenedSession'
 import {
   setCaptureBackend,
   VIEWPORT,
@@ -145,19 +146,11 @@ let captureFilterInstalled = false
 function captureSession(): Session {
   const ses = session.fromPartition(CAPTURE_PARTITION)
   if (!captureFilterInstalled) {
-    ses.webRequest.onBeforeRequest((details, callback) => {
-      let host = ''
-      try {
-        host = new URL(details.url).hostname
-      } catch {
-        /* unparseable (data:/blob:/about:) — no network egress, allow */
-      }
-      callback({ cancel: isBlockedSubresourceHost(host) })
-    })
-    // Steps can click links and buttons: never let one save a file to the user's
-    // disk, and never grant a page camera, microphone, location, or notifications.
-    ses.on('will-download', (event) => event.preventDefault())
-    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+    // Subresource egress filter + download block + permission denial. Steps can
+    // click links and buttons, so a page must never save a file to the user's disk
+    // or gain camera/microphone/location/notifications. Shared with the interactive
+    // Preview dock so both untrusted-page surfaces stay locked down identically.
+    hardenUntrustedSession(ses)
     captureFilterInstalled = true
   }
   return ses

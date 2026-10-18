@@ -16,12 +16,15 @@
  * Security mirrors view_localhost exactly: the page is untrusted dev-server output,
  * so each view is sandboxed, context-isolated, has no Node integration, runs in a
  * private session whose subresource requests can't reach private/LAN/metadata
- * hosts, and is pinned to loopback — any attempt to navigate or redirect the top
- * frame off loopback (or to open a new window) is refused.
+ * hosts (and which refuses downloads and every device/notification permission —
+ * see {@link hardenUntrustedSession}), and is pinned to loopback — any attempt to
+ * navigate or redirect the top frame off loopback (or to open a new window) is
+ * refused.
  */
 
 import { WebContentsView, session, type BaseWindow, type Session } from 'electron'
-import { isBlockedSubresourceHost, isLoopbackHost, validateLocalhostUrl } from './agent/loopback'
+import { isLoopbackHost, validateLocalhostUrl } from './agent/loopback'
+import { hardenUntrustedSession } from './hardenedSession'
 import type { PreviewPaneBounds, PreviewPaneSpec } from '@shared/preview'
 
 interface Pane {
@@ -39,15 +42,10 @@ let filterInstalled = false
 function previewSession(): Session {
   const ses = session.fromPartition(PREVIEW_PARTITION)
   if (!filterInstalled) {
-    ses.webRequest.onBeforeRequest((details, callback) => {
-      let hostname = ''
-      try {
-        hostname = new URL(details.url).hostname
-      } catch {
-        /* unparseable (data:/blob:/about:) — no network egress, allow */
-      }
-      callback({ cancel: isBlockedSubresourceHost(hostname) })
-    })
+    // Subresource egress filter + download block + permission denial, shared with
+    // the offscreen view_localhost capture so the two untrusted-page surfaces stay
+    // locked down identically.
+    hardenUntrustedSession(ses)
     filterInstalled = true
   }
   return ses
