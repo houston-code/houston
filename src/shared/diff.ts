@@ -119,6 +119,14 @@ function splitLines(s: string): string[] {
 export function diffLines(oldStr: string, newStr: string): DiffLine[] {
   const a = splitLines(oldStr)
   const b = splitLines(newStr)
+  // A file's final "\n" ends its last line; it does not start an empty one. Splitting
+  // leaves a phantom '' after it, which made a new two-line file read as "+3" with a
+  // blank third line. Drop it, except when only one side ends in a newline: then the
+  // newline being added or removed at EOF IS the change, and must stay visible.
+  const oldEol = oldStr.endsWith('\n')
+  const newEol = newStr.endsWith('\n')
+  if (oldEol && (newEol || newStr === '')) a.pop()
+  if (newEol && (oldEol || oldStr === '')) b.pop()
   const m = a.length
   const n = b.length
 
