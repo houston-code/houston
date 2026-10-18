@@ -87,6 +87,7 @@ import {
   alreadyAllowedAsRule,
   matchRule,
   networkDestination,
+  patchSubjectPaths,
   permissionSubject,
   shellReferencesExternalPath,
   shellRulePatterns
@@ -1130,10 +1131,14 @@ export async function startRun(
         // up one near-identical rule each. Deny stays exact (a broad deny is risky).
         const action = decision === 'rule-allow' ? 'allow' : 'deny'
         const subject = permissionSubject(toolName, execArgs)
+        // An apply_patch decision is saved per file it touched: the subject lists them,
+        // and a rule over the whole list would match no single file.
         const matches =
           action === 'allow' && toolName === 'run_shell' && subject
             ? shellRulePatterns(subject)
-            : [subject || '*']
+            : toolName === 'apply_patch' && subject
+              ? patchSubjectPaths(subject)
+              : [subject || '*']
         for (const match of matches) {
           if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, match)) {
             continue

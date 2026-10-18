@@ -7,6 +7,7 @@ import {
   matchRule,
   networkDestination,
   parseTightenOnlyRules,
+  patchSubjectPaths,
   permissionSubject,
   shellReferencesExternalPath,
   shellRulePatterns,
@@ -16,6 +17,10 @@ import type { PermissionRule } from '@shared/types'
 
 const allow = (tool: string, match: string): PermissionRule => ({ action: 'allow', tool, match })
 const deny = (tool: string, match: string): PermissionRule => ({ action: 'deny', tool, match })
+const ask = (tool: string, match: string): PermissionRule => ({ action: 'ask', tool, match })
+
+/** An apply_patch envelope from its body lines. */
+const envelope = (...body: string[]): string => ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
 
 describe('permissionSubject', () => {
   it('picks the right field per tool', () => {
@@ -25,6 +30,63 @@ describe('permissionSubject', () => {
     expect(permissionSubject('read_file', { path: 'src/a.ts' })).toBe('src/a.ts')
     expect(permissionSubject('glob', { pattern: '**/*.ts' })).toBe('**/*.ts')
     expect(permissionSubject('read_file', {})).toBe('')
+  })
+
+  it('lists every file an apply_patch touches, including a move target', () => {
+    const patch = envelope(
+      '*** Add File: src/new.ts',
+      '+x',
+      '*** Update File: src/old.ts',
+      '*** Move to: src/renamed.ts',
+      '-a',
+      '+b',
+      '*** Delete File: src/gone.ts'
+    )
+    const subject = permissionSubject('apply_patch', { patch })
+    expect(patchSubjectPaths(subject)).toEqual(['src/new.ts', 'src/old.ts', 'src/renamed.ts', 'src/gone.ts'])
+  })
+
+  it('gives a patch that does not parse no subject (it writes nothing)', () => {
+    expect(permissionSubject('apply_patch', { patch: 'not a patch' })).toBe('')
+    expect(permissionSubject('apply_patch', {})).toBe('')
+  })
+})
+
+describe('matchRule on apply_patch', () => {
+  const root = '/ws'
+  const two = envelope('*** Add File: docs/readme.md', '+x', '*** Add File: secrets/key.pem', '+y')
+  const subject = (patch: string): string => permissionSubject('apply_patch', { patch })
+
+  it("applies a file rule to the files inside the patch, which it never saw before", () => {
+    const rules = [deny('*', 'secrets/**')]
+    expect(matchRule(rules, 'apply_patch', subject(two), [root])).toBe('deny')
+    expect(matchRule([deny('apply_patch', 'secrets/**')], 'apply_patch', subject(two), [root])).toBe('deny')
+  })
+
+  it('denies the whole patch when any one file is denied, whatever allows the rest', () => {
+    const rules = [allow('*', 'docs/**'), deny('*', 'secrets/**')]
+    expect(matchRule(rules, 'apply_patch', subject(two), [root])).toBe('deny')
+  })
+
+  it('asks when any file is ask-gated', () => {
+    expect(matchRule([ask('*', 'secrets/**')], 'apply_patch', subject(two), [root])).toBe('ask')
+  })
+
+  it('allows only when every file is allowed', () => {
+    expect(matchRule([allow('*', 'docs/**')], 'apply_patch', subject(two), [root])).toBeNull()
+    expect(
+      matchRule([allow('*', 'docs/**'), allow('*', 'secrets/**')], 'apply_patch', subject(two), [root])
+    ).toBe('allow')
+  })
+
+  it('canonicalizes each file, so a climbing path still meets an absolute deny', () => {
+    const climb = envelope('*** Delete File: src/../../etc/passwd')
+    expect(matchRule([deny('*', '/etc/**')], 'apply_patch', subject(climb), [root])).toBe('deny')
+  })
+
+  it('keeps honoring an apply_patch rule saved over every patch', () => {
+    expect(matchRule([allow('apply_patch', '*')], 'apply_patch', subject(two), [root])).toBe('allow')
+    expect(matchRule([deny('apply_patch', '*')], 'apply_patch', subject('not a patch'), [root])).toBe('deny')
   })
 })
 

@@ -466,6 +466,10 @@ by respelling it: a file rule is resolved and anchored to the workspace (so
 like `src/../../etc/passwd` does not slip past it), a URL rule is
 case-insensitive on scheme and host, and a shell rule sees through quoting and
 backslash escapes (so `deny *rm -rf*` still fires on `"rm" -rf` or `r\m -rf`).
+An `apply_patch` call is checked against every file it adds, changes, deletes, or
+moves to: one denied file denies the whole patch, one `ask` file asks, and an
+`allow` covers it only when every file is allowed. "Always allow" or "Always deny"
+on a patch saves one rule per file.
 
 **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
 `deny` / `ask` rules, checked before the user's global rules. Those guardrails
