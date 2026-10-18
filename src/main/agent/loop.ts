@@ -30,7 +30,6 @@ import {
   isApprovalPolicy,
   type ApprovalPolicy,
   type ModelCaps,
-  type PermissionRule,
   type SelectedModel
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
@@ -90,7 +89,7 @@ import {
   matchRule,
   networkDestination,
   permissionSubject,
-  persistedRulePatterns,
+  persistedRules,
   isSensitiveWrite,
   shellReferencesExternalPath
 } from './permissions'
@@ -1196,15 +1195,16 @@ export async function startRun(
         // (dropping the `cd` prelude) instead of the exact command, and skip any
         // pattern an existing rule already allows — so repeated commands don't pile
         // up one near-identical rule each. Deny stays exact (a broad deny is risky).
-        // An apply_patch decision is saved per file it touched, and a patch that names
-        // no file saves nothing rather than a `*` rule over every patch (see
-        // persistedRulePatterns).
+        // Any other allow is an `exact` rule for the approved path, URL, or query,
+        // so a path holding `*`, or naming a directory, can't widen it. apply_patch
+        // stores one rule per file it touches, and a patch that names no file stores
+        // none, so an empty subject never becomes a `*` rule covering every patch
+        // (see persistedRules). The dedupe matches with the run's roots, as the gate does.
         const action = decision === 'rule-allow' ? 'allow' : 'deny'
-        for (const match of persistedRulePatterns(action, toolName, execArgs)) {
-          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, match)) {
+        for (const rule of persistedRules(action, toolName, execArgs)) {
+          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, rule.match, roots)) {
             continue
           }
-          const rule: PermissionRule = { action, tool: toolName, match }
           addPermissionRule(rule)
           permissionRules.splice(guardrailRuleCount, 0, rule)
         }

@@ -379,10 +379,10 @@ export function parseTightenOnlyRules(raw: unknown, maxRules: number): Permissio
   for (const r of rules) {
     if (out.length >= maxRules) break
     if (typeof r !== 'object' || r === null) continue
-    const { action, tool, match } = r as Record<string, unknown>
+    const { action, tool, match, exact } = r as Record<string, unknown>
     if (action !== 'deny' && action !== 'ask') continue // never honor `allow` (would loosen)
     if (typeof tool !== 'string' || typeof match !== 'string') continue
-    out.push({ action, tool, match })
+    out.push(exact === true ? { action, tool, match, exact } : { action, tool, match })
   }
   return out
 }
@@ -507,6 +507,25 @@ function globsIntersect(a: string, b: string): boolean {
   return solve(0, 0)
 }
 
+/**
+ * Whether an EXACT rule's `pattern` names `subject` (already canonicalized by kind)
+ * itself: the same resolved path (a relative pattern anchored to each root, as for a
+ * glob), the same URL with scheme and host case-folded, or the same string. `*` is an
+ * ordinary character and nothing extends past the pattern, so an exact `src` covers
+ * the directory entry `src` and not `src/a.ts`. A blank pattern is inert, as for a glob.
+ */
+function exactSubjectMatches(
+  kind: ReturnType<typeof subjectKind>,
+  pattern: string,
+  roots: string[],
+  subject: string
+): boolean {
+  if (!pattern.trim()) return false
+  if (kind === 'path') return candidatePatternPaths(pattern, roots).includes(subject)
+  if (kind === 'url') return lowerUrlAuthority(pattern) === subject
+  return pattern === subject
+}
+
 function patternMatches(pattern: string, subject: string): boolean {
   const p = pattern.trim()
   // An empty pattern matches NOTHING (the rule is inert), not everything — a blank
@@ -525,7 +544,8 @@ function patternMatches(pattern: string, subject: string): boolean {
  * subject and each rule pattern are canonicalized by kind before comparing — URLs
  * case-folded on scheme+host, filesystem paths resolved and anchored to the roots —
  * so a rule can't be dodged (deny) or widened (allow) by a spelling that resolves
- * to the same target.
+ * to the same target. An `exact` rule matches only its one literal subject (see
+ * {@link exactSubjectMatches}).
  */
 function matchOne(
   rules: PermissionRule[],
@@ -539,8 +559,9 @@ function matchOne(
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== toolName) continue
     const match = r.match ?? ''
-    const hit =
-      kind === 'path'
+    const hit = r.exact
+      ? exactSubjectMatches(kind, match, roots, canonSubject)
+      : kind === 'path'
         ? pathPatternMatches(match, roots, canonSubject)
         : kind === 'url'
           ? patternMatches(lowerUrlAuthority(match), canonSubject)
@@ -630,11 +651,22 @@ function shellCommandMatches(pattern: string, command: string): boolean {
   return c === p || c.startsWith(`${p} `)
 }
 
+/**
+ * Whether an EXACT shell rule's `pattern` is `command` itself, compared on what runs
+ * (dequoted, whitespace collapsed) like {@link shellCommandMatches}, but with `*` an
+ * ordinary character and no prefix extension. A blank pattern is inert.
+ */
+function shellCommandEquals(pattern: string, command: string): boolean {
+  if (!pattern.trim()) return false
+  return normalizeShellCommand(dequoteShell(pattern)) === normalizeShellCommand(dequoteShell(command))
+}
+
 /** First matching rule's action for a single shell sub-command, or null. */
 function matchOneShell(rules: PermissionRule[], command: string): PermissionRule['action'] | null {
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== 'run_shell') continue
-    if (shellCommandMatches(r.match ?? '', command)) return r.action
+    const match = r.match ?? ''
+    if (r.exact ? shellCommandEquals(match, command) : shellCommandMatches(match, command)) return r.action
   }
   return null
 }
@@ -983,42 +1015,68 @@ export function shellRulePatterns(command: string): string[] {
   return [...patterns]
 }
 
+/** The argument(s) {@link permissionSubject} reads a tool's subject from. */
+function subjectArgKeys(toolName: string): string[] {
+  if (toolName === 'run_shell') return ['command']
+  if (toolName === 'web_fetch') return ['url']
+  if (toolName === 'web_search') return ['query']
+  if (toolName.startsWith('mcp__')) return []
+  return ['path', 'pattern']
+}
+
 /**
- * The rule pattern(s) an "Always allow" / "Always deny" on a call persists, each saved
- * as a rule for the call's own tool.
+ * The rule(s) an "Always allow" / "Always deny" on a call persists, each for the
+ * call's own tool.
  *
  * - An ALLOW on `run_shell` stores generalized per-sub-command prefixes (see
- *   {@link shellRulePatterns}); a shell deny stays exact (a broadened deny is risky).
- * - `apply_patch` stores one path per file the patch touches (see
- *   {@link patchSubjectPaths}), since a rule over the whole list would match no single
- *   file. A patch that names no file stores nothing: the only pattern left would be
- *   `*`, which would allow (or deny) every patch to every file.
- * - Anything else stores its exact subject, or `*` for a tool whose calls carry no
- *   subject at all (the rule then names the tool itself).
+ *   {@link shellRulePatterns}); a shell deny stays as typed (a broadened deny is risky).
+ * - Any other ALLOW is `exact` (see {@link PermissionRule.exact}): it covers the one
+ *   path, URL, or query the user approved. Saved as a glob instead, a model-chosen
+ *   path would widen it: a file named `*` would allow every write, and a directory
+ *   path would allow everything inside it.
+ * - `apply_patch` stores one rule per file the patch touches, so a later patch is
+ *   auto-approved only when every file it touches is covered (see {@link matchRule}).
+ *   A patch that names no file stores nothing: the only pattern left would be `*`,
+ *   which would allow (or deny) every patch to every file.
+ * - An allow on a call that passes its subject argument blank (`path: ''`) stores
+ *   nothing, for the same reason.
+ * - A DENY stores the subject as a glob, so it can only be broader than the call
+ *   (tightening). A tool whose calls carry no subject argument at all stores `*` (the
+ *   rule then names the tool itself).
  */
-export function persistedRulePatterns(
+export function persistedRules(
   action: 'allow' | 'deny',
   toolName: string,
   args: Record<string, unknown>
-): string[] {
+): PermissionRule[] {
+  const exact = action === 'allow' && toolName !== 'run_shell'
+  const rule = (match: string): PermissionRule =>
+    exact ? { action, tool: toolName, match, exact: true } : { action, tool: toolName, match }
+  if (toolName === 'apply_patch') return patchSubjectPaths(permissionSubject(toolName, args)).map(rule)
   const subject = permissionSubject(toolName, args)
-  if (toolName === 'apply_patch') return patchSubjectPaths(subject)
-  if (action === 'allow' && toolName === 'run_shell' && subject) return shellRulePatterns(subject)
-  return [subject || '*']
+  if (subject.trim()) {
+    if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject).map(rule)
+    return [rule(subject)]
+  }
+  if (action === 'allow' && subjectArgKeys(toolName).some((k) => typeof args[k] === 'string')) return []
+  return [{ action, tool: toolName, match: subject || '*' }]
 }
 
 /**
  * Whether the current `rules` already resolve `sample` (a command, path, URL, or query
  * that a new rule would target) to ALLOW. Used to skip persisting a rule an existing,
  * broader rule already covers, so "Always allow" never piles up redundant entries.
+ * Pass the run's `roots`, the same ones the gate matches with, so a relative path
+ * resolves to the file the gate would check (without them it anchors at the cwd).
  */
 export function alreadyAllowedAsRule(
   rules: PermissionRule[],
   toolName: string,
-  sample: string
+  sample: string,
+  roots: string[] = []
 ): boolean {
   if (toolName === 'run_shell') return matchOneShell(rules, normalizeShellCommand(sample)) === 'allow'
-  return matchOne(rules, toolName, sample) === 'allow'
+  return matchOne(rules, toolName, sample, roots) === 'allow'
 }
 
 /** Shell allow patterns that can never match a real command (see cleanupPermissionRules). */
@@ -1051,6 +1109,9 @@ function isDeadShellPattern(match: string): boolean {
  *   and a bare fd number (`1`, not a command). Also drops rules that are pure shell
  *   scaffolding (`done`, `fi`, `for f`), and re-generalizes keyword-prefixed ones
  *   (`do wc` becomes `wc`), since segments are matched with that scaffolding stripped.
+ * - Keeps every `exact` rule exact (it is never re-generalized), and never treats one
+ *   as covering a broader rule: an exact `src` allows only `src`, so a later glob or
+ *   prefix `src` allow is not redundant after it.
  *
  * Every drop removes an allow, so the result is never looser than the input. Deny/ask
  * rules and non-shell rules are preserved verbatim (only exact dedupe applies). Pure
@@ -1078,18 +1139,21 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
   // NUL separates the fields because it cannot appear in any of them. Write it as an
   // escape, never as a raw byte: a literal NUL makes grep and ripgrep treat the whole
   // file as binary and skip it.
-  const key = (r: PermissionRule): string => `${r.action}\u0000${r.tool}\u0000${r.match}`
+  const key = (r: PermissionRule): string =>
+    `${r.action}\u0000${r.tool}\u0000${r.match}\u0000${r.exact ? 'exact' : ''}`
   for (const r of rules) {
     if (isShellAllow(r) && isDeadShellPattern(r.match ?? '')) continue
     let expanded: PermissionRule[] = [r]
-    if (isShellAllow(r)) {
+    if (isShellAllow(r) && !r.exact) {
       const pats = shellRulePatterns(r.match ?? '')
       // Keep the rule exact if generalizing it could shadow a narrower deny.
       expanded = pats.some(wouldShadowDeny) ? [r] : pats.map((match) => ({ ...r, match }))
     }
     for (const e of expanded) {
       if (seen.has(key(e))) continue
-      const priorAllows = out.filter((x) => x.action === 'allow')
+      // The coverage test matches e's pattern as one subject, which only proves an
+      // exact rule redundant: a broader e also covers what lies past that subject.
+      const priorAllows = out.filter((x) => x.action === 'allow' && (e.exact || !x.exact))
       if (e.action === 'allow' && alreadyAllowedAsRule(priorAllows, e.tool, e.match ?? '')) continue
       seen.add(key(e))
       out.push(e)

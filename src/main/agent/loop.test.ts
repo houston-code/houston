@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -1339,7 +1339,7 @@ describe('startRun', () => {
       ],
       onApproval: (_callId, decide) => decide('rule-allow')
     })
-    expect(h.addedRules).toContainEqual({ action: 'allow', tool: 'write_file', match: 'notes.txt' })
+    expect(h.addedRules).toContainEqual({ action: 'allow', tool: 'write_file', match: 'notes.txt', exact: true })
     // Only a1 prompted; a2 auto-approved by the rule, and both writes ran.
     expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
       'a1'
@@ -1383,6 +1383,37 @@ describe('startRun', () => {
       'p1'
     ])
     expect(existsSync(join(ws, 'b.txt'))).toBe(false)
+  })
+
+  it('"Always allow" on a write to a path named `*` saves an exact rule, not a match-all', async () => {
+    const write = (id: string, path: string): ProviderStreamEvent[] => [
+      { type: 'tool_call', call: { id, name: 'write_file', arguments: { path, content: 'x' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ]
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        write('w1', '*'),
+        write('w2', 'other.txt'),
+        write('w3', 'src'),
+        write('w4', 'src/deep.ts'),
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (id, decide) => decide(id === 'w1' || id === 'w3' ? 'rule-allow' : 'deny')
+    })
+    expect(h.addedRules).toEqual([
+      { action: 'allow', tool: 'write_file', match: '*', exact: true },
+      { action: 'allow', tool: 'write_file', match: 'src', exact: true }
+    ])
+    // Neither saved rule covers another file, so every write prompted.
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'w1',
+      'w2',
+      'w3',
+      'w4'
+    ])
+    expect(existsSync(join(ws, 'other.txt'))).toBe(false)
+    expect(existsSync(join(ws, 'src', 'deep.ts'))).toBe(false)
   })
 
   it('an admin managed `deny` overrides a user `allow` and reports an org-policy reason', async () => {
@@ -1481,7 +1512,7 @@ describe('startRun', () => {
       'w2'
     ])
     // The allow was still recorded to the user's own rules — just permanently shadowed.
-    expect(h.addedRules).toContainEqual({ action: 'allow', tool: 'write_file', match: 'notes.txt' })
+    expect(h.addedRules).toContainEqual({ action: 'allow', tool: 'write_file', match: 'notes.txt', exact: true })
   })
 
   it('rejects an unknown mid-run policy (fails closed, keeps prompting)', async () => {
@@ -3850,12 +3881,71 @@ describe('permission gates: batched sensitive reads and subagent calls', () => {
       expect(approvalsOf(r).map((a) => a.callId)).toEqual(['p1', 'p3'])
       // Exact per-file rules: never the match-all `*` an empty subject used to save.
       expect(h.addedRules).toEqual([
-        { action: 'allow', tool: 'apply_patch', match: 'a.txt' },
-        { action: 'allow', tool: 'apply_patch', match: 'b.txt' },
-        { action: 'allow', tool: 'apply_patch', match: 'c.txt' }
+        { action: 'allow', tool: 'apply_patch', match: 'a.txt', exact: true },
+        { action: 'allow', tool: 'apply_patch', match: 'b.txt', exact: true },
+        { action: 'allow', tool: 'apply_patch', match: 'c.txt', exact: true }
       ])
       expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toContain('a2')
       expect(readFileSync(join(ws, 'c.txt'), 'utf8')).toContain('c')
+    })
+
+    it('"Always allow" on a patch to a file named `*` or a directory path covers those paths only', async () => {
+      const r = await run({
+        policy: 'ask',
+        turns: [
+          patchCall('p1', patchOf('*** Add File: *', '+star', '*** Add File: src', '+dir')),
+          // Neither file is the `*` file or `src` itself, so this still prompts.
+          patchCall('p2', patchOf('*** Add File: other.txt', '+o', '*** Add File: lib/deep.ts', '+d')),
+          finalText('done')
+        ],
+        onApproval: (id, decide) => decide(id === 'p1' ? 'rule-allow' : 'deny')
+      })
+      expect(approvalsOf(r).map((a) => a.callId)).toEqual(['p1', 'p2'])
+      expect(h.addedRules).toEqual([
+        { action: 'allow', tool: 'apply_patch', match: '*', exact: true },
+        { action: 'allow', tool: 'apply_patch', match: 'src', exact: true }
+      ])
+      expect(existsSync(join(ws, 'other.txt'))).toBe(false)
+    })
+
+    it('"Always allow" skips a file a saved rule already allows in this workspace', async () => {
+      // An absolute rule for a.txt in the workspace: the dedupe must resolve the
+      // patch's relative a.txt against the workspace, as the gate does, not the cwd.
+      // (The run resolves its workspace with realpath: /var is /private/var on macOS.)
+      h.settings.permissionRules = [{ action: 'allow', tool: 'apply_patch', match: join(realpathSync(ws), 'a.txt') }]
+      try {
+        const r = await run({
+          policy: 'ask',
+          turns: [patchCall('p1', patchOf('*** Add File: a.txt', '+a', '*** Add File: b.txt', '+b')), finalText('done')],
+          onApproval: (_id, decide) => decide('rule-allow')
+        })
+        expect(approvalsOf(r).map((a) => a.callId)).toEqual(['p1'])
+        expect(h.addedRules).toEqual([{ action: 'allow', tool: 'apply_patch', match: 'b.txt', exact: true }])
+      } finally {
+        h.settings.permissionRules = []
+      }
+    })
+
+    it('"Always allow" still saves a file that a rule allows only outside the workspace', async () => {
+      // The same name under the process cwd is a different file: the gate prompted for
+      // it, so the user's consent must be saved, not skipped as "already allowed".
+      h.settings.permissionRules = [{ action: 'allow', tool: 'apply_patch', match: join(process.cwd(), 'a.txt') }]
+      try {
+        const r = await run({
+          policy: 'ask',
+          turns: [
+            patchCall('p1', patchOf('*** Add File: a.txt', '+a')),
+            patchCall('p2', patchOf('*** Update File: a.txt', '@@', '-a', '+a2')),
+            finalText('done')
+          ],
+          onApproval: (_id, decide) => decide('rule-allow')
+        })
+        expect(h.addedRules).toEqual([{ action: 'allow', tool: 'apply_patch', match: 'a.txt', exact: true }])
+        // The saved rule covers the second patch, so only the first prompted.
+        expect(approvalsOf(r).map((a) => a.callId)).toEqual(['p1'])
+      } finally {
+        h.settings.permissionRules = []
+      }
     })
 
     it('"Always allow" or "Always deny" on a patch that names no file saves no rule', async () => {

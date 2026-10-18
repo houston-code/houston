@@ -343,6 +343,30 @@ describe('SettingsModal', () => {
     expect(screen.getByDisplayValue('git status')).toBeInTheDocument()
   })
 
+  it('shows a rule\'s Exact flag and saves it when toggled, keeping it through edits', async () => {
+    const api = installApi()
+    const { container } = renderModal({
+      permissionRules: [
+        { action: 'allow', tool: 'write_file', match: 'src', exact: true },
+        { action: 'allow', tool: 'write_file', match: 'docs' }
+      ]
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    const boxes = screen.getAllByRole('checkbox', { name: 'Exact' }) as HTMLInputElement[]
+    expect(boxes.map((b) => b.checked)).toEqual([true, false])
+
+    // Editing the pattern keeps the flag; toggling flips it on the other rule.
+    fireEvent.change(screen.getByDisplayValue('src'), { target: { value: 'src/a.ts' } })
+    fireEvent.click(boxes[1])
+    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
+    expect(saved.permissionRules).toEqual([
+      { action: 'allow', tool: 'write_file', match: 'src/a.ts', exact: true },
+      { action: 'allow', tool: 'write_file', match: 'docs', exact: true }
+    ])
+  })
+
   it('tidies rules via the "Clean up rules" button (main-process helper)', async () => {
     const cleaned = [{ action: 'allow', tool: 'run_shell', match: 'npm install' }]
     const cleanupPermissionRules = vi.fn(() => Promise.resolve(cleaned))

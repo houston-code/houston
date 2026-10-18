@@ -54,10 +54,11 @@ export function parseProjectAllowRules(raw: unknown): PermissionRule[] {
   for (const r of rules) {
     if (out.length >= MAX_PROJECT_RULES) break
     if (typeof r !== 'object' || r === null) continue
-    const { action, tool, match } = r as Record<string, unknown>
+    const { action, tool, match, exact } = r as Record<string, unknown>
     if (action !== 'allow') continue
     if (typeof tool !== 'string' || typeof match !== 'string') continue
-    out.push({ action, tool, match })
+    // Keep `exact`: dropping it would read an exact allow as a glob, widening it.
+    out.push(exact === true ? { action, tool, match, exact } : { action, tool, match })
   }
   return out
 }

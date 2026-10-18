@@ -281,7 +281,9 @@ Open source under the [Apache License 2.0](LICENSE).
   *allow* / *deny* / *ask* rules in Settings, matched on the tool and a glob over
   its target (e.g. allow `run_shell` matching `git *`, deny anything matching
   `*rm -rf*`, always ask before `write_file` under `src/secret/**`). Rules are
-  checked before the policy; first match wins.
+  checked before the policy; first match wins. An *exact* rule matches only its
+  one target (no wildcards, no folder contents); *always allow* on a file, URL,
+  or search saves one.
 - **Hooks.** Run your own shell commands around tool calls (Settings → *Hooks*):
   a *PreToolUse* hook can block a call by exiting non-zero, and a *PostToolUse*
   hook's output is fed back to the agent — e.g. auto-format after every edit, or

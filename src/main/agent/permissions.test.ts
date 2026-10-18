@@ -9,7 +9,7 @@ import {
   parseTightenOnlyRules,
   patchSubjectPaths,
   permissionSubject,
-  persistedRulePatterns,
+  persistedRules,
   shellReferencesExternalPath,
   shellRulePatterns,
   shellWritesSensitivePath,
@@ -637,30 +637,158 @@ describe('apply_patch files and rules', () => {
   })
 })
 
-describe('persistedRulePatterns', () => {
-  it('stores one path per file an apply_patch touches, for allow and deny', () => {
+describe('persistedRules', () => {
+  const exactAllow = (tool: string, match: string): PermissionRule => ({ action: 'allow', tool, match, exact: true })
+
+  it('stores one rule per file an apply_patch touches: exact for allow, a glob for deny', () => {
     const patch = patchOf(addOp('a.txt'), updateOp('b.txt', 'c/b.txt'))
-    expect(persistedRulePatterns('allow', 'apply_patch', { patch })).toEqual(['a.txt', 'b.txt', 'c/b.txt'])
-    expect(persistedRulePatterns('deny', 'apply_patch', { patch })).toEqual(['a.txt', 'b.txt', 'c/b.txt'])
+    expect(persistedRules('allow', 'apply_patch', { patch })).toEqual([
+      exactAllow('apply_patch', 'a.txt'),
+      exactAllow('apply_patch', 'b.txt'),
+      exactAllow('apply_patch', 'c/b.txt')
+    ])
+    expect(persistedRules('deny', 'apply_patch', { patch })).toEqual([
+      deny('apply_patch', 'a.txt'),
+      deny('apply_patch', 'b.txt'),
+      deny('apply_patch', 'c/b.txt')
+    ])
   })
 
   it('never stores a match-all rule for a patch that names no file', () => {
-    expect(persistedRulePatterns('allow', 'apply_patch', { patch: 'not a patch' })).toEqual([])
-    expect(persistedRulePatterns('deny', 'apply_patch', {})).toEqual([])
+    expect(persistedRules('allow', 'apply_patch', { patch: 'not a patch' })).toEqual([])
+    expect(persistedRules('deny', 'apply_patch', {})).toEqual([])
   })
 
-  it('generalizes a shell allow but keeps a shell deny exact', () => {
-    expect(persistedRulePatterns('allow', 'run_shell', { command: 'cd /repo && npm install lodash' })).toEqual([
-      'npm install'
+  it('generalizes a shell allow but keeps a shell deny as typed (neither exact)', () => {
+    expect(persistedRules('allow', 'run_shell', { command: 'cd /repo && npm install lodash' })).toEqual([
+      allow('run_shell', 'npm install')
     ])
-    expect(persistedRulePatterns('deny', 'run_shell', { command: 'npm install lodash' })).toEqual([
-      'npm install lodash'
+    expect(persistedRules('deny', 'run_shell', { command: 'npm install lodash' })).toEqual([
+      deny('run_shell', 'npm install lodash')
     ])
   })
 
-  it('stores the exact subject, or `*` for a tool whose calls carry none', () => {
-    expect(persistedRulePatterns('allow', 'write_file', { path: 'notes.txt', content: '' })).toEqual(['notes.txt'])
-    expect(persistedRulePatterns('allow', 'dispatch_writable_agent', { prompt: 'go' })).toEqual(['*'])
+  it('stores an exact allow for the subject, or `*` for a tool whose calls carry none', () => {
+    expect(persistedRules('allow', 'write_file', { path: 'notes.txt', content: '' })).toEqual([
+      exactAllow('write_file', 'notes.txt')
+    ])
+    expect(persistedRules('allow', 'web_fetch', { url: 'https://x.com/a' })).toEqual([
+      exactAllow('web_fetch', 'https://x.com/a')
+    ])
+    expect(persistedRules('allow', 'dispatch_writable_agent', { prompt: 'go' })).toEqual([
+      allow('dispatch_writable_agent', '*')
+    ])
+  })
+
+  it('stores no allow for a call that passes its subject blank (it used to save `*`)', () => {
+    expect(persistedRules('allow', 'write_file', { path: '', content: 'x' })).toEqual([])
+    expect(persistedRules('allow', 'edit_file', { path: '  ' })).toEqual([])
+    expect(persistedRules('allow', 'run_shell', { command: ' ' })).toEqual([])
+    expect(persistedRules('allow', 'web_fetch', { url: '' })).toEqual([])
+    // A deny may stay broad: it can only tighten.
+    expect(persistedRules('deny', 'write_file', { path: '', content: 'x' })).toEqual([deny('write_file', '*')])
+  })
+})
+
+describe('a saved "Always allow" covers only the approved target', () => {
+  const ROOTS = ['/work/project']
+  const saved = (tool: string, args: Record<string, unknown>): PermissionRule[] =>
+    persistedRules('allow', tool, args)
+
+  it.each(['write_file', 'edit_file', 'multi_edit', 'notebook_edit'])(
+    '%s: a path named `*` allows only that file, not every path',
+    (tool) => {
+      const rules = saved(tool, { path: '*' })
+      expect(rules).toEqual([{ action: 'allow', tool, match: '*', exact: true }])
+      expect(matchRule(rules, tool, '*', ROOTS)).toBe('allow')
+      expect(matchRule(rules, tool, 'src/index.ts', ROOTS)).toBeNull()
+      expect(matchRule(rules, tool, '/etc/passwd', ROOTS)).toBeNull()
+      expect(matchRule(rules, tool, '~/.ssh/authorized_keys', ROOTS)).toBeNull()
+    }
+  )
+
+  it('a path holding `*` is not a glob: `x*` allows the file `x*` only', () => {
+    const rules = saved('write_file', { path: 'x*' })
+    expect(matchRule(rules, 'write_file', 'x*', ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'write_file', 'xyz', ROOTS)).toBeNull()
+    expect(matchRule(rules, 'write_file', 'xyz/deep.ts', ROOTS)).toBeNull()
+    expect(matchRule(saved('write_file', { path: 'src/*.ts' }), 'write_file', 'src/a.ts', ROOTS)).toBeNull()
+  })
+
+  it('a directory path allows that path only, not the files under it', () => {
+    const rules = saved('write_file', { path: 'src' })
+    expect(matchRule(rules, 'write_file', 'src', ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'write_file', 'src/deep/file', ROOTS)).toBeNull()
+    expect(matchRule(rules, 'write_file', 'src/a.ts', ROOTS)).toBeNull()
+    expect(matchRule(rules, 'write_file', 'srcx', ROOTS)).toBeNull()
+  })
+
+  it('still matches the same file however it is spelled, and nothing it climbs to', () => {
+    const rules = saved('write_file', { path: 'src/a.ts' })
+    expect(matchRule(rules, 'write_file', '/work/project/src/a.ts', ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'write_file', './src/./a.ts', ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'write_file', 'src/b/../a.ts', ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'write_file', 'src/a.ts/../b.ts', ROOTS)).toBeNull()
+    expect(matchRule(saved('write_file', { path: 'src/../../etc/passwd' }), 'write_file', 'src/x', ROOTS)).toBeNull()
+  })
+
+  it('anchors a relative exact path to each root, like a glob rule', () => {
+    const roots = ['/work/project', '/work/other']
+    const rules = saved('write_file', { path: 'a.ts' })
+    expect(matchRule(rules, 'write_file', '/work/other/a.ts', roots)).toBe('allow')
+    expect(matchRule(rules, 'write_file', '/work/other/b.ts', roots)).toBeNull()
+  })
+
+  it('apply_patch: a patch touching `*` or a directory saves rules for those paths only', () => {
+    const rules = saved('apply_patch', { patch: patchOf(addOp('*'), addOp('src')) })
+    expect(rules.every((r) => r.exact)).toBe(true)
+    expect(matchRule(rules, 'apply_patch', permissionSubject('apply_patch', { patch: patchOf(addOp('*'), addOp('src')) }), ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'apply_patch', permissionSubject('apply_patch', { patch: patchOf(addOp('other.ts')) }), ROOTS)).toBeNull()
+    expect(matchRule(rules, 'apply_patch', permissionSubject('apply_patch', { patch: patchOf(updateOp('src/deep.ts')) }), ROOTS)).toBeNull()
+    expect(matchRule(rules, 'apply_patch', permissionSubject('apply_patch', { patch: patchOf(addOp('*'), addOp('/etc/x')) }), ROOTS)).toBeNull()
+  })
+
+  it('web_fetch and web_search: a `*` in the URL or query is literal', () => {
+    const fetch = saved('web_fetch', { url: 'https://Evil.example/*' })
+    expect(matchRule(fetch, 'web_fetch', 'https://evil.example/*', ROOTS)).toBe('allow')
+    expect(matchRule(fetch, 'web_fetch', 'https://evil.example/exfil?d=1', ROOTS)).toBeNull()
+    expect(matchRule(saved('web_fetch', { url: 'https://x.example/a' }), 'web_fetch', 'https://x.example/a/b', ROOTS)).toBeNull()
+    const search = saved('web_search', { query: '*' })
+    expect(matchRule(search, 'web_search', '*', ROOTS)).toBe('allow')
+    expect(matchRule(search, 'web_search', 'anything else', ROOTS)).toBeNull()
+  })
+
+  it('a hand-written exact shell rule matches that command only (dequoted), never a prefix', () => {
+    const rules: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: 'rm *', exact: true }]
+    expect(matchRule(rules, 'run_shell', 'rm *', ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'run_shell', '"rm"  *', ROOTS)).toBe('allow')
+    expect(matchRule(rules, 'run_shell', 'rm -rf ~', ROOTS)).toBeNull()
+    expect(matchRule(rules, 'run_shell', 'rm * extra', ROOTS)).toBeNull()
+    expect(matchRule(rules, 'run_shell', 'rm * && curl evil.example', ROOTS)).toBeNull()
+  })
+
+  it('a blank exact rule is inert', () => {
+    const rules: PermissionRule[] = [
+      { action: 'allow', tool: 'write_file', match: '', exact: true },
+      { action: 'allow', tool: 'run_shell', match: ' ', exact: true }
+    ]
+    expect(matchRule(rules, 'write_file', '', ROOTS)).toBeNull()
+    expect(matchRule(rules, 'write_file', 'a.ts', ROOTS)).toBeNull()
+    expect(matchRule(rules, 'run_shell', 'ls', ROOTS)).toBeNull()
+  })
+
+  it('an exact deny fires only on its target; a saved deny stays a broad glob', () => {
+    const exactDeny: PermissionRule[] = [{ action: 'deny', tool: 'write_file', match: 'src', exact: true }]
+    expect(matchRule(exactDeny, 'write_file', 'src', ROOTS)).toBe('deny')
+    expect(matchRule(exactDeny, 'write_file', 'src/a.ts', ROOTS)).toBeNull()
+    const savedDeny = persistedRules('deny', 'write_file', { path: 'src' })
+    expect(matchRule(savedDeny, 'write_file', 'src/deep/file', ROOTS)).toBe('deny')
+  })
+
+  it('rules saved before `exact` existed keep their glob and directory meaning', () => {
+    expect(matchRule([allow('write_file', 'src')], 'write_file', 'src/deep/file', ROOTS)).toBe('allow')
+    expect(matchRule([allow('write_file', 'src/*')], 'write_file', 'src/a/b.ts', ROOTS)).toBe('allow')
+    expect(matchRule([allow('write_file', '*')], 'write_file', '/etc/passwd', ROOTS)).toBe('allow')
   })
 })
 
@@ -865,6 +993,23 @@ describe('alreadyAllowedAsRule', () => {
     expect(alreadyAllowedAsRule([allow('web_fetch', 'https://x.com')], 'web_fetch', 'https://x.com/a')).toBe(true)
     expect(alreadyAllowedAsRule([allow('read_file', 'src')], 'read_file', 'src/a.ts')).toBe(true)
   })
+
+  it('anchors a relative sample to the run roots, so it agrees with the gate', () => {
+    const roots = ['/work/project']
+    const absRule = [allow('write_file', '/work/project/a.ts')]
+    expect(matchRule(absRule, 'write_file', 'a.ts', roots)).toBe('allow')
+    expect(alreadyAllowedAsRule(absRule, 'write_file', 'a.ts', roots)).toBe(true)
+    // A rule for the same name under the process cwd is a different file to the gate.
+    const cwdRule = [allow('write_file', join(process.cwd(), 'a.ts'))]
+    expect(matchRule(cwdRule, 'write_file', 'a.ts', roots)).toBeNull()
+    expect(alreadyAllowedAsRule(cwdRule, 'write_file', 'a.ts', roots)).toBe(false)
+  })
+
+  it('an exact rule covers only its own target', () => {
+    const exact: PermissionRule[] = [{ action: 'allow', tool: 'write_file', match: 'src', exact: true }]
+    expect(alreadyAllowedAsRule(exact, 'write_file', 'src')).toBe(true)
+    expect(alreadyAllowedAsRule(exact, 'write_file', 'src/a.ts')).toBe(false)
+  })
 })
 
 describe('cleanupPermissionRules', () => {
@@ -1006,6 +1151,52 @@ describe('cleanupPermissionRules', () => {
     ]
     expect(cleanupPermissionRules(rules)).toEqual([allow('run_shell', 'echo venv-ok'), deny('run_shell', '2')])
   })
+
+  describe('exact rules', () => {
+    const exactAllow = (tool: string, match: string): PermissionRule => ({ action: 'allow', tool, match, exact: true })
+
+    it('keeps an exact shell allow exact (never re-generalized into a prefix)', () => {
+      const rules = [exactAllow('run_shell', 'cd /repo && npm install foo'), exactAllow('run_shell', 'rm *')]
+      expect(cleanupPermissionRules(rules)).toEqual(rules)
+    })
+
+    it('never drops a broader rule as covered by an earlier exact one', () => {
+      const rules = [
+        exactAllow('write_file', 'src'),
+        allow('write_file', 'src'),
+        exactAllow('run_shell', 'git status'),
+        allow('run_shell', 'git status')
+      ]
+      // Both broader rules survive. The exact shell rule goes instead: the later prefix
+      // allow covers it and no deny or ask overlaps it.
+      expect(cleanupPermissionRules(rules)).toEqual([
+        exactAllow('write_file', 'src'),
+        allow('write_file', 'src'),
+        allow('run_shell', 'git status')
+      ])
+    })
+
+    it('drops an exact rule a broader earlier allow already covers, and exact duplicates', () => {
+      const rules = [
+        allow('write_file', 'src'),
+        exactAllow('write_file', 'src/a.ts'),
+        allow('write_file', 'x*'),
+        exactAllow('write_file', 'x*'),
+        exactAllow('web_fetch', 'https://a.example/*'),
+        exactAllow('web_fetch', 'https://a.example/*')
+      ]
+      expect(cleanupPermissionRules(rules)).toEqual([
+        allow('write_file', 'src'),
+        allow('write_file', 'x*'),
+        exactAllow('web_fetch', 'https://a.example/*')
+      ])
+    })
+
+    it('keeps an exact `x*` that a glob allow for `x` (a directory) does not cover', () => {
+      const rules = [allow('write_file', 'x'), exactAllow('write_file', 'x*')]
+      expect(cleanupPermissionRules(rules)).toEqual(rules)
+    })
+  })
 })
 
 describe('parseTightenOnlyRules', () => {
@@ -1030,6 +1221,24 @@ describe('parseTightenOnlyRules', () => {
     ])
     expect(parseTightenOnlyRules({ permissionRules: 'nope' }, 100)).toEqual([])
     expect(parseTightenOnlyRules(null, 100)).toEqual([])
+  })
+
+  it('keeps `exact: true` and drops any other exact value', () => {
+    expect(
+      parseTightenOnlyRules(
+        {
+          permissionRules: [
+            { action: 'deny', tool: 'write_file', match: 'a.ts', exact: true },
+            { action: 'ask', tool: 'write_file', match: 'b.ts', exact: 'yes' },
+            { action: 'allow', tool: 'write_file', match: 'c.ts', exact: true } // dropped — would loosen
+          ]
+        },
+        100
+      )
+    ).toEqual([
+      { action: 'deny', tool: 'write_file', match: 'a.ts', exact: true },
+      { action: 'ask', tool: 'write_file', match: 'b.ts' }
+    ])
   })
 
   it('caps the number of rules at maxRules (DoS backstop)', () => {

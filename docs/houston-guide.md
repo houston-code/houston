@@ -474,6 +474,13 @@ moves to: one denied file denies the whole patch, one `ask` file asks, and an
 `allow` covers it only when every file is allowed. "Always allow" or "Always deny"
 on a patch saves one rule per file.
 
+A rule marked **Exact** matches only its one target: `*` is an ordinary
+character and a folder does not cover the files inside it. **Always allow** on a
+file, URL, or search saves an exact rule, so approving a write to a file named
+`*`, or to a folder path, allows that path and nothing else. (On a shell command
+it saves a command prefix instead, such as `npm install`.) **Always deny** saves a
+regular pattern, which can only be broader than the call it blocked.
+
 **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
 `deny` / `ask` rules, checked before the user's global rules. Those guardrails
 always apply and can only *tighten*, so cloning an untrusted repo can never

@@ -474,7 +474,13 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
 export function addPermissionRule(rule: PermissionRule): AppSettings {
   const current = getSettings().permissionRules ?? []
   if (
-    current.some((r) => r.action === rule.action && r.tool === rule.tool && r.match === rule.match)
+    current.some(
+      (r) =>
+        r.action === rule.action &&
+        r.tool === rule.tool &&
+        r.match === rule.match &&
+        !!r.exact === !!rule.exact
+    )
   ) {
     return getSettings()
   }
