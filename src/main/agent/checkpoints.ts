@@ -29,8 +29,12 @@ import { getUserDataDir } from '../userData'
 interface FileSnapshot {
   /** Content before the turn touched it; `null` if it didn't exist. */
   before: string | null
+  /** `before` is base64 of the file's bytes, not its text (see {@link readCapped}). */
+  beforeBinary?: boolean
   /** Content after the turn's writes; `null` if it ended up absent. Valid only when `afterCaptured`. */
   after: string | null
+  /** `after` is base64 of the file's bytes, not its text. */
+  afterBinary?: boolean
   /** Whether the post-turn content was captured, so redo skips files it can't restore. */
   afterCaptured: boolean
 }
@@ -53,15 +57,29 @@ interface PersistedCheckpoint {
   runId: string
   roots: string[]
   reverted: boolean
-  files: { path: string; before: string | null; after: string | null; afterCaptured: boolean }[]
+  files: {
+    path: string
+    before: string | null
+    after: string | null
+    afterCaptured: boolean
+    /** Set when the content is base64 bytes rather than text (schema version 2 on). */
+    beforeEncoding?: 'base64'
+    afterEncoding?: 'base64'
+  }[]
 }
 
 /** Don't snapshot files larger than this (a revert of a huge file isn't worth the memory). */
 const MAX_SNAPSHOT_BYTES = 5_000_000
 /** Retain at most this many turns' checkpoints; the oldest are evicted first. */
 const MAX_CHECKPOINTS = 50
-/** Bump when {@link PersistedCheckpoint} changes shape; older files are ignored. */
-const CHECKPOINT_SCHEMA_VERSION = 1
+/**
+ * Bump when {@link PersistedCheckpoint} changes shape. Version 2 added the base64
+ * encodings for binary snapshots; it is written so an older build, which would restore
+ * the base64 text as the file's content, ignores the file instead.
+ */
+const CHECKPOINT_SCHEMA_VERSION = 2
+/** Versions this build can load: 1 differs from 2 only in never holding binary content. */
+const READABLE_SCHEMA_VERSIONS = new Set([1, 2])
 
 /**
  * Run ids safe to use as a checkpoint filename. Every client mints runIds with
@@ -100,24 +118,40 @@ function resolveOrNull(roots: string[], relPath: string): string | null {
   }
 }
 
-/** Read a file, returning `capped: true` if it's too large to snapshot. */
-async function readCapped(abs: string): Promise<{ content: string | null; capped: boolean }> {
+/**
+ * Read a file for a snapshot, returning `capped: true` if it's too large to keep.
+ *
+ * A file whose bytes are valid UTF-8 is kept as its text. Anything else (an image, an
+ * archive, text in another encoding) is kept as base64 of its bytes: decoding it as
+ * UTF-8 replaces every invalid sequence, so restoring that text would write a
+ * corrupted file in place of the original.
+ */
+async function readCapped(
+  abs: string
+): Promise<{ content: string | null; binary: boolean; capped: boolean }> {
+  let buf: Buffer
   try {
-    const content = await fs.readFile(abs, 'utf8')
-    if (Buffer.byteLength(content) > MAX_SNAPSHOT_BYTES) return { content: null, capped: true }
-    return { content, capped: false }
+    buf = await fs.readFile(abs)
   } catch {
-    return { content: null, capped: false } // didn't exist / unreadable
+    return { content: null, binary: false, capped: false } // didn't exist / unreadable
   }
+  if (buf.byteLength > MAX_SNAPSHOT_BYTES) return { content: null, binary: false, capped: true }
+  const text = buf.toString('utf8')
+  if (Buffer.from(text, 'utf8').equals(buf)) return { content: text, binary: false, capped: false }
+  return { content: buf.toString('base64'), binary: true, capped: false }
 }
 
-/** Write `content` back, or delete the file when `content` is null. Recreates parent dirs. */
-async function applyState(abs: string, content: string | null): Promise<void> {
+/**
+ * Write `content` back (decoding base64 when `binary`), or delete the file when
+ * `content` is null. Recreates parent dirs.
+ */
+async function applyState(abs: string, content: string | null, binary = false): Promise<void> {
   if (content === null) {
     await fs.rm(abs, { force: true })
   } else {
     await fs.mkdir(dirname(abs), { recursive: true })
-    await fs.writeFile(abs, content, 'utf8')
+    if (binary) await fs.writeFile(abs, Buffer.from(content, 'base64'))
+    else await fs.writeFile(abs, content, 'utf8')
   }
 }
 
@@ -176,7 +210,9 @@ async function writeRunFile(runId: string): Promise<void> {
       path,
       before: s.before,
       after: s.after,
-      afterCaptured: s.afterCaptured
+      afterCaptured: s.afterCaptured,
+      ...(s.beforeBinary ? { beforeEncoding: 'base64' as const } : {}),
+      ...(s.afterBinary ? { afterEncoding: 'base64' as const } : {})
     }))
   }
   await writeJsonAtomic(join(dir, `${runId}.json`), data)
@@ -275,7 +311,7 @@ async function loadRunIntoMemory(runId: string): Promise<Checkpoint | null> {
     return null // absent or corrupt — treat as no checkpoint
   }
   if (
-    parsed?.version !== CHECKPOINT_SCHEMA_VERSION ||
+    !READABLE_SCHEMA_VERSIONS.has(parsed?.version) ||
     !Array.isArray(parsed.roots) ||
     parsed.roots.length === 0 ||
     !parsed.roots.every((r) => typeof r === 'string' && r.length > 0) ||
@@ -297,7 +333,9 @@ async function loadRunIntoMemory(runId: string): Promise<Checkpoint | null> {
     if (!abs) continue
     files.set(abs, {
       before: entry.before,
+      ...(entry.beforeEncoding === 'base64' ? { beforeBinary: true } : {}),
       after: entry.after,
+      ...(entry.afterEncoding === 'base64' ? { afterBinary: true } : {}),
       afterCaptured: entry.afterCaptured === true
     })
   }
@@ -410,9 +448,14 @@ export async function recordOriginal(runId: string, roots: string[], relPath: st
   }
   if (cp.files.has(abs)) return
 
-  const { content, capped } = await readCapped(abs)
+  const { content, binary, capped } = await readCapped(abs)
   if (capped) return // too big to snapshot — leave this file out of the checkpoint
-  cp.files.set(abs, { before: content, after: null, afterCaptured: false })
+  cp.files.set(abs, {
+    before: content,
+    ...(binary ? { beforeBinary: true } : {}),
+    after: null,
+    afterCaptured: false
+  })
   await schedulePersistRun(runId)
   // Keep the disk bounded the same way memory is. Queued AFTER the persist so the
   // prune pass sees the new run's file and the cap holds immediately.
@@ -437,7 +480,8 @@ export async function recordResult(
   const snap = checkpoints.get(runId)?.files.get(abs)
   if (!snap) return
 
-  const { content, capped } = await readCapped(abs)
+  const { content, binary, capped } = await readCapped(abs)
+  snap.afterBinary = binary
   if (capped) {
     snap.afterCaptured = false
   } else if (content === null) {
@@ -497,7 +541,7 @@ export async function restoreCheckpoint(runId: string): Promise<number> {
     // realpath gate the write tools use and skip anything that now escapes.
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
-      await applyState(abs, snap.before)
+      await applyState(abs, snap.before, snap.beforeBinary)
       restored++
     } catch {
       // Best effort — keep going with the rest.
@@ -523,7 +567,7 @@ export async function reapplyCheckpoint(runId: string): Promise<number> {
     // symlink planted since the snapshot must not let a redo write through it.
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
-      await applyState(abs, snap.after)
+      await applyState(abs, snap.after, snap.afterBinary)
       reapplied++
     } catch {
       // Best effort — keep going with the rest.
