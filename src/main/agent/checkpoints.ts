@@ -490,6 +490,12 @@ export async function restoreCheckpoint(runId: string): Promise<number> {
   if (!cp) return 0
   let restored = 0
   for (const [abs, snap] of cp.files) {
+    // Re-validate containment at apply time, not just at record time. A path that
+    // was inside the roots when snapshotted can be moved OUT of them by a symlink
+    // planted since (e.g. a sandboxed `ln -s /outside ws/sub` on a parent dir), and
+    // applyState writes/removes with raw fs that would follow it. Re-run the same
+    // realpath gate the write tools use and skip anything that now escapes.
+    if (!resolveOrNull(cp.roots, abs)) continue
     try {
       await applyState(abs, snap.before)
       restored++
@@ -513,6 +519,9 @@ export async function reapplyCheckpoint(runId: string): Promise<number> {
   let reapplied = 0
   for (const [abs, snap] of cp.files) {
     if (!snap.afterCaptured) continue
+    // Same apply-time containment re-check as restoreCheckpoint (see there): a
+    // symlink planted since the snapshot must not let a redo write through it.
+    if (!resolveOrNull(cp.roots, abs)) continue
     try {
       await applyState(abs, snap.after)
       reapplied++
