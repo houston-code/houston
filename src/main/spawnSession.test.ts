@@ -75,6 +75,14 @@ function fakeDeps(overrides: Partial<SpawnDeps> = {}): {
   return { deps, calls, titles }
 }
 
+// The seeded brief is tagged so the new chat shows a chip, with the brief's opening
+// line as its detail (the full text is still what the model gets).
+const HANDOFF = {
+  kind: 'spawned',
+  label: 'Handed-off task',
+  detail: 'Add OAuth login. Wire the callback route and add tests.'
+} as const
+
 const baseInput: SpawnSessionInput = {
   prompt: 'Add OAuth login. Wire the callback route and add tests.',
   providerId: 'anthropic',
@@ -99,7 +107,7 @@ describe('createSpawnBackend', () => {
     expect(calls.created[0].worktree).toBeUndefined()
 
     // The prompt becomes the first user message.
-    expect(calls.seeded[0].messages).toEqual([{ role: 'user', content: baseInput.prompt }])
+    expect(calls.seeded[0].messages).toEqual([{ role: 'user', content: baseInput.prompt, invokedAs: HANDOFF }])
 
     // Background run inherits provider/model/policy and carries the same seed.
     expect(calls.runs).toHaveLength(1)
@@ -109,7 +117,7 @@ describe('createSpawnBackend', () => {
       providerId: 'anthropic',
       model: 'claude-opus-4-8',
       approvalPolicy: 'ask',
-      messages: [{ role: 'user', content: baseInput.prompt }]
+      messages: [{ role: 'user', content: baseInput.prompt, invokedAs: HANDOFF }]
     })
     expect(calls.runs[0].req.runId).toBeTruthy()
 

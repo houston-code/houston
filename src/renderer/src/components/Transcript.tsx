@@ -5,6 +5,7 @@ import {
   type ToolApprovalDecision
 } from '@shared/agent'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
+import type { PromptInvocation, PromptInvocationKind } from '@shared/promptInvocation'
 import type { DisplayItem } from '../lib/items'
 import { groupItems } from '../lib/toolDisplay'
 import { copyText } from '../lib/clipboard'
@@ -13,7 +14,7 @@ import { ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
 import { ElicitationCard } from './ElicitationCard'
 import { Markdown } from './Markdown'
-import { Icon } from './Icon'
+import { Icon, type IconName } from './Icon'
 
 /**
  * Subtle, hover-revealed copy affordance shared by user and assistant turns. The
@@ -50,14 +51,49 @@ function CopyButton({ text, className }: { text: string; className?: string }): 
   )
 }
 
+const INVOCATION_ICON: Record<PromptInvocationKind, IconName> = {
+  command: 'terminal',
+  action: 'gitBranch',
+  spawned: 'link'
+}
+
+/**
+ * A turn whose text Houston wrote (`/review`, a ship button, `/agent`, a handoff
+ * brief). The chip says what the user did; the prompt the agent actually received
+ * stays one click away, so nothing it was told is hidden, just out of the way.
+ */
+function InvokedBubble({ text, invokedAs }: { text: string; invokedAs: PromptInvocation }): JSX.Element {
+  const mono = invokedAs.kind === 'command'
+  return (
+    <div className="msg msg--user msg--invoked">
+      <CopyButton text={text} className="msg__copy--user" />
+      <div className="msg__invoked">
+        <div className="msg__body msg__chip">
+          <Icon name={INVOCATION_ICON[invokedAs.kind]} className="msg__chip-icon" />
+          <span className={mono ? 'msg__chip-label msg__chip-label--mono' : 'msg__chip-label'}>
+            {invokedAs.label}
+          </span>
+          {invokedAs.detail && <span className="msg__chip-detail">{invokedAs.detail}</span>}
+        </div>
+        <details className="msg__prompt">
+          <summary className="msg__prompt-toggle">Instructions sent to the agent</summary>
+          <div className="msg__prompt-text">{text}</div>
+        </details>
+      </div>
+    </div>
+  )
+}
+
 function UserBubble({
   text,
   images,
-  isSummary
+  isSummary,
+  invokedAs
 }: {
   text: string
   images?: ImageAttachment[]
   isSummary?: boolean
+  invokedAs?: PromptInvocation
 }): JSX.Element {
   // The compaction summary is model-authored markdown, not user input. Render it as
   // a labeled, full-width block with its body parsed as markdown rather than the
@@ -73,6 +109,7 @@ function UserBubble({
       </div>
     )
   }
+  if (invokedAs && !images?.length) return <InvokedBubble text={text} invokedAs={invokedAs} />
   return (
     <div className="msg msg--user">
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
@@ -293,6 +330,7 @@ export function Transcript({
                     text={node.item.text}
                     images={node.item.images}
                     isSummary={node.item.isSummary}
+                    invokedAs={node.item.invokedAs}
                   />
                 )
               case 'assistant':

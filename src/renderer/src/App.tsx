@@ -11,14 +11,9 @@ import {
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type { ConversationMeta, PlanDecision, ReasoningEffort, RepoInfo } from '@shared/agent'
-import {
-  mergeCommands,
-  builtinCommands,
-  parseAgentInvocation,
-  agentInvocationPrompt,
-  type Command
-} from '@shared/commands'
+import { mergeCommands, builtinCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
+import { agentTurn, shipTurn, type InvokedTurn, type PromptInvocation } from '@shared/promptInvocation'
 import { resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
 import {
@@ -443,7 +438,7 @@ export default function App(): JSX.Element {
   // Start a turn immediately with the given text/images, creating a conversation
   // first if this is the very first message — in a fresh worktree when set up.
   const sendNow = useCallback(
-    async (text: string, images?: ImageAttachment[]) => {
+    async (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
@@ -478,6 +473,7 @@ export default function App(): JSX.Element {
         conversationId: convId,
         userText: text,
         images,
+        ...(invokedAs ? { invokedAs } : {}),
         providerId: settings.selected.providerId,
         model: settings.selected.model,
         approvalPolicy: settings.approvalPolicy
@@ -1069,21 +1065,32 @@ export default function App(): JSX.Element {
     if (n > 0) alert(`Re-applied ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
   }, [chat])
 
-  const onSend = useCallback(
-    (text: string, images?: ImageAttachment[]) => {
+  const dispatch = useCallback(
+    (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
       // Defer messages typed mid-run; main combines and sends them when it ends.
       if (chat.running && settings?.selected) {
         queue.enqueue({
           text,
           images,
+          ...(invokedAs ? { invokedAs } : {}),
           providerId: settings.selected.providerId,
           model: settings.selected.model,
           approvalPolicy: settings.approvalPolicy
         })
-      } else void sendNow(text, images)
+      } else void sendNow(text, images, invokedAs)
     },
     [chat.running, settings, queue, sendNow]
   )
+
+  // A message the user wrote in the composer.
+  const onSend = useCallback(
+    (text: string, images?: ImageAttachment[]) => dispatch(text, images),
+    [dispatch]
+  )
+
+  // A prompt Houston wrote on the user's behalf (see @shared/promptInvocation): the
+  // transcript shows what they did, not the instructions it expanded to.
+  const onInvoke = useCallback((turn: InvokedTurn) => dispatch(turn.text, undefined, turn.invokedAs), [dispatch])
 
   // Save a `#`-captured standing instruction to the workspace's (or every project's)
   // rules file — the files Houston already loads each run — and say where it landed.
@@ -1133,9 +1140,9 @@ export default function App(): JSX.Element {
   const onShip = useCallback(
     (action: ShipAction) => {
       setChangesOpen(false)
-      void onSend(action.prompt)
+      onInvoke(shipTurn(action))
     },
-    [onSend]
+    [onInvoke]
   )
 
   const onCompact = useCallback(async () => {
@@ -1194,9 +1201,9 @@ export default function App(): JSX.Element {
         // Dispatch one of the workspace's own agents. Phrased as an instruction to
         // dispatch (not a second path into subagents), so the agent's prompt, tools,
         // model and approval tier stay identical to when the model picks it itself.
-        const inv = parseAgentInvocation(args)
-        if (inv) void onSend(agentInvocationPrompt(inv.name, inv.task))
-        else chat.notify('Usage: /agent <name> <task> — the name matches a file in .houston/agents', 'error')
+        const turn = agentTurn(args, `/${cmd.name} ${args}`)
+        if (turn) onInvoke(turn)
+        else chat.notify('Usage: /agent <name> <task>. The name matches a file in .houston/agents', 'error')
       } else if (cmd.name === 'doctor') setDoctorOpen(true)
       else if (cmd.name === 'help') {
         chat.notify(
@@ -1209,7 +1216,7 @@ export default function App(): JSX.Element {
         chat.notify(`Approval mode: ${policy}`)
       }
     },
-    [onNewChat, onCompact, onListCapability, onChangePolicy, onSend, chat, commands]
+    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, commands]
   )
 
   // ---- Keyboard shortcuts, command palette, mode cycling ----
@@ -1884,6 +1891,7 @@ export default function App(): JSX.Element {
             onShip={canChat ? onShip : undefined}
             onCommand={onCommand}
             onSend={onSend}
+            onInvoke={onInvoke}
             onSteer={onSteer}
             onSaveMemory={onSaveMemory}
             onCancel={chat.cancel}

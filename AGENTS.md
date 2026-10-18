@@ -38,6 +38,13 @@ them from drifting:
   `tui.test.ts` (`resolves every blocking interaction`) is the runtime backstop.
 - When you add an `AgentEvent` or a blocking tool, wire the GUI, the TUI, and
   headless in the same change, and add/extend the parity coverage.
+- **A prompt Houston writes for the user is never shown as their words.** Build it
+  with a constructor in `src/shared/promptInvocation.ts` (`commandTurn`, `agentTurn`,
+  `shipTurn`, `spawnedTurn`) and send it as an invoked turn (`onInvoke` in the GUI,
+  the `prompt` slash result in the TUI); the message carries `invokedAs` and both
+  clients render that. A message the loop injects on its own goes through
+  `systemNoteMessage()`. `promptVisibility.guard.test.ts` inventories every place a
+  user turn is created and fails on a new one until it is classified.
 
 ## Agent-behavior goldens
 
