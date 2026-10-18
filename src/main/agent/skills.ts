@@ -1,5 +1,5 @@
-import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { promises as fs, realpathSync } from 'node:fs'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import { parseFrontmatter } from '@shared/frontmatter'
 import { HOUSTON_GUIDE } from './guide-content'
 
@@ -108,6 +108,23 @@ export function withBuiltinSkills(workspaceSkills: Skill[]): Skill[] {
   return merged
 }
 
+/**
+ * Whether `abs` resolves, through any symlinks, to a file inside `workspace`. A
+ * skill's SKILL.md comes from the repo, so it is attacker-controlled when an untrusted
+ * repo is opened, and its body reaches the model through the `skill` tool, which needs
+ * no approval. A SKILL.md that is a symlink out of the tree would hand the model a host
+ * file (a private key, a credentials file) without the prompt a direct read of it gets.
+ */
+function resolvesInsideWorkspace(abs: string, workspace: string): boolean {
+  try {
+    const root = realpathSync(workspace)
+    const rel = relative(root, realpathSync(abs))
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  } catch {
+    return false // missing or unreadable: nothing to load anyway
+  }
+}
+
 export async function loadSkills(workspace: string): Promise<Skill[]> {
   let entries
   try {
@@ -125,6 +142,7 @@ export async function loadSkills(workspace: string): Promise<Skill[]> {
     if (!e.isDirectory()) continue
     if (!/^[\w-]+$/.test(e.name)) continue
     const rel = `${SKILLS_DIR}/${e.name}/SKILL.md`
+    if (!resolvesInsideWorkspace(join(workspace, rel), workspace)) continue
     let raw: string
     try {
       raw = (await fs.readFile(join(workspace, rel), 'utf8')).trim()
@@ -158,9 +176,13 @@ export async function loadSkillBody(workspace: string, skill: Skill): Promise<st
     const text = skill.body.trim()
     return text || null
   }
+  // Checked again at read time: the file can have been swapped for a symlink since the
+  // skill list was built at the start of the run.
+  const abs = join(workspace, skill.path)
+  if (!resolvesInsideWorkspace(abs, workspace)) return null
   let raw: string
   try {
-    raw = (await fs.readFile(join(workspace, skill.path), 'utf8')).trim()
+    raw = (await fs.readFile(abs, 'utf8')).trim()
   } catch {
     return null
   }
