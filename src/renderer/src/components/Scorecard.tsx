@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelScorecard, Scorecard as ScorecardData } from '@shared/scorecard'
 import { formatTokens, formatUsd } from '@shared/usage'
+import { useFocusTrap } from '../lib/useFocusTrap'
 
 /**
  * A slide-over panel showing a LOCAL-ONLY per-model "loop scorecard": how each
@@ -19,6 +20,8 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
   const [data, setData] = useState<ScorecardData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const panelRef = useRef<HTMLElement>(null)
+  useFocusTrap(panelRef, onClose)
 
   const reload = useCallback(async () => {
     setError(null)
@@ -42,10 +45,13 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <aside
+        ref={panelRef}
         className="drawer scorecard"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label="Loop scorecard"
+        tabIndex={-1}
       >
         <header className="changes-panel__head">
           <div className="changes-panel__titles">
@@ -74,7 +80,7 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
           >
             ⟳
           </button>
-          <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
+          <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close" data-autofocus>
             ✕
           </button>
         </header>

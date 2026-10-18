@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { buildDoctorReport, type DoctorCheck, type DoctorFacts } from '@shared/doctor'
+import { useFocusTrap } from '../lib/useFocusTrap'
 
 /**
  * `/doctor` for the desktop app: the "why isn't this working" health view.
@@ -45,10 +46,12 @@ export function DoctorModal({
     }
   }, [workspace])
 
-  // Esc is handled by App's global key handler (which knows this modal is open and
-  // suppresses cycle-mode / run-cancel while it is), the same as the Scorecard and
-  // Files panels. A private document-level Esc listener here fired first and let
-  // App's handler fall through to `chat.cancel()`, silently killing a running turn.
+  // The focus trap closes on Esc from inside the dialog and stops it there, so the
+  // same key can't also reach App's global handler and cancel a running turn. (A
+  // document-level Esc listener here once fired first and let App's handler fall
+  // through to `chat.cancel()`, silently killing a running turn.)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(dialogRef, onClose)
 
   const report = facts ? buildDoctorReport(facts) : null
   const all = report?.groups.flatMap((g) => g.checks) ?? []
@@ -57,7 +60,9 @@ export function DoctorModal({
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="modal modal--doctor"
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="doctor-title"

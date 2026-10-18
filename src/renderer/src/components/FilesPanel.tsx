@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileEntry } from '@shared/files'
 import { Icon } from './Icon'
 import { FilePreview } from './FilePreview'
 import { baseName } from '../lib/paths'
+import { useFocusTrap } from '../lib/useFocusTrap'
 
 /** Debounce before a filter query hits the fuzzy file search (keeps typing smooth). */
 const FILTER_DEBOUNCE_MS = 160
@@ -109,6 +110,10 @@ export function FilesPanel({
   // Filter mode: a non-empty query shows flat fuzzy-search results instead of the tree.
   const [filter, setFilter] = useState('')
   const [results, setResults] = useState<string[] | null>(null)
+  // A modal drawer: focus starts in the filter field (type to find a file), Tab stays
+  // inside, Esc closes, and focus returns to whatever opened it.
+  const panelRef = useRef<HTMLElement>(null)
+  useFocusTrap(panelRef, onClose)
 
   const reload = useCallback(async () => {
     if (!workspace) {
@@ -195,10 +200,13 @@ export function FilesPanel({
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <aside
+        ref={panelRef}
         className="drawer files-panel"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label="Files"
+        tabIndex={-1}
       >
         <header className="changes-panel__head">
           <div className="changes-panel__titles">
@@ -235,6 +243,7 @@ export function FilesPanel({
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                   aria-label="Filter files"
+                  data-autofocus
                 />
                 {filter && (
                   <button

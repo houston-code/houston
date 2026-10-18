@@ -53,6 +53,16 @@ const sampleChanges: WorkingTreeChanges = {
 }
 
 describe('DiffPanel', () => {
+  it('takes focus on open and closes on Esc', async () => {
+    installApi(sampleChanges)
+    const onClose = vi.fn()
+    render(<DiffPanel workspace="/ws" onClose={onClose} />)
+    expect(document.activeElement).toBe(screen.getByLabelText('Close'))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getByText('src/foo.ts')).toBeInTheDocument())
+  })
+
   it('lists changed files with the working-tree scope label and totals', async () => {
     installApi(sampleChanges)
     render(<DiffPanel workspace="/repo" onClose={vi.fn()} />)

@@ -53,6 +53,15 @@ const sampleData: ScorecardData = {
 }
 
 describe('Scorecard', () => {
+  it('takes focus on open and closes on Esc', async () => {
+    installApi(emptyData)
+    const onClose = vi.fn()
+    render(<Scorecard onClose={onClose} />)
+    expect(document.activeElement).toBe(screen.getByLabelText('Close'))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('renders a per-model card with derived stats and a tool histogram', async () => {
     installApi(sampleData)
     render(<Scorecard onClose={vi.fn()} />)
