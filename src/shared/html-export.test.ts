@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Conversation } from './agent'
-import { conversationToHtml, escapeHtml } from './html-export'
+import { conversationToHtml, escapeHtml, HTML_DATA_OPEN_TAG, type HtmlConversationData } from './html-export'
+import { decodeHtmlEntities } from './html-import'
 
 function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
@@ -116,5 +117,89 @@ describe('conversationToHtml', () => {
     expect(html).not.toMatch(/url\(/i)
     // A plain http(s) URL only survives inside escaped body text, not as an attribute.
     expect(html).toContain('http://example.com/page')
+  })
+})
+
+describe('conversationToHtml data block', () => {
+  /** The JSON payload inside the export's data block. */
+  function dataBlock(html: string): HtmlConversationData {
+    const start = html.indexOf(HTML_DATA_OPEN_TAG) + HTML_DATA_OPEN_TAG.length
+    return JSON.parse(decodeHtmlEntities(html.slice(start, html.indexOf('</template>', start))))
+  }
+
+  it('embeds exactly one inert data block, in the head', () => {
+    const html = conversationToHtml(makeConversation())
+    expect(html.split(HTML_DATA_OPEN_TAG)).toHaveLength(2)
+    expect(html.indexOf(HTML_DATA_OPEN_TAG)).toBeLessThan(html.indexOf('</head>'))
+  })
+
+  it('stores the importable fields, tool-call ids included', () => {
+    const conv = makeConversation()
+    const data = dataBlock(conversationToHtml(conv))
+    expect(data).toEqual({
+      format: 'houston-conversation',
+      version: 1,
+      title: 'My chat',
+      providerId: 'anthropic',
+      model: 'claude-opus-4-8',
+      messages: conv.messages
+    })
+  })
+
+  it('leaves out what the page does not show: workspace, attachments, reasoning, invocation chips', () => {
+    const conv = makeConversation({
+      promptSnapshot: { date: '2026-10-18', gitStatus: 'branch secret-branch' },
+      messages: [
+        {
+          role: 'user',
+          content: 'look at this',
+          images: [{ mediaType: 'image/png', data: 'SECRETPIXELS' }],
+          invokedAs: { kind: 'command', label: '/review' }
+        },
+        {
+          role: 'assistant',
+          content: 'done',
+          reasoning: [{ text: 'private chain of thought', signature: 'sig' }]
+        },
+        {
+          role: 'tool',
+          content: 'pdf text',
+          toolCallId: 't',
+          toolName: 'read_file',
+          documents: [{ mediaType: 'application/pdf', data: 'SECRETPDF' }]
+        }
+      ]
+    })
+    const html = conversationToHtml(conv)
+    for (const hidden of [
+      '/some/where',
+      'SECRETPIXELS',
+      'SECRETPDF',
+      'private chain of thought',
+      'secret-branch',
+      '/review'
+    ]) {
+      expect(html).not.toContain(hidden)
+    }
+    expect(dataBlock(html).messages).toEqual([
+      { role: 'user', content: 'look at this' },
+      { role: 'assistant', content: 'done' },
+      { role: 'tool', content: 'pdf text', toolCallId: 't', toolName: 'read_file' }
+    ])
+  })
+
+  it('omits an empty provider or model rather than storing blanks', () => {
+    const data = dataBlock(conversationToHtml(makeConversation({ providerId: '', model: '' })))
+    expect(data).not.toHaveProperty('providerId')
+    expect(data).not.toHaveProperty('model')
+  })
+
+  it('keeps the block escaped so its JSON cannot close the template or add markup', () => {
+    const html = conversationToHtml(
+      makeConversation({ messages: [{ role: 'user', content: '</template><img src=x onerror=alert(1)>' }] })
+    )
+    expect(html).not.toContain('</template><img')
+    expect(html).not.toContain('<img src=x')
+    expect(dataBlock(html).messages[0].content).toBe('</template><img src=x onerror=alert(1)>')
   })
 })

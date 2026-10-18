@@ -14,17 +14,13 @@ import {
   type AgentEvent,
   type AgentSendRequest,
   type ChatMessage,
-  type ConversationMeta,
   type DeleteConversationResult,
+  type ImportConversationResult,
   type PlanDecision,
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
-import {
-  validateImportedConversation,
-  resolveImportWorkspace,
-  MAX_IMPORT_BYTES
-} from '@shared/conversation-io'
+import { parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit } from '@shared/images'
 import { sanitizeInvocation } from '@shared/promptInvocation'
@@ -869,27 +865,27 @@ export function registerIpc(): void {
     return res.filePath
   })
 
-  // Import a conversation from a JSON file into a new conversation. Returns its
-  // metadata, or null if cancelled. Throws (surfaced to the renderer) on a
-  // malformed file.
-  ipcMain.handle(IPC.conversationImport, async (event): Promise<ConversationMeta | null> => {
+  // Import a conversation from a JSON or HTML export into a new conversation.
+  // Returns its metadata and whether only the visible text could be recovered (an
+  // HTML export from before the embedded data block), or null if cancelled. Throws
+  // (surfaced to the renderer) on a malformed file.
+  ipcMain.handle(IPC.conversationImport, async (event): Promise<ImportConversationResult | null> => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const res = await dialog.showOpenDialog(win!, {
       title: 'Import conversation',
       properties: ['openFile'],
-      filters: [{ name: 'JSON', extensions: ['json'] }]
+      filters: [{ name: 'Chat export (JSON or HTML)', extensions: ['json', 'html', 'htm'] }]
     })
     if (res.canceled || res.filePaths.length === 0) return null
-    // Reject an oversized file BEFORE reading it into memory / JSON.parsing it, so
-    // a huge or hostile file can't exhaust memory.
+    // Reject an oversized file BEFORE reading it into memory / parsing it, so a
+    // huge or hostile file can't exhaust memory.
     const { size } = statSync(res.filePaths[0])
     if (size > MAX_IMPORT_BYTES) {
       throw new Error(
         `Conversation file is too large (${Math.round(size / 1_000_000)} MB; max ${Math.round(MAX_IMPORT_BYTES / 1_000_000)} MB).`
       )
     }
-    const raw = JSON.parse(readFileSync(res.filePaths[0], 'utf8'))
-    const data = validateImportedConversation(raw)
+    const { data, textOnly } = parseConversationFile(readFileSync(res.filePaths[0], 'utf8'))
     const settings = getSettings()
     const conv = importConversation(data, {
       // Only honor the file's workspace if it's already a trusted (recents) dir;
@@ -899,7 +895,7 @@ export function registerIpc(): void {
       model: settings.selected?.model ?? ''
     })
     const { messages: _messages, ...meta } = conv
-    return meta
+    return { meta, textOnly }
   })
 
   // Agent: fire-and-forget; progress is streamed back over IPC.agentEvent.

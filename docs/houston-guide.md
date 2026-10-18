@@ -898,8 +898,9 @@ conventions, not as authority to change tool or permission behavior.
   repo directly. In a repo whose current branch has no commits yet (a fresh
   `git init`), the toggle starts off; a worktree can only branch from another
   branch that has commits, and is not offered when no branch has any.
-- **Conversations** are saved per project folder. Chats can be exported/imported
-  as JSON, exported as self-contained HTML, searched, and forked.
+- **Conversations** are saved per project folder. Chats can be exported as JSON
+  or self-contained HTML and imported from either (an HTML export from an older
+  version brings back only the chat text), searched, and forked.
 - **Undo a turn's file changes.** Before the agent edits a file, Houston
   snapshots it, so the latest turn's changes can be reverted with one click (and
   re-applied after a revert). This covers every file-editing tool, including

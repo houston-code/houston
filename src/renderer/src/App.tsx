@@ -628,10 +628,15 @@ export default function App(): JSX.Element {
 
   const onImportConversation = useCallback(async () => {
     try {
-      const meta = await window.api.importConversation()
-      if (!meta) return
+      const res = await window.api.importConversation()
+      if (!res) return
       await refreshConversations()
-      await selectConversation(meta.id)
+      await selectConversation(res.meta.id)
+      if (res.textOnly) {
+        alert(
+          'This HTML file came from an older version of Houston, so only the chat text was imported. Tool calls and their results were left out.'
+        )
+      }
     } catch (e) {
       alert(`Could not import conversation: ${(e as Error).message}`)
     }

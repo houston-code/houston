@@ -300,6 +300,16 @@ export interface DeleteConversationResult {
   worktree?: WorktreeRemoval | null
 }
 
+/** Outcome of an import-conversation request. */
+export interface ImportConversationResult {
+  meta: ConversationMeta
+  /**
+   * True when the file only yielded the visible chat text: an HTML export from
+   * before Houston embedded the chat data, so tool calls and results were left out.
+   */
+  textOnly: boolean
+}
+
 export interface ConversationMeta {
   id: string
   title: string
