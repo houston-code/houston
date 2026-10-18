@@ -290,9 +290,14 @@ function pathsOverlap(p: string, others: string[]): boolean {
   return others.some((o) => p === o || isPathPrefix(p, o) || isPathPrefix(o, p))
 }
 
-/** Whether `prefix` is a path-segment prefix of `full` (e.g. /a/b is a prefix of /a/b/c). */
+/**
+ * Whether `prefix` is a path-segment prefix of `full` (e.g. /a/b is a prefix of /a/b/c).
+ * Both separators count: the paths come from `resolveInRoots`, which spells them with
+ * `\\` on Windows, where a `/`-only check never matched and a write under a listed
+ * directory left that listing cached. Elsewhere a `\\` can only over-invalidate.
+ */
 function isPathPrefix(prefix: string, full: string): boolean {
-  return full.startsWith(prefix.endsWith('/') ? prefix : `${prefix}/`)
+  return ['/', '\\'].some((s) => full.startsWith(prefix.endsWith(s) ? prefix : `${prefix}${s}`))
 }
 
 /**

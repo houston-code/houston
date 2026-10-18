@@ -57,6 +57,14 @@ describe('loadAgents', () => {
     expect(a.tools).toEqual(['read_file', 'glob', 'list_dir'])
   })
 
+  it('parses a YAML flow-list tools field, quoted or not', async () => {
+    // Split as-is this gave `[read_file` and `"glob"]`, so no name matched and the
+    // narrowing silently fell back to the default tool set.
+    writeAgent('lister', '---\ntools: [read_file, "glob", \'list_dir\']\n---\nYou only list.')
+    const [a] = await loadAgents(ws)
+    expect(a.tools).toEqual(['read_file', 'glob', 'list_dir'])
+  })
+
   it('leaves tools undefined when the front-matter field is absent', async () => {
     writeAgent('plain', 'Just a prompt, no tools field.')
     const [a] = await loadAgents(ws)
