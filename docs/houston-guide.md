@@ -252,7 +252,7 @@ it.
 It goes to the turn that is running. The agent reads it before its next step, so
 "no, use YAML instead" changes what happens next rather than arriving after the
 work is done. Houston prints `· steering: …` at the moment the message actually
-reaches the model, not when you pressed `Enter` — until then it has changed
+reaches the model, not when you pressed `Enter`. Until then it has changed
 nothing, and saying otherwise would be a lie. The message is an ordinary part of
 the conversation, so it appears in the transcript and is remembered like anything
 else you said.
@@ -850,7 +850,7 @@ you everywhere, appends it to the rules file it already reads on every run
 (`AGENTS.md` in the project, or in `~/.claude`), and tells you which file it
 wrote.
 
-This is for the moment you notice "it should always do X" — the moment you are
+This is for the moment you notice "it should always do X", the moment you are
 least likely to stop and open an editor. `#` alone is not a note, and a `#` in the
 middle of a line is ordinary text.
 
