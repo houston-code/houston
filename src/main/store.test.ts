@@ -798,3 +798,39 @@ describe('settings migration — onboarding (v10)', () => {
     expect(reloaded.getSettings().onboarding).toEqual({ checklistDone: true, seenTips: ['approval'] })
   })
 })
+
+describe('settings written by a newer Houston (after a downgrade)', () => {
+  const NEWER = 99
+
+  it('runs no migration steps and keeps the higher version in memory', async () => {
+    // Every step is gated on fromVersion < N, so a newer file is taken as already migrated:
+    // the scoped backfills must not re-add models the user deleted on the newer build.
+    writeSettings({ schemaVersion: NEWER, providers: [anthropicProvider(['claude-opus-4-8'])] })
+    const { getSettings } = await loadStore()
+    const s = getSettings()
+    expect(s.schemaVersion).toBe(NEWER)
+    expect(s.providers.find((p) => p.id === 'anthropic')!.models.map((m) => m.id)).toEqual(['claude-opus-4-8'])
+  })
+
+  it('never writes a lower version, and keeps settings this build does not know', async () => {
+    writeSettings({
+      schemaVersion: NEWER,
+      providers: [anthropicProvider(['claude-opus-4-8'])],
+      settingFromTheFuture: { enabled: true }
+    })
+    const { getSettings, saveSettings } = await loadStore()
+    saveSettings({ ...getSettings(), approvalPolicy: 'auto-edit' })
+    const onDisk = JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
+    expect(onDisk.schemaVersion).toBe(NEWER)
+    expect(onDisk.approvalPolicy).toBe('auto-edit')
+    expect(onDisk.settingFromTheFuture).toEqual({ enabled: true })
+  })
+
+  it('does not rewrite a newer file just because it was read', async () => {
+    writeSettings({ schemaVersion: NEWER, providers: [anthropicProvider(['claude-opus-4-8'])] })
+    const before = readFileSync(join(state.userData, 'settings.json'), 'utf8')
+    const { getSettings } = await loadStore()
+    getSettings()
+    expect(readFileSync(join(state.userData, 'settings.json'), 'utf8')).toBe(before)
+  })
+})

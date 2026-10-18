@@ -78,6 +78,19 @@ describe('legacy files without schemaVersion', () => {
   })
 })
 
+describe('files written by a newer Houston (after a downgrade)', () => {
+  it('keeps the higher version on write, so a later upgrade does not re-run migrations', async () => {
+    const newer = CONVERSATION_SCHEMA_VERSION + 3
+    writeRaw(ID_A, JSON.stringify({ ...legacyConv(ID_A), schemaVersion: newer }))
+    const { getConversation, setMessages } = await import('./conversations')
+    expect(getConversation(ID_A)!.schemaVersion).toBe(newer)
+    setMessages(ID_A, [{ role: 'user', content: 'edited on the older build' }])
+    const onDisk = JSON.parse(readFileSync(convPath(ID_A), 'utf8')) as Conversation
+    expect(onDisk.schemaVersion).toBe(newer)
+    expect(onDisk.messages).toEqual([{ role: 'user', content: 'edited on the older build' }])
+  })
+})
+
 describe('current-version round-trip', () => {
   it('createConversation stamps the version on disk and reads back identically', async () => {
     const { createConversation, getConversation } = await import('./conversations')
