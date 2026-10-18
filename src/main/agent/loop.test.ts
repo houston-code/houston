@@ -1326,6 +1326,44 @@ describe('startRun', () => {
     expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('two')
   })
 
+  it('"Always deny" on an apply_patch saves a rule per file, which then stops a later patch', async () => {
+    const patch = (...body: string[]): string => ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'p1',
+              name: 'apply_patch',
+              arguments: { patch: patch('*** Add File: a.txt', '+1', '*** Add File: b.txt', '+2') }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'p2', name: 'apply_patch', arguments: { patch: patch('*** Add File: b.txt', '+3') } }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => decide('rule-deny')
+    })
+    // One rule per touched file, never a blanket `*` over every future patch.
+    expect(h.addedRules).toContainEqual({ action: 'deny', tool: 'apply_patch', match: 'a.txt' })
+    expect(h.addedRules).toContainEqual({ action: 'deny', tool: 'apply_patch', match: 'b.txt' })
+    expect(h.addedRules).not.toContainEqual({ action: 'deny', tool: 'apply_patch', match: '*' })
+    // The second patch touches b.txt, so the saved rule refuses it without a prompt.
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'p1'
+    ])
+    expect(existsSync(join(ws, 'b.txt'))).toBe(false)
+  })
+
   it('an admin managed `deny` overrides a user `allow` and reports an org-policy reason', async () => {
     // Admin forbids `rm -rf …`; the user has a blanket allow for every shell command.
     // The managed tier outranks the user, so the call is denied outright.
