@@ -110,19 +110,47 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
 }
 
 /**
- * Split a shell command into whitespace-delimited tokens, honouring single- and
- * double-quoted spans (quotes stripped, contents kept). Good enough to scan
- * arguments for path-like tokens; not a full shell parser (no variable/command
- * substitution, no escape sequences).
+ * Split a shell command into the words bash builds from it: unquoted whitespace
+ * separates words, and the quoted, escaped, and bare pieces between it join into one,
+ * each read as {@link readShellSpan} reads it. So `"cd"k` is the one word `cdk` (not
+ * `cd` and `k`), `\/etc` and `$'\x2fetc'` are `/etc`, and `''` is an empty word. A
+ * backslash-newline joins lines. Not a full shell parser: nothing is expanded, and an
+ * operator stays inside a word it touches (`a>b` is one word).
  */
 function tokenizeShellCommand(command: string): string[] {
-  const tokens: string[] = []
+  const words: string[] = []
+  let word: string | null = null
+  for (let i = 0; i < command.length; ) {
+    if (command[i] === '\\' && command[i + 1] === '\n') {
+      i += 2 // a line continuation: no character, and no word break
+    } else if (/\s/.test(command[i])) {
+      if (word !== null) words.push(word)
+      word = null
+      i += 1
+    } else {
+      const span = readShellSpan(command, i)
+      word = (word ?? '') + (span ? span.text : command[i])
+      i = span ? span.end : i + 1
+    }
+  }
+  if (word !== null) words.push(word)
+  return words
+}
+
+/**
+ * The command split on whitespace, with a span in `"` or `'` kept whole and unwrapped
+ * and every backslash left as written. Not the words bash runs (see
+ * {@link tokenizeShellCommand}), but how a Windows path such as `C:\Users\x` or
+ * `..\..\x` reads, so {@link shellReferencesExternalPath} scans these words too.
+ */
+function plainShellWords(command: string): string[] {
+  const words: string[] = []
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g
   let m: RegExpExecArray | null
   while ((m = re.exec(command)) !== null) {
-    tokens.push(m[1] ?? m[2] ?? m[3] ?? '')
+    words.push(m[1] ?? m[2] ?? m[3] ?? '')
   }
-  return tokens
+  return words
 }
 
 /**
@@ -221,9 +249,10 @@ function isScratchTarget(abs: string): boolean {
  */
 function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
   if (!seg) return false
-  // A quoted path (`"/etc/shadow"`, `'~/f'`) keeps its quotes when it is glued to a
-  // flag/redirection or sits after `=`, since the tokenizer only strips quotes that
-  // wrap the whole token. Peel a surrounding pair so the value is analysed.
+  // A word can still hold a quote pair: a plain word keeps one glued after `=` or a
+  // redirection (`--file="/etc/x"`), and a bash word holds one as text when it was
+  // escaped or nested (`\"/etc/x\"`, `'"/etc/x"'`), which an `eval` or `sh -c` reads as
+  // quoting. Peel a surrounding pair so the value is analysed.
   seg = stripSurroundingQuotes(seg)
   if (!seg) return false
   const abs = absoluteTarget(seg)
@@ -250,7 +279,10 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * Whether a `run_shell` command references a filesystem path outside the workspace
  * `roots` — an absolute/home path that resolves outside every root, or a relative
  * path that climbs above the workspace root. Also inspects the value side of an `=`
- * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught).
+ * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught). The
+ * words are read as bash builds them (see {@link tokenizeShellCommand}), so quoting or
+ * escaping a path (`$'/etc'`, `\/etc`, `x"/../.."/y`) doesn't hide it, and again with
+ * backslashes kept (see {@link plainShellWords}), so a Windows path is seen too.
  *
  * Best-effort and deliberately conservative: a command that escapes is escalated
  * for approval, never silently auto-run. It can't catch paths hidden behind
@@ -258,7 +290,8 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * tripwire, not a sandbox. The sandbox remains the real confinement boundary.
  */
 export function shellReferencesExternalPath(command: string, roots: string[]): boolean {
-  for (const token of tokenizeShellCommand(command)) {
+  // Either reading naming an outside path flags the command: over-flagging only asks.
+  for (const token of [...tokenizeShellCommand(command), ...plainShellWords(command)]) {
     if (segmentEscapesWorkspace(token, roots)) return true
     // A redirection glued to its target (`>/etc/cron.d/evil`, `<~/.ssh/id_rsa`,
     // `2>/abs/log`) keeps the operator inside the token; peel it so the path is seen.
@@ -302,45 +335,48 @@ const COMMAND_PREFIXES = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'ti
  */
 export function shellWritesSensitivePath(command: string): boolean {
   for (const segment of splitShellCommand(command)) {
-    const tokens = tokenizeShellCommand(segment)
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i]!
-      // Output redirection, spaced (`> .env`) or glued (`>.env`, `2>>.env`). `>&2` is a
-      // descriptor duplication, not a file.
-      if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
-        const target = tokens[i + 1]
-        if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
-        continue
+    // Bash's words (`\.env` and `".e"nv` are `.env`) and the plain ones (a Windows
+    // path keeps its backslashes): either reading naming a credential file flags it.
+    for (const tokens of [tokenizeShellCommand(segment), plainShellWords(segment)]) {
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i]!
+        // Output redirection, spaced (`> .env`) or glued (`>.env`, `2>>.env`). `>&2` is a
+        // descriptor duplication, not a file.
+        if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
+          const target = tokens[i + 1]
+          if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
+          continue
+        }
+        const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
+        if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
       }
-      const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
-      if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
-    }
-    // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
-    let c = 0
-    while (
-      c < tokens.length &&
-      (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[c]!) || COMMAND_PREFIXES.has(tokens[c]!))
-    ) {
-      c++
-    }
-    const word = tokens[c]
-    if (word === undefined) continue
-    const cmd = word.slice(word.lastIndexOf('/') + 1)
-    const args = tokens.slice(c + 1)
-    const namesSensitive = (): boolean =>
-      args.some((a) => {
-        if (a.startsWith('-')) return false
-        // `dd of=.env`, `--target=.env`: the path may follow an `=`.
-        const eq = a.indexOf('=')
-        return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
-      })
-    if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
-    if (
-      IN_PLACE_EDITORS.has(cmd) &&
-      args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')) &&
-      namesSensitive()
-    ) {
-      return true
+      // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
+      let c = 0
+      while (
+        c < tokens.length &&
+        (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[c]!) || COMMAND_PREFIXES.has(tokens[c]!))
+      ) {
+        c++
+      }
+      const word = tokens[c]
+      if (word === undefined) continue
+      const cmd = word.slice(word.lastIndexOf('/') + 1)
+      const args = tokens.slice(c + 1)
+      const namesSensitive = (): boolean =>
+        args.some((a) => {
+          if (a.startsWith('-')) return false
+          // `dd of=.env`, `--target=.env`: the path may follow an `=`.
+          const eq = a.indexOf('=')
+          return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
+        })
+      if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
+      if (
+        IN_PLACE_EDITORS.has(cmd) &&
+        args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')) &&
+        namesSensitive()
+      ) {
+        return true
+      }
     }
   }
   return false
@@ -682,20 +718,54 @@ function readAnsiCQuote(s: string, start: number): { text: string; end: number }
 }
 
 /**
+ * The quoted or escaped span of shell text that starts at `s[i]`, read as the shell
+ * reads it, and the index past it; null when `s[i]` is an ordinary character. A
+ * backslash escapes the next character (and is dropped); single quotes are literal; in
+ * double quotes a backslash escapes only `"`, `` ` ``, `$`, `\`, and newline. A `$'...'`
+ * string is decoded (see {@link decodeAnsiC}), and a `$"..."` one reads as the plain
+ * double-quoted string (its text untranslated). `$$` is the shell's PID, read as a pair
+ * so the `'` after it opens a plain single-quoted string. An unclosed quote runs to the
+ * end of `s`.
+ */
+function readShellSpan(s: string, i: number): { text: string; end: number } | null {
+  const c = s[i]
+  if (c === '$') {
+    if (s[i + 1] === '$') return { text: '$$', end: i + 2 }
+    if (s[i + 1] === "'") return readAnsiCQuote(s, i)
+    if (s[i + 1] === '"') return readShellSpan(s, i + 1)
+    return null
+  }
+  if (c === '\\') return { text: s[i + 1] ?? '', end: i + 2 }
+  if (c === "'") {
+    const close = s.indexOf("'", i + 1)
+    return close === -1 ? { text: s.slice(i + 1), end: s.length } : { text: s.slice(i + 1, close), end: close + 1 }
+  }
+  if (c !== '"') return null
+  let text = ''
+  let j = i + 1
+  while (j < s.length && s[j] !== '"') {
+    if (s[j] === '\\' && j + 1 < s.length && '"`$\\\n'.includes(s[j + 1])) {
+      text += s[j + 1]
+      j += 2
+    } else {
+      text += s[j]
+      j += 1
+    }
+  }
+  return { text, end: j + 1 }
+}
+
+/**
  * Reduce a shell command to the logical text the shell would execute, by stripping
- * quotes and resolving backslash escapes: `"rm"`, `r''m`, `\rm`, `$'\x72m'`, and
- * `rm -r"f"` all collapse to `rm`. Without this, a deny rule like `*rm -rf*` is
- * trivially dodged by quoting the program name — the literal command string no longer
- * contains the token `rm -rf`, so the pattern never fires. Applied to BOTH a deny or
- * ask rule's pattern and the command before matching, so a rule the user deliberately
- * wrote with quotes still matches. The `*` wildcard survives (it's an ordinary
- * character here — a rule pattern's `*` stays a wildcard for {@link globMatches}). An
- * allow rule reads the command with {@link literalShellUnits} instead, which keeps a
- * quoted `*` apart from a bare one.
- *
- * A `$'...'` string is decoded (see {@link decodeAnsiC}), and a `$"..."` one reads as
- * the plain double-quoted string (its text untranslated). `$$` is the shell's PID, so
- * the `'` after it opens a plain single-quoted string.
+ * quotes and resolving backslash escapes (see {@link readShellSpan}): `"rm"`, `r''m`,
+ * `\rm`, `$'\x72m'`, and `rm -r"f"` all collapse to `rm`. Without this, a deny rule
+ * like `*rm -rf*` is trivially dodged by quoting the program name — the literal
+ * command string no longer contains the token `rm -rf`, so the pattern never fires.
+ * Applied to BOTH a deny or ask rule's pattern and the command before matching, so a
+ * rule the user deliberately wrote with quotes still matches. The `*` wildcard
+ * survives (it's an ordinary character here — a rule pattern's `*` stays a wildcard
+ * for {@link globMatches}). An allow rule reads the command with
+ * {@link literalShellUnits} instead, which keeps a quoted `*` apart from a bare one.
  *
  * Not a full shell parser: it strips quoting/escaping so the matcher sees through
  * spelling tricks, and runs per leaf sub-command AFTER {@link splitShellCommand}
@@ -705,48 +775,9 @@ function readAnsiCQuote(s: string, start: number): { text: string; end: number }
 function dequoteShell(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; ) {
-    const c = s[i]
-    if (c === '$' && s[i + 1] === '$') {
-      out += '$$'
-      i += 2
-    } else if (c === '$' && s[i + 1] === "'") {
-      const q = readAnsiCQuote(s, i)
-      out += q.text
-      i = q.end
-    } else if (c === '$' && s[i + 1] === '"') {
-      i += 1 // the double-quoted string is read next
-    } else if (c === '\\') {
-      // Backslash escapes the next char (outside quotes); drop the backslash, keep the char.
-      if (i + 1 < s.length) {
-        out += s[i + 1]
-        i += 2
-      } else {
-        i += 1
-      }
-    } else if (c === '"') {
-      i += 1
-      while (i < s.length && s[i] !== '"') {
-        // Inside double quotes a backslash only escapes " ` $ \ (and newline); otherwise literal.
-        if (s[i] === '\\' && i + 1 < s.length && '"`$\\\n'.includes(s[i + 1])) {
-          out += s[i + 1]
-          i += 2
-        } else {
-          out += s[i]
-          i += 1
-        }
-      }
-      i += 1 // skip the closing quote (or run off the end on an unbalanced quote)
-    } else if (c === "'") {
-      i += 1 // single quotes are literal — no escapes inside
-      while (i < s.length && s[i] !== "'") {
-        out += s[i]
-        i += 1
-      }
-      i += 1 // skip the closing quote
-    } else {
-      out += c
-      i += 1
-    }
+    const span = readShellSpan(s, i)
+    out += span ? span.text : s[i]
+    i = span ? span.end : i + 1
   }
   return out
 }
@@ -1085,7 +1116,10 @@ function matchClosingParen(s: string, open: number): number {
 /** Directory-change builtins whose only effect is the cwd — never worth a rule. */
 const CWD_BUILTINS = new Set(['cd', 'pushd', 'popd'])
 
-/** Whether a sub-command is a bare directory change (`cd`/`pushd`/`popd`). */
+/**
+ * Whether a sub-command is a bare directory change (`cd`/`pushd`/`popd`), judged on the
+ * word bash runs: `"cd"k` is the program `cdk`, while `\cd` and `$'cd'` are `cd`.
+ */
 function isCwdOnly(command: string): boolean {
   const first = tokenizeShellCommand(command)[0]
   return first !== undefined && CWD_BUILTINS.has(first)
@@ -1253,9 +1287,15 @@ function isCountOnlyPager(tokens: string[]): boolean {
  *   `$'\x2a'` decoded) is kept verbatim too, since its two-token prefix would be a glob
  *   over other programs.
  *   Only a verbatim pattern can therefore hold `*`, and that one is saved exact (see
- *   {@link shellAllowRule}). So is a program whose quoting the prefix would drop
- *   (`'~/bin/x' status`, `"my tool" status`): written bare, the prefix would name a
- *   different program, and would not cover the command it was saved for.
+ *   {@link shellAllowRule}). So is a program whose quoting or escaping the prefix would
+ *   drop (`'~/bin/x' status`, `\~/bin/x status`, `"my tool" status`): written bare, the
+ *   prefix would name a different program, and would not cover the command it was
+ *   saved for.
+ * - The program and verb are the words bash runs (see {@link tokenizeShellCommand}), so
+ *   a quoted or escaped `cd` or wrapper is the one it runs: `\sudo rm -rf x` stays
+ *   verbatim rather than saving a `\sudo rm` prefix that covers `sudo rm -rf /`, and
+ *   `"cd"k deploy` is the command `cdk deploy`, not a dropped `cd`. A word shaped like
+ *   `VAR=value` once its quotes come off (`F"OO"=1`) stays verbatim too.
  *
  * - A `head`/`tail` whose arguments are only line/byte counts (`tail -60`, `head -c 4000`,
  *   `head -n 30`) collapses to the bare program: it's slicing piped output, and keeping

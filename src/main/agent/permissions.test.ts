@@ -136,6 +136,12 @@ describe('shellWritesSensitivePath', () => {
     expect(w('cp -n .env.example .env; echo "ADMIN_PASSWORD=testpass" > .env; npx next build')).toBe(true)
   })
 
+  it('reads the words bash builds, so quoting or escaping a name does not hide it', () => {
+    for (const cmd of ['echo x > \\.env', 'echo x > ".e"nv', "c'p' .env.example $'.env'", 'r\\m .env', 'tee .en\\v']) {
+      expect(w(cmd), cmd).toBe(true)
+    }
+  })
+
   it('catches file-writing commands and in-place edits naming one', () => {
     expect(w('cp -n .env.example .env')).toBe(true)
     expect(w('mv tmp .env')).toBe(true)
@@ -293,14 +299,32 @@ describe('shellReferencesExternalPath', () => {
   })
 
   it('flags a quoted external path glued to a flag/env prefix', () => {
-    // The tokenizer only strips quotes wrapping a whole token, so a quote glued after
-    // `=` survives and must be peeled before the path is recognised.
     expect(ext('grep secret --file="/etc/shadow"')).toBe(true)
     expect(ext("grep secret --file='/etc/hosts'")).toBe(true)
     expect(ext('SECRET="/etc/passwd" cat x')).toBe(true)
     expect(ext('cat >"/etc/x"')).toBe(true)
     // A quoted `=` value pointing into the workspace is not an escape.
     expect(ext('--project="/work/project/tsconfig.json" tsc')).toBe(false)
+    // Quotes that survive into the word (escaped, or nested in the other kind) are
+    // peeled too: `eval` or `sh -c` would read them as quoting.
+    expect(ext('eval cat \\"/etc/passwd\\"')).toBe(true)
+    expect(ext(`cat '"/etc/passwd"'`)).toBe(true)
+  })
+
+  it('reads each word as bash does: escapes, `$\'...\'`, `$"..."`, and glued pieces', () => {
+    expect(ext("cat $'/etc/passwd'")).toBe(true)
+    expect(ext("cat $'\\x2fetc/passwd'")).toBe(true)
+    expect(ext('cat $"/etc/passwd"')).toBe(true)
+    expect(ext('cat \\/etc/passwd')).toBe(true)
+    // Bash leaves an escaped `~` unexpanded, but it is flagged anyway (the safe side).
+    expect(ext('cat \\~/.ssh/id_rsa')).toBe(true)
+    // Adjacent pieces are one word: `x/../../y` climbs out.
+    expect(ext('cat x"/../.."/y')).toBe(true)
+    expect(ext("cat ''../secret")).toBe(true)
+    // A line continuation joins, it does not start a word.
+    expect(ext('cat \\\n/etc/passwd')).toBe(true)
+    // Quoting or escaping that leaves an in-workspace path is still not an escape.
+    expect(ext("cat $'src/a.ts' \\./b a\"/b\"/../c")).toBe(false)
   })
 })
 
@@ -650,6 +674,34 @@ describe('matchRule', () => {
       expect(matchRule(allowCat, 'run_shell', 'cd ~/.ssh && cat config', ['/repo'])).toBeNull()
     })
 
+    it('reads a segment\'s program as bash does, so `"cd"k` is not skipped as a `cd`', () => {
+      const allowStatus = [allow('run_shell', 'git status')]
+      const roots = ['/work/project']
+      // Bash joins `"cd"k` into the one word `cdk`, which runs a program.
+      for (const cmd of ['git status && "cd"k deploy', "git status && 'cd'k deploy", 'git status && cdk deploy']) {
+        expect(matchRule(allowStatus, 'run_shell', cmd, roots)).toBeNull()
+      }
+      // A quoted or escaped `cd` is still the builtin, and still plumbing inside the workspace.
+      for (const cmd of ['git status && "cd" /work/project', 'git status && \\cd src', "git status && $'cd' src"]) {
+        expect(matchRule(allowStatus, 'run_shell', cmd, roots)).toBe('allow')
+      }
+    })
+
+    it('keeps a quoted or escaped `cd` out of the workspace gated', () => {
+      const allowStatus = [allow('run_shell', 'git status')]
+      const roots = ['/work/project']
+      for (const cmd of [
+        'cd /etc && git status',
+        "cd $'/etc' && git status",
+        "cd $'\\x2fetc' && git status",
+        'cd $"/etc" && git status',
+        'cd \\/etc && git status'
+      ]) {
+        expect(matchRule(allowStatus, 'run_shell', cmd, roots)).toBeNull()
+      }
+      expect(matchRule(allowStatus, 'run_shell', "cd $'/work/project' && git status", roots)).toBe('allow')
+    })
+
     it('still denies a `cd` chain when a sub-command is denied', () => {
       expect(matchRule(rules, 'run_shell', 'cd /repo && rm -rf ~', ['/repo'])).toBe('deny')
     })
@@ -972,10 +1024,24 @@ describe('a saved "Always allow" covers only the approved target', () => {
       "$'git' status -s",
       "$'\\x72m' -f $'a\\tb' $'it\\'s'",
       "printf $'%s\\n' x | wc -l",
-      'echo $"hi" $$ "$HOME"'
+      'echo $"hi" $$ "$HOME"',
+      'git status && "cd"k deploy',
+      "\\g\\it $'status' -s",
+      '\\sudo rm -rf /tmp/build',
+      "t'ail' -n \"5\""
     ]) {
       expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS)).toBe('allow')
     }
+  })
+
+  it('run_shell: an escaped or quoted wrapper is not generalized into a `sudo rm` rule', () => {
+    for (const command of ['\\sudo rm -rf /tmp/build', "s'udo' rm -rf /tmp/build", "$'sudo' rm -rf /tmp/build"]) {
+      const rules = saved('run_shell', { command })
+      expect(matchRule(rules, 'run_shell', command, ROOTS)).toBe('allow')
+      expect(matchRule(rules, 'run_shell', 'sudo rm -rf /', ROOTS)).toBeNull()
+    }
+    // A quoted name before `=` is not an assignment to bash, but saving it bare would cover one.
+    expect(matchRule(saved('run_shell', { command: 'F"OO"=1 rm -rf x' }), 'run_shell', 'FOO=1 rm -rf /', ROOTS)).toBeNull()
   })
 
   it('run_shell: a saved prefix still covers longer commands (unchanged)', () => {
@@ -1182,9 +1248,22 @@ describe('shellRulePatterns', () => {
     expect(shellRulePatterns("'~/bin/tool' status")).toEqual(["'~/bin/tool' status"])
     expect(shellRulePatterns('"my tool" status -v')).toEqual(['"my tool" status -v'])
     expect(shellRulePatterns('"$HOME/bin/x" run')).toEqual(['"$HOME/bin/x" run'])
-    // Quoting that changes nothing still generalizes, and an escape is kept as written.
+    // An escape that matters is quoting too.
+    expect(shellRulePatterns('\\~/bin/tool status -v')).toEqual(['\\~/bin/tool status -v'])
+    // Quoting or escaping that changes nothing still generalizes.
     expect(shellRulePatterns(`"git" 'status' -s`)).toEqual(['git status'])
-    expect(shellRulePatterns('\\~/bin/tool status -v')).toEqual(['\\~/bin/tool status'])
+    expect(shellRulePatterns("\\g\\it $'status' -s")).toEqual(['git status'])
+  })
+
+  it('reads the program and verb as the words bash runs', () => {
+    // `"cd"k` is the program `cdk`, not a `cd` prelude to drop.
+    expect(shellRulePatterns('git status && "cd"k deploy')).toEqual(['git status', 'cdk deploy'])
+    expect(shellRulePatterns('"cd" /work/project && git status')).toEqual(['git status'])
+    // A quoted or escaped wrapper or env prefix is still one, so it stays verbatim.
+    for (const cmd of ['\\sudo rm -rf /tmp/build', "s'udo' rm -rf /tmp/build", "$'sudo' rm -rf /tmp/build", 'F"OO"=1 rm -rf x']) {
+      expect(shellRulePatterns(cmd)).toEqual([cmd])
+    }
+    expect(shellRulePatterns("t'ail' -n \"5\"")).toEqual(['tail'])
   })
 
   it('keeps command-wrapper-prefixed commands exact (never broadens to `sudo rm`)', () => {

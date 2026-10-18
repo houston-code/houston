@@ -150,7 +150,9 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   lowercased, shell commands dequoted and `$'...'` decoded) so a re-spelling of a denied
   subject cannot slip past a rule. An allow reads a shell command the other way: a
   quoted `*`, `~`, `$`, or space stays distinct from a bare one, so approving a literal
-  never approves the expansion.
+  never approves the expansion. The workspace-escape check and the `cd` skip read a
+  command's words as bash builds them (`"cd"k` is `cdk`, `$'/etc'` is `/etc`), so
+  quoting can't hide a path or pass a program off as `cd`.
 - `src/main/sandbox/` — the per-OS sandbox backends and their conformance suite. The
   `linux-sandbox` CI job is the only one that exercises the real bubblewrap backend; the
   `test` job can only skip it.
