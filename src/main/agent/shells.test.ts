@@ -36,6 +36,18 @@ describe('background shell registry', () => {
     expect(readShellOutput(id, { full: true }).stdout).toBe('part1') // full re-reads everything
   })
 
+  it('keeps a multibyte character that arrives split across two output chunks', async () => {
+    // 'é' is 0xC3 0xA9. Written as two separate pipe chunks, decoding each chunk on
+    // its own turned both halves into replacement characters.
+    const child = node(
+      'process.stdout.write(Buffer.from([0x63, 0x61, 0x66, 0xc3]));' +
+        'setTimeout(() => process.stdout.write(Buffer.from([0xa9, 0x0a])), 50)'
+    )
+    const id = registerShell('node split', child)
+    await onClose(child)
+    expect(readShellOutput(id).stdout).toBe('café\n')
+  })
+
   it('reports not-found for an unknown id', () => {
     expect(readShellOutput('does-not-exist').found).toBe(false)
     expect(killShell('does-not-exist')).toBe('not-found')

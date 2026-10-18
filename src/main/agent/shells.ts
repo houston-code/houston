@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { StringDecoder } from 'node:string_decoder'
 import type { BackgroundShellInfo } from '@shared/agent'
 import { killProcessTree } from '../sandbox'
 import { detectLocalUrl } from './loopback'
@@ -118,14 +119,18 @@ export function registerShell(
       notifyShellsChanged()
     }
   }
+  // One decoder per stream: a multibyte character split across two pipe chunks
+  // would otherwise decode as two replacement characters.
+  const outDecoder = new StringDecoder('utf8')
+  const errDecoder = new StringDecoder('utf8')
   child.stdout?.on('data', (c: Buffer) => {
-    const s = c.toString()
+    const s = outDecoder.write(c)
     shell.stdoutProduced += s.length
     shell.stdout = appendCapped(shell.stdout, s)
     sniff(s)
   })
   child.stderr?.on('data', (c: Buffer) => {
-    const s = c.toString()
+    const s = errDecoder.write(c)
     shell.stderrProduced += s.length
     shell.stderr = appendCapped(shell.stderr, s)
     sniff(s)
