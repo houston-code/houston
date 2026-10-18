@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createSecretRedactor, findSecret, redactSecrets } from './redact'
+import { assertNoRedactedValues, createSecretRedactor, findSecret, redactSecrets } from './redact'
 
 // Built at runtime, like every other fixture here: as literals these match real
 // credential shapes, so third-party secret scanners flag this file in any clone.
@@ -75,6 +75,93 @@ describe('pattern redaction', () => {
   it('does not mistake hyphenated code for an OpenAI key', () => {
     const css = '.sk-loading-spinner-animation-delay { animation-delay: 0.2s; }'
     expect(redactSecrets(css)).toBe(css)
+  })
+})
+
+describe('secret-named env assignments', () => {
+  it('masks the values cat .env prints, keeping names, other vars, and comments', () => {
+    const env = [
+      'ADMIN_PASSWORD=testpass',
+      'SESSION_SECRET=6b37636167dc8a5726e48166a2533d930ecf',
+      'PORT=3000',
+      'NODE_ENV=development',
+      'STRIPE_API_KEY="pk with spaces"',
+      "db_password='quoted' # local only"
+    ].join('\n')
+    expect(redactSecrets(env)).toBe(
+      [
+        'ADMIN_PASSWORD=[redacted:env-secret]',
+        'SESSION_SECRET=[redacted:env-secret]',
+        'PORT=3000',
+        'NODE_ENV=development',
+        'STRIPE_API_KEY=[redacted:env-secret]',
+        'db_password=[redacted:env-secret] # local only'
+      ].join('\n')
+    )
+  })
+
+  it('covers export lines, env/printenv output, and grep -n prefixes', () => {
+    expect(redactSecrets('export GITHUB_TOKEN=abc123def')).toBe('export GITHUB_TOKEN=[redacted:env-secret]')
+    expect(redactSecrets('.env:2:JWT_SECRET=s3cr3t')).toBe('.env:2:JWT_SECRET=[redacted:env-secret]')
+    expect(redactSecrets('12:AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI')).toBe(
+      '12:AWS_SECRET_ACCESS_KEY=[redacted:env-secret]'
+    )
+  })
+
+  it('keeps the format label when a value also matches a known token format', () => {
+    const key = 'sk-ant-' + 'a'.repeat(30)
+    expect(redactSecrets(`ANTHROPIC_API_KEY=${key}`)).toBe('ANTHROPIC_API_KEY=[redacted:anthropic-key]')
+  })
+
+  it('leaves non-secret names, references, empty values, and code alone', () => {
+    for (const line of [
+      'OAUTH_TOKEN_URL=https://example.com/token',
+      'JWT_SECRET_FILE=/run/secrets/jwt',
+      'TOKEN_TTL=3600',
+      'PASSWORD=',
+      'API_KEY=$UPSTREAM_KEY',
+      'export GITHUB_TOKEN="${GH_TOKEN}"',
+      'TOKEN=get_token()',
+      'token = get_token()',
+      'const API_KEY = process.env.API_KEY',
+      'AUTHOR=Jane'
+    ]) {
+      expect(redactSecrets(line)).toBe(line)
+    }
+  })
+
+  it('stays linear on megabyte-long lines (tool output can carry them)', () => {
+    const inputs = [
+      'API_TOKEN=a' + ' '.repeat(1_000_000) + 'b',
+      'API_TOKEN=a' + ' \t'.repeat(500_000),
+      'x'.repeat(1_000_000) + '=1',
+      'SECRET_' + 'X'.repeat(1_000_000) + '=v',
+      'a:'.repeat(500_000) + 'TOKEN=v',
+      'API_TOKEN=' + 'a #'.repeat(330_000),
+      'x y'.repeat(330_000) + ' API_TOKEN=v',
+      'SESSION_SECRET=abc\n'.repeat(50_000)
+    ]
+    const started = Date.now()
+    for (const text of inputs) redactSecrets(text)
+    // A backtracking regression takes minutes here; the linear parser takes well under a second.
+    expect(Date.now() - started).toBeLessThan(4000)
+  })
+
+  it('is applied by the reusable redactor too', () => {
+    expect(createSecretRedactor([])('SESSION_SECRET=abc')).toBe('SESSION_SECRET=[redacted:env-secret]')
+  })
+})
+
+describe('assertNoRedactedValues', () => {
+  it('throws when a write adds a marker in a value position', () => {
+    expect(() => assertNoRedactedValues('A=1\n', 'A=1\nSECRET=[redacted:env-secret]\n')).toThrow(/placeholder/)
+    expect(() => assertNoRedactedValues('{}', '{"token": "[redacted:github-token]"}')).toThrow()
+  })
+
+  it('allows writes that keep or drop existing markers, and code that only mentions one', () => {
+    expect(() => assertNoRedactedValues('S=[redacted:env-secret]', 'S=[redacted:env-secret]\nB=2')).not.toThrow()
+    expect(() => assertNoRedactedValues('S=[redacted:env-secret]', 'S=real')).not.toThrow()
+    expect(() => assertNoRedactedValues('', "toBe('[redacted:secret]')")).not.toThrow()
   })
 })
 

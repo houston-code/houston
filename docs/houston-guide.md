@@ -769,6 +769,16 @@ is reachable only from that same command: not from the Preview panel,
 restores the shared network there. The agent is told this on Linux and checks web
 apps with requests from the command that starts the server.
 
+**Secret redaction.** Tool results, the transcript, and logs are scrubbed before
+the model or the UI sees them: well-known token formats and this install's stored
+secrets become `[redacted:…]`. A `NAME=value` line whose name marks it as a secret
+(`SESSION_SECRET`, `ADMIN_PASSWORD`, `GITHUB_TOKEN`, `STRIPE_API_KEY`, and the like),
+as `cat .env`, `env`, or `grep` prints it, keeps its name but shows the value as
+`[redacted:env-secret]`. The agent therefore refers to such a value by variable and
+file rather than repeating it, and a file write that would put a `[redacted:…]`
+placeholder where a value goes is refused, so writing back a file it read cannot
+replace the real secret with the placeholder.
+
 **Credential masking on egress.** Houston's own network tools refuse to *send* a
 credential: before a `web_fetch` or `web_search` leaves the machine, its URL or
 query is scanned for a well-known token format or one of this install's stored

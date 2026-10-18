@@ -61,7 +61,7 @@ import {
 } from './untrusted'
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument } from './webfetch'
-import { findSecret } from './redact'
+import { assertNoRedactedValues, findSecret } from './redact'
 import { describeStep, parseSteps, type CaptureInput, type LocalhostCapture } from './viewlocalhost'
 import { getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
@@ -476,6 +476,9 @@ const writeFile: ToolDef = {
   async execute(args, ctx) {
     const abs = resolveInRoots(rootsOf(ctx), str(args, 'path'))
     const content = str(args, 'content')
+    if (content.includes('[redacted:')) {
+      assertNoRedactedValues(await fs.readFile(abs, 'utf8').catch(() => ''), content)
+    }
     await fs.mkdir(dirname(abs), { recursive: true })
     await fs.writeFile(abs, content, 'utf8')
     return `Wrote ${Buffer.byteLength(content)} bytes to ${str(args, 'path')}.`
@@ -506,6 +509,7 @@ const editFile: ToolDef = {
     const replaceAll = args.replace_all === true
     const data = await fs.readFile(abs, 'utf8')
     const { content, strategy, replacements } = resolveEdit(data, oldStr, newStr, replaceAll)
+    assertNoRedactedValues(data, content)
     await fs.writeFile(abs, content, 'utf8')
     const fuzzy = strategy === 'exact' ? '' : ` [matched via ${strategy}]`
     return `Edited ${str(args, 'path')} (${replacements} replacement${
@@ -571,10 +575,12 @@ const multiEdit: ToolDef = {
     if (!Array.isArray(edits) || edits.length === 0) {
       throw new Error('edits must be a non-empty array.')
     }
-    let data = await fs.readFile(abs, 'utf8')
+    const original = await fs.readFile(abs, 'utf8')
+    let data = original
     edits.forEach((edit, i) => {
       data = applyEdit(data, (edit ?? {}) as EditSpec, i)
     })
+    assertNoRedactedValues(original, data)
     await fs.writeFile(abs, data, 'utf8')
     return `Edited ${str(args, 'path')} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
   }
@@ -795,6 +801,7 @@ const applyPatch: ToolDef = {
             `Add File: ${op.path} already exists. Use '*** Update File: ${op.path}' to modify it instead of adding it.`
           )
         claimWrite(abs, op.path)
+        assertNoRedactedValues('', op.content)
         staged.push({ abs, rel: op.path, content: op.content, verb: 'add' })
         added += 1
       } else if (op.type === 'delete') {
@@ -808,7 +815,9 @@ const applyPatch: ToolDef = {
         } catch {
           throw new Error(`Update File: ${op.path} does not exist.`)
         }
+        const original = data
         for (const hunk of op.hunks) data = resolveEdit(data, hunk.oldText, hunk.newText).content
+        assertNoRedactedValues(original, data)
         if (op.moveTo) {
           const target = resolveInRoots(roots, op.moveTo)
           if (target !== abs && (await exists(target))) {
