@@ -318,7 +318,9 @@ export function renderApprovalPrompt(
       ? `\n${paint('⚠ runs UNSANDBOXED (no OS confinement on this host)', 'yellow', 'bold')}`
       : ev.sensitiveRead
         ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
-        : ''
+        : ev.sensitiveWrite
+          ? `\n${paint('⚠ changes a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
+          : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
   return (

@@ -71,6 +71,8 @@ export interface ToolItem {
    * unusually, is asking — even in full-auto — so the card can explain why.
    */
   sensitiveRead?: boolean
+  /** The awaited call writes a credential / secret file, so it prompts even in full auto. */
+  sensitiveWrite?: boolean
   output?: string
   /** Latest progress line from a long-running tool (e.g. a review's current phase). */
   progress?: string
@@ -255,6 +257,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           toolKind: e.kind,
           shellNetwork: e.shellNetwork === true,
           sensitiveRead: e.sensitiveRead === true,
+          sensitiveWrite: e.sensitiveWrite === true,
           status: 'awaiting-approval'
         })
       }
@@ -270,6 +273,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           toolKind: e.kind,
           ...(e.shellNetwork ? { shellNetwork: true } : {}),
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
+          ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),
           status: 'awaiting-approval'
         }
       ]

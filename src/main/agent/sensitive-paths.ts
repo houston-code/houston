@@ -1,3 +1,5 @@
+import { parsePatch } from './apply-patch'
+
 /**
  * Whether a file path names a credential / secret store whose contents an agent
  * should not read without the user's say-so.
@@ -99,4 +101,26 @@ export function isSensitivePath(path: string): boolean {
   if (lower.endsWith('service-account.json') || lower.endsWith('serviceaccount.json')) return true
 
   return false
+}
+
+/**
+ * Whether a file-writing tool call targets a credential / secret file (see
+ * {@link isSensitivePath}): `path` for the single-file tools, every added, updated,
+ * deleted, or moved-to path for `apply_patch`. Writes to these files prompt even in
+ * full-auto: they are rarely edited, and overwriting one (a build check that resets
+ * `.env`, a write-back of a masked value) silently destroys something only the user
+ * can restore. A patch that doesn't parse names no targets; the tool itself rejects it.
+ */
+export function writesSensitivePath(toolName: string, args: Record<string, unknown>): boolean {
+  if (toolName === 'apply_patch') {
+    if (typeof args.patch !== 'string') return false
+    try {
+      return parsePatch(args.patch).some(
+        (op) => isSensitivePath(op.path) || (op.type === 'update' && !!op.moveTo && isSensitivePath(op.moveTo))
+      )
+    } catch {
+      return false
+    }
+  }
+  return typeof args.path === 'string' && isSensitivePath(args.path)
 }

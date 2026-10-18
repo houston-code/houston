@@ -783,6 +783,12 @@ export type AgentEvent =
        * a read — which normally never prompts — is asking.
        */
       sensitiveRead?: boolean
+      /**
+       * Present and `true` only when this write or shell command creates, overwrites, or
+       * removes a credential / secret file (`.env`, a key, a credential store) and so is
+       * prompting even in full-auto. Lets the UI explain why.
+       */
+      sensitiveWrite?: boolean
     }
   | {
       runId: string

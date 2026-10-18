@@ -83,6 +83,11 @@ export interface ApprovalInputs {
    * Defaults to false for non-read calls / ordinary files.
    */
   sensitiveRead?: boolean
+  /**
+   * Whether this write or shell command creates, overwrites, or removes a credential /
+   * secret file (see writesSensitivePath / shellWritesSensitivePath). Defaults to false.
+   */
+  sensitiveWrite?: boolean
 }
 
 /**
@@ -114,6 +119,12 @@ export interface ApprovalInputs {
  * full-auto, cleared only by an explicit `allow` rule or a read override the user
  * granted this run (picking "allow for run" on such a prompt) — the same escape
  * hatches the workspace-escaping shell has.
+ *
+ * Writing one (`sensitiveWrite`: a file tool targeting `.env`, a key, a credential
+ * store, or a shell command redirecting into or copying over one) prompts the same
+ * way. Such files are rarely edited and only the user can restore one an agent
+ * overwrote, so even full-auto asks first; an `allow` rule or "allow for run" on the
+ * prompt opts out.
  */
 export function decideApproval(inputs: ApprovalInputs): {
   mustApprove: boolean
@@ -138,6 +149,9 @@ export function decideApproval(inputs: ApprovalInputs): {
   // a read override for this run ("allow for run"), which a generic override on the
   // read kind is; an explicit allow-rule was handled above.
   if (kind === 'read' && inputs.sensitiveRead && !override) {
+    return { mustApprove: true, unsandboxedShell: false }
+  }
+  if ((kind === 'write' || kind === 'shell') && inputs.sensitiveWrite && !override) {
     return { mustApprove: true, unsandboxedShell: false }
   }
   return {

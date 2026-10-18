@@ -1371,6 +1371,27 @@ describe('startRun', () => {
     expect(existsSync(join(ws, 'guarded.txt'))).toBe(false)
   })
 
+  it('a write to .env prompts even in full-auto, flagged as a sensitive write', async () => {
+    writeFileSync(join(ws, '.env'), 'ADMIN_PASSWORD=mine\n')
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: '.env', content: 'ADMIN_PASSWORD=testpass\n' } } },
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'notes.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => decide('deny')
+    })
+    const prompts = r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string; sensitiveWrite?: boolean }>
+    // Only the .env write asked; the ordinary write ran unprompted, as full-auto does.
+    expect(prompts.map((e) => [e.callId, e.sensitiveWrite])).toEqual([['w1', true]])
+    expect(readFileSync(join(ws, '.env'), 'utf8')).toBe('ADMIN_PASSWORD=mine\n')
+    expect(existsSync(join(ws, 'notes.txt'))).toBe(true)
+  })
+
   it('a user\'s mid-run "Always allow" cannot shadow a managed `ask` (stays gated)', async () => {
     // The user picks "Always allow" on the first write. Because the persisted allow is
     // spliced BELOW the managed guardrail, first-match-wins keeps hitting the admin

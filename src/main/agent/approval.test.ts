@@ -294,4 +294,39 @@ describe('decideApproval', () => {
       ).toBe(false)
     })
   })
+
+  describe('credential-file write (sensitiveWrite=true)', () => {
+    it('prompts a write or shell command under full-auto', () => {
+      for (const kind of ['write', 'shell'] as const) {
+        expect(
+          decideApproval(base({ kind, policy: 'full-auto', sensitiveWrite: true })).mustApprove
+        ).toBe(true)
+      }
+    })
+
+    it('prompts a write under auto-edit, which otherwise auto-approves writes', () => {
+      expect(
+        decideApproval(base({ kind: 'write', policy: 'auto-edit', sensitiveWrite: true })).mustApprove
+      ).toBe(true)
+    })
+
+    it('an override (allow for run) or an explicit allow rule clears it', () => {
+      expect(
+        decideApproval(base({ kind: 'write', policy: 'full-auto', sensitiveWrite: true, override: true }))
+          .mustApprove
+      ).toBe(false)
+      expect(
+        decideApproval(base({ kind: 'write', ruleAction: 'allow', sensitiveWrite: true })).mustApprove
+      ).toBe(false)
+    })
+
+    it('does not affect ordinary writes, or reads', () => {
+      expect(
+        decideApproval(base({ kind: 'write', policy: 'full-auto', sensitiveWrite: false })).mustApprove
+      ).toBe(false)
+      expect(
+        decideApproval(base({ kind: 'read', policy: 'full-auto', sensitiveWrite: true })).mustApprove
+      ).toBe(false)
+    })
+  })
 })

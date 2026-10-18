@@ -89,7 +89,8 @@ import {
   networkDestination,
   permissionSubject,
   shellReferencesExternalPath,
-  shellRulePatterns
+  shellRulePatterns,
+  shellWritesSensitivePath
 } from './permissions'
 import {
   grantConversationNetworkHost,
@@ -98,7 +99,7 @@ import {
   overrideForConversation
 } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
-import { isSensitivePath } from './sensitive-paths'
+import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun } from './egress'
@@ -258,6 +259,7 @@ interface RunState {
       sandboxed?: boolean
       shellNetwork?: boolean
       sensitiveRead?: boolean
+      sensitiveWrite?: boolean
     }
   >
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
@@ -562,7 +564,8 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.preview ? { preview: a.preview } : {}),
       ...(a.sandboxed === false ? { sandboxed: false } : {}),
       ...(a.shellNetwork ? { shellNetwork: true } : {}),
-      ...(a.sensitiveRead ? { sensitiveRead: true } : {})
+      ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
+      ...(a.sensitiveWrite ? { sensitiveWrite: true } : {})
     })
   }
   for (const [callId, q] of run.pendingQuestions) {
@@ -2725,6 +2728,15 @@ export async function startRun(
               tool.kind === 'read' &&
               typeof execArgs.path === 'string' &&
               isSensitivePath(execArgs.path)
+            // Writing one (a file tool targeting it, or a shell command redirecting into,
+            // copying over, or removing it) prompts the same way: only the user can
+            // restore a `.env` an agent overwrote.
+            const sensitiveWrite =
+              (tool.kind === 'write' && writesSensitivePath(call.name, execArgs)) ||
+              (tool.kind === 'shell' &&
+                call.name === 'run_shell' &&
+                typeof execArgs.command === 'string' &&
+                shellWritesSensitivePath(execArgs.command))
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.
@@ -2739,7 +2751,8 @@ export async function startRun(
               shellSandboxed: isSandboxed(),
               shellUnsandboxedOverride: run.shellUnsandboxedOverride,
               shellEscapesWorkspace,
-              sensitiveRead
+              sensitiveRead,
+              sensitiveWrite
             })
 
             // #3b: in full-auto on a confining host, the first shell command pauses once
@@ -2801,7 +2814,8 @@ export async function startRun(
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {}),
-                ...(sensitiveRead ? { sensitiveRead: true } : {})
+                ...(sensitiveRead ? { sensitiveRead: true } : {}),
+                ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
               emit({
                 type: 'tool_approval',
@@ -2813,7 +2827,8 @@ export async function startRun(
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {}),
-                ...(sensitiveRead ? { sensitiveRead: true } : {})
+                ...(sensitiveRead ? { sensitiveRead: true } : {}),
+                ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
               const { decision, note: denyGuidance } = await waitForApproval(run, call.id)
               // Resolved (or cancelled) — it's no longer awaiting the user.

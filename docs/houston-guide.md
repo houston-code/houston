@@ -410,7 +410,10 @@ Approval is layered. From most to least restrictive:
   and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
   and the like) prompts even here, since reads otherwise never do. "Allow for run" on
   that prompt stops it asking about credential reads for the rest of the conversation,
-  and an `allow` permission rule opts a path in permanently.
+  and an `allow` permission rule opts a path in permanently. **Changing a credential
+  file** prompts too: a file edit that writes one, or a shell command that redirects
+  into, copies over, edits in place, or removes one (`> .env`, `cp .env.example .env`,
+  `sed -i … .env`, `rm .env`). Templates such as `.env.example` don't count.
 
 **Reading the diff.** A file edit shows a real diff before you approve it: the
 changed part with a few lines of context (long untouched stretches are folded away
