@@ -347,6 +347,24 @@ function num(args: Record<string, unknown>, key: string): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
+/**
+ * A PR, issue, or run number for a call's summary, or '' when absent. The schemas
+ * declare these as numbers, which {@link str} reads as missing, so an approval for
+ * merging PR 42 used to read "Merge PR (current branch)". A numeric string, which
+ * some models send, still reads as written.
+ */
+function idArg(args: Record<string, unknown>, key: string): string {
+  const v = args[key]
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  return typeof v === 'string' ? v.trim().replace(/^#/, '') : ''
+}
+
+/** `#N` for a PR or issue named in the call, else `fallback`. */
+function refOr(args: Record<string, unknown>, fallback: string): string {
+  const n = idArg(args, 'number')
+  return n ? `#${n}` : fallback
+}
+
 const objectSchema = (properties: JSONSchema, required: string[]): JSONSchema => ({
   type: 'object',
   properties,
@@ -2476,7 +2494,7 @@ export function formatPrList(json: string): string {
 
 const ghPrView: ToolDef = {
   kind: 'network',
-  summarize: (a) => `View PR ${str(a, 'number') || '(current branch)'}`,
+  summarize: (a) => `View PR ${refOr(a, '(current branch)')}`,
   schema: {
     name: 'gh_pr_view',
     description:
@@ -2574,7 +2592,7 @@ export function formatPrView(json: string, extra: { diff?: string; diffError?: s
 const ghPrComment: ToolDef = {
   kind: 'network',
   blockedInPlan: true,
-  summarize: (a) => `Comment on PR ${str(a, 'number') || '(current branch)'}`,
+  summarize: (a) => `Comment on PR ${refOr(a, '(current branch)')}`,
   schema: {
     name: 'gh_pr_comment',
     description:
@@ -2598,7 +2616,7 @@ const ghPrComment: ToolDef = {
 const ghPrCheckout: ToolDef = {
   kind: 'network',
   blockedInPlan: true,
-  summarize: (a) => `Checkout PR ${str(a, 'number')}`,
+  summarize: (a) => `Checkout PR ${refOr(a, '?')}`,
   schema: {
     name: 'gh_pr_checkout',
     description:
@@ -2857,7 +2875,7 @@ const ghIssueList: ToolDef = {
 
 const ghIssueView: ToolDef = {
   kind: 'network',
-  summarize: (a) => `View issue ${str(a, 'number')}`,
+  summarize: (a) => `View issue ${refOr(a, '?')}`,
   schema: {
     name: 'gh_issue_view',
     description:
@@ -2912,7 +2930,7 @@ const ghIssueCreate: ToolDef = {
 const ghIssueComment: ToolDef = {
   kind: 'network',
   blockedInPlan: true,
-  summarize: (a) => `Comment on issue ${str(a, 'number')}`,
+  summarize: (a) => `Comment on issue ${refOr(a, '?')}`,
   schema: {
     name: 'gh_issue_comment',
     description:
@@ -2989,7 +3007,7 @@ export function formatChecks(json: string): string {
 
 const ghPrChecks: ToolDef = {
   kind: 'network',
-  summarize: (a) => `PR checks ${str(a, 'number') || '(current branch)'}`,
+  summarize: (a) => `PR checks ${refOr(a, '(current branch)')}`,
   schema: {
     name: 'gh_pr_checks',
     description:
@@ -3012,7 +3030,7 @@ const ghPrChecks: ToolDef = {
 const ghPrReview: ToolDef = {
   kind: 'network',
   blockedInPlan: true,
-  summarize: (a) => `Review PR ${str(a, 'number') || '(current branch)'} (${str(a, 'action') || 'comment'})`,
+  summarize: (a) => `Review PR ${refOr(a, '(current branch)')} (${str(a, 'action') || 'comment'})`,
   schema: {
     name: 'gh_pr_review',
     description:
@@ -3051,7 +3069,16 @@ const ghPrReview: ToolDef = {
 const ghPrMerge: ToolDef = {
   kind: 'network',
   blockedInPlan: true,
-  summarize: (a) => `Merge PR ${str(a, 'number') || '(current branch)'}`,
+  summarize: (a) => {
+    // The method and the branch deletion are part of what is being approved, so they
+    // read in the prompt rather than only in the raw arguments.
+    const method = str(a, 'method')
+    const how = [
+      method && method !== 'merge' ? method : '',
+      a.delete_branch === true ? 'delete branch' : ''
+    ].filter(Boolean)
+    return `Merge PR ${refOr(a, '(current branch)')}${how.length ? ` (${how.join(', ')})` : ''}`
+  },
   schema: {
     name: 'gh_pr_merge',
     description:
@@ -3293,7 +3320,7 @@ export function formatRunLog(runId: string, log: string): string {
 
 const ghRunView: ToolDef = {
   kind: 'network',
-  summarize: (a) => `View CI run ${str(a, 'run_id')}`,
+  summarize: (a) => `View CI run ${idArg(a, 'run_id') || '?'}`,
   schema: {
     name: 'gh_run_view',
     description:
