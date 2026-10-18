@@ -1,0 +1,19 @@
+{
+  "$comment": "Models the weekly model-drift workflow should not flag: released, but deliberately not seeded as defaults. Each needs a reason. Remove an entry to have it flagged again.",
+  "ignore": [
+    { "id": "claude-opus-5", "reason": "Superseded by claude-opus-5-5 at a lower price." },
+    { "id": "claude-sonnet-5", "reason": "Superseded by claude-sonnet-5-5 at the same price." },
+    { "id": "claude-fable-5", "reason": "Superseded by claude-fable-5-1 at the same price." },
+    { "id": "claude-mythos-5", "reason": "Project Glasswing only; not generally available." },
+    { "id": "claude-mythos-5-1", "reason": "Project Glasswing only; not generally available." },
+    { "id": "gpt-6-sol", "reason": "Superseded by gpt-6.1-sol." },
+    { "id": "gpt-5.6-sol", "reason": "Superseded by the GPT-6 line." },
+    { "id": "gpt-5.6-terra", "reason": "Superseded by the GPT-6 line." },
+    { "id": "gpt-5.6-luna", "reason": "Superseded by gpt-6-luna." },
+    { "id": "gpt-5.6-cyber", "reason": "Restricted to verified organizations for security research." },
+    { "id": "gemini-3.7-flash", "reason": "Superseded by gemini-3.8-flash at the same price." },
+    { "id": "gemini-3.6-flash", "reason": "Superseded by gemini-3.8-flash at the same price." },
+    { "id": "gemini-3.5-flash", "reason": "Superseded by gemini-3.8-flash, which is cheaper." },
+    { "id": "gemini-3.1-flash-lite", "reason": "Superseded by gemini-3.5-flash-lite; shutdown announced for 2027-05-07." }
+  ]
+}

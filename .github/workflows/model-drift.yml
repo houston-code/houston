@@ -1,0 +1,175 @@
+name: Model drift
+
+# Weekly: which models do Anthropic, OpenAI and Google now list that Houston doesn't ship?
+# Flags them in one rolling GitHub issue, assigned to the repo owner, so a new release gets
+# added through a normal update (rules in model-facts.ts, the model-coverage check, the live
+# canary) soon after it ships, rather than users fetching it half-recognized.
+#
+# NEWS, NOT AN OUTAGE. This never reds for "a new model exists"; that's what the issue is for.
+# It reds only when a listing can't be read (bad key, provider down), which alert-on-failure.yml
+# reports like any other broken scheduled run. Kept separate from provider-canary.yml for that
+# reason: a red canary means a shipped model broke, and mixing in drift would muddy it.
+#
+# SECRETS NEVER MEET ISSUE-WRITE. The list job has read-only access, and each provider step
+# sees only its own key; it lists models (free, no model call) and passes a small report on.
+# The report job that edits the issue has `issues: write` and no secrets at all.
+#
+# Nothing here adds a model. A listing can include models that don't serve, so adding one is
+# still a PR. To stop flagging a model on purpose, add it with a reason to
+# src/main/providers/model-drift-ignore.json.
+
+on:
+  schedule:
+    # Mondays 10:00 UTC, after provider-canary (08:00 daily) and eval-live (09:00 Mondays).
+    - cron: '0 10 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-drift
+  cancel-in-progress: true
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  list:
+    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    outputs:
+      anthropic: ${{ steps.anthropic.outputs.report }}
+      openai: ${{ steps.openai.outputs.report }}
+      gemini: ${{ steps.gemini.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          install: full
+      # One step per provider, each with only its own key in scope. A missing key fails the
+      # run (and alerts) instead of reading as "nothing new" forever.
+      - name: Anthropic
+        id: anthropic
+        env:
+          DRIFT_PROVIDER: anthropic
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "${ANTHROPIC_API_KEY:-}" ] || { echo "::error::ANTHROPIC_API_KEY is empty or unset."; exit 1; }
+          DRIFT_OUT="$RUNNER_TEMP/anthropic.json" npx vitest run --project node src/main/providers/model-drift.integration.test.ts
+          echo "report=$(base64 -w0 "$RUNNER_TEMP/anthropic.json")" >> "$GITHUB_OUTPUT"
+      - name: OpenAI
+        id: openai
+        env:
+          DRIFT_PROVIDER: openai
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "${OPENAI_API_KEY:-}" ] || { echo "::error::OPENAI_API_KEY is empty or unset."; exit 1; }
+          DRIFT_OUT="$RUNNER_TEMP/openai.json" npx vitest run --project node src/main/providers/model-drift.integration.test.ts
+          echo "report=$(base64 -w0 "$RUNNER_TEMP/openai.json")" >> "$GITHUB_OUTPUT"
+      - name: Gemini
+        id: gemini
+        env:
+          DRIFT_PROVIDER: gemini
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "${GEMINI_API_KEY:-}" ] || { echo "::error::GEMINI_API_KEY is empty or unset."; exit 1; }
+          DRIFT_OUT="$RUNNER_TEMP/gemini.json" npx vitest run --project node src/main/providers/model-drift.integration.test.ts
+          echo "report=$(base64 -w0 "$RUNNER_TEMP/gemini.json")" >> "$GITHUB_OUTPUT"
+
+  report:
+    needs: [list]
+    # Only update the issue from a complete picture: a provider that couldn't list would otherwise
+    # read as "nothing new" for that provider and drop its models from the issue.
+    if: needs.list.result == 'success'
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: model-drift
+      TITLE: New models available
+      OWNER: ${{ github.repository_owner }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      ANTHROPIC: ${{ needs.list.outputs.anthropic }}
+      OPENAI: ${{ needs.list.outputs.openai }}
+      GEMINI: ${{ needs.list.outputs.gemini }}
+    steps:
+      - name: Open, update, or close the drift issue
+        run: |
+          set -eo pipefail
+          decode() { printf '%s' "$1" | base64 -d; }
+
+          sections=""
+          ids=""
+          for report in "$ANTHROPIC" "$OPENAI" "$GEMINI"; do
+            json=$(decode "$report")
+            sections+=$(jq -r '.section' <<<"$json")$'\n'
+            ids+=$(jq -r '.ids[]' <<<"$json")$'\n'
+          done
+          ids=$(printf '%s' "$ids" | sed '/^$/d' | sort -u)
+          # printf '%s\n' so the last id is newline-terminated; wc -l counts newlines.
+          count=$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')
+          [ "$count" = 1 ] && noun=model || noun=models
+
+          gh label create "$LABEL" --color 1D76DB \
+            --description 'A provider lists models Houston does not ship yet' --force > /dev/null
+          existing=$(gh issue list --label "$LABEL" --state open --limit 20 --json number,title,body \
+            | jq -c --arg t "$TITLE" 'map(select(.title == $t)) | .[0] // empty')
+
+          if [ "$count" = 0 ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$(jq -r .number <<<"$existing")" \
+                --comment "Every listed model is now shipped or ignored as of $RUN_URL. Closing."
+            fi
+            echo "No drift."
+            exit 0
+          fi
+
+          marker="<!-- model-drift ids: $(printf '%s' "$ids" | paste -sd, -) -->"
+          body_file="$RUNNER_TEMP/body.md"
+          {
+            echo "$marker"
+            echo "**$count $noun the providers list that Houston doesn't ship yet.** Checked $(date -u +%Y-%m-%d): $RUN_URL"
+            echo
+            echo "To add one: give it rules in \`src/shared/model-facts.ts\` if the table says it needs any, seed it in \`src/shared/defaults.ts\` with a scoped migration in \`src/main/store.ts\`, and run the provider canary on the branch. To stop flagging one on purpose, add it with a reason to \`src/main/providers/model-drift-ignore.json\`."
+            echo
+            printf '%s' "$sections"
+            echo
+            echo "_Updated weekly by \`.github/workflows/model-drift.yml\`; it closes itself once nothing is pending._"
+          } > "$body_file"
+
+          if [ -z "$existing" ]; then
+            gh issue create --label "$LABEL" --assignee "$OWNER" --title "$TITLE" --body-file "$body_file"
+            exit 0
+          fi
+
+          number=$(jq -r .number <<<"$existing")
+          before=$(jq -r .body <<<"$existing" | head -1 | sed -E 's/^<!-- model-drift ids: (.*) -->$/\1/' | tr ',' '\n' | sed '/^$/d' | sort -u)
+          gh issue edit "$number" --body-file "$body_file"
+          # Comment only when something new appeared: the assignee is notified on a comment, not
+          # on a body edit, so an unchanged list stays quiet week to week.
+          new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$ids") | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')
+          if [ -n "$new" ]; then
+            gh issue comment "$number" --body "New since the last check: $new. See the table above."
+          fi
+
+  # A listing that can't be read (bad key, provider down) is a broken scheduled run: say so.
+  alert:
+    needs: [list, report]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: Model drift
+      failed: ${{ contains(needs.*.result, 'failure') }}
