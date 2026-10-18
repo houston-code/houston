@@ -144,6 +144,17 @@ function sortKey(kind: ProviderKind, id: string): SortKey {
 }
 
 /**
+ * The named display family a model id belongs to for a provider kind (`opus`, `gpt`,
+ * `flash`), or null when it matches none and would sort into the generic bucket below
+ * every known family. The model coverage check requires every shipped model to have one.
+ */
+export function knownModelFamily(kind: ProviderKind, id: string): string | null {
+  const rules: readonly FamilyRule[] = FAMILY_RULES[kind] ?? FAMILY_RULES.openai
+  const key = sortKey(kind, id)
+  return key.rank < rules.length ? key.family : null
+}
+
+/**
  * A provider's models ordered most-advanced first, families grouped, newest version
  * first within a family. Stable and non-mutating.
  */

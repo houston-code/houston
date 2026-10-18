@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelOption } from './types'
-import { modelDisplayName, naturalCompare, pickDefaultModel, sortedModels } from './models'
+import { knownModelFamily, modelDisplayName, naturalCompare, pickDefaultModel, sortedModels } from './models'
 
 const ids = (ms: ModelOption[]): string[] => ms.map((m) => m.id)
 const m = (...xs: string[]): ModelOption[] => xs.map((id) => ({ id }))
@@ -219,5 +219,19 @@ describe('pickDefaultModel', () => {
 
   it('returns null when the provider has no models', () => {
     expect(pickDefaultModel({ kind: 'openai-compatible', models: [] })).toBeNull()
+  })
+})
+
+describe('knownModelFamily', () => {
+  it('names the display family a shipped model sorts in', () => {
+    expect(knownModelFamily('anthropic', 'claude-opus-5-5')).toBe('opus')
+    expect(knownModelFamily('bedrock', 'anthropic.claude-sonnet-5-5')).toBe('sonnet')
+    expect(knownModelFamily('openai', 'gpt-6.1-sol')).toBe('gpt')
+    expect(knownModelFamily('gemini', 'gemini-3.8-flash')).toBe('flash')
+  })
+
+  it('is null for an id that would fall into the generic bucket', () => {
+    expect(knownModelFamily('openai-compatible', 'llama3.1:latest')).toBeNull()
+    expect(knownModelFamily('anthropic', 'claude-2.1')).toBeNull()
   })
 })
