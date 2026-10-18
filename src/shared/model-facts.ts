@@ -87,6 +87,10 @@ const CLAUDE_INTERLEAVED = /claude-(opus|sonnet)-4[-@](\d{8}|1|5)\b/i
  *  top out at `high`. */
 const CLAUDE_XHIGH = /claude-(opus-4-[7-9]|opus-[5-9]|sonnet-[5-9]|fable|mythos)/i
 
+/** Models that think when the request omits `thinking` (Opus 5+, Sonnet 5+, Fable, Mythos). Some
+ *  reject `{ type: 'disabled' }` outright, so reasoning can be turned down but never off. */
+const CLAUDE_THINKS_BY_DEFAULT = /claude-(opus-[5-9]|sonnet-[5-9]|fable|mythos)/i
+
 /** Prefix-bound ("preserved") thinking: Fable 5.1, Opus 5.5, Sonnet 5.5. Mythos 5.1 doesn't
  *  run the check. */
 const CLAUDE_PRESERVED_THINKING = /claude-((opus|sonnet)-5-[5-9]|fable-5-[1-9])/i
@@ -309,6 +313,15 @@ export function anthropicSupportsInterleavedThinking(model: string): boolean {
 
 export function anthropicSupportsXhigh(model: string): boolean {
   return CLAUDE_XHIGH.test(model)
+}
+
+/**
+ * Claude models that run adaptive thinking even when the request sends no thinking config,
+ * at the model's default effort (medium or high). "Reasoning off" can't stop them thinking,
+ * so it maps to the lowest effort instead of leaving them at that default.
+ */
+export function anthropicThinksByDefault(model: string): boolean {
+  return CLAUDE_THINKS_BY_DEFAULT.test(model)
 }
 
 /**

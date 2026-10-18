@@ -7,6 +7,7 @@ import {
   anthropicSupportsInterleavedThinking,
   anthropicSupportsThinking,
   anthropicSupportsXhigh,
+  anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   geminiSupportsThinking,
   openaiSupportsReasoning
@@ -136,6 +137,7 @@ describe('model knowledge golden', () => {
             anthropicInterleaved: anthropicSupportsInterleavedThinking(id),
             anthropicXhigh: anthropicSupportsXhigh(id),
             anthropicPreserved: anthropicPreservesThinking(id),
+            anthropicThinksByDefault: anthropicThinksByDefault(id),
             openaiReasoning: openaiSupportsReasoning(id),
             geminiThinking: geminiSupportsThinking(id)
           }

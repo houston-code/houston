@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { AppSettings, SelectedModel } from '@shared/types'
 import type { RepoInfo } from '@shared/agent'
@@ -294,5 +294,27 @@ describe('ControlBar', () => {
 
     render(<ControlBar {...baseProps()} usage={{ context: 1000, output: 200, cost: 0.02 }} />)
     expect(screen.getByTitle(/Output this conversation/)).toBeInTheDocument()
+  })
+})
+
+describe('ControlBar reasoning control', () => {
+  function withModel(model: string) {
+    const props = baseProps()
+    props.settings.providers[0].models = [{ id: model }]
+    props.selected = { providerId: 'anthropic', model }
+    return props
+  }
+
+  it('labels off as minimal on a Claude model that always reasons', () => {
+    render(<ControlBar {...withModel('claude-opus-5-5')} />)
+    const select = screen.getByRole('combobox', { name: 'Reasoning effort' })
+    expect(within(select).getByRole('option', { name: 'Think: minimal' })).toBeInTheDocument()
+    expect(select.getAttribute('title')).toMatch(/always reasons/)
+  })
+
+  it('keeps "Think: off" on a model that can stop reasoning', () => {
+    render(<ControlBar {...withModel('claude-opus-4-8')} />)
+    const select = screen.getByRole('combobox', { name: 'Reasoning effort' })
+    expect(within(select).getByRole('option', { name: 'Think: off' })).toBeInTheDocument()
   })
 })

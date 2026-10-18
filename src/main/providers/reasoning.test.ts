@@ -5,6 +5,7 @@ import {
   anthropicSupportsThinking,
   anthropicSupportsInterleavedThinking,
   anthropicSupportsXhigh,
+  anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   openaiReasoningEffort,
   openaiResponsesReasoning,
@@ -54,6 +55,18 @@ describe('anthropic thinking', () => {
     }
     for (const id of ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-mythos-5-1', 'claude-opus-4-8']) {
       expect(anthropicPreservesThinking(id)).toBe(false)
+    }
+  })
+
+  it('maps off to the lowest effort on models that think regardless', () => {
+    for (const id of ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-mythos-5']) {
+      expect(anthropicThinksByDefault(id)).toBe(true)
+      expect(anthropicThinking(id, 'off')).toMatchObject({ kind: 'adaptive', effort: 'low', display: 'omitted' })
+      expect(anthropicThinking(id, undefined)).toMatchObject({ effort: 'low' })
+    }
+    for (const id of ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5']) {
+      expect(anthropicThinksByDefault(id)).toBe(false)
+      expect(anthropicThinking(id, 'off')).toBeNull()
     }
   })
 

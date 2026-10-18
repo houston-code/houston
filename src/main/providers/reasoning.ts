@@ -12,6 +12,7 @@ import {
   anthropicSupportsInterleavedThinking,
   anthropicSupportsThinking,
   anthropicSupportsXhigh,
+  anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   geminiSupportsThinking,
   openaiSupportsReasoning
@@ -24,6 +25,7 @@ export {
   anthropicSupportsInterleavedThinking,
   anthropicSupportsThinking,
   anthropicSupportsXhigh,
+  anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   geminiSupportsThinking,
   openaiSupportsReasoning
@@ -60,7 +62,8 @@ export type AnthropicThinking =
   | {
       kind: 'adaptive'
       effort: OnEffort
-      display: 'summarized'
+      /** `omitted` when the user turned reasoning off on a model that thinks regardless. */
+      display: 'summarized' | 'omitted'
       maxTokens: number
       /** Thinking blocks are prefix-bound; see {@link anthropicPreservesThinking}. */
       preserved: boolean
@@ -71,13 +74,27 @@ export type AnthropicThinking =
  * Anthropic reasoning config + the `max_tokens` to pair it with. Newer models
  * (4.6+) use adaptive thinking driven by `output_config.effort`; pre-4.6 models
  * and Haiku 4.5 use the legacy `{ type: 'enabled', budget_tokens }` API (budget
- * must be < max_tokens). Returns null when reasoning is off or unsupported.
+ * must be < max_tokens). Returns null when reasoning is unsupported, or off on a model
+ * that doesn't think unprompted.
  */
 export function anthropicThinking(
   model: string,
   effort: ReasoningEffort | undefined
 ): AnthropicThinking | null {
-  if (!isOn(effort) || !anthropicSupportsThinking(model)) return null
+  if (!anthropicSupportsThinking(model)) return null
+  if (!isOn(effort)) {
+    // Off: send nothing, unless the model would then think anyway at its own default
+    // effort. Those run at the lowest effort with the reasoning text hidden, which is the
+    // closest the API allows to off, and keeps their signed blocks in the history.
+    if (!anthropicThinksByDefault(model)) return null
+    return {
+      kind: 'adaptive',
+      effort: 'low',
+      display: 'omitted',
+      maxTokens: ANTHROPIC_BUDGET.low + ANTHROPIC_REPLY_HEADROOM,
+      preserved: anthropicPreservesThinking(model)
+    }
+  }
   const budgetTokens = ANTHROPIC_BUDGET[clampToHigh(effort)]
   const maxTokens = budgetTokens + ANTHROPIC_REPLY_HEADROOM
   if (anthropicUsesLegacyThinking(model)) {
