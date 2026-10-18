@@ -28,6 +28,7 @@ import type {
   ConversationMeta,
   DeleteConversationResult,
   ElicitationResult,
+  ImportConversationResult,
   PlanDecision,
   RepoInfo,
   ToolApprovalDecision
@@ -191,7 +192,7 @@ const api = {
     ipcRenderer.invoke(IPC.conversationExport, id),
   exportConversationHtml: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.conversationExportHtml, id),
-  importConversation: (): Promise<ConversationMeta | null> =>
+  importConversation: (): Promise<ImportConversationResult | null> =>
     ipcRenderer.invoke(IPC.conversationImport),
   organizeConversation: (
     id: string,
