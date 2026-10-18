@@ -3,6 +3,8 @@ import {
   MAX_STEPS,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_MS,
+  PRESS_KEYS,
+  STEP_ACTIONS,
   captureLocalhost,
   describeStep,
   formatConsole,
@@ -269,7 +271,7 @@ describe('capture backend injection', () => {
 })
 
 describe('parseSteps', () => {
-  it('accepts the four actions and fills in defaults', () => {
+  it('accepts fill, click, wait_for, and wait, and fills in defaults', () => {
     expect(
       parseSteps([
         { action: 'fill', selector: '#email', value: 'a@b.c' },
@@ -283,6 +285,48 @@ describe('parseSteps', () => {
       { action: 'wait_for', selector: '.dashboard', timeoutMs: MAX_WAIT_FOR_MS },
       { action: 'wait', ms: 500 }
     ])
+  })
+
+  it('accepts dblclick, and press with or without a selector', () => {
+    expect(
+      parseSteps([
+        { action: 'dblclick', selector: '.todo label' },
+        { action: 'press', key: 'Enter' },
+        { action: 'press', key: 'Escape', selector: '.edit' }
+      ])
+    ).toEqual([
+      { action: 'dblclick', selector: '.todo label' },
+      { action: 'press', key: 'Enter' },
+      { action: 'press', key: 'Escape', selector: '.edit' }
+    ])
+  })
+
+  it('canonicalizes a press key regardless of casing', () => {
+    expect(parseSteps([{ action: 'press', key: 'enter' }])).toEqual([{ action: 'press', key: 'Enter' }])
+    expect(parseSteps([{ action: 'press', key: 'ARROWDOWN' }])).toEqual([{ action: 'press', key: 'ArrowDown' }])
+  })
+
+  it('treats an empty press selector as no selector', () => {
+    for (const selector of [null, '', '   ']) {
+      expect(parseSteps([{ action: 'press', key: 'Tab', selector }])).toEqual([{ action: 'press', key: 'Tab' }])
+    }
+  })
+
+  it('rejects a press without a supported key, and a dblclick without a selector', () => {
+    expect(() => parseSteps([{ action: 'press' }])).toThrow(/steps\[0\]\.key must be one of Enter, Escape/)
+    expect(() => parseSteps([{ action: 'press', key: 'a' }])).toThrow(/key must be one of/)
+    expect(() => parseSteps([{ action: 'press', key: 'Control+A' }])).toThrow(/key must be one of/)
+    expect(() => parseSteps([{ action: 'press', key: 13 }])).toThrow(/key must be one of/)
+    expect(() => parseSteps([{ action: 'press', key: 'Enter', selector: 'a'.repeat(501) }])).toThrow(/longer than/)
+    expect(() => parseSteps([{ action: 'dblclick' }])).toThrow(/steps\[0\]\.selector is required for "dblclick"/)
+  })
+
+  it('names every action and key in its errors', () => {
+    expect(() => parseSteps([{ action: 'hover', selector: 'a' }])).toThrow(
+      `steps[0].action must be one of ${STEP_ACTIONS.join(', ')}.`
+    )
+    expect(STEP_ACTIONS).toEqual(['fill', 'click', 'dblclick', 'press', 'wait_for', 'wait'])
+    expect(() => parseSteps([{ action: 'press', key: 'F5' }])).toThrow(PRESS_KEYS.join(', '))
   })
 
   it('treats a missing steps argument as no steps', () => {
@@ -321,6 +365,12 @@ describe('describeStep', () => {
     const d = describeStep({ action: 'fill', selector: '#password', value: 'hunter2' })
     expect(d).toBe('fill "#password"')
     expect(d).not.toContain('hunter2')
+  })
+
+  it('describes double clicks and key presses', () => {
+    expect(describeStep({ action: 'dblclick', selector: '.todo label' })).toBe('double-click ".todo label"')
+    expect(describeStep({ action: 'press', key: 'Enter' })).toBe('press Enter')
+    expect(describeStep({ action: 'press', key: 'Escape', selector: '.edit' })).toBe('press Escape on ".edit"')
   })
 })
 

@@ -44,17 +44,47 @@ export const MAX_WAIT_FOR_MS = 10_000
 const MAX_SELECTOR_CHARS = 500
 const MAX_VALUE_CHARS = 10_000
 
+/** The step actions, in the order the schema and error messages list them. */
+export const STEP_ACTIONS = ['fill', 'click', 'dblclick', 'press', 'wait_for', 'wait'] as const
+
+/**
+ * Keys a `press` step may send, by their DOM `KeyboardEvent.key` names. A fixed
+ * set keeps the backend's key mapping total; typing text is `fill`'s job.
+ */
+export const PRESS_KEYS = [
+  'Enter',
+  'Escape',
+  'Tab',
+  'Backspace',
+  'Delete',
+  'Space',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown'
+] as const
+export type PressKey = (typeof PRESS_KEYS)[number]
+
 /**
  * One interaction run in the page before the screenshot, so the agent can
  * exercise a flow (log in, fill and submit a form) instead of only looking at a
  * page. `fill` sets a field's value the way typing would (input and change
- * events, so framework-controlled inputs see it); `click` clicks the element and
- * waits for any navigation it starts; `wait_for` waits until a selector matches
+ * events, so framework-controlled inputs see it) and leaves it focused; `click`
+ * clicks the element and waits for any navigation it starts; `dblclick` does the
+ * same with a double click (inline-edit UIs); `press` sends a real key press to
+ * the selector's element, or to whatever has focus when no selector is given
+ * (so fill then press Enter submits); `wait_for` waits until a selector matches
  * a visible element; `wait` pauses.
  */
 export type CaptureStep =
   | { action: 'fill'; selector: string; value: string }
   | { action: 'click'; selector: string }
+  | { action: 'dblclick'; selector: string }
+  | { action: 'press'; key: PressKey; selector?: string }
   | { action: 'wait_for'; selector: string; timeoutMs: number }
   | { action: 'wait'; ms: number }
 
@@ -269,6 +299,10 @@ export function describeStep(step: CaptureStep): string {
       return `fill ${JSON.stringify(step.selector)}`
     case 'click':
       return `click ${JSON.stringify(step.selector)}`
+    case 'dblclick':
+      return `double-click ${JSON.stringify(step.selector)}`
+    case 'press':
+      return step.selector ? `press ${step.key} on ${JSON.stringify(step.selector)}` : `press ${step.key}`
     case 'wait_for':
       return `wait for ${JSON.stringify(step.selector)}`
     case 'wait':
@@ -310,6 +344,18 @@ export function parseSteps(raw: unknown): CaptureStep[] {
       }
       case 'click':
         return { action: 'click', selector: selector() }
+      case 'dblclick':
+        return { action: 'dblclick', selector: selector() }
+      case 'press': {
+        // Accept any casing ("enter"), but hand the backend the canonical name.
+        const wanted = typeof o.key === 'string' ? o.key.toLowerCase() : undefined
+        const key = PRESS_KEYS.find((k) => k.toLowerCase() === wanted)
+        if (!key) throw new Error(`${where}.key must be one of ${PRESS_KEYS.join(', ')}.`)
+        // The selector is optional here: without one the key goes to whatever has focus.
+        const omitted =
+          o.selector === undefined || o.selector === null || (typeof o.selector === 'string' && !o.selector.trim())
+        return omitted ? { action: 'press', key } : { action: 'press', key, selector: selector() }
+      }
       case 'wait_for':
         return {
           action: 'wait_for',
@@ -319,7 +365,7 @@ export function parseSteps(raw: unknown): CaptureStep[] {
       case 'wait':
         return { action: 'wait', ms: ms(o.ms, MAX_WAIT_MS, 500) }
       default:
-        throw new Error(`${where}.action must be one of fill, click, wait_for, wait.`)
+        throw new Error(`${where}.action must be one of ${STEP_ACTIONS.join(', ')}.`)
     }
   })
 }

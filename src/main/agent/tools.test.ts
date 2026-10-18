@@ -1389,6 +1389,33 @@ describe('view_localhost', () => {
     )
   })
 
+  it('lists double clicks and key presses in the approval summary', () => {
+    const summary = getTool('view_localhost')!.summarize({
+      url: 'http://localhost:3000',
+      steps: [
+        { action: 'dblclick', selector: '.todo label' },
+        { action: 'fill', selector: '.edit', value: 'Walk the dog' },
+        { action: 'press', key: 'Enter' },
+        { action: 'press', key: 'escape', selector: '.edit' }
+      ]
+    })
+    expect(summary).toBe(
+      'View http://localhost:3000, then: double-click ".todo label", fill ".edit", press Enter, press Escape on ".edit"'
+    )
+  })
+
+  it('advertises the dblclick and press actions and their keys in its schema', () => {
+    const schema = getTool('view_localhost')!.schema
+    expect(schema.description).toContain('Every call is a fresh page load')
+    const params = schema.parameters as {
+      properties: { steps: { items: { properties: Record<string, { enum?: string[] }> } } }
+    }
+    const step = params.properties.steps.items.properties
+    expect(step.action.enum).toEqual(['fill', 'click', 'dblclick', 'press', 'wait_for', 'wait'])
+    expect(step.key.enum).toContain('Enter')
+    expect(step.key.enum).toContain('Escape')
+  })
+
   it('explains a refused connection on Linux, and only there', () => {
     const refused = 'net::ERR_CONNECTION_REFUSED (-102)'
     const denied = { allowNetwork: false, proxied: false }
