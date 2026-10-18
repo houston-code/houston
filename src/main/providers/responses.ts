@@ -308,7 +308,12 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
             }
             break
           }
-          case 'response.completed': {
+          // A response cut short (it hit max_output_tokens, or a content filter) ends on
+          // `response.incomplete` instead of `response.completed`, carrying the same
+          // usage and the reason. Missing it reported a truncated reply as a clean
+          // end_turn with no token counts.
+          case 'response.completed':
+          case 'response.incomplete': {
             const u = ev.response?.usage
             inputTokens = u?.input_tokens
             outputTokens = u?.output_tokens

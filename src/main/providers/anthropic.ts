@@ -58,6 +58,9 @@ export function toAnthropicMessages(
 ): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = []
   let mergingToolResults = false
+  // Set when an empty assistant turn was left out between two user turns, so the
+  // second folds onto the first instead of standing as its own `user` message.
+  let foldIntoPreviousUser = false
 
   for (const m of messages) {
     if (m.role === 'tool') {
@@ -116,6 +119,15 @@ export function toAnthropicMessages(
         ;(last.content as unknown[]).push(...blocks)
         continue
       }
+      if (foldIntoPreviousUser && last?.role === 'user') {
+        foldIntoPreviousUser = false
+        if (typeof last.content === 'string') {
+          last.content = last.content ? [{ type: 'text', text: last.content }] : []
+        }
+        ;(last.content as unknown[]).push(...blocks)
+        continue
+      }
+      foldIntoPreviousUser = false
       mergingToolResults = false
       // No images ⇒ keep the compact string form the model (and cache) expects.
       if (m.images?.length) {
@@ -124,13 +136,25 @@ export function toAnthropicMessages(
         out.push({ role: 'user', content: m.content })
       }
     } else if (m.role === 'assistant') {
-      mergingToolResults = false
       // Thinking blocks must come first, before text and tool_use.
       const content: unknown[] = [...thinkingBlocks(m, thinkingEnabled, model)]
-      if (m.content) content.push({ type: 'text', text: m.content })
+      // A text block that is empty or only whitespace is a 400, so send text only
+      // when there is some.
+      if (m.content.trim()) content.push({ type: 'text', text: m.content })
       for (const tc of m.toolCalls ?? []) {
         content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments })
       }
+      // Nothing left to send: the model ended its turn without text or tool calls, or
+      // the turn held only reasoning that isn't replayed to this model. An assistant
+      // message with no content is a 400 ("all messages must have non-empty content"),
+      // and since it stays in the history it would fail every later request too. Leave
+      // it out and join the user turns on either side of it.
+      if (content.length === 0) {
+        if (out[out.length - 1]?.role === 'user') foldIntoPreviousUser = true
+        continue
+      }
+      mergingToolResults = false
+      foldIntoPreviousUser = false
       out.push({ role: 'assistant', content: content as Anthropic.MessageParam['content'] })
     }
     // 'system' is passed out-of-band via the top-level system field.

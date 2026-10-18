@@ -223,6 +223,48 @@ describe('toOpenAIMessages', () => {
       }
     ])
   })
+
+  it('keeps parallel tool results together, with their images after the last one', () => {
+    // Every tool message answering a turn's tool_calls must follow it directly; a user
+    // image turn between two of them is a 400.
+    const msgs: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'call_1', name: 'read_file', arguments: { path: 'a.png' } },
+          { id: 'call_2', name: 'read_file', arguments: { path: 'b.ts' } },
+          { id: 'call_3', name: 'read_file', arguments: { path: 'c.png' } }
+        ]
+      },
+      {
+        role: 'tool',
+        content: '[image: a.png]',
+        toolCallId: 'call_1',
+        toolName: 'read_file',
+        images: [{ mediaType: 'image/png', data: 'AAA' }]
+      },
+      { role: 'tool', content: 'export {}', toolCallId: 'call_2', toolName: 'read_file' },
+      {
+        role: 'tool',
+        content: '[image: c.png]',
+        toolCallId: 'call_3',
+        toolName: 'read_file',
+        images: [{ mediaType: 'image/png', data: 'CCC' }]
+      },
+      { role: 'user', content: 'thanks' }
+    ]
+    const out = toOpenAIMessages(undefined, msgs)
+    expect(out.map((m) => m.role)).toEqual(['assistant', 'tool', 'tool', 'tool', 'user', 'user'])
+    expect(out[4]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,CCC' } }
+      ]
+    })
+    expect(out[5]).toEqual({ role: 'user', content: 'thanks' })
+  })
 })
 
 describe('openai adapter: client construction (base URL + custom headers)', () => {

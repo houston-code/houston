@@ -234,6 +234,82 @@ describe('toAnthropicMessages role alternation', () => {
   })
 })
 
+describe('toAnthropicMessages empty assistant turns', () => {
+  /** Every assistant message must carry at least one block, and no text block may be blank. */
+  function assertSendable(out: ReturnType<typeof toAnthropicMessages>): void {
+    for (const m of out) {
+      if (m.role !== 'assistant') continue
+      const blocks = blocksOf(m)
+      expect(blocks.length).toBeGreaterThan(0)
+      for (const b of blocks) {
+        if (b.type === 'text') expect(String(b.text).trim()).not.toBe('')
+      }
+    }
+  }
+
+  it('leaves out a reply with no text and no tool calls, joining the user turns around it', () => {
+    // An empty end_turn reply is persisted as-is; resending it as `content: []` was a
+    // 400 on every later request in the conversation.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'second' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+    assertSendable(out)
+    assertNoConsecutiveSameRole(out)
+    expect(out).toHaveLength(1)
+    expect(blocksOf(out[0]).map((b) => b.text)).toEqual(['first', 'second'])
+  })
+
+  it('folds the next user turn onto tool results when the reply after them was empty', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'exit 0', toolCallId: 't1', toolName: 'run' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'and now?' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+    assertSendable(out)
+    assertNoConsecutiveSameRole(out)
+    expect(out).toHaveLength(3)
+    const blocks = blocksOf(out[2])
+    expect(blocks.some((b) => b.type === 'tool_result' && b.tool_use_id === 't1')).toBe(true)
+    expect(blocks.some((b) => b.type === 'text' && b.text === 'and now?')).toBe(true)
+  })
+
+  it('drops a whitespace-only text block but keeps the tool calls beside it', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '\n\n', toolCalls: [{ id: 't1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 't1', toolName: 'run' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+    assertSendable(out)
+    expect(blocksOf(out[1]).map((b) => b.type)).toEqual(['tool_use'])
+  })
+
+  it('leaves out a reasoning-only reply whose blocks are not replayed to this model', () => {
+    // A reply cut off mid-thought has reasoning and nothing else; once those blocks are
+    // not sent (thinking off, or a different model), nothing is left to send.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'first' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: [{ text: 'hmm', signature: 'sig', model: 'claude-opus-5-5' }]
+      },
+      { role: 'user', content: 'second' }
+    ]
+    expect(toAnthropicMessages(msgs, false)).toHaveLength(1)
+    // Replayed to the model that signed it, the reasoning is the turn's content.
+    const replayed = toAnthropicMessages(msgs, true, 'claude-opus-5-5')
+    expect(replayed).toHaveLength(3)
+    expect(blocksOf(replayed[1]).map((b) => b.type)).toEqual(['thinking'])
+  })
+})
+
 describe('anthropic usage reporting', () => {
   beforeEach(() => h.stream.mockReset())
 
