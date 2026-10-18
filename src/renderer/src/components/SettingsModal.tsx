@@ -1563,7 +1563,9 @@ export function SettingsModal({
                       <strong>Ask</strong> always prompts. The pattern is a glob over the call&apos;s
                       command, path, URL, or query; an <strong>Exact</strong> rule matches only
                       that one target. <strong>Always allow</strong> on a file, URL, or search
-                      saves an exact rule. These are your global rules; a project&apos;s{' '}
+                      saves an exact rule, as it does for a shell command holding <code>*</code>{' '}
+                      that it can&apos;t shorten to a prefix. These are your global rules; a
+                      project&apos;s{' '}
                       <code>.houston/settings.json</code> may add stricter deny/ask rules that apply
                       first and aren&apos;t shown here.
                     </>

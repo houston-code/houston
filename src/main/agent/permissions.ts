@@ -985,7 +985,10 @@ function isCountOnlyPager(tokens: string[]): boolean {
  *   env-prefixed command, or a command wrapper (`sudo`/`env`/`xargs`/… — see
  *   {@link COMMAND_WRAPPERS}) whose second token is another program — is kept verbatim,
  *   so raw operations like `cat x`, `rm -rf y`, or `sudo rm -rf z` are NOT silently
- *   broadened to `cat`/`rm`/`sudo rm`.
+ *   broadened to `cat`/`rm`/`sudo rm`. A program spelled with `*` (`./*.sh run`) is
+ *   kept verbatim too, since its two-token prefix would be a glob over other programs.
+ *   Only a verbatim pattern can therefore hold `*`, and that one is saved exact (see
+ *   {@link shellAllowRule}).
  *
  * - A `head`/`tail` whose arguments are only line/byte counts (`tail -60`, `head -c 4000`,
  *   `head -n 30`) collapses to the bare program: it's slicing piped output, and keeping
@@ -1005,7 +1008,13 @@ export function shellRulePatterns(command: string): string[] {
     const verb = tokens[1]
     if (isCountOnlyPager(tokens)) {
       patterns.add(prog)
-    } else if (!ENV_ASSIGN.test(prog) && !COMMAND_WRAPPERS.has(prog) && verb && SUBCOMMAND_VERB.test(verb)) {
+    } else if (
+      !ENV_ASSIGN.test(prog) &&
+      !COMMAND_WRAPPERS.has(prog) &&
+      !prog.includes('*') &&
+      verb &&
+      SUBCOMMAND_VERB.test(verb)
+    ) {
       patterns.add(`${prog} ${verb}`)
     } else {
       patterns.add(norm)
@@ -1013,6 +1022,20 @@ export function shellRulePatterns(command: string): string[] {
   }
   if (patterns.size === 0) patterns.add(normalizeShellCommand(command))
   return [...patterns]
+}
+
+/**
+ * The `run_shell` allow rule saved for one pattern from {@link shellRulePatterns}. A
+ * pattern holding `*` is a sub-command kept verbatim, and the matcher would read that
+ * `*` as a wildcard: approving `rm *` would allow `rm -rf ~`, and approving
+ * `find . -name "*.ts"` would allow `find . -name x -delete -name y.ts`. So it is
+ * `exact`, covering the approved sub-command only. Every other pattern keeps its
+ * prefix meaning (`git status` also covers `git status -s`).
+ */
+function shellAllowRule(match: string): PermissionRule {
+  return match.includes('*')
+    ? { action: 'allow', tool: 'run_shell', match, exact: true }
+    : { action: 'allow', tool: 'run_shell', match }
 }
 
 /** The argument(s) {@link permissionSubject} reads a tool's subject from. */
@@ -1029,7 +1052,9 @@ function subjectArgKeys(toolName: string): string[] {
  * call's own tool.
  *
  * - An ALLOW on `run_shell` stores generalized per-sub-command prefixes (see
- *   {@link shellRulePatterns}); a shell deny stays as typed (a broadened deny is risky).
+ *   {@link shellRulePatterns}), except that a sub-command kept verbatim and holding `*`
+ *   is exact (see {@link shellAllowRule}); a shell deny stays as typed (a broadened
+ *   deny is risky).
  * - Any other ALLOW is `exact` (see {@link PermissionRule.exact}): it covers the one
  *   path, URL, or query the user approved. Saved as a glob instead, a model-chosen
  *   path would widen it: a file named `*` would allow every write, and a directory
@@ -1055,7 +1080,7 @@ export function persistedRules(
   if (toolName === 'apply_patch') return patchSubjectPaths(permissionSubject(toolName, args)).map(rule)
   const subject = permissionSubject(toolName, args)
   if (subject.trim()) {
-    if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject).map(rule)
+    if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject).map(shellAllowRule)
     return [rule(subject)]
   }
   if (action === 'allow' && subjectArgKeys(toolName).some((k) => typeof args[k] === 'string')) return []
@@ -1112,6 +1137,11 @@ function isDeadShellPattern(match: string): boolean {
  * - Keeps every `exact` rule exact (it is never re-generalized), and never treats one
  *   as covering a broader rule: an exact `src` allows only `src`, so a later glob or
  *   prefix `src` allow is not redundant after it.
+ * - Saves a sub-command it pulls out of a `run_shell` allow exact when it holds `*`,
+ *   as "Always allow" does (see {@link shellAllowRule}): `cd /r && rm *` becomes an
+ *   exact `rm *`, not a glob that allows `rm -rf ~`. A rule that is already its own
+ *   pattern (`rm *`, `git *`) is left as it is: nothing records whether "Always allow"
+ *   saved it or the user typed it as a glob on purpose, and the two read the same.
  *
  * Every drop removes an allow, so the result is never looser than the input. Deny/ask
  * rules and non-shell rules are preserved verbatim (only exact dedupe applies). Pure
@@ -1146,8 +1176,11 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
     let expanded: PermissionRule[] = [r]
     if (isShellAllow(r) && !r.exact) {
       const pats = shellRulePatterns(r.match ?? '')
-      // Keep the rule exact if generalizing it could shadow a narrower deny.
-      expanded = pats.some(wouldShadowDeny) ? [r] : pats.map((match) => ({ ...r, match }))
+      const own = normalizeShellCommand(r.match ?? '')
+      // Keep the rule as it is if generalizing it could shadow a narrower deny.
+      expanded = pats.some(wouldShadowDeny)
+        ? [r]
+        : pats.map((match) => (match === own ? { ...r, match } : { ...r, ...shellAllowRule(match) }))
     }
     for (const e of expanded) {
       if (seen.has(key(e))) continue

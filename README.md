@@ -283,7 +283,8 @@ Open source under the [Apache License 2.0](LICENSE).
   `*rm -rf*`, always ask before `write_file` under `src/secret/**`). Rules are
   checked before the policy; first match wins. An *exact* rule matches only its
   one target (no wildcards, no folder contents); *always allow* on a file, URL,
-  or search saves one.
+  or search saves one, as it does for a shell command holding `*` that it can't
+  shorten to a prefix like `npm install`.
 - **Hooks.** Run your own shell commands around tool calls (Settings → *Hooks*):
   a *PreToolUse* hook can block a call by exiting non-zero, and a *PostToolUse*
   hook's output is fed back to the agent — e.g. auto-format after every edit, or

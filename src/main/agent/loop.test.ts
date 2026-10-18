@@ -1416,6 +1416,56 @@ describe('startRun', () => {
     expect(existsSync(join(ws, 'src', 'deep.ts'))).toBe(false)
   })
 
+  it('"Always allow" on `rm *` saves an exact rule that does not auto-approve `rm -rf ~`', async () => {
+    // A stand-in under the run_shell name records what would run, so nothing executes.
+    const ran: string[] = []
+    h.probeTools = [
+      {
+        kind: 'shell',
+        summarize: () => 'probe run_shell',
+        schema: {
+          name: 'run_shell',
+          description: 'probe run_shell',
+          parameters: {
+            type: 'object',
+            properties: { command: { type: 'string' } },
+            required: ['command'],
+            additionalProperties: false
+          }
+        },
+        execute: async (a) => {
+          ran.push(String((a as { command?: string }).command))
+          return 'ok'
+        }
+      }
+    ]
+    // On a confining host an allow rule skips the prompt, so the saved rule alone decides.
+    h.sandboxed = true
+    const shell = (id: string, command: string): ProviderStreamEvent[] => [
+      { type: 'tool_call', call: { id, name: 'run_shell', arguments: { command } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ]
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        shell('s1', 'rm *'),
+        shell('s2', 'rm *'),
+        shell('s3', 'rm -rf ~'),
+        shell('s4', 'rm -rf .git'),
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (id, decide) => decide(id === 's1' ? 'rule-allow' : 'deny')
+    })
+    expect(h.addedRules).toEqual([{ action: 'allow', tool: 'run_shell', match: 'rm *', exact: true }])
+    // s2 repeats the approved command and runs unprompted; s3 and s4 still prompt.
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      's1',
+      's3',
+      's4'
+    ])
+    expect(ran).toEqual(['rm *', 'rm *'])
+  })
+
   it('an admin managed `deny` overrides a user `allow` and reports an org-policy reason', async () => {
     // Admin forbids `rm -rf …`; the user has a blanket allow for every shell command.
     // The managed tier outranks the user, so the call is denied outright.

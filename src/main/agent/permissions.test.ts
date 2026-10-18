@@ -668,6 +668,20 @@ describe('persistedRules', () => {
     ])
   })
 
+  it('saves a shell sub-command kept verbatim exact when it holds `*`', () => {
+    expect(persistedRules('allow', 'run_shell', { command: 'rm *' })).toEqual([exactAllow('run_shell', 'rm *')])
+    expect(persistedRules('allow', 'run_shell', { command: 'cd /repo && rm -f *.log && git add * && ls -la' })).toEqual([
+      exactAllow('run_shell', 'rm -f *.log'),
+      allow('run_shell', 'git add'),
+      allow('run_shell', 'ls -la')
+    ])
+    expect(persistedRules('allow', 'run_shell', { command: './*.sh run x' })).toEqual([
+      exactAllow('run_shell', './*.sh run x')
+    ])
+    // A deny stays a glob: it can only be broader than the call it blocked.
+    expect(persistedRules('deny', 'run_shell', { command: 'rm *' })).toEqual([deny('run_shell', 'rm *')])
+  })
+
   it('stores an exact allow for the subject, or `*` for a tool whose calls carry none', () => {
     expect(persistedRules('allow', 'write_file', { path: 'notes.txt', content: '' })).toEqual([
       exactAllow('write_file', 'notes.txt')
@@ -756,6 +770,40 @@ describe('a saved "Always allow" covers only the approved target', () => {
     const search = saved('web_search', { query: '*' })
     expect(matchRule(search, 'web_search', '*', ROOTS)).toBe('allow')
     expect(matchRule(search, 'web_search', 'anything else', ROOTS)).toBeNull()
+  })
+
+  it('run_shell: a `*` in an approved command is literal, so `rm *` does not allow `rm -rf ~`', () => {
+    const rm = saved('run_shell', { command: 'rm *' })
+    expect(matchRule(rm, 'run_shell', 'rm *', ROOTS)).toBe('allow')
+    for (const cmd of ['rm -rf ~', 'rm -rf *', 'rm * ~', 'rm -rf / *', 'rm x && rm *']) {
+      expect(matchRule(rm, 'run_shell', cmd, ROOTS)).toBeNull()
+    }
+    const find = saved('run_shell', { command: 'find . -name "*.ts"' })
+    expect(matchRule(find, 'run_shell', "find . -name '*.ts'", ROOTS)).toBe('allow')
+    expect(matchRule(find, 'run_shell', 'find . -name x -delete -name y.ts', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: 'ls *.ts' }), 'run_shell', 'ls ~/.ssh/id_rsa.ts', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: './*.sh run' }), 'run_shell', './evil.sh run', ROOTS)).toBeNull()
+  })
+
+  it('run_shell: every saved rule set auto-approves the command it was saved for', () => {
+    for (const command of [
+      'rm *',
+      'cd /work/project && rm -f *.log',
+      'ls *.ts | wc -l',
+      'git add * && git commit -m "wip *"',
+      'find . -name "*.ts" -type f',
+      'echo * | head -5',
+      './*.sh run x',
+      'for f in *.ts; do wc -l $f; done'
+    ]) {
+      expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS)).toBe('allow')
+    }
+  })
+
+  it('run_shell: a saved prefix still covers longer commands (unchanged)', () => {
+    // A generalized prefix or a verbatim sub-command with no `*` keeps its prefix meaning.
+    expect(matchRule(saved('run_shell', { command: 'git add *' }), 'run_shell', 'git add -A', ROOTS)).toBe('allow')
+    expect(matchRule(saved('run_shell', { command: 'cat a.txt' }), 'run_shell', 'cat a.txt b.txt', ROOTS)).toBe('allow')
   })
 
   it('a hand-written exact shell rule matches that command only (dequoted), never a prefix', () => {
@@ -943,6 +991,13 @@ describe('shellRulePatterns', () => {
 
   it('keeps env-prefixed commands exact (the prefix is part of what runs)', () => {
     expect(shellRulePatterns('FOO=1 npm run build')).toEqual(['FOO=1 npm run build'])
+  })
+
+  it('never generalizes a program spelled with `*` (its prefix would be a glob over programs)', () => {
+    expect(shellRulePatterns('./*.sh run x')).toEqual(['./*.sh run x'])
+    expect(shellRulePatterns('"*" status')).toEqual(['"*" status'])
+    // A `*` past the verb is dropped with the trailing args, as before.
+    expect(shellRulePatterns('git add *')).toEqual(['git add'])
   })
 
   it('keeps command-wrapper-prefixed commands exact (never broadens to `sudo rm`)', () => {
@@ -1195,6 +1250,37 @@ describe('cleanupPermissionRules', () => {
     it('keeps an exact `x*` that a glob allow for `x` (a directory) does not cover', () => {
       const rules = [allow('write_file', 'x'), exactAllow('write_file', 'x*')]
       expect(cleanupPermissionRules(rules)).toEqual(rules)
+    })
+
+    it('saves a `*` sub-command it pulls out of an older shell allow exact', () => {
+      const rules = [
+        allow('run_shell', 'cd /repo && rm -f *.log'),
+        allow('run_shell', 'do ls *.ts'),
+        allow('run_shell', 'cd /repo && npm install foo')
+      ]
+      const cleaned = cleanupPermissionRules(rules)
+      expect(cleaned).toEqual([
+        exactAllow('run_shell', 'rm -f *.log'),
+        exactAllow('run_shell', 'ls *.ts'),
+        allow('run_shell', 'npm install')
+      ])
+      // As a glob, `rm -f *.log` would have allowed this.
+      expect(matchRule(cleaned, 'run_shell', 'rm -f ~/x.log')).toBeNull()
+      expect(matchRule(cleaned, 'run_shell', 'rm -f *.log')).toBe('allow')
+      expect(cleanupPermissionRules(cleaned)).toEqual(cleaned)
+    })
+
+    it('leaves a shell glob that is already its own pattern alone (it may be on purpose)', () => {
+      // "Always allow" once saved `rm *` this way, but `git *` reads the same and is a
+      // common deliberate glob; nothing tells them apart, so neither is narrowed.
+      const rules = [allow('run_shell', 'git *'), allow('run_shell', 'rm *'), allow('run_shell', 'ls -la *.ts')]
+      expect(cleanupPermissionRules(rules)).toEqual(rules)
+      expect(matchRule(cleanupPermissionRules(rules), 'run_shell', 'git push --force')).toBe('allow')
+    })
+
+    it('drops an exact `*` sub-command an earlier allow already covers', () => {
+      const rules = [allow('run_shell', 'rm'), allow('run_shell', 'cd /repo && rm *')]
+      expect(cleanupPermissionRules(rules)).toEqual([allow('run_shell', 'rm')])
     })
   })
 })
