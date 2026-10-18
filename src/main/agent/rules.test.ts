@@ -188,6 +188,24 @@ describe('loadProjectRules', () => {
       expect(rules.text).not.toContain('TOPSECRET-LINK')
     })
 
+    it('does not load a rules file that is itself a symlink out of the tree', async () => {
+      // The file, not just its imports: `AGENTS.md -> ~/secret.md` put the target
+      // straight into the system prompt.
+      writeFileSync(join(home, 'secret.md'), 'TOPSECRET-RULESFILE')
+      symlinkSync(join(home, 'secret.md'), join(workspace, 'AGENTS.md'))
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).not.toContain('TOPSECRET-RULESFILE')
+      expect(rules.files).not.toContain('AGENTS.md')
+    })
+
+    it('still loads a rules file symlinked to another file in the tree', async () => {
+      writeFileSync(join(workspace, 'AGENTS.md'), 'SHARED-RULES-OK')
+      symlinkSync(join(workspace, 'AGENTS.md'), join(workspace, 'CLAUDE.md'))
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toContain('CLAUDE.md')
+      expect(rules.text).toContain('SHARED-RULES-OK')
+    })
+
     it('still allows an in-workspace import (legitimate split)', async () => {
       mkdirSync(join(workspace, 'docs'), { recursive: true })
       writeFileSync(join(workspace, 'docs', 'style.md'), 'IN-WORKSPACE-OK')

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -86,6 +86,45 @@ describe('resolveSkillInstructions with the built-in present', () => {
     const out = await resolveSkillInstructions('/anywhere', skills, 'nope')
     expect(out).toContain('Unknown skill')
     expect(out).toContain('houston-guide')
+  })
+})
+
+describe('skills from outside the workspace', () => {
+  // A repo's SKILL.md is attacker-controlled, and the `skill` tool returns its body
+  // to the model without asking. A symlink out of the tree must not be followed.
+  it('skips a SKILL.md that is a symlink out of the tree', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'houston-outside-'))
+    try {
+      writeFileSync(join(outside, 'secret.md'), SKILL_MD('stolen', 'TOPSECRET-SKILL'))
+      await withWorkspace(async (ws) => {
+        mkdirSync(join(ws, '.houston/skills/setup'), { recursive: true })
+        symlinkSync(join(outside, 'secret.md'), join(ws, '.houston/skills/setup/SKILL.md'))
+        mkdirSync(join(ws, '.houston/skills/real'), { recursive: true })
+        writeFileSync(join(ws, '.houston/skills/real/SKILL.md'), SKILL_MD('real'))
+        expect((await loadSkills(ws)).map((s) => s.name)).toEqual(['real'])
+      })
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a SKILL.md swapped for an outside symlink after the list was built', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'houston-outside-'))
+    try {
+      writeFileSync(join(outside, 'secret.md'), 'TOPSECRET-SWAP')
+      await withWorkspace(async (ws) => {
+        const file = join(ws, '.houston/skills/setup/SKILL.md')
+        mkdirSync(join(ws, '.houston/skills/setup'), { recursive: true })
+        writeFileSync(file, SKILL_MD('setup'))
+        const [skill] = await loadSkills(ws)
+        rmSync(file)
+        symlinkSync(join(outside, 'secret.md'), file)
+        expect(await loadSkillBody(ws, skill)).toBeNull()
+        expect(await resolveSkillInstructions(ws, [skill], 'setup')).not.toContain('TOPSECRET-SWAP')
+      })
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
   })
 })
 
