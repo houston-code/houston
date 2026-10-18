@@ -41,6 +41,7 @@ import { resolveShortcuts } from './lib/keybindingOverrides'
 import type { PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
+import { occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './lib/overlays'
 import {
   clampSidebarWidth,
   SIDEBAR_COLLAPSE_AT,
@@ -1213,7 +1214,7 @@ export default function App(): JSX.Element {
       } else if (POLICY_COMMANDS[cmd.name]) {
         const policy = POLICY_COMMANDS[cmd.name]
         void onChangePolicy(policy)
-        chat.notify(`Approval mode: ${policy}`)
+        chat.notify(`Approval mode: ${POLICY_LABEL[policy]}`)
       }
     },
     [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, commands]
@@ -1436,6 +1437,24 @@ export default function App(): JSX.Element {
     onboarding.startTour
   ])
 
+  // Every overlay's open state in one place (see lib/overlays.ts), read live by the
+  // keyboard handler through a ref so a newly opened overlay can never be missing
+  // from a stale closure.
+  const overlays: OverlayFlags = {
+    settings: settingsOpen,
+    doctor: doctorOpen,
+    changes: changesOpen,
+    files: filesOpen,
+    scorecard: scorecardOpen,
+    help: helpOpen,
+    palette: paletteOpen,
+    find: findOpen,
+    connect: connectOpen,
+    whatsNew: whatsNew !== null
+  }
+  const overlaysRef = useRef(overlays)
+  overlaysRef.current = overlays
+
   // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
   // ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab cycle mode, ⌘F find, ⌘⇧M model,
   // ⌘/ or ? help, ⌃` terminal, Esc to stop a run / close a dialog.
@@ -1492,35 +1511,27 @@ export default function App(): JSX.Element {
         e.preventDefault()
         cycleChat(-1)
       } else if (action === 'cycle-mode') {
-        // Shift+Tab is reverse-focus in dialogs — let their focus trap (or the find
+        // Shift+Tab is reverse-focus in dialogs: let their focus trap (or the find
         // bar) have it; only hijack it for mode-cycling in the main chat view. An
         // open popover menu (model picker, ⋯ menu) is portaled to <body>, invisible
-        // to these flags, so consult its registry too.
-        if (
-          paletteOpen ||
-          helpOpen ||
-          settingsOpen ||
-          changesOpen ||
-          filesOpen ||
-          scorecardOpen ||
-          doctorOpen ||
-          findOpen ||
-          isAnyPopoverOpen()
-        )
-          return
+        // to these flags, so consult its registry too, and a non-modal dialog (the
+        // What's new card) owns the key while focus is inside it.
+        const inDialog = e.target instanceof Element && e.target.closest('[role="dialog"]') !== null
+        if (ownsShiftTab(overlaysRef.current) || isAnyPopoverOpen() || inDialog) return
         e.preventDefault()
         cyclePolicy()
       } else if (action === 'escape') {
         // The open overlays own their own Esc (focus trap), so this mainly handles
-        // Esc with nothing focused — still ordered most-recent-first defensively.
-        if (paletteOpen) setPaletteOpen(false)
-        else if (helpOpen) setHelpOpen(false)
-        else if (findOpen) setFindOpen(false)
-        else if (settingsOpen) setSettingsOpen(false)
-        else if (changesOpen) setChangesOpen(false)
-        else if (filesOpen) setFilesOpen(false)
-        else if (scorecardOpen) setScorecardOpen(false)
-        else if (doctorOpen) setDoctorOpen(false)
+        // Esc with nothing focused, still ordered most-recent-first defensively.
+        const o = overlaysRef.current
+        if (o.palette) setPaletteOpen(false)
+        else if (o.help) setHelpOpen(false)
+        else if (o.find) setFindOpen(false)
+        else if (o.settings) setSettingsOpen(false)
+        else if (o.changes) setChangesOpen(false)
+        else if (o.files) setFilesOpen(false)
+        else if (o.scorecard) setScorecardOpen(false)
+        else if (o.doctor) setDoctorOpen(false)
         else if (chat.running) chat.cancel()
       }
     }
@@ -1537,13 +1548,6 @@ export default function App(): JSX.Element {
     cycleChat,
     cyclePolicy,
     shortcuts,
-    paletteOpen,
-    helpOpen,
-    findOpen,
-    settingsOpen,
-    changesOpen,
-    filesOpen,
-    scorecardOpen,
     chat.running,
     chat.cancel
   ])
@@ -1593,17 +1597,7 @@ export default function App(): JSX.Element {
     afterEdit: Boolean(chat.checkpoint && !chat.checkpoint.reverted && !chat.running),
     touring: onboarding.touring
   })
-  const tipsSuppressed =
-    settingsOpen ||
-    paletteOpen ||
-    helpOpen ||
-    doctorOpen ||
-    scorecardOpen ||
-    changesOpen ||
-    filesOpen ||
-    findOpen ||
-    connectOpen ||
-    whatsNew !== null
+  const tipsSuppressed = suppressesTips(overlays)
   // Only offer the image-attachment affordance when the selected model can see
   // images. Resolve host-reported capabilities first (same source the model picker
   // uses) so a host-listed vision model isn't denied the attach buttons by the
@@ -1909,9 +1903,9 @@ export default function App(): JSX.Element {
         <Suspense fallback={null}>
           <PreviewDock
             servers={previewServers}
-            // A full-screen overlay paints above the native preview views; hide them
-            // (but keep them alive) while one is open so a preview can't cover it.
-            occluded={settingsOpen || changesOpen || paletteOpen || helpOpen || !!whatsNew}
+            // The native preview views paint above every HTML overlay; hide them (but
+            // keep them alive) while one is open so a preview can't cover it.
+            occluded={occludesPreview(overlays)}
             onResizeMouseDown={onPreviewResizeMouseDown}
             onClose={togglePreview}
           />
