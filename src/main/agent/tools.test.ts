@@ -851,7 +851,7 @@ describe('apply_patch rollback on a phase-2 failure', () => {
     })
     expect(out).toMatch(/1 added, 1 updated/)
     expect(readFileSync(join(workspace, 'a.ts'), 'utf8')).toBe('two\n')
-    expect(readFileSync(join(workspace, 'sub/b.ts'), 'utf8')).toBe('new')
+    expect(readFileSync(join(workspace, 'sub/b.ts'), 'utf8')).toBe('new\n')
   })
 })
 
@@ -874,7 +874,7 @@ describe('apply_patch', () => {
       )
     })
     expect(out).toMatch(/1 added, 1 updated, 1 deleted/)
-    expect(await run('read_file', { path: 'new.ts' })).toBe('export const x = 1')
+    expect(await run('read_file', { path: 'new.ts' })).toBe('export const x = 1\n')
     expect(await run('read_file', { path: 'keep.ts' })).toBe('const a = 1\nconst b = 3\n')
     await expect(run('read_file', { path: 'old.ts' })).rejects.toThrow()
   })
@@ -886,6 +886,17 @@ describe('apply_patch', () => {
     })
     await expect(run('read_file', { path: 'a.ts' })).rejects.toThrow()
     expect(await run('read_file', { path: 'b.ts' })).toBe('hello\nthere\n')
+  })
+
+  it.skipIf(process.platform === 'win32')('keeps the file mode across a Move to', async () => {
+    // The destination is a new file; written as-is it took the default mode, so a
+    // moved script was no longer executable.
+    await run('write_file', { path: 'run.sh', content: '#!/bin/sh\necho hi\n' })
+    chmodSync(join(workspace, 'run.sh'), 0o755)
+    await run('apply_patch', {
+      patch: patch('*** Update File: run.sh', '*** Move to: bin/run.sh', ' #!/bin/sh', '-echo hi', '+echo hello')
+    })
+    expect(statSync(join(workspace, 'bin/run.sh')).mode & 0o777).toBe(0o755)
   })
 
   it('rejects a patch that writes one file in two blocks (no silent edit loss)', async () => {
@@ -2045,6 +2056,27 @@ describe('github (gh) tools', () => {
     expect(getTool('gh_pr_checkout')!.blockedInPlan).toBe(true)
     expect(getTool('gh_pr_list')!.blockedInPlan).toBeUndefined()
     expect(getTool('gh_pr_view')!.blockedInPlan).toBeUndefined()
+  })
+
+  it('names the PR, issue, or run a gh call targets in its approval summary', () => {
+    // The schemas send these ids as numbers; the summaries used to read them as absent,
+    // so approving a merge of PR 42 read "Merge PR (current branch)".
+    const sum = (name: string, args: Record<string, unknown>): string => getTool(name)!.summarize(args)
+    expect(sum('gh_pr_view', { number: 42 })).toBe('View PR #42')
+    expect(sum('gh_pr_comment', { number: 42, body: 'x' })).toBe('Comment on PR #42')
+    expect(sum('gh_pr_checkout', { number: 42 })).toBe('Checkout PR #42')
+    expect(sum('gh_pr_checks', { number: 42 })).toBe('PR checks #42')
+    expect(sum('gh_pr_review', { number: 42, action: 'approve' })).toBe('Review PR #42 (approve)')
+    expect(sum('gh_pr_merge', { number: 42 })).toBe('Merge PR #42')
+    expect(sum('gh_pr_merge', { number: 42, method: 'squash', delete_branch: true })).toBe(
+      'Merge PR #42 (squash, delete branch)'
+    )
+    expect(sum('gh_issue_view', { number: 7 })).toBe('View issue #7')
+    expect(sum('gh_issue_comment', { number: 7, body: 'x' })).toBe('Comment on issue #7')
+    expect(sum('gh_run_view', { run_id: 123456 })).toBe('View CI run 123456')
+    // A numeric string still reads as given; an omitted number still means the branch's PR.
+    expect(sum('gh_pr_view', { number: '#9' })).toBe('View PR #9')
+    expect(sum('gh_pr_merge', {})).toBe('Merge PR (current branch)')
   })
 
   it('all gh tools are network-kind (always prompt for approval)', () => {

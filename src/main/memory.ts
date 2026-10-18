@@ -47,12 +47,15 @@ export async function saveMemoryTo(dir: string, text: string): Promise<string> {
   const file = join(dir, 'AGENTS.md')
   const existing = safeRead(file)
   const heading = '## Notes'
+  // The Notes heading itself, alone on its line: a bare substring search also hit
+  // "### Notes" or "## Notes on deployment" and filed the note under that heading.
+  const headingLine = /^## Notes[ \t]*$/m.exec(existing ?? '')
   let next: string
   if (existing === null) {
     next = `# Project instructions\n\n${heading}\n\n- ${note}\n`
-  } else if (existing.includes(heading)) {
+  } else if (headingLine) {
     // Append inside the existing Notes section, so related notes stay together.
-    const at = existing.indexOf(heading) + heading.length
+    const at = headingLine.index + headingLine[0].length
     const rest = existing.slice(at)
     const nextHeading = rest.search(/\n## /)
     const insertAt = nextHeading === -1 ? existing.length : at + nextHeading

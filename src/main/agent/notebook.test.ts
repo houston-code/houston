@@ -246,6 +246,20 @@ describe('editNotebook', () => {
     expect(out.cells[1].execution_count).toBeNull()
   })
 
+  it('gives an inserted cell the id nbformat 4.5 requires, distinct from the others', () => {
+    const before = nb([codeCell('a', { id: 'aaaa1111' }), codeCell('b', { id: 'bbbb2222' })])
+    const out = editNotebook(before, { cell: 2, mode: 'insert', source: 'c' })
+    const id = out.cells[1].id
+    expect(typeof id).toBe('string')
+    expect(id).toMatch(/^[0-9a-f]{8}$/)
+    expect(['aaaa1111', 'bbbb2222']).not.toContain(id)
+  })
+
+  it('adds no id to a cell inserted into a notebook older than 4.5', () => {
+    const out = editNotebook(nb([], { nbformat_minor: 4 }), { cell: 1, mode: 'insert', source: 'x' })
+    expect(out.cells[0]).not.toHaveProperty('id')
+  })
+
   it('inserts into an empty notebook, defaulting to code', () => {
     const out = editNotebook(nb([]), { cell: 1, mode: 'insert', source: 'x = 1' })
     expect(out.cells).toHaveLength(1)

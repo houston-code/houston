@@ -328,7 +328,9 @@ Open source under the [Apache License 2.0](LICENSE).
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
   JSON file and import it back (or onto another machine) from the sidebar, or
-  export it as a self-contained HTML file for sharing and reading offline.
+  export it as a self-contained HTML file for sharing and reading offline. HTML
+  exports import back the same way; one from an older version brings back only
+  the chat text.
   **Search** the sidebar to find a past chat by its title or anything said in it.
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
   direction without disturbing the original.

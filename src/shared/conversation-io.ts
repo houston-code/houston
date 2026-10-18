@@ -1,9 +1,11 @@
 import type { ChatMessage, ChatRole, Conversation, ToolCall } from './agent'
+import { parseConversationHtml } from './html-import'
 
 /**
- * Validation for imported conversation JSON. Kept Electron-free (and in shared)
- * so it can be unit-tested and reused. The exported file is just a `Conversation`
- * serialized to JSON; on import we trust only the fields below and regenerate the
+ * Validation for imported conversation files. Kept Electron-free (and in shared)
+ * so it can be unit-tested and reused. A JSON export is just a `Conversation`
+ * serialized to JSON, and an HTML export embeds the same shape (see
+ * `html-import.ts`); on import we trust only the fields below and regenerate the
  * id/timestamps, so a malformed or hostile file can't smuggle in extra state.
  */
 
@@ -100,6 +102,27 @@ export function validateImportedConversation(raw: unknown): ImportedConversation
     providerId: str(o, 'providerId'),
     model: str(o, 'model')
   }
+}
+
+/** A conversation file's contents, validated and ready to import. */
+export interface ParsedConversationFile {
+  data: ImportedConversation
+  /** True when only the visible chat text could be recovered (an older HTML export). */
+  textOnly: boolean
+}
+
+/**
+ * Parse the text of an exported conversation file: an HTML export (recognized by
+ * its leading `<`) or a JSON export. Both go through
+ * {@link validateImportedConversation}. Throws on a malformed file.
+ */
+export function parseConversationFile(text: string): ParsedConversationFile {
+  const body = text.replace(/^\uFEFF/, '')
+  if (/^\s*</.test(body)) {
+    const { raw, textOnly } = parseConversationHtml(body)
+    return { data: validateImportedConversation(raw), textOnly }
+  }
+  return { data: validateImportedConversation(JSON.parse(body)), textOnly: false }
 }
 
 /**

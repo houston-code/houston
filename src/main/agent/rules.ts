@@ -217,6 +217,11 @@ async function loadOne(
   visited: Set<string>,
   confineRoot: string | null
 ): Promise<string | null> {
+  // The rules file itself is held to the same confinement as its imports: a workspace
+  // AGENTS.md that is a symlink out of the tree (`AGENTS.md -> ~/.ssh/id_rsa`) would
+  // otherwise put that file in the system prompt. A symlink within the tree
+  // (`CLAUDE.md -> AGENTS.md`) still resolves inside it and loads.
+  if (!importAllowed(path, confineRoot)) return null
   let raw: string
   try {
     raw = (await fs.readFile(path, 'utf8')).trim()

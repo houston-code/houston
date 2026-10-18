@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Conversation } from './agent'
+import { conversationToHtml, HTML_DATA_OPEN_TAG } from './html-export'
 import {
   forkConversationData,
   forkTitle,
+  parseConversationFile,
   resolveImportWorkspace,
   validateImportedConversation,
   MAX_IMPORT_MESSAGES,
@@ -144,6 +146,44 @@ describe('validateImportedConversation', () => {
       })
       expect(r.messages[0].toolCalls!.length).toBeLessThanOrEqual(1000)
     })
+  })
+})
+
+describe('parseConversationFile', () => {
+  const conv: Conversation = { ...valid, messages: valid.messages as Conversation['messages'] }
+
+  it('reads a JSON export, keeping its workspace for the recents check', () => {
+    const r = parseConversationFile(JSON.stringify(valid))
+    expect(r.textOnly).toBe(false)
+    expect(r.data.workspace).toBe('/some/where')
+    expect(r.data.messages).toEqual(valid.messages)
+  })
+
+  it('ignores a leading byte-order mark', () => {
+    expect(parseConversationFile(`\uFEFF${JSON.stringify(valid)}`).data.title).toBe('My chat')
+  })
+
+  it('reads an HTML export through its data block', () => {
+    const r = parseConversationFile(`\uFEFF\n  ${conversationToHtml(conv)}`)
+    expect(r.textOnly).toBe(false)
+    expect(r.data.title).toBe('My chat')
+    expect(r.data.model).toBe('claude-opus-4-8')
+    expect(r.data.workspace).toBeUndefined()
+    expect(r.data.messages).toEqual(valid.messages)
+  })
+
+  it('falls back to the visible text for an HTML export without a data block', () => {
+    const html = conversationToHtml(conv)
+    const start = html.indexOf(HTML_DATA_OPEN_TAG)
+    const legacy = html.slice(0, start) + html.slice(html.indexOf('</template>', start) + '</template>'.length)
+    const r = parseConversationFile(legacy)
+    expect(r.textOnly).toBe(true)
+    expect(r.data.messages).toEqual([{ role: 'user', content: 'hi' }])
+  })
+
+  it('surfaces parse errors for files that are neither', () => {
+    expect(() => parseConversationFile('not json')).toThrow()
+    expect(() => parseConversationFile('<p>just a page</p>')).toThrow(/not a Houston chat export/)
   })
 })
 

@@ -76,6 +76,36 @@ describe('checkpoints', () => {
     expect(readFileSync(f, 'utf8')).toBe('v1')
   })
 
+  it('restores a binary file byte for byte, not as decoded text', async () => {
+    // Bytes that are not valid UTF-8: decoding them as text and writing that back
+    // replaced each bad sequence and corrupted the file the revert was meant to save.
+    const f = join(ws, 'logo.png')
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00, 0xc3, 0x28])
+    writeFileSync(f, bytes)
+    await recordOriginal('run-bin', [ws], 'logo.png')
+    rmSync(f)
+    await recordResult('run-bin', [ws], 'logo.png', { expectAbsent: true })
+
+    expect(await restoreCheckpoint('run-bin')).toBe(1)
+    expect(readFileSync(f).equals(bytes)).toBe(true)
+    expect(await reapplyCheckpoint('run-bin')).toBe(1)
+    expect(existsSync(f)).toBe(false)
+  })
+
+  it('redoes a write that produced binary content byte for byte', async () => {
+    const f = join(ws, 'data.bin')
+    const after = Buffer.from([0x00, 0xfe, 0xff, 0x80])
+    writeFileSync(f, 'text before')
+    await recordOriginal('run-bin2', [ws], 'data.bin')
+    writeFileSync(f, after)
+    await recordResult('run-bin2', [ws], 'data.bin')
+
+    await restoreCheckpoint('run-bin2')
+    expect(readFileSync(f, 'utf8')).toBe('text before')
+    await reapplyCheckpoint('run-bin2')
+    expect(readFileSync(f).equals(after)).toBe(true)
+  })
+
   it('ignores paths that escape the allowed roots', async () => {
     await recordOriginal('run4', [ws], '../../etc/passwd')
     expect(checkpointFileCount('run4')).toBe(0)
@@ -476,6 +506,49 @@ describe('checkpoints', () => {
       expect(existsSync(join(dataDir, 'checkpoints', 'escape.json'))).toBe(false)
       // And a traversal-shaped id is never used to READ a file either.
       expect(await restoreCheckpoint('../../etc/passwd')).toBe(0)
+    })
+
+    it('keeps binary snapshots intact across a restart, and text as text on disk', async () => {
+      const bin = join(ws, 'img.bin')
+      const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x80])
+      writeFileSync(bin, bytes)
+      writeFileSync(join(ws, 'a.txt'), 'plain text\n')
+      noteConversationRun('conv1', 'run-b')
+      await recordOriginal('run-b', [ws], 'img.bin')
+      await recordOriginal('run-b', [ws], 'a.txt')
+      rmSync(bin)
+      writeFileSync(join(ws, 'a.txt'), 'changed\n')
+      await recordResult('run-b', [ws], 'img.bin', { expectAbsent: true })
+      await recordResult('run-b', [ws], 'a.txt')
+      await flushCheckpoints()
+
+      const saved = JSON.parse(readFileSync(join(dataDir, 'checkpoints', 'run-b.json'), 'utf8'))
+      const textEntry = saved.files.find((e: { path: string }) => e.path.endsWith('a.txt'))
+      expect(textEntry.before).toBe('plain text\n')
+      expect(textEntry).not.toHaveProperty('beforeEncoding')
+
+      clearCheckpoints() // simulate the app restarting
+      expect(await restoreCheckpoint('run-b')).toBe(2)
+      expect(readFileSync(bin).equals(bytes)).toBe(true)
+      expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('plain text\n')
+    })
+
+    it('still loads a checkpoint written before binary snapshots (schema version 1)', async () => {
+      const f = join(ws, 'a.txt')
+      writeFileSync(f, 'modified')
+      mkdirSync(join(dataDir, 'checkpoints'), { recursive: true })
+      writeFileSync(
+        join(dataDir, 'checkpoints', 'run-v1.json'),
+        JSON.stringify({
+          version: 1,
+          runId: 'run-v1',
+          roots: [ws],
+          reverted: false,
+          files: [{ path: f, before: 'original', after: 'modified', afterCaptured: true }]
+        })
+      )
+      expect(await restoreCheckpoint('run-v1')).toBe(1)
+      expect(readFileSync(f, 'utf8')).toBe('original')
     })
 
     it('ignores a corrupt checkpoint file', async () => {

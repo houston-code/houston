@@ -5,9 +5,33 @@
  * scripts, or network references — it opens and renders identically offline. All
  * conversation-derived content is HTML-escaped, so a message or tool argument can
  * never inject markup or script into the document.
+ *
+ * The document also carries the conversation as JSON in an inert `<template>` so
+ * Houston can import it again (see `html-import.ts`). That block holds only what
+ * the page already shows, plus the tool-call ids that pair each tool result with
+ * its call: no workspace path, attachments, or reasoning.
  */
 
 import type { ChatMessage, Conversation, ToolCall } from './agent'
+
+/** Id of the `<template>` that holds the importable conversation JSON. */
+export const HTML_DATA_ELEMENT_ID = 'houston-conversation'
+/** Exact opening tag of that block; the importer locates the block by this string. */
+export const HTML_DATA_OPEN_TAG = `<template id="${HTML_DATA_ELEMENT_ID}">`
+/** `format` marker inside the block, so a stray template with the same id isn't mistaken for one. */
+export const HTML_DATA_FORMAT = 'houston-conversation'
+/** Bump when the block's shape changes incompatibly; the importer refuses newer versions. */
+export const HTML_DATA_VERSION = 1
+
+/** The importable payload stored in the HTML data block. */
+export interface HtmlConversationData {
+  format: typeof HTML_DATA_FORMAT
+  version: number
+  title: string
+  providerId?: string
+  model?: string
+  messages: ChatMessage[]
+}
 
 /** Escape the five characters that are significant in HTML text/attribute context. */
 export function escapeHtml(value: string): string {
@@ -69,6 +93,33 @@ function renderMessage(msg: ChatMessage): string {
   }
   parts.push('</section>')
   return parts.join('')
+}
+
+/**
+ * Reduce a message to the fields an import keeps (see `validateImportedConversation`).
+ * Everything here is visible on the page except the tool-call ids.
+ */
+function portableMessage(msg: ChatMessage): ChatMessage {
+  const out: ChatMessage = { role: msg.role, content: msg.content }
+  if (msg.toolCalls && msg.toolCalls.length > 0) {
+    out.toolCalls = msg.toolCalls.map((c) => ({ id: c.id, name: c.name, arguments: c.arguments }))
+  }
+  if (msg.toolCallId) out.toolCallId = msg.toolCallId
+  if (msg.toolName) out.toolName = msg.toolName
+  return out
+}
+
+/** The conversation as importable JSON, HTML-escaped so it stays inert text inside the template. */
+function renderDataBlock(conv: Conversation): string {
+  const data: HtmlConversationData = {
+    format: HTML_DATA_FORMAT,
+    version: HTML_DATA_VERSION,
+    title: conv.title,
+    providerId: conv.providerId || undefined,
+    model: conv.model || undefined,
+    messages: conv.messages.map(portableMessage)
+  }
+  return `${HTML_DATA_OPEN_TAG}${escapeHtml(JSON.stringify(data))}</template>`
 }
 
 /** Inline stylesheet — kept minimal and self-contained (no @import, no url()). */
@@ -156,6 +207,7 @@ export function conversationToHtml(conv: Conversation): string {
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     `<title>${escapeHtml(title)}</title>`,
     `<style>${STYLES}</style>`,
+    renderDataBlock(conv),
     '</head>',
     '<body>',
     '<main>',

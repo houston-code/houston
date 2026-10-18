@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 /**
  * Jupyter notebook (`.ipynb`) support: reading a notebook as cells, and editing one
  * cell without disturbing the rest of the document.
@@ -250,10 +252,13 @@ export function editNotebook(nb: Notebook, edit: NotebookEdit): Notebook {
     if (!CELL_TYPES.includes(cellType)) {
       throw new Error(`Unknown cell_type "${cellType}": expected one of ${CELL_TYPES.join(', ')}.`)
     }
+    // nbformat 4.5 made a cell `id` required, so a cell inserted into such a notebook
+    // gets one; without it the saved file fails nbformat validation.
+    const id = (nb.nbformat_minor ?? 0) >= 5 ? { id: newCellId(cells) } : {}
     const created: NotebookCell =
       cellType === 'code'
-        ? { cell_type: 'code', metadata: {}, source: toSourceLines(source), outputs: [], execution_count: null }
-        : { cell_type: cellType, metadata: {}, source: toSourceLines(source) }
+        ? { ...id, cell_type: 'code', metadata: {}, source: toSourceLines(source), outputs: [], execution_count: null }
+        : { ...id, cell_type: cellType, metadata: {}, source: toSourceLines(source) }
     cells.splice(n - 1, 0, created)
     return { ...nb, cells }
   }
@@ -298,6 +303,15 @@ export function editNotebook(nb: Notebook, edit: NotebookEdit): Notebook {
  * newline. Matching the canonical formatting keeps an agent edit from showing up in
  * git as a whole-file reformat that buries the one cell that actually changed.
  */
+/** A cell id unused in `cells`, in the short hex form Jupyter itself assigns. */
+function newCellId(cells: NotebookCell[]): string {
+  const taken = new Set(cells.map((c) => c.id))
+  for (;;) {
+    const id = randomUUID().replace(/-/g, '').slice(0, 8)
+    if (!taken.has(id)) return id
+  }
+}
+
 export function serializeNotebook(nb: Notebook): string {
   return `${JSON.stringify(nb, null, 2)}\n`
 }
