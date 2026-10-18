@@ -433,6 +433,37 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(customArea).toHaveValue('model-a\nmodel-b'))
   })
 
+  it('summarizes what a fetch changed, and flags models this version does not recognize', async () => {
+    const api = installApi()
+    api.listModels.mockResolvedValueOnce([{ id: 'claude-opus-5-5' }, { id: 'claude-zeta-9' }])
+    renderModal()
+    fireEvent.click(screen.getAllByText('fetch from provider')[0]) // anthropic, which had claude-sonnet
+    const note = await screen.findByRole('status')
+    expect(note).toHaveTextContent('Fetched 2 models: 2 new, 1 no longer listed.')
+    expect(note).toHaveTextContent('New: claude-opus-5-5, claude-zeta-9.')
+    expect(note).toHaveTextContent('Removed (no longer listed): claude-sonnet.')
+    expect(note).toHaveTextContent("doesn't fully recognize claude-zeta-9")
+    expect(note.textContent).not.toContain('\u2014')
+  })
+
+  it('says so when a fetch changed nothing, and keeps the note until the list is edited', async () => {
+    const api = installApi()
+    api.listModels.mockResolvedValueOnce([{ id: 'claude-sonnet' }])
+    renderModal()
+    fireEvent.click(screen.getAllByText('fetch from provider')[0])
+    expect(await screen.findByRole('status')).toHaveTextContent('Fetched 1 model. No changes.')
+    const area = screen.getAllByPlaceholderText('one model id per line')[0]
+    // Tabbing through the field changes nothing, so the note stays.
+    fireEvent.focus(area)
+    fireEvent.blur(area)
+    expect(screen.getByRole('status')).toBeInTheDocument()
+    // A real edit makes it stale.
+    fireEvent.focus(area)
+    fireEvent.change(area, { target: { value: 'claude-sonnet\nclaude-opus' } })
+    fireEvent.blur(area)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   it('keeps a trailing newline while typing so a new model line can be started', () => {
     installApi()
     renderModal()
