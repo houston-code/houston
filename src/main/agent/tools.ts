@@ -681,6 +681,12 @@ interface StagedChange {
   /** null = delete the file; string = write this content. */
   content: string | null
   verb: 'add' | 'update' | 'delete'
+  /**
+   * Permission bits to give the written file. Set for a move's destination, which is
+   * a new file: written as-is it took the default mode, so an executable script that
+   * was moved came out no longer executable.
+   */
+  mode?: number
 }
 
 /**
@@ -835,8 +841,9 @@ const applyPatch: ToolDef = {
             )
           }
           claimWrite(target, op.moveTo)
+          const { mode } = await fs.stat(abs)
           staged.push({ abs, rel: op.path, content: null, verb: 'delete' })
-          staged.push({ abs: target, rel: op.moveTo, content: data, verb: 'update' })
+          staged.push({ abs: target, rel: op.moveTo, content: data, verb: 'update', mode })
         } else {
           claimWrite(abs, op.path)
           staged.push({ abs, rel: op.path, content: data, verb: 'update' })
@@ -869,6 +876,7 @@ const applyPatch: ToolDef = {
         const created = await fs.mkdir(dirname(change.abs), { recursive: true })
         if (created) createdDirs.push(created)
         await fs.writeFile(change.abs, change.content as string, 'utf8')
+        if (change.mode !== undefined) await fs.chmod(change.abs, change.mode)
       }
     } catch (e) {
       const where = failing ? ` on ${failing.rel}` : ''

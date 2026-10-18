@@ -804,6 +804,17 @@ describe('apply_patch', () => {
     expect(await run('read_file', { path: 'b.ts' })).toBe('hello\nthere\n')
   })
 
+  it.skipIf(process.platform === 'win32')('keeps the file mode across a Move to', async () => {
+    // The destination is a new file; written as-is it took the default mode, so a
+    // moved script was no longer executable.
+    await run('write_file', { path: 'run.sh', content: '#!/bin/sh\necho hi\n' })
+    chmodSync(join(workspace, 'run.sh'), 0o755)
+    await run('apply_patch', {
+      patch: patch('*** Update File: run.sh', '*** Move to: bin/run.sh', ' #!/bin/sh', '-echo hi', '+echo hello')
+    })
+    expect(statSync(join(workspace, 'bin/run.sh')).mode & 0o777).toBe(0o755)
+  })
+
   it('rejects a patch that writes one file in two blocks (no silent edit loss)', async () => {
     await run('write_file', { path: 'dup.ts', content: 'foo\nbar\n' })
     await expect(
