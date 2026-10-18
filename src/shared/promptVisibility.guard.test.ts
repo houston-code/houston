@@ -59,7 +59,10 @@ describe('prompt visibility guard', () => {
     'main/spawnSession.ts': { count: 1, why: "a spawned session's brief, tagged via spawnedTurn" },
     'main/headless.ts': { count: 1, why: 'the headless CLI prompt, which the user wrote' },
     'main/agent/loop.ts': { count: 2, why: "the user's own mid-run steers, and PreCompact context sent only to the summarizer" },
-    'main/agent/compaction.ts': { count: 2, why: 'summarizer request, and the summary turn the transcript labels itself' },
+    'main/agent/compaction.ts': {
+      count: 3,
+      why: 'summarizer request (its instruction, and adjacent user turns merged into one for it), and the summary turn the transcript labels itself'
+    },
     'main/agent/subagent.ts': { count: 2, why: "a subagent's own transcript, never shown as the user's" },
     'main/agent/title.ts': { count: 1, why: 'the title-generation request, never persisted' },
     'main/agent/untrusted.ts': { count: 2, why: 'the isolated reader request and its return type, never persisted' },

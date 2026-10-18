@@ -869,3 +869,78 @@ describe('progress, resume, and nesting', () => {
     expect(toolMsg?.content).toContain('resume is not available')
   })
 })
+
+describe('local permission gate (gateLocal)', () => {
+  it('routes every local call through the gate, and a refusal never runs or checkpoints it', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'readable note')
+    writeFileSync(join(ws, 'kept.txt'), 'original')
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const provider = recordingProvider(
+      [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'kept.txt', content: 'clobbered' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      sink
+    )
+    const gated: Array<{ name: string; kind: string; path: unknown }> = []
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'read then write',
+      signal: new AbortController().signal,
+      writable: true,
+      roots: [ws],
+      checkpointRunId: 'gate-run-1',
+      // Lets reads through, refuses every write without invoking its thunk.
+      gateLocal: async (name, kind, args, run) => {
+        gated.push({ name, kind, path: args.path })
+        return kind === 'write' ? 'Denied by a permission rule.' : run()
+      }
+    })
+    expect(gated).toEqual([
+      { name: 'read_file', kind: 'read', path: 'note.txt' },
+      { name: 'write_file', kind: 'write', path: 'kept.txt' }
+    ])
+    const toolMsgs = sink.messages[1].filter((m) => m.role === 'tool')
+    expect(toolMsgs.find((m) => m.toolCallId === 'r1')?.content).toContain('readable note')
+    expect(toolMsgs.find((m) => m.toolCallId === 'w1')?.content).toBe('Denied by a permission rule.')
+    // The refused write never touched the file or the parent's checkpoint.
+    expect(readFileSync(join(ws, 'kept.txt'), 'utf8')).toBe('original')
+    expect(checkpointFileCount('gate-run-1')).toBe(0)
+  })
+
+  it('without a gate, refuses a credential-file read and still runs ordinary reads', async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=ungated-dotenv-marker')
+    writeFileSync(join(ws, 'note.txt'), 'ordinary note')
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const provider = recordingProvider(
+      [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: '.env' } } },
+          { type: 'tool_call', call: { id: 'r2', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      sink
+    )
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'read both',
+      signal: new AbortController().signal
+    })
+    const toolMsgs = sink.messages[1].filter((m) => m.role === 'tool')
+    const refused = String(toolMsgs.find((m) => m.toolCallId === 'r1')?.content)
+    // Fail closed: a dispatcher that can't prompt can't consent to the read.
+    expect(refused).toContain("needs the user's approval")
+    expect(refused).not.toContain('ungated-dotenv-marker')
+    expect(toolMsgs.find((m) => m.toolCallId === 'r2')?.content).toContain('ordinary note')
+  })
+})

@@ -21,6 +21,7 @@ import type { ApprovalPolicy, PermissionRule } from '@shared/types'
 import type { ToolDef } from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
+import { COMPACTION_SUMMARY_PREFIX } from './compaction'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -1082,14 +1083,16 @@ describe('startRun', () => {
     // (older turns folded away) where the first, overflowing send did not.
     expect(summarized).toBe(true)
     expect(mainSends).toHaveLength(2)
-    // Durable context prepends a pinned working-memory block ahead of everything, so
-    // the summary no longer sits at index 0 — assert on the window contents instead.
     const joined = (w: ChatMessage[]): string => w.map((m) => m.content).join('\n')
-    expect(joined(mainSends[0])).not.toContain('COMPACTED SUMMARY')
-    expect(joined(mainSends[1])).toContain('COMPACTED SUMMARY')
-    // The pinned block rides both sends and carries the original task verbatim.
-    expect(joined(mainSends[0])).toContain('Pinned working memory')
-    expect(joined(mainSends[1])).toContain('Pinned working memory')
+    // Nothing was compacted before the first send: the log goes out verbatim, with no
+    // pinned block restating it.
+    expect(mainSends[0]).toEqual(history)
+    // The retry leads with the summary, then the pinned block carrying the original
+    // task that was folded away.
+    expect(mainSends[1][0].content).toContain('COMPACTED SUMMARY')
+    expect(mainSends[1][2].content).toContain(PINNED_MEMORY_PREFIX)
+    expect(mainSends[1][2].content).toContain('old question 0')
+    expect(joined(mainSends[1])).toContain('current question')
   })
 
   it('rides out a transient failure during a forced compaction, and says so', async () => {
@@ -1664,6 +1667,17 @@ describe('compaction persistence across runs', () => {
 })
 
 describe('prompt-cache-aware window assembly', () => {
+  // The resume test below reads compaction state from the real conversation store.
+  let userData: string
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
+    setUserDataDir(userData)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(userData, { recursive: true, force: true })
+  })
+
   // `read_file` is what makes the pinned block volatile: every call rewrites its
   // "files in play" list. That churn is the hazard these tests pin down — pinned at
   // message zero, one file read rewrote byte zero of the window and cost the
@@ -1728,7 +1742,7 @@ describe('prompt-cache-aware window assembly', () => {
     expect(shape(sends[2]).join('\n')).toContain('contents of b.ts')
   })
 
-  it('splices the pinned block in front of the final user turn, not at message zero', async () => {
+  it('sends the log verbatim, with no pinned block, until something is compacted', async () => {
     const sends: ChatMessage[][] = []
     const provider: Provider = {
       async *streamChat(req) {
@@ -1739,22 +1753,26 @@ describe('prompt-cache-aware window assembly', () => {
     }
     await run({ provider, messages: history() })
 
-    const w = sends[0]
-    const at = w.findIndex((m) => m.content.includes(PINNED_MEMORY_PREFIX))
-    // The head rides ahead of the block, untouched, as a stable cacheable prefix.
-    expect(at).toBeGreaterThan(0)
-    expect(w.slice(0, at).map((m) => m.content)).toEqual(['first task', 'first answer'])
-    // Then the synthetic pair, then the turn it is pinned in front of.
-    expect(w[at].role).toBe('user')
-    expect(w[at + 1].role).toBe('assistant')
-    expect(w[at + 2]).toMatchObject({ role: 'user', content: 'current question' })
+    // Nothing has been lost, so a block restating the head would be pure cost, and
+    // splicing it in front of each turn moved it down the window every turn.
+    expect(sends[0]).toEqual(history())
   })
 
-  it('keeps a mid-run nudge from moving the block or breaking the prefix', async () => {
+  it('keeps the pinned block put after the summary when a mid-run nudge lands', async () => {
     // The loop appends synthetic `user` messages of its own (a stall nudge here, plus
     // Stop-hook continuations and verification feedback). None of them starts a real
-    // turn, so none may be mistaken for the boundary: re-deriving it per iteration
-    // dragged the block down the window and rewrote the prefix from behind.
+    // turn, so none may move the block or rewrite the prefix from behind.
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const log: ChatMessage[] = [
+      { role: 'user', content: 'first task' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: 'second task' },
+      { role: 'assistant', content: 'second answer' },
+      { role: 'user', content: 'current question' }
+    ]
+    setMessages(conv.id, log)
+    setCompaction(conv.id, { cut: 2, summary: 'PRIOR SUMMARY' })
+
     const sends: ChatMessage[][] = []
     const looping: Provider = {
       async *streamChat(req) {
@@ -1768,7 +1786,7 @@ describe('prompt-cache-aware window assembly', () => {
     const saved = { ...h.settings }
     Object.assign(h.settings, extra)
     try {
-      await run({ provider: looping, messages: history(), policy: 'full-auto' })
+      await run({ provider: looping, messages: log, policy: 'full-auto', conversationId: conv.id })
     } finally {
       // Delete before restoring: these keys are absent by default, so assigning the
       // snapshot back would leave them set and reshape every later test's stall gate.
@@ -1778,13 +1796,16 @@ describe('prompt-cache-aware window assembly', () => {
 
     const n = sends.findIndex((w) => w.some((m) => /repeating the same tool call/i.test(m.content)))
     expect(n, 'no window carried the stall nudge').toBeGreaterThan(0)
-    // The block still sits in front of the real user turn, ahead of the nudge…
-    const w = sends[n]
-    const at = w.findIndex((m) => m.content.includes(PINNED_MEMORY_PREFIX))
-    expect(w.slice(0, at).map((m) => m.content)).toEqual(['first task', 'first answer'])
+    for (const w of sends) {
+      // Summary pair, then the block (derived from the compacted head), then the tail.
+      expect(w[0].content).toContain('PRIOR SUMMARY')
+      expect(w[2].content).toContain(PINNED_MEMORY_PREFIX)
+      expect(w[2].content).toContain('first task')
+      expect(w[4]).toMatchObject({ role: 'user', content: 'second task' })
+    }
     // …so the nudged window still extends the one before it.
     const prev = shape(sends[n - 1])
-    expect(shape(w).slice(0, prev.length)).toEqual(prev)
+    expect(shape(sends[n]).slice(0, prev.length)).toEqual(prev)
   })
 
   it('pins nothing on the very first turn (nothing has been compacted away yet)', async () => {
@@ -1801,6 +1822,289 @@ describe('prompt-cache-aware window assembly', () => {
     // The turn's own messages are in the window verbatim, so a block restating them
     // would be pure cost.
     expect(sends[0].map((m) => m.content)).toEqual(['only task'])
+  })
+})
+
+describe('context management inside a long turn', () => {
+  // Cross-turn tests persist compaction state through the real conversation store.
+  let userData: string
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
+    setUserDataDir(userData)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(userData, { recursive: true, force: true })
+    h.settings.compactionThreshold = 0
+  })
+
+  const FILE_CHARS = 20_000
+  const REQUEST = 'audit every module'
+
+  /** read_file stand-in returning a distinct `size`-char body per path, off disk. */
+  const bigReadFile = (size = FILE_CHARS): ToolDef => ({
+    kind: 'read',
+    summarize: () => 'probe read_file',
+    schema: {
+      name: 'read_file',
+      description: 'Read a file.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'],
+        additionalProperties: false
+      }
+    },
+    execute: async (args) => `${String(args.path)}\n${'x'.repeat(size)}`
+  })
+
+  const chars = (w: ChatMessage[]): number => w.reduce((n, m) => n + m.content.length, 0)
+  const shape = (w: ChatMessage[]): string[] => w.map((m) => `${m.role}:${m.content}`)
+
+  interface LongTurn {
+    provider: Provider
+    /** Main requests the provider accepted. */
+    sends: ChatMessage[][]
+    /** Main requests refused for exceeding `limitChars`. */
+    rejected: ChatMessage[][]
+    /** Summarization requests, and the output cap each one carried. */
+    summaries: ChatMessage[][]
+    summaryCaps: number[]
+  }
+
+  /**
+   * One long prompt: the model reads `reads` files, one per iteration, then answers.
+   * Optionally refuses any main request over `limitChars`, like a provider whose
+   * context window is full; `summaryStop` scripts how the summary call ends.
+   */
+  function longTurn(
+    reads: number,
+    opts: { limitChars?: number; summaryStop?: 'end_turn' | 'max_tokens'; tag?: string } = {}
+  ): LongTurn {
+    const t: LongTurn = { provider: null as unknown as Provider, sends: [], rejected: [], summaries: [], summaryCaps: [] }
+    t.provider = {
+      async *streamChat(req) {
+        // Summarization calls are the only ones that set maxTokens.
+        if (req.maxTokens != null) {
+          t.summaries.push(req.messages)
+          t.summaryCaps.push(req.maxTokens)
+          yield { type: 'text', text: `SUMMARY ${t.summaries.length}` }
+          yield { type: 'done', stopReason: opts.summaryStop ?? 'end_turn' }
+          return
+        }
+        if (chars(req.messages) > (opts.limitChars ?? Infinity)) {
+          t.rejected.push(req.messages)
+          yield { type: 'error', message: 'prompt is too long: 250000 tokens > 200000 maximum' }
+          return
+        }
+        t.sends.push(req.messages)
+        const n = t.sends.length
+        if (n <= reads) {
+          const path = `src/${opts.tag ?? 'f'}${n}.ts`
+          yield { type: 'tool_call', call: { id: `${opts.tag ?? 'read'}${n}`, name: 'read_file', arguments: { path } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+        } else {
+          yield { type: 'text', text: 'all done' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+    }
+    return t
+  }
+
+  /**
+   * A window every adapter accepts: it opens on a user turn, roles strictly alternate
+   * once tool results fold into user turns (Gemini rejects two users in a row), and
+   * every result answers a call in the assistant message right before it.
+   */
+  function expectValidWindow(w: ChatMessage[]): void {
+    const wire = toAnthropicMessages(w, false)
+    expect(wire[0].role).toBe('user')
+    for (let i = 1; i < wire.length; i++) {
+      expect(wire[i].role, `two ${wire[i].role} turns in a row at ${i}`).not.toBe(wire[i - 1].role)
+    }
+    for (let i = 0; i < w.length; i++) {
+      if (w[i].role !== 'tool') continue
+      let j = i - 1
+      while (j >= 0 && w[j].role === 'tool') j--
+      expect(w[j]?.toolCalls?.some((c) => c.id === w[i].toolCallId), `orphaned result at ${i}`).toBe(true)
+    }
+  }
+
+  /**
+   * The system prompt plus tool schemas, in the loop's own estimate, so a threshold
+   * can sit a known distance above them however the prompt grows.
+   */
+  async function fixedOverheadTokens(): Promise<number> {
+    let tokens = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        tokens = Math.ceil((req.system ?? '').length / 4) + Math.ceil(JSON.stringify(req.tools).length / 4)
+        yield { type: 'text', text: 'ok' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, policy: 'full-auto' })
+    return tokens
+  }
+
+  it('compacts inside a single long prompt once its own tool results cross the threshold', async () => {
+    // One user message, eight 20 KB reads, a small threshold. Every cut used to wait
+    // for a user boundary, so this run never compacted and its window grew to 160K
+    // characters until the provider refused it.
+    h.probeTools = [bigReadFile()]
+    h.settings.compactionThreshold = 8000
+    const t = longTurn(8)
+    const r = await run({ provider: t.provider, userText: REQUEST, policy: 'full-auto' })
+
+    expect(types(r).at(-1)).toBe('done')
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'all done' })
+    expect(types(r)).toContain('compaction')
+    // Bounded: never more than a few reads in flight, never all eight.
+    expect(Math.max(...t.sends.map(chars))).toBeLessThan(3 * FILE_CHARS)
+
+    const compacted = t.sends.filter((w) => w[0].content.startsWith(COMPACTION_SUMMARY_PREFIX))
+    expect(compacted.length).toBeGreaterThan(0)
+    for (const w of compacted) {
+      // The user's request rides verbatim (exactly once) even though the cut passed it.
+      expect(w.filter((m) => m.role === 'user' && m.content === REQUEST)).toHaveLength(1)
+      // The newest read is always in full: the model never loses what it just asked for.
+      expect(w.at(-1)!.role).toBe('tool')
+      expect(w.at(-1)!.content.length).toBeGreaterThan(FILE_CHARS)
+    }
+    for (const w of [...t.sends, ...t.summaries]) expectValidWindow(w)
+    // The transcript is untouched: every read is still there in full.
+    const results = r.messages.filter((m) => m.role === 'tool')
+    expect(results).toHaveLength(8)
+    expect(results.every((m) => m.content.length > FILE_CHARS)).toBe(true)
+  })
+
+  it('recovers a single-prompt run from a context overflow by cutting inside the turn', async () => {
+    // Compaction is off, so only the overflow path can save this run: the provider
+    // refuses anything over 70K characters, and the fourth read crosses it.
+    h.probeTools = [bigReadFile()]
+    const t = longTurn(6, { limitChars: 70_000 })
+    const r = await run({ provider: t.provider, userText: REQUEST, policy: 'full-auto' })
+
+    expect(t.rejected.length).toBeGreaterThan(0) // it really overflowed
+    expect(types(r)).toContain('compaction')
+    expect(types(r)).not.toContain('error')
+    expect(types(r).at(-1)).toBe('done')
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'all done' })
+    const firstCompacted = t.sends.findIndex((w) => w[0].content.startsWith(COMPACTION_SUMMARY_PREFIX))
+    expect(firstCompacted).toBeGreaterThan(0)
+    for (const w of t.sends.slice(firstCompacted)) {
+      expect(w.filter((m) => m.role === 'user' && m.content === REQUEST)).toHaveLength(1)
+    }
+    for (const w of t.sends) expectValidWindow(w)
+  })
+
+  it('keeps each turn\'s first window an extension of the last turn\'s final one', async () => {
+    // Nothing compacted. The pinned block used to be spliced in front of each turn's
+    // request, so it moved down a turn every turn and the next turn's first request
+    // diverged right where it had been, re-billing the whole previous turn.
+    h.probeTools = [bigReadFile(500)]
+    let messages: ChatMessage[] = [{ role: 'user', content: 'first task' }]
+    const turns: LongTurn[] = []
+    for (const [i, next] of ['second task', 'third task', 'fourth task'].entries()) {
+      const t = longTurn(2, { tag: `t${i}-` })
+      turns.push(t)
+      const r = await run({ provider: t.provider, messages, policy: 'full-auto' })
+      messages = [...r.messages, { role: 'user', content: next }]
+    }
+    for (let i = 1; i < turns.length; i++) {
+      const last = shape(turns[i - 1].sends.at(-1)!)
+      expect(shape(turns[i].sends[0]).slice(0, last.length)).toEqual(last)
+    }
+    for (const w of turns.flatMap((t) => t.sends)) {
+      expect(w.some((m) => m.content.includes(PINNED_MEMORY_PREFIX))).toBe(false)
+    }
+  })
+
+  it('keeps the next turn\'s window an extension of the last after a mid-turn compaction', async () => {
+    // A realistic threshold: 10K tokens of room above the system prompt and tools,
+    // with 3K-token reads. The first turn compacts inside itself; the later turns must
+    // rebuild the same summary, pinned block, and anchored request from the persisted
+    // state so their prefix still matches what the provider cached.
+    const overhead = await fixedOverheadTokens()
+    h.probeTools = [bigReadFile(12_000)]
+    h.settings.compactionThreshold = overhead + 10_000
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+
+    let messages: ChatMessage[] = [{ role: 'user', content: REQUEST }]
+    const turns: LongTurn[] = []
+    for (const [i, next] of ['second task', 'third task'].entries()) {
+      const t = longTurn(i === 0 ? 5 : 0)
+      turns.push(t)
+      const r = await run({ provider: t.provider, messages, policy: 'full-auto', conversationId: conv.id })
+      if (i === 0) expect(types(r)).toContain('compaction')
+      else expect(types(r)).not.toContain('compaction')
+      messages = [...r.messages, { role: 'user', content: next }]
+    }
+    const stored = getConversation(conv.id)!.compaction!
+    expect(stored.anchor).toBe(0) // the cut fell inside the first turn
+    expect(messages[stored.cut].role).toBe('assistant')
+
+    for (let i = 1; i < turns.length; i++) {
+      const last = shape(turns[i - 1].sends.at(-1)!)
+      const first = turns[i].sends[0]
+      expect(shape(first).slice(0, last.length)).toEqual(last)
+      // Summary pair, pinned block, then the anchored request: all at the head.
+      expect(first[0].content).toContain('SUMMARY 1')
+      expect(first[2].content).toContain(PINNED_MEMORY_PREFIX)
+      expect(first[4]).toMatchObject({ role: 'user', content: REQUEST })
+      expectValidWindow(first)
+    }
+  })
+
+  it('stubs stale reads before summarizing, and the next turn keeps the stubs', async () => {
+    // 1.5K-token reads against 10K tokens of room: by the seventh read the window is
+    // over, and stubbing the reads older than the last few iterations frees enough
+    // that no summary is needed. The next turn must send the same stubs.
+    const overhead = await fixedOverheadTokens()
+    h.probeTools = [bigReadFile(6_000)]
+    h.settings.compactionThreshold = overhead + 10_000
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+
+    const first = longTurn(7)
+    const r1 = await run({ provider: first.provider, userText: REQUEST, policy: 'full-auto', conversationId: conv.id })
+    expect(types(r1)).not.toContain('compaction')
+    const stored = getConversation(conv.id)!.compaction!
+    expect(stored).toMatchObject({ cut: 0, summary: '' })
+    expect(stored.evictBefore).toBeGreaterThan(0)
+
+    const last = first.sends.at(-1)!
+    expect(last[0].content).toContain(PINNED_MEMORY_PREFIX) // something was evicted
+    expect(last.some((m) => m.role === 'tool' && m.content.startsWith('[earlier read_file result on src/f1.ts'))).toBe(true)
+    expect(last.at(-1)!.content.length).toBeGreaterThan(6_000) // the newest read is whole
+    expectValidWindow(last)
+
+    const second = longTurn(0)
+    await run({
+      provider: second.provider,
+      messages: [...r1.messages, { role: 'user', content: 'second task' }],
+      policy: 'full-auto',
+      conversationId: conv.id
+    })
+    expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
+  })
+
+  it('treats a summary cut off at its output cap as a failed compaction', async () => {
+    // A thinking model can spend the whole cap before it writes the summary's end; a
+    // truncated summary must never replace the head it was meant to carry.
+    const history: ChatMessage[] = []
+    for (let i = 0; i < 4; i++) {
+      history.push({ role: 'user', content: `old question ${i}` }, { role: 'assistant', content: `old answer ${i}` })
+    }
+    history.push({ role: 'user', content: 'current question' })
+    const t = longTurn(0, { limitChars: 0, summaryStop: 'max_tokens' })
+    const r = await run({ provider: t.provider, messages: history })
+
+    expect(t.summaries).toHaveLength(1) // tried, and not retried into the same wall
+    expect(t.summaryCaps[0]).toBeGreaterThan(2048) // the old cap thinking models exhausted
+    expect(types(r)).not.toContain('compaction')
+    expect(types(r).at(-1)).toBe('error')
+    expect((r.events.at(-1) as { message: string }).message).toContain('context window')
   })
 })
 
@@ -3093,6 +3397,249 @@ describe('writable subagent unconfined-shell gate', () => {
     } finally {
       h.settings.permissionRules = []
     }
+  })
+})
+
+describe('permission gates: batched sensitive reads and subagent calls', () => {
+  /** Scripts turns and snapshots every request's messages, subagent transcripts included. */
+  function recording(turns: ProviderStreamEvent[][], requests: ChatMessage[][]): Provider {
+    let i = 0
+    return {
+      async *streamChat(req) {
+        // Snapshot: both loops keep mutating their live arrays after the call.
+        requests.push(JSON.parse(JSON.stringify(req.messages ?? [])) as ChatMessage[])
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        for (const ev of turn) yield ev
+      }
+    }
+  }
+  /** The tool result the (sub)agent's model was sent for `toolCallId`. */
+  const toolMessageFor = (requests: ChatMessage[][], toolCallId: string): string | undefined => {
+    for (const ms of requests) {
+      const m = ms.find((x) => x.role === 'tool' && x.toolCallId === toolCallId)
+      if (m) return String(m.content)
+    }
+    return undefined
+  }
+  const callTurn = (
+    ...calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>
+  ): ProviderStreamEvent[] => [
+    ...calls.map((call) => ({ type: 'tool_call' as const, call })),
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const finalText = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+  const approvalsOf = (r: RunResult): Array<Extract<AgentEvent, { type: 'tool_approval' }>> =>
+    r.events.filter((e) => e.type === 'tool_approval') as Array<
+      Extract<AgentEvent, { type: 'tool_approval' }>
+    >
+  const resultFor = (r: RunResult, callId: string): Extract<AgentEvent, { type: 'tool_result' }> | undefined =>
+    r.events.find((e) => e.type === 'tool_result' && e.callId === callId) as
+      | Extract<AgentEvent, { type: 'tool_result' }>
+      | undefined
+
+  afterEach(() => {
+    h.settings.permissionRules = []
+  })
+
+  // A lone read is a leading parallel batch of one. That batch used to skip the
+  // approval gate entirely, so in full-auto the file landed in the result unasked,
+  // while the same read placed after a write (sequential) did prompt.
+  it('prompts for a lone .env read under full-auto, and a denial keeps its contents out', async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-lone-marker')
+    const r = await run({
+      policy: 'full-auto',
+      turns: [callTurn({ id: 'r1', name: 'read_file', arguments: { path: '.env' } }), finalText('done')],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    const approvals = approvalsOf(r)
+    expect(approvals.map((a) => a.callId)).toEqual(['r1'])
+    expect(approvals[0].sensitiveRead).toBe(true)
+    expect(resultFor(r, 'r1')?.ok).toBe(false)
+    expect(JSON.stringify(r.events)).not.toContain('dotenv-lone-marker')
+    expect(JSON.stringify(r.messages)).not.toContain('dotenv-lone-marker')
+  })
+
+  it('prompts for a .env read batched with ordinary reads, which still run without a prompt', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'plain note body')
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-batch-marker')
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        callTurn(
+          { id: 'r1', name: 'read_file', arguments: { path: 'note.txt' } },
+          { id: 'r2', name: 'read_file', arguments: { path: '.env' } },
+          { id: 'r3', name: 'read_file', arguments: { path: 'note.txt' } }
+        ),
+        finalText('done')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // Only the credential file asked; the ordinary reads around it ran unprompted.
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['r2'])
+    expect(resultFor(r, 'r1')?.output).toContain('plain note body')
+    expect(resultFor(r, 'r3')?.output).toContain('plain note body')
+    // Approved, so it ran, and the model saw the results in call order.
+    expect(resultFor(r, 'r2')?.output).toContain('dotenv-batch-marker')
+    const toolIds = r.messages.filter((m) => m.role === 'tool').map((m) => m.toolCallId)
+    expect(toolIds).toEqual(['r1', 'r2', 'r3'])
+  })
+
+  it("refuses a read-only subagent's read of a managed-deny path without prompting", async () => {
+    h.managedRules = [{ action: 'deny', tool: 'read_file', match: 'secrets/*' }]
+    mkdirSync(join(ws, 'secrets'))
+    writeFileSync(join(ws, 'secrets', 'db.txt'), 'managed-deny-marker')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read it' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: 'secrets/db.txt' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // A deny never prompts, and it is attributed to the org, not a local rule.
+    expect(approvalsOf(r)).toEqual([])
+    expect(toolMessageFor(requests, 's1')).toBe("Denied by your organization's managed policy.")
+    expect(JSON.stringify(requests)).not.toContain('managed-deny-marker')
+  })
+
+  it("refuses a writable subagent's write to a deny-rule path and leaves the file unchanged", async () => {
+    h.settings.permissionRules = [{ action: 'deny', tool: 'write_file', match: 'protected*' }]
+    writeFileSync(join(ws, 'protected.txt'), 'original content')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'ask',
+      provider: recording(
+        [
+          callTurn({
+            id: 'd1',
+            name: 'dispatch_writable_agent',
+            arguments: { description: 'edit', prompt: 'overwrite it' }
+          }),
+          callTurn({
+            id: 's1',
+            name: 'write_file',
+            arguments: { path: 'protected.txt', content: 'clobbered by subagent' }
+          }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // Approving the dispatch is consent to edit, not to override a deny rule.
+    expect(approvalsOf(r).map((a) => a.name)).toEqual(['dispatch_writable_agent'])
+    expect(toolMessageFor(requests, 's1')).toBe('Denied by a permission rule.')
+    expect(readFileSync(join(ws, 'protected.txt'), 'utf8')).toBe('original content')
+  })
+
+  it("prompts for a writable subagent's write that an `ask` rule covers, with its diff", async () => {
+    h.settings.permissionRules = [{ action: 'ask', tool: 'write_file', match: 'guarded*' }]
+    writeFileSync(join(ws, 'guarded.txt'), 'before')
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        callTurn({ id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'edit', prompt: 'go' } }),
+        callTurn(
+          { id: 's1', name: 'write_file', arguments: { path: 'guarded.txt', content: 'after' } },
+          { id: 's2', name: 'write_file', arguments: { path: 'free.txt', content: 'unguarded' } }
+        ),
+        finalText('sub report'),
+        finalText('main done')
+      ],
+      onApproval: (id, decide) => decide(id === 'd1' ? 'allow' : 'deny')
+    })
+    const approvals = approvalsOf(r)
+    // The rule-covered write asked (with its diff); the uncovered one rode the dispatch.
+    expect(approvals.map((a) => a.callId)).toEqual(['d1', 'd1.write.1'])
+    expect(approvals[1].preview?.length).toBeGreaterThan(0)
+    expect(readFileSync(join(ws, 'guarded.txt'), 'utf8')).toBe('before')
+    expect(readFileSync(join(ws, 'free.txt'), 'utf8')).toBe('unguarded')
+  })
+
+  it("prompts for a subagent's .env read, and a denial keeps its contents out of the subagent", async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-subagent-marker')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read .env' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: '.env' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    const approvals = approvalsOf(r)
+    // dispatch_agent is a read, so the subagent's credential read is the only prompt:
+    // minted under the dispatch, labeled as the subagent's, flagged as sensitive.
+    expect(approvals.map((a) => a.callId)).toEqual(['d1.read.1'])
+    expect(approvals[0].name).toBe('read_file')
+    expect(approvals[0].sensitiveRead).toBe(true)
+    expect(approvals[0].summary).toContain('Subagent:')
+    expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
+    expect(JSON.stringify(requests)).not.toContain('dotenv-subagent-marker')
+    expect(JSON.stringify(r.events)).not.toContain('dotenv-subagent-marker')
+  })
+
+  it("runs a subagent's approved .env read as a visible row", async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-approved-marker')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read .env' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: '.env' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(r.events.some((e) => e.type === 'tool_start' && e.callId === 'd1.read.1')).toBe(true)
+    expect(resultFor(r, 'd1.read.1')?.ok).toBe(true)
+    expect(toolMessageFor(requests, 's1')).toContain('dotenv-approved-marker')
+  })
+
+  // On a confining host the sandbox still lets a command read outside the project, so
+  // the main loop prompts for a workspace-escaping command even in full-auto. Approving
+  // a writable dispatch is consent to work in the project, not to reach past it.
+  it("prompts for a writable subagent's confined command that reads outside the workspace", async () => {
+    h.sandboxed = true
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'copy', prompt: 'go' } }),
+          callTurn({ id: 's1', name: 'run_shell', arguments: { command: 'cp /etc/hosts escaped-copy.txt' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    const approvals = approvalsOf(r)
+    expect(approvals.map((a) => a.callId)).toEqual(['d1.shell.1'])
+    expect(approvals[0].name).toBe('run_shell')
+    expect(approvals[0].summary).toContain('Subagent:')
+    expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
+    expect(existsSync(join(ws, 'escaped-copy.txt'))).toBe(false)
   })
 })
 

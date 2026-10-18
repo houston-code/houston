@@ -6,13 +6,14 @@ import { getConversation, setCompaction, setMessages } from '../conversations'
 import { providerStreamError, withProviderRetry } from './retry'
 import {
   KEEP_RECENT_USER_TURNS,
-  SUMMARY_MAX_TOKENS,
+  SUMMARY_TRUNCATED_MESSAGE,
   buildSummaryMessages,
   buildSummaryRequestMessages,
   estimateTokens,
   findCompactionCutByBudget,
   findSummaryChunkCut,
-  summarizationSystemPrompt
+  summarizationSystemPrompt,
+  summaryMaxTokens
 } from './compaction'
 
 /**
@@ -107,18 +108,22 @@ export async function compactConversationNow(
       // Each chunk is retried on its own: they fold into a running summary, so losing
       // the whole compaction to a transient blip on the last of them would throw away
       // every chunk before it. Safe to retry in full — the text is accumulated here,
-      // not streamed to anyone.
+      // not streamed to anyone. A summary cut off at the output cap is an error, not
+      // a result: it would replace the head with a summary missing its end.
       const text = await withProviderRetry(async () => {
         let acc = ''
+        let truncated = false
         for await (const ev of provider.streamChat({
           model,
           system: summarizationSystemPrompt,
           messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next)),
-          maxTokens: SUMMARY_MAX_TOKENS
+          maxTokens: summaryMaxTokens(window)
         })) {
           if (ev.type === 'text') acc += ev.text
+          else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
           else if (ev.type === 'error') throw providerStreamError(ev)
         }
+        if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
         return acc
       })
       const summary = text.trim()

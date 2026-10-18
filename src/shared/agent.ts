@@ -441,10 +441,21 @@ export const CONVERSATION_SCHEMA_VERSION = 1
  * — e.g. after `/compact` rewrote the log, or on a hand-edited file.
  */
 export interface ConversationCompaction {
-  /** Index into `messages` where the verbatim tail begins (a `user` boundary). */
+  /**
+   * Index into `messages` where the verbatim tail begins: a `user` boundary, or an
+   * assistant iteration inside a turn when `anchor` is set. 0 when nothing has been
+   * summarized and only `evictBefore` applies.
+   */
   cut: number
-  /** Summary text standing in for `messages[0..cut)` in the provider window. */
+  /** Summary text standing in for `messages[0..cut)` in the provider window; '' when `cut` is 0. */
   summary: string
+  /**
+   * Set when `cut` falls inside a turn: index of the user message that opened that
+   * turn, re-sent verbatim between the summary and the tail.
+   */
+  anchor?: number
+  /** Tool results before this index are sent as eviction stubs. Only ever advances. */
+  evictBefore?: number
 }
 
 /**

@@ -121,6 +121,22 @@ describe('model-drift-ignore.json', () => {
   })
 })
 
+describe('Gemini drift after the seed stopped shipping a Pro model', () => {
+  // The seed once Gemini 4 Argon replaced gemini-3.1-pro-preview.
+  const shipped = ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.5-flash-lite']
+
+  it('does not flag older Pro models as an unshipped tier (the ids the first post-Argon run listed)', () => {
+    const listed = ['gemini-2.5-pro', 'gemini-3-pro-image', 'gemini-3-pro-image-preview', 'gemini-3.1-pro-preview-customtools']
+    expect(driftCandidates('gemini', listed.map((id) => ({ id })), shipped, none, NOW)).toEqual([])
+  })
+
+  it('still flags an unshipped tier from the newest shipped generation', () => {
+    expect(driftCandidates('gemini', [{ id: 'gemini-4-pro' }], shipped, none, NOW).map((c) => c.id)).toEqual([
+      'gemini-4-pro'
+    ])
+  })
+})
+
 describe('upcomingPriceChanges', () => {
   it('surfaces a scheduled change for a shipped model within the notice window', () => {
     const now = new Date('2026-11-20T09:00:00Z') // 11 days before argon's 2026-12-01 change
