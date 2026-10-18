@@ -463,6 +463,39 @@ describe('matchRule', () => {
       expect(matchRule(denyRm, 'run_shell', 'r\\m -r\\f /tmp/x')).toBe('deny')
     })
 
+    it("sees through bash's ANSI-C quoting (`$'...'`) and `$\"...\"`", () => {
+      for (const cmd of [
+        "$'\\x72m' -rf /tmp/x", // hex
+        "$'\\162m' -rf /tmp/x", // octal
+        "$'rm' -rf /tmp/x",
+        "$'\\x{72}m' $'\\055\\x72f' /tmp/x",
+        "$'\\u0072\\U0000006d' -rf /tmp/x",
+        "r$'m' -r$'f' /tmp/x",
+        "$'rm\\0junk' -rf /tmp/x", // a NUL ends the string
+        "$'r\\x6d\\c@junk' -rf /tmp/x", // so does `\c@`
+        '$"rm" -rf /tmp/x',
+        `$"r"'m' -rf /tmp/x`,
+        "echo ok && $'\\x72m' -rf /tmp/x"
+      ]) {
+        expect(matchRule(denyRm, 'run_shell', cmd)).toBe('deny')
+      }
+      // A rule written with `$'...'` matches what it decodes to.
+      expect(matchRule([deny('run_shell', "$'\\x72m' -rf*")], 'run_shell', 'rm -rf /tmp/x')).toBe('deny')
+      expect(matchRule([{ action: 'ask', tool: 'run_shell', match: 'curl *' }], 'run_shell', "$'\\143url' x")).toBe('ask')
+    })
+
+    it('decodes `$\'...\'` the way bash does, and only outside double quotes', () => {
+      const denyAt = (match: string): PermissionRule[] => [deny('run_shell', match)]
+      // `\'` does not close the string, and an unknown escape keeps its backslash.
+      expect(matchRule(denyAt(`echo "it's \\q"`), 'run_shell', "echo $'it\\'s \\q'")).toBe('deny')
+      // `\cX` is control-X; octal and hex take at most 3 and 2 digits.
+      expect(matchRule(denyAt('echo \x01A1 \x07g'), 'run_shell', "echo $'\\cA\\1011' $'\\x7g'")).toBe('deny')
+      // Inside double quotes `$'` is literal text, and `$$` is the PID, not `$` + `$'`.
+      expect(matchRule(denyRm, 'run_shell', `echo "$'\\x72m' -rf"`)).toBeNull()
+      expect(matchRule(denyAt('*rm*'), 'run_shell', "echo $$'\\x72m'")).toBeNull()
+      expect(matchRule(denyAt('*rm*'), 'run_shell', "echo $$$'\\x72m'")).toBe('deny')
+    })
+
     it('still matches a rule the user wrote WITH quotes', () => {
       const r: PermissionRule[] = [allow('run_shell', 'git commit -m "*"')]
       expect(matchRule(r, 'run_shell', 'git commit -m "a message"')).toBe('allow')
@@ -523,6 +556,33 @@ describe('matchRule', () => {
       expect(matchRule([allow('run_shell', 'cat src/a.ts')], 'run_shell', 'cat "src/a.ts"')).toBe('allow')
       expect(matchRule([allow('run_shell', "rm -rf '~'")], 'run_shell', 'rm -rf "~" x')).toBe('allow')
       expect(matchRule([allow('run_shell', 'echo "$HOME"')], 'run_shell', 'echo "$HOME"')).toBe('allow')
+      expect(matchRule([allow('run_shell', 'git status')], 'run_shell', "$'git' $'\\x73tatus' -s")).toBe('allow')
+      expect(matchRule(exact, 'run_shell', "rm $'\\x2a'")).toBe('allow')
+    })
+
+    it("an allow reads `$'...'` like other quoting: a decoded `*` or `~` is never the bare one", () => {
+      const pairs: [string, string][] = [
+        ["rm $'*'", 'rm *'],
+        ["rm $'\\x2a'", 'rm *'],
+        ["rm -rf $'~'", 'rm -rf ~'],
+        ["rm -rf $'\\176'", 'rm -rf ~'],
+        ["rm -rf $'build\\x20~'", 'rm -rf build ~'],
+        ["echo $'a\\x3e' ~/.bashrc", 'echo a> ~/.bashrc'],
+        // `$$` is the PID, so this is the PID then `HOME`, not `$HOME`.
+        ["echo $$'HOME'", 'echo $HOME'],
+        // `$"..."` can be translated into other text when it runs, so it reads as itself.
+        ['echo $"HOME"', 'echo $HOME'],
+        ['echo $"x"', 'echo "x"']
+      ]
+      for (const [approved, other] of pairs) {
+        const exact: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: approved, exact: true }]
+        expect(matchRule(exact, 'run_shell', approved)).toBe('allow')
+        expect(matchRule(exact, 'run_shell', other)).toBeNull()
+        expect(matchRule([{ action: 'allow', tool: 'run_shell', match: other, exact: true }], 'run_shell', approved)).toBeNull()
+      }
+      const tilde: PermissionRule[] = [allow('run_shell', "rm -rf $'~'")]
+      expect(matchRule(tilde, 'run_shell', 'rm -rf ~')).toBeNull()
+      expect(matchRule(tilde, 'run_shell', "rm -rf '~' x")).toBe('allow')
     })
 
     it("an allow's own `*` is still a wildcard, quoted or not, over quoted text too", () => {
@@ -871,6 +931,22 @@ describe('a saved "Always allow" covers only the approved target', () => {
     expect(matchRule(saved('run_shell', { command: '"my tool" status' }), 'run_shell', 'my tool status', ROOTS)).toBeNull()
   })
 
+  it("run_shell: a `*` spelled by a `$'...'` escape is literal too, and saved exact", () => {
+    const rm = saved('run_shell', { command: "rm $'\\x2a'" })
+    expect(rm).toEqual([{ action: 'allow', tool: 'run_shell', match: "rm $'\\x2a'", exact: true }])
+    expect(matchRule(rm, 'run_shell', "rm '*'", ROOTS)).toBe('allow')
+    for (const cmd of ['rm *', 'rm -rf ~', 'rm -rf *']) {
+      expect(matchRule(rm, 'run_shell', cmd, ROOTS)).toBeNull()
+    }
+    // A program it spells with `*` is not generalized to a glob over other programs.
+    const prog = saved('run_shell', { command: "./$'\\x2a'.sh run" })
+    expect(prog[0]?.exact).toBe(true)
+    expect(matchRule(prog, 'run_shell', './evil.sh run', ROOTS)).toBeNull()
+    const tilde = saved('run_shell', { command: "rm -rf $'\\x7e'" })
+    expect(matchRule(tilde, 'run_shell', 'rm -rf ~', ROOTS)).toBeNull()
+    expect(matchRule(tilde, 'run_shell', 'rm -rf ~/.ssh', ROOTS)).toBeNull()
+  })
+
   it('run_shell: every saved rule set auto-approves the command it was saved for', () => {
     for (const command of [
       'rm *',
@@ -890,7 +966,13 @@ describe('a saved "Always allow" covers only the approved target', () => {
       '\\~/bin/tool status',
       'echo "$HOME" | wc -c',
       `git commit -m "it's done"`,
-      `"git" 'status' && r''m -f "a b"`
+      `"git" 'status' && r''m -f "a b"`,
+      "rm $'\\x2a'",
+      "./$'\\x2a'.sh run",
+      "$'git' status -s",
+      "$'\\x72m' -f $'a\\tb' $'it\\'s'",
+      "printf $'%s\\n' x | wc -l",
+      'echo $"hi" $$ "$HOME"'
     ]) {
       expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS)).toBe('allow')
     }

@@ -467,12 +467,13 @@ the first match wins. Matching normalizes the target so a rule cannot be dodged
 by respelling it: a file rule is resolved and anchored to the workspace (so
 `src/*` covers the same file written as an absolute path, and a relative climb
 like `src/../../etc/passwd` does not slip past it), a URL rule is
-case-insensitive on scheme and host, and a shell rule sees through quoting and
-backslash escapes (so `deny *rm -rf*` still fires on `"rm" -rf` or `r\m -rf`).
-An allow rule sees through quoting only where it changes nothing (`"git" status`
-is `git status`): a quoted or escaped `*`, `~`, `$`, space, or `>` is not the bare
-one, since the shell treats them differently. Allowing `rm '*'` (one file named
-`*`) never allows `rm *`, and allowing `rm -rf '~'` never allows `rm -rf ~`.
+case-insensitive on scheme and host, and a shell rule sees through quoting,
+backslash escapes, and bash's `$'...'` escapes (so `deny *rm -rf*` still fires on
+`"rm" -rf`, `r\m -rf`, or `$'\x72m' -rf`). An allow rule sees through quoting only
+where it changes nothing (`"git" status` is `git status`): a quoted or escaped `*`,
+`~`, `$`, space, or `>` is not the bare one, since the shell treats them
+differently. Allowing `rm '*'` (one file named `*`) never allows `rm *`, and
+allowing `rm -rf '~'` (or `rm -rf $'\x7e'`) never allows `rm -rf ~`.
 An `apply_patch` call is checked against every file it adds, changes, deletes, or
 moves to: one denied file denies the whole patch, one `ask` file asks, and an
 `allow` covers it only when every file is allowed. "Always allow" or "Always deny"

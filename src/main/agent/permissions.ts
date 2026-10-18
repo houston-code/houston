@@ -576,17 +576,126 @@ function normalizeShellCommand(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
 }
 
+/** The single-character escapes of bash's ANSI-C quoting (`$'...'`). */
+const ANSI_C_ESCAPES = new Map([
+  ['a', '\x07'],
+  ['b', '\b'],
+  ['e', '\x1b'],
+  ['E', '\x1b'],
+  ['f', '\f'],
+  ['n', '\n'],
+  ['r', '\r'],
+  ['t', '\t'],
+  ['v', '\v'],
+  ['\\', '\\'],
+  ["'", "'"],
+  ['"', '"'],
+  ['?', '?']
+])
+
+/**
+ * The run of hex digits (at most `max`) at `s[i]`, as its value (wrapping at 32 bits,
+ * like bash's `int`) and the index past it; `n` is how many digits there were.
+ */
+function hexRun(s: string, i: number, max: number): { value: number; n: number; end: number } {
+  let value = 0
+  let n = 0
+  while (n < max && i < s.length && /[0-9A-Fa-f]/.test(s[i])) {
+    value = (value * 16 + parseInt(s[i], 16)) >>> 0
+    n += 1
+    i += 1
+  }
+  return { value, n, end: i }
+}
+
+/**
+ * Decode the body of a bash ANSI-C quoted string (`$'...'`) the way bash does: the C
+ * escapes in {@link ANSI_C_ESCAPES}, octal `\nnn`, hex `\xHH` and `\x{H...}`,
+ * `\uHHHH`, `\UHHHHHHHH`, and `\cX` (control-X). An unknown escape keeps its backslash,
+ * and a NUL ends the string, as in bash.
+ */
+function decodeAnsiC(body: string): string {
+  let out = ''
+  const emit = (code: number): boolean => {
+    if (code === 0) return false
+    out += String.fromCharCode(code)
+    return true
+  }
+  for (let i = 0; i < body.length; ) {
+    if (body[i] !== '\\' || i + 1 >= body.length) {
+      out += body[i]
+      i += 1
+      continue
+    }
+    const e = body[i + 1]
+    i += 2
+    const simple = ANSI_C_ESCAPES.get(e)
+    if (simple !== undefined) {
+      out += simple
+    } else if (e >= '0' && e <= '7') {
+      let code = Number(e)
+      for (let k = 0; k < 2 && i < body.length && body[i] >= '0' && body[i] <= '7'; k++, i++) {
+        code = code * 8 + Number(body[i])
+      }
+      if (!emit(code & 0xff)) break
+    } else if (e === 'x') {
+      const braced = body[i] === '{'
+      const run = hexRun(body, braced ? i + 1 : i, braced ? Infinity : 2)
+      if (!braced && run.n === 0) {
+        out += '\\x' // no hex digit: kept as written
+        continue
+      }
+      i = braced && body[run.end] === '}' ? run.end + 1 : run.end
+      if (!emit(run.value & 0xff)) break
+    } else if (e === 'u' || e === 'U') {
+      const run = hexRun(body, i, e === 'u' ? 4 : 8)
+      const v = run.value
+      // A value that is no character (none, a surrogate, past U+10FFFF) stays as written.
+      if (run.n === 0 || (v >= 0xd800 && v <= 0xdfff) || v > 0x10ffff) {
+        out += body.slice(i - 2, run.end)
+      } else if (v === 0) {
+        break
+      } else {
+        out += String.fromCodePoint(v)
+      }
+      i = run.end
+    } else if (e === 'c' && i < body.length) {
+      const x = body[i]
+      i += x === '\\' && body[i + 1] === '\\' ? 2 : 1 // `\c\\` is control-backslash
+      if (!emit(x === '?' ? 0x7f : x.charCodeAt(0) & 0x1f)) break
+    } else {
+      out += `\\${e}`
+    }
+  }
+  return out
+}
+
+/**
+ * The ANSI-C quoted string `$'...'` whose `$` is at `s[start]`: its decoded text (see
+ * {@link decodeAnsiC}) and the index past its closing quote. A backslash pairs with the
+ * next character first, so `\'` does not close it.
+ */
+function readAnsiCQuote(s: string, start: number): { text: string; end: number } {
+  let j = start + 2
+  while (j < s.length && s[j] !== "'") j += s[j] === '\\' ? 2 : 1
+  return { text: decodeAnsiC(s.slice(start + 2, Math.min(j, s.length))), end: Math.min(j + 1, s.length) }
+}
+
 /**
  * Reduce a shell command to the logical text the shell would execute, by stripping
- * quotes and resolving backslash escapes: `"rm"`, `r''m`, `\rm`, and `rm -r"f"` all
- * collapse to `rm`. Without this, a deny rule like `*rm -rf*` is trivially dodged by
- * quoting the program name — the literal command string no longer contains the token
- * `rm -rf`, so the pattern never fires. Applied to BOTH a deny or ask rule's pattern
- * and the command before matching, so a rule the user deliberately wrote with quotes
- * still matches. The `*` wildcard survives (it's an ordinary character here — a rule
- * pattern's `*` stays a wildcard for {@link globMatches}). An allow rule reads the
- * command with {@link literalShellUnits} instead, which keeps a quoted `*` apart from
- * a bare one.
+ * quotes and resolving backslash escapes: `"rm"`, `r''m`, `\rm`, `$'\x72m'`, and
+ * `rm -r"f"` all collapse to `rm`. Without this, a deny rule like `*rm -rf*` is
+ * trivially dodged by quoting the program name — the literal command string no longer
+ * contains the token `rm -rf`, so the pattern never fires. Applied to BOTH a deny or
+ * ask rule's pattern and the command before matching, so a rule the user deliberately
+ * wrote with quotes still matches. The `*` wildcard survives (it's an ordinary
+ * character here — a rule pattern's `*` stays a wildcard for {@link globMatches}). An
+ * allow rule reads the command with {@link literalShellUnits} instead, which keeps a
+ * quoted `*` apart from a bare one.
+ *
+ * A `$'...'` string is decoded (see {@link decodeAnsiC}), and a `$"..."` one reads as
+ * the plain double-quoted string (its text untranslated). `$$` is the shell's PID, so
+ * the `'` after it opens a plain single-quoted string.
  *
  * Not a full shell parser: it strips quoting/escaping so the matcher sees through
  * spelling tricks, and runs per leaf sub-command AFTER {@link splitShellCommand}
@@ -597,7 +706,16 @@ function dequoteShell(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; ) {
     const c = s[i]
-    if (c === '\\') {
+    if (c === '$' && s[i + 1] === '$') {
+      out += '$$'
+      i += 2
+    } else if (c === '$' && s[i + 1] === "'") {
+      const q = readAnsiCQuote(s, i)
+      out += q.text
+      i = q.end
+    } else if (c === '$' && s[i + 1] === '"') {
+      i += 1 // the double-quoted string is read next
+    } else if (c === '\\') {
       // Backslash escapes the next char (outside quotes); drop the backslash, keep the char.
       if (i + 1 < s.length) {
         out += s[i + 1]
@@ -677,13 +795,19 @@ const SHELL_INERT_CHAR = /^[A-Za-z0-9_\-./,:+@%^\u0080-￿]$/
  * `"rm"`, `r''m`, and `\rm` all read `rm`, but a quoted or escaped character that is
  * not {@link SHELL_INERT_CHAR inert} stays marked as literal (the unit `\c`), and a
  * `$` inside double quotes, which still expands but is not split or globbed, is the
- * unit `"$`. A literal backslash is `\\` and a literal `"` is `\"`, so the reading is
+ * unit `"$`. A literal backslash is `\\` and a literal `"` is `\"`, so every unit of two
+ * characters starts with `\` or `"` and no other unit is either, and the reading is
  * one-to-one: `rm '*'` (one file named `*`) is `rm \*` and never `rm *` (every file),
  * and `rm -rf '~'` is never `rm -rf ~`.
  *
  * {@link dequoteShell} folds these together on purpose, for deny and ask rules: a
  * respelling must not dodge a deny, and reading too much as the same only blocks
  * more. An allow needs the opposite, since whatever it folds together it approves.
+ *
+ * A `$'...'` string is decoded as in {@link dequoteShell} and its characters read like
+ * any other quoted ones, so `$'\x72m'` is `rm` but `$'*'` is the literal `\*`. A
+ * `$"..."` string can be translated into other text when it runs, so its units sit
+ * between the markers `"(` and `")` and it reads as itself only.
  *
  * Unquoted whitespace is collapsed and trimmed (after {@link normalizeShellCommand}, so
  * an empty `''` word leaves no double space); a quoted space is the unit `\ `.
@@ -694,24 +818,38 @@ function literalShellUnits(s: string): string[] {
     units.push(SHELL_INERT_CHAR.test(c) ? c : `\\${c}`)
   }
   const text = normalizeShellCommand(s)
+  // The double-quoted string opening at `text[i]`; returns the index past its close.
+  const doubleQuoted = (i: number): number => {
+    for (i += 1; i < text.length && text[i] !== '"'; ) {
+      if (text[i] === '\\' && i + 1 < text.length && '"`$\\\n'.includes(text[i + 1])) {
+        literal(text[i + 1])
+        i += 2
+      } else {
+        if (text[i] === '$') units.push('"$')
+        else literal(text[i])
+        i += 1
+      }
+    }
+    return i + 1
+  }
   for (let i = 0; i < text.length; ) {
     const c = text[i]
-    if (c === '\\') {
+    if (c === '$' && text[i + 1] === '$') {
+      units.push('$', '$')
+      i += 2
+    } else if (c === '$' && text[i + 1] === "'") {
+      const q = readAnsiCQuote(text, i)
+      for (let k = 0; k < q.text.length; k++) literal(q.text[k])
+      i = q.end
+    } else if (c === '$' && text[i + 1] === '"') {
+      units.push('"(')
+      i = doubleQuoted(i + 1)
+      units.push('")')
+    } else if (c === '\\') {
       if (i + 1 < text.length) literal(text[i + 1])
       i += 2
     } else if (c === '"') {
-      i += 1
-      while (i < text.length && text[i] !== '"') {
-        if (text[i] === '\\' && i + 1 < text.length && '"`$\\\n'.includes(text[i + 1])) {
-          literal(text[i + 1])
-          i += 2
-        } else {
-          if (text[i] === '$') units.push('"$')
-          else literal(text[i])
-          i += 1
-        }
-      }
-      i += 1
+      i = doubleQuoted(i)
     } else if (c === "'") {
       i += 1
       while (i < text.length && text[i] !== "'") {
@@ -732,11 +870,16 @@ function literalShellUnits(s: string): string[] {
 }
 
 /**
- * Any run of whole {@link literalShellUnits} units: a marked `\c` is never split, so a
- * wildcard can't stop between a backslash and its character and leave the rest of the
- * pattern matching out of step with the command's units.
+ * Any run of whole {@link literalShellUnits} units: a marked `\c` or a `"`-led unit is
+ * never split, so a wildcard can't stop inside one and leave the rest of the pattern
+ * matching out of step with the command's units.
  */
-const SHELL_UNITS_RE = String.raw`(?:\\[\s\S]|[^\\])*`
+const SHELL_UNITS_RE = String.raw`(?:[\\"][\s\S]|[^\\"])*`
+
+/** Whether a {@link literalShellUnits} unit is a `*`, which an allow pattern reads as its wildcard. */
+function isShellStarUnit(u: string | undefined): boolean {
+  return u === '*' || u === '\\*'
+}
 
 /**
  * {@link shellCommandMatches} for an ALLOW rule: the pattern and the command are
@@ -752,10 +895,8 @@ function shellAllowMatches(pattern: string, command: string): boolean {
   const c = literalShellUnits(command).join('')
   let re = ''
   for (const [i, u] of p.entries()) {
-    const wild = u === '*' || u === '\\*'
-    const prevWild = i > 0 && (p[i - 1] === '*' || p[i - 1] === '\\*')
-    if (!wild) re += escapeRegExp(u)
-    else if (!prevWild) re += SHELL_UNITS_RE
+    if (!isShellStarUnit(u)) re += escapeRegExp(u)
+    else if (!isShellStarUnit(p[i - 1])) re += SHELL_UNITS_RE
   }
   if (new RegExp(`^${re}$`).test(c)) return true
   const prefix = p.join('')
@@ -1108,8 +1249,9 @@ function isCountOnlyPager(tokens: string[]): boolean {
  *   env-prefixed command, or a command wrapper (`sudo`/`env`/`xargs`/… — see
  *   {@link COMMAND_WRAPPERS}) whose second token is another program — is kept verbatim,
  *   so raw operations like `cat x`, `rm -rf y`, or `sudo rm -rf z` are NOT silently
- *   broadened to `cat`/`rm`/`sudo rm`. A program spelled with `*` (`./*.sh run`) is
- *   kept verbatim too, since its two-token prefix would be a glob over other programs.
+ *   broadened to `cat`/`rm`/`sudo rm`. A program spelled with `*` (`./*.sh run`, or
+ *   `$'\x2a'` decoded) is kept verbatim too, since its two-token prefix would be a glob
+ *   over other programs.
  *   Only a verbatim pattern can therefore hold `*`, and that one is saved exact (see
  *   {@link shellAllowRule}). So is a program whose quoting the prefix would drop
  *   (`'~/bin/x' status`, `"my tool" status`): written bare, the prefix would name a
@@ -1136,7 +1278,7 @@ export function shellRulePatterns(command: string): string[] {
     } else if (
       !ENV_ASSIGN.test(prog) &&
       !COMMAND_WRAPPERS.has(prog) &&
-      !prog.includes('*') &&
+      !holdsShellStar(prog) &&
       verb &&
       SUBCOMMAND_VERB.test(verb) &&
       shellAllowMatches(`${prog} ${verb}`, norm)
@@ -1151,15 +1293,24 @@ export function shellRulePatterns(command: string): string[] {
 }
 
 /**
+ * Whether a shell pattern holds a `*` that an allow would read as its wildcard: one
+ * written out, or one a `$'...'` escape spells (`rm $'\x2a'`).
+ */
+function holdsShellStar(s: string): boolean {
+  return s.includes('*') || literalShellUnits(s).some(isShellStarUnit)
+}
+
+/**
  * The `run_shell` allow rule saved for one pattern from {@link shellRulePatterns}. A
- * pattern holding `*` is a sub-command kept verbatim, and the matcher would read that
- * `*` as a wildcard: approving `rm *` would allow `rm -rf ~`, and approving
- * `find . -name "*.ts"` would allow `find . -name x -delete -name y.ts`. So it is
- * `exact`, covering the approved sub-command only. Every other pattern keeps its
- * prefix meaning (`git status` also covers `git status -s`).
+ * pattern holding `*` (see {@link holdsShellStar}) is a sub-command kept verbatim, and
+ * the matcher would read that `*` as a wildcard: approving `rm *` would allow
+ * `rm -rf ~`, and approving `find . -name "*.ts"` would allow
+ * `find . -name x -delete -name y.ts`. So it is `exact`, covering the approved
+ * sub-command only. Every other pattern keeps its prefix meaning (`git status` also
+ * covers `git status -s`).
  */
 function shellAllowRule(match: string): PermissionRule {
-  return match.includes('*')
+  return holdsShellStar(match)
     ? { action: 'allow', tool: 'run_shell', match, exact: true }
     : { action: 'allow', tool: 'run_shell', match }
 }
