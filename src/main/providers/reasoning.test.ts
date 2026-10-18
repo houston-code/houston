@@ -70,6 +70,20 @@ describe('anthropic thinking', () => {
     }
   })
 
+  it('runs Haiku 5.5 adaptive, on by default and prefix-bound, without an xhigh tier', () => {
+    for (const id of ['claude-haiku-5-5', 'anthropic.claude-haiku-5-5']) {
+      expect(anthropicSupportsThinking(id)).toBe(true)
+      expect(anthropicUsesLegacyThinking(id)).toBe(false)
+      expect(anthropicThinksByDefault(id)).toBe(true)
+      expect(anthropicPreservesThinking(id)).toBe(true)
+      expect(anthropicSupportsXhigh(id)).toBe(false)
+      expect(anthropicThinking(id, 'xhigh')).toMatchObject({ kind: 'adaptive', effort: 'high' })
+      expect(anthropicThinking(id, 'off')).toMatchObject({ effort: 'low', display: 'omitted' })
+    }
+    // Haiku 4.5 keeps the legacy budget shape.
+    expect(anthropicUsesLegacyThinking('claude-haiku-4-5')).toBe(true)
+  })
+
   it('clamps xhigh on the 4.6 line, which tops out at high', () => {
     expect(anthropicSupportsXhigh('claude-opus-4-6')).toBe(false)
     expect(anthropicSupportsXhigh('claude-sonnet-4-6')).toBe(false)
@@ -284,6 +298,8 @@ describe('gemini thinking budget', () => {
     expect(geminiSupportsThinking('gemini-3.5-flash')).toBe(true)
     expect(geminiSupportsThinking('gemini-3.1-flash-lite')).toBe(true)
     expect(geminiSupportsThinking('gemini-3.1-pro-preview')).toBe(true)
+    // The generation is a range, so Gemini 4 reasons too (the old 3.x-only gate missed it).
+    expect(geminiSupportsThinking('gemini-4-argon')).toBe(true)
     expect(geminiThinkingBudget('gemini-3.5-flash', 'low')).toBeGreaterThan(0)
     expect(geminiThinkingBudget('gemini-3.1-flash-lite', 'high')).toBeGreaterThan(0)
     expect(geminiThinkingBudget('gemini-3.5-flash', 'off')).toBeUndefined()

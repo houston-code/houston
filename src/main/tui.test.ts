@@ -392,22 +392,29 @@ describe('parseSlashCommand', () => {
   it('resolves first-party template commands (/review) to a prompt turn', () => {
     expect(parseSlashCommand('/review', s, BUILTIN_TEMPLATE_COMMANDS)).toEqual({
       kind: 'prompt',
-      text: REVIEW_TEMPLATE
+      text: REVIEW_TEMPLATE,
+      invokedAs: {
+        kind: 'command',
+        label: '/review',
+        detail: 'Adversarial review of your uncommitted changes',
+        typed: '/review'
+      }
     })
   })
 
   it('resolves a custom command to its expanded prompt, appending args', () => {
     const custom: Command[] = [{ name: 'ship', description: 'Ship it', template: 'Do the release' }]
-    expect(parseSlashCommand('/ship', s, custom)).toEqual({ kind: 'prompt', text: 'Do the release' })
+    expect(parseSlashCommand('/ship', s, custom)).toMatchObject({ kind: 'prompt', text: 'Do the release' })
     expect(parseSlashCommand('/ship v2 now', s, custom)).toEqual({
       kind: 'prompt',
-      text: 'Do the release\n\nv2 now'
+      text: 'Do the release\n\nv2 now',
+      invokedAs: { kind: 'command', label: '/ship', detail: 'Ship it', typed: '/ship v2 now' }
     })
   })
 
   it('substitutes $ARGUMENTS in a custom template', () => {
     const custom: Command[] = [{ name: 'fix', description: 'Fix', template: 'Fix the $ARGUMENTS bug' }]
-    expect(parseSlashCommand('/fix login', s, custom)).toEqual({ kind: 'prompt', text: 'Fix the login bug' })
+    expect(parseSlashCommand('/fix login', s, custom)).toMatchObject({ kind: 'prompt', text: 'Fix the login bug' })
   })
 
   it('marks unknown commands', () => {
@@ -1866,7 +1873,23 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.runs).toHaveLength(1)
-    expect(rec.runs[0].messages).toEqual([{ role: 'user', content: REVIEW_TEMPLATE }])
+    // The model gets the full prompt; the message records the command, so the GUI
+    // shows a /review chip when this session is opened there.
+    expect(rec.runs[0].messages).toEqual([
+      {
+        role: 'user',
+        content: REVIEW_TEMPLATE,
+        invokedAs: {
+          kind: 'command',
+          label: '/review',
+          detail: 'Adversarial review of your uncommitted changes',
+          typed: '/review'
+        }
+      }
+    ])
+    // The scrollback names the command; the prompt never prints.
+    expect(t.text()).toContain('· /review: Adversarial review of your uncommitted changes')
+    expect(t.text()).not.toContain(REVIEW_TEMPLATE)
   })
 
   it('runs a custom .houston/commands command, expanding $ARGUMENTS', async () => {
@@ -1875,7 +1898,13 @@ describe('runTui', () => {
     const t = fakeIo(['/ship canary', null])
     d.io = t.io
     await runTui(opts, d)
-    expect(rec.runs[0].messages).toEqual([{ role: 'user', content: 'Release the canary build' }])
+    expect(rec.runs[0].messages).toEqual([
+      {
+        role: 'user',
+        content: 'Release the canary build',
+        invokedAs: { kind: 'command', label: '/ship', detail: 'Ship', typed: '/ship canary' }
+      }
+    ])
   })
 
   it('/share copies the invite over OSC 52 and prints it', async () => {
@@ -4323,6 +4352,14 @@ describe('/agent', () => {
     const sent = rec.runs[0].messages.at(-1)?.content ?? ''
     expect(sent).toContain('`reviewer` subagent')
     expect(sent).toContain('check the auth diff')
+    expect(rec.runs[0].messages.at(-1)?.invokedAs).toEqual({
+      kind: 'command',
+      label: '/agent reviewer',
+      detail: 'check the auth diff',
+      typed: '/agent reviewer check the auth diff'
+    })
+    expect(t.text()).toContain('· /agent reviewer: check the auth diff')
+    expect(t.text()).not.toContain('`reviewer` subagent')
   })
 
   it('still runs the agent when no task is given', () => {

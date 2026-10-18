@@ -9,11 +9,6 @@ interface SideTurn {
   error?: string
 }
 
-/** The text "Send to main" queues into the main chat for one side-chat exchange. */
-export function sideTurnHandoff(question: string, answer: string): string {
-  return `From a side chat:\n\nQuestion: ${question}\n\nAnswer: ${answer}`
-}
-
 /**
  * The side chat: a docked panel for quick questions about the open chat, answered
  * by a read-only aside that sees the chat so far but never writes into it. It works
@@ -38,8 +33,9 @@ export function SideChatPanel({
   providerId?: string
   model?: string
   onClose: () => void
-  onSendToMain: (text: string) => void
-  onContinueInNewChat: (text: string) => void
+  /** Hand one exchange to the main chat (the app builds the turn and queues it if busy). */
+  onSendToMain: (question: string, answer: string) => void
+  onContinueInNewChat: (question: string, answer: string) => void
   onResizeMouseDown: (e: React.MouseEvent) => void
 }): JSX.Element {
   const [sideId] = useState(() => crypto.randomUUID())
@@ -155,7 +151,7 @@ export function SideChatPanel({
                       className="btn btn--sm"
                       disabled={sent.has(t.id)}
                       onClick={() => {
-                        onSendToMain(sideTurnHandoff(t.question, t.answer ?? ''))
+                        onSendToMain(t.question, t.answer ?? '')
                         setSent((prev) => new Set(prev).add(t.id))
                       }}
                     >
@@ -164,7 +160,7 @@ export function SideChatPanel({
                     <button
                       type="button"
                       className="btn btn--sm"
-                      onClick={() => onContinueInNewChat(sideTurnHandoff(t.question, t.answer ?? ''))}
+                      onClick={() => onContinueInNewChat(t.question, t.answer ?? '')}
                     >
                       Continue in new chat
                     </button>

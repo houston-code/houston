@@ -19,6 +19,7 @@ import type {
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 import { accumulateModelUsage } from '@shared/usage'
+import { invocationText } from '@shared/promptInvocation'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import { clearConversationOverride } from './agent/overrides'
 import { redactSecrets } from './agent/redact'
@@ -349,7 +350,12 @@ export function deriveTitle(messages: ChatMessage[]): string | null {
   // the same redactor; ordinary prose is untouched. This is the one seam every client's
   // title derivation passes through (setMessages), including runs the loop hasn't
   // touched yet (ipc.ts derives the title from the raw message before the run starts).
-  const content = redactSecrets(first.content, titleSecretValues())
+  // A first-party prompt is titled by what the user did ("/review", "Create PR"), not
+  // by the instructions it expanded to. A spawned brief is the task itself, so it
+  // keeps titling from its text.
+  const source =
+    first.invokedAs && first.invokedAs.kind !== 'spawned' ? invocationText(first.invokedAs) : first.content
+  const content = redactSecrets(source, titleSecretValues())
   const text = content.trim().replace(/\s+/g, ' ')
   return text.length > 60 ? `${text.slice(0, 57)}…` : text || null
 }

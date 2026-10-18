@@ -3,6 +3,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 import { APP_NAME, IPC } from '@shared/constants'
 import { checkForUpdatesFromMenu } from './updater'
 import { shareHoustonFromMenu } from './share'
+import { openExternalSafely } from './safeExternal'
 
 /**
  * The application menu. Houston previously relied on Electron's default menu,
@@ -17,9 +18,12 @@ import { shareHoustonFromMenu } from './share'
  * check as the in-Settings button. Both render on every macOS architecture; there
  * is no arch-specific gating.
  *
- * Windows and Linux have no app submenu, so "Check for Updates…" lives under a
- * Help menu there, the platform convention. Without it the only manual check on
- * those platforms was buried in Settings.
+ * Every platform gets a Help menu (role 'help', always last) with the product
+ * guide and an issue link. On macOS the role is what makes AppKit add its native
+ * search field, which finds any menu item by name. Windows and Linux have no app
+ * submenu, so "Check for Updates…" lives under Help there too, the platform
+ * convention. Without it the only manual check on those platforms was buried in
+ * Settings.
  *
  * "Share Houston…" sits beside it on every platform (see ./share): the share
  * sheet on macOS, copy-and-confirm on Windows/Linux.
@@ -84,13 +88,25 @@ function macAppMenu(): MenuItemConstructorOptions {
   }
 }
 
-/** Help menu for Windows/Linux, which carries the manual update check and sharing there. */
-function helpMenu(): MenuItemConstructorOptions {
+/** The product guide (docs/houston-guide.md) as published on the repo's main branch. */
+export const GUIDE_URL = 'https://github.com/houston-code/houston/blob/main/docs/houston-guide.md'
+export const ISSUES_URL = 'https://github.com/houston-code/houston/issues/new'
+
+/** Help menu. On Windows/Linux it also carries the manual update check and
+ * sharing, which live in the app menu on macOS. */
+function helpMenu(isMac: boolean): MenuItemConstructorOptions {
   return {
     role: 'help',
     submenu: [
-      { label: 'Share Houston…', click: () => void shareHoustonFromMenu() },
-      { label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() }
+      { label: 'Houston Guide', click: () => openExternalSafely(GUIDE_URL) },
+      { label: 'Report an Issue', click: () => openExternalSafely(ISSUES_URL) },
+      ...(isMac
+        ? []
+        : [
+            { type: 'separator' as const },
+            { label: 'Share Houston…', click: () => void shareHoustonFromMenu() },
+            { label: 'Check for Updates…', click: () => void checkForUpdatesFromMenu() }
+          ])
     ]
   }
 }
@@ -120,7 +136,7 @@ export function appMenuTemplate(isMac: boolean): MenuItemConstructorOptions[] {
           : [{ role: 'close' as const }])
       ]
     },
-    ...(isMac ? [] : [helpMenu()])
+    helpMenu(isMac)
   ]
 }
 

@@ -11,6 +11,7 @@ import {
   modelHasTools,
   modelHasVision,
   modelPricing,
+  pricingAt,
   type ModelPricing
 } from './model-facts'
 
@@ -91,18 +92,24 @@ export function sessionUsageFromConversation(u: ConversationUsage): SessionUsage
  * heuristics don't know (deepseek, qwen, …). Returns null only when neither side
  * can supply an input+output rate.
  */
-export function resolvePricing(model: string, caps?: ModelCaps): ModelPricing | null {
-  const h = modelPricing(model)
+export function resolvePricing(model: string, caps?: ModelCaps, at: Date = new Date()): ModelPricing | null {
+  const listed = modelPricing(model)
+  // Scheduled price changes resolve to the rates in force on `at` (today, by default).
+  const h = listed ? pricingAt(listed, at) : null
   const input = caps?.inputPrice ?? h?.input
   const output = caps?.outputPrice ?? h?.output
   if (input === undefined || output === undefined) return null
   const cacheRead = caps?.cacheReadPrice ?? h?.cacheRead
   const cacheWrite = caps?.cacheWritePrice ?? h?.cacheWrite
+  // A host that lists its own prices lists a flat rate; the heuristic's long-context tier
+  // only describes the heuristic's own base rate, so it applies only when that is in use.
+  const hostPriced = caps?.inputPrice !== undefined || caps?.outputPrice !== undefined
   return {
     input,
     output,
     ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {})
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(h?.longContext && !hostPriced ? { longContext: h.longContext } : {})
   }
 }
 
@@ -144,11 +151,14 @@ export function turnCostUsd(
   inputTokens: number,
   outputTokens: number,
   cache?: CacheTokens,
-  caps?: ModelCaps
+  caps?: ModelCaps,
+  at: Date = new Date()
 ): number {
-  const p = resolvePricing(model, caps)
-  if (!p) return 0
+  const base = resolvePricing(model, caps, at)
+  if (!base) return 0
   const inTok = clampTokens(inputTokens)
+  // A prompt past the long-context threshold bills every token of the request at that tier.
+  const p = base.longContext && inTok > base.longContext.above ? base.longContext : base
   const outTok = clampTokens(outputTokens)
   const cacheRead = Math.min(inTok, clampTokens(cache?.readTokens))
   const cacheWrite = Math.min(inTok - cacheRead, clampTokens(cache?.writeTokens))

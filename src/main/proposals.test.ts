@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage, Conversation, ProposalState } from '@shared/agent'
-import { doItHereMessage } from '@shared/proposals'
+import { proposalHereTurn } from '@shared/promptInvocation'
 import { PROPOSAL_ACCEPTED_PREFIX, PROPOSE_SESSION_NAME, type SpawnSessionInput } from './agent/spawn'
 import {
   autoBranchFor,
@@ -182,11 +182,12 @@ describe('decideProposal', () => {
   })
 })
 
-describe('doItHereMessage', () => {
-  it('asks for the proposal here, carrying its brief', () => {
-    const msg = doItHereMessage({ title: 'Docs', prompt: 'Document /auth/*' })
-    expect(msg).toContain('"Docs"')
-    expect(msg.endsWith('Document /auth/*')).toBe(true)
+describe('proposalHereTurn', () => {
+  it('asks for the proposal here, carrying its brief, shown as a chip', () => {
+    const turn = proposalHereTurn({ title: 'Docs', prompt: 'Document /auth/*' })
+    expect(turn.text).toContain('"Docs"')
+    expect(turn.text.endsWith('Document /auth/*')).toBe(true)
+    expect(turn.invokedAs).toEqual({ kind: 'action', label: 'Do it here', detail: 'Docs' })
   })
 })
 

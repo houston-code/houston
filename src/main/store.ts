@@ -214,7 +214,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
     providers = backfillDefaultModels(providers, ['gemini-3.1-flash-lite'])
   }
   // v7: the current Gemini lineup. gemini-2.5-pro is closed to new users but still serves
-  // accounts that already use it, so it is not pruned.
+  // accounts that already use it, so it is not pruned. (Its 3.1-pro-preview add is a no-op
+  // since v13 replaced it in the seed with gemini-4-argon.)
   if (fromVersion < 7) {
     providers = backfillDefaultModels(providers, [
       'gemini-3.1-pro-preview',
@@ -244,6 +245,10 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   // v11: the local providers' seeded names changed ("Local — Ollama" → "Ollama (local)"). The
   // name is saved with the provider, so rename the ones still carrying the old seed.
   if (fromVersion < 11) providers = renameBuiltInProviderLabels(providers)
+  // v12: Claude Haiku 5.5. Scoped like the other adds; Haiku 4.5 still serves, so it stays.
+  if (fromVersion < 12) providers = backfillDefaultModels(providers, ['claude-haiku-5-5'])
+  // v13: Gemini 4 Argon. Scoped; gemini-3.1-pro-preview, which it replaces in the seed, still serves.
+  if (fromVersion < 13) providers = backfillDefaultModels(providers, ['gemini-4-argon'])
   const merged: AppSettings = {
     ...base,
     ...upgraded,

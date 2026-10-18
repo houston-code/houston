@@ -1918,6 +1918,89 @@ body.is-resizing {
 .msg--assistant .msg__body {
   line-height: 1.65;
 }
+/* A turn Houston wrote for the user (/review, Create PR, /agent, a handoff brief):
+   a compact chip naming what they did, with the full prompt behind a disclosure. */
+.msg__invoked {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 86%;
+  min-width: 0;
+}
+.msg--user .msg__body.msg__chip {
+  max-width: 100%;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 7px 12px;
+  white-space: normal;
+}
+.msg__chip-icon {
+  align-self: center;
+  flex: none;
+  opacity: 0.8;
+}
+.msg__chip-label {
+  font-weight: 600;
+}
+.msg__chip-label--mono {
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+.msg__chip-detail {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+:root[data-theme='light'] .msg__chip-detail {
+  color: color-mix(in srgb, #fff 82%, transparent);
+}
+.msg__prompt {
+  margin-top: 4px;
+  max-width: 100%;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.msg__prompt-toggle {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+  list-style: none;
+  user-select: none;
+  border-radius: 4px;
+}
+.msg__prompt-toggle::-webkit-details-marker {
+  display: none;
+}
+.msg__prompt-toggle::before {
+  content: '▸ ';
+}
+.msg__prompt[open] > .msg__prompt-toggle::before {
+  content: '▾ ';
+}
+.msg__prompt-toggle:hover {
+  color: var(--text);
+}
+.msg__prompt-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.msg__prompt-text {
+  align-self: stretch;
+  margin-top: 6px;
+  border-left: 2px solid var(--border);
+  padding: 2px 0 2px 10px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
 /* Compaction summary: a system-authored recap, shown full-width and set apart from
    the conversation by a quiet left rail rather than the user's accent bubble. */
 .msg--summary .msg__body {

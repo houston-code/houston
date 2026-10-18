@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServerConfig, PermissionRule } from '@shared/types'
 import { REDACTED_HEADER_VALUE, mcpHeaderScope, providerHeaderScope } from '@shared/types'
+import { SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 
 /**
  * Migration behaviour for the settings store. `getSettings()` runs `migrate()` on the
@@ -139,7 +140,8 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 8, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
     expect(ids[0]).toBe('claude-opus-4-8') // user's model kept, in place
-    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
+    // Haiku 5.5 arrives too, via the later scoped v12 add.
+    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])
   })
 
   it('scopes the v9 bump to the new ids — does not re-add a default the user deleted', async () => {
@@ -150,14 +152,15 @@ describe('settings migration — model backfill', () => {
 
   it('does not re-add a 5.x model a v9 install has already deleted', async () => {
     writeSettings({ schemaVersion: 9, providers: [anthropicProvider(['claude-opus-5-5'])] })
-    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
+    // Fable 5.1 and Sonnet 5.5 stay deleted; only the later v12 Haiku 5.5 add is new.
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
   })
 
   it('gives a pre-v2 install the full backfill without duplicating the v9 ids', async () => {
     // fromVersion 0 runs every gate: the full v2 seed and the scoped v9 add.
     writeSettings({ schemaVersion: 1, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
-    expect(ids).toContain('claude-haiku-4-5') // full backfill ran
+    expect(ids).toContain('claude-haiku-5-5') // full backfill ran
     expect(ids).toContain('claude-opus-5-5')
     expect(ids.filter((id) => id === 'claude-fable-5-1')).toHaveLength(1) // no duplicate
   })
@@ -165,7 +168,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(11)
+    expect(getSettings().schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -188,6 +191,18 @@ describe('settings migration — model backfill', () => {
     const { getSettings } = await loadStore()
     const anthropic = getSettings().providers.find((p) => p.id === 'anthropic')!
     expect(anthropic.models.find((m) => m.id === 'claude-opus-4-8')).toEqual({ id: 'claude-opus-4-8' })
+  })
+})
+
+describe('settings migration — Claude Haiku 5.5 (v12)', () => {
+  it('adds Haiku 5.5 and keeps Haiku 4.5, which still serves', async () => {
+    writeSettings({ schemaVersion: 11, providers: [anthropicProvider(['claude-opus-5-5', 'claude-haiku-4-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-haiku-4-5', 'claude-haiku-5-5'])
+  })
+
+  it('does not re-add Haiku 5.5 a v12 install has deleted', async () => {
+    writeSettings({ schemaVersion: 12, providers: [anthropicProvider(['claude-opus-5-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
   })
 })
 
@@ -286,7 +301,7 @@ describe('settings migration — retired Gemini models (v6)', () => {
   it('does not re-add the retired models on a later load', async () => {
     // The prune must stick: an up-to-date install reloading must not resurrect them.
     writeSettings({
-      schemaVersion: 7,
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
       providers: [geminiProvider(['gemini-2.5-pro'])]
     })
     const { getSettings } = await loadStore()
@@ -301,13 +316,25 @@ describe('settings migration — retired Gemini models (v6)', () => {
     writeSettings({ schemaVersion: 6, providers: [geminiProvider(['gemini-2.5-pro'], 'gemini-2.5-pro')] })
     const { getSettings } = await loadStore()
     const gemini = getSettings().providers.find((p) => p.id === 'gemini')!
+    // 3.1-pro-preview left the seed in v13, so the v7 add now brings only the Flash tiers;
+    // the later v13 add brings Gemini 4 Argon.
     expect(gemini.models.map((m) => m.id)).toEqual([
       'gemini-2.5-pro',
-      'gemini-3.1-pro-preview',
       'gemini-3.8-flash',
-      'gemini-3.5-flash-lite'
+      'gemini-3.5-flash-lite',
+      'gemini-4-argon'
     ])
     expect(gemini.defaultModel).toBe('gemini-2.5-pro') // the user's stored choice stands
+  })
+
+  it('adds Gemini 4 Argon on the v13 bump and keeps 3.1-pro-preview, which still serves', async () => {
+    writeSettings({ schemaVersion: 12, providers: [geminiProvider(['gemini-3.1-pro-preview', 'gemini-3.8-flash'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().providers.find((p) => p.id === 'gemini')!.models.map((m) => m.id)).toEqual([
+      'gemini-3.1-pro-preview',
+      'gemini-3.8-flash',
+      'gemini-4-argon'
+    ])
   })
 })
 
@@ -758,7 +785,7 @@ describe('settings migration — onboarding (v10)', () => {
     writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
     await loadStore().then((s) => s.getSettings())
     const onDisk = JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
-    expect(onDisk.schemaVersion).toBe(11)
+    expect(onDisk.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(onDisk.onboarding).toEqual({})
     // ...which then records its version. The next launch must not reclassify the user.
     markDesktopHasRun()
@@ -768,7 +795,7 @@ describe('settings migration — onboarding (v10)', () => {
   })
 
   it('does not rewrite a file that is already current', async () => {
-    writeSettings({ schemaVersion: 11, providers: [openaiProvider(['gpt-5.5'])] })
+    writeSettings({ schemaVersion: SETTINGS_SCHEMA_VERSION, providers: [openaiProvider(['gpt-5.5'])] })
     const before = statSync(join(state.userData, 'settings.json')).mtimeMs
     await loadStore().then((s) => s.getSettings())
     expect(statSync(join(state.userData, 'settings.json')).mtimeMs).toBe(before)

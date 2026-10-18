@@ -96,6 +96,31 @@ describe('deriveTitle', () => {
   it('returns null when there is no user message', () => {
     expect(deriveTitle([{ role: 'assistant', content: 'hi' }])).toBeNull()
   })
+
+  it('titles a first-party prompt by what the user did, not the instructions', () => {
+    expect(
+      deriveTitle([
+        {
+          role: 'user',
+          content: 'Review my current uncommitted changes for correctness…',
+          invokedAs: { kind: 'command', label: '/review', typed: '/review auth' }
+        }
+      ])
+    ).toBe('/review auth')
+    expect(
+      deriveTitle([
+        { role: 'user', content: 'Create a GitHub pull request…', invokedAs: { kind: 'action', label: 'Create PR' } }
+      ])
+    ).toBe('Create PR')
+  })
+
+  it('titles a handed-off brief from its text, which is the task itself', () => {
+    expect(
+      deriveTitle([
+        { role: 'user', content: 'Add OAuth login', invokedAs: { kind: 'spawned', label: 'Handed-off task' } }
+      ])
+    ).toBe('Add OAuth login')
+  })
 })
 
 describe('mergeRunningTotals', () => {

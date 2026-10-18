@@ -302,6 +302,11 @@ own step count, it stays a hard stop until you turn the switch on.
   first commit** when a remote exists but nothing is committed, and **Commit &
   push** for a remote that isn't on GitHub. Each hands the work to the agent as a
   normal turn, so every git and network step goes through your approvals.
+- **Prompts Houston writes for you.** `/review`, `/agent`, the shipping buttons, and
+  a session another chat handed off each send the agent a detailed prompt. The chat
+  shows what you did (for example "/review" or "Create PR") instead of that prompt;
+  open **Instructions sent to the agent** under it to read the exact text. The
+  terminal prints a one-line summary in its place.
 
 `/undo` covers the last turn's file writes only. It does not undo shell commands,
 and it does not touch git history.
@@ -920,6 +925,15 @@ conventions, not as authority to change tool or permission behavior.
   Houston profile, so the revert/redo affordance survives an app restart; the
   most recent 50 turns' checkpoints are kept. Shell-command side effects are not
   checkpointed: revert only restores files the editing tools touched.
+
+## Help menu
+
+The desktop app's **Help** menu (last in the menu bar on every platform) has
+**Houston Guide**, which opens this guide, and **Report an Issue**, which opens a
+new GitHub issue. On macOS the Help menu also has the system search field: type
+part of a command's name (for example "settings") to find it in the menus. On
+Windows and Linux the Help menu also holds **Share Houston…** and **Check for
+Updates…**, which sit in the app menu on macOS.
 
 ## Sharing Houston
 

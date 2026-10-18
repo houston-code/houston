@@ -42,6 +42,7 @@ const CORPUS = [
   'claude-sonnet-4-5-20250929',
   'claude-sonnet-4-20250514',
   'claude-haiku-4-5',
+  'claude-haiku-5-5',
   'claude-3-7-sonnet-20250219',
   'claude-3-5-sonnet-20241022',
   'claude-3-5-haiku-20241022',
@@ -53,6 +54,7 @@ const CORPUS = [
   'anthropic.claude-fable-5-1',
   'anthropic.claude-sonnet-5-5',
   'anthropic.claude-haiku-4-5',
+  'anthropic.claude-haiku-5-5',
   'anthropic.claude-sonnet-4-6',
   'claude-opus-4-5@20251101',
   'claude-sonnet-4@20250514',
@@ -97,6 +99,7 @@ const CORPUS = [
   'openai/gpt-5.6-luna',
   'openai/o3',
   // Gemini: current, preview, superseded.
+  'gemini-4-argon',
   'gemini-3.1-pro-preview',
   'gemini-3-pro-preview',
   'gemini-3.8-flash',

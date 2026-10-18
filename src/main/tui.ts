@@ -28,13 +28,17 @@ import { runtimeMissingLine } from '@shared/runtimes'
 import type { FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
-  expandTemplate,
   mergeCommands,
   resolveCommand,
-  parseAgentInvocation,
-  agentInvocationPrompt,
   type Command
 } from '@shared/commands'
+import {
+  agentTurn,
+  commandTurn,
+  proposalHereTurn,
+  type InvokedTurn,
+  type PromptInvocation
+} from '@shared/promptInvocation'
 import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
 import type { CompactResult } from './agent/compact'
 import type { McpServerStatus } from './mcp/manager'
@@ -59,7 +63,6 @@ import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
-import { doItHereMessage } from '@shared/proposals'
 import type { ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { truncateVisible, stripControlChars, osc52Copy } from './tui-wrap'
@@ -1121,10 +1124,21 @@ export type SlashResult =
   | { kind: 'trust'; op: 'status' | 'forget' | 'usage' }
   /** Set or replace a provider API key, or add a host (/login, /providers). */
   | { kind: 'login' }
-  /** A template command (custom `.houston/commands` or first-party `/review`): run the expanded prompt as a turn. */
-  | { kind: 'prompt'; text: string }
+  /**
+   * A template command (custom `.houston/commands` or first-party `/review`) or
+   * `/agent`: run the prompt as a turn, recorded as the command the user typed.
+   */
+  | ({ kind: 'prompt' } & InvokedTurn)
   | { kind: 'unknown'; name: string }
   | { kind: 'not-a-command' }
+
+/**
+ * The dim line the terminal prints when a slash command runs as a turn: what runs,
+ * never the prompt behind it (that's what the model reads, not the user).
+ */
+export function invocationEcho(inv: PromptInvocation): string {
+  return inv.detail ? `· ${inv.label}: ${inv.detail}` : `· running ${inv.label}`
+}
 
 /**
  * Interpret a line as a slash command. Pure: returns the *intent*; the driver
@@ -1172,11 +1186,11 @@ export function parseSlashCommand(
     case 'agents':
       return { kind: 'capability', which: name }
     case 'agent': {
-      const inv = parseAgentInvocation(arg)
+      const turn = agentTurn(arg, line)
       // No (or a nonsense) name → fall through to listing, which is what someone
       // typing `/agent` alone is looking for anyway.
-      if (!inv) return { kind: 'capability', which: 'agents' }
-      return { kind: 'prompt', text: agentInvocationPrompt(inv.name, inv.task) }
+      if (!turn) return { kind: 'capability', which: 'agents' }
+      return { kind: 'prompt', ...turn }
     }
     case 'settings':
       return { kind: 'settings' }
@@ -1261,7 +1275,8 @@ export function parseSlashCommand(
       // Not a built-in: try the template commands (first-party like /review, plus
       // custom `.houston/commands`). A match runs its expanded prompt as a turn.
       const cmd = resolveCommand(commands, name)
-      if (cmd?.template) return { kind: 'prompt', text: expandTemplate(cmd.template, arg) }
+      const turn = cmd ? commandTurn(cmd, arg, line) : null
+      if (turn) return { kind: 'prompt', ...turn }
       return { kind: 'unknown', name }
     }
   }
@@ -2223,8 +2238,8 @@ export function renderReasoningStatus(
 export { parseMemoryCapture, type MemoryScope }
 
 // `parseAgentInvocation` + `agentInvocationPrompt` now live in `@shared/commands`
-// (imported at the top); re-exported so existing callers of the TUI module keep working.
-export { parseAgentInvocation, agentInvocationPrompt }
+// and are re-exported so existing callers of the TUI module keep working.
+export { parseAgentInvocation, agentInvocationPrompt } from '@shared/commands'
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
 export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
@@ -2703,6 +2718,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
     let text = raw.trim()
     if (!text) continue
+    // Set when this turn's text is a prompt Houston wrote for a command (/review,
+    // /agent): saved on the message so every client shows the command, not the prompt.
+    let invokedAs: PromptInvocation | undefined
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
     deps.persistHistory?.(text)
@@ -3202,11 +3220,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         // "here": ask for it in this chat, as a normal turn. Fall through.
-        text = doItHereMessage(picked)
+        const turn = proposalHereTurn(picked)
+        text = turn.text
+        invokedAs = turn.invokedAs
+        deps.io.out(paint(`${invocationEcho(turn.invokedAs)}\n`, 'dim'))
       } else if (result.kind === 'prompt') {
         // A template command (custom `.houston/commands` or first-party /review):
         // run its expanded prompt as a normal turn. Fall through — don't `continue`.
+        // The typed line is already on screen; one dim line says what it runs, and
+        // the prompt itself stays out of the scrollback.
         text = result.text
+        invokedAs = result.invokedAs
+        deps.io.out(paint(`${invocationEcho(result.invokedAs)}\n`, 'dim'))
       } else {
         // 'handled' — informational commands print here where the state lives.
         handleInfoCommand(
@@ -3241,7 +3266,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     messages.push({
       role: 'user',
       content: text,
-      ...(pendingImages.length ? { images: pendingImages } : {})
+      ...(pendingImages.length ? { images: pendingImages } : {}),
+      ...(invokedAs ? { invokedAs } : {})
     })
     pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session

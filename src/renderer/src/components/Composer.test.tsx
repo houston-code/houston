@@ -18,6 +18,7 @@ function baseProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
     vision: true,
     onCommand: vi.fn(),
     onSend: vi.fn(),
+    onInvoke: vi.fn(),
     onCancel: vi.fn(),
     ...overrides
   }
@@ -172,7 +173,12 @@ describe('Composer slash-command templates', () => {
     const input = type('/review ')
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(props.onSend).toHaveBeenCalledWith('Do the review now.')
+    // Sent as an invoked turn, so the transcript shows "/review", not the prompt.
+    expect(props.onSend).not.toHaveBeenCalled()
+    expect(props.onInvoke).toHaveBeenCalledWith({
+      text: 'Do the review now.',
+      invokedAs: { kind: 'command', label: '/review', detail: 'Review', typed: '/review' }
+    })
     expect(input.value).toBe('') // sent, not left lingering in the field
   })
 
@@ -189,6 +195,7 @@ describe('Composer slash-command templates', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
 
     expect(props.onSend).not.toHaveBeenCalled()
+    expect(props.onInvoke).not.toHaveBeenCalled() // a custom prompt stays the user's to edit
     expect(input.value).toBe('Write a spec for the login flow.') // previewed for editing
   })
 })

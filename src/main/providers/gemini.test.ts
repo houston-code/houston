@@ -152,6 +152,43 @@ describe('gemini maxOutputTokens', () => {
   it('omits the cap when the caller sets none (server default applies)', async () => {
     expect(await configFor({})).not.toHaveProperty('maxOutputTokens')
   })
+
+  it('raises a short cap to 32K on Gemini 4, which spends output on thinking', async () => {
+    expect(await configFor({ model: 'gemini-4-argon', maxTokens: 64 })).toMatchObject({ maxOutputTokens: 32_768 })
+    h.stream.mockReset()
+    expect(await configFor({ model: 'gemini-4-argon', maxTokens: 50_000 })).toMatchObject({ maxOutputTokens: 50_000 })
+  })
+})
+
+describe('gemini thinking config', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  async function thinkingFor(model: string, effort: ChatRequest['reasoningEffort']): Promise<unknown> {
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield { candidates: [{ content: { parts: [{ text: 'ok' }] } }] }
+      })()
+    )
+    for await (const _ of createGeminiProvider('k').streamChat({
+      model,
+      reasoningEffort: effort,
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      void _
+    }
+    return (h.stream.mock.calls.at(-1)![0] as { config: Record<string, unknown> }).config.thinkingConfig
+  }
+
+  it('sends a thinking level on Gemini 4, LOW with thoughts hidden when reasoning is off', async () => {
+    expect(await thinkingFor('gemini-4-argon', 'medium')).toEqual({ thinkingLevel: 'MEDIUM', includeThoughts: true })
+    expect(await thinkingFor('gemini-4-argon', 'xhigh')).toEqual({ thinkingLevel: 'HIGH', includeThoughts: true })
+    expect(await thinkingFor('gemini-4-argon', 'off')).toEqual({ thinkingLevel: 'LOW', includeThoughts: false })
+  })
+
+  it('keeps the token budget on 2.5 and 3.x, and sends nothing when off there', async () => {
+    expect(await thinkingFor('gemini-3.8-flash', 'high')).toEqual({ thinkingBudget: 16_000, includeThoughts: true })
+    expect(await thinkingFor('gemini-3.8-flash', 'off')).toBeUndefined()
+  })
 })
 
 describe('gemini usage reporting', () => {

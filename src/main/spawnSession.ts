@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ApprovalPolicy } from '@shared/types'
 import type { ChatMessage, ConversationWorktree, SpawnedFrom } from '@shared/agent'
+import { spawnedTurn } from '@shared/promptInvocation'
 import type { SpawnBackend, SpawnSessionInput, SpawnSessionResult } from './agent/spawn'
 
 /**
@@ -146,7 +147,8 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
 
         // A forked context continues the spawning chat's history; the prompt is the
         // next user turn either way.
-        const userMessage: ChatMessage = { role: 'user', content: prompt }
+        const turn = spawnedTurn(prompt)
+        const userMessage: ChatMessage = { role: 'user', content: turn.text, invokedAs: turn.invokedAs }
         const seeded: ChatMessage[] = [...(input.history ?? []), userMessage]
         deps.seedMessages(conv.id, seeded)
 

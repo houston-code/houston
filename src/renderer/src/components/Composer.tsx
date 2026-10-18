@@ -28,6 +28,7 @@ import {
   resolveCommand,
   type Command
 } from '@shared/commands'
+import { commandTurn, type InvokedTurn } from '@shared/promptInvocation'
 import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
 import {
   MAX_ATTACHMENTS,
@@ -144,6 +145,7 @@ export function Composer({
   onShip,
   onCommand,
   onSend,
+  onInvoke,
   onSteer,
   onSaveMemory,
   onCancel
@@ -168,6 +170,11 @@ export function Composer({
   onShip?: (action: ShipAction) => void
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
+  /**
+   * Run a first-party template command (`/review`) as a turn. Separate from onSend
+   * so the transcript shows the command the user ran, not the prompt it expands to.
+   */
+  onInvoke: (turn: InvokedTurn) => void
   /**
    * Steer the running turn with the composer text, injected before the agent's next
    * step (distinct from onSend, which queues for after the run). Absent → no steer
@@ -605,18 +612,19 @@ export function Composer({
         const cmd = resolveCommand(commands, parsed.name)
         if (cmd) {
           if (cmd.template) {
-            const expanded = expandTemplate(cmd.template, parsed.args)
-            if (cmd.autoRun) {
-              // Action template (e.g. /review): run it straight away — send the
-              // expanded prompt as a normal turn instead of dropping it in the field.
+            const turn = cmd.autoRun ? commandTurn(cmd, parsed.args, trimmed) : null
+            if (turn) {
+              // Action template (e.g. /review): run it straight away as a turn instead
+              // of dropping the expanded prompt in the field.
               appendPromptHistory(trimmed)
-              onSend(expanded)
+              onInvoke(turn)
               setText('')
               setImages([])
               resetMenus()
             } else {
               // Custom command: expand into the composer so the (workspace-supplied)
               // prompt is visible and editable before the user sends it.
+              const expanded = expandTemplate(cmd.template, parsed.args)
               setText(expanded)
               resetMenus()
               focusEnd(expanded.length)

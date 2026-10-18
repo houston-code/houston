@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SideChatPanel, sideTurnHandoff } from './SideChatPanel'
+import { SideChatPanel } from './SideChatPanel'
 
 interface Api {
   askSideChat: ReturnType<typeof vi.fn>
@@ -101,10 +101,10 @@ describe('SideChatPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
     const send = await screen.findByRole('button', { name: 'Send to main' })
     fireEvent.click(send)
-    expect(props.onSendToMain).toHaveBeenCalledWith(sideTurnHandoff('A question', 'An answer'))
+    expect(props.onSendToMain).toHaveBeenCalledWith('A question', 'An answer')
     expect(screen.getByRole('button', { name: 'Sent to main' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Continue in new chat' }))
-    expect(props.onContinueInNewChat).toHaveBeenCalledWith(sideTurnHandoff('A question', 'An answer'))
+    expect(props.onContinueInNewChat).toHaveBeenCalledWith('A question', 'An answer')
   })
 
   it('forgets its side chat in main when it closes', async () => {

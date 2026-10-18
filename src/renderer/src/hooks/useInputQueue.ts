@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ImageAttachment } from '@shared/images'
+import type { PromptInvocation } from '@shared/promptInvocation'
 import type { ApprovalPolicy } from '@shared/types'
 import type { QueuedInputMeta } from '@shared/queue'
 
@@ -10,6 +11,7 @@ export interface InputQueue {
   enqueue: (input: {
     text: string
     images?: ImageAttachment[]
+    invokedAs?: PromptInvocation
     providerId: string
     model: string
     approvalPolicy: ApprovalPolicy
@@ -73,6 +75,7 @@ export function useInputQueue(conversationId: string | null): InputQueue {
         conversationId: cid,
         userText: input.text,
         images: input.images,
+        ...(input.invokedAs ? { invokedAs: input.invokedAs } : {}),
         providerId: input.providerId,
         model: input.model,
         approvalPolicy: input.approvalPolicy
