@@ -7,7 +7,8 @@ import {
   filesInPlay,
   lastUserTurnIndex,
   latestTodos,
-  originalTask
+  originalTask,
+  originalTaskIndex
 } from './workingMemory'
 
 function toolCall(name: string, args: Record<string, unknown>): ChatMessage {
@@ -131,6 +132,21 @@ describe('buildPinnedMemory', () => {
     expect(buildPinnedMemory([{ role: 'assistant', content: 'hi' }])).toBe('')
   })
 
+  it('leaves the task out when the caller already sends it verbatim', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'Add OAuth login' },
+      toolCall('read_file', { path: 'src/auth.ts' })
+    ]
+    const block = buildPinnedMemory(msgs, { omitTask: true })
+    expect(block.startsWith(PINNED_MEMORY_PREFIX)).toBe(true)
+    expect(block).not.toContain('Original task:')
+    expect(block).not.toContain('Add OAuth login')
+    expect(block).toContain('src/auth.ts')
+    // With the task left out and nothing else to say, there is no block at all.
+    expect(buildPinnedMemory([{ role: 'user', content: 'Just chat' }], { omitTask: true })).toBe('')
+    expect(buildPinnedMessages([{ role: 'user', content: 'Just chat' }], { omitTask: true })).toEqual([])
+  })
+
   it('clips a very long task to keep the block bounded', () => {
     const huge = 'x'.repeat(5000)
     const block = buildPinnedMemory([{ role: 'user', content: huge }])
@@ -150,6 +166,19 @@ describe('buildPinnedMessages', () => {
 
   it('returns [] when there is nothing to pin', () => {
     expect(buildPinnedMessages([])).toEqual([])
+  })
+})
+
+describe('originalTaskIndex', () => {
+  it('finds the first user turn, or -1 when there is none', () => {
+    expect(
+      originalTaskIndex([
+        { role: 'assistant', content: 'greeting' },
+        { role: 'user', content: 'first' },
+        { role: 'user', content: 'second' }
+      ])
+    ).toBe(1)
+    expect(originalTaskIndex([{ role: 'assistant', content: 'hi' }])).toBe(-1)
   })
 })
 

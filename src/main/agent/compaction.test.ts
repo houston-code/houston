@@ -6,20 +6,27 @@ import {
   COMPACTION_WINDOW_FRACTION,
   DOCUMENT_TOKENS_ESTIMATE,
   IMAGE_TOKENS_ESTIMATE,
+  EVICT_KEEP_RECENT_ITERATIONS,
   EVICT_KEEP_RECENT_TURNS,
   EVICT_MIN_BYTES,
+  SUMMARY_MAX_TOKENS,
   buildSummaryMessages,
   buildSummaryRequestMessages,
+  compactionAnchor,
+  compactionCandidates,
   estimateTokens,
   evictStaleToolResults,
+  evictionBoundary,
   evictionStub,
   findCompactionCut,
   findCompactionCutByBudget,
   findForcedCompactionCut,
   findSummaryChunkCut,
+  hasEvictableToolResults,
   isContextOverflowError,
   isValidCompactionState,
-  resolveCompactionThreshold
+  resolveCompactionThreshold,
+  summaryMaxTokens
 } from './compaction'
 
 /** A conversation of `turns` complete turns: user → assistant(tool) → tool → assistant. */
@@ -34,6 +41,24 @@ function conversation(turns: number): ChatMessage[] {
     })
     msgs.push({ role: 'tool', content: `contents ${t}`, toolCallId: `c${t}`, toolName: 'read_file' })
     msgs.push({ role: 'assistant', content: `answer ${t}` })
+  }
+  return msgs
+}
+
+/**
+ * One request followed by `iterations` tool rounds, each reading a `size`-char file:
+ * the shape of a single long prompt. The request is at 0; iteration i's assistant
+ * message is at 1 + 2i and its result at 2 + 2i.
+ */
+function longTurn(iterations: number, size = 20_000): ChatMessage[] {
+  const msgs: ChatMessage[] = [{ role: 'user', content: 'refactor the parser' }]
+  for (let i = 0; i < iterations; i++) {
+    msgs.push({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: `r${i}`, name: 'read_file', arguments: { path: `f${i}.ts` } }]
+    })
+    msgs.push({ role: 'tool', content: 'x'.repeat(size), toolCallId: `r${i}`, toolName: 'read_file' })
   }
   return msgs
 }
@@ -119,6 +144,30 @@ describe('isValidCompactionState', () => {
     expect(isValidCompactionState({ cut: 99, summary: 'S' }, log)).toBe(false)
   })
 
+  it('accepts a cut inside a turn when it is anchored to that turn\'s request', () => {
+    const turn = longTurn(3) // request at 0; iterations open at 1, 3, 5
+    expect(isValidCompactionState({ cut: 3, summary: 'S', anchor: 0 }, turn)).toBe(true)
+  })
+
+  it('rejects an anchor that is not a user message before an assistant cut', () => {
+    const turn = longTurn(3)
+    expect(isValidCompactionState({ cut: 3, summary: 'S', anchor: 1 }, turn)).toBe(false) // not a user
+    expect(isValidCompactionState({ cut: 3, summary: 'S', anchor: 3 }, turn)).toBe(false) // not before the cut
+    expect(isValidCompactionState({ cut: 3, summary: 'S', anchor: 0.5 }, turn)).toBe(false)
+    expect(isValidCompactionState({ cut: 3, summary: 'S' }, turn)).toBe(false) // mid-turn, unanchored
+    // A cut on a user boundary must not carry an anchor (nothing to re-send).
+    expect(isValidCompactionState({ cut: 4, summary: 'S', anchor: 0 }, log)).toBe(false)
+  })
+
+  it('accepts eviction-only state, and checks the watermark against the log', () => {
+    expect(isValidCompactionState({ cut: 0, summary: '', evictBefore: 6 }, log)).toBe(true)
+    expect(isValidCompactionState({ cut: 4, summary: 'S', evictBefore: 12 }, log)).toBe(true)
+    expect(isValidCompactionState({ cut: 0, summary: '', evictBefore: 13 }, log)).toBe(false)
+    expect(isValidCompactionState({ cut: 0, summary: '', evictBefore: 2.5 }, log)).toBe(false)
+    expect(isValidCompactionState({ cut: 0, summary: '', evictBefore: 0 }, log)).toBe(false)
+    expect(isValidCompactionState({ cut: 0, summary: '' }, log)).toBe(false) // empty state
+  })
+
   it('rejects the no-op cut 0 and malformed values', () => {
     expect(isValidCompactionState({ cut: 0, summary: 'S' }, log)).toBe(false)
     expect(isValidCompactionState({ cut: 4.5, summary: 'S' }, log)).toBe(false)
@@ -170,32 +219,107 @@ describe('findCompactionCutByBudget', () => {
 })
 
 describe('findForcedCompactionCut', () => {
-  it('advances one user turn at a time toward the latest turn', () => {
-    const msgs = conversation(5) // user messages at indices 0,4,8,12,16
-    const a = findForcedCompactionCut(msgs, 0)
-    expect(a).toBe(4)
-    const b = findForcedCompactionCut(msgs, a)
-    expect(b).toBe(8)
-  })
-
-  it('never cuts away the final user turn (the request being sent)', () => {
-    const msgs = conversation(3) // user messages at 0, 4, 8
-    // From a cut that already keeps only the last two turns, it stops at the last.
-    expect(findForcedCompactionCut(msgs, 4)).toBe(8)
-    // Already keeping only the final turn — nothing left to compact away.
-    expect(findForcedCompactionCut(msgs, 8)).toBe(8)
-  })
-
-  it('cannot advance a single-turn conversation', () => {
-    const msgs = conversation(1) // one user turn at index 0
-    expect(findForcedCompactionCut(msgs, 0)).toBe(0)
-  })
-
-  it('lands on a user boundary so the kept tail stays valid', () => {
-    const msgs = conversation(4)
+  it('halves the verbatim tail in one step instead of creeping a turn at a time', () => {
+    const msgs = conversation(8) // user messages at 0, 4, …, 28
+    const whole = estimateTokens('', msgs)
     const cut = findForcedCompactionCut(msgs, 0)
     expect(msgs[cut].role).toBe('user')
-    expect(msgs.slice(cut)[0].toolCallId).toBeUndefined()
+    expect(estimateTokens('', msgs.slice(cut))).toBeLessThanOrEqual(whole / 2)
+    // The earliest boundary that does it: one turn more would not have halved it.
+    expect(estimateTokens('', msgs.slice(cut - 4))).toBeGreaterThan(whole / 2)
+  })
+
+  it('never cuts away the request when its turn has not run an iteration yet', () => {
+    const msgs: ChatMessage[] = [...conversation(3), { role: 'user', content: 'current question' }]
+    let cut = 0
+    for (let i = 0; i < 10; i++) cut = findForcedCompactionCut(msgs, cut)
+    expect(cut).toBe(12) // the request being sent, alone
+  })
+
+  it('cuts inside a single long turn, after a complete tool-result block', () => {
+    const msgs = longTurn(8)
+    const cut = findForcedCompactionCut(msgs, 0)
+    expect(cut).toBeGreaterThan(1) // past the first iteration: something is summarized
+    expect(msgs[cut].role).toBe('assistant')
+    expect(msgs[cut - 1].role).toBe('tool')
+    expect(estimateTokens('', msgs.slice(cut))).toBeLessThanOrEqual(estimateTokens('', msgs) / 2)
+  })
+
+  it('keeps the newest iteration however hard it is pushed', () => {
+    const msgs = longTurn(6)
+    let cut = 0
+    for (let i = 0; i < 20; i++) cut = findForcedCompactionCut(msgs, cut)
+    expect(cut).toBe(msgs.length - 2) // the last assistant message, with its result
+  })
+
+  it('cannot advance when only the request and its first iteration remain', () => {
+    expect(findForcedCompactionCut(longTurn(1), 0)).toBe(0)
+    expect(findForcedCompactionCut([{ role: 'user', content: 'huge paste' }], 0)).toBe(0)
+  })
+
+  it('lands on a turn or iteration boundary so the kept tail stays valid', () => {
+    for (const msgs of [conversation(4), longTurn(5)]) {
+      const cut = findForcedCompactionCut(msgs, 0)
+      expect(['user', 'assistant']).toContain(msgs[cut].role)
+      expect(msgs[cut].toolCallId).toBeUndefined() // never opens on an orphaned result
+    }
+  })
+})
+
+describe('compactionCandidates', () => {
+  it('never offers a steer or note inside the current turn', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'the request' }, // 0: turnStart
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'list_dir', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'a', toolName: 'list_dir' },
+      { role: 'user', content: 'actually, update the docs too' }, // 3: a steer
+      { role: 'assistant', content: '', toolCalls: [{ id: 'b', name: 'list_dir', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'b', toolName: 'list_dir' },
+      { role: 'assistant', content: 'done' }
+    ]
+    expect(compactionCandidates(msgs, 0, 0)).toEqual([4, 6])
+  })
+
+  it('never separates a tool call from its result', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'the request' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'list_dir', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'a', toolName: 'list_dir' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'b', name: 'list_dir', arguments: {} },
+          { id: 'c', name: 'list_dir', arguments: {} }
+        ]
+      },
+      { role: 'tool', content: 'ok', toolCallId: 'b', toolName: 'list_dir' },
+      // `c` never got its result before the next iteration (an interrupted call).
+      { role: 'assistant', content: '', toolCalls: [{ id: 'd', name: 'list_dir', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'd', toolName: 'list_dir' },
+      { role: 'assistant', content: 'done' }
+    ]
+    expect(compactionCandidates(msgs, 0, 0)).toEqual([3, 7])
+  })
+
+  it('offers whole turns up to the turn start, then iterations inside it', () => {
+    const msgs = conversation(3) // user messages at 0, 4, 8; the last turn's iterations at 9, 11
+    expect(compactionCandidates(msgs, 0, 8)).toEqual([4, 8, 11])
+    expect(compactionCandidates(msgs, 4, 8)).toEqual([8, 11]) // only past the current cut
+    expect(compactionCandidates(msgs, 0, -1)).toEqual([])
+  })
+})
+
+describe('compactionAnchor', () => {
+  it('anchors a cut inside the turn to the request that opened it', () => {
+    const msgs = longTurn(3)
+    expect(compactionAnchor(msgs, 3, 0)).toBe(0)
+  })
+
+  it('anchors nothing when the cut starts a whole turn', () => {
+    const msgs = conversation(3)
+    expect(compactionAnchor(msgs, 4, 8)).toBeUndefined()
+    expect(compactionAnchor(msgs, 0, 8)).toBeUndefined()
   })
 })
 
@@ -291,6 +415,64 @@ describe('findCompactionCut', () => {
     const msgs = conversation(6)
     expect(findCompactionCut(msgs, 100, 2)).toBe(100)
   })
+
+  describe('with a tail budget', () => {
+    it('cuts inside the current turn when its own iterations overflow the budget', () => {
+      const msgs = longTurn(8) // ~5k tokens per iteration
+      const budget = 12_000
+      const cut = findCompactionCut(msgs, 0, 3, { tailBudget: budget })
+      expect(msgs[cut].role).toBe('assistant')
+      expect(estimateTokens('', msgs.slice(cut))).toBeLessThanOrEqual(budget)
+      // The earliest iteration that fits: one more would not have.
+      expect(estimateTokens('', msgs.slice(cut - 2))).toBeGreaterThan(budget)
+    })
+
+    it('keeps the last whole turns when they fit', () => {
+      expect(findCompactionCut(conversation(5), 0, 3, { tailBudget: 1_000_000 })).toBe(8)
+    })
+
+    it('keeps fewer whole turns before it cuts inside one', () => {
+      // Five turns, each carrying a ~5k-token read, then a small current request.
+      const msgs: ChatMessage[] = []
+      for (let t = 0; t < 5; t++) {
+        msgs.push({ role: 'user', content: `q${t}` })
+        msgs.push({
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `c${t}`, name: 'read_file', arguments: { path: `f${t}.ts` } }]
+        })
+        msgs.push({ role: 'tool', content: 'x'.repeat(20_000), toolCallId: `c${t}`, toolName: 'read_file' })
+        msgs.push({ role: 'assistant', content: `a${t}` })
+      }
+      msgs.push({ role: 'user', content: 'current question' }) // 20
+      // Room for one big turn plus the request, not the classic three turns.
+      const cut = findCompactionCut(msgs, 0, 3, { tailBudget: 6_000 })
+      expect(cut).toBe(16)
+      expect(msgs[cut].role).toBe('user')
+    })
+
+    it('keeps only the newest iteration when nothing fits', () => {
+      const msgs = longTurn(4)
+      expect(findCompactionCut(msgs, 0, 3, { tailBudget: 10 })).toBe(msgs.length - 2)
+    })
+
+    it('leaves the cut alone when the tail already fits', () => {
+      expect(findCompactionCut(longTurn(4), 0, 3, { tailBudget: 1_000_000 })).toBe(0)
+    })
+
+    it('treats only messages up to the turn start as whole turns', () => {
+      // Notes the loop pushed mid-turn are user messages, but not turns: counting them
+      // would cut the request away and keep three nudges.
+      const msgs: ChatMessage[] = [{ role: 'user', content: 'the request' }]
+      for (let i = 0; i < 4; i++) {
+        msgs.push({ role: 'assistant', content: '', toolCalls: [{ id: `n${i}`, name: 'list_dir', arguments: {} }] })
+        msgs.push({ role: 'tool', content: 'x'.repeat(8_000), toolCallId: `n${i}`, toolName: 'list_dir' })
+        msgs.push({ role: 'user', content: `[note ${i}]` })
+      }
+      const cut = findCompactionCut(msgs, 0, 3, { turnStart: 0, tailBudget: 3_000 })
+      expect(msgs[cut].role).toBe('assistant')
+    })
+  })
 })
 
 describe('buildSummaryMessages', () => {
@@ -320,6 +502,46 @@ describe('buildSummaryRequestMessages', () => {
     const req = buildSummaryRequestMessages([], head)
     expect(req[0].role).toBe('user') // head starts with a user message
     expect(req[req.length - 1].role).toBe('user') // the instruction
+  })
+
+  it('merges adjacent user messages so the request alternates strictly', () => {
+    // An anchored request in front of a head that opens on a note, and a head that
+    // ends on a note in front of the instruction: both used to be two users in a row.
+    const image = { mediaType: 'image/png', data: 'AAAA' }
+    const prior: ChatMessage[] = [
+      ...buildSummaryMessages('older summary'),
+      { role: 'user', content: 'the request', images: [image] }
+    ]
+    const head: ChatMessage[] = [
+      { role: 'user', content: '[note] keep going' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'list_dir', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'a', toolName: 'list_dir' },
+      { role: 'user', content: '[note] wrap up' }
+    ]
+    const before = JSON.stringify([prior, head])
+    const req = buildSummaryRequestMessages(prior, head)
+
+    for (let i = 1; i < req.length; i++) {
+      expect(req[i].role === 'user' && req[i - 1].role === 'user', `users at ${i - 1},${i}`).toBe(false)
+    }
+    expect(req[2].content).toBe('the request\n\n[note] keep going')
+    expect(req[2].images).toEqual([image]) // attachments survive the merge
+    expect(req.at(-1)!.content).toContain('[note] wrap up')
+    expect(req.at(-1)!.content).toContain('Produce the summary now')
+    expect(JSON.stringify([prior, head])).toBe(before) // inputs untouched
+  })
+})
+
+describe('summaryMaxTokens', () => {
+  it('gives a long session room for a full summary and a reasoning model room to think', () => {
+    expect(SUMMARY_MAX_TOKENS).toBeGreaterThanOrEqual(16_000)
+    expect(summaryMaxTokens(200_000)).toBe(SUMMARY_MAX_TOKENS)
+    expect(summaryMaxTokens(null)).toBe(SUMMARY_MAX_TOKENS)
+  })
+
+  it('scales down for small windows, never below the old fixed cap', () => {
+    expect(summaryMaxTokens(16_000)).toBe(4_000)
+    expect(summaryMaxTokens(4_096)).toBe(2048)
   })
 })
 
@@ -455,5 +677,57 @@ describe('evictStaleToolResults', () => {
   it('returns the input unchanged when nothing is old enough to be stale', () => {
     const window = windowWithLargeToolResults(EVICT_KEEP_RECENT_TURNS)
     expect(evictStaleToolResults(window)).toBe(window)
+  })
+
+  it('ages out a single long turn\'s own early reads by iteration', () => {
+    // One user turn: turn age alone never makes any of these stale.
+    const msgs = longTurn(EVICT_KEEP_RECENT_ITERATIONS + 2)
+    const out = evictStaleToolResults(msgs)
+    const stubbed = out.filter((m) => m.role === 'tool' && m.content.startsWith('[earlier '))
+    expect(stubbed.map((m) => m.toolCallId)).toEqual(['r0', 'r1'])
+    // The newest iterations stay verbatim.
+    expect(out.slice(-2 * EVICT_KEEP_RECENT_ITERATIONS)).toEqual(msgs.slice(-2 * EVICT_KEEP_RECENT_ITERATIONS))
+  })
+
+  it('stubs exactly what lies before an explicit boundary', () => {
+    const msgs = longTurn(6)
+    const out = evictStaleToolResults(msgs, { keepFrom: 3 })
+    expect(out[2].content.startsWith('[earlier ')).toBe(true)
+    expect(out.slice(3)).toEqual(msgs.slice(3))
+    expect(evictStaleToolResults(msgs, { keepFrom: 0 })).toBe(msgs)
+  })
+})
+
+describe('evictionBoundary', () => {
+  it('reaches into the current turn by iteration age', () => {
+    const msgs = longTurn(6) // iterations open at 1, 3, 5, 7, 9, 11
+    expect(evictionBoundary(msgs)).toBe(5) // the 4th most recent iteration
+  })
+
+  it('takes whichever of turn age and iteration age reaches further', () => {
+    // Five turns, one tool round each: iteration age says 5, turn age says 8.
+    expect(evictionBoundary(windowWithLargeToolResults(5))).toBe(8)
+    expect(evictionBoundary(windowWithLargeToolResults(5), { keepRecentIterations: 1 })).toBe(17)
+  })
+
+  it('is 0 when nothing is old enough by either measure', () => {
+    expect(evictionBoundary(longTurn(EVICT_KEEP_RECENT_ITERATIONS))).toBe(0)
+  })
+})
+
+describe('hasEvictableToolResults', () => {
+  it('reports whether a range holds a result worth stubbing', () => {
+    const msgs = longTurn(3)
+    expect(hasEvictableToolResults(msgs, 0, 3)).toBe(true) // the 20k read at 2
+    expect(hasEvictableToolResults(msgs, 3, 4)).toBe(false) // an assistant message
+    expect(hasEvictableToolResults(msgs, 5, 5)).toBe(false) // empty range
+  })
+
+  it('skips small and already-stubbed results', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'tool', content: 'ok', toolCallId: 'a', toolName: 'list_dir' },
+      { role: 'tool', content: evictionStub('read_file', 'f.ts', 9000), toolCallId: 'b', toolName: 'read_file' }
+    ]
+    expect(hasEvictableToolResults(msgs, 0, 2)).toBe(false)
   })
 })

@@ -27,7 +27,10 @@ describe('isLikelyChatModel', () => {
       'gpt-live-1',
       'gemini-3.8-live',
       'gemini-3.8-live-extended-thinking',
-      'gemini-3.5-live-translate-preview'
+      'gemini-3.5-live-translate-preview',
+      // Image generation, as a later drift run listed them.
+      'gemini-3-pro-image',
+      'gemini-3-pro-image-preview'
     ]) {
       expect(isLikelyChatModel(id), id).toBe(false)
     }

@@ -2,7 +2,10 @@ import type { Content, GoogleGenAI } from '@google/genai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
-import { geminiThinkingBudget } from './reasoning'
+import { geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
+
+/** Output floor for models that always think (Gemini 4): Google's recommended minimum. */
+const GEMINI_THINKING_MIN_OUTPUT = 32_768
 
 export function toGeminiContents(messages: ChatMessage[]): Content[] {
   const out: Content[] = []
@@ -93,11 +96,15 @@ export function createGeminiProvider(apiKey: string): Provider {
       const ai = await getAi()
       const config: Record<string, unknown> = {}
       if (req.system) config.systemInstruction = req.system
-      if (req.maxTokens) config.maxOutputTokens = req.maxTokens
-      const thinkingBudget = geminiThinkingBudget(req.model, req.reasoningEffort)
-      if (thinkingBudget !== undefined) {
-        config.thinkingConfig = { thinkingBudget, includeThoughts: true }
+      if (req.maxTokens) {
+        // Gemini 4 always thinks and spends the output limit on it: a short cap (a title, a
+        // summary) can run out mid-thought with no answer. Google recommends at least 32K.
+        config.maxOutputTokens = geminiUsesThinkingLevel(req.model)
+          ? Math.max(req.maxTokens, GEMINI_THINKING_MIN_OUTPUT)
+          : req.maxTokens
       }
+      const thinkingConfig = geminiThinkingConfig(req.model, req.reasoningEffort)
+      if (thinkingConfig) config.thinkingConfig = thinkingConfig
       if (req.tools && req.tools.length) {
         config.tools = [
           {

@@ -32,6 +32,37 @@ export interface ModelPricing {
    * `input * CACHE_WRITE_PRICE_MULTIPLIER` (Anthropic's 1.25x surcharge).
    */
   cacheWrite?: number
+  /**
+   * Higher rates once a request's prompt (all input tokens, cache reads and writes
+   * included) exceeds `above` tokens. Each request is priced on its own. Fields absent
+   * here fall back as they do for the base rate (cache multipliers off this tier's input).
+   */
+  longContext?: {
+    above: number
+    input: number
+    output: number
+    cacheRead?: number
+    cacheWrite?: number
+  }
+  /**
+   * Announced price changes, oldest first: from `from` (`YYYY-MM-DD`, UTC) the entry's rates
+   * replace the ones above. Kept as data rather than applied by hand on the day, so every
+   * installed build switches on time. See {@link pricingAt}.
+   */
+  scheduled?: ScheduledPrice[]
+}
+
+/** A dated price change: the full set of rates in force from `from` on. */
+export type ScheduledPrice = { from: string } & Omit<ModelPricing, 'scheduled'>
+
+/** The rates in force on `at`: the latest scheduled change whose date has arrived, else the base. */
+export function pricingAt(p: ModelPricing, at: Date): Omit<ModelPricing, 'scheduled'> {
+  const { scheduled, ...base } = p
+  const day = at.toISOString().slice(0, 10)
+  const current = scheduled?.filter((c) => c.from <= day).at(-1)
+  if (!current) return base
+  const { from: _from, ...rates } = current
+  return rates
 }
 
 /** A display-order family: canonical name plus a matcher for a lowercased id. */
@@ -86,14 +117,15 @@ const CLAUDE_INTERLEAVED = /claude-(opus|sonnet)-4[-@](\d{8}|1|5)\b/i
 /** The `xhigh` effort tier: Opus 4.7+, Sonnet 5+, Fable / Mythos. Opus 4.6 and Sonnet 4.6
  *  top out at `high`. */
 const CLAUDE_XHIGH = /claude-(opus-4-[7-9]|opus-[5-9]|sonnet-[5-9]|fable|mythos)/i
+// Haiku 5.5 documents no `xhigh` tier, so it clamps to `high` like the 4.6 line.
 
-/** Models that think when the request omits `thinking` (Opus 5+, Sonnet 5+, Fable, Mythos). Some
- *  reject `{ type: 'disabled' }` outright, so reasoning can be turned down but never off. */
-const CLAUDE_THINKS_BY_DEFAULT = /claude-(opus-[5-9]|sonnet-[5-9]|fable|mythos)/i
+/** Models that think when the request omits `thinking` (Opus, Sonnet and Haiku from 5 on, Fable,
+ *  Mythos). Some reject `{ type: 'disabled' }` outright, so reasoning can be turned down but never off. */
+const CLAUDE_THINKS_BY_DEFAULT = /claude-((opus|sonnet|haiku)-[5-9]|fable|mythos)/i
 
-/** Prefix-bound ("preserved") thinking: Fable 5.1, Opus 5.5, Sonnet 5.5. Mythos 5.1 doesn't
- *  run the check. */
-const CLAUDE_PRESERVED_THINKING = /claude-((opus|sonnet)-5-[5-9]|fable-5-[1-9])/i
+/** Prefix-bound ("preserved") thinking: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. Mythos 5.1
+ *  doesn't run the check. */
+const CLAUDE_PRESERVED_THINKING = /claude-((opus|sonnet|haiku)-5-[5-9]|fable-5-[1-9])/i
 
 const CLAUDE_FAMILIES: FamilyRule[] = [
   { name: 'fable', test: /fable/ },
@@ -104,22 +136,25 @@ const CLAUDE_FAMILIES: FamilyRule[] = [
 
 /** Per-MTok rates. Fable / Mythos are the flagship tier, priced above Opus. Cache writes
  *  are 1.25x input everywhere (the absent-field default); cache reads are 0.1x except
- *  where a release cut them (Fable / Mythos 5.1 at 0.025x, Opus 5.5 at 0.05x). Releases
+ *  where a release cut them (Fable / Mythos 5.1 at 0.025x, Opus 5.5 and Sonnet 5.5 at 0.05x). Releases
  *  repriced within a family are matched before the family-wide rate. */
 const CLAUDE_PRICES: Rows<ModelPricing> = [
   [/(fable|mythos)-5-1/, { input: 10, output: 50, cacheRead: 0.25 }],
   [/fable|mythos/, { input: 10, output: 50 }],
   [/opus-5-5/, { input: 4, output: 20, cacheRead: 0.2 }],
   [/opus/, { input: 5, output: 25 }],
+  [/sonnet-5-5/, { input: 2, output: 10, cacheRead: 0.1 }],
   [/sonnet-[5-9]/, { input: 2, output: 10 }],
   [/sonnet/, { input: 3, output: 15 }],
+  // Haiku 5.5 is priced by prompt length: a request over 100K input tokens pays the higher rate.
+  [/haiku-5-5/, { input: 0.1, output: 0.5, longContext: { above: 100_000, input: 0.5, output: 2.5 } }],
   [/haiku/, { input: 1, output: 5 }]
 ]
 
-/** Opus and Sonnet 4.6+ and Fable / Mythos ship a 1M window as standard; Haiku and older
- *  families (3.x, Opus/Sonnet ≤4.5) stay at 200K. */
+/** Opus and Sonnet 4.6+, Haiku 5+ and Fable / Mythos ship a 1M window as standard; Haiku 4.x
+ *  and older families (3.x, Opus/Sonnet ≤4.5) stay at 200K. */
 const CLAUDE_WINDOWS: Rows<number> = [
-  [/claude.*(opus-(4-[6-9]|[5-9])|sonnet-(4-[6-9]|[5-9])|fable|mythos)/, 1_000_000],
+  [/claude.*(opus-(4-[6-9]|[5-9])|sonnet-(4-[6-9]|[5-9])|haiku-[5-9]|fable|mythos)/, 1_000_000],
   [/claude/, 200_000]
 ]
 
@@ -220,38 +255,53 @@ const OPENAI_TOOLS: Rows<boolean> = [
 
 /** Configurable thinking budget: the 2.5 and 3.x lines, plus anything named "thinking".
  *  Unguarded because it only ever runs on a Gemini provider's ids. */
-const GEMINI_THINKING = /2\.5|thinking|gemini-3/i
+const GEMINI_THINKING = /2\.5|thinking|gemini-([3-9]|[1-9]\d)/i
+
+/** Gemini 4 on configures thinking by level (low / medium / high) rather than a token budget,
+ *  and always thinks, so "reasoning off" maps to the lowest level. */
+const GEMINI_THINKING_LEVEL = /gemini-([4-9]|[1-9]\d)/i
 
 const GEMINI_FAMILIES: FamilyRule[] = [
+  // Gemini 4 names its flagship Argon rather than Pro.
+  { name: 'argon', test: /argon/ },
   { name: 'pro', test: /pro/ },
   { name: 'flash', test: /flash/ }
 ]
 
 /** Rates vary by release rather than by tier, so specific ids precede each tier's fallback
  *  (lite before flash, which it contains). Cache reads are 0.1x, implicit-cache writes are
- *  free, and Pro prices are the <=200K-prompt tier. 3.5-flash-lite has no context caching,
- *  so its reads are priced at input. The 3.6-3.8 Flash rate doubles on 2027-01-01 per
- *  Google's pricing page. */
+ *  free, and Pro prompts over 200K tokens bill at the long-context tier. 3.5-flash-lite has no context caching,
+ *  so its reads are priced at input. Announced changes are scheduled on the row. */
 const GEMINI_PRICES: Rows<ModelPricing> = [
+  // Introductory rate through 2026-11-30, then the standard rate. No long-prompt tier.
+  [
+    /gemini-4-argon/,
+    { ...freeWrites(2, 10, 0.1), scheduled: [{ from: '2026-12-01', ...freeWrites(4, 20, 0.2) }] }
+  ],
   [/gemini.*3\.5.*flash-lite|gemini.*flash-lite.*3\.5/, freeWrites(0.3, 2.5)],
   [/gemini.*2\.5.*flash-lite|gemini.*flash-lite.*2\.5/, freeWrites(0.1, 0.4, 0.01)],
   [/gemini.*flash-lite/, freeWrites(0.25, 1.5, 0.025)], // 3.1
   [/gemini.*3\.5.*flash|gemini.*flash.*3\.5/, freeWrites(1.5, 9, 0.15)],
   [/gemini-3-flash/, freeWrites(0.5, 3, 0.05)],
   [/gemini.*2\.5.*flash|gemini.*flash.*2\.5/, freeWrites(0.3, 2.5, 0.03)],
-  [/gemini.*flash/, freeWrites(0.75, 3.75, 0.075)], // 3.6-3.8
-  [/gemini-3/, freeWrites(2, 12, 0.2)], // 3.x Pro
-  [/gemini/, freeWrites(1.25, 10, 0.125)] // 2.5 Pro
+  // 3.6-3.8 Flash, doubling on 2027-01-01 per Google's pricing page.
+  [
+    /gemini-3\.[6-8]-flash/,
+    { ...freeWrites(0.75, 3.75, 0.075), scheduled: [{ from: '2027-01-01', ...freeWrites(1.5, 7.5, 0.15) }] }
+  ],
+  [/gemini.*flash/, freeWrites(0.75, 3.75, 0.075)], // any other Flash: the current Flash rate
+  [/gemini-3/, { ...freeWrites(2, 12, 0.2), longContext: { above: 200_000, ...freeWrites(4, 18, 0.4) } }], // 3.x Pro
+  [/gemini/, { ...freeWrites(1.25, 10, 0.125), longContext: { above: 200_000, ...freeWrites(2.5, 15, 0.25) } }] // 2.5 Pro
 ]
 
 const GEMINI_WINDOWS: Rows<number> = [[/gemini/, 1_000_000]]
 
 /** Function calling: Gemini 1.5 and everything from 2.x on. */
-const GEMINI_TOOLS: Rows<boolean> = [[/gemini[^0-9]*(1\.5|2\.|3)/, true]]
+const GEMINI_TOOLS: Rows<boolean> = [[/gemini[^0-9]*(1\.5|2\.|[3-9]|[1-9]\d)/, true]]
 
 /** Gemini 1.5 and everything from 2.x on are multimodal; 1.0 (`gemini-pro`) was text-only. */
 const GEMINI_VISION: Rows<boolean> = [
-  [/gemini[^0-9]*(1\.5|2\.|3)/, true],
+  [/gemini[^0-9]*(1\.5|2\.|[3-9]|[1-9]\d)/, true],
   [/gemini/, false]
 ]
 
@@ -367,4 +417,8 @@ export function openaiSupportsReasoning(model: string): boolean {
 
 export function geminiSupportsThinking(model: string): boolean {
   return GEMINI_THINKING.test(model)
+}
+
+export function geminiUsesThinkingLevel(model: string): boolean {
+  return GEMINI_THINKING_LEVEL.test(model)
 }

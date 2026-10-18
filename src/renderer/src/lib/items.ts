@@ -11,6 +11,7 @@ import {
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { FileDiffPreview } from '@shared/diff'
 import type { ImageAttachment } from '@shared/images'
+import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 import { upsertFinding } from '@shared/reviewFindings'
 
@@ -29,6 +30,11 @@ export interface UserItem {
    * than as plain user text.
    */
   isSummary?: boolean
+  /**
+   * Set when `text` is a first-party prompt (`/review`, a ship button, `/agent`, a
+   * handed-off brief): the bubble shows this, with `text` behind a disclosure.
+   */
+  invokedAs?: PromptInvocation
 }
 export interface AssistantItem {
   kind: 'assistant'
@@ -147,7 +153,14 @@ export type DisplayItem =
 export function lastUserText(items: DisplayItem[]): string | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i]
-    if (it.kind === 'user' && !it.isSummary) return it.text
+    if (it.kind !== 'user' || it.isSummary) continue
+    // Recall what the user typed (`/review`), never the prompt Houston wrote for it.
+    // A button press or a handoff has nothing to recall, so look further back.
+    if (it.invokedAs) {
+      if (it.invokedAs.typed) return it.invokedAs.typed
+      continue
+    }
+    return it.text
   }
   return undefined
 }
@@ -558,6 +571,17 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
   }
 }
 
+/**
+ * The notice text for a saved system note: its opening paragraph. A note can carry
+ * a payload meant for the model (a failed verification's full test output), which
+ * would swamp a one-line notice; the opening says what happened.
+ */
+export function systemNoteSummary(content: string): string {
+  const body = content.slice(SYSTEM_NOTE_PREFIX.length).trim()
+  const first = body.split(/\n\s*\n/)[0]?.trim() ?? ''
+  return first.replace(/:$/, '.')
+}
+
 /** Build display items from a saved conversation's message log. */
 export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
   const resultByCallId = new Map<string, { output: string; images?: ImageAttachment[] }>()
@@ -574,14 +598,16 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
       // landing reminder) rides on a user message but isn't from the user — show it
       // as a system notice, not a user bubble, and keep it out of `lastUserText`.
       if (m.content.startsWith(SYSTEM_NOTE_PREFIX)) {
-        const text = m.content.slice(SYSTEM_NOTE_PREFIX.length).trim()
+        const text = systemNoteSummary(m.content)
         if (text) items.push({ kind: 'notice', id: nextId(), text, tone: 'info' })
       } else if (m.content.trim() || m.images?.length) {
+        const invokedAs = sanitizeInvocation(m.invokedAs)
         items.push({
           kind: 'user',
           id: nextId(),
           text: m.content,
           ...(m.images?.length ? { images: m.images } : {}),
+          ...(invokedAs ? { invokedAs } : {}),
           ...(m.content.startsWith(COMPACTION_SUMMARY_PREFIX) ? { isSummary: true } : {})
         })
       }

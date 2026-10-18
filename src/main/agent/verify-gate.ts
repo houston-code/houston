@@ -97,7 +97,7 @@ export interface VerifyResult {
  */
 export function verifyFailureMessage(command: string, output: string): string {
   return (
-    `Automatic verification failed. I ran your configured verification command ` +
+    `Automatic verification failed. Houston ran the configured verification command ` +
     `\`${command}\` after your changes and it did not pass:\n\n` +
     '```\n' +
     output +

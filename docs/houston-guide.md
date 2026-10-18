@@ -302,6 +302,11 @@ own step count, it stays a hard stop until you turn the switch on.
   first commit** when a remote exists but nothing is committed, and **Commit &
   push** for a remote that isn't on GitHub. Each hands the work to the agent as a
   normal turn, so every git and network step goes through your approvals.
+- **Prompts Houston writes for you.** `/review`, `/agent`, the shipping buttons, and
+  a session another chat handed off each send the agent a detailed prompt. The chat
+  shows what you did (for example "/review" or "Create PR") instead of that prompt;
+  open **Instructions sent to the agent** under it to read the exact text. The
+  terminal prints a one-line summary in its place.
 
 `/undo` covers the last turn's file writes only. It does not undo shell commands,
 and it does not touch git history.
@@ -514,7 +519,11 @@ ids fall back to the chat's model). By default a subagent is read-only (it canno
 edit files or run commands); a subagent marked `write: true` gets a writable tier
 and is dispatched with `dispatch_writable_agent`, which is approval-gated because
 it grants write access: one approval covers the whole delegated task's local
-actions, confined to the project. Either tier can also reach the web with
+actions, confined to the project. Your permission rules still apply inside
+either tier: a `deny` (including a managed-policy or project guardrail one)
+refuses the subagent's call outright, and an `ask` rule, a credential-file read
+(a `.env`, a private key), or a shell command that names a path outside the project
+asks you first, exactly as for the main agent. Either tier can also reach the web with
 `web_fetch` and `web_search`, and every network request first asks you for
 approval, per destination, exactly like the main agent's own network calls (a
 denial comes back to the subagent as its tool result). A subagent's shell
@@ -878,8 +887,11 @@ conventions, not as authority to change tool or permission behavior.
 
 ## Context, worktrees, and history
 
-- **Compaction.** When a conversation grows too large, Houston summarizes the
-  older turns so it never overflows the context window. The threshold is sized
+- **Compaction.** When a conversation grows too large, Houston first trims large
+  tool output the agent has moved past (it can re-read anything it still needs),
+  then summarizes the older part of the conversation, including the earlier steps
+  of one long request, so it never overflows the context window. The request being
+  worked on is always kept word for word. The threshold is sized
   automatically from the selected model's context window (a large-window model
   compacts later, a small local model sooner), and the summary is saved with the
   conversation so later turns extend it instead of re-summarizing from scratch.
@@ -902,6 +914,15 @@ conventions, not as authority to change tool or permission behavior.
   Houston profile, so the revert/redo affordance survives an app restart; the
   most recent 50 turns' checkpoints are kept. Shell-command side effects are not
   checkpointed: revert only restores files the editing tools touched.
+
+## Help menu
+
+The desktop app's **Help** menu (last in the menu bar on every platform) has
+**Houston Guide**, which opens this guide, and **Report an Issue**, which opens a
+new GitHub issue. On macOS the Help menu also has the system search field: type
+part of a command's name (for example "settings") to find it in the menus. On
+Windows and Linux the Help menu also holds **Share Houston…** and **Check for
+Updates…**, which sit in the app menu on macOS.
 
 ## Sharing Houston
 

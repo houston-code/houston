@@ -1,4 +1,5 @@
 import { parsePatch } from './apply-patch'
+import type { ToolKind } from './tools'
 
 /**
  * Whether a file path names a credential / secret store whose contents an agent
@@ -101,6 +102,16 @@ export function isSensitivePath(path: string): boolean {
   if (lower.endsWith('service-account.json') || lower.endsWith('serviceaccount.json')) return true
 
   return false
+}
+
+/**
+ * Whether a tool call is a read of a credential / secret file: a read-kind call
+ * whose `path` argument {@link isSensitivePath}. The one definition shared by the
+ * loop's approval gate, its parallel-read scheduler, and the subagent gate, so no
+ * path can judge the same call benign that another would have prompted for.
+ */
+export function isSensitiveRead(kind: ToolKind, args: Record<string, unknown>): boolean {
+  return kind === 'read' && typeof args.path === 'string' && isSensitivePath(args.path)
 }
 
 /**

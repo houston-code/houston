@@ -6,7 +6,14 @@ import type { ModelOption } from '@shared/types'
 import { listAnthropicModels } from './anthropic'
 import { listOpenAIModels } from './openai'
 import { listGeminiModels } from './gemini'
-import { driftCandidates, renderDriftSection, type DriftProvider } from './drift'
+import {
+  driftCandidates,
+  priceChangeKey,
+  renderDriftSection,
+  renderPriceRows,
+  upcomingPriceChanges,
+  type DriftProvider
+} from './drift'
 
 /**
  * Live runner for the weekly model-drift workflow (.github/workflows/model-drift.yml).
@@ -58,13 +65,21 @@ describe.skipIf(!PROVIDER)('model drift (live listing)', () => {
     const ignored = new Set(
       (JSON.parse(readFileSync(ignoreFile, 'utf8')) as { ignore: Array<{ id: string }> }).ignore.map((e) => e.id)
     )
-    const candidates = driftCandidates(provider, models, shipped, ignored, new Date())
+    const now = new Date()
+    const candidates = driftCandidates(provider, models, shipped, ignored, now)
+    const prices = upcomingPriceChanges(shipped, now)
 
     const out = process.env.DRIFT_OUT
     expect(out, 'DRIFT_OUT is not set').toBeTruthy()
     writeFileSync(
       out!,
-      JSON.stringify({ provider, ids: candidates.map((c) => c.id), section: renderDriftSection(provider, candidates) })
+      JSON.stringify({
+        provider,
+        ids: candidates.map((c) => c.id),
+        section: renderDriftSection(provider, candidates),
+        priceIds: prices.map(priceChangeKey),
+        priceRows: renderPriceRows(prices)
+      })
     )
   })
 })

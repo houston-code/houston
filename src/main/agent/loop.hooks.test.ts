@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentEvent, ChatMessage, Provider, ProviderStreamEvent, ToolApprovalDecision } from '@shared/agent'
+import {
+  SYSTEM_NOTE_PREFIX,
+  type AgentEvent,
+  type ChatMessage,
+  type Provider,
+  type ProviderStreamEvent,
+  type ToolApprovalDecision
+} from '@shared/agent'
 import type { Hook, PermissionRule } from '@shared/types'
 import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
 
@@ -163,6 +170,10 @@ describe('lifecycle hooks in the loop', () => {
     expect(provider.calls).toBe(2) // the block drove a second model turn
     const injected = messages.filter((m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('run the tests'))
     expect(injected).toHaveLength(1)
+    // A system note, not a user turn: the transcript shows it as Houston's.
+    expect(injected[0].content).toBe(
+      `${SYSTEM_NOTE_PREFIX} A Stop hook asked you to keep working: run the tests before stopping`
+    )
     const assistantText = messages.filter((m) => m.role === 'assistant').map((m) => m.content)
     expect(assistantText).toContain('second')
     expect(events.at(-1)?.type).toBe('done')

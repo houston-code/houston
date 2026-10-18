@@ -1,7 +1,8 @@
 import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
 import type { PermissionRule } from '@shared/types'
-import { isSensitivePath } from './sensitive-paths'
+import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
+import type { ToolKind } from './tools'
 
 /**
  * User-defined permission rules, consulted before the coarse approval policy.
@@ -307,6 +308,23 @@ export function shellWritesSensitivePath(command: string): boolean {
     }
   }
   return false
+}
+
+/**
+ * Whether a tool call creates, overwrites, or removes a credential / secret file: a
+ * write tool targeting one (see writesSensitivePath) or a `run_shell` command that
+ * writes one (see {@link shellWritesSensitivePath}). The one definition shared by the
+ * main loop's approval gate and the subagent gate, so neither can judge benign a
+ * call the other would have prompted for.
+ */
+export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<string, unknown>): boolean {
+  if (kind === 'write') return writesSensitivePath(toolName, args)
+  return (
+    kind === 'shell' &&
+    toolName === 'run_shell' &&
+    typeof args.command === 'string' &&
+    shellWritesSensitivePath(args.command)
+  )
 }
 
 /**

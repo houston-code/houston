@@ -29,7 +29,7 @@ export const BEDROCK_MODELS: string[] = [
   'anthropic.claude-fable-5-1',
   'anthropic.claude-opus-5-5',
   'anthropic.claude-sonnet-5-5',
-  'anthropic.claude-haiku-4-5'
+  'anthropic.claude-haiku-5-5'
 ]
 
 /**
@@ -42,21 +42,21 @@ export const VERTEX_MODELS: string[] = [
   'claude-fable-5-1',
   'claude-opus-5-5',
   'claude-sonnet-5-5',
-  'claude-haiku-4-5'
+  'claude-haiku-5-5'
 ]
 
 /**
  * Claude models on Microsoft Foundry, addressed with the bare id. The Foundry client
  * omits the models endpoint outright, so this is the same curated-list contract as
  * {@link BEDROCK_MODELS}: which of them a resource serves depends on what has been
- * deployed to it, so the user edits the list. Opus stays on 4.8 here: Fable 5.1 and
- * Sonnet 5.5 are documented on Foundry, Opus 5.5 is not yet.
+ * deployed to it, so the user edits the list. Opus stays on 4.8 here: Fable 5.1,
+ * Sonnet 5.5 and Haiku 5.5 are documented on Foundry, Opus 5.5 was not when this was set.
  */
 export const FOUNDRY_MODELS: string[] = [
   'claude-fable-5-1',
   'claude-opus-4-8',
   'claude-sonnet-5-5',
-  'claude-haiku-4-5'
+  'claude-haiku-5-5'
 ]
 
 /**

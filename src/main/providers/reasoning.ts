@@ -15,6 +15,7 @@ import {
   anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   geminiSupportsThinking,
+  geminiUsesThinkingLevel,
   openaiSupportsReasoning
 } from '@shared/model-facts'
 
@@ -28,6 +29,7 @@ export {
   anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   geminiSupportsThinking,
+  geminiUsesThinkingLevel,
   openaiSupportsReasoning
 }
 
@@ -157,6 +159,25 @@ const GEMINI_BUDGET: Record<'low' | 'medium' | 'high', number> = {
   low: 4096,
   medium: 10_000,
   high: 16_000
+}
+
+/**
+ * Gemini `thinkingConfig` for a request, or undefined to send none. The 2.5 and 3.x lines
+ * take a token budget; Gemini 4 takes a level (`LOW` / `MEDIUM` / `HIGH`) and always
+ * thinks, so "off" maps to `LOW` with the thoughts left out of the response. `xhigh`
+ * clamps to `HIGH`.
+ */
+export function geminiThinkingConfig(
+  model: string,
+  effort: ReasoningEffort | undefined
+): { thinkingBudget: number; includeThoughts: true } | { thinkingLevel: 'LOW' | 'MEDIUM' | 'HIGH'; includeThoughts: boolean } | undefined {
+  if (geminiUsesThinkingLevel(model)) {
+    if (!isOn(effort)) return { thinkingLevel: 'LOW', includeThoughts: false }
+    const level = clampToHigh(effort)
+    return { thinkingLevel: level === 'low' ? 'LOW' : level === 'medium' ? 'MEDIUM' : 'HIGH', includeThoughts: true }
+  }
+  const thinkingBudget = geminiThinkingBudget(model, effort)
+  return thinkingBudget === undefined ? undefined : { thinkingBudget, includeThoughts: true }
 }
 
 /** Gemini `thinkingBudget`, or undefined when off/unsupported. */

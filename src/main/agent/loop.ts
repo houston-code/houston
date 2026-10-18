@@ -18,7 +18,7 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import {
-  SYSTEM_NOTE_PREFIX,
+  systemNoteMessage,
   sanitizeApprovalNote,
   MAX_STEER_TEXT,
   MAX_PENDING_STEERS
@@ -88,9 +88,9 @@ import {
   matchRule,
   networkDestination,
   permissionSubject,
+  isSensitiveWrite,
   shellReferencesExternalPath,
-  shellRulePatterns,
-  shellWritesSensitivePath
+  shellRulePatterns
 } from './permissions'
 import {
   grantConversationNetworkHost,
@@ -99,7 +99,7 @@ import {
   overrideForConversation
 } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
-import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
+import { isSensitiveRead } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun } from './egress'
@@ -130,21 +130,27 @@ import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './p
 import { gitWritableRoots } from './gitDirs'
 import { githubContext, resolveGh, runGh } from './github'
 import {
+  COMPACTION_TAIL_FRACTION,
+  EVICTION_TARGET_FRACTION,
   KEEP_RECENT_USER_TURNS,
-  SUMMARY_MAX_TOKENS,
+  SUMMARY_TRUNCATED_MESSAGE,
   buildSummaryMessages,
   buildSummaryRequestMessages,
+  compactionAnchor,
   estimateTokens,
   evictStaleToolResults,
+  evictionBoundary,
   findCompactionCut,
   findForcedCompactionCut,
+  hasEvictableToolResults,
   isContextOverflowError,
   isValidCompactionState,
   resolveCompactionThreshold,
-  summarizationSystemPrompt
+  summarizationSystemPrompt,
+  summaryMaxTokens
 } from './compaction'
 import { getConversation, setCompaction, setPromptSnapshot } from '../conversations'
-import { buildPinnedMessages, lastUserTurnIndex } from './workingMemory'
+import { buildPinnedMessages, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
 import { StallDetector, resolveStallThresholds } from './stall'
 import {
   resolveBudgetLimits,
@@ -196,27 +202,35 @@ interface Route extends SelectedModel {
  * than it looks: the streaming loop calls it to *force* a compaction when a request
  * overflows the window, so before this a 503 here failed a turn that was otherwise
  * recoverable.
+ *
+ * A summary the model stopped at its output cap throws instead of returning: the
+ * cut-off part is the end of the conversation (the latest work and the next steps),
+ * and keeping it would silently replace the head with a summary that lost them.
  */
 async function summarize(
   provider: Provider,
   model: string,
   messages: ChatMessage[],
+  maxTokens: number,
   signal: AbortSignal,
   onRetry?: (attempt: number, err: unknown) => void
 ): Promise<string> {
   return withProviderRetry(
     async () => {
       let text = ''
+      let truncated = false
       for await (const ev of provider.streamChat({
         model,
         system: summarizationSystemPrompt,
         messages,
-        maxTokens: SUMMARY_MAX_TOKENS,
+        maxTokens,
         signal
       })) {
         if (ev.type === 'text') text += ev.text
+        else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
         else if (ev.type === 'error') throw providerStreamError(ev)
       }
+      if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
       return text.trim()
     },
     { signal, onRetry }
@@ -1165,6 +1179,187 @@ export async function startRun(
       return { model: req.model }
     }
 
+    // ---- Subagent consent seams ---------------------------------------------
+    // A subagent's gated calls (unconfined shell, network egress, and local calls a
+    // permission rule or the sensitive-read check stops) are propagated to the user
+    // as normal tool_approvals on callIds minted under the dispatching call. Deny
+    // rules win without a prompt, an existing grant (the per-run unconfined-shell
+    // consent, a per-destination network grant, an allow rule, a read override)
+    // skips the prompt exactly as in the main loop, and every prompted call's
+    // start/result is emitted so what the user consented to is never invisible.
+
+    // Minted as `${callId}.${tag}.${n}`, counted per (callId, tag) for the whole run:
+    // several agents can share one parent callId (a dispatch and its nested agents,
+    // a review's parallel reviewers), and two rows under one id would collide.
+    const subCallSeq = new Map<string, number>()
+    const mintSubCallId = (callId: string, tag: string): string => {
+      const key = `${callId}.${tag}`
+      const n = (subCallSeq.get(key) ?? 0) + 1
+      subCallSeq.set(key, n)
+      return `${key}.${n}`
+    }
+
+    // The refusal for a call a permission rule denies. Attributed to the managed tier
+    // when it originates there: the admin block is checked first, so if it matches at
+    // all it IS the winning rule. Gives the user an honest reason (their org, not a
+    // stray local rule) and signals the deny is not one they can lift from Settings.
+    const ruleDenialText = (name: string, args: Record<string, unknown>): string =>
+      managedPolicy.permissionRules.length > 0 &&
+      matchRule(managedPolicy.permissionRules, name, permissionSubject(name, args), roots) === 'deny'
+        ? "Denied by your organization's managed policy."
+        : 'Denied by a permission rule.'
+
+    const promptGatedCall = async (input: {
+      subCallId: string
+      name: string
+      args: Record<string, unknown>
+      kind: ToolKind
+      mustApprove: boolean
+      unsandboxedShell: boolean
+      /** A credential-file read: the card carries the same warning the main loop's does. */
+      sensitiveRead?: boolean
+      /** A change to a credential file: likewise. */
+      sensitiveWrite?: boolean
+      /** A write's per-file diffs, for the approval card and the live row. */
+      preview?: FileDiffPreview[] | null
+      denyNote: string
+      runCall: () => Promise<string>
+    }): Promise<string> => {
+      const {
+        subCallId,
+        name,
+        args,
+        kind,
+        mustApprove,
+        unsandboxedShell,
+        sensitiveRead,
+        sensitiveWrite,
+        preview,
+        denyNote,
+        runCall
+      } = input
+      const summary = `Subagent: ${getTool(name)!.summarize(args)}`
+      if (mustApprove) {
+        // Track + emit like any approval so re-adopt replay and cancelRun
+        // (which resolves pending approvals as deny) cover this prompt too.
+        run.pendingApprovals.set(subCallId, {
+          name,
+          summary,
+          args,
+          kind,
+          ...(preview ? { preview } : {}),
+          ...(unsandboxedShell ? { sandboxed: false } : {}),
+          ...(sensitiveRead ? { sensitiveRead: true } : {}),
+          ...(sensitiveWrite ? { sensitiveWrite: true } : {})
+        })
+        emit({
+          type: 'tool_approval',
+          callId: subCallId,
+          name,
+          summary,
+          args,
+          kind,
+          ...(preview ? { preview } : {}),
+          ...(unsandboxedShell ? { sandboxed: false } : {}),
+          ...(sensitiveRead ? { sensitiveRead: true } : {}),
+          ...(sensitiveWrite ? { sensitiveWrite: true } : {})
+        })
+        const { decision, note } = await waitForApproval(run, subCallId)
+        run.pendingApprovals.delete(subCallId)
+        const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
+        if (!approved) {
+          emit({
+            type: 'tool_result',
+            callId: subCallId,
+            name,
+            ok: false,
+            output: denialText('Denied by the user.', note)
+          })
+          return denialText(denyNote, note)
+        }
+      }
+      emit({ type: 'tool_start', callId: subCallId, name, args, kind, ...(preview ? { preview } : {}) })
+      try {
+        const output = redact(await runCall())
+        emit({ type: 'tool_result', callId: subCallId, name, ok: true, output })
+        return output
+      } catch (e) {
+        const output = redact(`Error: ${(e as Error).message}`)
+        emit({ type: 'tool_result', callId: subCallId, name, ok: false, output })
+        return output
+      }
+    }
+
+    /**
+     * The permission gate for a subagent's LOCAL calls (reads, edits, shell on a
+     * confining host), handed to runSubAgent as `gateLocal`. Without it a subagent
+     * ran these with no rule check at all, so a managed or project `deny` (tiers that
+     * must only ever tighten) and the credential-file prompt were silently skipped.
+     *
+     * - Rules are matched in the main loop's precedence (`permissionRules` is already
+     *   tier-ordered), and a deny refuses without a prompt.
+     * - A read goes through decideApproval exactly like the main loop's: an `ask` rule
+     *   prompts, and a credential-file read prompts unless an allow rule or this run's
+     *   read override covers it.
+     * - An edit or a confined command prompts for an `ask` rule. Its tier's default
+     *   prompt was already answered by the dispatch's own approval (a writable
+     *   subagent is consent to edit autonomously), but a rule that mandates a prompt
+     *   was not, and only the user can answer it.
+     * - A confined command that references a path outside the workspace also prompts
+     *   unless an allow rule covers it, as it does in the main loop: the sandbox may
+     *   still let it read `~/.ssh` or `/etc`, so the dispatch's consent to work in
+     *   the project does not extend to it.
+     * - So does an edit or command that changes a credential file (`.env`, a key),
+     *   unless an allow rule or this run's override for that kind covers it: consent
+     *   to edit the project is not consent to overwrite what only the user can restore.
+     */
+    const gateSubagentLocal =
+      (callId: string) =>
+      async (
+        name: string,
+        kind: ToolKind,
+        gateArgs: Record<string, unknown>,
+        runCall: () => Promise<string>
+      ): Promise<string> => {
+        const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
+        if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
+        const sensitiveRead = isSensitiveRead(kind, gateArgs)
+        const shellEscapesWorkspace =
+          kind === 'shell' &&
+          name === 'run_shell' &&
+          typeof gateArgs.command === 'string' &&
+          shellReferencesExternalPath(gateArgs.command, roots)
+        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs)
+        const mustApprove =
+          kind === 'read'
+            ? decideApproval({
+                ruleAction,
+                policy: run.policy,
+                kind,
+                override: run.override.has('read'),
+                shellSandboxed: isSandboxed(),
+                shellUnsandboxedOverride: run.shellUnsandboxedOverride,
+                sensitiveRead
+              }).mustApprove
+            : ruleAction === 'ask' ||
+              (shellEscapesWorkspace && ruleAction !== 'allow') ||
+              (sensitiveWrite && ruleAction !== 'allow' && !run.override.has(kind))
+        if (!mustApprove) return runCall()
+        return promptGatedCall({
+          subCallId: mintSubCallId(callId, kind),
+          name,
+          args: gateArgs,
+          kind,
+          mustApprove: true,
+          unsandboxedShell: false,
+          sensitiveRead,
+          sensitiveWrite,
+          preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
+          denyNote: 'Denied by the user. Do not retry this call; work around it or note it in your report.',
+          runCall
+        })
+      }
+
     const runDispatch = async (input: {
       /** The dispatch tool call this agent belongs to — progress events attach to it. */
       callId: string
@@ -1202,72 +1397,10 @@ export async function startRun(
       const systemOverride = resumed ? resumed.systemOverride : agent?.systemPrompt
       const allowedTools = resumed ? resumed.tools : agent?.tools
 
-      // Consent seams for a dispatched subagent's gated calls: UNCONFINED shell
-      // (writable tier on a host with no OS sandbox) and NETWORK egress (any tier).
-      // A background subagent can't prompt, so without these the calls are refused;
-      // with them, each is propagated to the user as a normal tool_approval on a
-      // minted callId under the dispatch. Deny rules still win without a prompt, an
-      // existing grant (the per-run unconfined-shell consent, a per-destination
-      // network grant, an allow rule) skips the prompt exactly as in the main loop,
-      // and every gated call's start/result is emitted so what runs unconfined — or
-      // leaves the machine — is never invisible.
-      const gateSeq = { shell: 0, net: 0 }
-      const promptGatedCall = async (input: {
-        subCallId: string
-        name: string
-        args: Record<string, unknown>
-        kind: ToolKind
-        mustApprove: boolean
-        unsandboxedShell: boolean
-        denyNote: string
-        runCall: () => Promise<string>
-      }): Promise<string> => {
-        const { subCallId, name, args, kind, mustApprove, unsandboxedShell, denyNote, runCall } = input
-        const summary = `Subagent: ${getTool(name)!.summarize(args)}`
-        if (mustApprove) {
-          // Track + emit like any approval so re-adopt replay and cancelRun
-          // (which resolves pending approvals as deny) cover this prompt too.
-          run.pendingApprovals.set(subCallId, {
-            name,
-            summary,
-            args,
-            kind,
-            ...(unsandboxedShell ? { sandboxed: false } : {})
-          })
-          emit({
-            type: 'tool_approval',
-            callId: subCallId,
-            name,
-            summary,
-            args,
-            kind,
-            ...(unsandboxedShell ? { sandboxed: false } : {})
-          })
-          const { decision, note } = await waitForApproval(run, subCallId)
-          run.pendingApprovals.delete(subCallId)
-          const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
-          if (!approved) {
-            emit({
-              type: 'tool_result',
-              callId: subCallId,
-              name,
-              ok: false,
-              output: denialText('Denied by the user.', note)
-            })
-            return denialText(denyNote, note)
-          }
-        }
-        emit({ type: 'tool_start', callId: subCallId, name, args, kind })
-        try {
-          const output = redact(await runCall())
-          emit({ type: 'tool_result', callId: subCallId, name, ok: true, output })
-          return output
-        } catch (e) {
-          const output = redact(`Error: ${(e as Error).message}`)
-          emit({ type: 'tool_result', callId: subCallId, name, ok: false, output })
-          return output
-        }
-      }
+      // Consent seams for this subagent's gated calls: UNCONFINED shell (writable tier
+      // on a host with no OS sandbox), NETWORK egress (any tier), and the permission
+      // rules on its LOCAL calls (see gateSubagentLocal). Unconfined shell and network
+      // are refused without their seams, since a background subagent can't prompt.
       // Only consulted by runSubAgent when the host lacks an OS sandbox.
       const gateUnconfinedShell = async (
         gateArgs: Record<string, unknown>,
@@ -1275,11 +1408,9 @@ export async function startRun(
       ): Promise<string> => {
         const subject = permissionSubject('run_shell', gateArgs)
         const ruleAction = matchRule(permissionRules, 'run_shell', subject, roots)
-        if (ruleAction === 'deny') {
-          return 'Denied by a permission rule.'
-        }
+        if (ruleAction === 'deny') return ruleDenialText('run_shell', gateArgs)
         return promptGatedCall({
-          subCallId: `${callId}.shell.${++gateSeq.shell}`,
+          subCallId: mintSubCallId(callId, 'shell'),
           name: 'run_shell',
           args: gateArgs,
           kind: 'shell',
@@ -1301,7 +1432,7 @@ export async function startRun(
         runCall: () => Promise<string>
       ): Promise<string> => {
         const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
-        if (ruleAction === 'deny') return 'Denied by a permission rule.'
+        if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
         const { mustApprove } = decideApproval({
           ruleAction,
           policy: run.policy,
@@ -1311,7 +1442,7 @@ export async function startRun(
           shellUnsandboxedOverride: run.shellUnsandboxedOverride
         })
         return promptGatedCall({
-          subCallId: `${callId}.net.${++gateSeq.net}`,
+          subCallId: mintSubCallId(callId, 'net'),
           name,
           args: gateArgs,
           kind: 'network',
@@ -1358,6 +1489,8 @@ export async function startRun(
               gateUnconfinedShell
             }
           : {}),
+        // Permission rules + the sensitive-read prompt on every local call, either tier.
+        gateLocal: gateSubagentLocal(callId),
         // Web access for either tier, every call gated per destination (the
         // subagent's shell stays offline regardless). getSecret/searchProvider let
         // web_search resolve its key; collectSecrets masks credentials on egress —
@@ -1585,6 +1718,9 @@ export async function startRun(
           // prompts) ship to the provider without passing flushResult — scrub them
           // with the same run-scoped redactor.
           redact,
+          // ...and whose reads answer to the same permission rules and credential-file
+          // prompt as a dispatched subagent's.
+          gateLocal: gateSubagentLocal(callId),
           onProgress: (message) => emit({ type: 'tool_progress', callId, message }),
           onSubAgent: (ev) =>
             emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
@@ -1674,7 +1810,11 @@ export async function startRun(
         : {})
     })
 
-    /** True if a call is a read-only tool with no gating — safe to run concurrently. */
+    /**
+     * True if a call is a read-only tool with no gating, safe to run concurrently.
+     * The concurrent batch skips the approval gate entirely, so anything that gate
+     * could stop (a deny/ask rule, a hook, a credential-file read) stays sequential.
+     */
     const isParallelCall = (call: ToolCall): boolean => {
       // ask_user blocks on a human; keep it sequential so its prompt never appears
       // in the middle of a concurrent read batch.
@@ -1687,44 +1827,78 @@ export async function startRun(
         permissionSubject(call.name, call.arguments),
         roots
       )
-      return isParallelizableRead(tool.kind, ruleAction, hasMatchingHook(call.name))
+      return isParallelizableRead(
+        tool.kind,
+        ruleAction,
+        hasMatchingHook(call.name),
+        isSensitiveRead(tool.kind, call.arguments)
+      )
     }
 
     // Context compaction state. `messages` is always the full, persisted log; what
     // we actually send the provider is `summaryMsgs` (a synthetic summary of the
-    // turns before `cut`) followed by `messages.slice(cut)`. The threshold scales
+    // messages before `cut`) followed by `messages.slice(cut)` (see buildWindow
+    // below for the rest of the assembly). The threshold scales
     // to the model's context window (host-listed caps first, then the family
     // heuristic); an explicit setting overrides it, and the fixed default covers
     // models whose window is unknown.
-    const threshold = resolveCompactionThreshold(
-      settings.compactionThreshold,
-      resolveContextWindow(req.model, selectedModelCaps)
-    )
+    const contextWindow = resolveContextWindow(req.model, selectedModelCaps)
+    const threshold = resolveCompactionThreshold(settings.compactionThreshold, contextWindow)
     let cut = 0
+    let summary = ''
     let summaryMsgs: ChatMessage[] = []
+    // Set when `cut` falls inside a turn: the index of that turn's request, re-sent
+    // verbatim between the summary and the tail (see compactionAnchor).
+    let anchor: number | undefined
+    // Eviction watermark: tool results before this index go out as stubs. Advanced
+    // only under context pressure and never moved back, so between advances the
+    // window stays append-only (see evictionBoundary and the pressure check below).
+    let evictBefore = 0
     let lastInputTokens = 0
-    // The boundary the pinned working-memory block is spliced in front of: the user
-    // turn this run is answering. Frozen here, after the intake repair and before the
-    // loop appends anything, because the loop pushes synthetic `user` messages of its
-    // own mid-run (a stall nudge, a Stop-hook continuation, verification feedback).
-    // Re-deriving the boundary per iteration would let any of those drag the block
-    // down the window and re-churn the prefix cache this placement exists to protect.
-    const pinnedAt = lastUserTurnIndex(messages)
+    // The user turn this run is answering: the only turn compaction may cut inside
+    // of, and the request it re-sends verbatim when it does. Frozen here, after the
+    // intake repair and before the loop appends anything, because the loop pushes
+    // synthetic `user` messages of its own mid-run (a stall nudge, a Stop-hook
+    // continuation, verification feedback) and none of them starts a real turn.
+    const turnStart = lastUserTurnIndex(messages)
     // Resume from compaction state persisted by an earlier run, so a follow-up
     // turn extends the existing summary instead of re-summarizing the whole head
-    // again every turn (each run previously started from cut 0). Validated against
-    // the current log — a rewritten log (`/compact`, import) or a cut shifted by
-    // the intake repair above fails the boundary check and re-summarizes fresh.
-    // Guarded like every store touch from the loop: persistence must never kill a run.
+    // again every turn (each run previously started from cut 0), and sends the same
+    // stubs and pinned block the last turn did, keeping its cached prefix valid.
+    // Validated against the current log — a rewritten log (`/compact`, import) or a
+    // cut shifted by the intake repair above fails the boundary check and
+    // re-summarizes fresh. Guarded like every store touch from the loop: persistence
+    // must never kill a run.
     if (conversationId) {
       try {
         const persisted = getConversation(conversationId)?.compaction
         if (persisted && isValidCompactionState(persisted, messages)) {
           cut = persisted.cut
-          summaryMsgs = buildSummaryMessages(persisted.summary)
+          if (cut > 0) {
+            summary = persisted.summary
+            summaryMsgs = buildSummaryMessages(summary)
+            anchor = persisted.anchor
+          }
+          evictBefore = persisted.evictBefore ?? 0
         }
       } catch {
         // Store unavailable (unwired host) — run with in-memory compaction only.
+      }
+    }
+    // Save the window's shape (cut, summary, anchor, eviction watermark) so the next
+    // run rebuilds the identical prefix. Guarded: a store failure only costs that
+    // resume, never the in-flight run.
+    const persistContextState = (): void => {
+      if (!conversationId) return
+      try {
+        setCompaction(conversationId, {
+          cut,
+          summary,
+          ...(anchor !== undefined ? { anchor } : {}),
+          ...(evictBefore > 0 ? { evictBefore } : {})
+        })
+      } catch {
+        // Store unavailable — the run continues with in-memory state.
       }
     }
 
@@ -1818,9 +1992,34 @@ export async function startRun(
     let verifyPassesRun = 0
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
+    // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn.
+    const anchorMsgs = (): ChatMessage[] => (anchor !== undefined ? [messages[anchor]] : [])
+
+    // The persisted log with the eviction watermark applied: large tool results
+    // before `evictBefore` replaced by stubs. Index-for-index with `messages`, so cut
+    // selection sizes candidate tails by what is actually sent.
+    const evictedLog = (): ChatMessage[] =>
+      evictBefore > 0 ? evictStaleToolResults(messages, { keepFrom: evictBefore }) : messages
+
+    // Advance the eviction watermark to the current staleness boundary (turn age or
+    // iteration age, whichever reaches further), when that would stub something new.
+    // The cheap step under context pressure: no model call, and nothing is lost that
+    // recall_history or a re-run can't bring back. Returns whether the window changed.
+    const advanceEviction = (): boolean => {
+      const boundary = evictionBoundary(messages)
+      if (boundary <= evictBefore) return false
+      if (!hasEvictableToolResults(messages, Math.max(cut, evictBefore), boundary)) return false
+      evictBefore = boundary
+      lastInputTokens = 0
+      persistContextState()
+      return true
+    }
+
     // Summarize messages[cut..newCut), fold the result into the synthetic summary,
     // and advance `cut`. Shared by the proactive (pre-send, threshold-driven) path
-    // and the reactive (post-overflow) recovery path.
+    // and the reactive (post-overflow) recovery path. `newCut` may fall inside the
+    // current turn, on an assistant iteration; the turn's request then becomes the
+    // anchor re-sent between the summary and the tail.
     const compactTo = async (newCut: number): Promise<'ok' | 'aborted' | 'failed'> => {
       if (newCut <= cut) return 'failed'
       // PreCompact: let a hook persist state or inject a note before older turns are
@@ -1841,11 +2040,14 @@ export async function startRun(
         : toSummarize
       try {
         // Follows the fallback route: provider and model move together here, so
-        // summarizing through a model we've just seen fail would be pointless.
-        const summary = await summarize(
+        // summarizing through a model we've just seen fail would be pointless. The
+        // prior summary goes in with the request it was anchored to, if any: together
+        // they are what stands in for messages[0..cut) today.
+        const text = await summarize(
           route.provider,
           route.model,
-          buildSummaryRequestMessages(summaryMsgs, material),
+          buildSummaryRequestMessages([...summaryMsgs, ...anchorMsgs()], material),
+          summaryMaxTokens(resolveContextWindow(route.model, route.caps)),
           abort.signal,
           // Report a retry in here the same way the turn loop does. Compaction can be
           // forced mid-turn, so without this a summary riding out a blip is just a run
@@ -1858,23 +2060,18 @@ export async function startRun(
               message: redact(describeProviderError(err))
             })
         )
-        if (!summary) return 'failed'
+        if (!text) return 'failed'
         // Messages folded into the summary *this round* (a count, which is what the
         // renderer shows) — not the absolute tail-start index.
         const compactedNow = newCut - cut
-        summaryMsgs = buildSummaryMessages(summary)
+        summary = text
+        summaryMsgs = buildSummaryMessages(text)
+        anchor = compactionAnchor(messages, newCut, turnStart)
         cut = newCut
         lastInputTokens = 0
         // Persist so the next run resumes from this summary instead of paying a
-        // fresh summarization of the same head. Guarded: a store failure only
-        // costs that resume, never the in-flight compaction.
-        if (conversationId) {
-          try {
-            setCompaction(conversationId, { cut: newCut, summary })
-          } catch {
-            // Store unavailable — the run continues with in-memory state.
-          }
-        }
+        // fresh summarization of the same head.
+        persistContextState()
         emit({ type: 'compaction', summarized: compactedNow })
         return 'ok'
       } catch {
@@ -1882,51 +2079,55 @@ export async function startRun(
       }
     }
 
-    // Assemble the window actually sent to the provider from the persisted log. Three
-    // durable-context transforms layer on top of the summary + kept tail, and NONE of
-    // them mutate `messages` — only this ephemeral copy:
-    //   1. summaryMsgs stands in for the compacted head (turns before `cut`).
-    //   2. Stale + large tool results in the kept tail are replaced by compact stubs
-    //      (recoverable via recall_history) — surgical, unlike whole-turn compaction.
-    //   3. Pinned working memory (original task, live todo list, files in play) is
-    //      spliced in so it survives compaction/eviction losslessly.
+    // Pinned working memory (original task, todo list, files in play), derived from
+    // everything compaction or eviction has touched: the head before the cut or the
+    // eviction watermark, whichever reaches further. Both only advance at a
+    // compaction or eviction, so the block is byte-identical in between. The task is
+    // left out while the request is still verbatim in the window (in the tail, or as
+    // the anchor).
+    const pinnedMessages = (): ChatMessage[] => {
+      const task = originalTaskIndex(messages)
+      return buildPinnedMessages(messages.slice(0, Math.max(cut, evictBefore)), {
+        omitTask: task >= cut || task === anchor
+      })
+    }
+
+    // Assemble the window actually sent to the provider from the persisted log. The
+    // durable-context transforms layer on top of the kept tail, and NONE of them
+    // mutate `messages` — only this ephemeral copy:
+    //   1. summaryMsgs stands in for the compacted head (messages before `cut`).
+    //   2. Pinned working memory survives compaction/eviction losslessly.
+    //   3. When the cut fell inside a turn, that turn's request, verbatim.
+    //   4. The kept tail, with tool results before the eviction watermark stubbed
+    //      (recoverable via recall_history) — surgical, unlike compaction.
     //
-    // Assembly is prompt-cache-aware, which dictates the order above. Caching matches
-    // a *prefix*, so the window must stay append-only across a turn's iterations: each
-    // request extends the last one, and only the new tail is billed at the full input
-    // rate. The pinned block is the one volatile part (a `read_file` reorders "files in
-    // play", a `todo_write` rewrites the todos), so it rides at the END of the stable
-    // prefix, immediately before the final user turn, instead of at the head where its
-    // churn invalidated the cache from message zero on every tool call. Deriving it
-    // from the head (the turns before that boundary) freezes it for the turn's
-    // duration, which is what keeps the prefix identical iteration to iteration. See
+    // Assembly is prompt-cache-aware, which dictates both the order and the gating.
+    // Caching matches a *prefix*, so the window must stay append-only: each request
+    // extends the last one, across a turn's iterations AND into the next turn, and
+    // only the new tail is billed at the full input rate. Until something has been
+    // compacted or evicted the window is the log verbatim, with no pinned block at
+    // all. After that, the summary, block, and anchor sit at the head and change only
+    // when the cut or the watermark advances, which rewrites the window there anyway;
+    // the block used to be spliced in front of each turn's request, so it moved one
+    // turn down the window every turn and re-billed the whole previous turn. See
     // workingMemory.ts for the full argument.
     //
     // The final invariant, enforced at the one boundary every request passes through:
     // the provider must never receive a `tool_use` without its `tool_result`
-    // immediately after. The transforms above preserve pairing today (the splice lands
-    // on a user-turn boundary, never between a call and its result), and the intake
-    // repair keeps the persisted log balanced — but any tool that blocks on the user
-    // (present_plan, ask_user) or an approval can be interrupted mid-call, and future
-    // transforms/hooks could slip. Normalizing here makes every request self-heal
-    // regardless of how its messages were assembled. It's a no-op on a balanced window.
+    // immediately after. The transforms above preserve pairing today (a cut lands on
+    // a user turn, or on an iteration whose earlier calls are all answered), and the
+    // intake repair keeps the persisted log balanced — but any tool that blocks on the
+    // user (present_plan, ask_user) or an approval can be interrupted mid-call, and
+    // future transforms/hooks could slip. Normalizing here makes every request
+    // self-heal regardless of how its messages were assembled. It's a no-op on a
+    // balanced window.
     const buildWindow = (): ChatMessage[] => {
-      const tail = evictStaleToolResults(messages.slice(cut))
-      // The block is derived from, and sits at the end of, everything before the
-      // current turn: the frozen pre-run head, or whatever compaction has since folded
-      // away, whichever reaches further. So it stays byte-identical between
-      // compactions — and refreshing it AT one is free, because advancing the cut
-      // rewrites the head of the window and invalidates the cache regardless.
-      const headEnd = Math.max(pinnedAt, cut)
-      const pinned = headEnd > 0 ? buildPinnedMessages(messages.slice(0, headEnd)) : []
-      // Where the boundary falls inside the kept tail. Clamped: once the cut advances
-      // past the boundary the whole head is summary, and the block leads the tail.
-      const at = Math.min(Math.max(pinnedAt - cut, 0), tail.length)
+      const pinned = cut > 0 || evictBefore > 0 ? pinnedMessages() : []
       return repairDanglingToolResults([
         ...summaryMsgs,
-        ...tail.slice(0, at),
         ...pinned,
-        ...tail.slice(at)
+        ...anchorMsgs(),
+        ...evictedLog().slice(cut)
       ])
     }
 
@@ -2024,10 +2225,7 @@ export async function startRun(
         const decision = shouldLand({ iteration: iter, costUsd: cumulativeCostUsd, alreadyLanded: landed }, budget)
         if (decision.land) {
           landed = true
-          messages.push({
-            role: 'user',
-            content: `${SYSTEM_NOTE_PREFIX} ${landingReminder(decision.iterationsLeft, decision.trigger)}`
-          })
+          messages.push(systemNoteMessage(landingReminder(decision.iterationsLeft, decision.trigger)))
           persist(messages)
         }
       }
@@ -2037,7 +2235,7 @@ export async function startRun(
       // stay in the request (a history with tool_use blocks must still declare them).
       const finalStep = isFinalStep(iter, budget)
       if (finalStep) {
-        messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${FINAL_STEP_NOTE}` })
+        messages.push(systemNoteMessage(FINAL_STEP_NOTE))
         persist(messages)
       }
 
@@ -2048,19 +2246,34 @@ export async function startRun(
       const tools = buildTools()
       const toolTokens = Math.ceil(JSON.stringify(tools).length / 4)
 
-      // Compact older turns before they overflow the model's context window. The
-      // visible transcript (persisted `messages`) is untouched — only the window
-      // sent to the provider shrinks.
+      // Shrink the window before it overflows the model's context window: first by
+      // stubbing stale tool results (cheap, no model call), then, unless that alone
+      // bought real headroom, by summarizing, which can now cut inside this turn.
+      // Both rewrite the window and both are sticky, so neither runs below the
+      // threshold: under it the window stays append-only and the provider cache keeps
+      // the whole conversation. The visible transcript (persisted `messages`) is
+      // untouched — only the window sent to the provider shrinks.
       if (threshold > 0) {
-        const windowNow = buildWindow()
-        const size = Math.max(estimateTokens(system, windowNow) + toolTokens, lastInputTokens)
-        if (size > threshold) {
-          const newCut = findCompactionCut(messages, cut, KEEP_RECENT_USER_TURNS)
-          // Summarization failure is non-fatal: keep going with the full window —
-          // the turn may still fit, or the provider error path will recover below.
-          if (newCut > cut && (await compactTo(newCut)) === 'aborted') {
-            emit({ type: 'done', stopReason: 'aborted' })
-            return
+        const windowSize = (): number =>
+          Math.max(estimateTokens(system, buildWindow()) + toolTokens, lastInputTokens)
+        if (windowSize() > threshold) {
+          // What the threshold leaves the messages once the system prompt and tool
+          // schemas (resent with every request) are paid for. Both targets below are
+          // shares of it, so a large prompt can't leave them unreachable.
+          const fixed = estimateTokens(system, []) + toolTokens
+          const room = Math.max(0, threshold - fixed)
+          advanceEviction()
+          if (windowSize() > fixed + room * EVICTION_TARGET_FRACTION) {
+            const newCut = findCompactionCut(evictedLog(), cut, KEEP_RECENT_USER_TURNS, {
+              turnStart,
+              tailBudget: Math.floor(room * COMPACTION_TAIL_FRACTION)
+            })
+            // Summarization failure is non-fatal: keep going with the full window —
+            // the turn may still fit, or the provider error path will recover below.
+            if (newCut > cut && (await compactTo(newCut)) === 'aborted') {
+              emit({ type: 'done', stopReason: 'aborted' })
+              return
+            }
           }
         }
       }
@@ -2145,11 +2358,19 @@ export async function startRun(
           }
           // Context overflow: the request is simply too big for the window. Retrying
           // it unchanged is futile and failing the run is worse than shrinking it, so
-          // (when nothing has streamed) force a compaction step and retry with fewer
-          // verbatim turns. Independent of the user's compaction threshold — an
-          // unsendable request must shrink regardless.
+          // (when nothing has streamed) shrink it and retry: stub stale tool results
+          // first (no model call), and once nothing is left to stub, force a
+          // compaction that halves the verbatim tail. The forced cut can land inside
+          // this turn, so a single long prompt recovers too. Independent of the
+          // user's compaction threshold — an unsendable request must shrink
+          // regardless.
           if (!emitted && isContextOverflowError(e)) {
-            const forcedCut = findForcedCompactionCut(messages, cut)
+            if (advanceEviction()) {
+              sendMessages = buildWindow()
+              attempt = -1 // reset the transient-retry budget for the smaller request
+              continue streaming
+            }
+            const forcedCut = findForcedCompactionCut(evictedLog(), cut, turnStart)
             const outcome = forcedCut > cut ? await compactTo(forcedCut) : 'failed'
             if (outcome === 'aborted') {
               emit({ type: 'done', stopReason: 'aborted' })
@@ -2160,9 +2381,10 @@ export async function startRun(
               attempt = -1 // reset the transient-retry budget for the smaller request
               continue streaming
             }
-            // Even the latest turn alone won't fit. No compaction can save it, but a
-            // model with a bigger window might — that's exactly what the chain is for,
-            // and it's the advice the error below would otherwise give the user.
+            // Even the newest iteration alone won't fit (or the summary failed). No
+            // compaction can save it, but a model with a bigger window might — that's
+            // exactly what the chain is for, and it's the advice the error below would
+            // otherwise give the user.
             if (hopToFallback("the conversation exceeded the model's context window")) {
               sendMessages = buildWindow()
               attempt = -1 // fresh transient-retry budget for the new model
@@ -2308,10 +2530,11 @@ export async function startRun(
           }
           if (stop.blocked) {
             stopContinuations++
-            messages.push({
-              role: 'user',
-              content: redact(stop.message) || 'A Stop hook requested that you keep working.'
-            })
+            messages.push(
+              systemNoteMessage(
+                `A Stop hook asked you to keep working: ${redact(stop.message) || 'it gave no reason.'}`
+              )
+            )
             persist(messages)
             continue
           }
@@ -2359,12 +2582,9 @@ export async function startRun(
           }
           emit({ type: 'verification', passed: result.passed })
           if (!result.passed) {
-            // Push the failure feedback as a real user-role message so the model
-            // sees it next turn and the transcript renders it sanely; then loop.
-            messages.push({
-              role: 'user',
-              content: verifyFailureMessage(settings.verifyCommand!, result.output)
-            })
+            // Push the failure feedback as a system note so the model sees it next
+            // turn and the transcript shows it as Houston's, not the user's; then loop.
+            messages.push(systemNoteMessage(verifyFailureMessage(settings.verifyCommand!, result.output)))
             persist(messages)
             continue
           }
@@ -2400,7 +2620,7 @@ export async function startRun(
         })
         if (action.kind === 'nudge') {
           lastStallNudge = iter
-          messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${action.message}` })
+          messages.push(systemNoteMessage(action.message))
           persist(messages)
         } else if (action.kind === 'stop') {
           // Persisted past the corrective nudge — end the run cleanly with a
@@ -2631,21 +2851,8 @@ export async function startRun(
           output = invalid.output
           ok = false
         } else if (ruleAction === 'deny') {
-          // Attribute a deny to the managed tier when it originates there — the admin
-          // block is checked first, so if it matches at all it IS the winning rule.
-          // Gives the user an honest reason (their org, not a stray local rule) and
-          // signals the deny is not one they can lift from Settings.
-          const byManaged =
-            managedPolicy.permissionRules.length > 0 &&
-            matchRule(
-              managedPolicy.permissionRules,
-              call.name,
-              permissionSubject(call.name, call.arguments),
-              roots
-            ) === 'deny'
-          output = byManaged
-            ? "Denied by your organization's managed policy."
-            : 'Denied by a permission rule.'
+          // Attributed to the managed tier when it originates there (see ruleDenialText).
+          output = ruleDenialText(call.name, call.arguments)
           ok = false
         } else if (isBlockedByPlan(run.policy, tool)) {
           output =
@@ -2724,19 +2931,11 @@ export async function startRun(
             // isSensitivePath): reads normally never prompt, so this is the one gate
             // that keeps a committed `.env` or private key from flowing into the
             // transcript unasked.
-            const sensitiveRead =
-              tool.kind === 'read' &&
-              typeof execArgs.path === 'string' &&
-              isSensitivePath(execArgs.path)
+            const sensitiveRead = isSensitiveRead(tool.kind, execArgs)
             // Writing one (a file tool targeting it, or a shell command redirecting into,
             // copying over, or removing it) prompts the same way: only the user can
             // restore a `.env` an agent overwrote.
-            const sensitiveWrite =
-              (tool.kind === 'write' && writesSensitivePath(call.name, execArgs)) ||
-              (tool.kind === 'shell' &&
-                call.name === 'run_shell' &&
-                typeof execArgs.command === 'string' &&
-                shellWritesSensitivePath(execArgs.command))
+            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs)
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.

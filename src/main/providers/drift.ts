@@ -1,5 +1,6 @@
 import type { ModelOption } from '@shared/types'
 import { isLikelyChatModel, missingModelFacts } from '@shared/model-listing'
+import { modelPricing } from '@shared/model-facts'
 
 /**
  * Model drift: which models a first-party provider now lists that Houston doesn't ship
@@ -50,14 +51,18 @@ function geminiTier(id: string): { tier: string; version: number; preview: boole
 
 /**
  * Gemini's listing carries no release dates, so "new" means newer than what's shipped in
- * the same tier: a higher version, a tier Houston doesn't ship at all, or the stable
- * release of a version Houston only ships as a preview.
+ * the same tier: a higher version, the stable release of a version Houston only ships as a
+ * preview, or a tier Houston doesn't ship at all from at least the newest shipped
+ * generation. That last condition matters: Gemini 4 names its flagship Argon rather than
+ * Pro, so once Houston shipped no Pro model, every older Pro still listed (2.5, 3, 3.1)
+ * would otherwise read as a tier Houston had never seen.
  */
 function geminiIsNewer(id: string, shipped: string[]): boolean {
   const t = geminiTier(id)
   if (!t) return false
-  const same = shipped.map(geminiTier).filter((s): s is NonNullable<typeof s> => !!s && s.tier === t.tier)
-  if (same.length === 0) return true
+  const all = shipped.map(geminiTier).filter((s): s is NonNullable<typeof s> => !!s)
+  const same = all.filter((s) => s.tier === t.tier)
+  if (same.length === 0) return all.length === 0 || t.version >= Math.max(...all.map((s) => s.version))
   const newest = Math.max(...same.map((s) => s.version))
   if (t.version > newest) return true
   return t.version === newest && !t.preview && same.every((s) => s.version < newest || s.preview)
@@ -107,4 +112,49 @@ export function renderDriftSection(provider: DriftProvider, candidates: DriftCan
       } |`
   )
   return [`### ${PROVIDER_NAME[provider]}`, '', '| Model | Released | To add it |', '|---|---|---|', ...rows, ''].join('\n')
+}
+
+/** How far ahead a scheduled price change is surfaced, so a cancelled one can be removed in time. */
+export const PRICE_NOTICE_DAYS = 14
+
+export interface UpcomingPriceChange {
+  id: string
+  /** `YYYY-MM-DD` the new rates take effect. */
+  from: string
+  input: number
+  output: number
+}
+
+/**
+ * Scheduled price changes in model-facts.ts for shipped models that take effect within
+ * PRICE_NOTICE_DAYS. Every installed build switches on the date by itself; this is the
+ * prompt to confirm the change is still happening (providers occasionally cancel one) and
+ * remove it from model-facts.ts if not.
+ */
+export function upcomingPriceChanges(shipped: string[], now: Date): UpcomingPriceChange[] {
+  const today = now.toISOString().slice(0, 10)
+  const horizon = new Date(now.getTime() + PRICE_NOTICE_DAYS * DAY_MS).toISOString().slice(0, 10)
+  const out: UpcomingPriceChange[] = []
+  for (const id of shipped) {
+    for (const c of modelPricing(id)?.scheduled ?? []) {
+      if (c.from >= today && c.from <= horizon) out.push({ id, from: c.from, input: c.input, output: c.output })
+    }
+  }
+  return out.sort((a, b) => a.from.localeCompare(b.from) || a.id.localeCompare(b.id))
+}
+
+const usd = (n: number): string => (Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`)
+
+/**
+ * Table rows for the drift issue's "Scheduled price changes" section, one per change (the
+ * workflow's report job adds the heading and table header once, across providers). Empty
+ * string when none are due.
+ */
+export function renderPriceRows(changes: UpcomingPriceChange[]): string {
+  return changes.map((c) => `| \`${c.id}\` | ${c.from} | ${usd(c.input)} / ${usd(c.output)} per MTok |`).join('\n')
+}
+
+/** Marker key for a price change, so the issue notifies when a new one comes due. */
+export function priceChangeKey(c: UpcomingPriceChange): string {
+  return `price:${c.id}@${c.from}`
 }

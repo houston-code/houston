@@ -485,6 +485,13 @@ export interface RunReviewOptions {
    * run-scoped redactor here; defaults to identity.
    */
   redact?: (text: string) => string
+  /**
+   * The dispatcher's permission gate for each reviewer's local reads (see
+   * SubAgentOptions.gateLocal), so a reviewer answers to the same deny/ask rules and
+   * credential-file prompt as any other agent. Absent => credential-file reads are
+   * refused and nothing else is checked.
+   */
+  gateLocal?: SubAgentOptions['gateLocal']
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
 }
@@ -523,6 +530,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     return baseRunAgent({
       ...o,
       redact, // each nested subagent scrubs its own tool outputs (see SubAgentOptions)
+      ...(opts.gateLocal ? { gateLocal: opts.gateLocal } : {}),
       ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
       onUsage: (u) => {
         inputTokens += u.inputTokens ?? 0
@@ -725,6 +733,8 @@ export interface ReviewWorkspaceOptions {
   explicitCacheControl?: boolean
   /** Scrub secrets from the diff and the nested subagents' tool outputs (see RunReviewOptions). */
   redact?: (text: string) => string
+  /** Permission gate for the reviewers' local reads (see RunReviewOptions). */
+  gateLocal?: SubAgentOptions['gateLocal']
   signal: AbortSignal
   /** Injected for tests. */
   gitExec?: GitExec
@@ -769,6 +779,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     onUsage: opts.onUsage,
     explicitCacheControl: opts.explicitCacheControl,
     redact: opts.redact,
+    gateLocal: opts.gateLocal,
     signal: opts.signal,
     runAgent: opts.runAgent
   })

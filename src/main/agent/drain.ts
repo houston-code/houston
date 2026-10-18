@@ -90,7 +90,7 @@ export async function runAndDrain(
 export function drainQueue(io: DrainIO, conversationId: string, owner?: number): void {
   const taken = takeQueue(conversationId)
   if (!taken) return
-  const { text, images } = combineQueued(taken.items)
+  const { text, images, invokedAs } = combineQueued(taken.items)
   if (!text && !images) return
   const conv = getConversation(conversationId)
   if (!conv) return
@@ -99,7 +99,8 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
   const userMessage: ChatMessage = {
     role: 'user',
     content: text,
-    ...(images?.length ? { images } : {})
+    ...(images?.length ? { images } : {}),
+    ...(invokedAs ? { invokedAs } : {})
   }
   const messages = [...conv.messages, userMessage]
   setMessages(conv.id, messages)
@@ -112,7 +113,8 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
     type: 'turn_start',
     conversationId,
     userText: text,
-    ...(images?.length ? { images } : {})
+    ...(images?.length ? { images } : {}),
+    ...(invokedAs ? { invokedAs } : {})
   })
   io.emitQueueChanged(conversationId, [])
 
