@@ -1,4 +1,5 @@
 import { safeStorage } from 'electron'
+import { secureStorageUnavailableMessage, type SecureStorageStatus } from '@shared/secureStorage'
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { writeFileAtomicSync } from './atomic-write'
 import { join, dirname } from 'node:path'
@@ -105,11 +106,18 @@ function selectedBackend(): string | null {
 
 let warnedWeakBackend = false
 
+/**
+ * Whether credentials can be stored right now. On macOS a denied Keychain prompt makes
+ * this false until Houston restarts (Electron caches the failed key lookup for the
+ * process), which is what the renderer's "Restart Houston" prompt keys off.
+ */
+export function secureStorageStatus(): SecureStorageStatus {
+  return { available: safeStorage.isEncryptionAvailable(), platform: process.platform }
+}
+
 function assertEncryptionAvailable(): void {
   if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error(
-      'OS encryption (Keychain) is unavailable, so credentials cannot be stored securely.'
-    )
+    throw new Error(secureStorageUnavailableMessage(process.platform))
   }
   // `isEncryptionAvailable()` returns true even for Linux's hardcoded-key
   // `basic_text` backend, which is NOT real at-rest encryption. Warn once so we

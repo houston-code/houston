@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyTheme } from '../hooks/useApplyTheme'
 import { applyTheme } from '../lib/theme'
@@ -25,6 +26,7 @@ import type {
 import { removeFolderTrust } from '@shared/types'
 import type { SandboxEgressSettings } from '@shared/egress'
 import { parseHeaderLines, sanitizeServerId } from '@shared/mcp'
+import { summarizeFetch, type FetchSummary } from '@shared/model-listing'
 import {
   DEFAULT_SHELL_OUTPUT_MAX_BYTES,
   DEFAULT_MAX_ITERATIONS,
@@ -148,12 +150,48 @@ function modelsToText(models: ModelOption[]): string {
 }
 
 function textToModels(text: string, prev: ModelOption[]): ModelOption[] {
-  const labelById = new Map(prev.map((m) => [m.id, m.label]))
+  // Keep everything known about an id that survives the edit (label, listed capabilities,
+  // when it was added), so editing the list doesn't strip the picker's metadata.
+  const byId = new Map(prev.map((m) => [m.id, m]))
   return text
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((id) => ({ id, label: labelById.get(id) }))
+    .map((id) => byId.get(id) ?? { id })
+}
+
+/** Up to `max` ids, then "and N more", so a large fetch stays one readable line. */
+function idList(ids: string[], max = 5): string {
+  const shown = ids.slice(0, max).join(', ')
+  return ids.length > max ? `${shown} and ${ids.length - max} more` : shown
+}
+
+/** What the last "fetch from provider" changed, shown under the models list. */
+function FetchSummaryNote({ summary }: { summary: FetchSummary }): JSX.Element {
+  const { total, added, removed, unrecognised } = summary
+  const counted = `Fetched ${total} model${total === 1 ? '' : 's'}`
+  if (added.length === 0 && removed.length === 0) {
+    return (
+      <p className="field__hint" role="status">
+        {counted}. No changes.
+      </p>
+    )
+  }
+  return (
+    <div className="field__hint" role="status">
+      <p>
+        {counted}: {added.length} new, {removed.length} no longer listed.
+      </p>
+      {added.length > 0 && <p>New: {idList(added)}.</p>}
+      {removed.length > 0 && <p>Removed (no longer listed): {idList(removed)}.</p>}
+      {unrecognised.length > 0 && (
+        <p>
+          This version of Houston doesn&apos;t fully recognize {idList(unrecognised)}. They work, but may
+          show no price or sort as an unknown family until an update adds them.
+        </p>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -166,11 +204,14 @@ function textToModels(text: string, prev: ModelOption[]): ModelOption[] {
 function ModelsField({
   models,
   busy,
+  summary,
   onFetch,
   onChange
 }: {
   models: ModelOption[]
   busy: boolean
+  /** What the last fetch changed; cleared once the list is edited by hand. */
+  summary?: FetchSummary
   onFetch: () => void
   onChange: (models: ModelOption[]) => void
 }): JSX.Element {
@@ -205,6 +246,7 @@ function ModelsField({
           setText(modelsToText(normalized))
         }}
       />
+      {summary && <FetchSummaryNote summary={summary} />}
     </label>
   )
 }
@@ -519,10 +561,14 @@ export function SettingsModal({
   const [tab, setTab] = useState<TabId>('models')
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
+  // Per provider: what its last "fetch from provider" changed, until the list is edited.
+  const [fetchSummaries, setFetchSummaries] = useState<Record<string, FetchSummary>>({})
   const [newLabel, setNewLabel] = useState('')
   const [newUrl, setNewUrl] = useState('')
   // A key/model action error, shown inline in the footer (vs a blocking alert()).
   const [formError, setFormError] = useState<string | null>(null)
+  // Set to the platform when a key save failed because the OS secure store is unusable.
+  const [storageBlocked, setStorageBlocked] = useState<string | null>(null)
   // True once a close is requested while there are unsaved edits — the footer then
   // asks to confirm rather than discarding silently.
   const [confirmingClose, setConfirmingClose] = useState(false)
@@ -781,13 +827,16 @@ export function SettingsModal({
     if (!key) return
     setBusy(id)
     setFormError(null)
+    setStorageBlocked(null)
     try {
       applyKeyResult(await window.api.setKey(id, key), id, true)
       setKeyInputs((k) => ({ ...k, [id]: '' }))
     } catch (e) {
-      // Surface storage failures (e.g. OS Keychain unavailable) instead of
-      // letting the key silently vanish.
-      setFormError(`Could not save API key: ${(e as Error).message}`)
+      // Surface storage failures instead of letting the key silently vanish. When the
+      // OS secure store is the cause (a denied Keychain prompt), say how to recover.
+      const blocked = await secureStorageBlocked()
+      if (blocked) setStorageBlocked(blocked)
+      else setFormError(`Could not save API key: ${(e as Error).message}`)
     } finally {
       setBusy(null)
     }
@@ -818,10 +867,17 @@ export function SettingsModal({
       const fetched = await window.api.listModels(id)
       // Adopt fetched ids + capability metadata, but keep any curated label the
       // user already had for that id (the listing rarely carries display labels).
-      const prev = new Map(
-        (settings.providers.find((p) => p.id === id)?.models ?? []).map((m) => [m.id, m])
-      )
-      patchProvider(id, { models: fetched.map((m) => ({ ...m, label: m.label ?? prev.get(m.id)?.label })) })
+      const provider = settings.providers.find((p) => p.id === id)
+      const before = provider?.models ?? []
+      const prev = new Map(before.map((m) => [m.id, m]))
+      const models = fetched.map((m) => {
+        const had = prev.get(m.id)
+        return { ...m, label: m.label ?? had?.label, ...(had?.addedAt ? { addedAt: had.addedAt } : {}) }
+      })
+      patchProvider(id, { models })
+      if (provider) {
+        setFetchSummaries((all) => ({ ...all, [id]: summarizeFetch(provider.kind, before, models) }))
+      }
     } catch (e) {
       setFormError(`Could not fetch models: ${(e as Error).message}`)
     } finally {
@@ -1090,8 +1146,17 @@ export function SettingsModal({
                       <ModelsField
                         models={p.models}
                         busy={busy === p.id}
+                        summary={fetchSummaries[p.id]}
                         onFetch={() => fetchModels(p.id)}
-                        onChange={(models) => patchProvider(p.id, { models })}
+                        onChange={(models) => {
+                          // A hand edit makes the fetch summary stale; a blur that changed
+                          // nothing (tabbing through the field) leaves it.
+                          const ids = (list: ModelOption[]): string => list.map((m) => m.id).join('\n')
+                          if (ids(models) !== ids(p.models)) {
+                            setFetchSummaries(({ [p.id]: _stale, ...rest }) => rest)
+                          }
+                          patchProvider(p.id, { models })
+                        }}
                       />
                     </div>
                   ))}
@@ -2168,6 +2233,7 @@ export function SettingsModal({
         </div>
 
         <div className="modal__foot">
+          {storageBlocked && <SecureStorageNotice platform={storageBlocked} />}
           {formError && (
             <span
               role="alert"

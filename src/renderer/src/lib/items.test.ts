@@ -9,6 +9,7 @@ import {
 import {
   itemsFromMessages,
   lastUserText,
+  systemNoteSummary,
   reduceEvent,
   type DisplayItem,
   type NoticeItem,
@@ -705,5 +706,59 @@ describe('reduceEvent review findings', () => {
 
   it('ignores a finding for a review row that is not present', () => {
     expect(reduceEvent([], finding('security:0', 'candidate'))).toEqual([])
+  })
+})
+
+describe('first-party prompt turns', () => {
+  const review = { kind: 'command', label: '/review', detail: 'Adversarial review', typed: '/review' } as const
+
+  it('carries a saved invokedAs onto the user item', () => {
+    const [item] = itemsFromMessages([{ role: 'user', content: 'Review my changes…', invokedAs: review }])
+    expect(item).toMatchObject({ kind: 'user', text: 'Review my changes…', invokedAs: review })
+  })
+
+  it('drops a malformed invokedAs so the turn renders as plain text', () => {
+    const msg = { role: 'user', content: 'hi', invokedAs: { kind: 'bogus', label: 'x' } } as unknown as ChatMessage
+    expect(itemsFromMessages([msg])[0]).not.toHaveProperty('invokedAs')
+  })
+
+  it('recalls the typed command, never the prompt it expanded to', () => {
+    const items: DisplayItem[] = [
+      { kind: 'user', id: 'u1', text: 'earlier' },
+      { kind: 'user', id: 'u2', text: 'Review my changes…', invokedAs: review }
+    ]
+    expect(lastUserText(items)).toBe('/review')
+  })
+
+  it('skips a button press or handoff, which has nothing to recall', () => {
+    const items: DisplayItem[] = [
+      { kind: 'user', id: 'u1', text: 'earlier' },
+      { kind: 'user', id: 'u2', text: 'Create a GitHub pull request…', invokedAs: { kind: 'action', label: 'Create PR' } }
+    ]
+    expect(lastUserText(items)).toBe('earlier')
+  })
+})
+
+describe('saved system notes', () => {
+  it('shows a failed verification as its opening line, not the full test output', () => {
+    const content = `${SYSTEM_NOTE_PREFIX} Automatic verification failed. Houston ran the configured verification command \`npm test\` after your changes and it did not pass:\n\n\`\`\`\nFAIL x.test.ts\n\`\`\`\n\nFix the problems above, then finish.`
+    expect(systemNoteSummary(content)).toBe(
+      'Automatic verification failed. Houston ran the configured verification command `npm test` after your changes and it did not pass.'
+    )
+    const [item] = itemsFromMessages([{ role: 'user', content }])
+    expect(item).toMatchObject({ kind: 'notice', tone: 'info' })
+    expect((item as NoticeItem).text).not.toContain('FAIL x.test.ts')
+  })
+
+  it('shows a Stop hook note as a notice, not a user bubble', () => {
+    const [item] = itemsFromMessages([
+      { role: 'user', content: `${SYSTEM_NOTE_PREFIX} A Stop hook asked you to keep working: run the tests` }
+    ])
+    expect(item).toEqual({
+      kind: 'notice',
+      id: expect.any(String),
+      text: 'A Stop hook asked you to keep working: run the tests',
+      tone: 'info'
+    })
   })
 })

@@ -272,6 +272,16 @@ describe('modelOptionFromListing', () => {
     })
   })
 
+  it('records the listed creation time as a release date', () => {
+    // OpenAI lists `created` as unix seconds.
+    expect(modelOptionFromListing({ id: 'gpt-6.1-sol', created: 1_790_000_000 })).toEqual({
+      id: 'gpt-6.1-sol',
+      caps: { releasedAt: '2026-09-21' }
+    })
+    // Placeholder zeros some proxies send are not a date.
+    expect(modelOptionFromListing({ id: 'local', created: 0 })).toEqual({ id: 'local' })
+  })
+
   it('captures OpenRouter-style capability metadata', () => {
     const opt = modelOptionFromListing({
       id: 'deepseek/deepseek-r1',

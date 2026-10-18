@@ -1,6 +1,7 @@
 // Renders the browser/tab icons from the app icon (assets/icon.png, 1024×1024):
 //   favicon.ico          16, 32 and 48 px frames (PNG-encoded ICO entries)
 //   apple-touch-icon.png 180 px, for iOS home screens and Safari favorites
+//   assets/icon-60.png   60 px, the header/footer logo (30 px CSS, sharp at 2x)
 // Uses the Chromium that Playwright already vendors for this repo's e2e tests.
 // Re-run after the app icon changes:  node website/tools/build-favicons.mjs
 import { readFileSync, writeFileSync } from "node:fs";
@@ -62,5 +63,6 @@ const ico = packIco([
 ]);
 writeFileSync(resolve(PUBLIC, "favicon.ico"), ico);
 writeFileSync(resolve(PUBLIC, "apple-touch-icon.png"), await render(180));
+writeFileSync(resolve(PUBLIC, "assets", "icon-60.png"), await render(60));
 await browser.close();
-console.log("✓ website/public/favicon.ico (16, 32, 48), apple-touch-icon.png");
+console.log("✓ website/public/favicon.ico (16, 32, 48), apple-touch-icon.png, assets/icon-60.png");

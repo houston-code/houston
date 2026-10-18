@@ -45,3 +45,20 @@ describe('toQueuedMeta', () => {
     ])
   })
 })
+
+describe('queued first-party prompts', () => {
+  const ship = { kind: 'action', label: 'Create PR', detail: 'Hands off to the agent.' } as const
+  const pr: QueuedInput = { id: 'p', text: 'Create a GitHub pull request…', invokedAs: ship }
+
+  it('keeps a lone queued prompt tagged', () => {
+    expect(combineQueued([pr])).toEqual({ text: pr.text, invokedAs: ship })
+  })
+
+  it('drops the tag once merged with other text, which is no longer just that action', () => {
+    expect(combineQueued([pr, { id: 'q', text: 'and add a changelog entry' }]).invokedAs).toBeUndefined()
+  })
+
+  it('lists a queued prompt by what the user did, not its text', () => {
+    expect(toQueuedMeta([pr])).toEqual([{ id: 'p', text: 'Create PR', imageCount: 0 }])
+  })
+})

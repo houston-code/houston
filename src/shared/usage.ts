@@ -8,6 +8,7 @@ import type { ModelUsage, ConversationUsage } from './agent'
 import {
   contextWindowFor,
   modelHasReasoning,
+  modelHasTools,
   modelHasVision,
   modelPricing,
   type ModelPricing
@@ -97,11 +98,15 @@ export function resolvePricing(model: string, caps?: ModelCaps): ModelPricing | 
   if (input === undefined || output === undefined) return null
   const cacheRead = caps?.cacheReadPrice ?? h?.cacheRead
   const cacheWrite = caps?.cacheWritePrice ?? h?.cacheWrite
+  // A host that lists its own prices lists a flat rate; the heuristic's long-context tier
+  // only describes the heuristic's own base rate, so it applies only when that is in use.
+  const hostPriced = caps?.inputPrice !== undefined || caps?.outputPrice !== undefined
   return {
     input,
     output,
     ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {})
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(h?.longContext && !hostPriced ? { longContext: h.longContext } : {})
   }
 }
 
@@ -145,9 +150,11 @@ export function turnCostUsd(
   cache?: CacheTokens,
   caps?: ModelCaps
 ): number {
-  const p = resolvePricing(model, caps)
-  if (!p) return 0
+  const base = resolvePricing(model, caps)
+  if (!base) return 0
   const inTok = clampTokens(inputTokens)
+  // A prompt past the long-context threshold bills every token of the request at that tier.
+  const p = base.longContext && inTok > base.longContext.above ? base.longContext : base
   const outTok = clampTokens(outputTokens)
   const cacheRead = Math.min(inTok, clampTokens(cache?.readTokens))
   const cacheWrite = Math.min(inTok - cacheRead, clampTokens(cache?.writeTokens))
@@ -212,13 +219,13 @@ export function resolveCapabilities(model: string, caps?: ModelCaps): ModelCapab
 }
 
 /**
- * Resolved tool-calling support: the host's listed value when known, else null
- * ("unknown" — the caller may probe a local server or simply stay silent). There's
- * no name-heuristic fallback because most tool-capable open models can't be told
- * apart from incapable ones by id alone.
+ * Resolved tool-calling support: the host's listed value when known, else the id
+ * heuristic when `model` is given (true for the hosted families that all call tools),
+ * else null ("unknown": the caller may probe a local server or simply stay silent). The
+ * heuristic never answers false, since most open models can't be told apart by id.
  */
-export function resolveToolSupport(caps?: ModelCaps): boolean | null {
-  return caps?.tools ?? null
+export function resolveToolSupport(caps?: ModelCaps, model?: string): boolean | null {
+  return caps?.tools ?? (model ? modelHasTools(model) : null)
 }
 
 /** Context window, preferring host-provided metadata over the family heuristic. */

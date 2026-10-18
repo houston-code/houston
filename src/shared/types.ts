@@ -9,6 +9,7 @@
  * main process — see `src/main/store.ts` and `src/main/secrets.ts`.
  */
 
+import type { OnboardingState } from './onboarding'
 import type { ReasoningEffort, ReasoningSummary, Verbosity } from './agent'
 import type { SandboxEgressSettings } from './egress'
 
@@ -110,6 +111,8 @@ export interface ModelCaps {
   cacheReadPrice?: number
   /** USD per 1M prompt-cache-write tokens; `0` = writes are free. */
   cacheWritePrice?: number
+  /** Release date the host's listing reports (`YYYY-MM-DD`); drives the picker's "New" mark. */
+  releasedAt?: string
 }
 
 export interface ModelOption {
@@ -117,6 +120,12 @@ export interface ModelOption {
   label?: string
   /** Capability metadata captured from the host's model list. Absent for hand-typed ids. */
   caps?: ModelCaps
+  /**
+   * When a settings migration added this model to the user's list (`YYYY-MM-DD`). Unset
+   * for models seeded on first run or added by hand, so only a model that arrived in an
+   * update reads as "New" in the picker.
+   */
+  addedAt?: string
 }
 
 /** A configured model provider. Safe to send to the renderer. */
@@ -619,6 +628,12 @@ export interface AppSettings {
   previewOpen?: boolean
   /** Width (px) of the docked plan-review panel (Plan mode). */
   planWidth?: number
+  /**
+   * First-run onboarding progress: the get-started checklist, which coachmarks have
+   * been seen, and the one-time tour invitation for pre-onboarding installs. See
+   * @shared/onboarding. Absent on a fresh install.
+   */
+  onboarding?: OnboardingState
 }
 
 /** One format-on-save backend and whether its binary is present on this machine. */

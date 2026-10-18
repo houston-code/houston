@@ -3834,6 +3834,9 @@ describe('loop control — verification gate', () => {
     )
     expect(feedback).toBeTruthy()
     expect((feedback!.content as string)).toContain('TS2322: type error')
+    // Fed back as Houston's note, so a reopened chat shows a notice, not a bubble
+    // the user appears to have written.
+    expect((feedback!.content as string).startsWith(`${SYSTEM_NOTE_PREFIX} `)).toBe(true)
     // Ended cleanly, and the self-correcting second edit landed.
     expect(types(r).at(-1)).toBe('done')
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('v2')

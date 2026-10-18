@@ -76,6 +76,10 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
   const now = deps.now ?? Date.now
   const warn = deps.warn ?? ((m: string) => log.warn(m))
 
+  // The version the store was read at. A newer Houston may have written it (the user
+  // downgraded); saving keeps that higher number so a later upgrade doesn't re-run
+  // migrations the file has already been through.
+  let storedVersion = SCHEDULES_SCHEMA_VERSION
   let schedules: ScheduledRunInfo[] = load()
   let timer: NodeJS.Timeout | null = null
   let started = false
@@ -89,6 +93,9 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
     }
     try {
       const parsed = JSON.parse(raw) as PersistedSchedules
+      if (typeof parsed.schemaVersion === 'number') {
+        storedVersion = Math.max(SCHEDULES_SCHEMA_VERSION, parsed.schemaVersion)
+      }
       if (!Array.isArray(parsed.schedules)) return []
       return parsed.schedules
     } catch {
@@ -106,7 +113,7 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
 
   function save(): void {
     const toWrite: PersistedSchedules = {
-      schemaVersion: SCHEDULES_SCHEMA_VERSION,
+      schemaVersion: storedVersion,
       schedules
     }
     try {

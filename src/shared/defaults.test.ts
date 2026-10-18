@@ -9,6 +9,7 @@ import {
   pruneDefaultModels,
   reconcileSelectedModel,
   resolveShellOutputBudget,
+  renameBuiltInProviderLabels,
   stripBuiltInModelLabels
 } from './defaults'
 
@@ -71,7 +72,7 @@ describe('defaultSettings', () => {
       'claude-fable-5-1',
       'claude-opus-5-5',
       'claude-sonnet-5-5',
-      'claude-haiku-4-5'
+      'claude-haiku-5-5'
     ])
     expect(anthropic.defaultModel).toBe('claude-opus-5-5')
   })
@@ -119,6 +120,11 @@ describe('stripBuiltInModelLabels', () => {
 })
 
 describe('backfillDefaultModels', () => {
+  it('leaves the full first-run seed unstamped, since none of it is news', () => {
+    const saved = [provider({ id: 'openai', models: [] })]
+    for (const m of backfillDefaultModels(saved)[0].models) expect(m.addedAt).toBeUndefined()
+  })
+
   it('appends new built-in default models a saved provider is missing', () => {
     const saved = [provider({ id: 'openai', models: [{ id: 'gpt-4o', label: 'GPT-4o' }] })]
     const ids = backfillDefaultModels(saved)[0].models.map((m) => m.id)
@@ -147,10 +153,14 @@ describe('backfillDefaultModels', () => {
     const saved = [
       provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-opus-4-8' }] })
     ]
-    const models = backfillDefaultModels(saved, ['claude-fable-5-1'])[0].models
+    const models = backfillDefaultModels(saved, ['claude-fable-5-1'], new Date('2026-10-18T09:00:00Z'))[0]
+      .models
     expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5-1'])
-    // The appended model is id-only; its display name is derived, not seeded.
-    expect(models.find((m) => m.id === 'claude-fable-5-1')).toEqual({ id: 'claude-fable-5-1' })
+    // The appended model carries no seeded label (its display name is derived) and is
+    // stamped with the day it arrived, for the picker's "New" mark.
+    expect(models.find((m) => m.id === 'claude-fable-5-1')).toEqual({ id: 'claude-fable-5-1', addedAt: '2026-10-18' })
+    // The user's existing model is untouched.
+    expect(models[0]).toEqual({ id: 'claude-opus-4-8' })
   })
 
   it('with onlyIds, does not re-add an already-present scoped id', () => {
@@ -308,5 +318,37 @@ describe('autoExtendTurnsEnabled', () => {
 
   it('honors an explicit off', () => {
     expect(autoExtendTurnsEnabled({ autoExtendTurns: false })).toBe(false)
+  })
+})
+
+describe('renameBuiltInProviderLabels', () => {
+  const local = (id: string, label: string, builtIn = true): ProviderConfig => ({
+    id,
+    kind: 'openai-compatible',
+    label,
+    models: [],
+    requiresKey: false,
+    hasKey: false,
+    builtIn
+  })
+
+  it('renames the local providers still carrying the old seeded name', () => {
+    const out = renameBuiltInProviderLabels([
+      local('ollama', 'Local \u2014 Ollama'),
+      local('lmstudio', 'Local \u2014 LM Studio')
+    ])
+    expect(out.map((p) => p.label)).toEqual(['Ollama (local)', 'LM Studio (local)'])
+  })
+
+  it('keeps a name the user changed, and leaves custom providers alone', () => {
+    const renamed = local('ollama', 'My Ollama box')
+    const custom = local('my-proxy', 'Local \u2014 Ollama', false)
+    const out = renameBuiltInProviderLabels([renamed, custom])
+    expect(out[0]).toBe(renamed)
+    expect(out[1]).toBe(custom)
+  })
+
+  it('seeds the new names, with no em dash in any built-in provider name', () => {
+    for (const p of defaultSettings().providers) expect(p.label).not.toContain('\u2014')
   })
 })

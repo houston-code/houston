@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildPrompt, extractText, sectionBody, summaryFixPrompt, SYSTEM_PROMPT } from './ai-release-notes.mjs'
+import { buildPrompt, buildRequest, extractText, sectionBody, summaryFixPrompt, SYSTEM_PROMPT } from './ai-release-notes.mjs'
 import { summaryProblems } from './check-changelog-summary.mjs'
 
 describe('buildPrompt', () => {
@@ -44,6 +44,25 @@ describe('buildPrompt', () => {
   it('handles an empty PR set without throwing', () => {
     const p = buildPrompt({ version: '0.0.1', date: '2026-06-28', prs: [] })
     expect(p).toContain('(no pull requests)')
+  })
+})
+
+describe('buildRequest', () => {
+  it('targets Opus 5.5 with adaptive thinking, explicit effort, and the refusal fallback', () => {
+    const messages = [{ role: 'user', content: 'x' }]
+    const req = buildRequest(messages)
+    expect(req.model).toBe('claude-opus-5-5')
+    expect(req.thinking).toEqual({ type: 'adaptive' })
+    expect(req.output_config).toEqual({ effort: 'high' })
+    expect(req.betas).toEqual(['server-side-fallback-2026-07-01'])
+    expect(req.fallbacks).toBe('default')
+    expect(req.system).toBe(SYSTEM_PROMPT)
+    expect(req.messages).toBe(messages)
+    // Opus 5.5 rejects a thinking budget, a disabled-thinking config, and sampling params.
+    const json = JSON.stringify(req)
+    for (const banned of ['budget_tokens', 'disabled', 'temperature', 'tool_choice']) {
+      expect(json).not.toContain(banned)
+    }
   })
 })
 

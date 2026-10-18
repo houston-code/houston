@@ -252,7 +252,7 @@ it.
 It goes to the turn that is running. The agent reads it before its next step, so
 "no, use YAML instead" changes what happens next rather than arriving after the
 work is done. Houston prints `· steering: …` at the moment the message actually
-reaches the model, not when you pressed `Enter` — until then it has changed
+reaches the model, not when you pressed `Enter`. Until then it has changed
 nothing, and saying otherwise would be a lie. The message is an ordinary part of
 the conversation, so it appears in the transcript and is remembered like anything
 else you said.
@@ -302,6 +302,11 @@ own step count, it stays a hard stop until you turn the switch on.
   first commit** when a remote exists but nothing is committed, and **Commit &
   push** for a remote that isn't on GitHub. Each hands the work to the agent as a
   normal turn, so every git and network step goes through your approvals.
+- **Prompts Houston writes for you.** `/review`, `/agent`, the shipping buttons, and
+  a session another chat handed off each send the agent a detailed prompt. The chat
+  shows what you did (for example "/review" or "Create PR") instead of that prompt;
+  open **Instructions sent to the agent** under it to read the exact text. The
+  terminal prints a one-line summary in its place.
 
 `/undo` covers the last turn's file writes only. It does not undo shell commands,
 and it does not touch git history.
@@ -850,7 +855,7 @@ you everywhere, appends it to the rules file it already reads on every run
 (`AGENTS.md` in the project, or in `~/.claude`), and tells you which file it
 wrote.
 
-This is for the moment you notice "it should always do X" — the moment you are
+This is for the moment you notice "it should always do X", the moment you are
 least likely to stop and open an editor. `#` alone is not a note, and a `#` in the
 middle of a line is ordinary text.
 
@@ -890,6 +895,15 @@ conventions, not as authority to change tool or permission behavior.
   most recent 50 turns' checkpoints are kept. Shell-command side effects are not
   checkpointed: revert only restores files the editing tools touched.
 
+## Help menu
+
+The desktop app's **Help** menu (last in the menu bar on every platform) has
+**Houston Guide**, which opens this guide, and **Report an Issue**, which opens a
+new GitHub issue. On macOS the Help menu also has the system search field: type
+part of a command's name (for example "settings") to find it in the menus. On
+Windows and Linux the Help menu also holds **Share Houston…** and **Check for
+Updates…**, which sit in the app menu on macOS.
+
 ## Sharing Houston
 
 To invite a friend, click **Share Houston** at the bottom of the sidebar (the share
@@ -910,6 +924,26 @@ rules, hooks, MCP servers, additional folders, context threshold, appearance
 also **Check for Updates…** in the app menu on macOS or the Help menu on Windows and
 Linux), and optional integrations (`gh`, formatters). API keys
 are encrypted with the OS keychain and stay in the main process.
+
+If a key won't save because the OS keychain is unavailable, Settings (and the Get started
+checklist's Connect panel) says how to fix it
+and offers **Restart Houston**. On macOS this usually means the Keychain prompt was
+denied: macOS only asks again after a restart, so restart and choose **Always Allow**.
+On Linux, unlock or install a keyring (such as GNOME Keyring or KWallet), then restart.
+
+## Getting started in the desktop app
+
+On a first launch the welcome screen shows a three-step **Get started** checklist:
+connect a model (paste an API key for Anthropic, OpenAI, or Gemini, which is checked
+with a live model listing before it is saved, or point at a local Ollama or LM Studio
+server), open a project folder, and send a first task. Each step ticks itself off from
+the app's real state, and **Skip setup** hides the checklist for good.
+
+A few one-time tips then point at controls the first time they matter: the approval
+mode and the **New worktree** toggle before the first message, and **Revert** and
+**Changes** after the first turn that edits files. **Skip tips** or Esc dismisses them.
+Installs from before this feature get a single "Take the tour" banner instead. Replay
+the tips any time with **Show getting-started tips** in the command palette (⌘K).
 
 ## License and legal
 

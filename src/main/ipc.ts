@@ -27,6 +27,7 @@ import {
 } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit } from '@shared/images'
+import { sanitizeInvocation } from '@shared/promptInvocation'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
 import { checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
@@ -48,7 +49,8 @@ import {
   openWorkspacePath,
   revealInFileManager
 } from './openInEditor'
-import { setKey, deleteKey, setMcpOAuthTokens } from './secrets'
+import { relaunchApp } from './quit-confirm'
+import { setKey, deleteKey, setMcpOAuthTokens, secureStorageStatus } from './secrets'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
@@ -95,7 +97,12 @@ import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
-import { getRepoInfo, createWorktree, removeWorktree } from './agent/worktree'
+import {
+  getRepoInfo,
+  createWorktree,
+  removeWorktree,
+  isWorktreeDisposable
+} from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { initGitRepo } from './agent/gitInit'
 import { realpathSync } from 'node:fs'
@@ -121,18 +128,55 @@ import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 
+/** Longest pasted key accepted by testKey; real provider keys are far shorter. */
+const MAX_TEST_KEY_LENGTH = 4096
+
+/**
+ * Check a candidate API key with a live model listing, without storing it, so a typo
+ * can never replace a working key. Resolves to the number of models the key can see;
+ * rejects with the provider's message, with the key itself scrubbed out of it.
+ */
+export async function testProviderKey(providerId: unknown, key: unknown): Promise<number> {
+  if (typeof providerId !== 'string' || typeof key !== 'string') {
+    throw new Error('Invalid provider or key.')
+  }
+  const candidate = key.trim()
+  if (!candidate || candidate.length > MAX_TEST_KEY_LENGTH) throw new Error('Invalid key.')
+  const provider = getProvider(providerId)
+  if (!provider) throw new Error(`Unknown provider: ${providerId}`)
+  if (!provider.requiresKey) throw new Error(`${provider.label} doesn't use an API key.`)
+  try {
+    return (await listModels(provider, candidate)).length
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    // No `cause`: the original error can carry the candidate key, and a cause would
+    // keep it reachable to anything that logs or serializes this error.
+    // eslint-disable-next-line preserve-caught-error
+    throw new Error(msg.split(candidate).join('[key]'))
+  }
+}
+
+/**
+ * Which delete-confirmation dialog was shown: a plain chat, a chat whose worktree
+ * holds work (keep/remove choice), or a chat whose worktree is clean and merged
+ * (plain confirmation that also tears the worktree down, since nothing is lost).
+ */
+export type DeleteDialogKind = 'plain' | 'worktree' | 'disposableWorktree'
+
 /**
  * Translate a delete-confirmation dialog button index into what should happen.
- * Button 0 is always Cancel (in both the plain and the worktree dialog), so a
- * cancel can never delete — the bug this guards against. Only the worktree
- * dialog's button 2 ("Delete & remove worktree") tears the worktree down.
+ * Button 0 is always Cancel (in every dialog), so a cancel can never delete — the
+ * bug this guards against. The worktree dialog's button 2 ("Delete & remove
+ * worktree") tears the worktree down; a disposable worktree goes with the chat.
  */
 export function resolveDeleteAction(
-  hasWorktree: boolean,
+  kind: DeleteDialogKind,
   response: number
 ): { delete: boolean; removeWorktree: boolean } {
   if (response === 0) return { delete: false, removeWorktree: false }
-  return { delete: true, removeWorktree: hasWorktree && response === 2 }
+  const removeWorktree =
+    kind === 'disposableWorktree' || (kind === 'worktree' && response === 2)
+  return { delete: true, removeWorktree }
 }
 
 /**
@@ -596,11 +640,19 @@ export function registerIpc(): void {
     return getSettings()
   })
 
+  ipcMain.handle(IPC.secureStorageStatus, () => secureStorageStatus())
+
+  ipcMain.handle(IPC.appRelaunch, () => relaunchApp())
+
   ipcMain.handle(IPC.settingsListModels, async (_event, providerId: string) => {
     const provider = getProvider(providerId)
     if (!provider) throw new Error(`Unknown provider: ${providerId}`)
     return listModels(provider)
   })
+
+  ipcMain.handle(IPC.settingsTestKey, (_event, providerId: unknown, key: unknown) =>
+    testProviderKey(providerId, key)
+  )
 
   // Preflight: does this local model support tool calling? Only meaningful for an
   // Ollama-style (openai-compatible) provider; anything else returns null (unknown)
@@ -706,20 +758,26 @@ export function registerIpc(): void {
       compactConversationNow(id, providerId, model)
   )
   // Delete a conversation, confirming first via a native dialog so the choice is
-  // unambiguous. A chat that owns a Houston-created worktree gets a three-way
-  // choice — the worktree can outlive the chat — and in every case the Cancel
-  // button truly cancels (returns deleted: false, nothing is touched).
+  // unambiguous. A chat that owns a Houston-created worktree with work in it gets a
+  // three-way choice — the worktree can outlive the chat. A clean, fully merged
+  // worktree holds nothing to keep, so it gets the plain confirmation and is torn
+  // down with the chat. In every case the Cancel button truly cancels (returns
+  // deleted: false, nothing is touched).
   ipcMain.handle(
     IPC.conversationDelete,
     async (event, id: string): Promise<DeleteConversationResult> => {
       const conv = getConversation(id)
       const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
       const title = conv?.title ?? 'this chat'
-      const hasWorktree = !!conv?.worktree
+      const kind: DeleteDialogKind = !conv?.worktree
+        ? 'plain'
+        : (await isWorktreeDisposable(conv.worktree))
+          ? 'disposableWorktree'
+          : 'worktree'
 
       const { response } = await dialog.showMessageBox(
         win!,
-        hasWorktree
+        kind === 'worktree'
           ? {
               type: 'warning',
               buttons: ['Cancel', 'Delete, keep worktree', 'Delete & remove worktree'],
@@ -729,8 +787,8 @@ export function registerIpc(): void {
               message: `Delete “${title}”?`,
               detail:
                 `This chat has a git worktree on branch “${conv!.worktree!.branch}”.\n\n` +
-                `Delete, keep worktree — remove the chat, leave the worktree on disk.\n` +
-                `Delete & remove worktree — also tear down the worktree (any uncommitted ` +
+                `Delete, keep worktree: remove the chat, leave the worktree on disk.\n` +
+                `Delete & remove worktree: also tear down the worktree (any uncommitted ` +
                 `or unmerged work is kept).`
             }
           : {
@@ -740,11 +798,15 @@ export function registerIpc(): void {
               cancelId: 0,
               title: 'Delete chat',
               message: `Delete “${title}”?`,
-              detail: 'This cannot be undone.'
+              detail:
+                kind === 'disposableWorktree'
+                  ? `Its worktree on branch “${conv!.worktree!.branch}” has no changes or ` +
+                    `unmerged commits, so it will be removed too. This cannot be undone.`
+                  : 'This cannot be undone.'
             }
       )
 
-      const action = resolveDeleteAction(hasWorktree, response)
+      const action = resolveDeleteAction(kind, response)
       if (!action.delete) return { deleted: false }
       // Drop any buffered follow-ups so a deleted chat's queue can't linger in memory.
       clearQueue(id)
@@ -868,10 +930,12 @@ export function registerIpc(): void {
     }
 
     const images = sanitizeAttachments(req.images)
+    const invokedAs = sanitizeInvocation(req.invokedAs)
     const userMessage: ChatMessage = {
       role: 'user',
       content: req.userText,
-      ...(images.length ? { images } : {})
+      ...(images.length ? { images } : {}),
+      ...(invokedAs ? { invokedAs } : {})
     }
     const messages = [...conv.messages, userMessage]
     setMessages(conv.id, messages)

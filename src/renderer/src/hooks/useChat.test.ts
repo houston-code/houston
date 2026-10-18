@@ -81,6 +81,19 @@ describe('useChat', () => {
     expect(result.current.items[0]).toMatchObject({ kind: 'user', text: 'hello' })
   })
 
+  it('passes a first-party prompt tag to the bubble and to main', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat())
+    const invokedAs = { kind: 'command', label: '/review', typed: '/review' } as const
+
+    await act(async () => {
+      await result.current.send({ ...SEND, userText: 'Review my changes…', invokedAs })
+    })
+
+    expect(api.startAgent.mock.calls[0][0]).toMatchObject({ userText: 'Review my changes…', invokedAs })
+    expect(result.current.items[0]).toMatchObject({ kind: 'user', text: 'Review my changes…', invokedAs })
+  })
+
   it('clears the running state when startAgent rejects (no orphan Stop button)', async () => {
     const { api } = installApi()
     api.startAgent.mockRejectedValueOnce(new Error('bridge down'))

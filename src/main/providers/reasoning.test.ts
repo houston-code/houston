@@ -5,6 +5,7 @@ import {
   anthropicSupportsThinking,
   anthropicSupportsInterleavedThinking,
   anthropicSupportsXhigh,
+  anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   openaiReasoningEffort,
   openaiResponsesReasoning,
@@ -55,6 +56,32 @@ describe('anthropic thinking', () => {
     for (const id of ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-mythos-5-1', 'claude-opus-4-8']) {
       expect(anthropicPreservesThinking(id)).toBe(false)
     }
+  })
+
+  it('maps off to the lowest effort on models that think regardless', () => {
+    for (const id of ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-mythos-5']) {
+      expect(anthropicThinksByDefault(id)).toBe(true)
+      expect(anthropicThinking(id, 'off')).toMatchObject({ kind: 'adaptive', effort: 'low', display: 'omitted' })
+      expect(anthropicThinking(id, undefined)).toMatchObject({ effort: 'low' })
+    }
+    for (const id of ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5']) {
+      expect(anthropicThinksByDefault(id)).toBe(false)
+      expect(anthropicThinking(id, 'off')).toBeNull()
+    }
+  })
+
+  it('runs Haiku 5.5 adaptive, on by default and prefix-bound, without an xhigh tier', () => {
+    for (const id of ['claude-haiku-5-5', 'anthropic.claude-haiku-5-5']) {
+      expect(anthropicSupportsThinking(id)).toBe(true)
+      expect(anthropicUsesLegacyThinking(id)).toBe(false)
+      expect(anthropicThinksByDefault(id)).toBe(true)
+      expect(anthropicPreservesThinking(id)).toBe(true)
+      expect(anthropicSupportsXhigh(id)).toBe(false)
+      expect(anthropicThinking(id, 'xhigh')).toMatchObject({ kind: 'adaptive', effort: 'high' })
+      expect(anthropicThinking(id, 'off')).toMatchObject({ effort: 'low', display: 'omitted' })
+    }
+    // Haiku 4.5 keeps the legacy budget shape.
+    expect(anthropicUsesLegacyThinking('claude-haiku-4-5')).toBe(true)
   })
 
   it('clamps xhigh on the 4.6 line, which tops out at high', () => {

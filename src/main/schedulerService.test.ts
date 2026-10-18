@@ -115,6 +115,15 @@ describe('createSchedulerService', () => {
     expect(service.list()).toHaveLength(0)
   })
 
+  it('keeps a higher schema version a newer Houston stamped on the store', () => {
+    writeFileSync(file, JSON.stringify({ schemaVersion: 7, schedules: [] }))
+    const { service } = makeService()
+    service.create(input())
+    const onDisk = JSON.parse(readFileSync(file, 'utf8'))
+    expect(onDisk.schemaVersion).toBe(7)
+    expect(onDisk.schedules).toHaveLength(1)
+  })
+
   it('catches up an occurrence missed while the host was down, once, at start()', async () => {
     // Written by a previous process: due an hour ago.
     const overdue: ScheduledRunInfo = {

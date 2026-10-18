@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 9
+export const SETTINGS_SCHEMA_VERSION = 12
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -73,13 +73,13 @@ export function defaultProviders(): ProviderConfig[] {
       // `modelDisplayName` in models.ts), so a seeded model reads identically to one
       // added via Fetch. No hardcoded labels to drift out of sync with fetched ids.
       // The current lineup, one model per tier. Superseded releases (Fable 5, Opus 4.8 /
-      // 4.7, Sonnet 4.6) still serve, so the v9 migration only adds the new ids to
-      // existing installs; it never removes a model a user may be using.
+      // 4.7, Sonnet 4.6, Haiku 4.5) still serve, so the migrations that brought in their
+      // successors (v9, v12) only add new ids; they never remove a model a user may be using.
       models: [
         { id: 'claude-fable-5-1' },
         { id: 'claude-opus-5-5' },
         { id: 'claude-sonnet-5-5' },
-        { id: 'claude-haiku-4-5' }
+        { id: 'claude-haiku-5-5' }
       ],
       // Changing this needs a live eval baseline for the new model in the same PR
       // (src/main/agent/evals/baselines/), or the scheduled eval-live.yml run reds.
@@ -132,7 +132,7 @@ export function defaultProviders(): ProviderConfig[] {
     {
       id: 'ollama',
       kind: 'openai-compatible',
-      label: 'Local — Ollama',
+      label: 'Ollama (local)',
       baseUrl: 'http://localhost:11434/v1',
       models: [],
       requiresKey: false,
@@ -142,7 +142,7 @@ export function defaultProviders(): ProviderConfig[] {
     {
       id: 'lmstudio',
       kind: 'openai-compatible',
-      label: 'Local — LM Studio',
+      label: 'LM Studio (local)',
       baseUrl: 'http://localhost:1234/v1',
       models: [],
       requiresKey: false,
@@ -170,15 +170,21 @@ export function defaultProviders(): ProviderConfig[] {
  */
 export function backfillDefaultModels(
   saved: ProviderConfig[],
-  onlyIds?: readonly string[]
+  onlyIds?: readonly string[],
+  now: Date = new Date()
 ): ProviderConfig[] {
   const only = onlyIds ? new Set(onlyIds) : null
+  // A scoped add is a version bump delivering newly released models, so stamp them for
+  // the picker's "New" mark. The full first-run/pre-v2 seed is not news and stays unstamped.
+  const addedAt = only ? now.toISOString().slice(0, 10) : undefined
   const defaults = new Map(defaultProviders().map((p) => [p.id, p]))
   return saved.map((p) => {
     const def = defaults.get(p.id)
     if (!def) return p
     const have = new Set(p.models.map((m) => m.id))
-    const additions = def.models.filter((m) => !have.has(m.id) && (!only || only.has(m.id)))
+    const additions = def.models
+      .filter((m) => !have.has(m.id) && (!only || only.has(m.id)))
+      .map((m) => (addedAt ? { ...m, addedAt } : m))
     return additions.length ? { ...p, models: [...p.models, ...additions] } : p
   })
 }
@@ -228,6 +234,24 @@ export function stripBuiltInModelLabels(saved: ProviderConfig[]): ProviderConfig
   return saved.map((p) => {
     if (!p.builtIn || !p.models.some((m) => m.label !== undefined)) return p
     return { ...p, models: p.models.map(({ label: _label, ...m }) => m) }
+  })
+}
+
+/** Built-in provider names older versions seeded, keyed by provider id, mapped to the current name. */
+const RENAMED_BUILT_IN_LABELS: Record<string, { from: string; to: string }> = {
+  ollama: { from: 'Local \u2014 Ollama', to: 'Ollama (local)' },
+  lmstudio: { from: 'Local \u2014 LM Studio', to: 'LM Studio (local)' }
+}
+
+/**
+ * Rename built-in providers whose saved name is exactly a name an older version seeded.
+ * The display name is persisted with the provider, so changing the seed alone would only
+ * reach fresh installs. A name the user has changed is left as they set it.
+ */
+export function renameBuiltInProviderLabels(saved: ProviderConfig[]): ProviderConfig[] {
+  return saved.map((p) => {
+    const rename = RENAMED_BUILT_IN_LABELS[p.id]
+    return p.builtIn && rename && p.label === rename.from ? { ...p, label: rename.to } : p
   })
 }
 

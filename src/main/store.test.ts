@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServerConfig, PermissionRule } from '@shared/types'
 import { REDACTED_HEADER_VALUE, mcpHeaderScope, providerHeaderScope } from '@shared/types'
+import { SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 
 /**
  * Migration behaviour for the settings store. `getSettings()` runs `migrate()` on the
@@ -139,7 +140,8 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 8, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
     expect(ids[0]).toBe('claude-opus-4-8') // user's model kept, in place
-    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
+    // Haiku 5.5 arrives too, via the later scoped v12 add.
+    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])
   })
 
   it('scopes the v9 bump to the new ids — does not re-add a default the user deleted', async () => {
@@ -150,14 +152,15 @@ describe('settings migration — model backfill', () => {
 
   it('does not re-add a 5.x model a v9 install has already deleted', async () => {
     writeSettings({ schemaVersion: 9, providers: [anthropicProvider(['claude-opus-5-5'])] })
-    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
+    // Fable 5.1 and Sonnet 5.5 stay deleted; only the later v12 Haiku 5.5 add is new.
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
   })
 
   it('gives a pre-v2 install the full backfill without duplicating the v9 ids', async () => {
     // fromVersion 0 runs every gate: the full v2 seed and the scoped v9 add.
     writeSettings({ schemaVersion: 1, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
-    expect(ids).toContain('claude-haiku-4-5') // full backfill ran
+    expect(ids).toContain('claude-haiku-5-5') // full backfill ran
     expect(ids).toContain('claude-opus-5-5')
     expect(ids.filter((id) => id === 'claude-fable-5-1')).toHaveLength(1) // no duplicate
   })
@@ -165,7 +168,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(9)
+    expect(getSettings().schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -188,6 +191,46 @@ describe('settings migration — model backfill', () => {
     const { getSettings } = await loadStore()
     const anthropic = getSettings().providers.find((p) => p.id === 'anthropic')!
     expect(anthropic.models.find((m) => m.id === 'claude-opus-4-8')).toEqual({ id: 'claude-opus-4-8' })
+  })
+})
+
+describe('settings migration — Claude Haiku 5.5 (v12)', () => {
+  it('adds Haiku 5.5 and keeps Haiku 4.5, which still serves', async () => {
+    writeSettings({ schemaVersion: 11, providers: [anthropicProvider(['claude-opus-5-5', 'claude-haiku-4-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-haiku-4-5', 'claude-haiku-5-5'])
+  })
+
+  it('does not re-add Haiku 5.5 a v12 install has deleted', async () => {
+    writeSettings({ schemaVersion: 12, providers: [anthropicProvider(['claude-opus-5-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
+  })
+})
+
+describe('settings migration — local provider names (v11)', () => {
+  const local = (id: string, label: string): unknown => ({
+    id,
+    kind: 'openai-compatible',
+    label,
+    baseUrl: 'http://localhost:11434/v1',
+    models: [],
+    requiresKey: false,
+    hasKey: false,
+    builtIn: true
+  })
+
+  it('renames the old seeded local provider names on upgrade', async () => {
+    writeSettings({
+      schemaVersion: 10,
+      providers: [local('ollama', 'Local \u2014 Ollama'), local('lmstudio', 'Local \u2014 LM Studio')]
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().providers.map((p) => p.label)).toEqual(['Ollama (local)', 'LM Studio (local)'])
+  })
+
+  it('keeps a local provider name the user changed', async () => {
+    writeSettings({ schemaVersion: 10, providers: [local('ollama', 'Studio Mac')] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().providers[0].label).toBe('Studio Mac')
   })
 })
 
@@ -693,5 +736,116 @@ describe('custom-header secrets', () => {
     expect(headerStore.map[providerHeaderScope('openai')]).toEqual({ Authorization: 'Bearer keep-me' })
     // Disk still carries no cleartext value.
     expect(JSON.stringify(readDisk())).not.toContain('keep-me')
+  })
+})
+
+/** The desktop app records its version on every launch; its presence = it has run here. */
+function markDesktopHasRun(): void {
+  writeFileSync(join(state.userData, 'update-state.json'), JSON.stringify({ lastSeenVersion: '0.5.0' }))
+}
+
+describe('settings migration — onboarding (v10)', () => {
+  it('gives an existing desktop install the tour invitation and marks the tips seen', async () => {
+    markDesktopHasRun()
+    writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toEqual({
+      seenTips: ['approval', 'worktree', 'changes', 'revert'],
+      tourInvite: 'pending'
+    })
+  })
+
+  it('treats a legacy file with no schemaVersion as an existing desktop install too', async () => {
+    markDesktopHasRun()
+    writeSettings({ providers: [openaiProvider(['gpt-5.5'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding?.tourInvite).toBe('pending')
+  })
+
+  it('treats a terminal-only profile as new to the desktop app (tips stay unseen)', async () => {
+    writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toEqual({})
+  })
+
+  it('saves the upgrade at once, so a later launch keeps the same decision', async () => {
+    // Terminal-only profile upgraded on the desktop app's first launch...
+    writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
+    await loadStore().then((s) => s.getSettings())
+    const onDisk = JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
+    expect(onDisk.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(onDisk.onboarding).toEqual({})
+    // ...which then records its version. The next launch must not reclassify the user.
+    markDesktopHasRun()
+    vi.resetModules()
+    const reloaded = await loadStore()
+    expect(reloaded.getSettings().onboarding).toEqual({})
+  })
+
+  it('does not rewrite a file that is already current', async () => {
+    writeSettings({ schemaVersion: SETTINGS_SCHEMA_VERSION, providers: [openaiProvider(['gpt-5.5'])] })
+    const before = statSync(join(state.userData, 'settings.json')).mtimeMs
+    await loadStore().then((s) => s.getSettings())
+    expect(statSync(join(state.userData, 'settings.json')).mtimeMs).toBe(before)
+  })
+
+  it('leaves a fresh install (no settings file) without onboarding state', async () => {
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toBeUndefined()
+  })
+
+  it('does not re-invite once the invitation was dismissed', async () => {
+    markDesktopHasRun()
+    writeSettings({
+      schemaVersion: 10,
+      providers: [openaiProvider(['gpt-5.5'])],
+      onboarding: { tourInvite: 'done', seenTips: [] }
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toEqual({ tourInvite: 'done', seenTips: [] })
+  })
+
+  it('round-trips onboarding progress through a save', async () => {
+    const { getSettings, saveSettings } = await loadStore()
+    saveSettings({ ...getSettings(), onboarding: { checklistDone: true, seenTips: ['approval'] } })
+    vi.resetModules()
+    const reloaded = await loadStore()
+    expect(reloaded.getSettings().onboarding).toEqual({ checklistDone: true, seenTips: ['approval'] })
+  })
+})
+
+describe('settings written by a newer Houston (after a downgrade)', () => {
+  const NEWER = 99
+
+  it('runs no migration steps and keeps the higher version in memory', async () => {
+    // Every step is gated on fromVersion < N, so a newer file is taken as already migrated:
+    // the scoped backfills must not re-add models the user deleted on the newer build.
+    writeSettings({ schemaVersion: NEWER, providers: [anthropicProvider(['claude-opus-4-8'])] })
+    const { getSettings } = await loadStore()
+    const s = getSettings()
+    expect(s.schemaVersion).toBe(NEWER)
+    expect(s.providers.find((p) => p.id === 'anthropic')!.models.map((m) => m.id)).toEqual(['claude-opus-4-8'])
+  })
+
+  it('never writes a lower version, and keeps settings this build does not know', async () => {
+    writeSettings({
+      schemaVersion: NEWER,
+      providers: [anthropicProvider(['claude-opus-4-8'])],
+      settingFromTheFuture: { enabled: true }
+    })
+    const { getSettings, saveSettings } = await loadStore()
+    saveSettings({ ...getSettings(), approvalPolicy: 'auto-edit' })
+    const onDisk = JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
+    expect(onDisk.schemaVersion).toBe(NEWER)
+    expect(onDisk.approvalPolicy).toBe('auto-edit')
+    expect(onDisk.settingFromTheFuture).toEqual({ enabled: true })
+  })
+
+  it('does not rewrite a newer file just because it was read', async () => {
+    writeSettings({ schemaVersion: NEWER, providers: [anthropicProvider(['claude-opus-4-8'])] })
+    const before = readFileSync(join(state.userData, 'settings.json'), 'utf8')
+    const { getSettings } = await loadStore()
+    getSettings()
+    expect(readFileSync(join(state.userData, 'settings.json'), 'utf8')).toBe(before)
   })
 })

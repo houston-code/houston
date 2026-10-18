@@ -4,8 +4,11 @@ import {
   resolveCloseAction,
   windowChromeOptions,
   setTerminalFocused,
-  isTerminalFocused
+  isTerminalFocused,
+  GUIDE_URL,
+  ISSUES_URL
 } from './menu'
+import { isSafeExternalUrl } from './safeExternal'
 
 describe('menu close routing', () => {
   it('routes Cmd+W to the active tab when the terminal is focused, else the window', () => {
@@ -34,7 +37,6 @@ describe('Check for Updates menu item', () => {
 
   it('stays in the app menu on macOS, with no duplicate Help entry', () => {
     const template = appMenuTemplate(true)
-    expect(template.find((m) => m.role === 'help')).toBeUndefined()
     const all = template.flatMap(itemLabels)
     expect(all.filter((l) => l === 'Check for Updates…')).toHaveLength(1)
   })
@@ -53,6 +55,32 @@ describe('Share Houston menu item', () => {
     const template = appMenuTemplate(true)
     expect(itemLabels(template[0])).toContain('Share Houston…')
     expect(template.flatMap(itemLabels).filter((l) => l === 'Share Houston…')).toHaveLength(1)
+  })
+})
+
+describe('Help menu', () => {
+  const itemLabels = (menu: { submenu?: unknown }): string[] =>
+    ((menu.submenu ?? []) as { label?: string }[]).map((i) => i.label ?? '')
+
+  it.each([true, false])('is the last menu with the guide and issue links (isMac=%s)', (isMac) => {
+    const template = appMenuTemplate(isMac)
+    const help = template[template.length - 1]
+    // role 'help' is what gives macOS its native menu search field.
+    expect(help.role).toBe('help')
+    expect(template.filter((m) => m.role === 'help')).toHaveLength(1)
+    expect(itemLabels(help).slice(0, 2)).toEqual(['Houston Guide', 'Report an Issue'])
+  })
+
+  it('carries only the links on macOS, where share and updates live in the app menu', () => {
+    const help = appMenuTemplate(true).at(-1)!
+    expect(itemLabels(help)).toEqual(['Houston Guide', 'Report an Issue'])
+  })
+
+  it('links to https URLs that pass the external-open allowlist', () => {
+    for (const url of [GUIDE_URL, ISSUES_URL]) {
+      expect(url.startsWith('https://')).toBe(true)
+      expect(isSafeExternalUrl(url)).toBe(true)
+    }
   })
 })
 

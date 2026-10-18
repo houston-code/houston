@@ -61,7 +61,7 @@ describe('createProvider key checks', () => {
       cfg({
         id: 'ollama',
         kind: 'openai-compatible',
-        label: 'Local — Ollama',
+        label: 'Ollama (local)',
         requiresKey: false,
         baseUrl: 'http://localhost:11434/v1'
       })

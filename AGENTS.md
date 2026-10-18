@@ -38,6 +38,13 @@ them from drifting:
   `tui.test.ts` (`resolves every blocking interaction`) is the runtime backstop.
 - When you add an `AgentEvent` or a blocking tool, wire the GUI, the TUI, and
   headless in the same change, and add/extend the parity coverage.
+- **A prompt Houston writes for the user is never shown as their words.** Build it
+  with a constructor in `src/shared/promptInvocation.ts` (`commandTurn`, `agentTurn`,
+  `shipTurn`, `spawnedTurn`) and send it as an invoked turn (`onInvoke` in the GUI,
+  the `prompt` slash result in the TUI); the message carries `invokedAs` and both
+  clients render that. A message the loop injects on its own goes through
+  `systemNoteMessage()`. `promptVisibility.guard.test.ts` inventories every place a
+  user turn is created and fails on a new one until it is classified.
 
 ## Agent-behavior goldens
 
@@ -66,7 +73,12 @@ reasoning, the Claude request-shape gates, display-order families) lives in
 provider's section there, add the id to the corpus in
 `src/main/providers/model-knowledge.test.ts`, and regenerate
 `src/main/providers/goldens/model-knowledge.json` with `-u`; the golden diff is the review
-surface for what changed. Seeding it as a default is separate: `src/shared/defaults.ts`
+surface for what changed. `model-coverage.test.ts` fails any default or curated cloud-host
+model that lacks a price, context window, named display family, tool calling or reasoning
+mode, or isn't pinned in that golden. The weekly `model-drift.yml` workflow lists each
+provider's models and keeps one "New models available" issue of releases Houston doesn't ship
+yet; to stop flagging one deliberately, add it with a reason to
+`src/main/providers/model-drift-ignore.json`. Seeding it as a default is separate: `src/shared/defaults.ts`
 plus a scoped `backfillDefaultModels` step in `src/main/store.ts`'s `migrate()`.
 
 ## Task-level evals

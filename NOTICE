@@ -23,6 +23,7 @@ Apache License grant over this repository. That artwork is:
     build/icon.icns
     build/icon.ico
     website/public/assets/icon.png
+    website/public/assets/icon-60.png
     website/public/assets/og.svg
     website/public/assets/og.png
     website/public/apple-touch-icon.png

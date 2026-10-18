@@ -30,7 +30,8 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
     await expect(page.locator('[role="listbox"]')).toBeVisible()
 
     const info = await page.evaluate(() => {
-      const menu = document.querySelector('[role="listbox"]') as HTMLElement
+      // The popover (search field + list) is what scrolls and what must stay on-screen.
+      const menu = document.querySelector('.model-menu') as HTMLElement
       const trig = document.querySelector('[role="combobox"][aria-haspopup="listbox"]') as HTMLElement
       const opts = Array.from(menu.querySelectorAll('[role="option"]')) as HTMLElement[]
       return {

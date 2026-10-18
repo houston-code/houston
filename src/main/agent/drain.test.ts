@@ -97,6 +97,30 @@ describe('runAndDrain', () => {
     expect(listQueue(cid)).toEqual([]) // drained
   })
 
+  it('keeps a lone queued first-party prompt tagged through the flush', async () => {
+    const cid = 'conv-invoked'
+    const invokedAs = { kind: 'action', label: 'Create PR' } as const
+    addToQueue({
+      conversationId: cid,
+      userText: 'Create a GitHub pull request…',
+      invokedAs,
+      providerId: 'anthropic',
+      model: 'm1',
+      approvalPolicy: 'ask'
+    })
+    endRunsWith({ done: 'end_turn' })
+    const sink = io()
+
+    await runAndDrain(sink, cid, runReq(cid))
+    await settle()
+
+    const turnStart = sink.emit.mock.calls.map(([, e]) => e).find((e) => e.type === 'turn_start')
+    expect(turnStart).toMatchObject({ userText: 'Create a GitHub pull request…', invokedAs })
+    expect(h.setMessages).toHaveBeenCalledWith(cid, [
+      { role: 'user', content: 'Create a GitHub pull request…', invokedAs }
+    ])
+  })
+
   it('holds the queue on error (no flush, no turn_start)', async () => {
     const cid = 'conv-error'
     addToQueue({ conversationId: cid, userText: 'A', providerId: 'anthropic', model: 'm', approvalPolicy: 'ask' })

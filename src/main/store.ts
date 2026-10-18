@@ -22,6 +22,7 @@ import {
 import {
   backfillDefaultModels,
   pruneDefaultModels,
+  renameBuiltInProviderLabels,
   DEFAULT_COMPACTION_THRESHOLD,
   defaultSettings,
   reconcileSelectedModel,
@@ -29,6 +30,8 @@ import {
   stripBuiltInModelLabels
 } from '@shared/defaults'
 import { SEARCH_PROVIDERS } from '@shared/search'
+import { existingInstallOnboarding } from '@shared/onboarding'
+import { readLastSeenVersion } from './update-state'
 
 /**
  * Persistent app settings (everything except secrets). Stored as JSON in userData.
@@ -151,6 +154,18 @@ function settingsPath(): string {
   return join(getUserDataDir(), 'settings.json')
 }
 
+/**
+ * The schema version to write: this build's, or a higher one the file already carries.
+ * A newer Houston may have written the file (the user downgraded), and its migrations
+ * already ran on it. Stamping this build's lower version would make the next upgrade run
+ * them again: re-adding models the user has since deleted, redoing one-time decisions.
+ * Keeping the higher number means a downgrade-then-upgrade runs nothing twice; this build
+ * still reads and writes the file, and settings it doesn't know survive the round trip.
+ */
+function stampedVersion(...versions: Array<number | undefined>): number {
+  return Math.max(SETTINGS_SCHEMA_VERSION, ...versions.map((v) => (typeof v === 'number' ? v : 0)))
+}
+
 function migrate(raw: Partial<AppSettings>): AppSettings {
   const base = defaultSettings()
   const fromVersion = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0
@@ -217,10 +232,25 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   if (fromVersion < 9) {
     providers = backfillDefaultModels(providers, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
   }
+  // v10: first-run onboarding. Only a settings file written before it shipped reaches
+  // this gate (a fresh install has no file to migrate). Existing desktop users skip the
+  // contextual tips and get a single dismissible tour invitation instead.
+  // The profile is shared with the terminal clients, so "existing" means the desktop
+  // app has run here before (it records its version on every launch, after this
+  // migration). Someone who has only used the terminal is new to the desktop app.
+  if (fromVersion < 10 && upgraded.onboarding === undefined) {
+    upgraded.onboarding = readLastSeenVersion() !== null ? existingInstallOnboarding() : {}
+  }
+  // v11: the local providers' seeded names changed ("Local — Ollama" → "Ollama (local)"). The
+  // name is saved with the provider, so rename the ones still carrying the old seed.
+  if (fromVersion < 11) providers = renameBuiltInProviderLabels(providers)
+  // v12: Claude Haiku 5.5. Scoped like the other adds; Haiku 4.5 still serves, so it stays.
+  if (fromVersion < 12) providers = backfillDefaultModels(providers, ['claude-haiku-5-5'])
   const merged: AppSettings = {
     ...base,
     ...upgraded,
-    schemaVersion: SETTINGS_SCHEMA_VERSION,
+    // A file written by a newer Houston keeps its higher version (see stampedVersion).
+    schemaVersion: stampedVersion(fromVersion),
     providers
   }
   // Drop a selection that no longer matches any configured model — e.g. a settings.json
@@ -229,14 +259,21 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   return merged
 }
 
-function loadFromDisk(): AppSettings {
+/**
+ * Read settings.json through the migrations. `upgraded` flags that the file was written
+ * by an older schema, so the caller saves the migrated result: a migration that reads
+ * outside state (v10 checks whether the desktop app has run) must be decided once, not
+ * re-run on a later launch after that state has changed.
+ */
+function loadFromDisk(): { settings: AppSettings; upgraded: boolean } {
   const path = settingsPath()
-  if (!existsSync(path)) return defaultSettings()
+  if (!existsSync(path)) return { settings: defaultSettings(), upgraded: false }
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<AppSettings>
-    return migrate(parsed)
+    const fromVersion = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 0
+    return { settings: migrate(parsed), upgraded: fromVersion < SETTINGS_SCHEMA_VERSION }
   } catch {
-    return defaultSettings()
+    return { settings: defaultSettings(), upgraded: false }
   }
 }
 
@@ -393,11 +430,13 @@ function withKeyFlags(settings: AppSettings): AppSettings {
 
 export function getSettings(): AppSettings {
   if (!cache) {
-    const { settings, migrated } = extractHeaderSecrets(loadFromDisk())
+    const loaded = loadFromDisk()
+    const { settings, migrated } = extractHeaderSecrets(loaded.settings)
     cache = settings
     // A legacy settings.json with cleartext header values: rewrite it now (0600, values
     // stripped) so the plaintext doesn't linger on disk until the next explicit save.
-    if (migrated) persist(cache)
+    // Likewise save a schema upgrade, so its one-time decisions stick.
+    if (migrated || loaded.upgraded) persist(cache)
   }
   return withKeyFlags(cache)
 }
@@ -410,7 +449,10 @@ export function saveSettings(next: AppSettings): AppSettings {
     ...next,
     selected: reconcileSelectedModel(next.providers, next.selected)
   }
-  const { settings } = extractHeaderSecrets({ ...reconciled, schemaVersion: SETTINGS_SCHEMA_VERSION })
+  const { settings } = extractHeaderSecrets({
+    ...reconciled,
+    schemaVersion: stampedVersion(next.schemaVersion, cache?.schemaVersion)
+  })
   cache = settings
   persist(cache)
   return withKeyFlags(cache)

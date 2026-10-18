@@ -390,6 +390,32 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(keyInput).toHaveValue(''))
   })
 
+  it('offers a restart when the key cannot be saved because the Keychain is unusable', async () => {
+    installApi({
+      setKey: vi.fn(() => Promise.reject(new Error('secure store unavailable'))),
+      getSecureStorageStatus: vi.fn(() => Promise.resolve({ available: false, platform: 'darwin' })),
+      relaunchApp: vi.fn(() => Promise.resolve(true))
+    })
+    renderModal()
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-secret' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    expect(await screen.findByRole('button', { name: 'Restart Houston' })).toBeInTheDocument()
+    expect(screen.getByText(/choose Always Allow/)).toBeInTheDocument()
+    expect(screen.queryByText(/Could not save API key/)).not.toBeInTheDocument()
+  })
+
+  it('shows the plain error when the save failed for another reason', async () => {
+    installApi({
+      setKey: vi.fn(() => Promise.reject(new Error('disk full'))),
+      getSecureStorageStatus: vi.fn(() => Promise.resolve({ available: true, platform: 'darwin' }))
+    })
+    renderModal()
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-secret' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    expect(await screen.findByText('Could not save API key: disk full')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Restart Houston' })).not.toBeInTheDocument()
+  })
+
   it('fetches models from the provider and writes them into the textarea', async () => {
     const api = installApi()
     renderModal()
@@ -405,6 +431,37 @@ describe('SettingsModal', () => {
 
     await waitFor(() => expect(api.listModels).toHaveBeenCalledWith('custom-1234'))
     await waitFor(() => expect(customArea).toHaveValue('model-a\nmodel-b'))
+  })
+
+  it('summarizes what a fetch changed, and flags models this version does not recognize', async () => {
+    const api = installApi()
+    api.listModels.mockResolvedValueOnce([{ id: 'claude-opus-5-5' }, { id: 'claude-zeta-9' }])
+    renderModal()
+    fireEvent.click(screen.getAllByText('fetch from provider')[0]) // anthropic, which had claude-sonnet
+    const note = await screen.findByRole('status')
+    expect(note).toHaveTextContent('Fetched 2 models: 2 new, 1 no longer listed.')
+    expect(note).toHaveTextContent('New: claude-opus-5-5, claude-zeta-9.')
+    expect(note).toHaveTextContent('Removed (no longer listed): claude-sonnet.')
+    expect(note).toHaveTextContent("doesn't fully recognize claude-zeta-9")
+    expect(note.textContent).not.toContain('\u2014')
+  })
+
+  it('says so when a fetch changed nothing, and keeps the note until the list is edited', async () => {
+    const api = installApi()
+    api.listModels.mockResolvedValueOnce([{ id: 'claude-sonnet' }])
+    renderModal()
+    fireEvent.click(screen.getAllByText('fetch from provider')[0])
+    expect(await screen.findByRole('status')).toHaveTextContent('Fetched 1 model. No changes.')
+    const area = screen.getAllByPlaceholderText('one model id per line')[0]
+    // Tabbing through the field changes nothing, so the note stays.
+    fireEvent.focus(area)
+    fireEvent.blur(area)
+    expect(screen.getByRole('status')).toBeInTheDocument()
+    // A real edit makes it stale.
+    fireEvent.focus(area)
+    fireEvent.change(area, { target: { value: 'claude-sonnet\nclaude-opus' } })
+    fireEvent.blur(area)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('keeps a trailing newline while typing so a new model line can be started', () => {
@@ -445,6 +502,26 @@ describe('SettingsModal', () => {
     const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
     const provider = saved.providers.find((p) => p.id === 'anthropic')!
     expect(provider.models.map((m) => m.id)).toEqual(['claude-sonnet', 'claude-opus'])
+  })
+
+  it('keeps capability metadata and the added date for ids that survive an edit', async () => {
+    const api = installApi()
+    const withMeta: ProviderConfig = {
+      ...anthropic,
+      models: [{ id: 'claude-sonnet', caps: { tools: true, contextWindow: 1_000_000 }, addedAt: '2026-10-10' }]
+    }
+    const { container } = renderModal({ providers: [withMeta, customEndpoint] })
+    const modelsArea = screen.getAllByPlaceholderText('one model id per line')[0]
+    fireEvent.focus(modelsArea)
+    fireEvent.change(modelsArea, { target: { value: 'claude-sonnet\nclaude-opus' } })
+    fireEvent.blur(modelsArea)
+    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = (api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings).providers.find((p) => p.id === 'anthropic')!
+    expect(saved.models).toEqual([
+      { id: 'claude-sonnet', caps: { tools: true, contextWindow: 1_000_000 }, addedAt: '2026-10-10' },
+      { id: 'claude-opus' }
+    ])
   })
 
   it('keeps an incomplete header line while typing and parses it on blur', async () => {

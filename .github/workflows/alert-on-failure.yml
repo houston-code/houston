@@ -1,7 +1,7 @@
 name: Alert on failure
 
-# Reusable alert: file one GitHub issue per unattended-workflow outage, assigned to the repo
-# owner, and close it when that workflow next goes green. Called from the scheduled workflows
+# Reusable alert: file one GitHub issue per unattended-workflow outage, assigned to the
+# ALERT_ASSIGNEE repo variable, and close it when that workflow next goes green. Called from the scheduled workflows
 # (eval-live, provider-canary, native-vuln-scan, dependabot-digest) and from ci.yml's
 # post-merge run on main, whose push is made by github-merge-queue[bot].
 #
@@ -46,7 +46,10 @@ jobs:
       TITLE: ${{ inputs.workflow }} is failing
       WORKFLOW: ${{ inputs.workflow }}
       FAILED: ${{ inputs.failed }}
-      OWNER: ${{ github.repository_owner }}
+      # The user to assign. Not github.repository_owner: an organization can't be assigned, so
+      # since this repo moved to an org every alert opened unassigned and notified nobody. Set
+      # it with: gh variable set ALERT_ASSIGNEE --body <github-login>
+      ASSIGNEE: ${{ vars.ALERT_ASSIGNEE }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: File, update, or resolve the failure issue
@@ -74,7 +77,13 @@ jobs:
             exit 0
           fi
 
+          if [ -z "$ASSIGNEE" ]; then
+            echo "::warning::ALERT_ASSIGNEE is not set, so this alert notifies nobody. Set the repo variable to a GitHub login."
+          fi
+
           if [ -n "$existing" ]; then
+            # Idempotent: also assigns an issue opened before ALERT_ASSIGNEE was set.
+            [ -z "$ASSIGNEE" ] || gh issue edit "$existing" --add-assignee "$ASSIGNEE" > /dev/null
             # Comment rather than open a second issue: an outage lasting a week should read as
             # one thread with a run per day, not seven duplicates.
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
@@ -84,7 +93,7 @@ jobs:
 
           # Assign the owner: assignment notifies unconditionally, which is the entire point —
           # the run's own failure notification went to a bot.
-          gh issue create --label "$LABEL" --assignee "$OWNER" --title "$TITLE" --body \
+          gh issue create --label "$LABEL" ${ASSIGNEE:+--assignee "$ASSIGNEE"} --title "$TITLE" --body \
           "**$WORKFLOW is failing.** First failing run: $RUN_URL
 
           This issue was opened by the workflow itself, because GitHub's own failure

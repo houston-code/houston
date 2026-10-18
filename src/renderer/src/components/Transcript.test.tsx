@@ -411,3 +411,37 @@ describe('Transcript', () => {
     expect(screen.queryByRole('button', { name: /Plan ready/ })).not.toBeInTheDocument()
   })
 })
+
+describe('Transcript first-party prompt turns', () => {
+  const PROMPT = 'Create a GitHub pull request for my current changes, using git and the gh_pr_create tool.'
+
+  it('shows what the user did, with the prompt behind a closed disclosure', () => {
+    const { container } = renderTranscript([
+      userItem({
+        text: PROMPT,
+        invokedAs: { kind: 'action', label: 'Create PR', detail: 'Hands off to the agent to commit, push, and open a PR.' }
+      })
+    ])
+    expect(screen.getByText('Create PR')).toBeInTheDocument()
+    expect(screen.getByText('Hands off to the agent to commit, push, and open a PR.')).toBeInTheDocument()
+    const details = container.querySelector('details.msg__prompt') as HTMLDetailsElement
+    expect(details).not.toBeNull()
+    expect(details.open).toBe(false)
+    // Still in the DOM (so find-in-page and the disclosure reach it), but folded away.
+    expect(within(details).getByText(PROMPT)).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Instructions sent to the agent'))
+    expect(details.open).toBe(true)
+  })
+
+  it('copies the prompt the agent received', async () => {
+    renderTranscript([userItem({ text: PROMPT, invokedAs: { kind: 'command', label: '/review' } })])
+    fireEvent.click(screen.getByTitle('Copy message'))
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(PROMPT))
+  })
+
+  it('renders an ordinary turn as a plain bubble', () => {
+    const { container } = renderTranscript([userItem({ text: 'fix the login bug' })])
+    expect(container.querySelector('.msg__chip')).toBeNull()
+    expect(screen.getByText('fix the login bug')).toBeInTheDocument()
+  })
+})

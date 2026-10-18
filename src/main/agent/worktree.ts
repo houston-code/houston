@@ -294,3 +294,29 @@ export async function removeWorktree(
       : `Removed the worktree but kept branch "${wt.branch}" (it has unmerged commits).`
   }
 }
+
+/**
+ * True when tearing the worktree down would lose nothing: the checkout exists, has
+ * no uncommitted or untracked changes, and its branch is fully merged into the main
+ * worktree's HEAD (the same checks `removeWorktree`'s non-forced `worktree remove`
+ * and `branch -d` apply). Lets the delete dialog skip the keep/remove choice for an
+ * untouched worktree. Read-only and never throws: any doubt (missing path, bad
+ * ref, git failure) answers false so the user is still asked.
+ */
+export async function isWorktreeDisposable(
+  wt: ConversationWorktree,
+  exec: GitRun = runGit,
+  exists: (p: string) => boolean = existsSync
+): Promise<boolean> {
+  if (!isSafeGitRef(wt.branch) || !exists(wt.path)) return false
+  try {
+    const status = await exec(['status', '--porcelain'], wt.path)
+    if (status.trim() !== '') return false
+    // Fully qualified so the branch can never be read as an option; exits non-zero
+    // (rejects) when the branch has commits HEAD doesn't contain.
+    await exec(['merge-base', '--is-ancestor', `refs/heads/${wt.branch}`, 'HEAD'], wt.repoRoot)
+    return true
+  } catch {
+    return false
+  }
+}

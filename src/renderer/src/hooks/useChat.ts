@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
 import type { AgentEvent, ElicitationResult, PlanDecision, PlanPayload, ToolApprovalDecision } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
+import type { PromptInvocation } from '@shared/promptInvocation'
 import type { SessionUsage } from '@shared/usage'
 import { reduceEvent, type DisplayItem, type PlanStatus } from '../lib/items'
 
@@ -20,12 +21,13 @@ interface SendParams {
   conversationId: string
   userText: string
   images?: ImageAttachment[]
+  invokedAs?: PromptInvocation
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy
 }
 
-type RetryParams = Omit<SendParams, 'userText' | 'images'>
+type RetryParams = Omit<SendParams, 'userText' | 'images' | 'invokedAs'>
 
 /** A revertable set of file changes from the most recent turn. */
 export interface Checkpoint {
@@ -134,7 +136,8 @@ export function useChat(conversationId: string | null = null): ChatController {
             kind: 'user',
             id: `u-${e.runId}`,
             text: e.userText,
-            ...(e.images?.length ? { images: e.images } : {})
+            ...(e.images?.length ? { images: e.images } : {}),
+            ...(e.invokedAs ? { invokedAs: e.invokedAs } : {})
           }
         ])
         return
@@ -186,7 +189,8 @@ export function useChat(conversationId: string | null = null): ChatController {
         kind: 'user',
         id: `u-${runId}`,
         text: params.userText,
-        ...(params.images?.length ? { images: params.images } : {})
+        ...(params.images?.length ? { images: params.images } : {}),
+        ...(params.invokedAs ? { invokedAs: params.invokedAs } : {})
       }
     ])
     setRunning(true)
@@ -198,6 +202,7 @@ export function useChat(conversationId: string | null = null): ChatController {
         conversationId: params.conversationId,
         userText: params.userText,
         images: params.images,
+        ...(params.invokedAs ? { invokedAs: params.invokedAs } : {}),
         providerId: params.providerId,
         model: params.model,
         approvalPolicy: params.approvalPolicy

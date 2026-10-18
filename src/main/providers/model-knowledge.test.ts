@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { contextWindowFor, modelCapabilities, modelPricing } from '@shared/usage'
+import { contextWindowFor, modelCapabilities, modelPricing, resolveToolSupport } from '@shared/usage'
 import { sortedModels } from '@shared/models'
 import type { ProviderKind } from '@shared/types'
 import {
@@ -7,6 +7,7 @@ import {
   anthropicSupportsInterleavedThinking,
   anthropicSupportsThinking,
   anthropicSupportsXhigh,
+  anthropicThinksByDefault,
   anthropicUsesLegacyThinking,
   geminiSupportsThinking,
   openaiSupportsReasoning
@@ -41,6 +42,7 @@ const CORPUS = [
   'claude-sonnet-4-5-20250929',
   'claude-sonnet-4-20250514',
   'claude-haiku-4-5',
+  'claude-haiku-5-5',
   'claude-3-7-sonnet-20250219',
   'claude-3-5-sonnet-20241022',
   'claude-3-5-haiku-20241022',
@@ -50,6 +52,9 @@ const CORPUS = [
   'claude-instant-1.2',
   'anthropic.claude-opus-5-5',
   'anthropic.claude-fable-5-1',
+  'anthropic.claude-sonnet-5-5',
+  'anthropic.claude-haiku-4-5',
+  'anthropic.claude-haiku-5-5',
   'anthropic.claude-sonnet-4-6',
   'claude-opus-4-5@20251101',
   'claude-sonnet-4@20250514',
@@ -130,12 +135,14 @@ describe('model knowledge golden', () => {
           window: contextWindowFor(id),
           pricing: modelPricing(id),
           caps: modelCapabilities(id),
+          tools: resolveToolSupport(undefined, id),
           gates: {
             anthropicThinking: anthropicSupportsThinking(id),
             anthropicLegacy: anthropicUsesLegacyThinking(id),
             anthropicInterleaved: anthropicSupportsInterleavedThinking(id),
             anthropicXhigh: anthropicSupportsXhigh(id),
             anthropicPreserved: anthropicPreservesThinking(id),
+            anthropicThinksByDefault: anthropicThinksByDefault(id),
             openaiReasoning: openaiSupportsReasoning(id),
             geminiThinking: geminiSupportsThinking(id)
           }

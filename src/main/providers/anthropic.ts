@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { randomUUID } from 'node:crypto'
+import type { ModelOption } from '@shared/types'
 import type {
   ChatMessage,
   ChatRequest,
@@ -9,6 +10,7 @@ import type {
   StopReason
 } from '@shared/agent'
 import { anthropicThinking } from './reasoning'
+import { releaseDateFrom } from './release-date'
 
 const DEFAULT_MAX_TOKENS = 8192
 
@@ -188,6 +190,18 @@ function reasoningFromMessage(content: Anthropic.ContentBlock[], model: string):
 }
 
 /**
+ * Whether a request failed because a replayed thinking block no longer matches the
+ * conversation that produced it ("preserved thinking": the block is bound to the earlier
+ * prefix, which compaction or tool-result stubbing changed). The API names the block's
+ * `signature` and says it is bound to a different conversation. Exported for testing.
+ */
+export function isStaleThinkingError(err: unknown): boolean {
+  const e = err as { status?: number; message?: unknown } | null
+  if (!e || e.status !== 400 || typeof e.message !== 'string') return false
+  return /thinking/i.test(e.message) && /signature|different conversation|block_binding/i.test(e.message)
+}
+
+/**
  * The client surface this adapter actually drives: `messages.stream`. The
  * first-party SDK client and the Bedrock/Vertex clients all extend `BaseAnthropic`
  * and expose the same `messages` resource, so typing the seam structurally lets
@@ -215,7 +229,8 @@ export function createMessagesProvider(
     /**
      * Whether the host accepts the thinking-binding-controls beta. True on the
      * Claude API, Bedrock and Vertex; Foundry's support is unconfirmed, and an
-     * unknown beta there would fail every turn, so it opts out.
+     * unknown beta there would fail every turn, so it opts out and relies on the
+     * strip-and-retry recovery in `streamChat` instead.
      */
     thinkingBindingControls?: boolean
   } = {}
@@ -238,8 +253,11 @@ export function createMessagesProvider(
         : undefined
 
       const thinking = anthropicThinking(req.model, req.reasoningEffort)
-      const messages = toAnthropicMessages(req.messages, thinking !== null, req.model)
-      markMessagesCacheBreakpoint(messages)
+      const buildMessages = (replayThinking: boolean): Anthropic.MessageParam[] => {
+        const out = toAnthropicMessages(req.messages, replayThinking, req.model)
+        markMessagesCacheBreakpoint(out)
+        return out
+      }
 
       // Thinking dictates max_tokens: legacy budget thinking needs room above the
       // budget; adaptive sizing keeps the reply's headroom unchanged (see reasoning.ts).
@@ -252,43 +270,62 @@ export function createMessagesProvider(
         ...(dropStaleBlocks ? [THINKING_BINDING_BETA] : [])
       ]
 
-      const stream = client.messages.stream(
-        {
-          model: req.model,
-          max_tokens: maxTokens,
-          ...(system ? { system } : {}),
-          messages,
-          ...(tools && tools.length ? { tools } : {}),
-          // Opus 4.7/4.8 (and Fable/Mythos) reject `{type:'enabled', budget_tokens}`
-          // with a 400 — they require adaptive thinking + output_config.effort.
-          ...(thinking?.kind === 'adaptive'
-            ? {
-                thinking: {
-                  type: 'adaptive' as const,
-                  display: thinking.display,
-                  // Not in the SDK's non-beta param types yet; sent as-is on the wire.
-                  ...(dropStaleBlocks
-                    ? { block_binding: { prefix_mismatch_behavior: 'drop_block' as const } }
-                    : {})
-                },
-                output_config: { effort: thinking.effort }
-              }
-            : thinking?.kind === 'budget'
-              ? { thinking: { type: 'enabled' as const, budget_tokens: thinking.budgetTokens } }
-              : {})
-        },
-        {
-          signal: req.signal,
-          // Only legacy budget thinking needs the interleaved beta; adaptive
-          // models reject/ignore it and interleave on their own.
-          ...(betas.length ? { headers: { 'anthropic-beta': betas.join(',') } } : {})
-        }
-      )
+      type Stream = ReturnType<MessagesClient['messages']['stream']>
+      const open = (messages: Anthropic.MessageParam[]): Stream =>
+        client.messages.stream(
+          {
+            model: req.model,
+            max_tokens: maxTokens,
+            ...(system ? { system } : {}),
+            messages,
+            ...(tools && tools.length ? { tools } : {}),
+            // Opus 4.7/4.8 (and Fable/Mythos) reject `{type:'enabled', budget_tokens}`
+            // with a 400 — they require adaptive thinking + output_config.effort.
+            ...(thinking?.kind === 'adaptive'
+              ? {
+                  thinking: {
+                    type: 'adaptive' as const,
+                    display: thinking.display,
+                    // Not in the SDK's non-beta param types yet; sent as-is on the wire.
+                    ...(dropStaleBlocks
+                      ? { block_binding: { prefix_mismatch_behavior: 'drop_block' as const } }
+                      : {})
+                  },
+                  output_config: { effort: thinking.effort }
+                }
+              : thinking?.kind === 'budget'
+                ? { thinking: { type: 'enabled' as const, budget_tokens: thinking.budgetTokens } }
+                : {})
+          },
+          {
+            signal: req.signal,
+            // Only legacy budget thinking needs the interleaved beta; adaptive
+            // models reject/ignore it and interleave on their own.
+            ...(betas.length ? { headers: { 'anthropic-beta': betas.join(',') } } : {})
+          }
+        )
+
+      // A prefix-bound thinking block replayed after Houston edited the history is a 400
+      // where `drop_block` isn't available (Foundry) or isn't honored. Recover the way the
+      // API documents: strip every replayed thinking block and retry once. The turn loses
+      // only that earlier reasoning; text and tool calls are untouched.
+      let stream = open(buildMessages(thinking !== null))
+      let events = stream[Symbol.asyncIterator]()
+      let next: IteratorResult<Anthropic.MessageStreamEvent>
+      try {
+        next = await events.next()
+      } catch (err) {
+        if (!(thinking?.kind === 'adaptive' && thinking.preserved && isStaleThinkingError(err))) throw err
+        stream = open(buildMessages(false))
+        events = stream[Symbol.asyncIterator]()
+        next = await events.next()
+      }
 
       // Buffer streamed tool-call JSON per content block index.
       const toolBuffers = new Map<number, { id: string; name: string; json: string }>()
 
-      for await (const event of stream) {
+      for (; !next.done; next = await events.next()) {
+        const event = next.value
         if (event.type === 'content_block_start') {
           const block = event.content_block
           if (block.type === 'tool_use') {
@@ -372,7 +409,7 @@ export async function listAnthropicModels(
   apiKey: string,
   baseURL?: string,
   headers?: Record<string, string>
-): Promise<string[]> {
+): Promise<ModelOption[]> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
   const client = new Anthropic({
     apiKey,
@@ -380,5 +417,8 @@ export async function listAnthropicModels(
     ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
   })
   const page = await client.models.list({ limit: 100 })
-  return page.data.map((m) => m.id)
+  return page.data.map((m) => {
+    const releasedAt = releaseDateFrom(m.created_at)
+    return releasedAt ? { id: m.id, caps: { releasedAt } } : { id: m.id }
+  })
 }
