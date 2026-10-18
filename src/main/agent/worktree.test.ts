@@ -9,6 +9,7 @@ import {
   getRepoInfo,
   createWorktree,
   removeWorktree,
+  isWorktreeDisposable,
   type GitRun
 } from './worktree'
 
@@ -360,6 +361,42 @@ describe('removeWorktree', () => {
   })
 })
 
+describe('isWorktreeDisposable', () => {
+  const wt = { path: '/repo/.houston/worktrees/x', branch: 'feat/x', repoRoot: '/repo' }
+  const onDisk = (): boolean => true
+
+  it('is true for a clean worktree whose branch HEAD already contains', async () => {
+    const calls: string[][] = []
+    const exec = fakeGit({ 'status --porcelain': () => '', 'merge-base --is-ancestor': () => '' }, calls)
+    expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(true)
+    // The branch is passed fully qualified so it can't be read as an option.
+    expect(calls).toContainEqual(['merge-base', '--is-ancestor', 'refs/heads/feat/x', 'HEAD'])
+  })
+
+  it('is false when the worktree has uncommitted or untracked changes', async () => {
+    const exec = fakeGit({ 'status --porcelain': () => '?? scratch.txt\n' })
+    expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(false)
+  })
+
+  it('is false when the branch has commits HEAD lacks', async () => {
+    const exec = fakeGit({
+      'status --porcelain': () => '',
+      'merge-base --is-ancestor': () => {
+        throw new Error('')
+      }
+    })
+    expect(await isWorktreeDisposable(wt, exec, onDisk)).toBe(false)
+  })
+
+  it('is false, without running git, when the worktree is gone or the branch is unsafe', async () => {
+    const calls: string[][] = []
+    const exec = fakeGit({}, calls)
+    expect(await isWorktreeDisposable(wt, exec, () => false)).toBe(false)
+    expect(await isWorktreeDisposable({ ...wt, branch: '--evil' }, exec, onDisk)).toBe(false)
+    expect(calls).toEqual([])
+  })
+})
+
 // End-to-end against real git: validates the actual command construction and
 // filesystem effects the injected-exec tests can only assert indirectly.
 describe('worktree integration (real git)', () => {
@@ -471,6 +508,28 @@ describe('worktree integration (real git)', () => {
       const forced = await removeWorktree(wt, { force: true })
       expect(forced.removed).toBe(true)
       expect(existsSync(wt.path)).toBe(false)
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
+  maybe('treats a fresh worktree as disposable until it holds work', async () => {
+    const repo = initRepo()
+    const g = (cwd: string, ...args: string[]): void => {
+      execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' })
+    }
+    try {
+      const wt = await createWorktree({ workspace: repo, branch: 'brave-falcon' })
+      expect(await isWorktreeDisposable(wt)).toBe(true)
+      // An untracked file is work worth asking about.
+      writeFileSync(join(wt.path, 'scratch.txt'), 'wip\n')
+      expect(await isWorktreeDisposable(wt)).toBe(false)
+      // Committed but unmerged is still work.
+      g(wt.path, 'add', 'scratch.txt')
+      g(wt.path, '-c', 'commit.gpgsign=false', 'commit', '-m', 'wip')
+      expect(await isWorktreeDisposable(wt)).toBe(false)
+      // Once merged into the main checkout, nothing would be lost.
+      g(repo, 'merge', '--ff-only', 'brave-falcon')
+      expect(await isWorktreeDisposable(wt)).toBe(true)
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }
