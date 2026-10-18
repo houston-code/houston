@@ -6,7 +6,14 @@ const wrap = (...body: string[]): string => ['*** Begin Patch', ...body, '*** En
 describe('parsePatch', () => {
   it('parses an Add File op', () => {
     const ops = parsePatch(wrap('*** Add File: a/new.ts', '+line one', '+line two'))
-    expect(ops).toEqual([{ type: 'add', path: 'a/new.ts', content: 'line one\nline two' }])
+    // Each `+` line is a line of the file, so the file ends with a newline.
+    expect(ops).toEqual([{ type: 'add', path: 'a/new.ts', content: 'line one\nline two\n' }])
+  })
+
+  it('adds an empty file when Add File has no lines', () => {
+    expect(parsePatch(wrap('*** Add File: empty.txt'))).toEqual([
+      { type: 'add', path: 'empty.txt', content: '' }
+    ])
   })
 
   it('parses a Delete File op', () => {
@@ -123,7 +130,42 @@ describe('parsePatch — unified diff / git diff', () => {
         '+line two'
       )
     )
+    // No "\\ No newline at end of file" marker: the file ends with a newline.
+    expect(ops).toEqual([{ type: 'add', path: 'new.ts', content: 'line one\nline two\n' }])
+  })
+
+  it('adds a file without a final newline when the diff marks it so', () => {
+    const ops = parsePatch(
+      diff(
+        '--- /dev/null',
+        '+++ b/new.ts',
+        '@@ -0,0 +1,2 @@',
+        '+line one',
+        '+line two',
+        '\\ No newline at end of file'
+      )
+    )
     expect(ops).toEqual([{ type: 'add', path: 'new.ts', content: 'line one\nline two' }])
+  })
+
+  it('parses a final hunk whose last line carries the no-newline marker', () => {
+    // The common shape for a file without a trailing newline: the marker follows the
+    // hunk's last line, after its line counts are met. It used to be read as the next
+    // file's header and rejected the whole patch.
+    const ops = parsePatch(
+      diff(
+        '--- a/x.ts',
+        '+++ b/x.ts',
+        '@@ -1 +1 @@',
+        '-a',
+        '\\ No newline at end of file',
+        '+b',
+        '\\ No newline at end of file'
+      )
+    )
+    expect(ops).toEqual([
+      { type: 'update', path: 'x.ts', moveTo: undefined, hunks: [{ oldText: 'a', newText: 'b' }] }
+    ])
   })
 
   it('parses a file deletion (+++ /dev/null)', () => {

@@ -367,7 +367,7 @@ describe('runSubAgent', () => {
         checkpointRunId: 'parent-run-1'
       })
       expect(readFileSync(join(ws, 'existing.txt'), 'utf8')).toBe('after-sub')
-      expect(readFileSync(join(ws, 'created.txt'), 'utf8')).toBe('made by subagent')
+      expect(readFileSync(join(ws, 'created.txt'), 'utf8')).toBe('made by subagent\n')
       // Both files landed in the PARENT run's checkpoint, so reverting the turn
       // undoes the delegated changes too.
       expect(checkpointFileCount('parent-run-1')).toBe(2)

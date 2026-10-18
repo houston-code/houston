@@ -528,7 +528,7 @@ describe('startRun', () => {
       expect(readFileSync(join(ws, 'gone.txt'), 'utf8')).toBe('delete me')
       // …and redo re-applies the whole patch, including the delete.
       expect(await reapplyCheckpoint(cp!.runId)).toBe(3)
-      expect(readFileSync(join(ws, 'added.txt'), 'utf8')).toBe('hello')
+      expect(readFileSync(join(ws, 'added.txt'), 'utf8')).toBe('hello\n')
       expect(readFileSync(join(ws, 'changed.txt'), 'utf8')).toBe('new line\n')
       expect(existsSync(join(ws, 'gone.txt'))).toBe(false)
     } finally {
