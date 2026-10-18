@@ -1,4 +1,4 @@
-import type { Content, GoogleGenAI } from '@google/genai'
+import type { Content, GoogleGenAI, Part } from '@google/genai'
 import { randomUUID } from 'node:crypto'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
@@ -15,7 +15,27 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
   // that lands a user message right after a result) folds onto it. Gemini enforces
   // user/model alternation, so two consecutive `user` turns are a 400.
   let mergingToolResults = false
+  // A functionResponse part can't share a turn with media (inlineData) parts, so
+  // images a tool produced (e.g. a view_localhost screenshot) follow as their own
+  // user turn for vision-capable models. They wait until the run of tool results
+  // ends: the responses to one model turn's function calls must all sit in the next
+  // turn, so an image turn between two parallel results is a 400 (the response
+  // parts no longer match the call parts).
+  let toolImages: Part[] = []
+  // Whether the last emitted turn came from a plain user message (not tool results
+  // or a tool's images), so a second plain user message can fold onto it.
+  let lastPlainUser = false
+  const flushToolImages = (): void => {
+    if (!toolImages.length) return
+    out.push({ role: 'user', parts: toolImages })
+    toolImages = []
+    // The image turn is its own `user` turn; a following nudge must not fold into
+    // the tool-result turn behind it, so a fresh user turn is correct there.
+    mergingToolResults = false
+  }
   for (const m of messages) {
+    if (m.role !== 'tool') flushToolImages()
+    if (m.role !== 'user') lastPlainUser = false
     if (m.role === 'user') {
       const parts: Content['parts'] = []
       if (m.content) parts!.push({ text: m.content })
@@ -36,19 +56,22 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
           out.push({ role: 'user', parts: mediaParts })
           mergingToolResults = false
         }
+        lastPlainUser = false
         continue
       }
       mergingToolResults = false
-      // Two plain user turns in a row (an automated note queued just ahead of the
+      // Two plain user messages in a row (an automated note queued just ahead of the
       // user's message, or a forked history ending on a user turn before the hand-off
-      // prompt) fold together, for the same alternation rule. Never onto a turn of
-      // function responses, which can't share a turn with inline media.
-      if (last?.role === 'user' && last.parts && !last.parts.some((p) => 'functionResponse' in p)) {
+      // prompt) fold together, for the same alternation rule. Only onto a turn that
+      // was itself a plain user message: never onto function responses (which can't
+      // share a turn with inline media) or a tool's image turn (kept on its own).
+      if (lastPlainUser && last?.parts) {
         last.parts.push(...parts!)
         continue
       }
       if (!parts!.length) parts!.push({ text: '' }) // Gemini rejects an empty parts array
       out.push({ role: 'user', parts })
+      lastPlainUser = true
     } else if (m.role === 'assistant') {
       mergingToolResults = false
       const parts: Content['parts'] = []
@@ -71,24 +94,12 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
         out.push({ role: 'user', parts: [fnPart] })
         mergingToolResults = true
       }
-      // A functionResponse part can't share a turn with media (inlineData) parts,
-      // so images a tool produced (e.g. a view_localhost screenshot) follow as
-      // their own user turn for vision-capable models. (Text parts are fine to mix,
-      // which is how a following nudge folds in above.)
-      if (m.images?.length) {
-        out.push({
-          role: 'user',
-          parts: m.images.map((img) => ({
-            inlineData: { mimeType: img.mediaType, data: img.data }
-          }))
-        })
-        // The image turn is its own `user` turn; a following nudge must not fold
-        // into it (functionResponse + inlineData can't share a turn), so a fresh
-        // user turn is correct there — stop merging.
-        mergingToolResults = false
+      for (const img of m.images ?? []) {
+        toolImages.push({ inlineData: { mimeType: img.mediaType, data: img.data } })
       }
     }
   }
+  flushToolImages()
   return out
 }
 

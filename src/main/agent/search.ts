@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { promises as fs, existsSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { minimatch } from 'minimatch'
@@ -110,14 +111,20 @@ export function runRipgrep(
     }
     let out = ''
     let err = ''
+    // Decoded as streams: a multibyte character split across two pipe chunks would
+    // otherwise turn into replacement characters in the matched line.
+    const outDecoder = new StringDecoder('utf8')
+    const errDecoder = new StringDecoder('utf8')
     child.stdout.on('data', (c: Buffer) => {
-      if (out.length < 5_000_000) out += c.toString()
+      if (out.length < 5_000_000) out += outDecoder.write(c)
     })
     child.stderr.on('data', (c: Buffer) => {
-      if (err.length < 64_000) err += c.toString()
+      if (err.length < 64_000) err += errDecoder.write(c)
     })
     child.on('error', (e) => resolve({ matches: [], error: e.message }))
     child.on('close', (code) => {
+      out += outDecoder.end()
+      err += errDecoder.end()
       // rg exit codes: 0 = matches, 1 = no matches, 2 = error (bad regex, missing
       // path, unreadable file). When we got matches, return them regardless of the
       // code — a per-file read error during an otherwise-successful search still

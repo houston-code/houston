@@ -418,7 +418,8 @@ export function extractDiff(args: Record<string, unknown>): string | null {
   }
   if (typeof args.content === 'string') {
     const header = path ? `+++ ${path} (new file)\n` : ''
-    return header + args.content.split('\n').map((l) => `+${l}`).join('\n')
+    // The final "\n" ends the last line; it is not a blank line of its own.
+    return header + args.content.replace(/\n$/, '').split('\n').map((l) => `+${l}`).join('\n')
   }
   return null
 }

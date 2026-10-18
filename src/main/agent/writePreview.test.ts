@@ -32,9 +32,9 @@ describe('previewWrite: write_file', () => {
   it('marks a genuinely new file as created, with every line an addition', async () => {
     const p = await previewWrite('write_file', { path: 'new.ts', content: 'a\nb\n' }, roots())
     expect(p?.[0].created).toBe(true)
-    // 3, not 2: a trailing newline yields a final empty line, which is how diffLines
-    // has always split text and how the existing edit/write diffs already render.
-    expect(diffStat(p![0].diff)).toEqual({ added: 3, removed: 0 })
+    // 2, not 3: the trailing newline ends the second line; it is not a third, blank one.
+    expect(diffStat(p![0].diff)).toEqual({ added: 2, removed: 0 })
+    expect(p![0].diff.map((l) => l.text)).toEqual(['a', 'b'])
   })
 
   it('returns null without content to write', async () => {
@@ -138,7 +138,8 @@ describe('previewWrite: apply_patch', () => {
     expect(diffStat(p![1].diff)).toEqual({ added: 1, removed: 1 })
 
     expect(p![2].deleted).toBe(true)
-    expect(diffStat(p![2].diff)).toEqual({ added: 0, removed: 2 })
+    // One line removed: 'delete me\n' is a single line plus its terminator.
+    expect(diffStat(p![2].diff)).toEqual({ added: 0, removed: 1 })
   })
 
   it('previews a move as the destination carrying the edit, noting its origin', async () => {

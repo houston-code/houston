@@ -121,6 +121,49 @@ describe('toGeminiContents', () => {
       }
     ])
   })
+
+  it('keeps parallel tool results in one turn when an earlier one produced an image', () => {
+    // The responses to one model turn's calls must all sit in the next turn. An image
+    // turn spliced in after the first result split them (a 400: the response parts no
+    // longer match the call parts), so the images wait for the run to end.
+    const msgs: ChatMessage[] = [
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'c1', name: 'view_localhost', arguments: {} },
+          { id: 'c2', name: 'run', arguments: {} }
+        ]
+      },
+      {
+        role: 'tool',
+        content: 'Loaded',
+        toolCallId: 'c1',
+        toolName: 'view_localhost',
+        images: [{ mediaType: 'image/png', data: 'SHOT' }]
+      },
+      { role: 'tool', content: 'r2', toolCallId: 'c2', toolName: 'run' },
+      { role: 'user', content: 'Wrap up.' }
+    ]
+    expect(toGeminiContents(msgs)).toEqual([
+      {
+        role: 'model',
+        parts: [
+          { functionCall: { name: 'view_localhost', args: {} } },
+          { functionCall: { name: 'run', args: {} } }
+        ]
+      },
+      {
+        role: 'user',
+        parts: [
+          { functionResponse: { name: 'view_localhost', response: { result: 'Loaded' } } },
+          { functionResponse: { name: 'run', response: { result: 'r2' } } }
+        ]
+      },
+      { role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: 'SHOT' } }] },
+      { role: 'user', parts: [{ text: 'Wrap up.' }] }
+    ])
+  })
 })
 
 describe('gemini maxOutputTokens', () => {
@@ -314,7 +357,7 @@ describe('toGeminiContents: consecutive user turns', () => {
     expect(out).toEqual([{ role: 'user', parts: [{ text: 'note' }, { text: 'question' }] }])
   })
 
-  it('never folds media onto a turn of function responses', () => {
+  it('never folds onto a turn of function responses or the media split from one', () => {
     const out = toGeminiContents([
       { role: 'user', content: 'go' },
       { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read_file', arguments: {} }] },
@@ -324,7 +367,9 @@ describe('toGeminiContents: consecutive user turns', () => {
     ])
     const last = out[out.length - 1]
     expect(out.filter((c) => c.parts?.some((p) => 'functionResponse' in p))[0].parts?.some((p) => 'inlineData' in p)).toBe(false)
-    // The trailing text folds onto the media turn (a plain user turn), not a new one.
-    expect(last.parts?.map((p) => ('text' in p ? p.text : 'media'))).toEqual(['media', 'and this'])
+    // The media split off a tool-result turn stays its own turn, and the next message
+    // doesn't fold into it (the same rule as a tool's own images).
+    expect(last.parts).toEqual([{ text: 'and this' }])
+    expect(out[out.length - 2].parts?.every((p) => 'inlineData' in p)).toBe(true)
   })
 })

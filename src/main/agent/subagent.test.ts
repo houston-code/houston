@@ -944,3 +944,109 @@ describe('local permission gate (gateLocal)', () => {
     expect(toolMsgs.find((m) => m.toolCallId === 'r2')?.content).toContain('ordinary note')
   })
 })
+
+describe('output limit and argument checks', () => {
+  /** Scripts turns and records each request's cap and messages. */
+  function capRecording(turns: ProviderStreamEvent[][]): {
+    provider: Provider
+    requests: Array<{ maxTokens?: number; messages: ChatMessage[] }>
+  } {
+    const requests: Array<{ maxTokens?: number; messages: ChatMessage[] }> = []
+    let i = 0
+    return {
+      requests,
+      provider: {
+        async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
+          requests.push({ maxTokens: req.maxTokens, messages: structuredClone(req.messages) })
+          for (const ev of turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]) yield ev
+        }
+      }
+    }
+  }
+
+  const toolResults = (messages: ChatMessage[]): string[] =>
+    messages.filter((m) => m.role === 'tool').map((m) => m.content)
+
+  it('answers a write the output limit cut off without running it, then raises the cap', async () => {
+    const { provider, requests } = capRecording([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: {}, incomplete: true } },
+        { type: 'done', stopReason: 'max_tokens' }
+      ],
+      [{ type: 'text', text: 'Wrote it in parts.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const report = await runSubAgent({
+      provider,
+      model: 'claude-opus-5-5',
+      workspace: ws,
+      prompt: 'write a big file',
+      writable: true,
+      signal: new AbortController().signal
+    })
+    expect(report).toBe('Wrote it in parts.')
+    const [result] = toolResults(requests[1].messages)
+    expect(result).toMatch(/^Not run: your reply reached the output limit/)
+    // The first turn no longer runs under a fixed 4096-token cap; the redo gets the ceiling.
+    expect(requests.map((r) => r.maxTokens)).toEqual([undefined, 128_000])
+  })
+
+  it('checks arguments against the schema before running a tool', async () => {
+    const { provider, requests } = capRecording([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'x.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'write',
+      writable: true,
+      signal: new AbortController().signal
+    })
+    expect(toolResults(requests[1].messages)[0]).toMatch(/^Invalid arguments for tool "write_file"/)
+    expect(existsSync(join(ws, 'x.txt'))).toBe(false)
+  })
+
+  it('continues a report the limit cut off and returns the whole of it', async () => {
+    const { provider, requests } = capRecording([
+      [{ type: 'text', text: 'The answer is lo' }, { type: 'done', stopReason: 'max_tokens' }],
+      [{ type: 'text', text: 'ng and complete.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const progress: string[] = []
+    const report = await runSubAgent({
+      provider,
+      model: 'claude-haiku-4-5',
+      workspace: ws,
+      prompt: 'explain',
+      signal: new AbortController().signal,
+      onProgress: (m) => progress.push(m)
+    })
+    expect(report).toBe('The answer is long and complete.')
+    expect(requests[1].messages.at(-1)!.content).toMatch(/Continue exactly where it stopped/)
+    expect(requests[1].maxTokens).toBe(64_000)
+    expect(progress.some((p) => p.includes('continuing past the output limit'))).toBe(true)
+  })
+
+  it('stops continuing after three cut-offs in a row and flags the report as cut off', async () => {
+    let calls = 0
+    const provider: Provider = {
+      async *streamChat(): AsyncGenerator<ProviderStreamEvent> {
+        calls++
+        yield { type: 'text', text: `part${calls} ` }
+        yield { type: 'done', stopReason: 'max_tokens' }
+      }
+    }
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'explain',
+      signal: new AbortController().signal
+    })
+    expect(calls).toBe(4)
+    expect(report).toBe("part1 part2 part3 part4\n\n[subagent report cut off at the model's output limit]")
+  })
+})

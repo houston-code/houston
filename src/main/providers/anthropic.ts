@@ -7,12 +7,12 @@ import type {
   Provider,
   ProviderStreamEvent,
   ReasoningBlock,
-  StopReason
+  StopReason,
+  ToolCall
 } from '@shared/agent'
-import { anthropicThinking } from './reasoning'
+import { anthropicMaxTokens, anthropicThinking } from './reasoning'
 import { releaseDateFrom } from './release-date'
-
-const DEFAULT_MAX_TOKENS = 8192
+import { parseToolArguments } from './tool-args'
 
 /**
  * Beta header that turns on interleaved thinking for legacy budget-thinking
@@ -58,6 +58,9 @@ export function toAnthropicMessages(
 ): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = []
   let mergingToolResults = false
+  // Set when an empty assistant turn was left out between two user turns, so the
+  // second folds onto the first instead of standing as its own `user` message.
+  let foldIntoPreviousUser = false
 
   for (const m of messages) {
     if (m.role === 'tool') {
@@ -116,6 +119,15 @@ export function toAnthropicMessages(
         ;(last.content as unknown[]).push(...blocks)
         continue
       }
+      if (foldIntoPreviousUser && last?.role === 'user') {
+        foldIntoPreviousUser = false
+        if (typeof last.content === 'string') {
+          last.content = last.content ? [{ type: 'text', text: last.content }] : []
+        }
+        ;(last.content as unknown[]).push(...blocks)
+        continue
+      }
+      foldIntoPreviousUser = false
       mergingToolResults = false
       // Two plain user turns in a row are a 400 as well. They happen when Houston
       // queues an automated note just ahead of the user's message (a finished
@@ -138,13 +150,25 @@ export function toAnthropicMessages(
         out.push({ role: 'user', content: m.content })
       }
     } else if (m.role === 'assistant') {
-      mergingToolResults = false
       // Thinking blocks must come first, before text and tool_use.
       const content: unknown[] = [...thinkingBlocks(m, thinkingEnabled, model)]
-      if (m.content) content.push({ type: 'text', text: m.content })
+      // A text block that is empty or only whitespace is a 400, so send text only
+      // when there is some.
+      if (m.content.trim()) content.push({ type: 'text', text: m.content })
       for (const tc of m.toolCalls ?? []) {
         content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments })
       }
+      // Nothing left to send: the model ended its turn without text or tool calls, or
+      // the turn held only reasoning that isn't replayed to this model. An assistant
+      // message with no content is a 400 ("all messages must have non-empty content"),
+      // and since it stays in the history it would fail every later request too. Leave
+      // it out and join the user turns on either side of it.
+      if (content.length === 0) {
+        if (out[out.length - 1]?.role === 'user') foldIntoPreviousUser = true
+        continue
+      }
+      mergingToolResults = false
+      foldIntoPreviousUser = false
       out.push({ role: 'assistant', content: content as Anthropic.MessageParam['content'] })
     }
     // 'system' is passed out-of-band via the top-level system field.
@@ -273,9 +297,13 @@ export function createMessagesProvider(
         return out
       }
 
-      // Thinking dictates max_tokens: legacy budget thinking needs room above the
-      // budget; adaptive sizing keeps the reply's headroom unchanged (see reasoning.ts).
-      const maxTokens = thinking ? thinking.maxTokens : req.maxTokens ?? DEFAULT_MAX_TOKENS
+      // Thinking sizes max_tokens (the budget plus the reply's headroom, see reasoning.ts),
+      // and a caller's cap can only raise that: legacy budget thinking needs room above the
+      // budget, so a small cap (the compaction summary's) can't shrink a thinking turn.
+      // Without thinking the caller's cap is used as given.
+      const maxTokens = thinking
+        ? Math.max(thinking.maxTokens, req.maxTokens ?? 0)
+        : req.maxTokens ?? anthropicMaxTokens(req.model)
       // Houston edits history (compaction, tool-result stubbing), which invalidates
       // prefix-bound thinking blocks; drop those blocks rather than fail the turn.
       const dropStaleBlocks = thinking?.kind === 'adaptive' && thinking.preserved && bindingControls
@@ -335,13 +363,18 @@ export function createMessagesProvider(
         next = await events.next()
       }
 
-      // Buffer streamed tool-call JSON per content block index.
+      // Buffer streamed tool-call JSON per content block index. Finished calls are held
+      // until the stream ends: only then is the stop reason known, and it decides whether
+      // the last call was cut off.
       const toolBuffers = new Map<number, { id: string; name: string; json: string }>()
+      const calls: { index: number; call: ToolCall }[] = []
+      let lastBlock: { index: number; type: string } | undefined
 
       for (; !next.done; next = await events.next()) {
         const event = next.value
         if (event.type === 'content_block_start') {
           const block = event.content_block
+          lastBlock = { index: event.index, type: block.type }
           if (block.type === 'tool_use') {
             toolBuffers.set(event.index, { id: block.id, name: block.name, json: '' })
           }
@@ -358,19 +391,28 @@ export function createMessagesProvider(
         } else if (event.type === 'content_block_stop') {
           const buf = toolBuffers.get(event.index)
           if (buf) {
-            let args: Record<string, unknown>
-            try {
-              args = buf.json ? JSON.parse(buf.json) : {}
-            } catch {
-              args = {}
-            }
-            yield { type: 'tool_call', call: { id: buf.id || randomUUID(), name: buf.name, arguments: args } }
+            calls.push({ index: event.index, call: toolCallFromBuffer(buf) })
             toolBuffers.delete(event.index)
           }
         }
       }
 
       const final = await stream.finalMessage()
+      const stopReason = mapStopReason(final.stop_reason)
+      // A block the stream opened but never closed was cut off mid-call.
+      for (const [index, buf] of toolBuffers) {
+        const call: ToolCall = { id: buf.id || randomUUID(), name: buf.name, arguments: {}, incomplete: true }
+        calls.push({ index, call })
+      }
+      calls.sort((a, b) => a.index - b.index)
+      // At the output limit, a tool_use that is the reply's last block is the one the
+      // model was still writing, even when what arrived happens to parse (an empty
+      // buffer reads as `{}`).
+      if (stopReason === 'max_tokens' && lastBlock?.type === 'tool_use') {
+        const cut = calls.find((c) => c.index === lastBlock!.index)
+        if (cut) cut.call = { ...cut.call, arguments: {}, incomplete: true }
+      }
+      for (const { call } of calls) yield { type: 'tool_call', call }
       const reasoning = reasoningFromMessage(final.content, req.model)
       // With caching, input_tokens counts only the *uncached* prefix; add the
       // cached reads/writes back so the reported context size stays accurate.
@@ -383,7 +425,7 @@ export function createMessagesProvider(
       const inputTokens = u ? (u.input_tokens ?? 0) + cacheReadTokens + cacheWriteTokens : undefined
       yield {
         type: 'done',
-        stopReason: mapStopReason(final.stop_reason),
+        stopReason,
         usage: {
           inputTokens,
           outputTokens: final.usage?.output_tokens,
@@ -394,6 +436,19 @@ export function createMessagesProvider(
       }
     }
   }
+}
+
+/**
+ * A finished tool_use block as a call. JSON that doesn't parse can't be run, so it becomes
+ * an empty placeholder marked `incomplete` rather than a call with silently missing
+ * arguments.
+ */
+function toolCallFromBuffer(buf: { id: string; name: string; json: string }): ToolCall {
+  const id = buf.id || randomUUID()
+  const args = parseToolArguments(buf.json)
+  return args
+    ? { id, name: buf.name, arguments: args }
+    : { id, name: buf.name, arguments: {}, incomplete: true }
 }
 
 /** A provider for the first-party Anthropic API, authenticated with an API key. */

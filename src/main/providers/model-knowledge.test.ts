@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { contextWindowFor, modelCapabilities, modelPricing, resolveToolSupport } from '@shared/usage'
 import { sortedModels } from '@shared/models'
 import type { ProviderKind } from '@shared/types'
+import { maxOutputTokensFor } from '@shared/model-facts'
 import {
   anthropicPreservesThinking,
   anthropicSupportsInterleavedThinking,
@@ -35,6 +36,7 @@ const CORPUS = [
   'claude-opus-4-5',
   'claude-opus-4-1',
   'claude-opus-4-20250514',
+  'anthropic.claude-opus-4-1-20250805-v1:0',
   'claude-sonnet-5-5',
   'claude-sonnet-5',
   'claude-sonnet-4-6',
@@ -134,6 +136,7 @@ describe('model knowledge golden', () => {
         id,
         {
           window: contextWindowFor(id),
+          maxOutput: maxOutputTokensFor(id),
           pricing: modelPricing(id),
           caps: modelCapabilities(id),
           tools: resolveToolSupport(undefined, id),

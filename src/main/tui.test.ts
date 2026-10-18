@@ -609,6 +609,11 @@ describe('extractDiff', () => {
     expect(d).toContain('+line2')
   })
 
+  it('does not render a file\'s trailing newline as an extra blank added line', () => {
+    const d = extractDiff({ path: 'new.ts', content: 'line1\nline2\n' })
+    expect(d).toBe('+++ new.ts (new file)\n+line1\n+line2')
+  })
+
   it('returns null when nothing is derivable', () => {
     expect(extractDiff({ path: 'a.ts' })).toBeNull()
     expect(extractDiff({ patch: '  ' })).toBeNull()

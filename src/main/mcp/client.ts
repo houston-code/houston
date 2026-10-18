@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
 import {
@@ -157,6 +158,7 @@ export class McpClient {
   private nextId = 1
   private readonly pending = new PendingRequests()
   private buffer = ''
+  private readonly decoder = new StringDecoder('utf8')
   private closed = false
   /** Capabilities the server declared at initialize (gates list re-fetches). */
   private capable: Record<McpListKind, boolean> = { tools: true, resources: false, prompts: false }
@@ -198,6 +200,10 @@ export class McpClient {
     })
     this.child = child
     child.stdout.on('data', (c: Buffer) => this.onData(c))
+    // A write to a server that has gone away fails with EPIPE, which Node reports as an
+    // 'error' event on stdin. Unheard, it surfaces as an uncaught exception (the
+    // standalone CLI exits on those), so treat it like the process exiting.
+    child.stdin.on('error', (e: Error) => this.failAll(`MCP server stopped reading input: ${e.message}`))
     child.on('exit', () => this.failAll('MCP server process exited'))
     child.on('error', (e: Error) => this.failAll(`MCP server failed to start: ${e.message}`))
 
@@ -274,7 +280,9 @@ export class McpClient {
   // ---- transport internals ----
 
   private onData(chunk: Buffer): void {
-    this.buffer += chunk.toString('utf8')
+    // Decoded as a stream: a multibyte character split across two pipe chunks would
+    // otherwise decode as two replacement characters, corrupting the message text.
+    this.buffer += this.decoder.write(chunk)
     let nl: number
     while ((nl = this.buffer.indexOf('\n')) >= 0) {
       const line = this.buffer.slice(0, nl).trim()

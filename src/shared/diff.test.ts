@@ -59,6 +59,46 @@ describe('diffLines', () => {
     expect(d.filter((l) => l.type !== 'del').map((l) => l.text)).toEqual(['b', 'c'])
   })
 
+  it('does not count a trailing newline as an extra line of a new file', () => {
+    expect(diffLines('', 'hello\nworld\n')).toEqual([
+      { type: 'add', text: 'hello' },
+      { type: 'add', text: 'world' }
+    ])
+  })
+
+  it('does not count a trailing newline as an extra line of a deleted file', () => {
+    expect(diffLines('hello\nworld\n', '')).toEqual([
+      { type: 'del', text: 'hello' },
+      { type: 'del', text: 'world' }
+    ])
+  })
+
+  it('leaves no trailing blank context line when both sides end in a newline', () => {
+    expect(diffLines('a\nb\n', 'a\nB\n')).toEqual([
+      { type: 'ctx', text: 'a' },
+      { type: 'del', text: 'b' },
+      { type: 'add', text: 'B' }
+    ])
+  })
+
+  it('keeps a newline added at end of file visible as a change', () => {
+    const d = diffLines('a\nb', 'a\nb\n')
+    expect(d.filter((l) => l.type !== 'ctx')).toEqual([{ type: 'add', text: '' }])
+  })
+
+  it('keeps a newline removed at end of file visible as a change', () => {
+    const d = diffLines('a\nb\n', 'a\nb')
+    expect(d.filter((l) => l.type !== 'ctx')).toEqual([{ type: 'del', text: '' }])
+  })
+
+  it('handles CRLF files the same way', () => {
+    expect(diffLines('', 'x\r\ny\r\n').map((l) => l.text)).toEqual(['x\r', 'y\r'])
+  })
+
+  it('treats a file holding only a newline as one empty line', () => {
+    expect(diffLines('', '\n')).toEqual([{ type: 'add', text: '' }])
+  })
+
   it('falls back to a coarse diff for very large inputs without hanging', () => {
     const big = Array.from({ length: 2500 }, (_, i) => `line ${i}`).join('\n')
     const d = diffLines(big, `${big}\nextra`)

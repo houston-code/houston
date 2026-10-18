@@ -302,8 +302,12 @@ function runUserShell(
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe']
     })
-    child.stdout?.on('data', (d: Buffer) => onOutput(d.toString()))
-    child.stderr?.on('data', (d: Buffer) => onOutput(d.toString()))
+    // Decode as streams, so a multibyte character split across two pipe chunks
+    // prints as itself rather than as two replacement characters.
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (d: string) => onOutput(d))
+    child.stderr?.on('data', (d: string) => onOutput(d))
     child.on('error', reject)
     child.on('close', (code) => resolve(code ?? 0))
   })
