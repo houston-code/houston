@@ -3,7 +3,8 @@ import { isLikelyChatModel, missingModelFacts, summarizeFetch } from './model-li
 
 describe('isLikelyChatModel', () => {
   it('keeps chat models', () => {
-    for (const id of ['claude-opus-5-5', 'gpt-6.1-sol', 'o3', 'gemini-3.8-flash', 'llama3.1:latest']) {
+    // "live" only as its own segment: a name merely containing the letters stays.
+    for (const id of ['claude-opus-5-5', 'gpt-6.1-sol', 'o3', 'gemini-3.8-flash', 'llama3.1:latest', 'olive-7b']) {
       expect(isLikelyChatModel(id), id).toBe(true)
     }
   })
@@ -21,7 +22,12 @@ describe('isLikelyChatModel', () => {
       'davinci-002',
       'gpt-4o-realtime-preview',
       'gpt-4o-audio-preview',
-      'gpt-4o-search-preview'
+      'gpt-4o-search-preview',
+      // Streaming voice models, as the first live drift run listed them.
+      'gpt-live-1',
+      'gemini-3.8-live',
+      'gemini-3.8-live-extended-thinking',
+      'gemini-3.5-live-translate-preview'
     ]) {
       expect(isLikelyChatModel(id), id).toBe(false)
     }

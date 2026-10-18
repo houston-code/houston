@@ -1,7 +1,7 @@
 name: Model drift
 
 # Weekly: which models do Anthropic, OpenAI and Google now list that Houston doesn't ship?
-# Flags them in one rolling GitHub issue, assigned to the repo owner, so a new release gets
+# Flags them in one rolling GitHub issue, assigned to the ALERT_ASSIGNEE repo variable, so a new release gets
 # added through a normal update (rules in model-facts.ts, the model-coverage check, the live
 # canary) soon after it ships, rather than users fetching it half-recognized.
 #
@@ -96,7 +96,8 @@ jobs:
       GH_REPO: ${{ github.repository }}
       LABEL: model-drift
       TITLE: New models available
-      OWNER: ${{ github.repository_owner }}
+      # A user login: an organization owner can't be assigned (see alert-on-failure.yml).
+      ASSIGNEE: ${{ vars.ALERT_ASSIGNEE }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       ANTHROPIC: ${{ needs.list.outputs.anthropic }}
       OPENAI: ${{ needs.list.outputs.openai }}
@@ -111,7 +112,8 @@ jobs:
           ids=""
           for report in "$ANTHROPIC" "$OPENAI" "$GEMINI"; do
             json=$(decode "$report")
-            sections+=$(jq -r '.section' <<<"$json")$'\n'
+            section=$(jq -r '.section' <<<"$json")
+            [ -z "$section" ] || sections+="$section"$'\n\n'
             ids+=$(jq -r '.ids[]' <<<"$json")$'\n'
           done
           ids=$(printf '%s' "$ids" | sed '/^$/d' | sort -u)
@@ -146,12 +148,17 @@ jobs:
             echo "_Updated weekly by \`.github/workflows/model-drift.yml\`; it closes itself once nothing is pending._"
           } > "$body_file"
 
+          if [ -z "$ASSIGNEE" ]; then
+            echo "::warning::ALERT_ASSIGNEE is not set, so the drift issue notifies nobody. Set the repo variable to a GitHub login."
+          fi
           if [ -z "$existing" ]; then
-            gh issue create --label "$LABEL" --assignee "$OWNER" --title "$TITLE" --body-file "$body_file"
+            gh issue create --label "$LABEL" ${ASSIGNEE:+--assignee "$ASSIGNEE"} --title "$TITLE" --body-file "$body_file"
             exit 0
           fi
 
           number=$(jq -r .number <<<"$existing")
+          # Idempotent: also assigns an issue opened before ALERT_ASSIGNEE was set.
+          [ -z "$ASSIGNEE" ] || gh issue edit "$number" --add-assignee "$ASSIGNEE" > /dev/null
           before=$(jq -r .body <<<"$existing" | head -1 | sed -E 's/^<!-- model-drift ids: (.*) -->$/\1/' | tr ',' '\n' | sed '/^$/d' | sort -u)
           gh issue edit "$number" --body-file "$body_file"
           # Comment only when something new appeared: the assignee is notified on a comment, not
