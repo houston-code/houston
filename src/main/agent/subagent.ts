@@ -2,6 +2,7 @@ import {
   systemNoteMessage,
   type ChatMessage,
   type Provider,
+  type ReasoningBlock,
   type StopReason,
   type TokenUsage,
   type ToolCall
@@ -411,6 +412,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     let calls: ToolCall[] = []
     // Widened by the cast: it's assigned inside the retry callback, which narrowing can't see.
     let stopReason = 'end_turn' as StopReason
+    // The turn's replayable reasoning state (signed thinking, encrypted reasoning,
+    // function-call thought signatures), kept on the transcript like the main loop
+    // does: some models reject the next request of a tool loop without it.
+    let reasoning: ReasoningBlock[] = []
     try {
       // One turn of the subagent's own loop, retried on a transient failure. Retrying
       // the whole turn is safe here even though the parent run streams: a subagent's
@@ -422,6 +427,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           text = ''
           calls = []
           stopReason = 'end_turn'
+          reasoning = []
           for await (const ev of provider.streamChat({
             model,
             system,
@@ -436,6 +442,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
             else if (ev.type === 'done') {
               stopReason = ev.stopReason
               if (ev.usage) opts.onUsage?.(ev.usage)
+              if (ev.reasoning?.length) reasoning = ev.reasoning
             } else if (ev.type === 'error') throw providerStreamError(ev)
           }
         },
@@ -465,7 +472,12 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       outputContinuations < MAX_OUTPUT_CONTINUATIONS &&
       iter + 1 < MAX_SUBAGENT_ITERATIONS
     if (!continueCutOff || text.trim()) {
-      messages.push({ role: 'assistant', content: text, ...(calls.length ? { toolCalls: calls } : {}) })
+      messages.push({
+        role: 'assistant',
+        content: text,
+        ...(calls.length ? { toolCalls: calls } : {}),
+        ...(reasoning.length ? { reasoning } : {})
+      })
     }
 
     if (continueCutOff) {

@@ -78,6 +78,33 @@ describe('runSubAgent', () => {
     expect(report).toContain('42')
   })
 
+  it("keeps each turn's reasoning state on its transcript for the next request", async () => {
+    // Signed thinking and function-call thought signatures have to come back with the
+    // tool loop's next request; some models reject it otherwise.
+    writeFileSync(join(ws, 'note.txt'), 'the answer is 42')
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const reasoning = [{ text: '', model: 'm', id: 'c1', signature: 'sig-1' }]
+    const provider = recordingProvider(
+      [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+          { type: 'done', stopReason: 'tool_use', reasoning }
+        ],
+        [{ type: 'text', text: 'It says 42.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      sink
+    )
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'what does note.txt say?',
+      signal: new AbortController().signal
+    })
+    const assistant = sink.messages[1].find((m) => m.role === 'assistant')
+    expect(assistant?.reasoning).toEqual(reasoning)
+  })
+
   it('refuses tools outside the read-only set', async () => {
     // The subagent shouldn't be offered write tools, but guard even if asked.
     const provider = scriptedProvider([

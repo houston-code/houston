@@ -166,6 +166,91 @@ describe('toGeminiContents', () => {
   })
 })
 
+describe('gemini function-call thought signatures', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  it('records the signature each function call arrives with, keyed by call id', async () => {
+    h.stream.mockResolvedValue(
+      (async function* () {
+        yield {
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                parts: [
+                  { functionCall: { id: 'fc1', name: 'read_file', args: { path: 'a' } }, thoughtSignature: 'SIG1' },
+                  { functionCall: { id: 'fc2', name: 'read_file', args: { path: 'b' } } }
+                ]
+              }
+            }
+          ]
+        }
+      })()
+    )
+    const provider = createGeminiProvider('k')
+    let done: ProviderStreamEvent | undefined
+    for await (const ev of provider.streamChat({
+      model: 'gemini-3.8-flash',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest)) {
+      if (ev.type === 'done') done = ev
+    }
+    expect(done).toMatchObject({
+      stopReason: 'tool_use',
+      reasoning: [{ text: '', model: 'gemini-3.8-flash', id: 'fc1', signature: 'SIG1' }]
+    })
+  })
+
+  it('sends each function call back with its signature, for the model that issued it', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'read both' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          { id: 'fc1', name: 'read_file', arguments: { path: 'a' } },
+          { id: 'fc2', name: 'read_file', arguments: { path: 'b' } }
+        ],
+        reasoning: [{ text: '', model: 'gemini-3.8-flash', id: 'fc1', signature: 'SIG1' }]
+      },
+      { role: 'tool', content: 'A', toolCallId: 'fc1', toolName: 'read_file' },
+      { role: 'tool', content: 'B', toolCallId: 'fc2', toolName: 'read_file' }
+    ]
+    expect(toGeminiContents(msgs, 'gemini-3.8-flash')[1]).toEqual({
+      role: 'model',
+      parts: [
+        { functionCall: { name: 'read_file', args: { path: 'a' } }, thoughtSignature: 'SIG1' },
+        { functionCall: { name: 'read_file', args: { path: 'b' } } }
+      ]
+    })
+    // Another model can't use the signature, so the calls go back without it.
+    expect(toGeminiContents(msgs, 'gemini-4-argon')[1].parts).toEqual([
+      { functionCall: { name: 'read_file', args: { path: 'a' } } },
+      { functionCall: { name: 'read_file', args: { path: 'b' } } }
+    ])
+  })
+
+  it('passes the request model through, so replayed signatures reach the API', async () => {
+    h.stream.mockResolvedValue((async function* () {})())
+    const provider = createGeminiProvider('k')
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'fc1', name: 'run', arguments: {} }],
+        reasoning: [{ text: '', model: 'gemini-3.8-flash', id: 'fc1', signature: 'SIG1' }]
+      },
+      { role: 'tool', content: 'ok', toolCallId: 'fc1', toolName: 'run' }
+    ]
+    for await (const _ of provider.streamChat({ model: 'gemini-3.8-flash', messages } as ChatRequest)) {
+      // drain
+    }
+    const sent = h.stream.mock.calls[0][0] as { contents: { parts: Record<string, unknown>[] }[] }
+    expect(sent.contents[1].parts[0]).toMatchObject({ thoughtSignature: 'SIG1' })
+  })
+})
+
 describe('gemini maxOutputTokens', () => {
   beforeEach(() => h.stream.mockReset())
 
