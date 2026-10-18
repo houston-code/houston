@@ -34,6 +34,10 @@ describe("favicons", () => {
     expect(pngSize(read("apple-touch-icon.png"))).toEqual([180, 180]);
   });
 
+  it("assets/icon-60.png is 60 px", () => {
+    expect(pngSize(read("assets/icon-60.png"))).toEqual([60, 60]);
+  });
+
   const PAGES = readdirSync(PUBLIC, { recursive: true }).filter((p) => p.endsWith(".html"));
 
   it("finds the site's pages", () => {
@@ -46,6 +50,13 @@ describe("favicons", () => {
     // No other icon links (e.g. the 1024 px app icon) for browsers to prefer instead.
     const iconLinks = html.match(/<link rel="(?:icon|apple-touch-icon)"[^>]*>/g);
     expect(iconLinks).toEqual(ICON_LINKS);
+  });
+
+  // The header/footer logo renders at 30 px; the 1024 px app icon is 17 KB for nothing.
+  it.each(PAGES)("%s shows the 60 px logo, not the full app icon", (page) => {
+    const html = read(page).toString("utf8");
+    expect(html).toContain('<img src="/assets/icon-60.png" alt="" width="30" height="30" />');
+    expect(html).not.toMatch(/<img src="\/assets\/icon\.png"/);
   });
 
   it("the legal-page template emits the same icon links", () => {

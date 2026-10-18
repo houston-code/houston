@@ -121,7 +121,7 @@
   <header class="site-header">
     <div class="wrap">
       <a class="brand" href="/" aria-label="Houston home">
-        <img src="/assets/icon.png" alt="" width="30" height="30" />
+        <img src="/assets/icon-60.png" alt="" width="30" height="30" />
         <span>Houston</span>
         <span class="beta-badge">Beta</span>
       </a>
@@ -163,7 +163,13 @@
 
         <figure class="shot">
           <picture>
+            <source type="image/webp" media="(prefers-color-scheme: dark)" data-theme-source="dark"
+              srcset="/assets/screens/models-dark-800.webp 800w, /assets/screens/models-dark-1200.webp 1200w, /assets/screens/models-dark-1600.webp 1600w"
+              sizes="(max-width: 1120px) calc(100vw - 48px), 1072px" />
             <source srcset="/assets/screens/models-dark.png" media="(prefers-color-scheme: dark)" data-theme-source="dark" />
+            <source type="image/webp"
+              srcset="/assets/screens/models-light-800.webp 800w, /assets/screens/models-light-1200.webp 1200w, /assets/screens/models-light-1600.webp 1600w"
+              sizes="(max-width: 1120px) calc(100vw - 48px), 1072px" />
             <img src="/assets/screens/models-light.png" width="1600" height="1035" fetchpriority="high"
             alt="Houston's model picker open, listing Anthropic Claude, OpenAI GPT, Google Gemini, and local Ollama models, each row showing vision and reasoning capability badges and its context-window size." />
           </picture>
@@ -389,7 +395,7 @@
       <div class="footer-grid">
         <div class="footer-brand">
           <a class="brand" href="/" aria-label="Houston home">
-            <img src="/assets/icon.png" alt="" width="30" height="30" />
+            <img src="/assets/icon-60.png" alt="" width="30" height="30" />
             <span>Houston</span>
           </a>
           <p>A cross-platform coding agent. Bring your own model.</p>
