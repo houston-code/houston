@@ -51,14 +51,18 @@ function geminiTier(id: string): { tier: string; version: number; preview: boole
 
 /**
  * Gemini's listing carries no release dates, so "new" means newer than what's shipped in
- * the same tier: a higher version, a tier Houston doesn't ship at all, or the stable
- * release of a version Houston only ships as a preview.
+ * the same tier: a higher version, the stable release of a version Houston only ships as a
+ * preview, or a tier Houston doesn't ship at all from at least the newest shipped
+ * generation. That last condition matters: Gemini 4 names its flagship Argon rather than
+ * Pro, so once Houston shipped no Pro model, every older Pro still listed (2.5, 3, 3.1)
+ * would otherwise read as a tier Houston had never seen.
  */
 function geminiIsNewer(id: string, shipped: string[]): boolean {
   const t = geminiTier(id)
   if (!t) return false
-  const same = shipped.map(geminiTier).filter((s): s is NonNullable<typeof s> => !!s && s.tier === t.tier)
-  if (same.length === 0) return true
+  const all = shipped.map(geminiTier).filter((s): s is NonNullable<typeof s> => !!s)
+  const same = all.filter((s) => s.tier === t.tier)
+  if (same.length === 0) return all.length === 0 || t.version >= Math.max(...all.map((s) => s.version))
   const newest = Math.max(...same.map((s) => s.version))
   if (t.version > newest) return true
   return t.version === newest && !t.preview && same.every((s) => s.version < newest || s.preview)
