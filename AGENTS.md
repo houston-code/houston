@@ -66,7 +66,9 @@ reasoning, the Claude request-shape gates, display-order families) lives in
 provider's section there, add the id to the corpus in
 `src/main/providers/model-knowledge.test.ts`, and regenerate
 `src/main/providers/goldens/model-knowledge.json` with `-u`; the golden diff is the review
-surface for what changed. Seeding it as a default is separate: `src/shared/defaults.ts`
+surface for what changed. `model-coverage.test.ts` fails any default or curated cloud-host
+model that lacks a price, context window, named display family, tool calling or reasoning
+mode, or isn't pinned in that golden. Seeding it as a default is separate: `src/shared/defaults.ts`
 plus a scoped `backfillDefaultModels` step in `src/main/store.ts`'s `migrate()`.
 
 ## Task-level evals
