@@ -170,15 +170,21 @@ export function defaultProviders(): ProviderConfig[] {
  */
 export function backfillDefaultModels(
   saved: ProviderConfig[],
-  onlyIds?: readonly string[]
+  onlyIds?: readonly string[],
+  now: Date = new Date()
 ): ProviderConfig[] {
   const only = onlyIds ? new Set(onlyIds) : null
+  // A scoped add is a version bump delivering newly released models, so stamp them for
+  // the picker's "New" mark. The full first-run/pre-v2 seed is not news and stays unstamped.
+  const addedAt = only ? now.toISOString().slice(0, 10) : undefined
   const defaults = new Map(defaultProviders().map((p) => [p.id, p]))
   return saved.map((p) => {
     const def = defaults.get(p.id)
     if (!def) return p
     const have = new Set(p.models.map((m) => m.id))
-    const additions = def.models.filter((m) => !have.has(m.id) && (!only || only.has(m.id)))
+    const additions = def.models
+      .filter((m) => !have.has(m.id) && (!only || only.has(m.id)))
+      .map((m) => (addedAt ? { ...m, addedAt } : m))
     return additions.length ? { ...p, models: [...p.models, ...additions] } : p
   })
 }

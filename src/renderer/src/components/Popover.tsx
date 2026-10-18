@@ -45,6 +45,7 @@ export function Popover({
   className = 'menu',
   role,
   ariaLabel,
+  roving = true,
   children
 }: {
   anchorRef: RefObject<HTMLElement | null>
@@ -56,6 +57,11 @@ export function Popover({
   className?: string
   role?: string
   ariaLabel?: string
+  /**
+   * Move focus between items on ArrowUp/Down. A menu that keeps focus in its own input
+   * and tracks the active item itself (a filterable listbox) turns this off.
+   */
+  roving?: boolean
   children: ReactNode
 }): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null)
@@ -63,6 +69,8 @@ export function Popover({
   // Read onClose live so the effects below arm once and survive parent re-renders.
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const rovingRef = useRef(roving)
+  rovingRef.current = roving
 
   useLayoutEffect(() => {
     const a = anchorRef.current?.getBoundingClientRect()
@@ -126,7 +134,7 @@ export function Popover({
         onCloseRef.current()
         return
       }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (rovingRef.current && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
         const menu = ref.current
         if (!menu || !menu.contains(document.activeElement)) return
         const items = Array.from(menu.querySelectorAll<HTMLElement>(FOCUSABLE))

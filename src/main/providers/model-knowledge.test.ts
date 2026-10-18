@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { contextWindowFor, modelCapabilities, modelPricing } from '@shared/usage'
+import { contextWindowFor, modelCapabilities, modelPricing, resolveToolSupport } from '@shared/usage'
 import { sortedModels } from '@shared/models'
 import type { ProviderKind } from '@shared/types'
 import {
@@ -131,6 +131,7 @@ describe('model knowledge golden', () => {
           window: contextWindowFor(id),
           pricing: modelPricing(id),
           caps: modelCapabilities(id),
+          tools: resolveToolSupport(undefined, id),
           gates: {
             anthropicThinking: anthropicSupportsThinking(id),
             anthropicLegacy: anthropicUsesLegacyThinking(id),

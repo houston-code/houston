@@ -757,8 +757,26 @@ body.is-resizing {
 
 /* ---- Model picker menu ---- */
 .model-menu {
-  min-width: 232px;
-  max-width: 340px;
+  /* Fixed width so the menu doesn't jump narrower as the search filters the list. */
+  width: 400px;
+  max-width: calc(100vw - 16px);
+}
+/* Filter field pinned above the list; focus lands here when the menu opens. */
+.model-menu__search {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 2px 0 4px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.model-menu__search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 .model-menu__opt {
   display: grid;
@@ -825,6 +843,30 @@ body.is-resizing {
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+}
+.model-menu__price {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* "New" mark after the name: a model released recently or added by an update. */
+.model-menu__new {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+/* One line naming the providers with no models yet, instead of an empty group each. */
+.model-menu__footnote {
+  padding: 6px 9px 3px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11.5px;
 }
 .model-menu__empty {
   padding: 5px 9px;
