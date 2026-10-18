@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { existsSync } from 'node:fs'
 import { SKIP_DIRS } from './search'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
@@ -158,14 +159,20 @@ export function runAstGrep(o: AstGrepRunOptions): Promise<{ matches: string[]; e
     }
     let out = ''
     let err = ''
+    // Decoded as streams: a multibyte character split across two pipe chunks would
+    // otherwise turn into replacement characters (or break a JSON line).
+    const outDecoder = new StringDecoder('utf8')
+    const errDecoder = new StringDecoder('utf8')
     child.stdout.on('data', (c: Buffer) => {
-      if (out.length < 5_000_000) out += c.toString()
+      if (out.length < 5_000_000) out += outDecoder.write(c)
     })
     child.stderr.on('data', (c: Buffer) => {
-      err += c.toString()
+      err += errDecoder.write(c)
     })
     child.on('error', (e) => resolve({ matches: [], error: e.message }))
     child.on('close', (code) => {
+      out += outDecoder.end()
+      err += errDecoder.end()
       const matches = parseAstGrepStream(out, o.max)
       // ast-grep exits non-zero both for "no matches" (exit 1) and for real
       // failures like a bad language or a missing path. astGrepError() tells them

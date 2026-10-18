@@ -311,11 +311,13 @@ export class CappedOutput {
   }
 
   toString(): string {
-    const head = Buffer.concat(this.headChunks).toString('utf8')
     if (this.droppedBytes === 0) {
-      // Nothing dropped: head + tail are contiguous, so concatenation is exact.
-      return head + Buffer.concat(this.tailChunks).toString('utf8')
+      // Nothing dropped: head + tail are contiguous, so decode them as one buffer. The
+      // head budget can end partway through a multibyte character, and decoding the
+      // two halves separately would turn that character into replacement characters.
+      return Buffer.concat([...this.headChunks, ...this.tailChunks]).toString('utf8')
     }
+    const head = Buffer.concat(this.headChunks).toString('utf8')
     const tail = Buffer.concat(this.tailChunks).toString('utf8')
     return `${head}\n[... ${this.droppedBytes} bytes truncated ...]\n${tail}`
   }
