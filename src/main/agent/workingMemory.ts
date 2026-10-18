@@ -3,8 +3,8 @@ import { formatTodoList, parseTodosSafe, type Todo } from '@shared/todos'
 import { parsePatch } from './apply-patch'
 
 /**
- * Pinned working memory: a small, always-present block that survives compaction
- * losslessly. Compaction summarizes older turns into a lossy synthetic summary and
+ * Pinned working memory: a small block that rides every request once anything has
+ * been compacted or evicted, and survives compaction losslessly. Compaction summarizes older turns into a lossy synthetic summary and
  * tool-result eviction drops stale outputs — either can quietly lose the anchors a
  * long run must never forget: what the user originally asked for, the live task
  * list, and which files are currently in play. This module rebuilds that anchor
@@ -14,36 +14,39 @@ import { parsePatch } from './apply-patch'
  * keep in sync — which keeps the builder a pure function that is trivial to test
  * and immune to drift from the real transcript.
  *
- * WHERE THE BLOCK GOES, AND WHY IT MATTERS FOR COST
- * ------------------------------------------------
+ * WHEN AND WHERE THE BLOCK GOES, AND WHY IT MATTERS FOR COST
+ * -----------------------------------------------------------
  * Provider prompt caching is *prefix* matching: a request reuses a cached prefix
  * only up to the first byte that differs from the cached one. The loop's request
- * assembly therefore has to keep the window APPEND-ONLY across the iterations of a
- * turn — each request must extend the previous one rather than rewrite it — or the
- * cache is missed and the whole conversation is re-billed at the full input rate.
+ * assembly therefore has to keep the window APPEND-ONLY: each request must extend
+ * the previous one rather than rewrite it, across the iterations of a turn AND from
+ * one turn to the next, or the cache is missed and everything behind the first
+ * difference is re-billed as a fresh cache write.
  *
- * That makes this block's *volatility* the hazard, not its size. Its contents move
- * as the run works (a new `read_file` reorders "files in play", a `todo_write`
- * rewrites the list), so it must never sit ahead of the stable prefix: pinned at
- * message zero, a single file read rewrote byte zero of the window and invalidated
- * the provider cache for every message behind it, on every iteration.
+ * That makes this block's *position and volatility* the hazard, not its size. Its
+ * contents move as the run works (a new `read_file` reorders "files in play", a
+ * `todo_write` rewrites the list). Pinned at message zero and rebuilt per call, a
+ * single file read rewrote byte zero of the window on every iteration. Spliced in
+ * front of each turn's request, it moved one turn down the window every turn, so
+ * the next turn's first request diverged from the last one's cached prefix right
+ * where the block used to be, re-billing the whole previous turn.
  *
- * Two rules keep it cheap, and both are load-bearing:
+ * Three rules keep it cheap, and all are load-bearing:
  *
- *  1. The loop splices it in immediately BEFORE the final user turn (see
- *     {@link lastUserTurnIndex}), not at the head — so everything earlier stays a
- *     stable, cacheable prefix.
- *  2. It is derived from the turns before that boundary, so it is FROZEN while the
- *     turn only appends: the head it reads from cannot change underneath it. That
- *     falls out of the argument the loop passes, which is why this module takes a
- *     head rather than reaching for the whole log itself. (The loop does widen that
- *     head as compaction folds turns away — but that is free, because advancing the
- *     cut rewrites the window's head and drops the cache regardless.)
+ *  1. It is only sent once something has actually been compacted or evicted. Until
+ *     then the window is the log verbatim and nothing has been lost, so a block
+ *     restating it would be pure cost and would make the window differ from the log.
+ *  2. The loop places it directly after the compaction summary pair (or at the head
+ *     when only eviction has run): a spot that does not move as turns are appended.
+ *  3. It is derived from the compacted/evicted head (the messages before the cut or
+ *     the eviction watermark, whichever reaches further), which is FROZEN until the
+ *     next compaction or eviction. That falls out of the argument the loop passes,
+ *     which is why this module takes a head rather than reaching for the whole log
+ *     itself. Refreshing it at a compaction or eviction is free: those rewrite the
+ *     window at or before the block regardless.
  *
- * Rule 2 is what makes rule 1 pay off — a block placed late but rebuilt on every
- * iteration would still break the cache at that point on every tool call. Nothing
- * is lost by reading only the head: the current turn's own messages are still in
- * the window verbatim, and this block exists for what compaction took away.
+ * Nothing is lost by reading only the head: everything after it is still in the
+ * window verbatim, and this block exists for what compaction and eviction took away.
  */
 
 /** Marker prefix on the synthetic pinned block, so the renderer/tests can spot it. */
@@ -88,10 +91,15 @@ function clip(text: string, max: number): string {
   return `${text.slice(0, max).trimEnd()}…`
 }
 
+/** Index of the first user turn (the original task), or -1 when there is none. */
+export function originalTaskIndex(messages: ChatMessage[]): number {
+  return messages.findIndex((m) => m.role === 'user')
+}
+
 /** The first user turn's text — the original task. Empty when there is none. */
 export function originalTask(messages: ChatMessage[]): string {
-  const first = messages.find((m) => m.role === 'user')
-  return first ? first.content.trim() : ''
+  const i = originalTaskIndex(messages)
+  return i === -1 ? '' : messages[i].content.trim()
 }
 
 /**
@@ -133,16 +141,26 @@ export function filesInPlay(messages: ChatMessage[], max = MAX_FILES): string[] 
   return out
 }
 
+export interface PinnedMemoryOptions {
+  /**
+   * Leave out the original-task section: the caller sends that request verbatim
+   * elsewhere in the window (still in the tail, or re-sent as a mid-turn anchor), so
+   * restating it would only duplicate it.
+   */
+  omitTask?: boolean
+}
+
 /**
  * Build the pinned-memory text block from the full message log, or '' when there is
- * nothing worth pinning yet (no user turn at all). Bounded in size on every axis so
- * it stays a small, cheap segment that rides every request.
+ * nothing worth pinning (no user turn at all, or nothing left once the task is
+ * omitted). Bounded in size on every axis so it stays a small, cheap segment that
+ * rides every request.
  */
-export function buildPinnedMemory(messages: ChatMessage[]): string {
+export function buildPinnedMemory(messages: ChatMessage[], opts: PinnedMemoryOptions = {}): string {
   const task = originalTask(messages)
   if (!task) return ''
 
-  const sections: string[] = [`Original task:\n${clip(task, MAX_TASK_CHARS)}`]
+  const sections: string[] = opts.omitTask ? [] : [`Original task:\n${clip(task, MAX_TASK_CHARS)}`]
 
   const todos = latestTodos(messages)
   if (todos.length > 0) {
@@ -154,19 +172,16 @@ export function buildPinnedMemory(messages: ChatMessage[]): string {
     sections.push(`Files in play (most recent first):\n${files.map((f) => `- ${f}`).join('\n')}`)
   }
 
+  if (sections.length === 0) return ''
   const body = sections.join('\n\n')
   return clip(`${PINNED_MEMORY_PREFIX}\n\n${body}`, MAX_BLOCK_CHARS)
 }
 
 /**
- * Index of the final user turn — the boundary the pinned block is spliced in front
- * of, and the end of the head it is derived from. Returns -1 when the log has no
- * user message (nothing to pin, and no turn to sit in front of).
- *
- * A user message always starts a turn, so this index is a clean seam: the message
- * before it ends the previous turn, never a `tool_use` awaiting its result (the
- * loop's intake repair guarantees that), so inserting a pair here cannot separate a
- * call from its result.
+ * Index of the final user turn: at run start, the request the run is answering.
+ * The loop freezes it as the turn's start, the boundary compaction may cut inside
+ * of and the request it re-sends verbatim when it does. Returns -1 when the log has
+ * no user message.
  */
 export function lastUserTurnIndex(messages: ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -178,15 +193,18 @@ export function lastUserTurnIndex(messages: ChatMessage[]): number {
 /**
  * The synthetic user/assistant pair carrying the pinned block, or [] when there's
  * nothing to pin. A *pair* (not a lone user message) keeps role alternation valid
- * where the loop splices it in — mirroring how `buildSummaryMessages` frames the
- * compaction summary.
+ * where the loop places it, after the summary pair: mirroring how
+ * `buildSummaryMessages` frames the compaction summary.
  *
- * Pass the HEAD of the log (the turns before the current one), not the whole log:
- * that is what freezes the block for the duration of a turn and keeps the provider
- * cache alive. See the note at the top of this module.
+ * Pass the compacted/evicted HEAD of the log, not the whole log: that is what
+ * freezes the block between compactions and keeps the provider cache alive. See
+ * the note at the top of this module.
  */
-export function buildPinnedMessages(messages: ChatMessage[]): ChatMessage[] {
-  const block = buildPinnedMemory(messages)
+export function buildPinnedMessages(
+  messages: ChatMessage[],
+  opts: PinnedMemoryOptions = {}
+): ChatMessage[] {
+  const block = buildPinnedMemory(messages, opts)
   if (!block) return []
   return [
     { role: 'user', content: block },
