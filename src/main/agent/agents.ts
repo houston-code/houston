@@ -54,9 +54,14 @@ function firstLine(s: string): string {
 /** Parse a front-matter `tools:` field (comma/space separated) into a name list. */
 function parseTools(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined
+  // Also accept the YAML flow-list form, `tools: [read_file, "glob"]`: split as-is it
+  // gave `[read_file` and `"glob"]`, no name matched, and the narrowing silently fell
+  // back to the full read-only set (dropping a writable agent's write tools).
   const tools = value
+    .trim()
+    .replace(/^\[|\]$/g, '')
     .split(/[\s,]+/)
-    .map((t) => t.trim())
+    .map((t) => t.trim().replace(/^["']|["']$/g, ''))
     .filter(Boolean)
   return tools.length ? tools : undefined
 }
