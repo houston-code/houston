@@ -197,7 +197,7 @@ function failingSpawn(): SpawnFn {
   return (() => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
-      stdin: { write: () => true },
+      stdin: Object.assign(new EventEmitter(), { write: () => true }),
       stderr: new EventEmitter(),
       kill: () => {}
     })
