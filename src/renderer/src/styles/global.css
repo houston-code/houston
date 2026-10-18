@@ -2718,6 +2718,9 @@ button.finding__head:focus-visible,
   letter-spacing: 0.04em;
   color: var(--ok);
 }
+.question__answer-label--none {
+  color: var(--text-dim);
+}
 .question__answer-text {
   color: var(--text);
   white-space: pre-wrap;

@@ -57,6 +57,8 @@ import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
+import { PRESENT_PLAN_TOOL } from '@shared/constants'
+import { PLAN_OUTCOME_LABEL, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
 import { truncateVisible, stripControlChars, osc52Copy } from './tui-wrap'
 import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream } from './markdown-ansi'
@@ -455,6 +457,12 @@ export function renderToolResult(
   paint: Painter,
   opts: { verbose?: boolean } = {}
 ): string {
+  // A prompt the run was stopped in front of, and a plan review's decision, come back
+  // in the model's wording ("Denied by the user. They said: …", "The user REJECTED
+  // this plan. Do not make any changes…"). Say what happened instead.
+  const stopped = stoppedPromptText(output)
+  if (stopped) return paint(`  ⊘ ${stopped}`, 'dim')
+  if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
   const lines = output.split('\n')
   if (!ok) {
     const body = trimBlank(lines)

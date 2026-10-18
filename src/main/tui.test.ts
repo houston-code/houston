@@ -7,6 +7,7 @@ import { catalogForPlatform } from '@shared/provider-catalog'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
+import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import {
   parseTuiArgs,
   makePainter,
@@ -647,6 +648,26 @@ describe('renderToolResult', () => {
   })
   it('is empty for successful no-output results', () => {
     expect(renderToolResult('x', true, '   \n  ', paint)).toBe('')
+  })
+
+  // Stopping the run answers open prompts for the model ("Denied by the user. They
+  // said: The user interrupted…"); printing that read as if the user had said it.
+  it('says a prompt was stopped rather than echoing the model-facing denial', () => {
+    const denied = `Denied by the user. They said: ${APPROVAL_INTERRUPTED_NOTE}`
+    const out = renderToolResult('run_shell', false, denied, paint)
+    expect(out).toContain('Not run: the run was stopped before it was approved.')
+    expect(out).not.toContain('failed')
+    expect(out).not.toContain('They said')
+    expect(renderToolResult('ask_user', true, QUESTION_STOPPED_ANSWER, paint)).toContain(
+      'Not answered: the run was stopped.'
+    )
+  })
+
+  it('prints a plan review as its decision, not the instructions sent to the model', () => {
+    const rejected = 'The user REJECTED this plan. Do not make any changes. Briefly acknowledge and wait.'
+    expect(renderToolResult('present_plan', true, rejected, paint)).toBe('  ↳ Plan rejected')
+    const accepted = 'The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now.'
+    expect(renderToolResult('present_plan', true, accepted, paint)).toBe('  ↳ Plan accepted')
   })
 
   // A failure used to render as "✗ run_shell failed" and throw the error away —

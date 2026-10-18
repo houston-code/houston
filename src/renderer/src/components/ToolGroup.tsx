@@ -5,6 +5,7 @@ import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
 import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/reviewFindings'
+import { stoppedPromptText } from '@shared/promptOutcome'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
@@ -230,13 +231,16 @@ function ToolRow({
   const awaiting = item.status === 'awaiting-approval'
   const running = item.status === 'running'
   const tally = reviewTally(item.findings, running)
+  // An approval the user stopped the run in front of comes back as a denial "they
+  // said" was an interruption, which is the model's wording, not the user's.
+  const output = stoppedPromptText(item.output) ?? item.output
 
   // Open the diff/output by default while a change is awaiting approval.
   const [open, setOpen] = useState(awaiting)
   // Guidance to send with a denial ("no, use staging instead").
   const [note, setNote] = useState('')
   // Todo/sweep rows render their list inline, so they have nothing extra to expand.
-  const expandable = !isTodo && !isSweep && Boolean(allLines.length > 0 || item.output)
+  const expandable = !isTodo && !isSweep && Boolean(allLines.length > 0 || output)
   const toggle = (): void => {
     if (expandable) setOpen((v) => !v)
   }
@@ -353,7 +357,7 @@ function ToolRow({
           ))}
         </div>
       )}
-      {open && item.output && !isTodo && !isSweep && <pre className="tool-row__output">{item.output}</pre>}
+      {open && output && !isTodo && !isSweep && <pre className="tool-row__output">{output}</pre>}
 
       {item.images && item.images.length > 0 && (
         <div className="tool-row__images">
