@@ -22,7 +22,9 @@ export function mentionQuery(line: string): string | null {
 
 /** The `/<query>` command token when the whole line is a single command word. */
 export function commandQuery(line: string): string | null {
-  const m = /^\/([a-z?]*)$/.exec(line)
+  // Custom `.houston/commands` names may hold digits, `-`, `_`, and capitals; a
+  // lowercase-only pattern dropped the menu as soon as one was typed (`/fix-`).
+  const m = /^\/([\w?-]*)$/.exec(line)
   return m ? m[1] : null
 }
 
@@ -57,15 +59,20 @@ export type FileFinder = (query: string) => Promise<string[]>
  * Build an async readline completer from a command list and a file finder. Only
  * hits the filesystem when the current token is an `@`-mention.
  */
-export function makeCompleter(finder: FileFinder, commands: CommandSpec[] = COMMANDS) {
+export function makeCompleter(
+  finder: FileFinder,
+  /** Read at each Tab, so commands loaded after startup (a workspace's own) complete too. */
+  commands: CommandSpec[] | (() => CommandSpec[]) = COMMANDS
+) {
+  const current = (): CommandSpec[] => (typeof commands === 'function' ? commands() : commands)
   return (line: string, callback: (err: null, result: [string[], string]) => void): void => {
     const mention = mentionQuery(line)
     if (mention === null) {
-      callback(null, completeInput(line, [], commands))
+      callback(null, completeInput(line, [], current()))
       return
     }
     finder(mention)
-      .then((files) => callback(null, completeInput(line, files, commands)))
+      .then((files) => callback(null, completeInput(line, files, current())))
       .catch(() => callback(null, [[], line]))
   }
 }
