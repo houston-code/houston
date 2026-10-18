@@ -285,6 +285,13 @@ any point. Settings > Loop control has the per-turn step count, the
 keep-going-while-productive switch, and the hard limit. If you had already set your
 own step count, it stays a hard stop until you turn the switch on.
 
+A single reply also has an output limit. When a reply is cut off there, the agent
+picks it up exactly where it stopped (up to three times in a row) instead of leaving
+a half-finished answer, and the transcript notes each time. A tool call the limit cut
+off is never run on partial input: it is answered as "not run" and the agent redoes
+the work in smaller pieces. Either way, later replies in the turn ask for the model's
+full output allowance where Houston knows it.
+
 ## Undoing a turn, and seeing what changed
 
 - **`/undo`** puts back the files the last turn changed; **`/redo`** re-applies

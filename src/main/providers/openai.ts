@@ -7,6 +7,7 @@ import { openaiReasoningEffort, openaiSupportsReasoning } from './reasoning'
 import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
 import { releaseDateFrom } from './release-date'
+import { parseToolArguments } from './tool-args'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
@@ -68,8 +69,10 @@ export function toOpenAIMessages(system: string | undefined, messages: ChatMessa
 }
 
 function mapFinishReason(reason: string | null | undefined, hadToolCalls: boolean): StopReason {
-  if (hadToolCalls || reason === 'tool_calls') return 'tool_use'
+  // Checked first: a reply cut off at the output limit while writing a tool call still
+  // carries that call, and the loop needs to know it was cut off rather than finished.
   if (reason === 'length') return 'max_tokens'
+  if (hadToolCalls || reason === 'tool_calls') return 'tool_use'
   return 'end_turn'
 }
 
@@ -261,14 +264,19 @@ export function createChatCompletionsProvider(
       }
 
       let hadToolCalls = toolAcc.size > 0
-      for (const acc of toolAcc.values()) {
-        let args: Record<string, unknown>
-        try {
-          args = acc.args ? JSON.parse(acc.args) : {}
-        } catch {
-          args = {}
+      // Tool calls follow any content in a Chat Completions reply, so at the output limit
+      // the last one is the call the model was still writing, whatever its JSON parses to.
+      const accs = [...toolAcc.values()]
+      const cutOff = finishReason === 'length' ? accs.length - 1 : -1
+      for (const [i, acc] of accs.entries()) {
+        const args = i === cutOff ? null : parseToolArguments(acc.args)
+        const id = acc.id || randomUUID()
+        yield {
+          type: 'tool_call',
+          call: args
+            ? { id, name: acc.name, arguments: args }
+            : { id, name: acc.name, arguments: {}, incomplete: true }
         }
-        yield { type: 'tool_call', call: { id: acc.id || randomUUID(), name: acc.name, arguments: args } }
       }
 
       // No structured tool calls, but the model may have written one as text.

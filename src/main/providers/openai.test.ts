@@ -561,3 +561,61 @@ describe('openai adapter: reasoning_effort gating', () => {
     expect(body).not.toHaveProperty('reasoning_effort') // deepseek-r1 isn't matched by the regex
   })
 })
+
+describe('openai adapter: tool calls cut off at the output limit', () => {
+  beforeEach(() => h.create.mockReset())
+
+  /** A streamed tool-call delta: the first carries the id and name, later ones more JSON. */
+  const callChunk = (index: number, args: string, id?: string, name?: string): unknown => ({
+    choices: [
+      {
+        delta: {
+          tool_calls: [{ index, ...(id ? { id } : {}), function: { ...(name ? { name } : {}), arguments: args } }]
+        }
+      }
+    ]
+  })
+
+  it('reports max_tokens and marks the call being written when the reply hit the limit', async () => {
+    const events = await run([
+      callChunk(0, '{"path":"a.ts"}', 'call_1', 'read_file'),
+      callChunk(1, '{"path":"b.ts","content":"exp', 'call_2', 'write_file'),
+      stopChunk('length')
+    ])
+    expect(events.filter((e) => e.type === 'tool_call')).toEqual([
+      { type: 'tool_call', call: { id: 'call_1', name: 'read_file', arguments: { path: 'a.ts' } } },
+      { type: 'tool_call', call: { id: 'call_2', name: 'write_file', arguments: {}, incomplete: true } }
+    ])
+    // A cut-off reply that carries calls used to read as `tool_use`, hiding the cut.
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'max_tokens' })
+  })
+
+  it('marks the last call even when its JSON happens to parse', async () => {
+    const events = await run([callChunk(0, '{}', 'call_1', 'write_file'), stopChunk('length')])
+    expect(events[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'call_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+  })
+
+  it('marks malformed JSON incomplete on a normal tool_calls finish', async () => {
+    const events = await run([callChunk(0, '{"path": "a.ts"', 'call_1', 'read_file'), stopChunk('tool_calls')])
+    expect(events[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'call_1', name: 'read_file', arguments: {}, incomplete: true }
+    })
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'tool_use' })
+  })
+
+  it('passes whole calls through unmarked', async () => {
+    const events = await run([
+      callChunk(0, '{"path":', 'call_1', 'read_file'),
+      callChunk(0, '"a.ts"}'),
+      stopChunk('tool_calls')
+    ])
+    expect(events[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'call_1', name: 'read_file', arguments: { path: 'a.ts' } }
+    })
+  })
+})

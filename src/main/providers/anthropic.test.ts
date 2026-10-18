@@ -458,3 +458,158 @@ describe('stale prefix-bound thinking recovery', () => {
     expect(h.stream).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('anthropic tool calls cut off at the output limit', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  /** A stream that replays `events`, then finishes with `stopReason`. */
+  function streamOf(events: unknown[], stopReason: string): unknown {
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const ev of events) yield ev
+      },
+      finalMessage: async () => ({
+        content: [],
+        stop_reason: stopReason,
+        usage: { input_tokens: 1, output_tokens: 1 }
+      })
+    }
+  }
+
+  const start = (index: number, id: string, name = 'write_file'): unknown => ({
+    type: 'content_block_start',
+    index,
+    content_block: { type: 'tool_use', id, name, input: {} }
+  })
+  const json = (index: number, partial_json: string): unknown => ({
+    type: 'content_block_delta',
+    index,
+    delta: { type: 'input_json_delta', partial_json }
+  })
+  const stop = (index: number): unknown => ({ type: 'content_block_stop', index })
+
+  async function eventsFor(events: unknown[], stopReason: string): Promise<unknown[]> {
+    h.stream.mockReturnValue(streamOf(events, stopReason))
+    const out: unknown[] = []
+    for await (const ev of createAnthropicProvider('sk-test').streamChat({
+      model: 'claude-opus-4-8',
+      messages: [{ role: 'user', content: 'hi' }]
+    })) {
+      out.push(ev)
+    }
+    return out
+  }
+
+  it('marks a call whose JSON was cut off as incomplete instead of running it with {}', async () => {
+    const out = await eventsFor(
+      [start(0, 'tu_1'), json(0, '{"path":"big.ts","content":"export const a'), stop(0)],
+      'max_tokens'
+    )
+    expect(out).toEqual([
+      { type: 'tool_call', call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true } },
+      expect.objectContaining({ type: 'done', stopReason: 'max_tokens' })
+    ])
+  })
+
+  it('marks the last call at the limit even when what arrived parses', async () => {
+    // An empty buffer reads as `{}`, a valid object: only the stop reason gives it away.
+    const out = await eventsFor([start(0, 'tu_1'), stop(0)], 'max_tokens')
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+  })
+
+  it('answers a block the stream opened but never closed', async () => {
+    const out = await eventsFor([start(0, 'tu_1'), json(0, '{"path":"a')], 'max_tokens')
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+  })
+
+  it('keeps the finished calls ahead of the cut-off one, in order', async () => {
+    const out = await eventsFor(
+      [
+        start(0, 'tu_1', 'read_file'),
+        json(0, '{"path":"a.ts"}'),
+        stop(0),
+        start(1, 'tu_2'),
+        json(1, '{"path":"b.ts","content":"x'),
+        stop(1)
+      ],
+      'max_tokens'
+    )
+    expect(out.slice(0, 2)).toEqual([
+      { type: 'tool_call', call: { id: 'tu_1', name: 'read_file', arguments: { path: 'a.ts' } } },
+      { type: 'tool_call', call: { id: 'tu_2', name: 'write_file', arguments: {}, incomplete: true } }
+    ])
+  })
+
+  it('leaves a whole call alone when the limit hit while writing text after it', async () => {
+    const out = await eventsFor(
+      [
+        start(0, 'tu_1', 'read_file'),
+        json(0, '{"path":"a.ts"}'),
+        stop(0),
+        { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'and then' } }
+      ],
+      'max_tokens'
+    )
+    expect(out).toContainEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'read_file', arguments: { path: 'a.ts' } }
+    })
+  })
+
+  it('marks malformed JSON incomplete on a normal tool_use stop too', async () => {
+    const out = await eventsFor([start(0, 'tu_1'), json(0, '{"path": oops}'), stop(0)], 'tool_use')
+    expect(out).toEqual([
+      { type: 'tool_call', call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true } },
+      expect.objectContaining({ type: 'done', stopReason: 'tool_use' })
+    ])
+  })
+
+  it('passes a whole call through unmarked', async () => {
+    const out = await eventsFor([start(0, 'tu_1'), json(0, '{"path":"a.ts","content":"x"}'), stop(0)], 'tool_use')
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'write_file', arguments: { path: 'a.ts', content: 'x' } }
+    })
+  })
+})
+
+describe('anthropic max_tokens sizing', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  it('gives a reply without thinking the raised headroom, clamped to the model ceiling', async () => {
+    expect((await captureRequest({ model: 'claude-sonnet-4-5', reasoningEffort: 'off' })).max_tokens).toBe(32_000)
+    expect((await captureRequest({ model: 'claude-3-5-haiku-20241022' })).max_tokens).toBe(8192)
+  })
+
+  it('keeps the long-standing cap for an id whose ceiling is unknown', async () => {
+    expect((await captureRequest({ model: 'claude-test' })).max_tokens).toBe(8192)
+  })
+
+  it('sizes a thinking turn as the budget plus the reply headroom', async () => {
+    // Opus 4.8 at high effort: the 16K sizing budget + 32K for the reply.
+    expect((await captureRequest({ model: 'claude-opus-4-8', reasoningEffort: 'high' })).max_tokens).toBe(48_000)
+    // Opus 4.1 caps output at 32K, which still leaves room above its 16K budget.
+    const legacy = await captureRequest({ model: 'claude-opus-4-1', reasoningEffort: 'high' })
+    expect(legacy.max_tokens).toBe(32_000)
+    expect((legacy.thinking as { budget_tokens: number }).budget_tokens).toBeLessThan(32_000)
+  })
+
+  it("uses a caller's cap as given without thinking", async () => {
+    expect((await captureRequest({ model: 'claude-opus-4-8', maxTokens: 2048 })).max_tokens).toBe(2048)
+    expect((await captureRequest({ model: 'claude-opus-4-8', maxTokens: 128_000 })).max_tokens).toBe(128_000)
+  })
+
+  it("lets a caller's cap raise a thinking turn but never shrink it below its budget sizing", async () => {
+    const raised = await captureRequest({ model: 'claude-opus-4-8', reasoningEffort: 'high', maxTokens: 128_000 })
+    expect(raised.max_tokens).toBe(128_000)
+    const small = await captureRequest({ model: 'claude-haiku-4-5', reasoningEffort: 'high', maxTokens: 2048 })
+    expect(small.max_tokens).toBeGreaterThan((small.thinking as { budget_tokens: number }).budget_tokens)
+  })
+})

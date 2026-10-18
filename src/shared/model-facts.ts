@@ -158,6 +158,18 @@ const CLAUDE_WINDOWS: Rows<number> = [
   [/claude/, 200_000]
 ]
 
+/** The `max_tokens` ceiling: 128K on Opus and Sonnet 4.6+, Haiku 5+ and Fable / Mythos; 64K on
+ *  Opus 4.5, Sonnet 4.0 / 4.5, Haiku 4.5 and Sonnet 3.7; 32K on Opus 4.0 / 4.1; 8K on the 3.5 line
+ *  and 4K on Claude 3. Opus 4.5 precedes the Opus 4 row it would otherwise match. */
+const CLAUDE_MAX_OUTPUT: Rows<number> = [
+  [/claude.*(opus-(4-[6-9]|[5-9])|sonnet-(4-[6-9]|[5-9])|haiku-[5-9]|fable|mythos)/, 128_000],
+  [/claude.*opus-4-5/, 64_000],
+  [/claude.*opus-4/, 32_000],
+  [/claude.*(sonnet-4|haiku-4|3-7-sonnet|sonnet-3-7)/, 64_000],
+  [/claude-3-5/, 8192],
+  [/claude-3/, 4096]
+]
+
 /** Claude 3 onward is multimodal; Claude 2 / Instant were text-only. */
 const CLAUDE_VISION: Rows<boolean> = [
   [/claude-(instant|1|2)([^0-9]|$)/, false],
@@ -344,6 +356,16 @@ export function contextWindowFor(model: string): number | null {
   return (
     firstMatch(CLAUDE_WINDOWS, m) ?? firstMatch(GEMINI_WINDOWS, m) ?? firstMatch(OPENAI_WINDOWS, m) ?? null
   )
+}
+
+/**
+ * The most output tokens one reply may request, or null when unknown. Only Claude is tabled:
+ * the Messages API requires `max_tokens` on every request, so Houston has to pick a number,
+ * while the OpenAI and Gemini adapters send no cap and those models already reply up to
+ * their own maximum.
+ */
+export function maxOutputTokensFor(model: string): number | null {
+  return firstMatch(CLAUDE_MAX_OUTPUT, model.toLowerCase()) ?? null
 }
 
 /**
