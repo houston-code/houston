@@ -169,7 +169,7 @@ describe('ModelPicker — local model tool-support warning', () => {
         provider({
           id: 'ollama',
           kind: 'openai-compatible',
-          label: 'Local — Ollama',
+          label: 'Ollama (local)',
           requiresKey: false,
           hasKey: false,
           baseUrl: 'http://localhost:11434/v1',

@@ -9,6 +9,7 @@ import {
   pruneDefaultModels,
   reconcileSelectedModel,
   resolveShellOutputBudget,
+  renameBuiltInProviderLabels,
   stripBuiltInModelLabels
 } from './defaults'
 
@@ -308,5 +309,37 @@ describe('autoExtendTurnsEnabled', () => {
 
   it('honors an explicit off', () => {
     expect(autoExtendTurnsEnabled({ autoExtendTurns: false })).toBe(false)
+  })
+})
+
+describe('renameBuiltInProviderLabels', () => {
+  const local = (id: string, label: string, builtIn = true): ProviderConfig => ({
+    id,
+    kind: 'openai-compatible',
+    label,
+    models: [],
+    requiresKey: false,
+    hasKey: false,
+    builtIn
+  })
+
+  it('renames the local providers still carrying the old seeded name', () => {
+    const out = renameBuiltInProviderLabels([
+      local('ollama', 'Local \u2014 Ollama'),
+      local('lmstudio', 'Local \u2014 LM Studio')
+    ])
+    expect(out.map((p) => p.label)).toEqual(['Ollama (local)', 'LM Studio (local)'])
+  })
+
+  it('keeps a name the user changed, and leaves custom providers alone', () => {
+    const renamed = local('ollama', 'My Ollama box')
+    const custom = local('my-proxy', 'Local \u2014 Ollama', false)
+    const out = renameBuiltInProviderLabels([renamed, custom])
+    expect(out[0]).toBe(renamed)
+    expect(out[1]).toBe(custom)
+  })
+
+  it('seeds the new names, with no em dash in any built-in provider name', () => {
+    for (const p of defaultSettings().providers) expect(p.label).not.toContain('\u2014')
   })
 })

@@ -165,7 +165,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(10)
+    expect(getSettings().schemaVersion).toBe(11)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -188,6 +188,34 @@ describe('settings migration — model backfill', () => {
     const { getSettings } = await loadStore()
     const anthropic = getSettings().providers.find((p) => p.id === 'anthropic')!
     expect(anthropic.models.find((m) => m.id === 'claude-opus-4-8')).toEqual({ id: 'claude-opus-4-8' })
+  })
+})
+
+describe('settings migration — local provider names (v11)', () => {
+  const local = (id: string, label: string): unknown => ({
+    id,
+    kind: 'openai-compatible',
+    label,
+    baseUrl: 'http://localhost:11434/v1',
+    models: [],
+    requiresKey: false,
+    hasKey: false,
+    builtIn: true
+  })
+
+  it('renames the old seeded local provider names on upgrade', async () => {
+    writeSettings({
+      schemaVersion: 10,
+      providers: [local('ollama', 'Local \u2014 Ollama'), local('lmstudio', 'Local \u2014 LM Studio')]
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().providers.map((p) => p.label)).toEqual(['Ollama (local)', 'LM Studio (local)'])
+  })
+
+  it('keeps a local provider name the user changed', async () => {
+    writeSettings({ schemaVersion: 10, providers: [local('ollama', 'Studio Mac')] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().providers[0].label).toBe('Studio Mac')
   })
 })
 
@@ -730,7 +758,7 @@ describe('settings migration — onboarding (v10)', () => {
     writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
     await loadStore().then((s) => s.getSettings())
     const onDisk = JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
-    expect(onDisk.schemaVersion).toBe(10)
+    expect(onDisk.schemaVersion).toBe(11)
     expect(onDisk.onboarding).toEqual({})
     // ...which then records its version. The next launch must not reclassify the user.
     markDesktopHasRun()
@@ -740,7 +768,7 @@ describe('settings migration — onboarding (v10)', () => {
   })
 
   it('does not rewrite a file that is already current', async () => {
-    writeSettings({ schemaVersion: 10, providers: [openaiProvider(['gpt-5.5'])] })
+    writeSettings({ schemaVersion: 11, providers: [openaiProvider(['gpt-5.5'])] })
     const before = statSync(join(state.userData, 'settings.json')).mtimeMs
     await loadStore().then((s) => s.getSettings())
     expect(statSync(join(state.userData, 'settings.json')).mtimeMs).toBe(before)
