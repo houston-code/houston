@@ -96,7 +96,7 @@ function relayServer(text: string): void {
 function okSpawn(toolName = 'echo'): SpawnFn {
   return (() => {
     const stdout = new EventEmitter()
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string }
         if (msg.id === undefined) return true
@@ -106,7 +106,7 @@ function okSpawn(toolName = 'echo'): SpawnFn {
         )
         return true
       }
-    }
+    })
     return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
   }) as unknown as SpawnFn
 }
@@ -115,7 +115,7 @@ function okSpawn(toolName = 'echo'): SpawnFn {
 function resourcefulSpawn(): SpawnFn {
   return (() => {
     const stdout = new EventEmitter()
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string }
         if (msg.id === undefined) return true
@@ -129,7 +129,7 @@ function resourcefulSpawn(): SpawnFn {
         )
         return true
       }
-    }
+    })
     return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
   }) as unknown as SpawnFn
 }
@@ -146,7 +146,7 @@ function elicitingSpawn(seen: { initCapabilities?: unknown }): SpawnFn {
     let pendingToolCallId: number | undefined
     const emit = (obj: unknown): void =>
       void queueMicrotask(() => stdout.emit('data', Buffer.from(`${JSON.stringify(obj)}\n`)))
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as {
           id?: number
@@ -185,7 +185,7 @@ function elicitingSpawn(seen: { initCapabilities?: unknown }): SpawnFn {
         }
         return true
       }
-    }
+    })
     return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
   }) as unknown as SpawnFn
 }
@@ -197,7 +197,7 @@ function failingSpawn(): SpawnFn {
   return (() => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
-      stdin: { write: () => true },
+      stdin: Object.assign(new EventEmitter(), { write: () => true }),
       stderr: new EventEmitter(),
       kill: () => {}
     })
@@ -565,7 +565,7 @@ describe('mcp manager statuses and hardening', () => {
       const c = new McpClient(((_cmd: string, _args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string }) => {
         captured.push(options)
         const stdout = new EventEmitter()
-        const stdin = {
+        const stdin = Object.assign(new EventEmitter(), {
           write(line: string): boolean {
             const msg = JSON.parse(line.trim()) as { id?: number; method: string }
             if (msg.id === undefined) return true
@@ -575,7 +575,7 @@ describe('mcp manager statuses and hardening', () => {
             )
             return true
           }
-        }
+        })
         return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
       }) as unknown as SpawnFn)
       created.push(c)

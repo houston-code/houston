@@ -16,6 +16,7 @@ import {
   anthropicUsesLegacyThinking,
   geminiSupportsThinking,
   geminiUsesThinkingLevel,
+  maxOutputTokensFor,
   openaiSupportsReasoning
 } from '@shared/model-facts'
 
@@ -56,8 +57,30 @@ const ANTHROPIC_BUDGET: Record<'low' | 'medium' | 'high', number> = {
   high: 16_000
 }
 
-/** Extra output tokens to allow on top of the thinking budget for the reply. */
-export const ANTHROPIC_REPLY_HEADROOM = 8192
+/**
+ * Output tokens to allow for the reply, on top of any thinking budget. Sized so a whole-file
+ * write of a large source file fits in one call; the model's own ceiling still clamps it.
+ * Raising `max_tokens` costs nothing until it's used: Anthropic's output rate limit counts
+ * only the tokens actually generated.
+ */
+export const ANTHROPIC_REPLY_HEADROOM = 32_000
+
+/**
+ * The reply headroom for a Claude id whose output ceiling isn't known: every Claude model
+ * from 3.5 on accepts it, so an unrecognized id can't be sent a cap it rejects.
+ */
+export const ANTHROPIC_FALLBACK_REPLY_HEADROOM = 8192
+
+/**
+ * `max_tokens` for an Anthropic request: `thinkingTokens` of thinking budget plus the reply
+ * headroom, clamped to the model's ceiling where it's known.
+ */
+export function anthropicMaxTokens(model: string, thinkingTokens = 0): number {
+  const ceiling = maxOutputTokensFor(model)
+  return ceiling
+    ? Math.min(thinkingTokens + ANTHROPIC_REPLY_HEADROOM, ceiling)
+    : thinkingTokens + ANTHROPIC_FALLBACK_REPLY_HEADROOM
+}
 
 /** Anthropic reasoning config: adaptive thinking (4.6+) or legacy budget thinking. */
 export type AnthropicThinking =
@@ -93,12 +116,12 @@ export function anthropicThinking(
       kind: 'adaptive',
       effort: 'low',
       display: 'omitted',
-      maxTokens: ANTHROPIC_BUDGET.low + ANTHROPIC_REPLY_HEADROOM,
+      maxTokens: anthropicMaxTokens(model, ANTHROPIC_BUDGET.low),
       preserved: anthropicPreservesThinking(model)
     }
   }
   const budgetTokens = ANTHROPIC_BUDGET[clampToHigh(effort)]
-  const maxTokens = budgetTokens + ANTHROPIC_REPLY_HEADROOM
+  const maxTokens = anthropicMaxTokens(model, budgetTokens)
   if (anthropicUsesLegacyThinking(model)) {
     return {
       kind: 'budget',

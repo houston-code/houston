@@ -234,6 +234,82 @@ describe('toAnthropicMessages role alternation', () => {
   })
 })
 
+describe('toAnthropicMessages empty assistant turns', () => {
+  /** Every assistant message must carry at least one block, and no text block may be blank. */
+  function assertSendable(out: ReturnType<typeof toAnthropicMessages>): void {
+    for (const m of out) {
+      if (m.role !== 'assistant') continue
+      const blocks = blocksOf(m)
+      expect(blocks.length).toBeGreaterThan(0)
+      for (const b of blocks) {
+        if (b.type === 'text') expect(String(b.text).trim()).not.toBe('')
+      }
+    }
+  }
+
+  it('leaves out a reply with no text and no tool calls, joining the user turns around it', () => {
+    // An empty end_turn reply is persisted as-is; resending it as `content: []` was a
+    // 400 on every later request in the conversation.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'second' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+    assertSendable(out)
+    assertNoConsecutiveSameRole(out)
+    expect(out).toHaveLength(1)
+    expect(blocksOf(out[0]).map((b) => b.text)).toEqual(['first', 'second'])
+  })
+
+  it('folds the next user turn onto tool results when the reply after them was empty', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'exit 0', toolCallId: 't1', toolName: 'run' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'and now?' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+    assertSendable(out)
+    assertNoConsecutiveSameRole(out)
+    expect(out).toHaveLength(3)
+    const blocks = blocksOf(out[2])
+    expect(blocks.some((b) => b.type === 'tool_result' && b.tool_use_id === 't1')).toBe(true)
+    expect(blocks.some((b) => b.type === 'text' && b.text === 'and now?')).toBe(true)
+  })
+
+  it('drops a whitespace-only text block but keeps the tool calls beside it', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '\n\n', toolCalls: [{ id: 't1', name: 'run', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 't1', toolName: 'run' }
+    ]
+    const out = toAnthropicMessages(msgs, false)
+    assertSendable(out)
+    expect(blocksOf(out[1]).map((b) => b.type)).toEqual(['tool_use'])
+  })
+
+  it('leaves out a reasoning-only reply whose blocks are not replayed to this model', () => {
+    // A reply cut off mid-thought has reasoning and nothing else; once those blocks are
+    // not sent (thinking off, or a different model), nothing is left to send.
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'first' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: [{ text: 'hmm', signature: 'sig', model: 'claude-opus-5-5' }]
+      },
+      { role: 'user', content: 'second' }
+    ]
+    expect(toAnthropicMessages(msgs, false)).toHaveLength(1)
+    // Replayed to the model that signed it, the reasoning is the turn's content.
+    const replayed = toAnthropicMessages(msgs, true, 'claude-opus-5-5')
+    expect(replayed).toHaveLength(3)
+    expect(blocksOf(replayed[1]).map((b) => b.type)).toEqual(['thinking'])
+  })
+})
+
 describe('anthropic usage reporting', () => {
   beforeEach(() => h.stream.mockReset())
 
@@ -380,5 +456,160 @@ describe('stale prefix-bound thinking recovery', () => {
       drain({ model: 'claude-sonnet-5-5', reasoningEffort: 'high', messages: historyWithThinking('claude-sonnet-5-5') })
     ).rejects.toBe(stale)
     expect(h.stream).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('anthropic tool calls cut off at the output limit', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  /** A stream that replays `events`, then finishes with `stopReason`. */
+  function streamOf(events: unknown[], stopReason: string): unknown {
+    return {
+      async *[Symbol.asyncIterator]() {
+        for (const ev of events) yield ev
+      },
+      finalMessage: async () => ({
+        content: [],
+        stop_reason: stopReason,
+        usage: { input_tokens: 1, output_tokens: 1 }
+      })
+    }
+  }
+
+  const start = (index: number, id: string, name = 'write_file'): unknown => ({
+    type: 'content_block_start',
+    index,
+    content_block: { type: 'tool_use', id, name, input: {} }
+  })
+  const json = (index: number, partial_json: string): unknown => ({
+    type: 'content_block_delta',
+    index,
+    delta: { type: 'input_json_delta', partial_json }
+  })
+  const stop = (index: number): unknown => ({ type: 'content_block_stop', index })
+
+  async function eventsFor(events: unknown[], stopReason: string): Promise<unknown[]> {
+    h.stream.mockReturnValue(streamOf(events, stopReason))
+    const out: unknown[] = []
+    for await (const ev of createAnthropicProvider('sk-test').streamChat({
+      model: 'claude-opus-4-8',
+      messages: [{ role: 'user', content: 'hi' }]
+    })) {
+      out.push(ev)
+    }
+    return out
+  }
+
+  it('marks a call whose JSON was cut off as incomplete instead of running it with {}', async () => {
+    const out = await eventsFor(
+      [start(0, 'tu_1'), json(0, '{"path":"big.ts","content":"export const a'), stop(0)],
+      'max_tokens'
+    )
+    expect(out).toEqual([
+      { type: 'tool_call', call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true } },
+      expect.objectContaining({ type: 'done', stopReason: 'max_tokens' })
+    ])
+  })
+
+  it('marks the last call at the limit even when what arrived parses', async () => {
+    // An empty buffer reads as `{}`, a valid object: only the stop reason gives it away.
+    const out = await eventsFor([start(0, 'tu_1'), stop(0)], 'max_tokens')
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+  })
+
+  it('answers a block the stream opened but never closed', async () => {
+    const out = await eventsFor([start(0, 'tu_1'), json(0, '{"path":"a')], 'max_tokens')
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true }
+    })
+  })
+
+  it('keeps the finished calls ahead of the cut-off one, in order', async () => {
+    const out = await eventsFor(
+      [
+        start(0, 'tu_1', 'read_file'),
+        json(0, '{"path":"a.ts"}'),
+        stop(0),
+        start(1, 'tu_2'),
+        json(1, '{"path":"b.ts","content":"x'),
+        stop(1)
+      ],
+      'max_tokens'
+    )
+    expect(out.slice(0, 2)).toEqual([
+      { type: 'tool_call', call: { id: 'tu_1', name: 'read_file', arguments: { path: 'a.ts' } } },
+      { type: 'tool_call', call: { id: 'tu_2', name: 'write_file', arguments: {}, incomplete: true } }
+    ])
+  })
+
+  it('leaves a whole call alone when the limit hit while writing text after it', async () => {
+    const out = await eventsFor(
+      [
+        start(0, 'tu_1', 'read_file'),
+        json(0, '{"path":"a.ts"}'),
+        stop(0),
+        { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'and then' } }
+      ],
+      'max_tokens'
+    )
+    expect(out).toContainEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'read_file', arguments: { path: 'a.ts' } }
+    })
+  })
+
+  it('marks malformed JSON incomplete on a normal tool_use stop too', async () => {
+    const out = await eventsFor([start(0, 'tu_1'), json(0, '{"path": oops}'), stop(0)], 'tool_use')
+    expect(out).toEqual([
+      { type: 'tool_call', call: { id: 'tu_1', name: 'write_file', arguments: {}, incomplete: true } },
+      expect.objectContaining({ type: 'done', stopReason: 'tool_use' })
+    ])
+  })
+
+  it('passes a whole call through unmarked', async () => {
+    const out = await eventsFor([start(0, 'tu_1'), json(0, '{"path":"a.ts","content":"x"}'), stop(0)], 'tool_use')
+    expect(out[0]).toEqual({
+      type: 'tool_call',
+      call: { id: 'tu_1', name: 'write_file', arguments: { path: 'a.ts', content: 'x' } }
+    })
+  })
+})
+
+describe('anthropic max_tokens sizing', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  it('gives a reply without thinking the raised headroom, clamped to the model ceiling', async () => {
+    expect((await captureRequest({ model: 'claude-sonnet-4-5', reasoningEffort: 'off' })).max_tokens).toBe(32_000)
+    expect((await captureRequest({ model: 'claude-3-5-haiku-20241022' })).max_tokens).toBe(8192)
+  })
+
+  it('keeps the long-standing cap for an id whose ceiling is unknown', async () => {
+    expect((await captureRequest({ model: 'claude-test' })).max_tokens).toBe(8192)
+  })
+
+  it('sizes a thinking turn as the budget plus the reply headroom', async () => {
+    // Opus 4.8 at high effort: the 16K sizing budget + 32K for the reply.
+    expect((await captureRequest({ model: 'claude-opus-4-8', reasoningEffort: 'high' })).max_tokens).toBe(48_000)
+    // Opus 4.1 caps output at 32K, which still leaves room above its 16K budget.
+    const legacy = await captureRequest({ model: 'claude-opus-4-1', reasoningEffort: 'high' })
+    expect(legacy.max_tokens).toBe(32_000)
+    expect((legacy.thinking as { budget_tokens: number }).budget_tokens).toBeLessThan(32_000)
+  })
+
+  it("uses a caller's cap as given without thinking", async () => {
+    expect((await captureRequest({ model: 'claude-opus-4-8', maxTokens: 2048 })).max_tokens).toBe(2048)
+    expect((await captureRequest({ model: 'claude-opus-4-8', maxTokens: 128_000 })).max_tokens).toBe(128_000)
+  })
+
+  it("lets a caller's cap raise a thinking turn but never shrink it below its budget sizing", async () => {
+    const raised = await captureRequest({ model: 'claude-opus-4-8', reasoningEffort: 'high', maxTokens: 128_000 })
+    expect(raised.max_tokens).toBe(128_000)
+    const small = await captureRequest({ model: 'claude-haiku-4-5', reasoningEffort: 'high', maxTokens: 2048 })
+    expect(small.max_tokens).toBeGreaterThan((small.thinking as { budget_tokens: number }).budget_tokens)
   })
 })

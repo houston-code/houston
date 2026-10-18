@@ -40,6 +40,33 @@ describe('sanitizeTitle', () => {
     expect(sanitizeTitle('“Smart quotes here”')).toBe('Smart quotes here')
   })
 
+  it('strips markdown a model wraps the title in', () => {
+    expect(sanitizeTitle('## Fix flaky auth test')).toBe('Fix flaky auth test')
+    expect(sanitizeTitle('# Summary')).toBe('Summary')
+    expect(sanitizeTitle('**Add dark mode toggle**')).toBe('Add dark mode toggle')
+    expect(sanitizeTitle('__Add dark mode toggle__')).toBe('Add dark mode toggle')
+    expect(sanitizeTitle('*Explain the build*')).toBe('Explain the build')
+    expect(sanitizeTitle('- Set up CI')).toBe('Set up CI')
+    expect(sanitizeTitle('> Set up CI')).toBe('Set up CI')
+    expect(sanitizeTitle('1. Set up CI')).toBe('Set up CI')
+    expect(sanitizeTitle('Fix `parseArgs` crash')).toBe('Fix parseArgs crash')
+    expect(sanitizeTitle('Fix the **auth** test')).toBe('Fix the auth test')
+  })
+
+  it('drops a leading "Title:" label', () => {
+    expect(sanitizeTitle('Title: Fix flaky auth test')).toBe('Fix flaky auth test')
+    expect(sanitizeTitle('**Title:** Fix flaky auth test')).toBe('Fix flaky auth test')
+    expect(sanitizeTitle('chat title - Fix flaky auth test')).toBe('Fix flaky auth test')
+  })
+
+  it('leaves characters that only look like markdown alone', () => {
+    expect(sanitizeTitle('C# migration plan')).toBe('C# migration plan')
+    expect(sanitizeTitle('#123 regression fix')).toBe('#123 regression fix')
+    expect(sanitizeTitle('snake_case to camelCase')).toBe('snake_case to camelCase')
+    expect(sanitizeTitle('2x faster builds')).toBe('2x faster builds')
+    expect(sanitizeTitle('Title case helper')).toBe('Title case helper')
+  })
+
   it('drops a trailing period but keeps the words', () => {
     expect(sanitizeTitle('Refactor the parser.')).toBe('Refactor the parser')
   })

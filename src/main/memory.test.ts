@@ -28,6 +28,19 @@ describe('saveMemoryTo', () => {
     expect(out.indexOf('first note')).toBeLessThan(out.indexOf('second note'))
   })
 
+  it('files a note under the Notes heading itself, not a heading that only starts with it', async () => {
+    writeFileSync(
+      join(dir, 'AGENTS.md'),
+      '# Rules\n\n### Notes\n\n- nested\n\n## Notes on deployment\n\n- deploy note\n'
+    )
+    await saveMemoryTo(dir, 'new note')
+    const out = read()
+    // A fresh "## Notes" section, with the note in it; the others are untouched.
+    expect(out).toMatch(/^## Notes\n\n- new note\n$/m)
+    expect(out).toContain('## Notes on deployment\n\n- deploy note\n')
+    expect(out.indexOf('new note')).toBeGreaterThan(out.indexOf('deploy note'))
+  })
+
   it('keeps a pre-existing rules file and adds a Notes section after it', async () => {
     writeFileSync(join(dir, 'AGENTS.md'), '# House rules\n\nUse tabs.\n')
     await saveMemoryTo(dir, 'and semicolons')

@@ -19,7 +19,7 @@ function fakeServer(tools: ToolDecl[], callResult: (params: unknown) => unknown)
       stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`))
     )
   }
-  const stdin = {
+  const stdin = Object.assign(new EventEmitter(), {
     write(line: string): boolean {
       const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: unknown }
       if (msg.id === undefined) return true // a notification
@@ -28,7 +28,7 @@ function fakeServer(tools: ToolDecl[], callResult: (params: unknown) => unknown)
       else if (msg.method === 'tools/call') reply(msg.id, callResult(msg.params))
       return true
     }
-  }
+  })
   const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
   return (() => child) as unknown as SpawnFn
 }
@@ -79,7 +79,7 @@ describe('McpClient (fake stdio server)', () => {
   it('spawns the server with a sanitized env (secrets stripped, opts.env re-added)', async () => {
     let captured: { env?: NodeJS.ProcessEnv; cwd?: string } | undefined
     const stdout = new EventEmitter()
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string }
         if (msg.id === undefined) return true
@@ -89,7 +89,7 @@ describe('McpClient (fake stdio server)', () => {
         )
         return true
       }
-    }
+    })
     const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
     const spawnFn = ((_cmd: string, _args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string }) => {
       captured = options
@@ -138,7 +138,7 @@ describe('McpClient (fake stdio server)', () => {
   it('re-fetches the tool list on notifications/tools/list_changed', async () => {
     let toolset = [{ name: 'one' }]
     const stdout = new EventEmitter()
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string }
         if (msg.id === undefined) return true
@@ -148,7 +148,7 @@ describe('McpClient (fake stdio server)', () => {
         )
         return true
       }
-    }
+    })
     const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
     const client = new McpClient((() => child) as unknown as SpawnFn)
     await client.connect({ command: 'fake' })
@@ -163,7 +163,7 @@ describe('McpClient (fake stdio server)', () => {
 
   it('lists and fetches prompts when the server declares the capability', async () => {
     const stdout = new EventEmitter()
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string }
         if (msg.id === undefined) return true
@@ -186,7 +186,7 @@ describe('McpClient (fake stdio server)', () => {
         )
         return true
       }
-    }
+    })
     const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
     const client = new McpClient((() => child) as unknown as SpawnFn)
     await client.connect({ command: 'fake' })
@@ -204,7 +204,7 @@ describe('McpClient (fake stdio server)', () => {
     const emit = (obj: unknown): void => {
       stdout.emit('data', Buffer.from(`${JSON.stringify(obj)}\n`))
     }
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: Record<string, unknown> }
         if (msg.id === undefined) return true
@@ -217,7 +217,7 @@ describe('McpClient (fake stdio server)', () => {
         queueMicrotask(() => emit({ jsonrpc: '2.0', id: msg.id, result }))
         return true
       }
-    }
+    })
     const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
     const client = new McpClient((() => child) as unknown as SpawnFn)
     await client.connect({ command: 'fake' })
@@ -235,7 +235,7 @@ describe('McpClient (fake stdio server)', () => {
 
   it('marks the client closed on process exit so later calls fail fast', async () => {
     const stdout = new EventEmitter()
-    const stdin = {
+    const stdin = Object.assign(new EventEmitter(), {
       write(line: string): boolean {
         const msg = JSON.parse(line.trim()) as { id?: number; method: string }
         if (msg.id === undefined) return true
@@ -245,7 +245,7 @@ describe('McpClient (fake stdio server)', () => {
         )
         return true
       }
-    }
+    })
     const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
     const client = new McpClient((() => child) as unknown as SpawnFn)
     await client.connect({ command: 'fake' })
@@ -255,5 +255,68 @@ describe('McpClient (fake stdio server)', () => {
     expect(client.isClosed).toBe(true)
     // Should reject immediately (not wait out the 120s call timeout).
     await expect(client.callTool('echo', {})).rejects.toThrow(/closed/)
+  })
+
+  it('keeps a multibyte character that arrives split across two stdout chunks', async () => {
+    // 'é' is 0xC3 0xA9. A server's reply can be cut anywhere by the pipe; decoding each
+    // chunk on its own turned the two halves into replacement characters.
+    const stdout = new EventEmitter()
+    const stdin = Object.assign(new EventEmitter(), {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+        if (msg.id === undefined) return true
+        const result =
+          msg.method === 'tools/list'
+            ? { tools: [{ name: 'echo' }] }
+            : msg.method === 'tools/call'
+              ? { content: [{ type: 'text', text: 'café' }] }
+              : {}
+        const bytes = Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`)
+        const cut = bytes.indexOf(0xa9)
+        queueMicrotask(() => {
+          if (cut === -1) {
+            stdout.emit('data', bytes)
+            return
+          }
+          stdout.emit('data', bytes.subarray(0, cut))
+          stdout.emit('data', bytes.subarray(cut))
+        })
+        return true
+      }
+    })
+    const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    const client = new McpClient((() => child) as unknown as SpawnFn)
+    await client.connect({ command: 'fake' })
+    expect(await client.callTool('echo', {})).toBe('café')
+    client.close()
+  })
+
+  it('treats a broken stdin pipe like the server exiting instead of throwing', async () => {
+    let answer = true
+    const stdout = new EventEmitter()
+    const stdin = Object.assign(new EventEmitter(), {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+        if (msg.id === undefined || !answer) return true
+        const result = msg.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : {}
+        queueMicrotask(() =>
+          stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+        )
+        return true
+      }
+    })
+    const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    const client = new McpClient((() => child) as unknown as SpawnFn)
+    await client.connect({ command: 'fake' })
+
+    // The server stops reading: the in-flight call's write fails with EPIPE, which Node
+    // delivers as an 'error' event on stdin. With no listener, emit() throws, which in
+    // the app is an uncaught exception.
+    answer = false
+    const call = client.callTool('echo', {})
+    const epipe = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
+    expect(() => stdin.emit('error', epipe)).not.toThrow()
+    await expect(call).rejects.toThrow(/stopped reading input/)
+    expect(client.isClosed).toBe(true)
   })
 })

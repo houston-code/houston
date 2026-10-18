@@ -12,6 +12,8 @@ import {
   openaiSupportsReasoning,
   geminiThinkingBudget,
   geminiSupportsThinking,
+  anthropicMaxTokens,
+  ANTHROPIC_FALLBACK_REPLY_HEADROOM,
   ANTHROPIC_REPLY_HEADROOM
 } from './reasoning'
 
@@ -303,5 +305,38 @@ describe('gemini thinking budget', () => {
     expect(geminiThinkingBudget('gemini-3.5-flash', 'low')).toBeGreaterThan(0)
     expect(geminiThinkingBudget('gemini-3.1-flash-lite', 'high')).toBeGreaterThan(0)
     expect(geminiThinkingBudget('gemini-3.5-flash', 'off')).toBeUndefined()
+  })
+})
+
+describe('anthropicMaxTokens', () => {
+  it('adds the reply headroom to the thinking budget', () => {
+    expect(anthropicMaxTokens('claude-opus-5-5')).toBe(ANTHROPIC_REPLY_HEADROOM)
+    expect(anthropicMaxTokens('claude-opus-5-5', 16_000)).toBe(16_000 + ANTHROPIC_REPLY_HEADROOM)
+  })
+
+  it("clamps to the model's output ceiling", () => {
+    // Claude 3.5 tops out at 8K and Opus 4.1 at 32K: a larger max_tokens is a 400.
+    expect(anthropicMaxTokens('claude-3-5-haiku-20241022')).toBe(8192)
+    expect(anthropicMaxTokens('claude-opus-4-1', 16_000)).toBe(32_000)
+  })
+
+  it('keeps the long-standing headroom for an id whose ceiling is unknown', () => {
+    expect(anthropicMaxTokens('claude-test')).toBe(ANTHROPIC_FALLBACK_REPLY_HEADROOM)
+    expect(anthropicMaxTokens('claude-test', 4096)).toBe(4096 + ANTHROPIC_FALLBACK_REPLY_HEADROOM)
+  })
+
+  it('leaves every legacy thinking model room above its largest budget', () => {
+    for (const model of [
+      'claude-3-7-sonnet-20250219',
+      'claude-opus-4-20250514',
+      'claude-opus-4-1',
+      'claude-opus-4-5',
+      'claude-sonnet-4-5',
+      'claude-haiku-4-5'
+    ]) {
+      const t = anthropicThinking(model, 'xhigh')
+      expect(t?.kind, model).toBe('budget')
+      if (t?.kind === 'budget') expect(t.maxTokens, model).toBeGreaterThan(t.budgetTokens)
+    }
   })
 })

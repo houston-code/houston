@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type {
   AgentEvent,
   ChatMessage,
+  ChatRequest,
   PlanDecision,
   PlanPayload,
   Provider,
@@ -274,6 +275,7 @@ async function run(
     onQuestion?: (callId: string, answer: (a: string) => void) => void
     onPlan?: (callId: string, plan: PlanPayload, decide: (d: PlanDecision) => void) => void
     conversationId?: string
+    model?: string
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -303,7 +305,7 @@ async function run(
       ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
       workspace: ws,
       providerId: 'anthropic',
-      model: 'claude-test',
+      model: opts.model ?? 'claude-test',
       approvalPolicy: opts.policy ?? 'ask',
       messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }]
     },
@@ -526,7 +528,7 @@ describe('startRun', () => {
       expect(readFileSync(join(ws, 'gone.txt'), 'utf8')).toBe('delete me')
       // …and redo re-applies the whole patch, including the delete.
       expect(await reapplyCheckpoint(cp!.runId)).toBe(3)
-      expect(readFileSync(join(ws, 'added.txt'), 'utf8')).toBe('hello')
+      expect(readFileSync(join(ws, 'added.txt'), 'utf8')).toBe('hello\n')
       expect(readFileSync(join(ws, 'changed.txt'), 'utf8')).toBe('new line\n')
       expect(existsSync(join(ws, 'gone.txt'))).toBe(false)
     } finally {
@@ -1322,6 +1324,44 @@ describe('startRun', () => {
       'a1'
     ])
     expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('two')
+  })
+
+  it('"Always deny" on an apply_patch saves a rule per file, which then stops a later patch', async () => {
+    const patch = (...body: string[]): string => ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'p1',
+              name: 'apply_patch',
+              arguments: { patch: patch('*** Add File: a.txt', '+1', '*** Add File: b.txt', '+2') }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 'p2', name: 'apply_patch', arguments: { patch: patch('*** Add File: b.txt', '+3') } }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => decide('rule-deny')
+    })
+    // One rule per touched file, never a blanket `*` over every future patch.
+    expect(h.addedRules).toContainEqual({ action: 'deny', tool: 'apply_patch', match: 'a.txt' })
+    expect(h.addedRules).toContainEqual({ action: 'deny', tool: 'apply_patch', match: 'b.txt' })
+    expect(h.addedRules).not.toContainEqual({ action: 'deny', tool: 'apply_patch', match: '*' })
+    // The second patch touches b.txt, so the saved rule refuses it without a prompt.
+    expect((r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string }>).map((e) => e.callId)).toEqual([
+      'p1'
+    ])
+    expect(existsSync(join(ws, 'b.txt'))).toBe(false)
   })
 
   it('an admin managed `deny` overrides a user `allow` and reports an org-policy reason', async () => {
@@ -5595,5 +5635,138 @@ describe('steerRun', () => {
       (ms) => saved.push([...ms])
     )
     expect(saved.at(-1)?.some((m) => m.role === 'user' && m.content === 'remembered')).toBe(true)
+  })
+})
+
+describe('output-limit recovery', () => {
+  /** A scripted provider that also records what each request asked for. */
+  function recording(turns: ProviderStreamEvent[][]): {
+    provider: Provider
+    requests: Array<{ maxTokens?: number; messages: ChatMessage[] }>
+  } {
+    const requests: Array<{ maxTokens?: number; messages: ChatMessage[] }> = []
+    let i = 0
+    return {
+      requests,
+      provider: {
+        async *streamChat(req: ChatRequest) {
+          requests.push({ maxTokens: req.maxTokens, messages: structuredClone(req.messages) })
+          for (const ev of turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]) yield ev
+        }
+      }
+    }
+  }
+
+  const cutWrite: ProviderStreamEvent = {
+    type: 'tool_call',
+    call: { id: 'w1', name: 'write_file', arguments: {}, incomplete: true }
+  }
+  const resultFor = (r: RunResult, callId: string): { ok: boolean; output: string } | undefined =>
+    r.events.find((e) => e.type === 'tool_result' && e.callId === callId) as
+      | { ok: boolean; output: string }
+      | undefined
+  const notices = (r: RunResult): string[] =>
+    r.events.filter((e) => e.type === 'notice').map((e) => (e as { message: string }).message)
+
+  it('answers a call the limit cut off without running it, then gives the model its full ceiling', async () => {
+    const { provider, requests } = recording([
+      [{ type: 'text', text: 'Writing the file.' }, cutWrite, { type: 'done', stopReason: 'max_tokens' }],
+      [{ type: 'text', text: 'Done in pieces.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    // Full-auto: nothing would stop a whole write from running, so only the flag does.
+    const r = await run({ provider, policy: 'full-auto', model: 'claude-opus-5-5' })
+
+    expect(r.events.some((e) => e.type === 'tool_start' && e.callId === 'w1')).toBe(false)
+    const result = resultFor(r, 'w1')
+    expect(result?.ok).toBe(false)
+    expect(result?.output).toMatch(/^Not run: your reply reached the output limit/)
+    expect(notices(r).some((n) => n.includes("output limit while writing a write_file call"))).toBe(true)
+    // The history stays valid: the cut-off tool_use is answered like any other.
+    expect(orphanedToolUses(r.messages)).toEqual([])
+    // The first request leaves the adapter's default; the redo asks for the model's ceiling.
+    expect(requests.map((q) => q.maxTokens)).toEqual([undefined, 128_000])
+    expect(r.events.some((e) => e.type === 'limit')).toBe(false)
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+  })
+
+  it('still runs the whole calls of a cut-off reply', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'alpha')
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'a.txt' } } },
+          cutWrite,
+          { type: 'done', stopReason: 'max_tokens' }
+        ],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    expect(resultFor(r, 'r1')).toMatchObject({ ok: true })
+    expect(resultFor(r, 'r1')?.output).toContain('alpha')
+    expect(resultFor(r, 'w1')).toMatchObject({ ok: false })
+    expect(orphanedToolUses(r.messages)).toEqual([])
+  })
+
+  it('asks for valid JSON when a malformed call was not cut off, without raising the cap', async () => {
+    const { provider, requests } = recording([
+      [cutWrite, { type: 'done', stopReason: 'tool_use' }],
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const r = await run({ provider, policy: 'full-auto', model: 'claude-opus-5-5' })
+    expect(resultFor(r, 'w1')?.output).toMatch(/not valid JSON/)
+    expect(notices(r).some((n) => n.includes('output limit'))).toBe(false)
+    expect(requests.map((q) => q.maxTokens)).toEqual([undefined, undefined])
+  })
+
+  it('continues a text reply the limit cut off, exactly where it stopped', async () => {
+    const { provider, requests } = recording([
+      [{ type: 'text', text: 'The answer is lo' }, { type: 'done', stopReason: 'max_tokens' }],
+      [{ type: 'text', text: 'ng and complete.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const r = await run({ provider, model: 'claude-opus-5-5' })
+
+    expect(requests).toHaveLength(2)
+    const note = requests[1].messages.at(-1)!
+    expect(note.role).toBe('user')
+    expect(note.content.startsWith(SYSTEM_NOTE_PREFIX)).toBe(true)
+    expect(note.content).toMatch(/Continue exactly where it stopped/)
+    expect(requests[1].maxTokens).toBe(128_000)
+    expect(notices(r)).toContain(
+      `The reply reached the model's output limit, so Houston asked it to continue (1/3).`
+    )
+    expect(r.messages.filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual([
+      'The answer is lo',
+      'ng and complete.'
+    ])
+    // Continued to completion: no cut-off notice, and the run ends cleanly.
+    expect(r.events.some((e) => e.type === 'limit')).toBe(false)
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+  })
+
+  it('gives up after three cut-offs in a row and says the reply was cut off', async () => {
+    let calls = 0
+    const provider: Provider = {
+      async *streamChat() {
+        calls++
+        yield { type: 'text', text: `part ${calls} ` }
+        yield { type: 'done', stopReason: 'max_tokens' }
+      }
+    }
+    const r = await run({ provider })
+    expect(calls).toBe(4) // the first reply plus three continuations
+    expect(r.events.find((e) => e.type === 'limit')).toMatchObject({ reason: 'max-output' })
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'max_tokens' })
+    expect(orphanedToolUses(r.messages)).toEqual([])
+  })
+
+  it('does not keep an empty reply the limit cut off, and asks for the answer instead', async () => {
+    const { provider, requests } = recording([
+      [{ type: 'reasoning', text: 'thinking at length' }, { type: 'done', stopReason: 'max_tokens' }],
+      [{ type: 'text', text: 'Here it is.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const r = await run({ provider })
+    expect(requests[1].messages.at(-1)!.content).toMatch(/before it produced any answer/)
+    expect(r.messages.filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual(['Here it is.'])
   })
 })

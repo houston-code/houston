@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, win32 } from 'node:path'
 import {
@@ -266,5 +266,32 @@ describe('runAstGrep / searchStructural (ast-grep binary)', { timeout: 30_000 },
       max: 100
     })
     expect(out).toContain('generated.ts:1:')
+  })
+})
+
+describe('runAstGrep output decoding', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-fake-ag-')))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  // A stand-in ast-grep that prints one JSON match whose text holds 'é' (0xC3 0xA9)
+  // split across two separate writes, so the bytes reach Houston as two pipe chunks.
+  it.skipIf(process.platform === 'win32')('keeps a multibyte character split across output chunks', async () => {
+    const fakeAg = join(dir, 'ast-grep')
+    const line = JSON.stringify({ file: 'a.ts', range: { start: { line: 0, column: 0 } }, text: 'café()' })
+    const bytes = Buffer.from(`${line}\n`)
+    const cut = bytes.indexOf(0xa9)
+    writeFileSync(
+      fakeAg,
+      `#!${process.execPath}\n` +
+        `const b = Buffer.from(${JSON.stringify([...bytes])});` +
+        `process.stdout.write(b.subarray(0, ${cut}));` +
+        `setTimeout(() => process.stdout.write(b.subarray(${cut})), 50)\n`
+    )
+    chmodSync(fakeAg, 0o755)
+    const res = await runAstGrep({ binPath: fakeAg, pattern: 'café()', lang: 'ts', cwd: dir, searchRel: '.', max: 100 })
+    expect(res.matches).toEqual(['a.ts:1:1: café()'])
   })
 })

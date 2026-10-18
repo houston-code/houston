@@ -7,7 +7,8 @@ import {
   readdirSync,
   existsSync,
   mkdirSync,
-  statSync
+  statSync,
+  symlinkSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -545,6 +546,47 @@ describe('checkpoints', () => {
       expect(await restoreCheckpoint('run-x')).toBe(1)
       expect(readFileSync(f, 'utf8')).toBe('original')
       expect(existsSync(join(dataDir, 'checkpoints'))).toBe(false)
+    })
+  })
+
+  // POSIX-only: Windows symlink creation needs elevated privileges in CI.
+  describe.skipIf(process.platform === 'win32')('apply-time containment', () => {
+    it('refuses to restore through a parent-dir symlink planted after the snapshot', async () => {
+      const outside = mkdtempSync(join(tmpdir(), 'houston-cp-outside-'))
+      try {
+        // Snapshot a file inside a subdir: before='original', after='agent'.
+        mkdirSync(join(ws, 'sub'))
+        writeFileSync(join(ws, 'sub', 'x.txt'), 'original')
+        await recordOriginal('run-sym', [ws], 'sub/x.txt')
+        writeFileSync(join(ws, 'sub', 'x.txt'), 'agent')
+        await recordResult('run-sym', [ws], 'sub/x.txt')
+
+        // The agent swaps the subdir for a symlink pointing OUTSIDE the workspace
+        // (what a sandboxed `ln -s` would do), so the stored path now resolves out.
+        rmSync(join(ws, 'sub'), { recursive: true, force: true })
+        symlinkSync(outside, join(ws, 'sub'), 'dir')
+
+        // Restore must skip the escaping path, writing nothing into `outside`.
+        expect(await restoreCheckpoint('run-sym')).toBe(0)
+        expect(existsSync(join(outside, 'x.txt'))).toBe(false)
+
+        // And redo must not write the agent content through the symlink either.
+        expect(await reapplyCheckpoint('run-sym')).toBe(0)
+        expect(existsSync(join(outside, 'x.txt'))).toBe(false)
+      } finally {
+        rmSync(outside, { recursive: true, force: true })
+      }
+    })
+
+    it('still restores a path that stays within the roots', async () => {
+      mkdirSync(join(ws, 'keep'))
+      writeFileSync(join(ws, 'keep', 'y.txt'), 'original')
+      await recordOriginal('run-ok', [ws], 'keep/y.txt')
+      writeFileSync(join(ws, 'keep', 'y.txt'), 'agent')
+      await recordResult('run-ok', [ws], 'keep/y.txt')
+
+      expect(await restoreCheckpoint('run-ok')).toBe(1)
+      expect(readFileSync(join(ws, 'keep', 'y.txt'), 'utf8')).toBe('original')
     })
   })
 })

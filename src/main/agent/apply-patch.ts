@@ -70,6 +70,18 @@ function isDirective(line: string): boolean {
   return line.startsWith('*** ')
 }
 
+/**
+ * An added file's text ends with a newline, as text files do: each `+` line in the
+ * envelope is one line of the file, and a unified diff marks a last line that lacks
+ * one with "\ No newline at end of file". Joining the lines alone dropped the final
+ * newline from every file a patch created.
+ */
+function addedFileContent(lines: string[], endsWithoutNewline = false): string {
+  const content = lines.join('\n')
+  if (!content || endsWithoutNewline || content.endsWith('\n')) return content
+  return `${content}\n`
+}
+
 /** Reduce a run of hunk lines (`@@` / ` ` / `-` / `+`) into {oldText,newText} hunks. */
 function parseHunks(lines: string[], path: string): UpdateHunk[] {
   const hunks: UpdateHunk[] = []
@@ -137,7 +149,7 @@ function parseEnvelope(patch: string): PatchOp[] {
         else throw new Error(`Add File: ${path}: content lines must start with "+".`)
         i += 1
       }
-      ops.push({ type: 'add', path, content: body.join('\n') })
+      ops.push({ type: 'add', path, content: addedFileContent(body) })
     } else if (line.startsWith(DELETE)) {
       const path = line.slice(DELETE.length).trim()
       if (!path) throw new Error('Delete File: missing path.')
@@ -195,7 +207,7 @@ function consumeHunk(
   lines: string[],
   start: number,
   path: string
-): { hunk: UpdateHunk; next: number } {
+): { hunk: UpdateHunk; next: number; newEndsWithoutNewline: boolean } {
   const m = HUNK_HEADER.exec(lines[start])
   if (!m) throw new Error(`Unified diff: malformed hunk header "${lines[start]}".`)
   let oldRemaining = m[2] === undefined ? 1 : parseInt(m[2], 10)
@@ -203,13 +215,21 @@ function consumeHunk(
   const oldBuf: string[] = []
   const newBuf: string[] = []
   let i = start + 1
+  // The tag of the last content line, so a "\ No newline at end of file" marker can be
+  // attributed: it applies to the line just before it.
+  let lastTag = ''
+  let newEndsWithoutNewline = false
+  const isNoNewlineMarker = (l: string | undefined): boolean => l !== undefined && l.startsWith('\\')
   while (i < lines.length && (oldRemaining > 0 || newRemaining > 0)) {
     const l = lines[i]
-    if (l.startsWith('\\')) {
-      i += 1 // "\ No newline at end of file" — metadata, not a content line
+    if (isNoNewlineMarker(l)) {
+      // "\ No newline at end of file": metadata, not a content line.
+      if (lastTag === '+' || lastTag === ' ') newEndsWithoutNewline = true
+      i += 1
       continue
     }
     const tag = l[0]
+    lastTag = l === '' ? ' ' : tag
     const text = l.length === 0 ? '' : l.slice(1)
     if (l === '' || tag === ' ') {
       oldBuf.push(text)
@@ -230,7 +250,12 @@ function consumeHunk(
   if (oldRemaining > 0 || newRemaining > 0) {
     throw new Error(`Unified diff: ${path}: hunk ended before its declared line counts were met.`)
   }
-  return { hunk: { oldText: oldBuf.join('\n'), newText: newBuf.join('\n') }, next: i }
+  // The marker after the hunk's final line comes after its counts are met.
+  if (isNoNewlineMarker(lines[i])) {
+    if (lastTag === '+' || lastTag === ' ') newEndsWithoutNewline = true
+    i += 1
+  }
+  return { hunk: { oldText: oldBuf.join('\n'), newText: newBuf.join('\n') }, next: i, newEndsWithoutNewline }
 }
 
 /** Parse a unified diff / `git diff` into the same structured operations. */
@@ -293,10 +318,12 @@ function parseUnifiedDiff(patch: string): PatchOp[] {
     // Read every hunk for this file, consuming each by its declared line counts.
     const hunks: UpdateHunk[] = []
     const label = stripDiffPrefix(oldPath === '/dev/null' ? (newPath ?? '') : oldPath)
+    let newEndsWithoutNewline = false
     while (i < n && lines[i].startsWith('@@')) {
-      const { hunk, next } = consumeHunk(lines, i, label)
-      hunks.push(hunk)
-      i = next
+      const consumed = consumeHunk(lines, i, label)
+      hunks.push(consumed.hunk)
+      newEndsWithoutNewline = consumed.newEndsWithoutNewline
+      i = consumed.next
     }
 
     // Resolve the operation.
@@ -308,7 +335,14 @@ function parseUnifiedDiff(patch: string): PatchOp[] {
       const path = stripDiffPrefix(newPath ?? renameTo ?? '')
       if (!path || path === '/dev/null')
         throw new Error('Unified diff: add is missing a destination path.')
-      ops.push({ type: 'add', path, content: hunks.map((h) => h.newText).join('\n') })
+      ops.push({
+        type: 'add',
+        path,
+        content: addedFileContent(
+          hunks.map((h) => h.newText),
+          newEndsWithoutNewline
+        )
+      })
     } else {
       const from = stripDiffPrefix(oldPath ?? renameFrom ?? '')
       const to = stripDiffPrefix(newPath ?? renameTo ?? from)

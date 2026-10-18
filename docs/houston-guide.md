@@ -285,6 +285,13 @@ any point. Settings > Loop control has the per-turn step count, the
 keep-going-while-productive switch, and the hard limit. If you had already set your
 own step count, it stays a hard stop until you turn the switch on.
 
+A single reply also has an output limit. When a reply is cut off there, the agent
+picks it up exactly where it stopped (up to three times in a row) instead of leaving
+a half-finished answer, and the transcript notes each time. A tool call the limit cut
+off is never run on partial input: it is answered as "not run" and the agent redoes
+the work in smaller pieces. Either way, later replies in the turn ask for the model's
+full output allowance where Houston knows it.
+
 ## Undoing a turn, and seeing what changed
 
 - **`/undo`** puts back the files the last turn changed; **`/redo`** re-applies
@@ -462,6 +469,10 @@ by respelling it: a file rule is resolved and anchored to the workspace (so
 like `src/../../etc/passwd` does not slip past it), a URL rule is
 case-insensitive on scheme and host, and a shell rule sees through quoting and
 backslash escapes (so `deny *rm -rf*` still fires on `"rm" -rf` or `r\m -rf`).
+An `apply_patch` call is checked against every file it adds, changes, deletes, or
+moves to: one denied file denies the whole patch, one `ask` file asks, and an
+`allow` covers it only when every file is allowed. "Always allow" or "Always deny"
+on a patch saves one rule per file.
 
 **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
 `deny` / `ask` rules, checked before the user's global rules. Those guardrails

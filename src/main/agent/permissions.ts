@@ -1,6 +1,7 @@
 import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
 import type { PermissionRule } from '@shared/types'
+import { parsePatch } from './apply-patch'
 import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
 import type { ToolKind } from './tools'
 
@@ -54,6 +55,36 @@ export function networkDestination(toolName: string, args: Record<string, unknow
   return toolName
 }
 
+/**
+ * Separates the files in an `apply_patch` subject. A patch names each file on a line of
+ * its own, so a path inside one can never contain it.
+ */
+const PATCH_SUBJECT_SEPARATOR = '\n'
+
+/**
+ * Every file an `apply_patch` call adds, updates, deletes, or moves to, deduplicated,
+ * or [] for a patch that doesn't parse (it fails before writing anything).
+ */
+function patchTargets(patch: unknown): string[] {
+  if (typeof patch !== 'string') return []
+  try {
+    const paths = parsePatch(patch).flatMap((op) =>
+      op.type === 'update' && op.moveTo ? [op.path, op.moveTo] : [op.path]
+    )
+    return [...new Set(paths)]
+  } catch {
+    return []
+  }
+}
+
+/**
+ * The files an `apply_patch` subject names (see {@link permissionSubject}), one rule
+ * pattern each, for persisting an "Always allow/deny" decision per file.
+ */
+export function patchSubjectPaths(subject: string): string[] {
+  return subject.split(PATCH_SUBJECT_SEPARATOR).filter(Boolean)
+}
+
 /** The string a permission rule's pattern is matched against, per tool. */
 export function permissionSubject(toolName: string, args: Record<string, unknown>): string {
   const s = (k: string): string => (typeof args[k] === 'string' ? (args[k] as string) : '')
@@ -64,6 +95,11 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
       return s('url')
     case 'web_search':
       return s('query')
+    case 'apply_patch':
+      // The files live inside the patch text, not in a `path` argument, so reading
+      // `path` left a patch with no subject: no file rule, not even `*` over a path,
+      // could match the files it wrote or deleted. Each is matched (see matchRule).
+      return patchTargets(args.patch).join(PATCH_SUBJECT_SEPARATOR)
     default:
       // Namespaced MCP tools (mcp__<id>__<tool>) take arbitrary args, so match on
       // the tool name itself — lets rules target a server/tool, e.g. `mcp__github__*`.
@@ -815,7 +851,33 @@ export function matchRule(
 ): PermissionRule['action'] | null {
   if (!rules?.length) return null
   if (toolName === 'run_shell') return matchShellRule(rules, subject, roots)
+  if (toolName === 'apply_patch') return matchPatchRule(rules, subject, roots)
   return matchOne(rules, toolName, subject, roots)
+}
+
+/**
+ * Resolve rules for an `apply_patch` call against every file it touches, the way
+ * {@link matchShellRule} treats a compound command: a denied file denies the patch,
+ * an `ask` on any file asks, and an `allow` is honored only when every file is allowed,
+ * so one allowed file can't carry the others past a rule or the approval policy.
+ */
+function matchPatchRule(
+  rules: PermissionRule[],
+  subject: string,
+  roots: string[]
+): PermissionRule['action'] | null {
+  const paths = patchSubjectPaths(subject)
+  if (paths.length <= 1) return matchOne(rules, 'apply_patch', paths[0] ?? '', roots)
+  let allAllow = true
+  let anyAsk = false
+  for (const path of paths) {
+    const action = matchOne(rules, 'apply_patch', path, roots)
+    if (action === 'deny') return 'deny'
+    if (action === 'ask') anyAsk = true
+    if (action !== 'allow') allAllow = false
+  }
+  if (allAllow) return 'allow'
+  return anyAsk ? 'ask' : null
 }
 
 /** A leading `VAR=value` env-assignment token, which precedes the real program. */

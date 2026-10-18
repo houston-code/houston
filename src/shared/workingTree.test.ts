@@ -139,6 +139,14 @@ describe('untrackedToFileDiff', () => {
     expect(f.hunks[0].lines.every((l) => l.type === 'add')).toBe(true)
   })
 
+  it('counts lines the way git does when the file ends in a newline', () => {
+    // Most files end in "\n"; it terminates the last line rather than adding a blank one.
+    const f = untrackedToFileDiff('notes.md', 'line 1\nline 2\n')
+    expect(f.added).toBe(2)
+    expect(f.hunks[0].header).toBe('@@ -0,0 +1,2 @@')
+    expect(f.hunks[0].lines.map((l) => l.text)).toEqual(['line 1', 'line 2'])
+  })
+
   it('shows a note for binary, oversized, unreadable, and empty files', () => {
     expect(untrackedToFileDiff('x.bin', null, { binary: true })).toMatchObject({
       binary: true,

@@ -82,6 +82,14 @@ export function sanitizeTitle(raw: string): string | null {
     .find((l) => l.length > 0)
   if (!firstLine) return null
   let t = firstLine.replace(/\s+/g, ' ').trim()
+  // Despite "no markdown" in the prompt, models (small local ones especially) answer
+  // with "## Fix auth", "**Fix auth**" or "Title: Fix auth". The sidebar and title bar
+  // show the text literally, so strip the block markers, a leading label, and inline
+  // emphasis/code down to the words.
+  t = t.replace(/^(?:#{1,6}|>|[-*+]|\d+[.)])\s+/, '')
+  t = t.replace(/(\*\*|__)(.+?)\1/g, '$2').replace(/(^|\s)[*_](\S(?:.*?\S)?)[*_](?=\s|$)/g, '$1$2')
+  t = t.replace(/`([^`]+)`/g, '$1')
+  t = t.replace(/^(?:chat\s+)?title\s*[:\-–—]\s*/i, '').trim()
   // Drop wrapping quotes/backticks some models add, then any trailing sentence period.
   t = t.replace(/^["'`“”]+/, '').replace(/["'`“”]+$/, '').trim()
   t = t.replace(/[.]+$/, '').trim()

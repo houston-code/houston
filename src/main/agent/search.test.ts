@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, win32 } from 'node:path'
 import { resolveRipgrep, runRipgrep, searchContents } from './search'
@@ -281,5 +281,28 @@ describe('searchContents options (ripgrep)', () => {
     expect(out).toContain('line1') // context before
     expect(out).toContain('NEEDLE here') // match
     expect(out).toContain('line3') // context after
+  })
+})
+
+describe('runRipgrep output decoding', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-fake-rg-')))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  // A stand-in ripgrep that prints one match line with 'é' (0xC3 0xA9) split across
+  // two separate writes, so the bytes reach Houston as two pipe chunks.
+  it.skipIf(process.platform === 'win32')('keeps a multibyte character split across output chunks', async () => {
+    const fakeRg = join(dir, 'rg')
+    writeFileSync(
+      fakeRg,
+      `#!${process.execPath}\n` +
+        "process.stdout.write(Buffer.concat([Buffer.from('a.ts:1: caf'), Buffer.from([0xc3])]));" +
+        "setTimeout(() => process.stdout.write(Buffer.from([0xa9, 0x0a])), 50)\n"
+    )
+    chmodSync(fakeRg, 0o755)
+    const res = await runRipgrep(fakeRg, 'caf', dir, '.', 100)
+    expect(res.matches).toEqual(['a.ts:1: café'])
   })
 })

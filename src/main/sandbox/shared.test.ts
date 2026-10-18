@@ -95,6 +95,15 @@ describe('CappedOutput', () => {
     expect(cap.droppedBytes).toBe(0)
   })
 
+  it('keeps a multibyte character intact when the head budget ends inside it', () => {
+    // 'é' is two bytes; a 4-byte head ends after its first byte. Nothing is dropped,
+    // so the output must read exactly as written, not with replacement characters.
+    const cap = new CappedOutput(4, 8)
+    cap.push(Buffer.from('café ok'))
+    expect(cap.droppedBytes).toBe(0)
+    expect(cap.toString()).toBe('café ok')
+  })
+
   it('preserves BOTH ends with a truncation marker once over budget', () => {
     const cap = new CappedOutput(3, 3)
     cap.push(Buffer.from('abc' + 'M'.repeat(10) + 'xyz'))
