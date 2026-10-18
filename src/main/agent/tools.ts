@@ -1112,9 +1112,13 @@ const globTool: ToolDef = {
  * and TLS errors as the common tools (git/gh, curl, npm/pip, language runtimes)
  * surface them. Used only to *explain* an already-failed command, so a loose
  * match is fine: it never changes what runs.
+ *
+ * macOS's resolver reports a blocked lookup as EAI_NONAME ("nodename nor servname
+ * provided, or not known"), with no "getaddrinfo" in the text, and pip/requests
+ * wrap it in urllib3's "Failed to establish a new connection", so both are listed.
  */
 const NETWORK_ERROR_RE =
-  /could ?n.?t resolve host|name (?:or service not known|resolution)|temporary failure in name resolution|getaddrinfo|network is (?:unreachable|down)|no route to host|connection (?:refused|reset|timed out)|failed to connect|dial tcp|operation not permitted.*(?:socket|connect)|socket.*operation not permitted|tls handshake|enotfound|econnrefused|eai_again/i
+  /could ?n.?t resolve host|name (?:or service not known|resolution)|temporary failure in name resolution|getaddrinfo|nodename nor servname|failed to establish a new connection|network is (?:unreachable|down)|no route to host|connection (?:refused|reset|timed out)|failed to connect|dial tcp|operation not permitted.*(?:socket|connect)|socket.*operation not permitted|tls handshake|enotfound|econnrefused|eai_again/i
 
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =

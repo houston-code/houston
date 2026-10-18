@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, realpathSync, mkdirSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
+import { OFFLINE_FAIL_FAST_ENV, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
 import { resolveWindowsBash } from '../sandbox/windows'
 import {
   applySessionResult,
@@ -19,9 +19,9 @@ const BASH = process.platform === 'win32' ? resolveWindowsBash() : '/bin/bash'
 
 /** A non-sandboxed runner that executes the wrapped command with plain bash, so
  * these tests run on Linux CI (no sandbox-exec) yet exercise the real wrapper. */
-function bashRunner(opts: SandboxRunOptions): Promise<SandboxRunResult> {
+function bashRunner(opts: SandboxRunOptions, env?: NodeJS.ProcessEnv): Promise<SandboxRunResult> {
   return new Promise((resolve) => {
-    const child = spawn(BASH!, ['-c', opts.command], { cwd: opts.cwd })
+    const child = spawn(BASH!, ['-c', opts.command], { cwd: opts.cwd, env })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (c) => (stdout += c.toString()))
@@ -70,7 +70,15 @@ describe('buildSessionCommand', () => {
   it('captures cwd/env under a private umask so the temp files are 0600', () => {
     const out = buildSessionCommand('make', { cwd: '/proj', env: '' }, paths)
     expect(out).toContain(`(umask 077; (pwd -W 2>/dev/null || pwd) > '/t/c')`)
-    expect(out).toContain(`(umask 077; export -p > '/t/e')`)
+    expect(out).toMatch(/\(umask 077; [^\n]*export -p > '\/t\/e'\)/)
+  })
+
+  it('leaves the injected offline retry settings out of the env snapshot', () => {
+    const out = buildSessionCommand('make', { cwd: '/proj', env: '' }, paths)
+    const capture = out.split('\n').find((l) => l.includes(`export -p > '/t/e'`))!
+    for (const [name, value] of Object.entries(OFFLINE_FAIL_FAST_ENV)) {
+      expect(capture).toContain(`[ "\${${name}-}" = '${value}' ] && unset ${name};`)
+    }
   })
 })
 
@@ -157,6 +165,31 @@ describe.skipIf(!BASH)('runInSession (end to end with real bash)', () => {
     })
     expect(res.stdout.trim()).toBe('just-this')
     expect(res.stdout).not.toContain('declare -x')
+  })
+
+  it('drops the offline retry settings once the run gains network, keeping an agent export', async () => {
+    // Mirrors sandboxEnv: offline launches carry OFFLINE_FAIL_FAST_ENV, networked ones don't.
+    const base = { ...process.env }
+    for (const name of Object.keys(OFFLINE_FAIL_FAST_ENV)) delete base[name]
+    const modeRunner = (o: SandboxRunOptions): Promise<SandboxRunResult> =>
+      bashRunner(o, { ...base, ...(o.allowNetwork ? {} : OFFLINE_FAIL_FAST_ENV) })
+    const session = createShellSession(ws)
+    const offline = await runInSession({
+      command: 'echo "$PIP_RETRIES"; export CARGO_NET_RETRY=5',
+      session,
+      workspace: ws,
+      allowNetwork: false,
+      run: modeRunner
+    })
+    expect(offline.stdout.trim()).toBe(OFFLINE_FAIL_FAST_ENV.PIP_RETRIES)
+    const online = await runInSession({
+      command: 'echo "${PIP_RETRIES-unset} ${npm_config_fetch_retries-unset} ${CARGO_NET_RETRY-unset}"',
+      session,
+      workspace: ws,
+      allowNetwork: true,
+      run: modeRunner
+    })
+    expect(online.stdout.trim()).toBe('unset unset 5')
   })
 
   it('preserves the command exit code', async () => {

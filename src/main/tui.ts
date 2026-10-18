@@ -329,10 +329,15 @@ export function renderApprovalPrompt(
         : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
+  // Until the run has a shell-network grant, "allow" runs the command offline; say
+  // which answer also grants network before the user picks, not after it fails.
+  const offline = ev.shellOffline
+    ? `\n${paint('  Runs without network. Choose "Allow for run" to also allow network for this run.', 'dim')}`
+    : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
   return (
-    `\n${head} ${kind}\n  ${ev.summary}${warn}\n` +
+    `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}\n` +
     paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim') +
     paint('\n  …or type why not, and that goes back to the agent', 'dim')
   )

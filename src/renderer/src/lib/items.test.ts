@@ -391,6 +391,31 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
     expect(describeTool(tool)).toEqual({ verb: 'Run', target: 'npm test', mono: true })
   })
 
+  it('carries the offline flag onto a shell approval row, live and on replay', () => {
+    const ev = {
+      runId: 'r',
+      type: 'tool_approval' as const,
+      callId: 'c1',
+      name: 'run_shell',
+      summary: 'pip install fastapi',
+      args: { command: 'pip install fastapi' },
+      kind: 'shell' as const,
+      shellOffline: true
+    }
+    const live = reduceEvent([], ev).find((i): i is ToolItem => i.kind === 'tool')!
+    expect(live.shellOffline).toBe(true)
+    // Replay onto a row rebuilt from the log flips it in place, keeping the flag.
+    const fromLog = itemsFromMessages([
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'run_shell', arguments: ev.args }] }
+    ])
+    const replayed = reduceEvent(fromLog, ev).filter((i): i is ToolItem => i.kind === 'tool' && i.id === 'c1')
+    expect(replayed).toHaveLength(1)
+    expect(replayed[0].shellOffline).toBe(true)
+    // Absent on the event means no note.
+    const { shellOffline: _, ...granted } = ev
+    expect(reduceEvent([], granted).find((i): i is ToolItem => i.kind === 'tool')!.shellOffline).toBeUndefined()
+  })
+
   it('updates an existing question card instead of duplicating it', () => {
     const fromLog = itemsFromMessages([
       {

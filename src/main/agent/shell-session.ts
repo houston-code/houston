@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { OFFLINE_FAIL_FAST_ENV } from '../sandbox'
 import type { EgressProxyEndpoints, SandboxRunOptions, SandboxRunResult } from '../sandbox'
 
 /**
@@ -69,7 +70,14 @@ export function buildSessionCommand(
   // which Node cannot use as the next command's spawn cwd. Elsewhere `-W` is an invalid
   // option, so the silenced failure falls through to plain `pwd`.
   lines.push(`(umask 077; (pwd -W 2>/dev/null || pwd) > ${singleQuote(paths.cwdOut)}) 2>/dev/null`)
-  lines.push(`(umask 077; export -p > ${singleQuote(paths.envOut)}) 2>/dev/null`)
+  // Leave the sandbox's offline-only retry settings out of the snapshot while they
+  // still hold the injected value: re-sourced, they would outlive the run's
+  // shell-network grant and stop every later, networked install from retrying. A
+  // value the agent exported itself differs, so it is kept. Unset in the subshell only.
+  const dropOffline = Object.entries(OFFLINE_FAIL_FAST_ENV)
+    .map(([name, value]) => `[ "\${${name}-}" = ${singleQuote(value)} ] && unset ${name};`)
+    .join(' ')
+  lines.push(`(umask 077; ${dropOffline} export -p > ${singleQuote(paths.envOut)}) 2>/dev/null`)
   lines.push('exit $__houston_ec')
   return lines.join('\n')
 }
