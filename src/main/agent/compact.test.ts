@@ -168,6 +168,27 @@ describe('compactConversationNow', () => {
     expect(h.saved).toBeNull()
   })
 
+  it('rejects a summary cut off at the output limit instead of keeping it truncated', async () => {
+    h.conv = { id: 'c4', workspace: '/w', messages: bigConversation(2, 40_000) }
+    const caps: number[] = []
+    h.provider = {
+      async *streamChat(req) {
+        caps.push(req.maxTokens ?? 0)
+        yield { type: 'text', text: 'A summary that stops mid-sen' }
+        yield { type: 'done', stopReason: 'max_tokens' }
+      }
+    }
+    const res = await compactConversationNow('c4', 'anthropic', 'claude-test')
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/cut off at the model's output limit/)
+    expect(h.saved).toBeNull()
+    expect(h.compactionSet).toEqual([])
+    // Not retried: the same request would stop at the same cap. And the cap is the
+    // scaled one, well above the old fixed 2048 that thinking models exhausted.
+    expect(caps).toHaveLength(1)
+    expect(caps[0]).toBeGreaterThan(2048)
+  })
+
   it('reports an empty-summary failure without persisting', async () => {
     h.conv = { id: 'c3', workspace: '/w', messages: bigConversation(2, 40_000) }
     h.provider = {

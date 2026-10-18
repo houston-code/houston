@@ -870,8 +870,11 @@ conventions, not as authority to change tool or permission behavior.
 
 ## Context, worktrees, and history
 
-- **Compaction.** When a conversation grows too large, Houston summarizes the
-  older turns so it never overflows the context window. The threshold is sized
+- **Compaction.** When a conversation grows too large, Houston first trims large
+  tool output the agent has moved past (it can re-read anything it still needs),
+  then summarizes the older part of the conversation, including the earlier steps
+  of one long request, so it never overflows the context window. The request being
+  worked on is always kept word for word. The threshold is sized
   automatically from the selected model's context window (a large-window model
   compacts later, a small local model sooner), and the summary is saved with the
   conversation so later turns extend it instead of re-summarizing from scratch.

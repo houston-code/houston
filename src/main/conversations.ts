@@ -465,7 +465,13 @@ export function setCompaction(id: string, compaction: ConversationCompaction | n
   const conv = read(id)
   if (!conv) return
   if (compaction) {
-    if (conv.compaction?.cut === compaction.cut && conv.compaction.summary === compaction.summary) {
+    const prev = conv.compaction
+    if (
+      prev?.cut === compaction.cut &&
+      prev.summary === compaction.summary &&
+      prev.anchor === compaction.anchor &&
+      prev.evictBefore === compaction.evictBefore
+    ) {
       return
     }
     conv.compaction = compaction
