@@ -20,6 +20,9 @@ describe('commandQuery', () => {
   })
   it('returns null once there is a space (args) or non-command', () => {
     expect(commandQuery('/model claude')).toBeNull()
+    // Custom command names: digits, hyphens, underscores, capitals.
+    expect(commandQuery('/fix-')).toBe('fix-')
+    expect(commandQuery('/Deploy_2')).toBe('Deploy_2')
     expect(commandQuery('hello')).toBeNull()
   })
 })
@@ -78,6 +81,24 @@ describe('makeCompleter', () => {
 // Tab completion printed bare names with no descriptions, no argument hints, and —
 // because the completer only knew the BUILT-IN list — no sign that a workspace's
 // own .houston/commands existed. You had to know a name to discover it.
+describe('custom command completion', () => {
+  const custom: CommandSpec[] = [...COMMANDS, { name: 'fix-tests', description: 'Fix the failing tests' }]
+
+  it('keeps matching a hyphenated custom command in the menu as it is typed', () => {
+    expect(commandMenu('/fix-', custom)?.map((c) => c.name)).toEqual(['fix-tests'])
+  })
+
+  it('tab-completes commands loaded after the completer was built', async () => {
+    let commands: CommandSpec[] = [...COMMANDS]
+    const completer = makeCompleter(async () => [], () => commands)
+    commands = custom
+    const result = await new Promise<[string[], string]>((resolve) =>
+      completer('/fix', (_err, r) => resolve(r))
+    )
+    expect(result[0]).toEqual(['/fix-tests '])
+  })
+})
+
 describe('commandMenu', () => {
   const cmds: CommandSpec[] = [
     { name: 'help', description: 'List the available commands' },
