@@ -3091,6 +3091,222 @@ describe('writable subagent unconfined-shell gate', () => {
   })
 })
 
+describe('permission gates: batched sensitive reads and subagent calls', () => {
+  /** Scripts turns and snapshots every request's messages, subagent transcripts included. */
+  function recording(turns: ProviderStreamEvent[][], requests: ChatMessage[][]): Provider {
+    let i = 0
+    return {
+      async *streamChat(req) {
+        // Snapshot: both loops keep mutating their live arrays after the call.
+        requests.push(JSON.parse(JSON.stringify(req.messages ?? [])) as ChatMessage[])
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        for (const ev of turn) yield ev
+      }
+    }
+  }
+  /** The tool result the (sub)agent's model was sent for `toolCallId`. */
+  const toolMessageFor = (requests: ChatMessage[][], toolCallId: string): string | undefined => {
+    for (const ms of requests) {
+      const m = ms.find((x) => x.role === 'tool' && x.toolCallId === toolCallId)
+      if (m) return String(m.content)
+    }
+    return undefined
+  }
+  const callTurn = (
+    ...calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>
+  ): ProviderStreamEvent[] => [
+    ...calls.map((call) => ({ type: 'tool_call' as const, call })),
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const finalText = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+  const approvalsOf = (r: RunResult): Array<Extract<AgentEvent, { type: 'tool_approval' }>> =>
+    r.events.filter((e) => e.type === 'tool_approval') as Array<
+      Extract<AgentEvent, { type: 'tool_approval' }>
+    >
+  const resultFor = (r: RunResult, callId: string): Extract<AgentEvent, { type: 'tool_result' }> | undefined =>
+    r.events.find((e) => e.type === 'tool_result' && e.callId === callId) as
+      | Extract<AgentEvent, { type: 'tool_result' }>
+      | undefined
+
+  afterEach(() => {
+    h.settings.permissionRules = []
+  })
+
+  // A lone read is a leading parallel batch of one. That batch used to skip the
+  // approval gate entirely, so in full-auto the file landed in the result unasked,
+  // while the same read placed after a write (sequential) did prompt.
+  it('prompts for a lone .env read under full-auto, and a denial keeps its contents out', async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-lone-marker')
+    const r = await run({
+      policy: 'full-auto',
+      turns: [callTurn({ id: 'r1', name: 'read_file', arguments: { path: '.env' } }), finalText('done')],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    const approvals = approvalsOf(r)
+    expect(approvals.map((a) => a.callId)).toEqual(['r1'])
+    expect(approvals[0].sensitiveRead).toBe(true)
+    expect(resultFor(r, 'r1')?.ok).toBe(false)
+    expect(JSON.stringify(r.events)).not.toContain('dotenv-lone-marker')
+    expect(JSON.stringify(r.messages)).not.toContain('dotenv-lone-marker')
+  })
+
+  it('prompts for a .env read batched with ordinary reads, which still run without a prompt', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'plain note body')
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-batch-marker')
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        callTurn(
+          { id: 'r1', name: 'read_file', arguments: { path: 'note.txt' } },
+          { id: 'r2', name: 'read_file', arguments: { path: '.env' } },
+          { id: 'r3', name: 'read_file', arguments: { path: 'note.txt' } }
+        ),
+        finalText('done')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // Only the credential file asked; the ordinary reads around it ran unprompted.
+    expect(approvalsOf(r).map((a) => a.callId)).toEqual(['r2'])
+    expect(resultFor(r, 'r1')?.output).toContain('plain note body')
+    expect(resultFor(r, 'r3')?.output).toContain('plain note body')
+    // Approved, so it ran, and the model saw the results in call order.
+    expect(resultFor(r, 'r2')?.output).toContain('dotenv-batch-marker')
+    const toolIds = r.messages.filter((m) => m.role === 'tool').map((m) => m.toolCallId)
+    expect(toolIds).toEqual(['r1', 'r2', 'r3'])
+  })
+
+  it("refuses a read-only subagent's read of a managed-deny path without prompting", async () => {
+    h.managedRules = [{ action: 'deny', tool: 'read_file', match: 'secrets/*' }]
+    mkdirSync(join(ws, 'secrets'))
+    writeFileSync(join(ws, 'secrets', 'db.txt'), 'managed-deny-marker')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read it' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: 'secrets/db.txt' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // A deny never prompts, and it is attributed to the org, not a local rule.
+    expect(approvalsOf(r)).toEqual([])
+    expect(toolMessageFor(requests, 's1')).toBe("Denied by your organization's managed policy.")
+    expect(JSON.stringify(requests)).not.toContain('managed-deny-marker')
+  })
+
+  it("refuses a writable subagent's write to a deny-rule path and leaves the file unchanged", async () => {
+    h.settings.permissionRules = [{ action: 'deny', tool: 'write_file', match: 'protected*' }]
+    writeFileSync(join(ws, 'protected.txt'), 'original content')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'ask',
+      provider: recording(
+        [
+          callTurn({
+            id: 'd1',
+            name: 'dispatch_writable_agent',
+            arguments: { description: 'edit', prompt: 'overwrite it' }
+          }),
+          callTurn({
+            id: 's1',
+            name: 'write_file',
+            arguments: { path: 'protected.txt', content: 'clobbered by subagent' }
+          }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // Approving the dispatch is consent to edit, not to override a deny rule.
+    expect(approvalsOf(r).map((a) => a.name)).toEqual(['dispatch_writable_agent'])
+    expect(toolMessageFor(requests, 's1')).toBe('Denied by a permission rule.')
+    expect(readFileSync(join(ws, 'protected.txt'), 'utf8')).toBe('original content')
+  })
+
+  it("prompts for a writable subagent's write that an `ask` rule covers, with its diff", async () => {
+    h.settings.permissionRules = [{ action: 'ask', tool: 'write_file', match: 'guarded*' }]
+    writeFileSync(join(ws, 'guarded.txt'), 'before')
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        callTurn({ id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'edit', prompt: 'go' } }),
+        callTurn(
+          { id: 's1', name: 'write_file', arguments: { path: 'guarded.txt', content: 'after' } },
+          { id: 's2', name: 'write_file', arguments: { path: 'free.txt', content: 'unguarded' } }
+        ),
+        finalText('sub report'),
+        finalText('main done')
+      ],
+      onApproval: (id, decide) => decide(id === 'd1' ? 'allow' : 'deny')
+    })
+    const approvals = approvalsOf(r)
+    // The rule-covered write asked (with its diff); the uncovered one rode the dispatch.
+    expect(approvals.map((a) => a.callId)).toEqual(['d1', 'd1.write.1'])
+    expect(approvals[1].preview?.length).toBeGreaterThan(0)
+    expect(readFileSync(join(ws, 'guarded.txt'), 'utf8')).toBe('before')
+    expect(readFileSync(join(ws, 'free.txt'), 'utf8')).toBe('unguarded')
+  })
+
+  it("prompts for a subagent's .env read, and a denial keeps its contents out of the subagent", async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-subagent-marker')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read .env' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: '.env' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    const approvals = approvalsOf(r)
+    // dispatch_agent is a read, so the subagent's credential read is the only prompt:
+    // minted under the dispatch, labeled as the subagent's, flagged as sensitive.
+    expect(approvals.map((a) => a.callId)).toEqual(['d1.read.1'])
+    expect(approvals[0].name).toBe('read_file')
+    expect(approvals[0].sensitiveRead).toBe(true)
+    expect(approvals[0].summary).toContain('Subagent:')
+    expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
+    expect(JSON.stringify(requests)).not.toContain('dotenv-subagent-marker')
+    expect(JSON.stringify(r.events)).not.toContain('dotenv-subagent-marker')
+  })
+
+  it("runs a subagent's approved .env read as a visible row", async () => {
+    writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-approved-marker')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read .env' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: '.env' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(r.events.some((e) => e.type === 'tool_start' && e.callId === 'd1.read.1')).toBe(true)
+    expect(resultFor(r, 'd1.read.1')?.ok).toBe(true)
+    expect(toolMessageFor(requests, 's1')).toContain('dotenv-approved-marker')
+  })
+})
+
 describe('present_plan (Plan mode review)', () => {
   const planBody =
     '## Overview\nKeep an unsent message per chat.\n\n1. Add a `draft` field\n2. Restore it on open'

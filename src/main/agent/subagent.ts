@@ -1,10 +1,11 @@
 import type { ChatMessage, Provider, TokenUsage } from '@shared/agent'
-import { getTool, type ToolContext } from './tools'
+import { getTool, type ToolContext, type ToolKind } from './tools'
 import { runQuarantineExtraction } from './untrusted'
 import { providerStreamError, withProviderRetry } from './retry'
 import { recordOriginal, recordResult, writeTargets } from './checkpoints'
 import type { ShellSession } from './shell-session'
 import { isSandboxed } from '../sandbox'
+import { isSensitiveRead } from './sensitive-paths'
 
 /**
  * A nested subagent: the main agent delegates a scoped task to a fresh loop with
@@ -23,6 +24,12 @@ import { isSandboxed } from '../sandbox'
  *   the gate, run_shell is refused — fail closed. The parent grants the tier by
  *   approving the dispatch_writable_agent call; every other LOCAL tool call then runs
  *   autonomously without further prompts.
+ *
+ * Either tier's local calls still answer to the user's permission rules: the
+ * dispatcher wires `gateLocal`, which refuses what a deny rule (any tier, managed
+ * policy included) covers and prompts for what an `ask` rule covers or what reads a
+ * credential file. The tier's consent replaces only the default prompts, never a
+ * rule's or the sensitive-read one.
  *
  * Orthogonal to the tier, the dispatcher may also grant network access (`opts.network`):
  * it offers web_fetch/web_search and routes EVERY call through a per-destination
@@ -206,6 +213,26 @@ export interface SubAgentOptions {
     searchProvider?: string
     collectSecrets?: () => string[]
   }
+  /**
+   * Permission gate for every LOCAL tool call: reads, edits, and shell on a confining
+   * host (unconfined shell and network have their own seams above). The dispatcher
+   * applies the same permission rules as the main loop, in the same tier order
+   * (managed policy, project guardrails, the user's rules, trusted project allows),
+   * plus the sensitive-read check: a deny refuses without a prompt, and an `ask` rule
+   * or a read of a credential file is propagated to the user as an approval. Called
+   * with the call's name, kind, and arguments and a thunk that executes it; resolves
+   * with the tool-result text (the output, or a refusal note).
+   *
+   * Absent => there are no rules to apply, so local calls run as before, EXCEPT a
+   * credential-file read, which is refused (fail closed: a dispatcher that can't
+   * prompt can't consent to it).
+   */
+  gateLocal?: (
+    name: string,
+    kind: ToolKind,
+    args: Record<string, unknown>,
+    run: () => Promise<string>
+  ) => Promise<string>
   /** Persistent shell state for run_shell (writable tier). */
   shellSession?: ShellSession
   /** Cap on a single shell command's output kept in a tool result. */
@@ -476,14 +503,30 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         // Snapshot write targets into the dispatching turn's checkpoint, exactly
         // as the main loop does for its own write tools, so "revert" covers the
         // subagent's edits. (Shell side effects aren't checkpointed here — the
-        // main loop doesn't checkpoint run_shell either.)
+        // main loop doesn't checkpoint run_shell either.) Inside the thunk, so a
+        // call the gate refuses leaves no checkpoint entry behind.
         const cpRunId = tool.kind === 'write' ? opts.checkpointRunId : undefined
         const targets = cpRunId ? writeTargets(call.name, call.arguments) : []
-        for (const t of targets) await recordOriginal(cpRunId!, roots, t.path)
-        try {
-          output = await tool.execute(call.arguments, toolCtx)
+        const runLocal = async (): Promise<string> => {
+          for (const t of targets) await recordOriginal(cpRunId!, roots, t.path)
+          const out = await tool.execute(call.arguments, toolCtx)
           for (const t of targets) {
             await recordResult(cpRunId!, roots, t.path, { expectAbsent: t.deleted })
+          }
+          return out
+        }
+        try {
+          if (opts.gateLocal) {
+            // The dispatcher's permission rules and sensitive-read prompt, the same
+            // checks the main loop runs before any call of its own.
+            output = await opts.gateLocal(call.name, tool.kind, call.arguments, runLocal)
+          } else if (isSensitiveRead(tool.kind, call.arguments)) {
+            output =
+              `Reading ${String(call.arguments.path)} needs the user's approval because it looks like a ` +
+              'credential or secret file, and this subagent cannot ask for it. Do not retry; note in ' +
+              'your report that the main agent can read it with approval if it is needed.'
+          } else {
+            output = await runLocal()
           }
         } catch (e) {
           output = `Error: ${(e as Error).message}`
