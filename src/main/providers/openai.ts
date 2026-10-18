@@ -6,6 +6,7 @@ import { imageDataUrl } from '@shared/images'
 import { openaiReasoningEffort, openaiSupportsReasoning } from './reasoning'
 import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
+import { releaseDateFrom } from './release-date'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
@@ -366,8 +367,12 @@ export function modelOptionFromListing(raw: Record<string, unknown>): ModelOptio
     if (cacheWritePrice !== undefined) caps.cacheWritePrice = cacheWritePrice
   }
 
+  const released = releaseDateFrom(raw.created)
+  if (released) caps.releasedAt = released
+
   return Object.keys(caps).length ? { id, caps } : { id }
 }
+
 
 /**
  * Convert a host-listed per-token price (a string like "0.0000002", per

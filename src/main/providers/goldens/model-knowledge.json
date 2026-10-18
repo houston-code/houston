@@ -11,6 +11,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -32,6 +33,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -54,6 +56,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -75,6 +78,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -97,6 +101,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -118,6 +123,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -139,6 +145,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -160,6 +167,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -181,6 +189,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -202,6 +211,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -223,6 +233,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -244,6 +255,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -265,6 +277,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -286,6 +299,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -307,6 +321,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -328,6 +343,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -349,6 +365,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -370,6 +387,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -391,6 +409,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -412,6 +431,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -433,6 +453,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -454,6 +475,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -475,6 +497,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -496,6 +519,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -514,6 +538,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -532,6 +557,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -554,6 +580,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -576,6 +603,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -597,6 +625,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -618,6 +647,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -639,6 +669,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": true,
@@ -660,6 +691,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -681,6 +713,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": true,
         "anthropicLegacy": false,
@@ -704,6 +737,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -727,6 +761,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -750,6 +785,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -773,6 +809,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -796,6 +833,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -819,6 +857,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -842,6 +881,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -865,6 +905,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -888,6 +929,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -911,6 +953,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -934,6 +977,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -957,6 +1001,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -980,6 +1025,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1003,6 +1049,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1026,6 +1073,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1049,6 +1097,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1072,6 +1121,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1095,6 +1145,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1118,6 +1169,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1141,6 +1193,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1164,6 +1217,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1187,6 +1241,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1210,6 +1265,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1233,6 +1289,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1256,6 +1313,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1274,6 +1332,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1292,6 +1351,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1315,6 +1375,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1338,6 +1399,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1361,6 +1423,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1384,6 +1447,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1407,6 +1471,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1430,6 +1495,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1453,6 +1519,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1476,6 +1543,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1499,6 +1567,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1522,6 +1591,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1545,6 +1615,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1568,6 +1639,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1591,6 +1663,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1614,6 +1687,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1637,6 +1711,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1660,6 +1735,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1683,6 +1759,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1706,6 +1783,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1729,6 +1807,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1752,6 +1831,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1775,6 +1855,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1798,6 +1879,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1821,6 +1903,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1844,6 +1927,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1867,6 +1951,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1890,6 +1975,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1913,6 +1999,7 @@
         "vision": true,
         "reasoning": true
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1931,6 +2018,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1949,6 +2037,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1967,6 +2056,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -1985,6 +2075,7 @@
         "vision": false,
         "reasoning": false
       },
+      "tools": null,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,
@@ -2008,6 +2099,7 @@
         "vision": true,
         "reasoning": false
       },
+      "tools": true,
       "gates": {
         "anthropicThinking": false,
         "anthropicLegacy": false,

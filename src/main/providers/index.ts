@@ -161,9 +161,7 @@ export async function listModels(config: ProviderConfig, keyOverride?: string): 
   const headers = resolveHeaders(config.id)
   switch (config.kind) {
     case 'anthropic':
-      return (await listAnthropicModels(key ?? '', config.baseUrl, headers)).map((id) => ({
-        id
-      }))
+      return listAnthropicModels(key ?? '', config.baseUrl, headers)
     case 'openai':
     case 'openai-compatible':
       return listOpenAIModels(key, config.baseUrl, headers)

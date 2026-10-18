@@ -120,6 +120,11 @@ describe('stripBuiltInModelLabels', () => {
 })
 
 describe('backfillDefaultModels', () => {
+  it('leaves the full first-run seed unstamped, since none of it is news', () => {
+    const saved = [provider({ id: 'openai', models: [] })]
+    for (const m of backfillDefaultModels(saved)[0].models) expect(m.addedAt).toBeUndefined()
+  })
+
   it('appends new built-in default models a saved provider is missing', () => {
     const saved = [provider({ id: 'openai', models: [{ id: 'gpt-4o', label: 'GPT-4o' }] })]
     const ids = backfillDefaultModels(saved)[0].models.map((m) => m.id)
@@ -148,10 +153,14 @@ describe('backfillDefaultModels', () => {
     const saved = [
       provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-opus-4-8' }] })
     ]
-    const models = backfillDefaultModels(saved, ['claude-fable-5-1'])[0].models
+    const models = backfillDefaultModels(saved, ['claude-fable-5-1'], new Date('2026-10-18T09:00:00Z'))[0]
+      .models
     expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5-1'])
-    // The appended model is id-only; its display name is derived, not seeded.
-    expect(models.find((m) => m.id === 'claude-fable-5-1')).toEqual({ id: 'claude-fable-5-1' })
+    // The appended model carries no seeded label (its display name is derived) and is
+    // stamped with the day it arrived, for the picker's "New" mark.
+    expect(models.find((m) => m.id === 'claude-fable-5-1')).toEqual({ id: 'claude-fable-5-1', addedAt: '2026-10-18' })
+    // The user's existing model is untouched.
+    expect(models[0]).toEqual({ id: 'claude-opus-4-8' })
   })
 
   it('with onlyIds, does not re-add an already-present scoped id', () => {

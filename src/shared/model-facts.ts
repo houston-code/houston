@@ -129,6 +129,12 @@ const CLAUDE_VISION: Rows<boolean> = [
   [/claude/, true]
 ]
 
+/** Tool use: every Claude from 3 on. Only positive facts; an unknown id stays unknown. */
+const CLAUDE_TOOLS: Rows<boolean> = [
+  [/claude-(instant|1|2)([^0-9]|$)/, false],
+  [/claude/, true]
+]
+
 // ── OpenAI (GPT / o-series) ───────────────────────────────────────────────────────
 
 /** Reasoning models (o-series, and GPT from gpt-5 on) accept `reasoning_effort`. Anchored,
@@ -203,6 +209,13 @@ const OPENAI_VISION: Rows<boolean> = [
   [O_SERIES, true]
 ]
 
+/** Function calling: GPT-3.5 Turbo, GPT-4 on, and the o-series except the first o1 previews. */
+const OPENAI_TOOLS: Rows<boolean> = [
+  [/(^|[^a-z0-9])o1-(preview|mini)/, false],
+  [/gpt-3\.5-turbo|gpt-4|gpt-([5-9]|[1-9]\d)/, true],
+  [O_SERIES, true]
+]
+
 // ── Google (Gemini) ───────────────────────────────────────────────────────────────
 
 /** Configurable thinking budget: the 2.5 and 3.x lines, plus anything named "thinking".
@@ -232,6 +245,9 @@ const GEMINI_PRICES: Rows<ModelPricing> = [
 ]
 
 const GEMINI_WINDOWS: Rows<number> = [[/gemini/, 1_000_000]]
+
+/** Function calling: Gemini 1.5 and everything from 2.x on. */
+const GEMINI_TOOLS: Rows<boolean> = [[/gemini[^0-9]*(1\.5|2\.|3)/, true]]
 
 /** Gemini 1.5 and everything from 2.x on are multimodal; 1.0 (`gemini-pro`) was text-only. */
 const GEMINI_VISION: Rows<boolean> = [
@@ -278,6 +294,17 @@ export function contextWindowFor(model: string): number | null {
   return (
     firstMatch(CLAUDE_WINDOWS, m) ?? firstMatch(GEMINI_WINDOWS, m) ?? firstMatch(OPENAI_WINDOWS, m) ?? null
   )
+}
+
+/**
+ * Whether the model calls tools: true for the hosted families that all do, null otherwise.
+ * Never false from the id alone: most open models can't be told apart by name, so
+ * "unknown" is the honest answer and lets a caller probe a local server instead.
+ */
+export function modelHasTools(model: string): true | null {
+  const m = model.toLowerCase()
+  const known = firstMatch(CLAUDE_TOOLS, m) ?? firstMatch(OPENAI_TOOLS, m) ?? firstMatch(GEMINI_TOOLS, m)
+  return known === true ? true : null
 }
 
 /** Whether the model accepts image inputs. Unknown ids report false. */

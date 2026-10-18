@@ -473,6 +473,26 @@ describe('SettingsModal', () => {
     expect(provider.models.map((m) => m.id)).toEqual(['claude-sonnet', 'claude-opus'])
   })
 
+  it('keeps capability metadata and the added date for ids that survive an edit', async () => {
+    const api = installApi()
+    const withMeta: ProviderConfig = {
+      ...anthropic,
+      models: [{ id: 'claude-sonnet', caps: { tools: true, contextWindow: 1_000_000 }, addedAt: '2026-10-10' }]
+    }
+    const { container } = renderModal({ providers: [withMeta, customEndpoint] })
+    const modelsArea = screen.getAllByPlaceholderText('one model id per line')[0]
+    fireEvent.focus(modelsArea)
+    fireEvent.change(modelsArea, { target: { value: 'claude-sonnet\nclaude-opus' } })
+    fireEvent.blur(modelsArea)
+    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = (api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings).providers.find((p) => p.id === 'anthropic')!
+    expect(saved.models).toEqual([
+      { id: 'claude-sonnet', caps: { tools: true, contextWindow: 1_000_000 }, addedAt: '2026-10-10' },
+      { id: 'claude-opus' }
+    ])
+  })
+
   it('keeps an incomplete header line while typing and parses it on blur', async () => {
     const api = installApi()
     const { container } = renderModal()

@@ -77,3 +77,31 @@ describe('Popover', () => {
     pane.remove()
   })
 })
+
+describe('Popover roving focus', () => {
+  function renderWith(roving: boolean) {
+    const anchor = document.createElement('button')
+    document.body.appendChild(anchor)
+    const ref: RefObject<HTMLButtonElement> = { current: anchor }
+    return render(
+      <Popover anchorRef={ref} onClose={() => {}} roving={roving}>
+        <input aria-label="filter" />
+        <button className="menu__item">One</button>
+      </Popover>
+    )
+  }
+
+  it('moves focus between items on ArrowDown by default', () => {
+    const { getByLabelText, getByText } = renderWith(true)
+    getByLabelText('filter').focus()
+    fireEvent.keyDown(getByLabelText('filter'), { key: 'ArrowDown' })
+    expect(getByText('One')).toHaveFocus()
+  })
+
+  it('leaves focus in place when roving is off, for a menu that tracks its own active item', () => {
+    const { getByLabelText } = renderWith(false)
+    getByLabelText('filter').focus()
+    fireEvent.keyDown(getByLabelText('filter'), { key: 'ArrowDown' })
+    expect(getByLabelText('filter')).toHaveFocus()
+  })
+})

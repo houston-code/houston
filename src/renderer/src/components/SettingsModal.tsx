@@ -149,12 +149,14 @@ function modelsToText(models: ModelOption[]): string {
 }
 
 function textToModels(text: string, prev: ModelOption[]): ModelOption[] {
-  const labelById = new Map(prev.map((m) => [m.id, m.label]))
+  // Keep everything known about an id that survives the edit (label, listed capabilities,
+  // when it was added), so editing the list doesn't strip the picker's metadata.
+  const byId = new Map(prev.map((m) => [m.id, m]))
   return text
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((id) => ({ id, label: labelById.get(id) }))
+    .map((id) => byId.get(id) ?? { id })
 }
 
 /**
@@ -827,7 +829,12 @@ export function SettingsModal({
       const prev = new Map(
         (settings.providers.find((p) => p.id === id)?.models ?? []).map((m) => [m.id, m])
       )
-      patchProvider(id, { models: fetched.map((m) => ({ ...m, label: m.label ?? prev.get(m.id)?.label })) })
+      patchProvider(id, {
+        models: fetched.map((m) => {
+          const had = prev.get(m.id)
+          return { ...m, label: m.label ?? had?.label, ...(had?.addedAt ? { addedAt: had.addedAt } : {}) }
+        })
+      })
     } catch (e) {
       setFormError(`Could not fetch models: ${(e as Error).message}`)
     } finally {

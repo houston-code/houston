@@ -8,6 +8,7 @@ import type { ModelUsage, ConversationUsage } from './agent'
 import {
   contextWindowFor,
   modelHasReasoning,
+  modelHasTools,
   modelHasVision,
   modelPricing,
   type ModelPricing
@@ -212,13 +213,13 @@ export function resolveCapabilities(model: string, caps?: ModelCaps): ModelCapab
 }
 
 /**
- * Resolved tool-calling support: the host's listed value when known, else null
- * ("unknown" — the caller may probe a local server or simply stay silent). There's
- * no name-heuristic fallback because most tool-capable open models can't be told
- * apart from incapable ones by id alone.
+ * Resolved tool-calling support: the host's listed value when known, else the id
+ * heuristic when `model` is given (true for the hosted families that all call tools),
+ * else null ("unknown": the caller may probe a local server or simply stay silent). The
+ * heuristic never answers false, since most open models can't be told apart by id.
  */
-export function resolveToolSupport(caps?: ModelCaps): boolean | null {
-  return caps?.tools ?? null
+export function resolveToolSupport(caps?: ModelCaps, model?: string): boolean | null {
+  return caps?.tools ?? (model ? modelHasTools(model) : null)
 }
 
 /** Context window, preferring host-provided metadata over the family heuristic. */

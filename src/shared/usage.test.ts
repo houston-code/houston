@@ -431,9 +431,20 @@ describe('resolveToolSupport', () => {
     expect(resolveToolSupport({ tools: false })).toBe(false)
   })
 
-  it('returns null (unknown) when unlisted — no name heuristic', () => {
+  it('returns null (unknown) when unlisted and no model id is given', () => {
     expect(resolveToolSupport({})).toBeNull()
     expect(resolveToolSupport(undefined)).toBeNull()
+  })
+
+  it('falls back to the id for hosted families that all call tools, never answering false', () => {
+    expect(resolveToolSupport(undefined, 'claude-opus-5-5')).toBe(true)
+    expect(resolveToolSupport(undefined, 'gpt-6.1-sol')).toBe(true)
+    expect(resolveToolSupport(undefined, 'gemini-3.8-flash')).toBe(true)
+    // An open model the id can't vouch for stays unknown, so a local probe can decide.
+    expect(resolveToolSupport(undefined, 'llama3.1:latest')).toBeNull()
+    expect(resolveToolSupport(undefined, 'o1-preview')).toBeNull()
+    // A listed value always wins over the id.
+    expect(resolveToolSupport({ tools: false }, 'gpt-4o')).toBe(false)
   })
 })
 

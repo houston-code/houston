@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { randomUUID } from 'node:crypto'
+import type { ModelOption } from '@shared/types'
 import type {
   ChatMessage,
   ChatRequest,
@@ -9,6 +10,7 @@ import type {
   StopReason
 } from '@shared/agent'
 import { anthropicThinking } from './reasoning'
+import { releaseDateFrom } from './release-date'
 
 const DEFAULT_MAX_TOKENS = 8192
 
@@ -407,7 +409,7 @@ export async function listAnthropicModels(
   apiKey: string,
   baseURL?: string,
   headers?: Record<string, string>
-): Promise<string[]> {
+): Promise<ModelOption[]> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
   const client = new Anthropic({
     apiKey,
@@ -415,5 +417,8 @@ export async function listAnthropicModels(
     ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
   })
   const page = await client.models.list({ limit: 100 })
-  return page.data.map((m) => m.id)
+  return page.data.map((m) => {
+    const releasedAt = releaseDateFrom(m.created_at)
+    return releasedAt ? { id: m.id, caps: { releasedAt } } : { id: m.id }
+  })
 }
