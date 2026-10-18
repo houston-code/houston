@@ -27,6 +27,7 @@ import {
 } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit } from '@shared/images'
+import { sanitizeInvocation } from '@shared/promptInvocation'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
 import { checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
@@ -929,10 +930,12 @@ export function registerIpc(): void {
     }
 
     const images = sanitizeAttachments(req.images)
+    const invokedAs = sanitizeInvocation(req.invokedAs)
     const userMessage: ChatMessage = {
       role: 'user',
       content: req.userText,
-      ...(images.length ? { images } : {})
+      ...(images.length ? { images } : {}),
+      ...(invokedAs ? { invokedAs } : {})
     }
     const messages = [...conv.messages, userMessage]
     setMessages(conv.id, messages)

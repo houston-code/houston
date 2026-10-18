@@ -18,7 +18,7 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import {
-  SYSTEM_NOTE_PREFIX,
+  systemNoteMessage,
   sanitizeApprovalNote,
   MAX_STEER_TEXT,
   MAX_PENDING_STEERS
@@ -2021,10 +2021,7 @@ export async function startRun(
         const decision = shouldLand({ iteration: iter, costUsd: cumulativeCostUsd, alreadyLanded: landed }, budget)
         if (decision.land) {
           landed = true
-          messages.push({
-            role: 'user',
-            content: `${SYSTEM_NOTE_PREFIX} ${landingReminder(decision.iterationsLeft, decision.trigger)}`
-          })
+          messages.push(systemNoteMessage(landingReminder(decision.iterationsLeft, decision.trigger)))
           persist(messages)
         }
       }
@@ -2034,7 +2031,7 @@ export async function startRun(
       // stay in the request (a history with tool_use blocks must still declare them).
       const finalStep = isFinalStep(iter, budget)
       if (finalStep) {
-        messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${FINAL_STEP_NOTE}` })
+        messages.push(systemNoteMessage(FINAL_STEP_NOTE))
         persist(messages)
       }
 
@@ -2305,10 +2302,11 @@ export async function startRun(
           }
           if (stop.blocked) {
             stopContinuations++
-            messages.push({
-              role: 'user',
-              content: redact(stop.message) || 'A Stop hook requested that you keep working.'
-            })
+            messages.push(
+              systemNoteMessage(
+                `A Stop hook asked you to keep working: ${redact(stop.message) || 'it gave no reason.'}`
+              )
+            )
             persist(messages)
             continue
           }
@@ -2356,12 +2354,9 @@ export async function startRun(
           }
           emit({ type: 'verification', passed: result.passed })
           if (!result.passed) {
-            // Push the failure feedback as a real user-role message so the model
-            // sees it next turn and the transcript renders it sanely; then loop.
-            messages.push({
-              role: 'user',
-              content: verifyFailureMessage(settings.verifyCommand!, result.output)
-            })
+            // Push the failure feedback as a system note so the model sees it next
+            // turn and the transcript shows it as Houston's, not the user's; then loop.
+            messages.push(systemNoteMessage(verifyFailureMessage(settings.verifyCommand!, result.output)))
             persist(messages)
             continue
           }
@@ -2397,7 +2392,7 @@ export async function startRun(
         })
         if (action.kind === 'nudge') {
           lastStallNudge = iter
-          messages.push({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${action.message}` })
+          messages.push(systemNoteMessage(action.message))
           persist(messages)
         } else if (action.kind === 'stop') {
           // Persisted past the corrective nudge — end the run cleanly with a

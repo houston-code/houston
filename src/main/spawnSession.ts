@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ApprovalPolicy } from '@shared/types'
 import type { ChatMessage, ConversationWorktree } from '@shared/agent'
+import { spawnedTurn } from '@shared/promptInvocation'
 import type { SpawnBackend, SpawnSessionInput, SpawnSessionResult } from './agent/spawn'
 
 /**
@@ -132,7 +133,8 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           ...(spawnedFrom ? { spawnedFrom } : {})
         })
 
-        const userMessage: ChatMessage = { role: 'user', content: prompt }
+        const turn = spawnedTurn(prompt)
+        const userMessage: ChatMessage = { role: 'user', content: turn.text, invokedAs: turn.invokedAs }
         deps.seedMessages(conv.id, [userMessage])
 
         // A caller-supplied title wins and sticks (marked generated); otherwise the

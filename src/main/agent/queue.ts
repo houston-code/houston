@@ -7,6 +7,7 @@ import {
   type QueuedInputMeta
 } from '@shared/queue'
 import { sanitizeAttachments } from '@shared/images'
+import { sanitizeInvocation } from '@shared/promptInvocation'
 
 /** The send settings to use when a conversation's queue is flushed as the next turn. */
 interface QueueState {
@@ -27,10 +28,12 @@ const queues = new Map<string, QueueState>()
 /** Append a message to a conversation's queue; returns the updated display list. */
 export function addToQueue(req: QueueAddRequest): QueuedInputMeta[] {
   const images = sanitizeAttachments(req.images)
+  const invokedAs = sanitizeInvocation(req.invokedAs)
   const item: QueuedInput = {
     id: randomUUID(),
     text: req.userText,
-    ...(images.length ? { images } : {})
+    ...(images.length ? { images } : {}),
+    ...(invokedAs ? { invokedAs } : {})
   }
   const existing = queues.get(req.conversationId)
   // The newest message's send settings win when the combined turn is dispatched.

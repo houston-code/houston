@@ -32,6 +32,15 @@ describe('main queue manager', () => {
     clearQueue(cid)
   })
 
+  it('keeps a valid invokedAs and drops a malformed one at the IPC boundary', () => {
+    const cid = 'conv-invoked'
+    add(cid, 'Create a GitHub pull request…', { invokedAs: { kind: 'action', label: 'Create PR' } })
+    add(cid, 'x', { invokedAs: { kind: 'evil', label: 'y' } as never })
+    const taken = takeQueue(cid)
+    expect(taken?.items[0].invokedAs).toEqual({ kind: 'action', label: 'Create PR' })
+    expect(taken?.items[1]).not.toHaveProperty('invokedAs')
+  })
+
   it('removes a single message by id', () => {
     const cid = 'conv-remove'
     add(cid, 'a')
