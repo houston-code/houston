@@ -15,6 +15,9 @@ import type {
   UserItem
 } from './items'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
+import { shortenPath } from './paths'
+
+export { shortenPath }
 
 export interface ToolDescription {
   /** Short action label, e.g. "Read", "Run", "Search". */
@@ -23,13 +26,6 @@ export interface ToolDescription {
   target: string
   /** Render the target in a monospace font (paths/commands) vs prose (queries). */
   mono: boolean
-}
-
-/** Shorten a path to its last two segments, prefixed with an ellipsis. */
-export function shortenPath(p: string, segments = 2): string {
-  const parts = p.replace(/\/+$/, '').split('/').filter(Boolean)
-  if (parts.length <= segments) return p
-  return '…/' + parts.slice(-segments).join('/')
 }
 
 /** Collapse a shell command to a single trimmed line for the row. */

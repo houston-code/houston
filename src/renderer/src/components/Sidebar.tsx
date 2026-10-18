@@ -9,6 +9,7 @@ import {
   type SidebarSection
 } from '../lib/chatGroups'
 import { listEditors, fileManagerName } from '../lib/editors'
+import { baseName } from '../lib/paths'
 import { Icon } from './Icon'
 import { Popover } from './Popover'
 import { MenuExpander } from './MenuExpander'
@@ -20,11 +21,6 @@ import { ShareButton } from './ShareButton'
  * own chat drags and ignore unrelated drags (e.g. files into the composer).
  */
 const CONV_DRAG_MIME = 'application/x-houston-conv-id'
-
-function basename(p: string): string {
-  const parts = p.replace(/\/+$/, '').split('/')
-  return parts[parts.length - 1] || p
-}
 
 /** Which chats the sidebar shows: live chats ("active") or archived ones. */
 export type ConversationStatusFilter = 'active' | 'archived'
@@ -39,6 +35,8 @@ export interface SidebarProps {
   collapsed: boolean
   /** Toggle collapsed ⇄ expanded. */
   onToggleCollapse: () => void
+  /** The toggle's keyboard shortcut as displayed on this platform (e.g. ⌘B, Ctrl+B). */
+  toggleShortcut?: string
   /** Conversation ids with a live agent run — each gets a pulsing "running" dot. */
   runningIds: ReadonlySet<string>
   onSelect: (id: string) => void
@@ -268,13 +266,13 @@ function ConvRow({
           )}
           {conv.worktree ? (
             <>
-              {basename(conv.worktree.repoRoot)}{' '}
+              {baseName(conv.worktree.repoRoot)}{' '}
               <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
                 ⑂ {conv.worktree.branch}
               </span>
             </>
           ) : (
-            basename(conv.workspace)
+            baseName(conv.workspace)
           )}
         </div>
       </div>
@@ -284,6 +282,9 @@ function ConvRow({
           ref={btnRef}
           className="conv__action"
           title="More"
+          aria-label={`More actions for ${conv.title}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
           onClick={(e) => {
             e.stopPropagation()
             toggleMenu()
@@ -459,6 +460,9 @@ function GroupHeader({
             ref={btnRef}
             className="conv__action"
             title="Group options"
+            aria-label={`Options for group ${section.name}`}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
           >
             ⋯
@@ -673,6 +677,7 @@ function SidebarSectionView({
 
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
+  const shortcut = props.toggleShortcut ? ` (${props.toggleShortcut})` : ''
   const sections = buildSidebarSections(conversations, groups, props.collapsedSections)
   // Which conversation/group is currently being renamed (id), if any.
   const [renamingConv, setRenamingConv] = useState<string | null>(null)
@@ -685,7 +690,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <button
           className="sidebar__rail-btn"
           onClick={props.onToggleCollapse}
-          title="Expand sidebar (⌘B)"
+          title={`Expand sidebar${shortcut}`}
           aria-label="Expand sidebar"
         >
           »
@@ -717,7 +722,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       <button
         className="sidebar__collapse"
         onClick={props.onToggleCollapse}
-        title="Collapse sidebar (⌘B)"
+        title={`Collapse sidebar${shortcut}`}
         aria-label="Collapse sidebar"
       >
         «

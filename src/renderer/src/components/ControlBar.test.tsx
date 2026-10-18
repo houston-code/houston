@@ -110,6 +110,11 @@ describe('ControlBar', () => {
     expect(props.onChangeWorkspace).toHaveBeenCalledOnce()
   })
 
+  it('shows only the folder name for a Windows workspace path', () => {
+    render(<ControlBar {...baseProps()} workspace={'C:\\Users\\me\\projects\\houston'} />)
+    expect(screen.getByTitle('Change project folder')).toHaveTextContent(/^📁houston$/)
+  })
+
   it('prompts to set an API key only when the selected provider lacks one', () => {
     // Default selection (Anthropic, has key) → no warning.
     const withKey = baseProps()

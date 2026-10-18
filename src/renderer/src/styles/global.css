@@ -412,6 +412,11 @@ body.is-resizing {
   gap: 6px;
   margin-bottom: 10px;
 }
+/* The filter button sits in a menu-wrap (the popover's anchor); let it stretch to the
+   search box's height instead of shrinking to its icon. */
+.sidebar__searchrow > .conv__menu-wrap {
+  display: flex;
+}
 .sidebar__search {
   flex: 1;
   min-width: 0;

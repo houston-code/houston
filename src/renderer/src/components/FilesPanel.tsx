@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { FileEntry } from '@shared/files'
 import { Icon } from './Icon'
 import { FilePreview } from './FilePreview'
+import { baseName } from '../lib/paths'
 
 /** Debounce before a filter query hits the fuzzy file search (keeps typing smooth). */
 const FILTER_DEBOUNCE_MS = 160
@@ -9,12 +10,6 @@ const FILTER_DEBOUNCE_MS = 160
 /** Indentation (px) added per tree depth, plus the row's base left padding. */
 const INDENT_PX = 14
 const BASE_PAD_PX = 10
-
-/** The trailing path segment — a file/folder's display name. */
-function baseName(p: string): string {
-  const s = p.replace(/\/+$/, '')
-  return s.slice(s.lastIndexOf('/') + 1) || p
-}
 
 interface TreeRowProps {
   entry: FileEntry

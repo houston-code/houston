@@ -27,7 +27,8 @@ export function Titlebar({
   onToggleTerminal,
   terminalOpen,
   onToggleSideChat,
-  sideChatOpen
+  sideChatOpen,
+  terminalShortcut
 }: {
   title: string
   /** Background work (agent runs + terminals, in progress + recently finished) for the indicator. */
@@ -47,6 +48,8 @@ export function Titlebar({
   /** Toggle the side chat (a read-only aside about this chat). Absent with no open chat. */
   onToggleSideChat?: () => void
   sideChatOpen?: boolean
+  /** The terminal toggle's shortcut as displayed on this platform (e.g. ⌃`, Ctrl+`). */
+  terminalShortcut?: string
 }): JSX.Element {
   const hasChanges = !!changes && changes.fileCount > 0
   return (
@@ -110,7 +113,9 @@ export function Titlebar({
             </Tooltip>
           )}
           {onToggleTerminal && (
-            <Tooltip label="Terminal: toggle the integrated terminal (⌃`)">
+            <Tooltip
+              label={`Terminal: toggle the integrated terminal${terminalShortcut ? ` (${terminalShortcut})` : ''}`}
+            >
               <button
                 type="button"
                 className={`titlebar__action${terminalOpen ? ' titlebar__action--active' : ''}`}
