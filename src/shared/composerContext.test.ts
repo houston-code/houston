@@ -75,7 +75,7 @@ describe('formatFileContext', () => {
   })
   it('omits contents for binary and unreadable files', () => {
     expect(formatFileContext('a.bin', null, { binary: true })).toBe(
-      'File: a.bin (binary file — contents omitted)'
+      'File: a.bin (binary file, contents omitted)'
     )
     expect(formatFileContext('a.txt', null)).toBe('File: a.txt (could not be read)')
   })

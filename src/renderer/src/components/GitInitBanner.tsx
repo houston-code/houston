@@ -161,7 +161,7 @@ export function GitInitBanner({
         </p>
         <p className="git-init-banner__text">
           Initialize one so you can review, undo, and turn what Houston builds into a PR.
-          Nothing is committed — your files just become visible in Changes.
+          Nothing is committed. Your files just become visible in Changes.
         </p>
         {initError && (
           <p className="git-init-banner__error" role="alert">

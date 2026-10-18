@@ -1155,7 +1155,7 @@ export default function App(): JSX.Element {
       void window.api.saveMemory(workspace ?? '', scope, text).then((path) => {
         chat.notify(
           path
-            ? `Remembered — added to ${scope === 'project' ? 'this project' : 'every project'} (${path})`
+            ? `Remembered: added to ${scope === 'project' ? 'this project' : 'every project'} (${path})`
             : 'Could not save that instruction.',
           path ? 'info' : 'error'
         )
@@ -1257,7 +1257,7 @@ export default function App(): JSX.Element {
     } else if (res.ok) {
       chat.notify(
         res.reason === 'single-turn'
-          ? "This conversation is a single turn — there are no earlier turns to summarize. Start a new chat to free up context."
+          ? "This conversation is a single turn, so there are no earlier turns to summarize. Start a new chat to free up context."
           : 'Nothing to compact yet.'
       )
     } else {
@@ -1914,7 +1914,7 @@ export default function App(): JSX.Element {
           <div className="queue-bar">
             <span className="queue-bar__label">
               {queue.queued.length} queued ·{' '}
-              {chat.running ? 'sent when this run finishes' : 'the run stopped — send them now or clear'}
+              {chat.running ? 'sent when this run finishes' : 'the run stopped: send them now or clear them'}
             </span>
             <ul className="queue-bar__items">
               {queue.queued.map((q) => {

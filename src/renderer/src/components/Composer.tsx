@@ -416,7 +416,7 @@ export function Composer({
       focusEnd(start + clip.length)
       added = true
     }
-    if (!added) flashNotice(image ? 'Image copied — switch to a vision model to attach it' : 'Clipboard is empty')
+    if (!added) flashNotice(image ? 'Image copied. Switch to a vision model to attach it.' : 'Clipboard is empty')
   }
 
   const confirmLink = (): void => {
@@ -1024,7 +1024,7 @@ export function Composer({
                     type="button"
                     className="composer__send composer__steer"
                     aria-label="Steer"
-                    title="Steer the running turn — the agent reads this before its next step"
+                    title="Steer the running turn: the agent reads this before its next step"
                     onClick={steer}
                     disabled={sendDisabled}
                   >
@@ -1035,7 +1035,7 @@ export function Composer({
                   type="button"
                   className="composer__send"
                   aria-label="Queue"
-                  title="Queue this message — it’s sent when the current run finishes"
+                  title="Queue this message (it’s sent when the current run finishes)"
                   onClick={submit}
                   disabled={sendDisabled}
                 >

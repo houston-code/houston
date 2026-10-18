@@ -1164,7 +1164,7 @@ export function SettingsModal({
 
                 <SettingsSection
                   title="Add a provider"
-                  desc="Pick a known host, or point Houston at any OpenAI-compatible server — local or hosted."
+                  desc="Pick a known host, or point Houston at any OpenAI-compatible server, local or hosted."
                 >
                   <label className="field">
                     <span>Known hosts</span>
@@ -1188,7 +1188,7 @@ export function SettingsModal({
                               disabled={existingProviderIds.has(c.id)}
                             >
                               {c.label}
-                              {existingProviderIds.has(c.id) ? ' — added' : ''}
+                              {existingProviderIds.has(c.id) ? ' (added)' : ''}
                             </option>
                           ))}
                       </optgroup>
@@ -1203,7 +1203,7 @@ export function SettingsModal({
                               disabled={existingProviderIds.has(c.id)}
                             >
                               {c.label}
-                              {existingProviderIds.has(c.id) ? ' — added' : ''}
+                              {existingProviderIds.has(c.id) ? ' (added)' : ''}
                             </option>
                           ))}
                       </optgroup>
@@ -1382,7 +1382,7 @@ export function SettingsModal({
                       }
                     />
                     <span>
-                      Detect unproductive loops — repeating the same tool call, hitting the same error
+                      Detect unproductive loops: repeating the same tool call, hitting the same error
                       over and over, or going several turns without changing any file. On detection
                       the model gets one corrective reminder; if it keeps looping, the turn stops. On
                       by default.
@@ -1406,7 +1406,7 @@ export function SettingsModal({
                     <span>
                       Verification command (e.g. <code>npm run typecheck</code> or <code>npm test</code>
                       ). Runs in the project folder through the same sandbox as shell commands. Leave
-                      empty to disable — nothing runs unless you set this.
+                      empty to disable; nothing runs unless you set this.
                     </span>
                     <input
                       type="text"
@@ -1542,7 +1542,7 @@ export function SettingsModal({
                 {onShowScorecard && (
                   <SettingsSection
                     title="Loop scorecard"
-                    desc="See how each model has actually behaved across your chats — average steps, tool use, clean-finish rate, and cost. Aggregated on-device from your local data only, never sent anywhere."
+                    desc="See how each model has actually behaved across your chats: average steps, tool use, clean-finish rate, and cost. Aggregated on-device from your local data only, never sent anywhere."
                   >
                     <button type="button" className="btn" onClick={onShowScorecard}>
                       Open loop scorecard
@@ -1759,7 +1759,7 @@ export function SettingsModal({
 
                 <SettingsSection
                   title="Optional integrations"
-                  desc="These extras are optional — Houston works without them. Status on this machine:"
+                  desc="These extras are optional. Houston works without them. Status on this machine:"
                 >
                   <div className="integration">
                     <span className="integration__name">
@@ -1774,7 +1774,7 @@ export function SettingsModal({
                           ? 'Not found'
                           : integrations.gh.authenticated
                             ? 'Installed & signed in'
-                            : 'Installed — not signed in'}
+                            : 'Installed, not signed in'}
                     </span>
                   </div>
                   {integrations != null &&
@@ -1869,7 +1869,7 @@ export function SettingsModal({
                       After the agent writes a file, run a fast checker on it (<code>eslint</code>{' '}
                       for JS/TS, <code>ruff</code>/<code>pyflakes</code> for Python,{' '}
                       <code>gofmt</code> for Go) and show any problems to the agent so it can
-                      self-correct in the same turn. Read-only — never edits the file. Only runs when
+                      self-correct in the same turn. Read-only: never edits the file. Only runs when
                       the checker is installed; off by default.
                     </span>
                   </label>
@@ -1879,7 +1879,7 @@ export function SettingsModal({
                   title="MCP servers"
                   desc={
                     <>
-                      Connect Model Context Protocol servers — a local <strong>stdio</strong> process
+                      Connect Model Context Protocol servers: a local <strong>stdio</strong> process
                       or a remote <strong>HTTP</strong> or <strong>SSE</strong> endpoint. Remote
                       servers authenticate with a bearer-token header or with <strong>OAuth</strong>{' '}
                       (Sign in opens your browser; tokens are stored encrypted and refreshed
@@ -2203,7 +2203,7 @@ export function SettingsModal({
                   desc="Your installed version, and a manual check for new releases."
                 >
                   <div className="updates-row">
-                    <span className="updates-row__version">Houston {version || '—'}</span>
+                    <span className="updates-row__version">Houston {version || '–'}</span>
                     <button
                       className="btn btn--sm"
                       onClick={() => void checkForUpdates()}

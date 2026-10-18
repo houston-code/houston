@@ -218,7 +218,7 @@ export function untrackedToFileDiff(
   if (opts.binary) return { ...base, binary: true, note: 'Binary file' }
   if (opts.unreadable) return { ...base, binary: false, note: 'Could not read file' }
   if (opts.tooLargeKb != null) {
-    return { ...base, binary: false, note: `Large file (${opts.tooLargeKb} KB) — not shown` }
+    return { ...base, binary: false, note: `Large file (${opts.tooLargeKb} KB), not shown` }
   }
   const lines = diffLines('', content ?? '')
   const added = lines.length

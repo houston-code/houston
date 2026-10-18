@@ -3827,7 +3827,7 @@ describe('/mcp tools', () => {
       { id: 'docs', state: 'connected', tools: 2, toolNames: ['search_docs', 'fetch_page'] },
       paintNo
     )
-    expect(out).toContain('docs — 2 tools')
+    expect(out).toContain('docs: 2 tools')
     expect(out).toContain('search_docs')
     expect(out).toContain('fetch_page')
   })
