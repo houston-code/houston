@@ -6,6 +6,7 @@ import {
   resolveContextWindow,
   type SessionUsage
 } from '@shared/usage'
+import { anthropicThinksByDefault } from '@shared/model-facts'
 import { branchNameError, canCreateWorktree } from '../lib/worktree'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
@@ -21,6 +22,9 @@ export const POLICY_LABEL: Record<ApprovalPolicy, string> = {
   'auto-edit': 'Auto-approve edits',
   'full-auto': 'Full auto'
 }
+
+/** Provider kinds served by the Claude adapter, whose models the Claude gates describe. */
+const CLAUDE_KINDS = new Set(['anthropic', 'bedrock', 'vertex', 'foundry'])
 
 const REASONING_LABEL: Record<ReasoningEffort, string> = {
   off: 'Think: off',
@@ -102,6 +106,12 @@ export function ControlBar({
   const hasReasoning = selected
     ? resolveCapabilities(selected.model, selectedModelOpt?.caps).reasoning
     : true
+  // Some Claude models reason on every request; for them "off" runs at the lowest effort.
+  const alwaysThinks =
+    !!selected &&
+    !!provider &&
+    CLAUDE_KINDS.has(provider.kind) &&
+    anthropicThinksByDefault(selected.model)
   const pct = usage ? contextPercent(usage.context, ctxWindow) : null
   const meterClass = pct === null ? '' : pct >= 95 ? ' usage__fill--danger' : pct >= 80 ? ' usage__fill--warn' : ''
 
@@ -203,14 +213,16 @@ export function ControlBar({
         aria-label="Reasoning effort"
         onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
         title={
-          hasReasoning
-            ? 'How hard the model should think before answering'
-            : 'The selected model has no reasoning mode'
+          !hasReasoning
+            ? 'The selected model has no reasoning mode'
+            : alwaysThinks
+              ? 'This model always reasons. Minimal runs it at the lowest effort with its reasoning hidden.'
+              : 'How hard the model should think before answering'
         }
       >
         {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
           <option key={r} value={r}>
-            {REASONING_LABEL[r]}
+            {r === 'off' && alwaysThinks ? 'Think: minimal' : REASONING_LABEL[r]}
           </option>
         ))}
       </select>

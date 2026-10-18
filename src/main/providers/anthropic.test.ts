@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { ChatMessage, ChatRequest } from '@shared/agent'
-import { markMessagesCacheBreakpoint, createAnthropicProvider, toAnthropicMessages } from './anthropic'
+import {
+  markMessagesCacheBreakpoint,
+  createAnthropicProvider,
+  isStaleThinkingError,
+  toAnthropicMessages
+} from './anthropic'
 
 /** Fails if any two adjacent messages share a role — the API 400s on that. */
 function assertNoConsecutiveSameRole(out: Anthropic.MessageParam[]): void {
@@ -274,5 +279,106 @@ describe('anthropic usage reporting', () => {
     expect(usage.inputTokens).toBe(1000)
     expect(usage.cacheReadTokens).toBeUndefined()
     expect(usage.cacheWriteTokens).toBeUndefined()
+  })
+})
+
+/** A stream that fails on its first event, the way the SDK surfaces a rejected request. */
+function failingStream(err: unknown): unknown {
+  return {
+    [Symbol.asyncIterator]() {
+      return { next: () => Promise.reject(err) }
+    },
+    finalMessage: () => Promise.reject(err)
+  }
+}
+
+/** A prior assistant turn carrying a signed thinking block from `model`, then a new user turn. */
+function historyWithThinking(model: string): ChatMessage[] {
+  return [
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: 'answer', reasoning: [{ text: 'thought', signature: 'sig', model }] },
+    { role: 'user', content: 'second' }
+  ]
+}
+
+const sentThinkingBlocks = (call: number): number =>
+  ((h.stream.mock.calls[call][0] as { messages: Anthropic.MessageParam[] }).messages ?? [])
+    .flatMap((m) => blocksOf(m))
+    .filter((b) => b.type === 'thinking').length
+
+async function drain(req: Partial<ChatRequest> & { model: string }): Promise<void> {
+  const gen = createAnthropicProvider('sk-test').streamChat({
+    messages: [{ role: 'user', content: 'hi' }],
+    ...req
+  } as ChatRequest)
+  while (!(await gen.next()).done) {
+    /* drain */
+  }
+}
+
+describe('reasoning off on models that always think', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  it('runs at the lowest effort with reasoning hidden, instead of the model default', async () => {
+    const params = await captureRequest({ model: 'claude-opus-5-5', reasoningEffort: 'off' })
+    expect(params.thinking).toMatchObject({ type: 'adaptive', display: 'omitted' })
+    expect(params.output_config).toEqual({ effort: 'low' })
+  })
+
+  it('keeps replaying the signed blocks so the reasoning chain stays intact', async () => {
+    h.stream.mockReturnValue(fakeStream())
+    await drain({ model: 'claude-fable-5-1', reasoningEffort: 'off', messages: historyWithThinking('claude-fable-5-1') })
+    expect(sentThinkingBlocks(0)).toBe(1)
+  })
+
+  it('still sends nothing for a model that does not think unprompted', async () => {
+    const params = await captureRequest({ model: 'claude-opus-4-8', reasoningEffort: 'off' })
+    expect(params.thinking).toBeUndefined()
+  })
+})
+
+describe('stale prefix-bound thinking recovery', () => {
+  beforeEach(() => h.stream.mockReset())
+
+  const stale = Object.assign(
+    new Error(
+      'messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.'
+    ),
+    { status: 400 }
+  )
+
+  it('detects the binding 400 and nothing else', () => {
+    expect(isStaleThinkingError(stale)).toBe(true)
+    expect(isStaleThinkingError(Object.assign(new Error('max_tokens: too large'), { status: 400 }))).toBe(false)
+    expect(isStaleThinkingError(Object.assign(new Error(stale.message), { status: 500 }))).toBe(false)
+    expect(isStaleThinkingError(null)).toBe(false)
+  })
+
+  it('strips the replayed thinking blocks and retries once', async () => {
+    h.stream.mockReturnValueOnce(failingStream(stale)).mockReturnValueOnce(fakeStream())
+    await drain({ model: 'claude-opus-5-5', reasoningEffort: 'high', messages: historyWithThinking('claude-opus-5-5') })
+    expect(h.stream).toHaveBeenCalledTimes(2)
+    expect(sentThinkingBlocks(0)).toBe(1)
+    expect(sentThinkingBlocks(1)).toBe(0)
+    // Thinking itself stays on for the retry; only the stale history blocks go.
+    expect((h.stream.mock.calls[1][0] as { thinking?: unknown }).thinking).toMatchObject({ type: 'adaptive' })
+  })
+
+  it('does not retry an unrelated 400, or a model whose blocks are not prefix-bound', async () => {
+    const other = Object.assign(new Error('tools.0: invalid schema'), { status: 400 })
+    h.stream.mockReturnValueOnce(failingStream(other))
+    await expect(drain({ model: 'claude-opus-5-5', reasoningEffort: 'high' })).rejects.toBe(other)
+    h.stream.mockReset()
+    h.stream.mockReturnValueOnce(failingStream(stale))
+    await expect(drain({ model: 'claude-opus-4-8', reasoningEffort: 'high' })).rejects.toBe(stale)
+    expect(h.stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives up after one retry rather than looping', async () => {
+    h.stream.mockReturnValue(failingStream(stale))
+    await expect(
+      drain({ model: 'claude-sonnet-5-5', reasoningEffort: 'high', messages: historyWithThinking('claude-sonnet-5-5') })
+    ).rejects.toBe(stale)
+    expect(h.stream).toHaveBeenCalledTimes(2)
   })
 })
