@@ -390,6 +390,32 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(keyInput).toHaveValue(''))
   })
 
+  it('offers a restart when the key cannot be saved because the Keychain is unusable', async () => {
+    installApi({
+      setKey: vi.fn(() => Promise.reject(new Error('secure store unavailable'))),
+      getSecureStorageStatus: vi.fn(() => Promise.resolve({ available: false, platform: 'darwin' })),
+      relaunchApp: vi.fn(() => Promise.resolve(true))
+    })
+    renderModal()
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-secret' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    expect(await screen.findByRole('button', { name: 'Restart Houston' })).toBeInTheDocument()
+    expect(screen.getByText(/choose Always Allow/)).toBeInTheDocument()
+    expect(screen.queryByText(/Could not save API key/)).not.toBeInTheDocument()
+  })
+
+  it('shows the plain error when the save failed for another reason', async () => {
+    installApi({
+      setKey: vi.fn(() => Promise.reject(new Error('disk full'))),
+      getSecureStorageStatus: vi.fn(() => Promise.resolve({ available: true, platform: 'darwin' }))
+    })
+    renderModal()
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-secret' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    expect(await screen.findByText('Could not save API key: disk full')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Restart Houston' })).not.toBeInTheDocument()
+  })
+
   it('fetches models from the provider and writes them into the textarea', async () => {
     const api = installApi()
     renderModal()

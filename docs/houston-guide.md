@@ -911,6 +911,11 @@ also **Check for Updates…** in the app menu on macOS or the Help menu on Windo
 Linux), and optional integrations (`gh`, formatters). API keys
 are encrypted with the OS keychain and stay in the main process.
 
+If a key won't save because the OS keychain is unavailable, Settings says how to fix it
+and offers **Restart Houston**. On macOS this usually means the Keychain prompt was
+denied: macOS only asks again after a restart, so restart and choose **Always Allow**.
+On Linux, unlock or install a keyring (such as GNOME Keyring or KWallet), then restart.
+
 ## License and legal
 
 Houston is open-source software under the **Apache License 2.0** (`LICENSE` in the

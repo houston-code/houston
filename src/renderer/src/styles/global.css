@@ -5531,3 +5531,19 @@ body.is-resizing .plan-panel__resizer::after {
   border-left-color: var(--border);
   opacity: 0.8;
 }
+
+/* ---- Secure storage (Keychain) recovery ---- */
+.secure-storage-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: auto;
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--danger);
+}
+.secure-storage-notice__text {
+  flex: 1;
+  min-width: 0;
+}

@@ -90,13 +90,30 @@ export function guardQuitWithLiveWork(e: ElectronEvent, win: BrowserWindow | und
  * Resolves true when the restart may proceed.
  */
 export async function confirmRestartForUpdate(): Promise<boolean> {
+  return confirmRestart('restart')
+}
+
+/**
+ * Relaunch Houston, confirming first if work is still running. Used to recover from a
+ * denied Keychain prompt: Electron caches the failed key lookup for the process, so
+ * only a fresh process makes macOS ask again. Resolves true when the relaunch started.
+ */
+export async function relaunchApp(): Promise<boolean> {
+  if (!(await confirmRestart('relaunch'))) return false
+  app.relaunch()
+  app.quit()
+  return true
+}
+
+/** Confirm a restart (update install or relaunch), marking the quit confirmed on a yes. */
+async function confirmRestart(reason: QuitReason): Promise<boolean> {
   if (quitConfirmed) return true
   const work = liveWork()
   if (shouldConfirmQuit(work)) {
     if (quitPrompting) return false
     quitPrompting = true
     try {
-      if (!(await confirmLiveWork(dialogParent(), work, 'restart'))) return false
+      if (!(await confirmLiveWork(dialogParent(), work, reason))) return false
     } catch (err) {
       log.error('restart confirmation dialog failed', err)
       return false
