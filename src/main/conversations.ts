@@ -91,7 +91,16 @@ function isConversationShape(raw: unknown): raw is Conversation {
  * shape-identical to v1, so today the only change is stamping the version.
  */
 function migrate(conv: Conversation): Conversation {
-  return { ...conv, schemaVersion: CONVERSATION_SCHEMA_VERSION }
+  return { ...conv, schemaVersion: stampedVersion(conv.schemaVersion) }
+}
+
+/**
+ * This build's schema version, or the higher one a newer Houston already stamped on the
+ * file. Writing the lower number after a downgrade would make the next upgrade re-run
+ * migrations the file has already been through.
+ */
+function stampedVersion(onDisk: number | undefined): number {
+  return Math.max(CONVERSATION_SCHEMA_VERSION, typeof onDisk === 'number' ? onDisk : 0)
 }
 
 /**
@@ -134,8 +143,9 @@ function read(id: string): Conversation | null {
 function write(conv: Conversation): void {
   const path = filePath(conv.id)
   // Stamp on every write, whatever the call path, so a file read as legacy (v0)
-  // converges to the current version the first time it's touched.
-  const toWrite: Conversation = { ...conv, schemaVersion: CONVERSATION_SCHEMA_VERSION }
+  // converges to the current version the first time it's touched (and a file stamped by
+  // a newer Houston keeps its higher version).
+  const toWrite: Conversation = { ...conv, schemaVersion: stampedVersion(conv.schemaVersion) }
   // 0600 — owner read/write only. Transcripts can capture secrets echoed in tool
   // output (a curl with an auth header, an env dump), so keep them off world-read.
   writeFileAtomicSync(path, JSON.stringify(toWrite, null, 2), 0o600)

@@ -154,6 +154,18 @@ function settingsPath(): string {
   return join(getUserDataDir(), 'settings.json')
 }
 
+/**
+ * The schema version to write: this build's, or a higher one the file already carries.
+ * A newer Houston may have written the file (the user downgraded), and its migrations
+ * already ran on it. Stamping this build's lower version would make the next upgrade run
+ * them again: re-adding models the user has since deleted, redoing one-time decisions.
+ * Keeping the higher number means a downgrade-then-upgrade runs nothing twice; this build
+ * still reads and writes the file, and settings it doesn't know survive the round trip.
+ */
+function stampedVersion(...versions: Array<number | undefined>): number {
+  return Math.max(SETTINGS_SCHEMA_VERSION, ...versions.map((v) => (typeof v === 'number' ? v : 0)))
+}
+
 function migrate(raw: Partial<AppSettings>): AppSettings {
   const base = defaultSettings()
   const fromVersion = typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 0
@@ -235,7 +247,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   const merged: AppSettings = {
     ...base,
     ...upgraded,
-    schemaVersion: SETTINGS_SCHEMA_VERSION,
+    // A file written by a newer Houston keeps its higher version (see stampedVersion).
+    schemaVersion: stampedVersion(fromVersion),
     providers
   }
   // Drop a selection that no longer matches any configured model — e.g. a settings.json
@@ -434,7 +447,10 @@ export function saveSettings(next: AppSettings): AppSettings {
     ...next,
     selected: reconcileSelectedModel(next.providers, next.selected)
   }
-  const { settings } = extractHeaderSecrets({ ...reconciled, schemaVersion: SETTINGS_SCHEMA_VERSION })
+  const { settings } = extractHeaderSecrets({
+    ...reconciled,
+    schemaVersion: stampedVersion(next.schemaVersion, cache?.schemaVersion)
+  })
   cache = settings
   persist(cache)
   return withKeyFlags(cache)
