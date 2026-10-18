@@ -132,6 +132,70 @@ describe('useChat', () => {
     expect(result.current.checkpoint).toEqual({ runId, files: 2, reverted: false })
   })
 
+  it('counts every file-writing tool toward the checkpoint, not only write_file and edit_file', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    const runId = await sendAndGetRunId(result, api)
+
+    emit({ runId, type: 'tool_result', callId: 'm', name: 'multi_edit', ok: true, output: 'edited' })
+    emit({ runId, type: 'tool_result', callId: 'p', name: 'apply_patch', ok: true, output: 'patched' })
+    emit({ runId, type: 'tool_result', callId: 'n', name: 'notebook_edit', ok: true, output: 'cell' })
+
+    expect(result.current.checkpoint).toEqual({ runId, files: 3, reverted: false })
+  })
+
+  it("takes the main process's file count, which sees every file a patch touched", async () => {
+    const { api, emit } = installApi()
+    const getCheckpoint = vi.fn((_conv: string) => Promise.resolve({ runId, files: 3, reverted: false }))
+    Object.assign(api, { getCheckpoint })
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+
+    emit({ runId, type: 'tool_result', callId: 'p', name: 'apply_patch', ok: true, output: 'patched' })
+    await act(async () => {})
+
+    expect(getCheckpoint).toHaveBeenCalledWith('c1')
+    expect(result.current.checkpoint).toEqual({ runId, files: 3, reverted: false })
+  })
+
+  it("shows a writable subagent's edits, which only the main process can count", async () => {
+    const { api, emit } = installApi()
+    let files = 0
+    Object.assign(api, {
+      getCheckpoint: vi.fn(() => Promise.resolve(files ? { runId, files, reverted: false } : null))
+    })
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+
+    // A subagent that changed nothing leaves no checkpoint...
+    emit({ runId, type: 'tool_result', callId: 's1', name: 'dispatch_writable_agent', ok: true, output: 'report' })
+    await act(async () => {})
+    expect(result.current.checkpoint).toBeNull()
+
+    // ...one that edited two files shows them.
+    files = 2
+    emit({ runId, type: 'tool_result', callId: 's2', name: 'dispatch_writable_agent', ok: true, output: 'report' })
+    await act(async () => {})
+    expect(result.current.checkpoint).toEqual({ runId, files: 2, reverted: false })
+  })
+
+  it("ignores a late checkpoint answer once another turn has started", async () => {
+    const { api, emit } = installApi()
+    let answer: (cp: { runId: string; files: number; reverted: boolean }) => void = () => {}
+    Object.assign(api, {
+      getCheckpoint: vi.fn(() => new Promise((resolve) => (answer = resolve)))
+    })
+    const { result } = renderHook(() => useChat('c1'))
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'tool_result', callId: 'p', name: 'apply_patch', ok: true, output: 'patched' })
+    emit({ runId, type: 'done', stopReason: 'end_turn' })
+
+    // The next turn starts (clearing the checkpoint) before the answer arrives.
+    emit({ runId: 'next', type: 'turn_start', conversationId: 'c1', userText: 'more' })
+    await act(async () => answer({ runId, files: 4, reverted: false }))
+    expect(result.current.checkpoint).toBeNull()
+  })
+
   it('does not count reads or failed writes toward the checkpoint', async () => {
     const { api, emit } = installApi()
     const { result } = renderHook(() => useChat())

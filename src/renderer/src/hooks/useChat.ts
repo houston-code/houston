@@ -104,7 +104,16 @@ export interface ChatController {
   notify: (text: string, tone?: 'info' | 'error') => void
 }
 
-const WRITE_TOOLS = new Set(['write_file', 'edit_file'])
+/**
+ * Tools whose successful result means the turn changed files on disk, so it has a
+ * revertable checkpoint: every file-writing tool records one in the main process.
+ * Tracking only write_file and edit_file left a turn that used multi_edit,
+ * apply_patch, or notebook_edit without a revert affordance until it was reopened.
+ */
+const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'notebook_edit'])
+
+/** A writable subagent's edits land in the dispatching turn's checkpoint too. */
+const DELEGATED_WRITE_TOOLS = new Set(['dispatch_writable_agent'])
 
 export function useChat(conversationId: string | null = null): ChatController {
   const [items, setItems] = useState<DisplayItem[]>([])
@@ -156,13 +165,34 @@ export function useChat(conversationId: string | null = null): ChatController {
         return
       }
       // Track successful file writes so the turn's changes can be reverted.
-      if (e.type === 'tool_result' && e.ok && WRITE_TOOLS.has(e.name)) {
+      if (
+        e.type === 'tool_result' &&
+        e.ok &&
+        (FILE_WRITE_TOOLS.has(e.name) || DELEGATED_WRITE_TOOLS.has(e.name))
+      ) {
         const runId = e.runId
-        setCheckpoint((prev) => ({
-          runId,
-          files: (prev?.runId === runId ? prev.files : 0) + 1,
-          reverted: false
-        }))
+        // Count the call at once, so the affordance arrives with the result...
+        if (FILE_WRITE_TOOLS.has(e.name)) {
+          setCheckpoint((prev) => ({
+            runId,
+            files: (prev?.runId === runId ? prev.files : 0) + 1,
+            reverted: false
+          }))
+        }
+        // ...then take the main process's checkpoint, which counts distinct files (an
+        // apply_patch can touch several; two edits of one file are one change) and is
+        // the only place a writable subagent's edits show up. Ignored if the user has
+        // since moved to another conversation or started another turn.
+        const conv = convIdRef.current
+        if (conv && window.api.getCheckpoint) {
+          void window.api
+            .getCheckpoint(conv)
+            .then((cp) => {
+              const sameTurn = runIdRef.current === runId || runIdRef.current === null
+              if (cp && cp.runId === runId && sameTurn && convIdRef.current === conv) setCheckpoint(cp)
+            })
+            .catch(() => {})
+        }
       }
       // A fresh plan (initial, or a revision after "suggest changes") opens/refreshes
       // the review panel; the previous one, if any, is superseded in the transcript.
