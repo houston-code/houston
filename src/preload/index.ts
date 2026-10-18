@@ -120,6 +120,9 @@ const api = {
     ipcRenderer.invoke(IPC.secureStorageStatus),
   /** Relaunch Houston; resolves false if the user kept running work instead. */
   relaunchApp: (): Promise<boolean> => ipcRenderer.invoke(IPC.appRelaunch),
+  /** Verify a key with a live listing without storing it; resolves to the model count. */
+  testKey: (providerId: string, key: string): Promise<number> =>
+    ipcRenderer.invoke(IPC.settingsTestKey, providerId, key),
   /** Whether a local model supports tool calling: true / false / null (unknown). */
   ollamaSupportsTools: (providerId: string, model: string): Promise<boolean | null> =>
     ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),

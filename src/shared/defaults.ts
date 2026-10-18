@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 9
+export const SETTINGS_SCHEMA_VERSION = 10
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected

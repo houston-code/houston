@@ -83,6 +83,8 @@ export const IPC = {
   secureStorageStatus: 'secrets:status',
   /** Relaunch Houston (confirming if work is running), e.g. to re-prompt for Keychain access. */
   appRelaunch: 'app:relaunch',
+  /** Check a candidate API key with a live model listing, without storing it. */
+  settingsTestKey: 'settings:testKey',
   /** Whether a local (Ollama) model supports tool calling — true / false / null (unknown). */
   ollamaSupportsTools: 'ollama:supportsTools',
   // MCP: remote-server OAuth sign-in/out + live connection status (Settings UI).

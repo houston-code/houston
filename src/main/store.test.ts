@@ -165,7 +165,7 @@ describe('settings migration — model backfill', () => {
   it('stamps the current schema version on load', async () => {
     writeSettings({ schemaVersion: 1, providers: [openaiProvider(['gpt-4o'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().schemaVersion).toBe(9)
+    expect(getSettings().schemaVersion).toBe(10)
   })
 
   it('v4 strips stale hardcoded model labels from a built-in provider', async () => {
@@ -693,5 +693,80 @@ describe('custom-header secrets', () => {
     expect(headerStore.map[providerHeaderScope('openai')]).toEqual({ Authorization: 'Bearer keep-me' })
     // Disk still carries no cleartext value.
     expect(JSON.stringify(readDisk())).not.toContain('keep-me')
+  })
+})
+
+/** The desktop app records its version on every launch; its presence = it has run here. */
+function markDesktopHasRun(): void {
+  writeFileSync(join(state.userData, 'update-state.json'), JSON.stringify({ lastSeenVersion: '0.5.0' }))
+}
+
+describe('settings migration — onboarding (v10)', () => {
+  it('gives an existing desktop install the tour invitation and marks the tips seen', async () => {
+    markDesktopHasRun()
+    writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toEqual({
+      seenTips: ['approval', 'worktree', 'changes', 'revert'],
+      tourInvite: 'pending'
+    })
+  })
+
+  it('treats a legacy file with no schemaVersion as an existing desktop install too', async () => {
+    markDesktopHasRun()
+    writeSettings({ providers: [openaiProvider(['gpt-5.5'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding?.tourInvite).toBe('pending')
+  })
+
+  it('treats a terminal-only profile as new to the desktop app (tips stay unseen)', async () => {
+    writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toEqual({})
+  })
+
+  it('saves the upgrade at once, so a later launch keeps the same decision', async () => {
+    // Terminal-only profile upgraded on the desktop app's first launch...
+    writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
+    await loadStore().then((s) => s.getSettings())
+    const onDisk = JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
+    expect(onDisk.schemaVersion).toBe(10)
+    expect(onDisk.onboarding).toEqual({})
+    // ...which then records its version. The next launch must not reclassify the user.
+    markDesktopHasRun()
+    vi.resetModules()
+    const reloaded = await loadStore()
+    expect(reloaded.getSettings().onboarding).toEqual({})
+  })
+
+  it('does not rewrite a file that is already current', async () => {
+    writeSettings({ schemaVersion: 10, providers: [openaiProvider(['gpt-5.5'])] })
+    const before = statSync(join(state.userData, 'settings.json')).mtimeMs
+    await loadStore().then((s) => s.getSettings())
+    expect(statSync(join(state.userData, 'settings.json')).mtimeMs).toBe(before)
+  })
+
+  it('leaves a fresh install (no settings file) without onboarding state', async () => {
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toBeUndefined()
+  })
+
+  it('does not re-invite once the invitation was dismissed', async () => {
+    markDesktopHasRun()
+    writeSettings({
+      schemaVersion: 10,
+      providers: [openaiProvider(['gpt-5.5'])],
+      onboarding: { tourInvite: 'done', seenTips: [] }
+    })
+    const { getSettings } = await loadStore()
+    expect(getSettings().onboarding).toEqual({ tourInvite: 'done', seenTips: [] })
+  })
+
+  it('round-trips onboarding progress through a save', async () => {
+    const { getSettings, saveSettings } = await loadStore()
+    saveSettings({ ...getSettings(), onboarding: { checklistDone: true, seenTips: ['approval'] } })
+    vi.resetModules()
+    const reloaded = await loadStore()
+    expect(reloaded.getSettings().onboarding).toEqual({ checklistDone: true, seenTips: ['approval'] })
   })
 })

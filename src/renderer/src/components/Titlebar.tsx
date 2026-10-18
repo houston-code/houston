@@ -97,6 +97,7 @@ export function Titlebar({
                 className="titlebar__action"
                 onClick={onShowChanges}
                 aria-label="Changes"
+                data-tour="changes"
               >
                 <Icon name="diff" size={15} />
                 {hasChanges && <span className="titlebar__badge">{changes.fileCount}</span>}

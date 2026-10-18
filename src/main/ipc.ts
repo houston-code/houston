@@ -122,6 +122,34 @@ import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 
+/** Longest pasted key accepted by testKey; real provider keys are far shorter. */
+const MAX_TEST_KEY_LENGTH = 4096
+
+/**
+ * Check a candidate API key with a live model listing, without storing it, so a typo
+ * can never replace a working key. Resolves to the number of models the key can see;
+ * rejects with the provider's message, with the key itself scrubbed out of it.
+ */
+export async function testProviderKey(providerId: unknown, key: unknown): Promise<number> {
+  if (typeof providerId !== 'string' || typeof key !== 'string') {
+    throw new Error('Invalid provider or key.')
+  }
+  const candidate = key.trim()
+  if (!candidate || candidate.length > MAX_TEST_KEY_LENGTH) throw new Error('Invalid key.')
+  const provider = getProvider(providerId)
+  if (!provider) throw new Error(`Unknown provider: ${providerId}`)
+  if (!provider.requiresKey) throw new Error(`${provider.label} doesn't use an API key.`)
+  try {
+    return (await listModels(provider, candidate)).length
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    // No `cause`: the original error can carry the candidate key, and a cause would
+    // keep it reachable to anything that logs or serializes this error.
+    // eslint-disable-next-line preserve-caught-error
+    throw new Error(msg.split(candidate).join('[key]'))
+  }
+}
+
 /**
  * Translate a delete-confirmation dialog button index into what should happen.
  * Button 0 is always Cancel (in both the plain and the worktree dialog), so a
@@ -606,6 +634,10 @@ export function registerIpc(): void {
     if (!provider) throw new Error(`Unknown provider: ${providerId}`)
     return listModels(provider)
   })
+
+  ipcMain.handle(IPC.settingsTestKey, (_event, providerId: unknown, key: unknown) =>
+    testProviderKey(providerId, key)
+  )
 
   // Preflight: does this local model support tool calling? Only meaningful for an
   // Ollama-style (openai-compatible) provider; anything else returns null (unknown)

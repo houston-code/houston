@@ -154,8 +154,10 @@ export function createProvider(config: ProviderConfig): Provider {
  * while never reaching the network. Azure OpenAI has neither an API nor a curatable
  * lineup — its models are deployments the user names — so it echoes what's configured.
  */
-export async function listModels(config: ProviderConfig): Promise<ModelOption[]> {
-  const key = getKey(config.id)
+export async function listModels(config: ProviderConfig, keyOverride?: string): Promise<ModelOption[]> {
+  // `keyOverride` lists with a candidate key that isn't stored yet (testKey), so a key
+  // can be checked before it replaces the one in the secrets store.
+  const key = keyOverride ?? getKey(config.id)
   const headers = resolveHeaders(config.id)
   switch (config.kind) {
     case 'anthropic':

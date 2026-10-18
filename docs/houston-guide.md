@@ -911,10 +911,25 @@ also **Check for Updates…** in the app menu on macOS or the Help menu on Windo
 Linux), and optional integrations (`gh`, formatters). API keys
 are encrypted with the OS keychain and stay in the main process.
 
-If a key won't save because the OS keychain is unavailable, Settings says how to fix it
+If a key won't save because the OS keychain is unavailable, Settings (and the Get started
+checklist's Connect panel) says how to fix it
 and offers **Restart Houston**. On macOS this usually means the Keychain prompt was
 denied: macOS only asks again after a restart, so restart and choose **Always Allow**.
 On Linux, unlock or install a keyring (such as GNOME Keyring or KWallet), then restart.
+
+## Getting started in the desktop app
+
+On a first launch the welcome screen shows a three-step **Get started** checklist:
+connect a model (paste an API key for Anthropic, OpenAI, or Gemini, which is checked
+with a live model listing before it is saved, or point at a local Ollama or LM Studio
+server), open a project folder, and send a first task. Each step ticks itself off from
+the app's real state, and **Skip setup** hides the checklist for good.
+
+A few one-time tips then point at controls the first time they matter: the approval
+mode and the **New worktree** toggle before the first message, and **Revert** and
+**Changes** after the first turn that edits files. **Skip tips** or Esc dismisses them.
+Installs from before this feature get a single "Take the tour" banner instead. Replay
+the tips any time with **Show getting-started tips** in the command palette (⌘K).
 
 ## License and legal
 
