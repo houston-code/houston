@@ -271,7 +271,8 @@
       "window": 1000000,
       "pricing": {
         "input": 2,
-        "output": 10
+        "output": 10,
+        "cacheRead": 0.1
       },
       "caps": {
         "vision": true,
@@ -417,6 +418,33 @@
         "anthropicXhigh": false,
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
+        "openaiReasoning": false,
+        "geminiThinking": false
+      }
+    },
+    "claude-haiku-5-5": {
+      "window": 1000000,
+      "pricing": {
+        "input": 0.1,
+        "output": 0.5,
+        "longContext": {
+          "above": 100000,
+          "input": 0.5,
+          "output": 2.5
+        }
+      },
+      "caps": {
+        "vision": true,
+        "reasoning": true
+      },
+      "tools": true,
+      "gates": {
+        "anthropicThinking": true,
+        "anthropicLegacy": false,
+        "anthropicInterleaved": false,
+        "anthropicXhigh": false,
+        "anthropicPreserved": true,
+        "anthropicThinksByDefault": true,
         "openaiReasoning": false,
         "geminiThinking": false
       }
@@ -619,7 +647,8 @@
       "window": 1000000,
       "pricing": {
         "input": 2,
-        "output": 10
+        "output": 10,
+        "cacheRead": 0.1
       },
       "caps": {
         "vision": true,
@@ -655,6 +684,33 @@
         "anthropicXhigh": false,
         "anthropicPreserved": false,
         "anthropicThinksByDefault": false,
+        "openaiReasoning": false,
+        "geminiThinking": false
+      }
+    },
+    "anthropic.claude-haiku-5-5": {
+      "window": 1000000,
+      "pricing": {
+        "input": 0.1,
+        "output": 0.5,
+        "longContext": {
+          "above": 100000,
+          "input": 0.5,
+          "output": 2.5
+        }
+      },
+      "caps": {
+        "vision": true,
+        "reasoning": true
+      },
+      "tools": true,
+      "gates": {
+        "anthropicThinking": true,
+        "anthropicLegacy": false,
+        "anthropicInterleaved": false,
+        "anthropicXhigh": false,
+        "anthropicPreserved": true,
+        "anthropicThinksByDefault": true,
         "openaiReasoning": false,
         "geminiThinking": false
       }
@@ -729,7 +785,8 @@
       "window": 1000000,
       "pricing": {
         "input": 2,
-        "output": 10
+        "output": 10,
+        "cacheRead": 0.1
       },
       "caps": {
         "vision": true,
@@ -1653,7 +1710,14 @@
         "input": 2,
         "output": 12,
         "cacheRead": 0.2,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "longContext": {
+          "above": 200000,
+          "input": 4,
+          "output": 18,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
       },
       "caps": {
         "vision": true,
@@ -1677,7 +1741,14 @@
         "input": 2,
         "output": 12,
         "cacheRead": 0.2,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "longContext": {
+          "above": 200000,
+          "input": 4,
+          "output": 18,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
       },
       "caps": {
         "vision": true,
@@ -1869,7 +1940,14 @@
         "input": 1.25,
         "output": 10,
         "cacheRead": 0.125,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "longContext": {
+          "above": 200000,
+          "input": 2.5,
+          "output": 15,
+          "cacheRead": 0.25,
+          "cacheWrite": 0
+        }
       },
       "caps": {
         "vision": true,
@@ -1989,7 +2067,14 @@
         "input": 1.25,
         "output": 10,
         "cacheRead": 0.125,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "longContext": {
+          "above": 200000,
+          "input": 2.5,
+          "output": 15,
+          "cacheRead": 0.25,
+          "cacheWrite": 0
+        }
       },
       "caps": {
         "vision": true,
@@ -2013,7 +2098,14 @@
         "input": 1.25,
         "output": 10,
         "cacheRead": 0.125,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "longContext": {
+          "above": 200000,
+          "input": 2.5,
+          "output": 15,
+          "cacheRead": 0.25,
+          "cacheWrite": 0
+        }
       },
       "caps": {
         "vision": false,
@@ -2185,6 +2277,8 @@
       "claude-sonnet-4@20250514",
       "claude-3-7-sonnet-20250219",
       "claude-3-5-sonnet-20241022",
+      "anthropic.claude-haiku-5-5",
+      "claude-haiku-5-5",
       "anthropic.claude-haiku-4-5",
       "claude-haiku-4-5",
       "claude-3-5-haiku-20241022",
@@ -2293,6 +2387,7 @@
       "gpt-4-turbo",
       "gpt-3.5-turbo",
       "anthropic.claude-fable-5-1",
+      "anthropic.claude-haiku-5-5",
       "anthropic.claude-haiku-4-5",
       "anthropic.claude-opus-5-5",
       "anthropic.claude-sonnet-5-5",
@@ -2301,6 +2396,7 @@
       "claude-2.1",
       "claude-fable-5-1",
       "claude-fable-5",
+      "claude-haiku-5-5",
       "claude-haiku-4-5",
       "claude-3-5-haiku-20241022",
       "claude-3-haiku-20240307",
@@ -2374,6 +2470,7 @@
       "gemini-2.0-flash",
       "gemini-2.0-flash-thinking-exp",
       "anthropic.claude-fable-5-1",
+      "anthropic.claude-haiku-5-5",
       "anthropic.claude-haiku-4-5",
       "anthropic.claude-opus-5-5",
       "anthropic.claude-sonnet-5-5",
@@ -2382,6 +2479,7 @@
       "claude-2.1",
       "claude-fable-5-1",
       "claude-fable-5",
+      "claude-haiku-5-5",
       "claude-haiku-4-5",
       "claude-3-5-haiku-20241022",
       "claude-3-haiku-20240307",
@@ -2485,6 +2583,7 @@
       "gpt-4-turbo",
       "gpt-3.5-turbo",
       "anthropic.claude-fable-5-1",
+      "anthropic.claude-haiku-5-5",
       "anthropic.claude-haiku-4-5",
       "anthropic.claude-opus-5-5",
       "anthropic.claude-sonnet-5-5",
@@ -2493,6 +2592,7 @@
       "claude-2.1",
       "claude-fable-5-1",
       "claude-fable-5",
+      "claude-haiku-5-5",
       "claude-haiku-4-5",
       "claude-3-5-haiku-20241022",
       "claude-3-haiku-20240307",
@@ -2569,6 +2669,8 @@
       "claude-sonnet-4@20250514",
       "claude-3-7-sonnet-20250219",
       "claude-3-5-sonnet-20241022",
+      "anthropic.claude-haiku-5-5",
+      "claude-haiku-5-5",
       "anthropic.claude-haiku-4-5",
       "claude-haiku-4-5",
       "claude-3-5-haiku-20241022",

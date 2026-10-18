@@ -55,9 +55,15 @@ function usd(n: number): string {
 function priceOf(m: ModelOption): { short: string; spoken: string } | null {
   const p = resolvePricing(m.id, m.caps)
   if (!p) return null
+  const base = `${usd(p.input)} input, ${usd(p.output)} output per million tokens`
+  const long = p.longContext
   return {
-    short: `${usd(p.input)}/${usd(p.output)}`,
-    spoken: `${usd(p.input)} input, ${usd(p.output)} output per million tokens`
+    // A trailing "+" marks a price that rises for long prompts; the tooltip and the spoken
+    // name give the higher rate.
+    short: `${usd(p.input)}/${usd(p.output)}${long ? '+' : ''}`,
+    spoken: long
+      ? `${base}, ${usd(long.input)} input, ${usd(long.output)} output above ${formatTokens(long.above)} tokens`
+      : base
   }
 }
 
