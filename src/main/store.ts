@@ -22,6 +22,7 @@ import {
 import {
   backfillDefaultModels,
   pruneDefaultModels,
+  renameBuiltInProviderLabels,
   DEFAULT_COMPACTION_THRESHOLD,
   defaultSettings,
   reconcileSelectedModel,
@@ -228,6 +229,9 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   if (fromVersion < 10 && upgraded.onboarding === undefined) {
     upgraded.onboarding = readLastSeenVersion() !== null ? existingInstallOnboarding() : {}
   }
+  // v11: the local providers' seeded names changed ("Local — Ollama" → "Ollama (local)"). The
+  // name is saved with the provider, so rename the ones still carrying the old seed.
+  if (fromVersion < 11) providers = renameBuiltInProviderLabels(providers)
   const merged: AppSettings = {
     ...base,
     ...upgraded,

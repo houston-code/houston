@@ -2,7 +2,7 @@ import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 10
+export const SETTINGS_SCHEMA_VERSION = 11
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -132,7 +132,7 @@ export function defaultProviders(): ProviderConfig[] {
     {
       id: 'ollama',
       kind: 'openai-compatible',
-      label: 'Local — Ollama',
+      label: 'Ollama (local)',
       baseUrl: 'http://localhost:11434/v1',
       models: [],
       requiresKey: false,
@@ -142,7 +142,7 @@ export function defaultProviders(): ProviderConfig[] {
     {
       id: 'lmstudio',
       kind: 'openai-compatible',
-      label: 'Local — LM Studio',
+      label: 'LM Studio (local)',
       baseUrl: 'http://localhost:1234/v1',
       models: [],
       requiresKey: false,
@@ -228,6 +228,24 @@ export function stripBuiltInModelLabels(saved: ProviderConfig[]): ProviderConfig
   return saved.map((p) => {
     if (!p.builtIn || !p.models.some((m) => m.label !== undefined)) return p
     return { ...p, models: p.models.map(({ label: _label, ...m }) => m) }
+  })
+}
+
+/** Built-in provider names older versions seeded, keyed by provider id, mapped to the current name. */
+const RENAMED_BUILT_IN_LABELS: Record<string, { from: string; to: string }> = {
+  ollama: { from: 'Local \u2014 Ollama', to: 'Ollama (local)' },
+  lmstudio: { from: 'Local \u2014 LM Studio', to: 'LM Studio (local)' }
+}
+
+/**
+ * Rename built-in providers whose saved name is exactly a name an older version seeded.
+ * The display name is persisted with the provider, so changing the seed alone would only
+ * reach fresh installs. A name the user has changed is left as they set it.
+ */
+export function renameBuiltInProviderLabels(saved: ProviderConfig[]): ProviderConfig[] {
+  return saved.map((p) => {
+    const rename = RENAMED_BUILT_IN_LABELS[p.id]
+    return p.builtIn && rename && p.label === rename.from ? { ...p, label: rename.to } : p
   })
 }
 
