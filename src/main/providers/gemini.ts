@@ -1,13 +1,32 @@
 import type { Content, GoogleGenAI, Part } from '@google/genai'
 import { randomUUID } from 'node:crypto'
-import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import type {
+  ChatMessage,
+  ChatRequest,
+  Provider,
+  ProviderStreamEvent,
+  ReasoningBlock
+} from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
 
 /** Output floor for models that always think (Gemini 4): Google's recommended minimum. */
 const GEMINI_THINKING_MIN_OUTPUT = 32_768
 
-export function toGeminiContents(messages: ChatMessage[]): Content[] {
+/**
+ * The thought signatures a turn's function calls carried, keyed by call id, for the
+ * model the request goes to. A signature is bound to the model that issued it, so
+ * after a fallback hop or a model switch the calls go back without one.
+ */
+function callSignatures(m: ChatMessage, model: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const r of m.reasoning ?? []) {
+    if (r.id && r.signature && (!r.model || r.model === model)) out.set(r.id, r.signature)
+  }
+  return out
+}
+
+export function toGeminiContents(messages: ChatMessage[], model = ''): Content[] {
   const out: Content[] = []
   // Tracks whether the last emitted turn is a `user` turn built from tool
   // result(s), so a plain user turn that immediately follows (e.g. a mid-loop
@@ -61,8 +80,16 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
       mergingToolResults = false
       const parts: Content['parts'] = []
       if (m.content) parts!.push({ text: m.content })
+      // Thinking models (Gemini 3 and later) sign their function calls and reject a
+      // request whose current-turn calls come back without the signature, so each
+      // call is sent with the one it was issued with.
+      const signatures = callSignatures(m, model)
       for (const tc of m.toolCalls ?? []) {
-        parts!.push({ functionCall: { name: tc.name, args: tc.arguments } })
+        const thoughtSignature = signatures.get(tc.id)
+        parts!.push({
+          functionCall: { name: tc.name, args: tc.arguments },
+          ...(thoughtSignature ? { thoughtSignature } : {})
+        })
       }
       out.push({ role: 'model', parts })
     } else if (m.role === 'tool') {
@@ -124,7 +151,7 @@ export function createGeminiProvider(apiKey: string): Provider {
 
       const stream = await ai.models.generateContentStream({
         model: req.model,
-        contents: toGeminiContents(req.messages),
+        contents: toGeminiContents(req.messages, req.model),
         config
       })
 
@@ -133,6 +160,9 @@ export function createGeminiProvider(apiKey: string): Provider {
       let outputTokens: number | undefined
       let cacheReadTokens: number | undefined
       let finishReason: string | undefined
+      // Function-call thought signatures, carried on the turn as reasoning blocks keyed
+      // by call id so the next request can return each one (see toGeminiContents).
+      const signatures: ReasoningBlock[] = []
       for await (const chunk of stream) {
         // usageMetadata is cumulative across the stream; keep the latest seen.
         const usage = chunk.usageMetadata
@@ -157,10 +187,14 @@ export function createGeminiProvider(apiKey: string): Provider {
         for (const part of parts) {
           if (part.functionCall) {
             sawToolCall = true
+            const id = part.functionCall.id || randomUUID()
+            if (part.thoughtSignature) {
+              signatures.push({ text: '', model: req.model, id, signature: part.thoughtSignature })
+            }
             yield {
               type: 'tool_call',
               call: {
-                id: part.functionCall.id || randomUUID(),
+                id,
                 name: part.functionCall.name ?? '',
                 arguments: (part.functionCall.args as Record<string, unknown>) ?? {}
               }
@@ -182,7 +216,8 @@ export function createGeminiProvider(apiKey: string): Provider {
           inputTokens,
           outputTokens,
           ...(cacheReadTokens ? { cacheReadTokens } : {})
-        }
+        },
+        ...(signatures.length ? { reasoning: signatures } : {})
       }
     }
   }
