@@ -581,10 +581,12 @@ function normalizeShellCommand(s: string): string {
  * quotes and resolving backslash escapes: `"rm"`, `r''m`, `\rm`, and `rm -r"f"` all
  * collapse to `rm`. Without this, a deny rule like `*rm -rf*` is trivially dodged by
  * quoting the program name — the literal command string no longer contains the token
- * `rm -rf`, so the pattern never fires. Applied to BOTH the rule pattern and the
- * command before matching, so a rule the user deliberately wrote with quotes (e.g.
- * `git commit -m "*"`) still matches. The `*` wildcard survives (it's an ordinary
- * character here — a rule pattern's `*` stays a wildcard for {@link globMatches}).
+ * `rm -rf`, so the pattern never fires. Applied to BOTH a deny or ask rule's pattern
+ * and the command before matching, so a rule the user deliberately wrote with quotes
+ * still matches. The `*` wildcard survives (it's an ordinary character here — a rule
+ * pattern's `*` stays a wildcard for {@link globMatches}). An allow rule reads the
+ * command with {@link literalShellUnits} instead, which keeps a quoted `*` apart from
+ * a bare one.
  *
  * Not a full shell parser: it strips quoting/escaping so the matcher sees through
  * spelling tricks, and runs per leaf sub-command AFTER {@link splitShellCommand}
@@ -632,12 +634,12 @@ function dequoteShell(s: string): string {
 }
 
 /**
- * Match a permission pattern against a shell command. `*` matches any run of
- * characters including `/` (a command is not a path — `/` is just a character),
- * so a deny rule like `*rm -rf*` fires on `rm -rf /tmp/x`. Both sides are first
- * reduced past quoting/escaping (see {@link dequoteShell}) so the rule matches on
- * what actually runs, not how it was spelled. Falls back to a prefix match for
- * convenience ("git" matches "git status").
+ * Match a deny or ask pattern against a shell command (an allow uses
+ * {@link shellAllowMatches}). `*` matches any run of characters including `/` (a
+ * command is not a path — `/` is just a character), so a deny rule like `*rm -rf*`
+ * fires on `rm -rf /tmp/x`. Both sides are first reduced past quoting/escaping (see
+ * {@link dequoteShell}) so the rule matches on what actually runs, not how it was
+ * spelled. Falls back to a prefix match for convenience ("git" matches "git status").
  */
 function shellCommandMatches(pattern: string, command: string): boolean {
   // An empty pattern matches nothing (inert rule), not every command — check the
@@ -661,12 +663,133 @@ function shellCommandEquals(pattern: string, command: string): boolean {
   return normalizeShellCommand(dequoteShell(pattern)) === normalizeShellCommand(dequoteShell(command))
 }
 
-/** First matching rule's action for a single shell sub-command, or null. */
+/**
+ * Characters that mean the same to the shell quoted or not, in any position: letters,
+ * digits, `_ - . / , : + @ % ^`, and anything non-ASCII. Every other character can
+ * change what runs once its quotes come off: whitespace splits a word, `* ? [` glob,
+ * `~` and `$` expand, `{` brace-expands, `< >` redirect, `=` assigns, `#` comments.
+ */
+const SHELL_INERT_CHAR = /^[A-Za-z0-9_\-./,:+@%^\u0080-￿]$/
+
+/**
+ * How an ALLOW rule reads a shell command, as a list of units that join into its
+ * canonical text. Quotes and backslash escapes come off as in {@link dequoteShell}, so
+ * `"rm"`, `r''m`, and `\rm` all read `rm`, but a quoted or escaped character that is
+ * not {@link SHELL_INERT_CHAR inert} stays marked as literal (the unit `\c`), and a
+ * `$` inside double quotes, which still expands but is not split or globbed, is the
+ * unit `"$`. A literal backslash is `\\` and a literal `"` is `\"`, so the reading is
+ * one-to-one: `rm '*'` (one file named `*`) is `rm \*` and never `rm *` (every file),
+ * and `rm -rf '~'` is never `rm -rf ~`.
+ *
+ * {@link dequoteShell} folds these together on purpose, for deny and ask rules: a
+ * respelling must not dodge a deny, and reading too much as the same only blocks
+ * more. An allow needs the opposite, since whatever it folds together it approves.
+ *
+ * Unquoted whitespace is collapsed and trimmed (after {@link normalizeShellCommand}, so
+ * an empty `''` word leaves no double space); a quoted space is the unit `\ `.
+ */
+function literalShellUnits(s: string): string[] {
+  const units: string[] = []
+  const literal = (c: string): void => {
+    units.push(SHELL_INERT_CHAR.test(c) ? c : `\\${c}`)
+  }
+  const text = normalizeShellCommand(s)
+  for (let i = 0; i < text.length; ) {
+    const c = text[i]
+    if (c === '\\') {
+      if (i + 1 < text.length) literal(text[i + 1])
+      i += 2
+    } else if (c === '"') {
+      i += 1
+      while (i < text.length && text[i] !== '"') {
+        if (text[i] === '\\' && i + 1 < text.length && '"`$\\\n'.includes(text[i + 1])) {
+          literal(text[i + 1])
+          i += 2
+        } else {
+          if (text[i] === '$') units.push('"$')
+          else literal(text[i])
+          i += 1
+        }
+      }
+      i += 1
+    } else if (c === "'") {
+      i += 1
+      while (i < text.length && text[i] !== "'") {
+        literal(text[i])
+        i += 1
+      }
+      i += 1
+    } else if (c === ' ') {
+      if (units.length && units[units.length - 1] !== ' ') units.push(' ')
+      i += 1
+    } else {
+      units.push(c)
+      i += 1
+    }
+  }
+  if (units[units.length - 1] === ' ') units.pop()
+  return units
+}
+
+/**
+ * Any run of whole {@link literalShellUnits} units: a marked `\c` is never split, so a
+ * wildcard can't stop between a backslash and its character and leave the rest of the
+ * pattern matching out of step with the command's units.
+ */
+const SHELL_UNITS_RE = String.raw`(?:\\[\s\S]|[^\\])*`
+
+/**
+ * {@link shellCommandMatches} for an ALLOW rule: the pattern and the command are
+ * compared as {@link literalShellUnits}, so a quoted `*` or `~` in the command is not
+ * the bare one a pattern names (`rm -rf '~'` covers `rm -rf '~' x`, never `rm -rf ~`).
+ * Every `*` in the pattern is still its wildcard, quoted or not, so a hand-written
+ * `git commit -m "*"` covers any message; a literal `*` takes an exact rule.
+ */
+function shellAllowMatches(pattern: string, command: string): boolean {
+  if (!pattern.trim()) return false
+  const p = literalShellUnits(pattern)
+  if (!p.length) return false
+  const c = literalShellUnits(command).join('')
+  let re = ''
+  for (const [i, u] of p.entries()) {
+    const wild = u === '*' || u === '\\*'
+    const prevWild = i > 0 && (p[i - 1] === '*' || p[i - 1] === '\\*')
+    if (!wild) re += escapeRegExp(u)
+    else if (!prevWild) re += SHELL_UNITS_RE
+  }
+  if (new RegExp(`^${re}$`).test(c)) return true
+  const prefix = p.join('')
+  return c === prefix || c.startsWith(`${prefix} `)
+}
+
+/**
+ * {@link shellCommandEquals} for an ALLOW rule: the same command read as
+ * {@link literalShellUnits}, so an exact `rm '*'` never allows `rm *`.
+ */
+function shellAllowEquals(pattern: string, command: string): boolean {
+  if (!pattern.trim()) return false
+  const p = literalShellUnits(pattern).join('')
+  return p !== '' && p === literalShellUnits(command).join('')
+}
+
+/**
+ * First matching rule's action for a single shell sub-command, or null. An allow rule
+ * reads the command as {@link literalShellUnits}, a deny or ask rule as
+ * {@link dequoteShell}: a quoted `*` or `~` is the bare one to a deny, never to an allow.
+ */
 function matchOneShell(rules: PermissionRule[], command: string): PermissionRule['action'] | null {
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== 'run_shell') continue
     const match = r.match ?? ''
-    if (r.exact ? shellCommandEquals(match, command) : shellCommandMatches(match, command)) return r.action
+    const hit =
+      r.action === 'allow'
+        ? r.exact
+          ? shellAllowEquals(match, command)
+          : shellAllowMatches(match, command)
+        : r.exact
+          ? shellCommandEquals(match, command)
+          : shellCommandMatches(match, command)
+    if (hit) return r.action
   }
   return null
 }
@@ -988,7 +1111,9 @@ function isCountOnlyPager(tokens: string[]): boolean {
  *   broadened to `cat`/`rm`/`sudo rm`. A program spelled with `*` (`./*.sh run`) is
  *   kept verbatim too, since its two-token prefix would be a glob over other programs.
  *   Only a verbatim pattern can therefore hold `*`, and that one is saved exact (see
- *   {@link shellAllowRule}).
+ *   {@link shellAllowRule}). So is a program whose quoting the prefix would drop
+ *   (`'~/bin/x' status`, `"my tool" status`): written bare, the prefix would name a
+ *   different program, and would not cover the command it was saved for.
  *
  * - A `head`/`tail` whose arguments are only line/byte counts (`tail -60`, `head -c 4000`,
  *   `head -n 30`) collapses to the bare program: it's slicing piped output, and keeping
@@ -1013,7 +1138,8 @@ export function shellRulePatterns(command: string): string[] {
       !COMMAND_WRAPPERS.has(prog) &&
       !prog.includes('*') &&
       verb &&
-      SUBCOMMAND_VERB.test(verb)
+      SUBCOMMAND_VERB.test(verb) &&
+      shellAllowMatches(`${prog} ${verb}`, norm)
     ) {
       patterns.add(`${prog} ${verb}`)
     } else {

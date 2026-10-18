@@ -148,7 +148,9 @@ for the *denied* path, not only the allowed one, and a security pass before the 
 - `src/main/agent/permissions.ts` — permission-rule matching. Subject and pattern are
   canonicalized per kind before comparison (paths anchored to the roots, URL authority
   lowercased, shell commands dequoted) so a re-spelling of a denied subject cannot slip
-  past a rule.
+  past a rule. An allow reads a shell command the other way: a quoted `*`, `~`, `$`, or
+  space stays distinct from a bare one, so approving a literal never approves the
+  expansion.
 - `src/main/sandbox/` — the per-OS sandbox backends and their conformance suite. The
   `linux-sandbox` CI job is the only one that exercises the real bubblewrap backend; the
   `test` job can only skip it.

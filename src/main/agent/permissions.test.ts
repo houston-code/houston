@@ -474,6 +474,76 @@ describe('matchRule', () => {
       expect(matchRule(allowEcho, 'run_shell', 'echo "hi" && rm -rf /tmp/x')).toBeNull()
       expect(matchRule(denyRm, 'run_shell', 'echo "hi" && "rm" -rf /tmp/x')).toBe('deny')
     })
+
+    it('a deny or ask still reads a quoted `*`, `~`, or space as the bare one', () => {
+      const rules: PermissionRule[] = [deny('run_shell', 'rm -rf ~*'), { action: 'ask', tool: 'run_shell', match: 'ls ~/x y' }]
+      for (const cmd of ["rm -rf '~'", 'rm -rf "~"', 'rm -rf \\~', "rm -rf '~/.ssh'"]) {
+        expect(matchRule(rules, 'run_shell', cmd)).toBe('deny')
+      }
+      expect(matchRule(rules, 'run_shell', "ls '~/x y'")).toBe('ask')
+      const exactDeny: PermissionRule[] = [{ action: 'deny', tool: 'run_shell', match: 'rm *', exact: true }]
+      for (const cmd of ["rm '*'", 'rm "*"', 'rm \\*', 'rm *']) {
+        expect(matchRule(exactDeny, 'run_shell', cmd)).toBe('deny')
+      }
+    })
+
+    it('an allow keeps a quoted `*`, `~`, `$`, space, or `>` apart from a bare one', () => {
+      // Each pair reads the same once dequoted, but the shell runs them differently.
+      const pairs: [string, string][] = [
+        ["rm '*'", 'rm *'],
+        ['rm \\*', 'rm *'],
+        ["rm -rf '~'", 'rm -rf ~'],
+        ["rm -rf '~'", 'rm -rf ~/x'],
+        ["rm -rf 'build ~'", 'rm -rf build ~'],
+        ["rm -rf '$HOME'", 'rm -rf $HOME'],
+        ["rm -rf '$HOME'", 'rm -rf "$HOME"'],
+        ['rm -rf "$X"', 'rm -rf $X'],
+        ["echo 'a > ~/.bashrc'", 'echo a > ~/.bashrc'],
+        ["ls '?.ts'", 'ls ?.ts'],
+        ["ls '[ab].ts'", 'ls [ab].ts'],
+        ["echo '{a,b}'", 'echo {a,b}']
+      ]
+      for (const [approved, other] of pairs) {
+        const exact: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: approved, exact: true }]
+        expect(matchRule(exact, 'run_shell', approved)).toBe('allow')
+        expect(matchRule(exact, 'run_shell', other)).toBeNull()
+        // A `*` in a rule that is not exact is its wildcard, quoted or not (see below).
+        if (!approved.includes('*')) expect(matchRule([allow('run_shell', approved)], 'run_shell', other)).toBeNull()
+        // Nor the other way round: approving the bare form allows no quoted one.
+        expect(matchRule([{ action: 'allow', tool: 'run_shell', match: other, exact: true }], 'run_shell', approved)).toBeNull()
+      }
+    })
+
+    it('an allow still folds respellings that change nothing', () => {
+      const exact: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: "rm '*'", exact: true }]
+      for (const cmd of ['rm "*"', 'rm \\*', `r''m '*'`, `"rm"  '*'`]) {
+        expect(matchRule(exact, 'run_shell', cmd)).toBe('allow')
+      }
+      expect(matchRule([allow('run_shell', 'git status')], 'run_shell', `"git" 'status' -s`)).toBe('allow')
+      expect(matchRule([allow('run_shell', 'cat src/a.ts')], 'run_shell', 'cat "src/a.ts"')).toBe('allow')
+      expect(matchRule([allow('run_shell', "rm -rf '~'")], 'run_shell', 'rm -rf "~" x')).toBe('allow')
+      expect(matchRule([allow('run_shell', 'echo "$HOME"')], 'run_shell', 'echo "$HOME"')).toBe('allow')
+    })
+
+    it("an allow's own `*` is still a wildcard, quoted or not, over quoted text too", () => {
+      const allowEcho: PermissionRule[] = [allow('run_shell', 'echo *')]
+      for (const cmd of ["echo '*'", 'echo "a b"', 'echo ~', "echo 'a > b'"]) {
+        expect(matchRule(allowEcho, 'run_shell', cmd)).toBe('allow')
+      }
+      expect(matchRule([allow('run_shell', "ls '*'")], 'run_shell', 'ls src')).toBe('allow')
+      expect(matchRule([allow('run_shell', 'ls *.ts')], 'run_shell', "ls 'a b.ts'")).toBe('allow')
+      expect(matchRule([allow('run_shell', 'ls *.ts')], 'run_shell', 'ls a.js')).toBeNull()
+    })
+
+    it("an allow's wildcard cannot end inside a quoted character", () => {
+      // `echo *'>x'` allows echo of anything ending in a literal `>x`. In `echo '\'>x` the
+      // `\` is literal but the `>` redirects; a wildcard that could stop between a
+      // literal backslash and its marker would read that `>` as the quoted one.
+      const rules: PermissionRule[] = [allow('run_shell', "echo *'>x'")]
+      expect(matchRule(rules, 'run_shell', "echo a'>x'")).toBe('allow')
+      expect(matchRule(rules, 'run_shell', `echo '\\'>x`)).toBeNull()
+      expect(matchRule(rules, 'run_shell', 'echo \\\\>x')).toBeNull()
+    })
   })
 
   it('prefix-matches a bare command pattern', () => {
@@ -785,6 +855,22 @@ describe('a saved "Always allow" covers only the approved target', () => {
     expect(matchRule(saved('run_shell', { command: './*.sh run' }), 'run_shell', './evil.sh run', ROOTS)).toBeNull()
   })
 
+  it('run_shell: a quoted `*` or `~` in an approved command is not the bare one', () => {
+    const star = saved('run_shell', { command: "rm '*'" })
+    expect(star).toEqual([{ action: 'allow', tool: 'run_shell', match: "rm '*'", exact: true }])
+    expect(matchRule(star, 'run_shell', 'rm "*"', ROOTS)).toBe('allow')
+    expect(matchRule(star, 'run_shell', 'rm *', ROOTS)).toBeNull()
+    const tilde = saved('run_shell', { command: "rm -rf '~'" })
+    expect(tilde).toEqual([{ action: 'allow', tool: 'run_shell', match: "rm -rf '~'" }])
+    expect(matchRule(tilde, 'run_shell', 'rm -rf ~', ROOTS)).toBeNull()
+    expect(matchRule(tilde, 'run_shell', 'rm -rf ~/.ssh', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: "rm -rf 'build ~'" }), 'run_shell', 'rm -rf build ~', ROOTS)).toBeNull()
+    // A quoted program is not saved bare, which would name a different program.
+    const tool = saved('run_shell', { command: "'~/bin/tool' status" })
+    expect(matchRule(tool, 'run_shell', '~/bin/tool status', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: '"my tool" status' }), 'run_shell', 'my tool status', ROOTS)).toBeNull()
+  })
+
   it('run_shell: every saved rule set auto-approves the command it was saved for', () => {
     for (const command of [
       'rm *',
@@ -794,7 +880,17 @@ describe('a saved "Always allow" covers only the approved target', () => {
       'find . -name "*.ts" -type f',
       'echo * | head -5',
       './*.sh run x',
-      'for f in *.ts; do wc -l $f; done'
+      'for f in *.ts; do wc -l $f; done',
+      "rm '*'",
+      'rm \\*',
+      "rm -rf '~'",
+      'rm -rf "build dir"',
+      "'~/bin/tool' status",
+      '"my tool" status -v',
+      '\\~/bin/tool status',
+      'echo "$HOME" | wc -c',
+      `git commit -m "it's done"`,
+      `"git" 'status' && r''m -f "a b"`
     ]) {
       expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS)).toBe('allow')
     }
@@ -1000,6 +1096,15 @@ describe('shellRulePatterns', () => {
     expect(shellRulePatterns('git add *')).toEqual(['git add'])
   })
 
+  it('keeps a program verbatim when its prefix would drop quoting that matters', () => {
+    expect(shellRulePatterns("'~/bin/tool' status")).toEqual(["'~/bin/tool' status"])
+    expect(shellRulePatterns('"my tool" status -v')).toEqual(['"my tool" status -v'])
+    expect(shellRulePatterns('"$HOME/bin/x" run')).toEqual(['"$HOME/bin/x" run'])
+    // Quoting that changes nothing still generalizes, and an escape is kept as written.
+    expect(shellRulePatterns(`"git" 'status' -s`)).toEqual(['git status'])
+    expect(shellRulePatterns('\\~/bin/tool status -v')).toEqual(['\\~/bin/tool status'])
+  })
+
   it('keeps command-wrapper-prefixed commands exact (never broadens to `sudo rm`)', () => {
     // A wrapper's second token is a program, not a sub-command verb — generalizing
     // `sudo rm -rf /tmp/build` to `sudo rm` would then auto-approve `sudo rm -rf /`.
@@ -1068,6 +1173,18 @@ describe('alreadyAllowedAsRule', () => {
 })
 
 describe('cleanupPermissionRules', () => {
+  it('never rewrites a quoted program into a bare one, or a quoted `*` into a glob', () => {
+    expect(cleanupPermissionRules([allow('run_shell', "cd /r && '~/bin/tool' status -v")])).toEqual([
+      allow('run_shell', "'~/bin/tool' status -v")
+    ])
+    // Two exact rules a quote tells apart are both kept: neither covers the other.
+    const both: PermissionRule[] = [
+      { action: 'allow', tool: 'run_shell', match: 'rm *', exact: true },
+      { action: 'allow', tool: 'run_shell', match: "rm '*'", exact: true }
+    ]
+    expect(cleanupPermissionRules(both)).toEqual(both)
+  })
+
   it('collapses a pile of exact cd-prefixed commands into a handful of prefixes', () => {
     const messy: PermissionRule[] = [
       allow('run_shell', 'cd /Users/me/repo && npm install foo'),
