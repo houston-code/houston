@@ -98,6 +98,8 @@ export interface NoticeItem {
   tone: 'error' | 'info' | 'handoff'
   /** A missing language runtime, rendered with a one-click install. */
   runtime?: { label: string; installCommand?: string; url: string }
+  /** A "retrying" notice; the next attempt updates it in place instead of stacking. */
+  retry?: boolean
 }
 export interface QuestionItem {
   kind: 'question'
@@ -466,15 +468,12 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'retry': {
       const finalized = finalizeStreaming(items)
-      return [
-        ...finalized,
-        {
-          kind: 'notice',
-          id: nextId(),
-          text: `⟳ Connection issue, retrying (${e.attempt}/${e.max}): ${e.message}`,
-          tone: 'info'
-        }
-      ]
+      const text = `⟳ Connection issue, retrying (${e.attempt}/${e.max}): ${e.message}`
+      // Back-to-back attempts update one line ("retrying (3/6)") rather than stacking
+      // a row per attempt down the transcript.
+      const last = finalized[finalized.length - 1]
+      if (last?.kind === 'notice' && last.retry) return [...finalized.slice(0, -1), { ...last, text }]
+      return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'info', retry: true }]
     }
     case 'model_fallback': {
       const finalized = finalizeStreaming(items)

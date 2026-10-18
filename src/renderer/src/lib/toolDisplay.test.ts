@@ -18,6 +18,35 @@ describe('shortenPath', () => {
 })
 
 describe('describeTool', () => {
+  it('labels the multi-file and git tools instead of showing their raw names', () => {
+    expect(describeTool(tool('multi_edit', { path: 'src/x.ts' }))).toEqual({ verb: 'Edit', target: 'src/x.ts', mono: true })
+    const one = ['*** Begin Patch', '*** Update File: src/app.ts', '@@', '-a', '+b', '*** End Patch'].join('\n')
+    expect(describeTool(tool('apply_patch', { patch: one }))).toEqual({ verb: 'Patch', target: 'src/app.ts', mono: true })
+    const two = ['*** Begin Patch', '*** Add File: a.txt', '+a', '*** Delete File: b.txt', '*** End Patch'].join('\n')
+    expect(describeTool(tool('apply_patch', { patch: two }))).toEqual({ verb: 'Patch', target: '2 files', mono: false })
+    const unified = ['--- a/src/app.ts', '+++ b/src/app.ts', '@@ -1 +1 @@', '-a', '+b'].join('\n')
+    expect(describeTool(tool('apply_patch', { patch: unified })).target).toBe('src/app.ts')
+    expect(describeTool(tool('git_status', {})).verb).toBe('Git status')
+    expect(describeTool(tool('git_diff', { path: 'src' }))).toEqual({ verb: 'Git diff', target: 'src', mono: true })
+  })
+
+  it('labels the GitHub issue, review, merge and CI tools', () => {
+    expect(describeTool(tool('gh_pr_merge', { number: 42 })).verb).toBe('Merge PR')
+    expect(describeTool(tool('gh_pr_merge', { number: 42 })).target).toBe('#42')
+    expect(describeTool(tool('gh_pr_review', {})).target).toBe('(current)')
+    expect(describeTool(tool('gh_issue_view', { number: '7' })).target).toBe('#7')
+    expect(describeTool(tool('gh_issue_create', { title: 'Crash on start' })).target).toBe('Crash on start')
+    expect(describeTool(tool('gh_run_view', { run_id: 123 })).target).toBe('123')
+  })
+
+  it('shows an MCP tool by its own name and server, not the namespaced identifier', () => {
+    expect(describeTool(tool('mcp__linear__create_issue', {}))).toEqual({
+      verb: 'create_issue',
+      target: 'via linear',
+      mono: false
+    })
+  })
+
   it('describes file tools by path', () => {
     expect(describeTool(tool('read_file', { path: 'src/x.ts' }))).toEqual({
       verb: 'Read',

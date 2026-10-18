@@ -407,6 +407,9 @@ describe('Transcript', () => {
   it('renders a resolved plan marker as a non-interactive status', () => {
     renderTranscript([planItem({ status: 'accepted' })])
     expect(screen.getByText('Accepted')).toBeInTheDocument()
+    // It is no longer "ready" once decided.
+    expect(screen.queryByText('Plan ready')).not.toBeInTheDocument()
+    expect(screen.getByText('Plan')).toBeInTheDocument()
     // No button — a resolved plan can't be re-opened for a decision.
     expect(screen.queryByRole('button', { name: /Plan ready/ })).not.toBeInTheDocument()
   })
