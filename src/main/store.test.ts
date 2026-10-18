@@ -301,7 +301,7 @@ describe('settings migration — retired Gemini models (v6)', () => {
   it('does not re-add the retired models on a later load', async () => {
     // The prune must stick: an up-to-date install reloading must not resurrect them.
     writeSettings({
-      schemaVersion: 7,
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
       providers: [geminiProvider(['gemini-2.5-pro'])]
     })
     const { getSettings } = await loadStore()
@@ -316,13 +316,25 @@ describe('settings migration — retired Gemini models (v6)', () => {
     writeSettings({ schemaVersion: 6, providers: [geminiProvider(['gemini-2.5-pro'], 'gemini-2.5-pro')] })
     const { getSettings } = await loadStore()
     const gemini = getSettings().providers.find((p) => p.id === 'gemini')!
+    // 3.1-pro-preview left the seed in v13, so the v7 add now brings only the Flash tiers;
+    // the later v13 add brings Gemini 4 Argon.
     expect(gemini.models.map((m) => m.id)).toEqual([
       'gemini-2.5-pro',
-      'gemini-3.1-pro-preview',
       'gemini-3.8-flash',
-      'gemini-3.5-flash-lite'
+      'gemini-3.5-flash-lite',
+      'gemini-4-argon'
     ])
     expect(gemini.defaultModel).toBe('gemini-2.5-pro') // the user's stored choice stands
+  })
+
+  it('adds Gemini 4 Argon on the v13 bump and keeps 3.1-pro-preview, which still serves', async () => {
+    writeSettings({ schemaVersion: 12, providers: [geminiProvider(['gemini-3.1-pro-preview', 'gemini-3.8-flash'])] })
+    const { getSettings } = await loadStore()
+    expect(getSettings().providers.find((p) => p.id === 'gemini')!.models.map((m) => m.id)).toEqual([
+      'gemini-3.1-pro-preview',
+      'gemini-3.8-flash',
+      'gemini-4-argon'
+    ])
   })
 })
 

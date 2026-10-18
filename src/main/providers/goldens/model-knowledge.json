@@ -1704,6 +1704,39 @@
         "geminiThinking": false
       }
     },
+    "gemini-4-argon": {
+      "window": 1000000,
+      "pricing": {
+        "input": 2,
+        "output": 10,
+        "cacheRead": 0.1,
+        "cacheWrite": 0,
+        "scheduled": [
+          {
+            "from": "2026-12-01",
+            "input": 4,
+            "output": 20,
+            "cacheRead": 0.2,
+            "cacheWrite": 0
+          }
+        ]
+      },
+      "caps": {
+        "vision": true,
+        "reasoning": true
+      },
+      "tools": true,
+      "gates": {
+        "anthropicThinking": false,
+        "anthropicLegacy": false,
+        "anthropicInterleaved": false,
+        "anthropicXhigh": false,
+        "anthropicPreserved": false,
+        "anthropicThinksByDefault": false,
+        "openaiReasoning": false,
+        "geminiThinking": true
+      }
+    },
     "gemini-3.1-pro-preview": {
       "window": 1000000,
       "pricing": {
@@ -1772,7 +1805,16 @@
         "input": 0.75,
         "output": 3.75,
         "cacheRead": 0.075,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "scheduled": [
+          {
+            "from": "2027-01-01",
+            "input": 1.5,
+            "output": 7.5,
+            "cacheRead": 0.15,
+            "cacheWrite": 0
+          }
+        ]
       },
       "caps": {
         "vision": true,
@@ -1796,7 +1838,16 @@
         "input": 0.75,
         "output": 3.75,
         "cacheRead": 0.075,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "scheduled": [
+          {
+            "from": "2027-01-01",
+            "input": 1.5,
+            "output": 7.5,
+            "cacheRead": 0.15,
+            "cacheWrite": 0
+          }
+        ]
       },
       "caps": {
         "vision": true,
@@ -1820,7 +1871,16 @@
         "input": 0.75,
         "output": 3.75,
         "cacheRead": 0.075,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "scheduled": [
+          {
+            "from": "2027-01-01",
+            "input": 1.5,
+            "output": 7.5,
+            "cacheRead": 0.15,
+            "cacheWrite": 0
+          }
+        ]
       },
       "caps": {
         "vision": true,
@@ -2129,7 +2189,16 @@
         "input": 0.75,
         "output": 3.75,
         "cacheRead": 0.075,
-        "cacheWrite": 0
+        "cacheWrite": 0,
+        "scheduled": [
+          {
+            "from": "2027-01-01",
+            "input": 1.5,
+            "output": 7.5,
+            "cacheRead": 0.15,
+            "cacheWrite": 0
+          }
+        ]
       },
       "caps": {
         "vision": true,
@@ -2303,6 +2372,7 @@
       "gemini-2.0-flash",
       "gemini-1.5-pro",
       "gemini-pro",
+      "gemini-4-argon",
       "gemini-2.0-flash-thinking-exp",
       "google/gemini-3.8-flash",
       "gpt-5.6",
@@ -2439,6 +2509,7 @@
       "gemini-2.0-flash",
       "gemini-1.5-pro",
       "gemini-pro",
+      "gemini-4-argon",
       "gemini-2.0-flash-thinking-exp",
       "google/gemini-3.8-flash",
       "llama3.1:latest",
@@ -2446,6 +2517,7 @@
       "qwen2.5-coder"
     ],
     "gemini": [
+      "gemini-4-argon",
       "gpt-5.5-pro",
       "gpt-5.4-pro",
       "gpt-5.2-pro",
@@ -2635,6 +2707,7 @@
       "gemini-2.0-flash",
       "gemini-1.5-pro",
       "gemini-pro",
+      "gemini-4-argon",
       "gemini-2.0-flash-thinking-exp",
       "google/gemini-3.8-flash",
       "llama3.1:latest",
@@ -2695,6 +2768,7 @@
       "gemini-2.0-flash",
       "gemini-1.5-pro",
       "gemini-pro",
+      "gemini-4-argon",
       "gemini-2.0-flash-thinking-exp",
       "google/gemini-3.8-flash",
       "gpt-5.6",

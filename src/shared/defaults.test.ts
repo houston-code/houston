@@ -58,7 +58,7 @@ describe('defaultSettings', () => {
   it('seeds the current Gemini lineup with a stable default', () => {
     const gemini = defaultSettings().providers.find((p) => p.id === 'gemini')!
     expect(gemini.models.map((m) => m.id)).toEqual([
-      'gemini-3.1-pro-preview',
+      'gemini-4-argon',
       'gemini-3.8-flash',
       'gemini-3.5-flash-lite'
     ])

@@ -99,6 +99,7 @@ const CORPUS = [
   'openai/gpt-5.6-luna',
   'openai/o3',
   // Gemini: current, preview, superseded.
+  'gemini-4-argon',
   'gemini-3.1-pro-preview',
   'gemini-3-pro-preview',
   'gemini-3.8-flash',

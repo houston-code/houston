@@ -442,6 +442,28 @@ describe('resolveCapabilities', () => {
   })
 })
 
+describe('scheduled price changes', () => {
+  const before = new Date('2026-11-30T23:00:00Z')
+  const after = new Date('2026-12-01T00:00:00Z')
+
+  it('applies the rates in force on the day', () => {
+    expect(resolvePricing('gemini-4-argon', undefined, before)).toEqual({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 })
+    expect(resolvePricing('gemini-4-argon', undefined, after)).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 })
+    expect(turnCostUsd('gemini-4-argon', 1_000_000, 1_000_000, undefined, undefined, after)).toBeCloseTo(24, 9)
+  })
+
+  it('keeps Gemini 3.6-3.8 Flash at the current rate until it doubles on 2027-01-01', () => {
+    expect(resolvePricing('gemini-3.8-flash', undefined, new Date('2026-12-31T12:00:00Z'))?.input).toBe(0.75)
+    expect(resolvePricing('gemini-3.8-flash', undefined, new Date('2027-01-01T00:00:00Z'))?.input).toBe(1.5)
+    // A retired Flash id falls to the current rate and carries no schedule.
+    expect(modelPricing('gemini-2.0-flash')?.scheduled).toBeUndefined()
+  })
+
+  it('lets a host-listed price override the schedule', () => {
+    expect(resolvePricing('gemini-4-argon', { inputPrice: 1, outputPrice: 3 }, after)).toMatchObject({ input: 1, output: 3 })
+  })
+})
+
 describe('turnCostUsd long-context tier', () => {
   it('bills a whole request at the higher tier once its prompt passes the threshold', () => {
     // Haiku 5.5: $0.10/$0.50 up to 100K prompt tokens, $0.50/$2.50 above.

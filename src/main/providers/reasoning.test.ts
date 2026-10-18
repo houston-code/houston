@@ -298,6 +298,8 @@ describe('gemini thinking budget', () => {
     expect(geminiSupportsThinking('gemini-3.5-flash')).toBe(true)
     expect(geminiSupportsThinking('gemini-3.1-flash-lite')).toBe(true)
     expect(geminiSupportsThinking('gemini-3.1-pro-preview')).toBe(true)
+    // The generation is a range, so Gemini 4 reasons too (the old 3.x-only gate missed it).
+    expect(geminiSupportsThinking('gemini-4-argon')).toBe(true)
     expect(geminiThinkingBudget('gemini-3.5-flash', 'low')).toBeGreaterThan(0)
     expect(geminiThinkingBudget('gemini-3.1-flash-lite', 'high')).toBeGreaterThan(0)
     expect(geminiThinkingBudget('gemini-3.5-flash', 'off')).toBeUndefined()
