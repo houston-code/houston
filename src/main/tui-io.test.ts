@@ -373,6 +373,20 @@ describe('readComposer (raw-mode composer)', () => {
     }
   }
 
+  it('leaves only the submitted line in the scrollback, not the command menu under it', async () => {
+    const t = harness({ menuFor: (l) => (l.startsWith('/') ? ['  /changes  What is different in the working tree'] : []) })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/changes')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('/changes')
+    // The live menu was drawn while typing; the final echo after the last erase must
+    // carry the prompt and text only.
+    const out = t.text()
+    const finalEcho = out.slice(out.lastIndexOf('\x1b[0J') + '\x1b[0J'.length)
+    expect(finalEcho).toContain('/changes')
+    expect(finalEcho).not.toContain('What is different')
+  })
+
   it('submits a typed line on Enter', async () => {
     const { io, stdin } = harness()
     const read = io.readComposer!('> ')
@@ -474,6 +488,27 @@ describe('readComposer (raw-mode composer)', () => {
     // The trailing space comes from the completion itself, so the next token can
     // just be typed; the driver trims the submitted line.
     await expect(read).resolves.toBe('/help ')
+  })
+
+  it('prints ambiguous completions only when no live menu already lists them', async () => {
+    const completer = (line: string, cb: (err: null, result: [string[], string]) => void): void =>
+      cb(null, [['/redo ', '/review '], line])
+    const tab = async (t: ReturnType<typeof harness>): Promise<void> => {
+      const read = t.io.readComposer!('> ')
+      t.stdin.push('/re')
+      t.stdin.push('\t')
+      await new Promise((r) => setImmediate(r)) // the completer round trip is async
+      t.stdin.push('\r')
+      await read
+    }
+    // The slash-command menu under the composer already shows both: Tab prints nothing.
+    const withMenu = harness({ completer, menuFor: (l) => (l.startsWith('/') ? ['  /redo', '  /review'] : []) })
+    await tab(withMenu)
+    expect(withMenu.text()).not.toContain('/redo  /review')
+    // With no menu (an @-file mention), the candidates are printed so they can be seen.
+    const noMenu = harness({ completer })
+    await tab(noMenu)
+    expect(noMenu.text()).toContain('/redo  /review')
   })
 
   it('hands the draft to $EDITOR on Ctrl-X Ctrl-E and takes back the result', async () => {

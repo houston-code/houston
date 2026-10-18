@@ -79,8 +79,17 @@ function renderListItem(
 ): string {
   const marker = ordered ? `${index}.` : '•'
   const bullet = opts.paint(marker, 'cyan')
-  const body = renderBlocks(item.blocks, opts, depth + 1)
   const pad = ' '.repeat(marker.length + 1)
+  // Every line of the body is prefixed below (indent + bullet or its padding), so it
+  // must wrap that much narrower. Wrapping at the full width and indenting after made
+  // long items overflow the terminal, which then broke them mid-word.
+  const prefix = 2 * depth + pad.length
+  const width = opts.width ?? 0
+  const body = renderBlocks(
+    item.blocks,
+    { ...opts, width: width > 0 ? Math.max(1, width - prefix) : width },
+    depth + 1
+  )
   // First line gets the bullet; continuation lines align under the text.
   const lines = body.split('\n')
   return lines.map((l, i) => (i === 0 ? `${'  '.repeat(depth)}${bullet} ${l}` : `${'  '.repeat(depth)}${pad}${l}`)).join('\n')

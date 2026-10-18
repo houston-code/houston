@@ -579,10 +579,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // terminals wrap and insert a phantom row, which would desync the redraw.
       const width = (): number =>
         Math.max(8, (deps.columns?.() ?? process.stdout.columns ?? 80) - 1)
-      const view = (): ReturnType<typeof renderEditor> => {
+      const view = (withMenu = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
-        const below = deps.menuFor?.(state.lines[state.row] ?? '') ?? []
+        const below = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '') ?? []) : []
         return renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
           // is answered where you are already looking.
@@ -652,9 +652,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         done = true
         pending = null
         eraseRegion()
-        // Leave the submitted message in the scrollback, exactly as readline did.
+        // Leave the submitted message in the scrollback, exactly as readline did:
+        // just the prompt and text, not the command menu that was open under it.
         if (echo && value !== null) {
-          const v = view()
+          const v = view(false)
           rawWrite(`${v.rows.join('\n')}\n`)
         }
         teardown()
@@ -687,8 +688,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           let next = state
           for (let i = 0; i < back; i++) next = reduceEditor(next, { type: 'backspace' }).state
           state = reduceEditor(next, { type: 'char', value: insert }).state
-        } else if (hits.length > 1) {
-          // Ambiguous and nothing more to insert: show the candidates above the composer.
+        } else if (hits.length > 1 && !(deps.menuFor?.(state.lines[state.row] ?? '') ?? []).length) {
+          // Ambiguous and nothing more to insert: show the candidates above the
+          // composer, unless the live menu under it already lists them (a slash
+          // command). Printing them there too left a copy in the scrollback on
+          // every Tab.
           eraseRegion()
           rawWrite(`${hits.map((h) => h.trim()).join('  ')}\n`)
         }
