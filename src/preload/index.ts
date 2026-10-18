@@ -28,6 +28,7 @@ import type {
   ConversationMeta,
   DeleteConversationResult,
   ElicitationResult,
+  ProposalState,
   PlanDecision,
   RepoInfo,
   ToolApprovalDecision
@@ -324,6 +325,39 @@ const api = {
   ): Promise<{ runId: string; files: number; reverted: boolean } | null> =>
     ipcRenderer.invoke(IPC.checkpointGet, conversationId),
   /** Subscribe to streamed agent events. Returns an unsubscribe function. */
+  /** Start a propose_session card as its own background chat (under `policy`). */
+  startProposal: (
+    conversationId: string,
+    callId: string,
+    policy: ApprovalPolicy
+  ): Promise<{ conversationId: string; title: string; proposals: Record<string, ProposalState> }> =>
+    ipcRenderer.invoke(IPC.proposalStart, conversationId, callId, policy),
+  /** Record "do it here" or "dismiss" on a proposal card; resolves to the chat's proposal map. */
+  decideProposal: (
+    conversationId: string,
+    callId: string,
+    status: 'here' | 'dismissed'
+  ): Promise<Record<string, ProposalState>> =>
+    ipcRenderer.invoke(IPC.proposalSetState, conversationId, callId, status),
+
+  // Side chat: a read-only aside about the open conversation (never enters its log)
+  askSideChat: (
+    sideId: string,
+    conversationId: string,
+    question: string,
+    providerId: string,
+    model: string
+  ): Promise<string> =>
+    ipcRenderer.invoke(IPC.sideChatAsk, sideId, conversationId, question, providerId, model),
+  cancelSideChat: (sideId: string): Promise<void> => ipcRenderer.invoke(IPC.sideChatCancel, sideId),
+  closeSideChat: (sideId: string): Promise<void> => ipcRenderer.invoke(IPC.sideChatClose, sideId),
+  onSideChatProgress: (cb: (p: { sideId: string; message: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { sideId: string; message: string }): void =>
+      cb(payload)
+    ipcRenderer.on(IPC.sideChatProgress, listener)
+    return () => ipcRenderer.removeListener(IPC.sideChatProgress, listener)
+  },
+
   onAgentEvent: (cb: (e: AgentEvent) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, payload: AgentEvent): void => cb(payload)
     ipcRenderer.on(IPC.agentEvent, listener)

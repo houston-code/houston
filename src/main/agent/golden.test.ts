@@ -111,6 +111,15 @@ vi.mock('./promptSnapshot', async (importActual) => ({
   ...(await importActual<typeof import('./promptSnapshot')>()),
   localDateStamp: () => '2026-01-15'
 }))
+// A desktop run always belongs to a saved chat. The loop reads and writes a few
+// per-chat records (prompt snapshot, compaction, finished-child reports); keep the
+// goldens off the real conversation store.
+vi.mock('../conversations', () => ({
+  getConversation: () => null,
+  setCompaction: () => {},
+  setPromptSnapshot: () => {},
+  takeChildReports: () => []
+}))
 vi.mock('./plugins', () => {
   const inert = { has: () => false, size: 0, emit: async () => {} }
   return { loadPlugins: async () => inert, loadPluginsIfEnabled: async () => inert }
@@ -120,6 +129,8 @@ vi.mock('./plugins', () => {
 const { startRun, resolveApproval, resolveQuestion, resolvePlan } = await import('./loop')
 
 const GOLDEN_RUN_ID = 'golden-run'
+/** The saved chat the desktop scenarios run in (the GUI never runs without one). */
+const GOLDEN_CONVERSATION_ID = 'golden-conversation'
 
 /** One provider request, snapshotted before the scripted turn streams back. */
 interface CapturedRequest {
@@ -215,6 +226,8 @@ async function runScenario(opts: {
   onApproval?: (callId: string, decide: (d: ToolApprovalDecision) => void) => void
   onQuestion?: (callId: string, answer: (a: string) => void) => void
   onPlan?: (callId: string, decide: (d: PlanDecision) => void) => void
+  /** The saved chat the run belongs to; omitted for a one-shot run with none. */
+  conversationId?: string
 }): Promise<ScenarioResult> {
   const requests: CapturedRequest[] = []
   h.provider = capturingProvider(opts.turns, requests)
@@ -235,6 +248,7 @@ async function runScenario(opts: {
   await startRun(
     {
       runId: GOLDEN_RUN_ID,
+      ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
       workspace: ws,
       providerId: opts.providerId ?? 'anthropic',
       model: opts.model ?? 'claude-sonnet-5',
@@ -372,6 +386,7 @@ describe('agent behavior goldens', () => {
     writeFileSync(join(ws, 'notes.txt'), 'remember the milk\n')
 
     const r = await runScenario({
+      conversationId: GOLDEN_CONVERSATION_ID,
       turns: [
         [
           { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'notes.txt' } } },
@@ -399,6 +414,7 @@ describe('agent behavior goldens', () => {
   it('approval flow (ask policy): one write allowed, one denied', async () => {
     configureDesktopBackends()
     const r = await runScenario({
+      conversationId: GOLDEN_CONVERSATION_ID,
       turns: [
         [
           { type: 'tool_call', call: { id: 'c1', name: 'write_file', arguments: { path: 'a.txt', content: 'A\n' } } },
@@ -420,6 +436,7 @@ describe('agent behavior goldens', () => {
   it('plan mode: present_plan, accept — pins plan prompt, toolset, decision feedback', async () => {
     configureDesktopBackends()
     const r = await runScenario({
+      conversationId: GOLDEN_CONVERSATION_ID,
       turns: [
         [
           {
@@ -452,6 +469,7 @@ describe('agent behavior goldens', () => {
   it('ask_user: question asked, answered, answer fed back', async () => {
     configureDesktopBackends()
     const r = await runScenario({
+      conversationId: GOLDEN_CONVERSATION_ID,
       turns: [
         [
           {
@@ -504,6 +522,7 @@ describe('agent behavior goldens', () => {
     for (const f of families) {
       h.models = f.caps ? [{ id: f.model, caps: f.caps }] : []
       const r = await runScenario({
+      conversationId: GOLDEN_CONVERSATION_ID,
         turns: [[{ type: 'text', text: 'ok' }, doneTurn({ inputTokens: 1000, outputTokens: 100 })]],
         providerId: f.providerId,
         model: f.model

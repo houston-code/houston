@@ -382,3 +382,35 @@ describe('stale prefix-bound thinking recovery', () => {
     expect(h.stream).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('toAnthropicMessages: consecutive user turns', () => {
+  it('folds a plain user turn onto the one before it (two in a row are a 400)', () => {
+    const out = toAnthropicMessages(
+      [
+        { role: 'user', content: 'Automated note from Houston (not from the user): a session finished' },
+        { role: 'user', content: 'what next?', images: [{ mediaType: 'image/png', data: 'AAA' }] }
+      ],
+      false
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].role).toBe('user')
+    expect(out[0].content).toEqual([
+      { type: 'text', text: 'Automated note from Houston (not from the user): a session finished' },
+      { type: 'text', text: 'what next?' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } }
+    ])
+  })
+
+  it('leaves alternating turns alone', () => {
+    const out = toAnthropicMessages(
+      [
+        { role: 'user', content: 'a' },
+        { role: 'assistant', content: 'b' },
+        { role: 'user', content: 'c' }
+      ],
+      false
+    )
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect(out[2].content).toBe('c')
+  })
+})

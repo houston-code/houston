@@ -86,3 +86,19 @@ describe('Titlebar icon-only actions', () => {
     expect(within(btn).queryByText(/^\d+$/)).not.toBeInTheDocument()
   })
 })
+
+describe('Titlebar side chat button', () => {
+  it('toggles the side chat and reflects the open state', () => {
+    const onToggleSideChat = vi.fn()
+    render(<Titlebar title="Houston" onToggleSideChat={onToggleSideChat} sideChatOpen={false} />)
+    const btn = screen.getByRole('button', { name: 'Side chat' })
+    expect(btn).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(btn)
+    expect(onToggleSideChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('is absent with no open chat', () => {
+    render(<Titlebar title="Houston" />)
+    expect(screen.queryByRole('button', { name: 'Side chat' })).toBeNull()
+  })
+})

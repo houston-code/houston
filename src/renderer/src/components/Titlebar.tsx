@@ -25,7 +25,9 @@ export function Titlebar({
   previewOpen,
   previewCount,
   onToggleTerminal,
-  terminalOpen
+  terminalOpen,
+  onToggleSideChat,
+  sideChatOpen
 }: {
   title: string
   /** Background work (agent runs + terminals, in progress + recently finished) for the indicator. */
@@ -42,6 +44,9 @@ export function Titlebar({
   previewCount?: number
   onToggleTerminal?: () => void
   terminalOpen?: boolean
+  /** Toggle the side chat (a read-only aside about this chat). Absent with no open chat. */
+  onToggleSideChat?: () => void
+  sideChatOpen?: boolean
 }): JSX.Element {
   const hasChanges = !!changes && changes.fileCount > 0
   return (
@@ -114,6 +119,19 @@ export function Titlebar({
                 aria-pressed={terminalOpen}
               >
                 <Icon name="terminal" size={15} />
+              </button>
+            </Tooltip>
+          )}
+          {onToggleSideChat && (
+            <Tooltip label="Side chat: ask a quick question without interrupting this chat">
+              <button
+                type="button"
+                className={`titlebar__action${sideChatOpen ? ' titlebar__action--active' : ''}`}
+                onClick={onToggleSideChat}
+                aria-label="Side chat"
+                aria-pressed={sideChatOpen}
+              >
+                <Icon name="sideChat" size={15} />
               </button>
             </Tooltip>
           )}

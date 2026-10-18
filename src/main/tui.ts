@@ -58,6 +58,9 @@ import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
+import { PROPOSE_SESSION_TOOL } from '@shared/constants'
+import { doItHereMessage } from '@shared/proposals'
+import type { ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { truncateVisible, stripControlChars, osc52Copy } from './tui-wrap'
 import { SHARE_MESSAGE } from '@shared/share'
@@ -767,6 +770,36 @@ export function parseSessionSelection(answer: string, sessions: BackgroundSessio
   return null
 }
 
+/** A propose_session card as the terminal lists it (`/proposals`). */
+export interface TuiProposal {
+  callId: string
+  title: string
+  prompt: string
+  /** The user's decision, or undefined while it is still open. */
+  status?: ProposalState['status']
+}
+
+/** `/proposals`: the sessions the agent proposed in this chat, numbered. Pure. */
+export function renderProposals(list: TuiProposal[], paint: Painter): string {
+  if (!list.length) return paint('No sessions proposed in this chat yet.', 'dim')
+  const lines = [paint('Proposed sessions:', 'bold')]
+  list.forEach((p, i) => {
+    const state =
+      p.status === 'started'
+        ? paint('started', 'green')
+        : p.status === 'here'
+          ? paint('asked here', 'dim')
+          : p.status === 'dismissed'
+            ? paint('dismissed', 'dim')
+            : paint('open', 'cyan')
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${p.title}  ${state}`)
+  })
+  lines.push(
+    paint('  /proposals start <n> runs one as its own session · here <n> asks for it in this chat · dismiss <n>', 'dim')
+  )
+  return lines.join('\n')
+}
+
 /** What the last turn changed on disk, and whether it has been undone already. */
 export interface CheckpointInfo {
   runId: string
@@ -1076,6 +1109,10 @@ export type SlashResult =
   | { kind: 'output'; index: number }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
+  /** List or act on the sessions the agent proposed (/proposals [start|here|dismiss n]). */
+  | { kind: 'proposals'; op: 'list' | 'start' | 'here' | 'dismiss'; index?: number }
+  /** Ask a quick side question about this chat without adding it to the chat (/btw). */
+  | { kind: 'btw'; question: string }
   /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
   | { kind: 'hooks'; action: SettingsAction }
   /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
@@ -1115,6 +1152,20 @@ export function parseSlashCommand(
       return { kind: 'resume', query: arg }
     case 'spawned':
       return { kind: 'spawned' }
+    case 'proposals':
+    case 'proposed': {
+      const [op, n] = arg.trim().split(/\s+/)
+      if (op === 'start' || op === 'here' || op === 'dismiss') {
+        const index = Number(n)
+        return Number.isInteger(index) && index >= 1
+          ? { kind: 'proposals', op, index }
+          : { kind: 'proposals', op: 'list' }
+      }
+      return { kind: 'proposals', op: 'list' }
+    }
+    case 'btw':
+    case 'aside':
+      return { kind: 'btw', question: arg.trim() }
     case 'fork':
       return { kind: 'fork' }
     case 'skills':
@@ -1255,6 +1306,8 @@ export const HELP_TEXT = [
   '  /review               adversarial review of your uncommitted changes',
   '  /resume [query]       list (or search) and reopen a saved session',
   '  /spawned              list the background sessions the agent started; open one',
+  '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
+  '  /btw <question>       ask a quick side question; the answer stays out of this chat',
   '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
   '  /skills /agents       list workspace skills / custom agents',
@@ -2020,6 +2073,30 @@ export interface TuiDeps {
    * isn't available here.
    */
   backgroundSessions?: () => BackgroundSession[]
+  /**
+   * The chat's `propose_session` cards and what to do with them (`/proposals`).
+   * Absent ⇒ the command says proposals are unavailable here.
+   */
+  proposals?: {
+    list: (conversationId: string) => TuiProposal[]
+    start: (
+      conversationId: string,
+      callId: string,
+      policy: ApprovalPolicy
+    ) => Promise<{ conversationId: string; title: string }>
+    decide: (conversationId: string, callId: string, status: 'here' | 'dismissed') => void
+  }
+  /**
+   * Answer a side question about a saved chat with a read-only aside (`/btw`). The
+   * answer is printed, never added to the chat. Absent ⇒ unavailable here.
+   */
+  sideChat?: (input: {
+    sideId: string
+    conversationId: string
+    question: string
+    providerId: string
+    model: string
+  }) => Promise<string>
   /**
    * Append a standing instruction to the project's or the user's rules file (the
    * `#` capture). Returns the path written, so the user can see where it went —
@@ -3055,7 +3132,78 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(paint(`Unknown command: /${result.name}. Try /help.\n`, 'yellow'))
         continue
       }
-      if (result.kind === 'prompt') {
+      if (result.kind === 'btw') {
+        if (!deps.sideChat) {
+          deps.io.out(paint('· side chat is unavailable here\n', 'dim'))
+          continue
+        }
+        if (!result.question) {
+          deps.io.out(paint('· usage: /btw <question>\n', 'dim'))
+          continue
+        }
+        if (!conversationId || !providerId || !model) {
+          deps.io.out(paint('· side chat needs a saved chat: send a message first\n', 'dim'))
+          continue
+        }
+        deps.io.startSpinner?.('Side chat')
+        try {
+          const answer = await deps.sideChat({
+            // One side chat per main chat, so follow-up questions keep its context.
+            sideId: `tui-${conversationId}`,
+            conversationId,
+            question: result.question,
+            providerId,
+            model
+          })
+          deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${answer.trim()}\n`)
+        } catch (e) {
+          deps.io.out(paint(`· side chat failed: ${(e as Error).message}\n`, 'red'))
+        } finally {
+          deps.io.stopSpinner?.()
+        }
+        continue
+      }
+      if (result.kind === 'proposals') {
+        if (!deps.proposals) {
+          deps.io.out(paint('· proposals are unavailable here\n', 'dim'))
+          continue
+        }
+        if (!conversationId) {
+          deps.io.out(paint('· no sessions proposed in this chat yet\n', 'dim'))
+          continue
+        }
+        const list = deps.proposals.list(conversationId)
+        if (result.op === 'list' || result.index === undefined) {
+          deps.io.out(`${renderProposals(list, paint)}\n`)
+          continue
+        }
+        const picked = list[result.index - 1]
+        if (!picked) {
+          deps.io.out(paint(`· no proposal ${result.index}; /proposals lists them\n`, 'dim'))
+          continue
+        }
+        if (picked.status === 'started') {
+          deps.io.out(paint('· that proposal was already started; /spawned opens it\n', 'dim'))
+          continue
+        }
+        try {
+          if (result.op === 'start') {
+            const started = await deps.proposals.start(conversationId, picked.callId, policy)
+            deps.io.out(paint(`· started "${started.title}" in the background; /spawned opens it\n`, 'green'))
+            continue
+          }
+          deps.proposals.decide(conversationId, picked.callId, result.op === 'here' ? 'here' : 'dismissed')
+        } catch (e) {
+          deps.io.out(paint(`· couldn't do that: ${(e as Error).message}\n`, 'red'))
+          continue
+        }
+        if (result.op === 'dismiss') {
+          deps.io.out(paint(`· dismissed "${picked.title}"\n`, 'dim'))
+          continue
+        }
+        // "here": ask for it in this chat, as a normal turn. Fall through.
+        text = doItHereMessage(picked)
+      } else if (result.kind === 'prompt') {
         // A template command (custom `.houston/commands` or first-party /review):
         // run its expanded prompt as a normal turn. Fall through — don't `continue`.
         text = result.text
@@ -3205,6 +3353,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The list was just drawn from the call's args; its result is only the
           // model-facing summary of what we already showed.
           if (todoCalls.delete(e.callId) && e.ok) {
+            toolArgs.delete(e.callId)
+            break
+          }
+          // A proposal is a card in the desktop app; here it's a line pointing at
+          // the command that starts it.
+          if (e.name === PROPOSE_SESSION_TOOL && e.ok && e.output.startsWith('Proposed "')) {
+            const title = toolArgs.get(e.callId)?.title
+            deps.io.out(
+              paint(
+                `  · proposed a session${typeof title === 'string' ? `: ${title}` : ''}. /proposals to start it, ask for it here, or dismiss it\n`,
+                'cyan'
+              )
+            )
             toolArgs.delete(e.callId)
             break
           }

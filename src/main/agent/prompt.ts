@@ -134,8 +134,16 @@ export function buildSystemPrompt(
     : host.sandboxBackend === 'bubblewrap'
       ? LINUX_VIEW_LOCALHOST_LINE
       : '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot plus console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps (fill the form, click submit, wait_for what should appear next) with test data, and check the step results and the final screenshot.'
+  // A finished session reports back only to a saved chat, which is also exactly when
+  // propose_session is offered (a proposal card is stored on the chat).
+  const spawnReport = offers('propose_session')
+    ? 'It reports back here at the start of a later turn, once it finishes, so give it a self-contained prompt (or context "fork" to hand it this conversation).'
+    : 'It does not report back here, so give it a self-contained prompt.'
   const spawnSessionLine = offers('spawn_session')
-    ? ' spawn_session is different: it starts a separate, persistent background session (optionally on its own git branch/worktree) for independent work that should run in parallel with this one. It does not report back here, so give it a self-contained prompt.'
+    ? ` spawn_session is different: it starts a separate, persistent background session (optionally on its own git branch/worktree) for independent work that should run in parallel with this one. Use it when the user asks for parallel or background work. ${spawnReport}`
+    : ''
+  const proposeSessionLine = offers('propose_session')
+    ? '\n- When you notice work that could run in parallel and is not what the user asked you to do (a separate fix spotted in passing, the natural follow-up, a part you set aside), propose it with propose_session rather than starting it or doing it here: the user gets a card and decides. Propose real, self-contained work only, never what you are about to do anyway, and say in your reply that you proposed it.'
     : ''
   const scheduleLine = offers('schedule_run', 'list_scheduled_runs', 'cancel_scheduled_run')
     ? '\n- When the user wants something done on a schedule or later ("every morning...", "tomorrow at 9..."), use schedule_run (list_scheduled_runs and cancel_scheduled_run manage existing ones). Each occurrence starts a fresh session with the stored prompt under the current approval policy, so make that prompt self-contained. Schedules fire while Houston is running and persist across restarts.'
@@ -164,7 +172,7 @@ When the user asks how Houston itself works (its slash commands, skills, subagen
 - Shell commands must not wait for input: pass non-interactive flags (-y, --yes, --no-input) and never open an editor or pager. Run dev servers, watchers, and other open-ended commands with background:true, then use read_shell_output and kill_shell.
 - Houston asks the user for approval when you make a call that needs it, so don't ask for the same permission in chat first. If the user denies a call, don't retry it or reach the same result through another tool: adjust your approach, or ask what they would prefer.
 - Use the gh_* tools for GitHub (pull requests, issues, CI runs, creating a repo) rather than gh in run_shell: they carry their own network approval, so they work even when the shell has no network. Push the branch before gh_pr_create, and use gh_run_view with log_failed:true to diagnose a failed CI run.
-- Delegate only when it pays for itself. dispatch_agent suits a broad, read-heavy investigation that would flood your context; dispatch_writable_agent suits a self-contained piece of implementation. Don't delegate what you can finish in a few tool calls, and don't dispatch agents just to double-check your own work.${spawnSessionLine}${scheduleLine}
+- Delegate only when it pays for itself. dispatch_agent suits a broad, read-heavy investigation that would flood your context; dispatch_writable_agent suits a self-contained piece of implementation. Don't delegate what you can finish in a few tool calls, and don't dispatch agents just to double-check your own work.${spawnSessionLine}${proposeSessionLine}${scheduleLine}
 - When you need facts that may have changed since your training (a library's current API, an unfamiliar error message) and the project can't answer, use web_search or web_fetch rather than guessing.
 
 # Making changes

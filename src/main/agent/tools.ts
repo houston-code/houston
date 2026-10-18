@@ -71,7 +71,13 @@ import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
 import { runReadGit, captureTry, uncommittedDiffBase } from './gitRead'
-import { SPAWN_SESSION_NAME, type SpawnSessionResult } from './spawn'
+import {
+  PROPOSAL_ACCEPTED_PREFIX,
+  PROPOSE_SESSION_NAME,
+  SPAWN_SESSION_NAME,
+  type SessionContext,
+  type SpawnSessionResult
+} from './spawn'
 import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
@@ -212,7 +218,14 @@ export interface ToolContext {
     title?: string
     prompt: string
     worktree?: { branch: string; base?: string }
+    context?: SessionContext
   }) => Promise<SpawnSessionResult>
+  /**
+   * Record a `propose_session` call for the user to start (injected by the loop,
+   * which enforces the per-turn cap and refuses a duplicate title). Throws with a
+   * model-facing reason when refused. Present wherever `spawnSession` is.
+   */
+  proposeSession?: (input: { title: string }) => void
 }
 
 export interface ToolDef {
@@ -1929,11 +1942,64 @@ function formatSpawnResult(r: SpawnSessionResult): string {
       : `Workspace: ${r.workspace}`
   )
   lines.push(
-    'It is its own persisted conversation the user can open. It runs independently and will not report back into this chat.'
+    r.reportsBack
+      ? 'It is its own persisted conversation the user can open, and it runs independently. When it finishes, a short report of how it went arrives at the start of the next turn in this chat.'
+      : 'It is its own persisted conversation the user can open. It runs independently and will not report back into this chat.'
   )
   if (r.note) lines.push(r.note)
   return lines.join('\n')
 }
+
+/** Parse a spawn/propose call's optional `worktree` argument (branch + optional base). */
+export function parseWorktreeArg(args: Record<string, unknown>): { branch: string; base?: string } | undefined {
+  const wt = args.worktree
+  if (wt === undefined || wt === null) return undefined
+  if (typeof wt !== 'object' || Array.isArray(wt)) {
+    throw new Error('worktree must be an object with a "branch" (and optional "base").')
+  }
+  const wtRec = wt as Record<string, unknown>
+  const branch = str(wtRec, 'branch').trim()
+  if (!branch) throw new Error('worktree.branch is required when spawning onto a worktree.')
+  if (!isSafeGitRef(branch)) throw new Error(`Invalid branch name: "${branch}"`)
+  const base = str(wtRec, 'base').trim()
+  if (base && !isSafeGitRef(base)) throw new Error(`Invalid base ref: "${base}"`)
+  return { branch, ...(base ? { base } : {}) }
+}
+
+/** Parse a spawn/propose call's optional `context` argument; defaults to `fresh`. */
+export function parseContextArg(args: Record<string, unknown>): SessionContext {
+  const v = args.context
+  if (v === undefined || v === null || v === '') return 'fresh'
+  if (v === 'fresh' || v === 'fork') return v
+  throw new Error('context must be "fresh" or "fork".')
+}
+
+/** The `worktree` parameter schema, shared by spawn_session and propose_session. */
+const WORKTREE_PARAM = {
+  type: 'object',
+  description:
+    'Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.',
+  properties: {
+    branch: {
+      type: 'string',
+      description: 'New branch name to create and check out for the session.'
+    },
+    base: {
+      type: 'string',
+      description: 'Optional base ref to branch from (defaults to the current HEAD).'
+    }
+  },
+  required: ['branch'],
+  additionalProperties: false
+} as const
+
+/** The `context` parameter schema, shared by spawn_session and propose_session. */
+const CONTEXT_PARAM = {
+  type: 'string',
+  enum: ['fresh', 'fork'],
+  description:
+    'Optional: "fresh" (the default) starts the session with only your prompt; "fork" also gives it a copy of this conversation so far, so it knows what was read, decided, and tried. Prefer "fork" when the task builds on this conversation, and "fresh" for self-contained work.'
+} as const
 
 const spawnSessionTool: ToolDef = {
   // Creates a git branch/worktree + a new conversation and starts an autonomous
@@ -1947,7 +2013,7 @@ const spawnSessionTool: ToolDef = {
   schema: {
     name: SPAWN_SESSION_NAME,
     description:
-      'Spawn a separate chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into this turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it to run work in parallel, e.g. to hand off an independent feature onto its own git branch/worktree while you continue here. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. It starts fresh with no view of this conversation, so put everything it needs in `prompt`.',
+      'Spawn a separate chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into this turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it only when the user asked for parallel or background work; to suggest parallel work yourself, use propose_session instead. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. By default it starts fresh with no view of this conversation, so put everything it needs in `prompt` (or pass context "fork").',
     parameters: objectSchema(
       {
         prompt: {
@@ -1960,23 +2026,8 @@ const spawnSessionTool: ToolDef = {
           description:
             'Optional short title for the chat as it appears in the sidebar (a few words). Omit to derive one from the prompt.'
         },
-        worktree: {
-          type: 'object',
-          description:
-            'Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.',
-          properties: {
-            branch: {
-              type: 'string',
-              description: 'New branch name to create and check out for the session.'
-            },
-            base: {
-              type: 'string',
-              description: 'Optional base ref to branch from (defaults to the current HEAD).'
-            }
-          },
-          required: ['branch'],
-          additionalProperties: false
-        }
+        worktree: WORKTREE_PARAM,
+        context: CONTEXT_PARAM
       },
       ['prompt']
     )
@@ -1986,28 +2037,64 @@ const spawnSessionTool: ToolDef = {
     if (!prompt) throw new Error("prompt is required: it becomes the new session's first message.")
     if (!ctx.spawnSession) throw new Error('Spawning sessions is not available in this context.')
     const title = str(args, 'title').trim()
-
-    let worktree: { branch: string; base?: string } | undefined
-    const wt = args.worktree
-    if (wt !== undefined && wt !== null) {
-      if (typeof wt !== 'object' || Array.isArray(wt)) {
-        throw new Error('worktree must be an object with a "branch" (and optional "base").')
-      }
-      const wtRec = wt as Record<string, unknown>
-      const branch = str(wtRec, 'branch').trim()
-      if (!branch) throw new Error('worktree.branch is required when spawning onto a worktree.')
-      if (!isSafeGitRef(branch)) throw new Error(`Invalid branch name: "${branch}"`)
-      const base = str(wtRec, 'base').trim()
-      if (base && !isSafeGitRef(base)) throw new Error(`Invalid base ref: "${base}"`)
-      worktree = { branch, ...(base ? { base } : {}) }
-    }
+    const worktree = parseWorktreeArg(args)
+    const context = parseContextArg(args)
 
     const result = await ctx.spawnSession({
       prompt,
       ...(title ? { title } : {}),
-      ...(worktree ? { worktree } : {})
+      ...(worktree ? { worktree } : {}),
+      ...(context === 'fork' ? { context } : {})
     })
     return formatSpawnResult(result)
+  }
+}
+
+/** Longest title a proposal card shows; the model is asked for a few words. */
+export const MAX_PROPOSAL_TITLE_CHARS = 80
+
+const proposeSessionTool: ToolDef = {
+  // Only records a card; nothing runs until the user starts it from the card, and
+  // starting it is the user's own gesture. So it needs no approval and is allowed
+  // in plan mode, unlike spawn_session.
+  kind: 'read',
+  summarize: (a) => `Propose session: ${str(a, 'title').trim() || firstLine(str(a, 'prompt')) || 'new session'}`,
+  schema: {
+    name: PROPOSE_SESSION_NAME,
+    description:
+      "Propose a separate session for a piece of work you noticed that could run in parallel with this one (independent of what you are doing here, and worth its own conversation). The user sees a card with Start session, Do it here, and Dismiss; nothing runs unless they choose. If they start it, it becomes its own background chat with this prompt, on its own git worktree when the project is a git repository, under the user's current approval policy, and reports back here when it finishes. Use it for real follow-ups, not one-line tweaks or speculation, and at most a few times per turn. Do not do the proposed work yourself unless the user asks for it here. Prefer this over spawn_session unless the user asked you to start parallel work.",
+    parameters: objectSchema(
+      {
+        title: {
+          type: 'string',
+          description: 'Short title for the card and the new chat (a few words, under 60 characters).'
+        },
+        prompt: {
+          type: 'string',
+          description:
+            "The full brief for the new session: the task, the files or area, and what done looks like. It becomes the session's first message, so make it self-contained (or pass context \"fork\")."
+        },
+        worktree: WORKTREE_PARAM,
+        context: CONTEXT_PARAM
+      },
+      ['title', 'prompt']
+    )
+  },
+  async execute(args, ctx) {
+    const title = str(args, 'title').replace(/\s+/g, ' ').trim()
+    const prompt = str(args, 'prompt').trim()
+    if (!title) throw new Error('title is required: it labels the card the user sees.')
+    if (title.length > MAX_PROPOSAL_TITLE_CHARS) {
+      throw new Error(`title is too long (max ${MAX_PROPOSAL_TITLE_CHARS} characters). Use a few words.`)
+    }
+    if (!prompt) throw new Error("prompt is required: it becomes the new session's first message.")
+    // Validate now so a bad branch name fails while the model can still fix it,
+    // not later when the user clicks Start.
+    parseWorktreeArg(args)
+    parseContextArg(args)
+    if (!ctx.proposeSession) throw new Error('Proposing sessions is not available in this context.')
+    ctx.proposeSession({ title })
+    return `${PROPOSAL_ACCEPTED_PREFIX}${title}" to the user as a card. Nothing runs unless they start it; if they do, you will get its report here when it finishes. Carry on with your own task and don't do the proposed work here unless the user asks.`
   }
 }
 
@@ -3626,6 +3713,7 @@ export const TOOLS: ToolDef[] = [
   dispatchAgent,
   dispatchWritableAgent,
   spawnSessionTool,
+  proposeSessionTool,
   scheduleRun,
   listScheduledRuns,
   cancelScheduledRun,
@@ -3661,8 +3749,14 @@ export function getTool(name: string): ToolDef | undefined {
 export interface BuiltinToolsetOptions {
   /** A localhost capture backend is wired (desktop only); backs view_localhost. */
   localhostCapture: boolean
-  /** A spawn backend is wired; backs spawn_session. */
+  /** A spawn backend is wired; backs spawn_session (and propose_session). */
   spawn: boolean
+  /**
+   * The client can show proposal cards for the user to start (GUI and TUI). False
+   * on a run nobody is watching (headless), where a proposal could never be started.
+   * Absent counts as true.
+   */
+  proposals?: boolean
   /** A scheduler backend is wired; backs the schedule tools. */
   scheduler: boolean
   /** The run starts in plan mode; present_plan (the "exit plan mode" tool) is offered only then. */
@@ -3680,6 +3774,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
     const name = t.schema.name
     if (name === VIEW_LOCALHOST_NAME) return opts.localhostCapture
     if (name === SPAWN_SESSION_NAME) return opts.spawn
+    if (name === PROPOSE_SESSION_NAME) return opts.spawn && opts.proposals !== false
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler
     if (name === PRESENT_PLAN_NAME) return opts.planMode
     return true

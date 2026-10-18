@@ -144,5 +144,7 @@ export function forkConversationData(src: Conversation, id: string, now: number)
   delete fork.groupId
   // A fork hasn't run anything yet — don't inherit the source's failed-turn marker.
   delete fork.lastError
+  // Finished-child reports belong to the chat that spawned them; the fork never did.
+  delete fork.childReports
   return fork
 }

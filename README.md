@@ -120,13 +120,25 @@ Open source under the [Apache License 2.0](LICENSE).
   `spawn_session` spins off a *separate* chat: the agent hands it a task, optionally
   on its own git branch and worktree, and sets it running autonomously in the
   background. It appears in the sidebar with a live running indicator, seeded with
-  the handed-off context as its first message — open it to watch, answer an
-  approval, or take over. The spawned session inherits your current approval policy,
-  so it is never more permissive than the chat that spawned it. Use it to run
+  the handed-off context as its first message (open it to watch, answer an
+  approval, or take over), or with a copy of the current chat when the agent
+  forks it. The spawned session inherits your current approval policy, so it is
+  never more permissive than the chat that spawned it, and when it finishes the
+  chat that started it gets a short report on its next turn. Use it to run
   independent work in parallel without leaving your current chat. Spawning works
   in the TUI and headless CLI too: sessions run non-interactively there (approvals
   auto-declined) and persist as conversations you can pick up with `/resume` or
   `--resume <id>`.
+- **Proposed sessions.** When the agent notices parallel work you didn't ask for,
+  it proposes it with `propose_session` instead of starting it: a card with
+  **Start session**, **Do it here**, and **Dismiss**. Nothing runs until you pick.
+  A started proposal runs on its own worktree in a git project. In the terminal,
+  `/proposals` lists them and `/proposals start <n>` starts one.
+- **Side chat.** The titlebar's side chat button opens a panel for quick questions
+  about the open chat, answered by a read-only aside that sees the chat so far and
+  can read the project but never writes into the chat. It works while a turn is
+  still running. Send an exchange to the main chat (queued if a turn is running)
+  or continue it in a new chat. In the terminal, `/btw <question>`.
 - **Scheduled runs.** Ask for something recurring ("every morning at 9, run the
   tests and summarize failures") and the agent stores a schedule with
   `schedule_run`; at each occurrence a fresh background session starts with the

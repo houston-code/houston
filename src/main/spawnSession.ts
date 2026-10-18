@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { ApprovalPolicy } from '@shared/types'
-import type { ChatMessage, ConversationWorktree } from '@shared/agent'
+import type { ChatMessage, ConversationWorktree, SpawnedFrom } from '@shared/agent'
 import type { SpawnBackend, SpawnSessionInput, SpawnSessionResult } from './agent/spawn'
 
 /**
@@ -44,7 +44,7 @@ export interface SpawnDeps {
     providerId: string
     model: string
     worktree?: ConversationWorktree
-    spawnedFrom?: { conversationId: string; title: string }
+    spawnedFrom?: SpawnedFrom
   }): { id: string; title: string }
   /** Seed the conversation's first user message (persists it and derives a title). */
   seedMessages(conversationId: string, messages: ChatMessage[]): void
@@ -65,7 +65,11 @@ export interface SpawnDeps {
    * conversation referencing it.
    */
   removeWorktree(worktree: ConversationWorktree): Promise<unknown>
-  /** Kick off the background run for the new session (fire-and-forget). */
+  /**
+   * Kick off the background run for the new session. Fire-and-forget for the
+   * spawning turn; a returned promise (settling when the run ends) lets the backend
+   * report the finished child back to its parent.
+   */
   startBackgroundRun(
     conversationId: string,
     req: {
@@ -76,7 +80,12 @@ export interface SpawnDeps {
       approvalPolicy: ApprovalPolicy
       messages: ChatMessage[]
     }
-  ): void
+  ): void | Promise<unknown>
+  /**
+   * Queue a finished child's report on the chat that spawned it, so the parent's
+   * next turn learns how it went. Absent ⇒ children finish silently.
+   */
+  reportToParent?(parentConversationId: string, childConversationId: string): void
 }
 
 /**
@@ -121,8 +130,11 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
         // show a "handoff from …" label above its seeded message.
         const parentId = input.parentConversationId
         const parentTitle = parentId ? deps.getTitle(parentId)?.trim() : undefined
-        const spawnedFrom =
-          parentId && parentTitle ? { conversationId: parentId, title: parentTitle } : undefined
+        const historyLength = input.history?.length ?? 0
+        const spawnedFrom: SpawnedFrom | undefined =
+          parentId && parentTitle
+            ? { conversationId: parentId, title: parentTitle, ...(historyLength ? { historyLength } : {}) }
+            : undefined
 
         const conv = deps.createConversation({
           workspace,
@@ -132,8 +144,11 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           ...(spawnedFrom ? { spawnedFrom } : {})
         })
 
+        // A forked context continues the spawning chat's history; the prompt is the
+        // next user turn either way.
         const userMessage: ChatMessage = { role: 'user', content: prompt }
-        deps.seedMessages(conv.id, [userMessage])
+        const seeded: ChatMessage[] = [...(input.history ?? []), userMessage]
+        deps.seedMessages(conv.id, seeded)
 
         // A caller-supplied title wins and sticks (marked generated); otherwise the
         // title derived from the prompt stands, and the usual model summary upgrades
@@ -145,20 +160,35 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
         // Start the run in the background. No owning window (owner is undefined) so
         // any window that opens the chat can adopt it and answer its approvals; its
         // events broadcast to every window (see the IO in ipc.ts).
-        deps.startBackgroundRun(conv.id, {
+        const run = deps.startBackgroundRun(conv.id, {
           runId: randomUUID(),
           workspace,
           providerId: input.providerId,
           model: input.model,
           approvalPolicy: input.approvalPolicy,
-          messages: [userMessage]
+          messages: seeded
         })
+        // When the child's run settles (success or failure), tell its parent. Never
+        // throws into the spawning turn: the report is best-effort bookkeeping.
+        if (run && parentId && deps.reportToParent) {
+          const report = deps.reportToParent.bind(deps)
+          void run
+            .catch(() => {})
+            .then(() => {
+              try {
+                report(parentId, conv.id)
+              } catch {
+                // A store failure only loses the note; the child's chat still has it all.
+              }
+            })
+        }
 
         return {
           conversationId: conv.id,
           title: finalTitle,
           workspace,
-          ...(worktree ? { worktree } : {})
+          ...(worktree ? { worktree } : {}),
+          ...(run && parentId && deps.reportToParent ? { reportsBack: true } : {})
         }
       } catch (e) {
         // A step after the worktree was created failed — don't leave a branch +

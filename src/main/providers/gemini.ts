@@ -36,6 +36,14 @@ export function toGeminiContents(messages: ChatMessage[]): Content[] {
         continue
       }
       mergingToolResults = false
+      // Two plain user turns in a row (an automated note queued just ahead of the
+      // user's message, or a forked history ending on a user turn before the hand-off
+      // prompt) fold together, for the same alternation rule. Never onto a turn of
+      // function responses, which can't share a turn with inline media.
+      if (last?.role === 'user' && last.parts && !last.parts.some((p) => 'functionResponse' in p)) {
+        last.parts.push(...parts!)
+        continue
+      }
       if (!parts!.length) parts!.push({ text: '' }) // Gemini rejects an empty parts array
       out.push({ role: 'user', parts })
     } else if (m.role === 'assistant') {

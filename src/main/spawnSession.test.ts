@@ -242,3 +242,73 @@ describe('createSpawnBackend', () => {
     expect(calls.removed).toHaveLength(0)
   })
 })
+
+describe('createSpawnBackend: forked context and reporting back', () => {
+  it('seeds a forked history ahead of the prompt, in both the log and the run', async () => {
+    const { deps, calls } = fakeDeps()
+    const history: ChatMessage[] = [
+      { role: 'user', content: 'earlier question' },
+      { role: 'assistant', content: 'earlier answer' }
+    ]
+    await createSpawnBackend(deps).spawn({ ...baseInput, history })
+    const expected = [...history, { role: 'user', content: baseInput.prompt }]
+    expect(calls.seeded[0].messages).toEqual(expected)
+    expect(calls.runs[0].req.messages).toEqual(expected)
+  })
+
+  it('reports the finished child to its parent once the run settles', async () => {
+    let finish!: () => void
+    const reported: Array<[string, string]> = []
+    const { deps } = fakeDeps({
+      getTitle: (id) => (id === 'parent' ? 'Parent chat' : 'Child'),
+      startBackgroundRun: () => new Promise<void>((r) => (finish = r)),
+      reportToParent: (parentId, childId) => {
+        reported.push([parentId, childId])
+      }
+    })
+    const result = await createSpawnBackend(deps).spawn({ ...baseInput, parentConversationId: 'parent' })
+    expect(result.reportsBack).toBe(true)
+    expect(reported).toEqual([])
+    finish()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(reported).toEqual([['parent', 'conv-1']])
+  })
+
+  it('reports a failed child too, and never throws a report failure into the caller', async () => {
+    const reported: string[] = []
+    const { deps } = fakeDeps({
+      startBackgroundRun: () => Promise.reject(new Error('boom')),
+      reportToParent: (_p, child) => {
+        reported.push(child)
+        throw new Error('store full')
+      }
+    })
+    await createSpawnBackend(deps).spawn({ ...baseInput, parentConversationId: 'parent' })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(reported).toEqual(['conv-1'])
+  })
+
+  it('does not promise a report when there is no parent or no run promise', async () => {
+    const reported: string[] = []
+    const { deps } = fakeDeps({ reportToParent: (_p, c) => void reported.push(c) })
+    const noParent = await createSpawnBackend(deps).spawn(baseInput)
+    expect(noParent.reportsBack).toBeUndefined()
+    const noRunPromise = await createSpawnBackend(deps).spawn({ ...baseInput, parentConversationId: 'parent' })
+    expect(noRunPromise.reportsBack).toBeUndefined()
+    expect(reported).toEqual([])
+  })
+})
+
+describe('createSpawnBackend: where the hand-off starts', () => {
+  it('records how much forked history precedes the hand-off prompt', async () => {
+    const { deps, calls } = fakeDeps({ getTitle: (id) => (id === 'parent' ? 'Parent chat' : 'Child') })
+    const history: ChatMessage[] = [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: 'b' }
+    ]
+    await createSpawnBackend(deps).spawn({ ...baseInput, parentConversationId: 'parent', history })
+    expect(calls.created[0].spawnedFrom).toEqual({ conversationId: 'parent', title: 'Parent chat', historyLength: 2 })
+    await createSpawnBackend(deps).spawn({ ...baseInput, parentConversationId: 'parent' })
+    expect(calls.created[1].spawnedFrom).toEqual({ conversationId: 'parent', title: 'Parent chat' })
+  })
+})

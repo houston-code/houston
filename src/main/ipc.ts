@@ -120,10 +120,13 @@ import {
   mergeRunningTotals,
   setMessages,
   setGeneratedTitle,
-  updateConversationMeta
+  updateConversationMeta,
+  reportChildToParent
 } from './conversations'
 import { createSpawnBackend } from './spawnSession'
 import { setSpawnBackend } from './agent/spawn'
+import { decideProposal, hostProposalDeps, startProposal } from './proposals'
+import { askSideChat, cancelSideChat, closeSideChat, hostSideChatDeps, isSideChatId } from './sideChat'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 
@@ -301,10 +304,11 @@ function wireSpawnSession(): void {
         // Owner is undefined — a background run any window can adopt and approve.
         // Track it as live for the concurrency cap; drop it when the run settles.
         liveSpawnedRuns.add(conversationId)
-        void runAndDrain(makeBroadcastIo(), conversationId, req, undefined).finally(() =>
+        return runAndDrain(makeBroadcastIo(), conversationId, req, undefined).finally(() =>
           liveSpawnedRuns.delete(conversationId)
         )
-      }
+      },
+      reportToParent: reportChildToParent
     })
   )
 }
@@ -1124,6 +1128,83 @@ export function registerIpc(): void {
   // step (see steerRun). A run-control call like the others, so it is gated on run
   // ownership — otherwise another window could push text into this run's context.
   // steerRun trims + caps the text itself; the boundary only rejects a non-string.
+  // Start a propose_session card as its own background chat. The approval policy is
+  // the user's current one, coerced at this boundary like a normal send (an unknown
+  // value would fail open downstream).
+  ipcMain.handle(
+    IPC.proposalStart,
+    async (_event, conversationId: unknown, callId: unknown, policy: unknown) => {
+      if (typeof conversationId !== 'string' || typeof callId !== 'string' || callId.length > 200) {
+        throw new Error('Invalid proposal.')
+      }
+      const { result, proposals } = await startProposal(
+        { conversationId, callId, approvalPolicy: isApprovalPolicy(policy) ? policy : 'plan' },
+        hostProposalDeps()
+      )
+      return { conversationId: result.conversationId, title: result.title, proposals }
+    }
+  )
+
+  // Record "do it here" or "dismiss" on a proposal card.
+  ipcMain.handle(
+    IPC.proposalSetState,
+    (_event, conversationId: unknown, callId: unknown, status: unknown) => {
+      if (
+        typeof conversationId !== 'string' ||
+        typeof callId !== 'string' ||
+        callId.length > 200 ||
+        (status !== 'here' && status !== 'dismissed')
+      ) {
+        throw new Error('Invalid proposal decision.')
+      }
+      return decideProposal({ conversationId, callId, status }, hostProposalDeps())
+    }
+  )
+
+  // Side chat: answer a question about a conversation with a read-only subagent,
+  // outside the conversation's log. Progress lines go back to the asking window only.
+  ipcMain.handle(
+    IPC.sideChatAsk,
+    async (
+      event,
+      sideId: unknown,
+      conversationId: unknown,
+      question: unknown,
+      providerId: unknown,
+      model: unknown
+    ): Promise<string> => {
+      if (
+        !isSideChatId(sideId) ||
+        typeof conversationId !== 'string' ||
+        typeof question !== 'string' ||
+        typeof providerId !== 'string' ||
+        typeof model !== 'string'
+      ) {
+        throw new Error('Invalid side chat request.')
+      }
+      const sender = event.sender
+      return askSideChat(
+        {
+          sideId,
+          conversationId,
+          question,
+          providerId,
+          model,
+          onProgress: (message) => {
+            if (!sender.isDestroyed()) sender.send(IPC.sideChatProgress, { sideId, message })
+          }
+        },
+        hostSideChatDeps()
+      )
+    }
+  )
+  ipcMain.handle(IPC.sideChatCancel, (_event, sideId: unknown) => {
+    if (isSideChatId(sideId)) cancelSideChat(sideId)
+  })
+  ipcMain.handle(IPC.sideChatClose, (_event, sideId: unknown) => {
+    if (isSideChatId(sideId)) closeSideChat(sideId)
+  })
+
   ipcMain.handle(IPC.agentSteer, (event, runId: string, text: unknown): boolean => {
     if (typeof text !== 'string') return false
     if (!callerOwnsRun(event, runId)) return false

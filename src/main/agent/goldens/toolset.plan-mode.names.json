@@ -24,6 +24,7 @@
   "dispatch_agent",
   "dispatch_writable_agent",
   "spawn_session",
+  "propose_session",
   "schedule_run",
   "list_scheduled_runs",
   "cancel_scheduled_run",

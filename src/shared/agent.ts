@@ -277,6 +277,19 @@ export interface DeleteConversationResult {
   worktree?: WorktreeRemoval | null
 }
 
+/** Where a spawned chat came from (see `ConversationMeta.spawnedFrom`). */
+export interface SpawnedFrom {
+  conversationId: string
+  /** The spawning chat's title at spawn time. */
+  title: string
+  /**
+   * How many messages at the start of the log were copied from the spawning chat (a
+   * forked context). The hand-off prompt follows them, so that's where the "handoff
+   * from …" label goes. Absent (0) for a fresh context.
+   */
+  historyLength?: number
+}
+
 export interface ConversationMeta {
   id: string
   title: string
@@ -314,7 +327,7 @@ export interface ConversationMeta {
    * carries the spawning chat's id and its title at spawn time, so the spawned
    * chat can show a "handoff from …" label above its seeded first message.
    */
-  spawnedFrom?: { conversationId: string; title: string }
+  spawnedFrom?: SpawnedFrom
   /**
    * True when the most recent run ended in an error (mirrors {@link Conversation.lastError}
    * without carrying the message). Surfaced in the lightweight list so the background-tasks
@@ -442,6 +455,38 @@ export interface Conversation extends ConversationMeta {
   compaction?: ConversationCompaction
   /** Present once the chat has run; see {@link PromptSnapshot}. */
   promptSnapshot?: PromptSnapshot
+  /**
+   * What the user did with each `propose_session` card in this chat, keyed by the
+   * proposing tool call's id. A call with no entry is still open (nothing has run).
+   */
+  proposals?: Record<string, ProposalState>
+  /**
+   * Sessions this chat spawned that have finished since its last turn. The loop
+   * hands them to the model as one automated note at the start of the next turn
+   * and clears the list, so a report is delivered exactly once.
+   */
+  childReports?: ChildReport[]
+}
+
+/** The user's decision on a `propose_session` card. */
+export interface ProposalState {
+  /** `started`: running as its own session; `here`: the user asked for it in this chat; `dismissed`: declined. */
+  status: 'started' | 'here' | 'dismissed'
+  /** The spawned session, when `started`. */
+  conversationId?: string
+  /** Epoch ms the decision was made. */
+  at: number
+}
+
+/** A spawned session's outcome, queued on its parent until the parent's next turn. */
+export interface ChildReport {
+  conversationId: string
+  title: string
+  /** `error` when the child's last run failed. */
+  outcome: 'done' | 'error'
+  /** The start of the child's final answer (or its error), already truncated. */
+  summary: string
+  finishedAt: number
 }
 
 /** Internal input to the agent loop. */
