@@ -10,10 +10,12 @@
   <image x="72" y="68" width="64" height="64" href="{{ICON_DATA_URI}}"/>
   <text x="148" y="112" font-size="34" font-weight="600" fill="#e9ecf1" letter-spacing="-0.5">Houston</text>
 
+  <text x="72" y="198" font-size="24" font-weight="600" fill="#8ab2ff">Open-source AI coding agent</text>
+
   <g font-size="60" font-weight="700" fill="#e9ecf1" letter-spacing="-1.8">
-    <text x="72" y="256">A coding agent</text>
-    <text x="72" y="326">that runs on</text>
-    <text x="72" y="396">your machine.</text>
+    <text x="72" y="266">Powerful enough</text>
+    <text x="72" y="334">to ship, safe</text>
+    <text x="72" y="402">enough to trust.</text>
   </g>
 
   <g font-size="26" fill="#9aa3b2">
