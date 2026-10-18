@@ -81,6 +81,12 @@ function readImageFile(file: File): Promise<ImageAttachment | null> {
   })
 }
 
+/**
+ * Built-in commands that can't run while a turn is in flight. /compact rewrites the
+ * conversation history the running turn is reading and appending to.
+ */
+const IDLE_ONLY_COMMANDS = new Set(['compact'])
+
 /** Max gap between the two Esc presses that recalls the last message. */
 const DOUBLE_ESC_MS = 500
 
@@ -499,9 +505,8 @@ export function Composer({
     () => (cmdPrefix === null ? [] : matchCommands(commands, cmdPrefix)),
     [cmdPrefix, commands]
   )
-  // While a run is active, messages are queued verbatim — the command menu would
-  // only mislead (Enter queues the text instead of running a command).
-  const showCmdMenu = !cmdDismissed && cmdMatches.length > 0 && !running
+  // Commands run mid-turn too (see submit), so the menu shows while running as well.
+  const showCmdMenu = !cmdDismissed && cmdMatches.length > 0
 
   // Query workspace files for the active @-mention (debounced).
   useEffect(() => {
@@ -601,54 +606,61 @@ export function Composer({
     const trimmed = text.trim()
     const hasAttachments = images.length > 0 || context.length > 0
     if ((!trimmed && !hasAttachments) || disabled) return
-    // While a run is in progress the message is queued verbatim as the next
-    // input (the app combines all queued messages when the run finishes), so
-    // slash commands aren't interpreted — they'd be sent as a prompt anyway.
-    if (!running) {
-      // Slash commands only when there are no attachments (a message with images
-      // or context is always sent as a normal message).
-      const parsed = !hasAttachments ? parseSlashCommand(trimmed) : null
-      if (parsed) {
-        const cmd = resolveCommand(commands, parsed.name)
-        if (cmd) {
-          if (cmd.template) {
-            const turn = cmd.autoRun ? commandTurn(cmd, parsed.args, trimmed) : null
-            if (turn) {
-              // Action template (e.g. /review): run it straight away as a turn instead
-              // of dropping the expanded prompt in the field.
-              appendPromptHistory(trimmed)
-              onInvoke(turn)
-              setText('')
-              setImages([])
-              resetMenus()
-            } else {
-              // Custom command: expand into the composer so the (workspace-supplied)
-              // prompt is visible and editable before the user sends it.
-              const expanded = expandTemplate(cmd.template, parsed.args)
-              setText(expanded)
-              resetMenus()
-              focusEnd(expanded.length)
-            }
-          } else {
-            appendPromptHistory(trimmed)
-            onCommand(cmd, parsed.args)
-            setText('')
-            resetMenus()
-          }
-          return
-        }
-        // Unknown command — fall through and send it as a normal message.
-      }
-      // A `#`-capture ("# always run the linter") is a standing instruction, not a
-      // turn — but only with no attachments (a message with an image is a message).
-      // Confirm the scope before writing rather than guess: the user can still send
-      // it as an ordinary message from the prompt.
-      const note = !hasAttachments && onSaveMemory ? parseMemoryCapture(trimmed) : null
-      if (note) {
-        setMemoryDraft(note)
-        resetMenus()
+    // Slash commands run whether or not a turn is in flight. Queuing one as text
+    // (as this used to while running) sent the model a literal "/plan" or "/new" and
+    // the command never ran; the same actions are already live mid-run from the mode
+    // menu, Shift+Tab and New chat. A command that turns into a prompt (/review,
+    // /agent) goes through onInvoke and queues as an invoked turn. Plain messages
+    // still queue for after the run.
+    // Slash commands only when there are no attachments (a message with images
+    // or context is always sent as a normal message).
+    const parsed = !hasAttachments ? parseSlashCommand(trimmed) : null
+    if (parsed) {
+      const cmd = resolveCommand(commands, parsed.name)
+      if (cmd && running && !cmd.template && IDLE_ONLY_COMMANDS.has(cmd.name)) {
+        // Keep the text so it can be sent once the turn ends.
+        flashNotice(`/${cmd.name} can't run while the agent is working. Send it once this turn ends.`)
+        setCmdDismissed(true)
         return
       }
+      if (cmd) {
+        if (cmd.template) {
+          const turn = cmd.autoRun ? commandTurn(cmd, parsed.args, trimmed) : null
+          if (turn) {
+            // Action template (e.g. /review): run it straight away as a turn instead
+            // of dropping the expanded prompt in the field.
+            appendPromptHistory(trimmed)
+            onInvoke(turn)
+            setText('')
+            setImages([])
+            resetMenus()
+          } else {
+            // Custom command: expand into the composer so the (workspace-supplied)
+            // prompt is visible and editable before the user sends it.
+            const expanded = expandTemplate(cmd.template, parsed.args)
+            setText(expanded)
+            resetMenus()
+            focusEnd(expanded.length)
+          }
+        } else {
+          appendPromptHistory(trimmed)
+          onCommand(cmd, parsed.args)
+          setText('')
+          resetMenus()
+        }
+        return
+      }
+      // Unknown command — fall through and send it as a normal message.
+    }
+    // A `#`-capture ("# always run the linter") is a standing instruction, not a
+    // turn — but only with no attachments (a message with an image is a message).
+    // Confirm the scope before writing rather than guess: the user can still send
+    // it as an ordinary message from the prompt.
+    const note = !hasAttachments && onSaveMemory ? parseMemoryCapture(trimmed) : null
+    if (note) {
+      setMemoryDraft(note)
+      resetMenus()
+      return
     }
     if (trimmed) appendPromptHistory(trimmed)
     onSend(buildMessageWithContext(trimmed, context), images.length ? images : undefined)
@@ -683,6 +695,12 @@ export function Composer({
   const steer = (): void => {
     const trimmed = text.trim()
     if (!trimmed || !onSteer || disabled) return
+    // A command is run, not steered: as steering it reached the model as text.
+    const parsed = parseSlashCommand(trimmed)
+    if (parsed && resolveCommand(commands, parsed.name)) {
+      submit()
+      return
+    }
     appendPromptHistory(trimmed)
     onSteer(buildMessageWithContext(trimmed, context))
     setText('')
