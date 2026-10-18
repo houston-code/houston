@@ -3305,6 +3305,33 @@ describe('permission gates: batched sensitive reads and subagent calls', () => {
     expect(resultFor(r, 'd1.read.1')?.ok).toBe(true)
     expect(toolMessageFor(requests, 's1')).toContain('dotenv-approved-marker')
   })
+
+  // On a confining host the sandbox still lets a command read outside the project, so
+  // the main loop prompts for a workspace-escaping command even in full-auto. Approving
+  // a writable dispatch is consent to work in the project, not to reach past it.
+  it("prompts for a writable subagent's confined command that reads outside the workspace", async () => {
+    h.sandboxed = true
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'copy', prompt: 'go' } }),
+          callTurn({ id: 's1', name: 'run_shell', arguments: { command: 'cp /etc/hosts escaped-copy.txt' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    const approvals = approvalsOf(r)
+    expect(approvals.map((a) => a.callId)).toEqual(['d1.shell.1'])
+    expect(approvals[0].name).toBe('run_shell')
+    expect(approvals[0].summary).toContain('Subagent:')
+    expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
+    expect(existsSync(join(ws, 'escaped-copy.txt'))).toBe(false)
+  })
 })
 
 describe('present_plan (Plan mode review)', () => {

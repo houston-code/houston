@@ -105,8 +105,9 @@ Open source under the [Apache License 2.0](LICENSE).
   project; that dispatch is approval-gated, so one consent covers the delegated
   task's local actions. Permission rules still apply inside either tier: a `deny`
   (including a managed-policy or project one) refuses the subagent's call, and an
-  `ask` rule or a credential-file read (a `.env`, a private key) asks you first,
-  just as it would for the main agent. Either tier can also fetch public URLs and
+  `ask` rule, a credential-file read (a `.env`, a private key), or a shell
+  command that names a path outside the project asks you first, just as it would
+  for the main agent. Either tier can also fetch public URLs and
   search the web, with every network request routed back to you as its own
   per-destination approval prompt (and shown live in the transcript); a
   subagent's shell commands never get network access. On a host without an OS-enforced sandbox,

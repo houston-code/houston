@@ -1269,10 +1269,14 @@ export async function startRun(
      * - A read goes through decideApproval exactly like the main loop's: an `ask` rule
      *   prompts, and a credential-file read prompts unless an allow rule or this run's
      *   read override covers it.
-     * - An edit or a confined command prompts only for an `ask` rule. Its tier's
-     *   default prompt was already answered by the dispatch's own approval (a writable
+     * - An edit or a confined command prompts for an `ask` rule. Its tier's default
+     *   prompt was already answered by the dispatch's own approval (a writable
      *   subagent is consent to edit autonomously), but a rule that mandates a prompt
      *   was not, and only the user can answer it.
+     * - A confined command that references a path outside the workspace also prompts
+     *   unless an allow rule covers it, as it does in the main loop: the sandbox may
+     *   still let it read `~/.ssh` or `/etc`, so the dispatch's consent to work in
+     *   the project does not extend to it.
      */
     const gateSubagentLocal =
       (callId: string) =>
@@ -1285,6 +1289,11 @@ export async function startRun(
         const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
         if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
         const sensitiveRead = isSensitiveRead(kind, gateArgs)
+        const shellEscapesWorkspace =
+          kind === 'shell' &&
+          name === 'run_shell' &&
+          typeof gateArgs.command === 'string' &&
+          shellReferencesExternalPath(gateArgs.command, roots)
         const mustApprove =
           kind === 'read'
             ? decideApproval({
@@ -1296,7 +1305,7 @@ export async function startRun(
                 shellUnsandboxedOverride: run.shellUnsandboxedOverride,
                 sensitiveRead
               }).mustApprove
-            : ruleAction === 'ask'
+            : ruleAction === 'ask' || (shellEscapesWorkspace && ruleAction !== 'allow')
         if (!mustApprove) return runCall()
         return promptGatedCall({
           subCallId: mintSubCallId(callId, kind),
