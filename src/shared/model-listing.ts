@@ -12,11 +12,11 @@ import { resolvePricing } from './usage'
 /**
  * Ids a first-party listing returns that aren't chat models this agent can drive:
  * embeddings, speech, image and video generation, moderation, legacy completions, and
- * the realtime, live (streaming voice), translation, search and computer-use variants of
- * chat models.
+ * the realtime, live (streaming voice), image-generation, translation, search and
+ * computer-use variants of chat models.
  */
 const NON_CHAT =
-  /embed|tts|whisper|transcribe|translate|dall-e|gpt-image|imagen|veo|sora|moderation|davinci|babbage|realtime|audio|search|computer-use|aqa|learnlm|(^|-)live(-|$)/
+  /embed|tts|whisper|transcribe|translate|dall-e|imagen|veo|sora|moderation|davinci|babbage|realtime|audio|search|computer-use|aqa|learnlm|(^|-)(live|image)(-|$)/
 
 /** A dated snapshot of a model that also has an undated id (`gpt-5-2025-08-07`, `claude-opus-4-20250514`). */
 const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$|-\d{8}$|@\d{8}$/
