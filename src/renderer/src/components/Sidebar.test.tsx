@@ -999,9 +999,17 @@ describe('Sidebar: spawned chats nest under their parent', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(toggle)
     expect(screen.queryByText('Update API docs')).toBeNull()
-    expect(screen.getByText('1 running')).toBeInTheDocument()
+    // Running reads in the running dot's accent, not the warning colour.
+    expect(screen.getByText('1 running')).toHaveClass('conv__tag--running')
     fireEvent.click(screen.getByRole('button', { name: 'Show 2 spawned sessions' }))
+    expect(screen.queryByText('1 running')).toBeNull()
     expect(screen.getByText('Update API docs')).toBeInTheDocument()
+  })
+
+  it('shows a neutral count when nothing under a folded parent is running', () => {
+    render(<Sidebar {...baseProps({ conversations: convs })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Hide 2 spawned sessions' }))
+    expect(screen.getByText('2 spawned')).toHaveClass('conv__tag--count')
   })
 
   it('never folds away the open chat', () => {

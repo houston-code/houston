@@ -485,6 +485,15 @@ body.is-resizing {
   color: var(--warn);
   vertical-align: 1px;
 }
+/* A folded parent's tag: spawned sessions still running read in the running dot's
+   accent; a plain count of them stays neutral. */
+.conv__tag--running {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.conv__tag--count {
+  color: var(--text-dim);
+}
 .sidebar__list {
   flex: 1;
   min-height: 0;
@@ -593,9 +602,6 @@ body.is-resizing {
   font-size: 10px;
   flex-shrink: 0;
 }
-/* Leading "running" dot: a chat with a live agent run. Same accent + cadence as
-   the status-bar busy dot, so a running chat reads consistently in both places.
-   The pulse is neutralized by the global prefers-reduced-motion rule above. */
 .conv-children {
   margin-left: 14px;
   padding-left: 6px;
@@ -632,6 +638,9 @@ body.is-resizing {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+/* Leading "running" dot: a chat with a live agent run. Same accent + cadence as
+   the status-bar busy dot, so a running chat reads consistently in both places.
+   The pulse is neutralized by the global prefers-reduced-motion rule above. */
 .conv__running {
   width: 7px;
   height: 7px;

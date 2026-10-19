@@ -298,7 +298,14 @@ function ConvRow({
             <span className="conv__tag" title="Archived">Archived</span>
           )}
           {nested && !nested.expanded && (
-            <span className="conv__tag" title="Spawned sessions under this chat">
+            <span
+              className={`conv__tag ${nested.running > 0 ? 'conv__tag--running' : 'conv__tag--count'}`}
+              title={
+                nested.running > 0
+                  ? `${nested.running} of the ${nested.count} spawned sessions under this chat ${nested.running === 1 ? 'is' : 'are'} running`
+                  : 'Spawned sessions under this chat'
+              }
+            >
               {nested.running > 0 ? `${nested.running} running` : `${nested.count} spawned`}
             </span>
           )}
