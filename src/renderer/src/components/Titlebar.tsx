@@ -96,7 +96,7 @@ export function Titlebar({
             <Tooltip
               label={
                 hasChanges
-                  ? `Changes: ${changes.fileCount} changed file${changes.fileCount === 1 ? '' : 's'} (+${changes.added} −${changes.removed}) — view uncommitted changes`
+                  ? `Changes: ${changes.fileCount} changed file${changes.fileCount === 1 ? '' : 's'} (+${changes.added} −${changes.removed}). View uncommitted changes`
                   : 'Changes: view uncommitted working-tree changes'
               }
             >

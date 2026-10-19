@@ -162,12 +162,12 @@ export function FilePreview({
           </div>
         ) : data.kind === 'too-large' ? (
           <p className="file-preview__note">
-            This file is {humanSize(data.bytes)} — too large to preview (limit{' '}
+            This file is {humanSize(data.bytes)}, too large to preview (limit{' '}
             {humanSize(data.limit)}). Open it to view in another app.
           </p>
         ) : data.kind === 'binary' ? (
           <p className="file-preview__note">
-            Binary file ({humanSize(data.bytes)}) — no text preview. Open it to view in another
+            Binary file ({humanSize(data.bytes)}): no text preview. Open it to view in another
             app.
           </p>
         ) : (

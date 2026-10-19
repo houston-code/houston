@@ -1073,7 +1073,7 @@ export async function planDecisionFor(
     case 'edit': {
       const edited = deps.editText ? await deps.editText(planToMarkdown(plan)) : null
       if (edited && edited.trim()) return { kind: 'accept', mode: 'auto-edit', editedBody: edited }
-      deps.io.out(paint('· no editor available (set $EDITOR) — accepting the plan as presented\n', 'dim'))
+      deps.io.out(paint('· no editor available (set $EDITOR), accepting the plan as presented\n', 'dim'))
       return accept('auto-edit')
     }
     case 'suggest': {
@@ -1372,7 +1372,7 @@ export const HELP_TEXT = [
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   '  /theme [name]         list or switch color theme (default | bright | mono)',
-  '  /image [path]         attach an image — from your clipboard, or a file',
+  '  /image [path]         attach an image from your clipboard, or a file',
   '  /cwd                  show the working directory',
   '  /share                copy an invite to Houston to send a friend',
   '  /<name>               run a custom command from .houston/commands',
@@ -1547,7 +1547,7 @@ export function renderMcpTools(name: string, status: McpServerStatus | undefined
   }
   const names = status.toolNames ?? []
   if (!names.length) return paint(`· "${name}" is connected but exposes no tools`, 'dim')
-  const lines = [paint(`${name} — ${names.length} tool${names.length === 1 ? '' : 's'}:`, 'bold')]
+  const lines = [paint(`${name}: ${names.length} tool${names.length === 1 ? '' : 's'}`, 'bold')]
   // Namespaced as the agent sees them, so what is listed here is what appears in
   // an approval prompt.
   for (const t of names) lines.push(`  ${paint(stripControlChars(t), 'cyan')}`)
@@ -2619,7 +2619,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     void deps.checkUpdate()
       .then((u) => {
         if (!u) return
-        const head = u.headline ? ` — ${u.headline}` : ''
+        const head = u.headline ? `: ${u.headline}` : ''
         updateNotice =
           paint(`· update available: ${u.latest} (you have ${deps.version ?? 'this build'})${head}`, 'yellow') +
           paint(`\n  ${u.url}`, 'dim')
@@ -3307,7 +3307,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Surface an actionable /login hint and skip the run instead.
     const activeProvider = deps.getSettings().providers.find((p) => p.id === providerId)
     if (activeProvider?.requiresKey && !activeProvider.hasKey) {
-      deps.io.out(paint(`· ${providerId} has no API key — run /login to set one\n`, 'yellow'))
+      deps.io.out(paint(`· ${providerId} has no API key. Run /login to set one.\n`, 'yellow'))
       continue
     }
 
@@ -3859,7 +3859,7 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
     `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,
     '',
-    paint('  Changes here apply on your next message — no restart needed.', 'dim')
+    paint('  Changes here apply on your next message, no restart needed.', 'dim')
   ]
   deps.io.out(`${lines.join('\n')}\n`)
 }

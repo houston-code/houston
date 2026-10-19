@@ -112,16 +112,16 @@ export function CostBreakdown({
               </span>
               <span>{formatTokens(m.inputTokens)}</span>
               <span>{formatTokens(m.outputTokens)}</span>
-              <span>{m.cacheReadTokens > 0 ? formatTokens(m.cacheReadTokens) : '—'}</span>
-              <span>{m.cost > 0 ? formatUsd(m.cost) : '—'}</span>
+              <span>{m.cacheReadTokens > 0 ? formatTokens(m.cacheReadTokens) : '–'}</span>
+              <span>{m.cost > 0 ? formatUsd(m.cost) : '–'}</span>
             </div>
           ))}
           <div className="usage-panel__row usage-panel__row--total">
             <span>Total</span>
             <span />
             <span>{formatTokens(usage.output)}</span>
-            <span>{(usage.cacheRead ?? 0) > 0 ? formatTokens(usage.cacheRead!) : '—'}</span>
-            <span>{usage.cost > 0 ? formatUsd(usage.cost) : '—'}</span>
+            <span>{(usage.cacheRead ?? 0) > 0 ? formatTokens(usage.cacheRead!) : '–'}</span>
+            <span>{usage.cost > 0 ? formatUsd(usage.cost) : '–'}</span>
           </div>
           <p className="usage-panel__note">
             Cached input bills far below the base rate, so a long conversation costs

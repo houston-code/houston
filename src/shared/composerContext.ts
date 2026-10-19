@@ -145,7 +145,7 @@ export function formatFileContext(
   content: string | null,
   opts: { truncated?: boolean; binary?: boolean } = {}
 ): string {
-  if (opts.binary) return `File: ${name} (binary file — contents omitted)`
+  if (opts.binary) return `File: ${name} (binary file, contents omitted)`
   if (content === null) return `File: ${name} (could not be read)`
   const header = opts.truncated ? `File: ${name} (truncated)` : `File: ${name}`
   const fence = fenceFor(content)

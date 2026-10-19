@@ -75,7 +75,7 @@ export function BackgroundTasks({
       <Tooltip
         label={
           runningCount > 0
-            ? `Background tasks — ${runningCount} running`
+            ? `Background tasks: ${runningCount} running`
             : 'Background tasks'
         }
         disabled={open}

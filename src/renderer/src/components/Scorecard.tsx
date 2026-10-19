@@ -57,7 +57,7 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
           <div className="changes-panel__titles">
             <h2 className="changes-panel__title">Loop scorecard</h2>
             <p className="changes-panel__scope">
-              How each model has behaved across your chats — aggregated on-device from local
+              How each model has behaved across your chats, aggregated on-device from local
               data only, never sent anywhere. Figures are approximate.
             </p>
           </div>
@@ -133,7 +133,7 @@ function ModelCard({ row }: { row: ModelScorecard }): JSX.Element {
         />
         <Stat
           label="Total cost"
-          value={row.totalCost > 0 ? `≈${formatUsd(row.totalCost)}` : '—'}
+          value={row.totalCost > 0 ? `≈${formatUsd(row.totalCost)}` : '–'}
           hint={
             row.totalCost > 0
               ? `Approximate; ≈${formatUsd(row.avgCost)} per run`

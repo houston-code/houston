@@ -433,7 +433,7 @@ function ToolRow({
             className="tool-row__approval-reason"
             type="text"
             value={note}
-            placeholder="Why not? (optional — tell the agent what to do instead)"
+            placeholder="Why not? (optional: tell the agent what to do instead)"
             aria-label="Reason for denying, sent to the agent"
             maxLength={MAX_APPROVAL_NOTE}
             onChange={(e) => setNote(e.target.value)}

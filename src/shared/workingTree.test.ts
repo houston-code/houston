@@ -154,7 +154,7 @@ describe('untrackedToFileDiff', () => {
       hunks: []
     })
     expect(untrackedToFileDiff('big.log', null, { tooLargeKb: 512 }).note).toBe(
-      'Large file (512 KB) — not shown'
+      'Large file (512 KB), not shown'
     )
     expect(untrackedToFileDiff('x', null, { unreadable: true }).note).toBe('Could not read file')
     expect(untrackedToFileDiff('empty.txt', '').note).toBe('Empty file')

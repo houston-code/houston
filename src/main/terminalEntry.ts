@@ -233,7 +233,7 @@ export function wireTerminalSessionBackends(opts: {
         .finally(() => {
           liveSpawnedRuns.delete(conversationId)
           const title = getConversation(conversationId)?.title ?? conversationId
-          opts.notify?.(`background session "${title}" finished — resume it to see the result (id ${conversationId})`)
+          opts.notify?.(`background session "${title}" finished. Resume it to see the result (id ${conversationId})`)
         })
       pending.add(run)
       void run.finally(() => pending.delete(run))
