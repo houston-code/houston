@@ -22,7 +22,7 @@ import { wireLocalhostCapture } from './localhostCapture'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
 import { parseTuiArgs } from './tui'
-import { runTuiEntry, runHeadlessEntry } from './terminalEntry'
+import { runTuiEntry, runHeadlessEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
 
@@ -174,8 +174,10 @@ const tui = parseTuiArgs(process.argv, process.cwd())
 // One-shot headless mode: `Houston -p "<prompt>" [--cwd dir] [--full-auto] [--json]`.
 // Runs the agent without a window and exits with a status code; everything else
 // (GUI, IPC, auto-update) is skipped. The `verifyOnStop` gate only runs after an
-// edit, so it needs `--full-auto` (or `--approval auto-edit`) headless.
-const headless = tui ? null : parseHeadlessArgs(process.argv, process.cwd())
+// edit, so it needs `--full-auto` (or `--approval auto-edit`) headless. `-p -` (or
+// a bare `-p` with input piped in) reads the prompt from stdin; with no `-p` at all
+// a launch opens the window, whatever stdin holds.
+const headless = tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
 
 if (tui) {
   // The full client wiring lives in terminalEntry.ts, shared verbatim with the

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { isatty } from 'node:tty'
 import { spawn, spawnSync } from 'node:child_process'
 import type { McpServerConfig } from '@shared/types'
 import {
@@ -94,6 +95,34 @@ import {
  * hosts exit differently (`app.exit` vs `process.exit`), and both tear down the
  * agent's background shells and MCP connections before returning.
  */
+
+/**
+ * True when stdin carries data piped or redirected in (a pipe, a socket, or a
+ * file) rather than a terminal or an empty device such as /dev/null, which is
+ * what a GUI launch or a CI step with no input gets. Decides whether a headless
+ * run with no prompt reads one from stdin. Reads only file-descriptor metadata,
+ * so it never consumes input or blocks.
+ */
+export function stdinIsPiped(): boolean {
+  if (isatty(0)) return false
+  try {
+    const st = fstatSync(0)
+    return st.isFIFO() || st.isFile() || st.isSocket()
+  } catch {
+    return false
+  }
+}
+
+/** Read all of stdin as UTF-8 (a piped prompt, or a key piped into `providers set-key`). */
+export function readAllStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (chunk) => (data += chunk))
+    process.stdin.on('end', () => resolve(data))
+    process.stdin.on('error', reject)
+  })
+}
 
 /** Read a file, returning null if it doesn't exist / can't be read. */
 function safeRead(path: string): string | null {
@@ -636,6 +665,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions): Promise<numbe
       resolveElicitation,
       out: (s) => process.stdout.write(s),
       err: (s) => process.stderr.write(s),
+      readStdin: readAllStdin,
       // Persist headless runs as conversations (shared with the TUI/GUI) so
       // --continue / --resume and an interactive `-i` handoff can pick them up.
       session: {

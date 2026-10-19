@@ -13,13 +13,18 @@ import { runtimeMissingLine } from '@shared/runtimes'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
-import type {
-  AgentEvent,
-  AgentRunRequest,
-  ChatMessage,
-  ElicitationResult,
-  PlanDecision,
-  ToolApprovalDecision
+import {
+  isReasoningEffort,
+  REASONING_EFFORTS,
+  type AgentEvent,
+  type AgentRunRequest,
+  type ChatMessage,
+  type ElicitationResult,
+  type PlanDecision,
+  type ReasoningEffort,
+  type RunSettingsOverrides,
+  type StopReason,
+  type ToolApprovalDecision
 } from '@shared/agent'
 
 /**
@@ -31,6 +36,47 @@ import type {
  * Everything here is pure / dependency-injected (no Electron, no real I/O) so it
  * can be unit-tested; index.ts wires the real deps when a prompt flag is present.
  */
+
+/**
+ * The process exit codes of a headless run, so a script or benchmark harness can
+ * tell a finished task from one that ran out of budget without parsing output.
+ * Documented for users in the README and docs/houston-guide.md; keep them in sync.
+ */
+export const HEADLESS_EXIT = {
+  /** The agent finished on its own. */
+  ok: 0,
+  /** An error or aborted run, a stalled agent, or a call refused under `--on-approval fail`. */
+  failed: 1,
+  /** A bad flag value, or no prompt (an empty stdin). Nothing ran. */
+  usage: 2,
+  /** The run hit a budget (its step cap or the model's output limit) before finishing. */
+  limit: 3
+} as const
+
+/** How a headless run ended: the `status` of the `--json` result line. */
+export type HeadlessStatus = 'success' | 'limit' | 'stalled' | 'approval_denied' | 'error'
+
+/**
+ * The last line a `--json` run prints: one summary a harness can read instead of
+ * folding the event stream itself.
+ */
+export interface HeadlessResult {
+  type: 'result'
+  status: HeadlessStatus
+  /** The final `done` event's stop reason; null when the run never got that far. */
+  stopReason: StopReason | null
+  /** Why the loop stopped short, when a `limit` event ended it. */
+  limitReason?: 'max-steps' | 'max-output' | 'stalled'
+  /** Model rounds the agent took (the unit `--max-turns` caps). */
+  turns: number
+  /** Estimated cost in USD, subagent and review rounds included. */
+  costUsd: number
+  inputTokens: number
+  outputTokens: number
+  durationMs: number
+  /** The assistant text streamed after the run's last tool call: its closing answer. */
+  finalText: string
+}
 
 /**
  * What headless does when the loop asks for a tool approval (there is no human
@@ -76,7 +122,61 @@ export interface HeadlessOptions {
   continueSession: boolean
   /** `--resume <id>`: resume a specific saved session (e.g. one started in the TUI). */
   resumeId?: string
+  /**
+   * Read the prompt from stdin (`-p -`, or a piped stdin with no prompt given);
+   * `prompt` is empty until runHeadless reads it.
+   */
+  promptFromStdin?: boolean
+  /** `--effort`: the reasoning effort for this run, over settings.reasoningEffort. */
+  effort?: ReasoningEffort
+  /** `--max-turns`: a hard step cap for this run, over settings.maxIterations. */
+  maxTurns?: number
+  /** `--max-cost`: the USD cost at which the agent is told to wrap up (costCeilingUsd). */
+  maxCostUsd?: number
+  /** `--verify`: run this command at a natural stop after edits (verifyOnStop + verifyCommand). */
+  verifyCommand?: string
+  /**
+   * A flag carried a value it can't take. runHeadless reports it and exits with
+   * HEADLESS_EXIT.usage before anything runs, rather than silently running with
+   * a budget or check the caller didn't ask for.
+   */
+  usageError?: string
 }
+
+/** Facts about the process's stdin that decide whether a prompt can come from it. */
+export interface HeadlessStdin {
+  /** stdin is a pipe or a redirected file, not a terminal or /dev/null. */
+  stdinPiped?: boolean
+  /**
+   * Take a piped stdin as the prompt even with no `-p` at all. The standalone CLI
+   * sets it (a bare `houston` in a pipe has no other use); the desktop binary
+   * doesn't, since a bare launch there opens the window.
+   */
+  bareStdinPrompt?: boolean
+}
+
+/**
+ * Every flag the headless parser reads. `-p` followed by one of these takes no
+ * value from it, so `-p --json` with a piped prompt doesn't run "--json" as the task.
+ */
+const HEADLESS_FLAGS = new Set([
+  '-p',
+  '--prompt',
+  '--continue',
+  '--resume',
+  '-C',
+  '--cwd',
+  '--model',
+  '--provider',
+  '--approval',
+  '--full-auto',
+  '--on-approval',
+  '--json',
+  '--effort',
+  '--max-turns',
+  '--max-cost',
+  '--verify'
+])
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
 export function flagValue(argv: string[], i: number): { value?: string; next: number } {
@@ -96,10 +196,17 @@ export function nameOf(arg: string): string {
 /**
  * Parse argv for headless mode. Returns null when no prompt flag is present, so
  * the caller launches the normal GUI. Unknown tokens (the binary path, the app
- * path Electron injects, etc.) are ignored.
+ * path Electron injects, etc.) are ignored. The prompt comes from stdin for
+ * `-p -`, and for a `-p` with no value (or, with `bareStdinPrompt`, no `-p` at
+ * all) when stdin is piped.
  */
-export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessOptions | null {
+export function parseHeadlessArgs(
+  argv: string[],
+  defaultCwd: string,
+  stdin: HeadlessStdin = {}
+): HeadlessOptions | null {
   let prompt: string | undefined
+  let promptFlag = false
   let cwd = defaultCwd
   let providerId: string | undefined
   let model: string | undefined
@@ -108,12 +215,48 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
   let json = false
   let continueSession = false
   let resumeId: string | undefined
+  let effort: ReasoningEffort | undefined
+  let maxTurns: number | undefined
+  let maxCostUsd: number | undefined
+  let verifyCommand: string | undefined
+  let usageError: string | undefined
+  // Keep the first bad value: it's the one the caller reads about.
+  const bad = (message: string): void => {
+    usageError ??= message
+  }
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
     if (name === '-p' || name === '--prompt') {
+      promptFlag = true
+      if (!argv[i].includes('=') && argv[i + 1] !== undefined && HEADLESS_FLAGS.has(nameOf(argv[i + 1]))) {
+        prompt = undefined
+        continue
+      }
       const { value, next } = flagValue(argv, i)
       prompt = value
+      i = next
+    } else if (name === '--effort') {
+      const { value, next } = flagValue(argv, i)
+      if (isReasoningEffort(value)) effort = value
+      else bad(`--effort must be one of ${REASONING_EFFORTS.join(', ')} (got ${quoted(value)})`)
+      i = next
+    } else if (name === '--max-turns') {
+      const { value, next } = flagValue(argv, i)
+      const n = value !== undefined && /^[0-9]+$/.test(value) ? Number(value) : NaN
+      if (Number.isSafeInteger(n) && n >= 1) maxTurns = n
+      else bad(`--max-turns must be a whole number of at least 1 (got ${quoted(value)})`)
+      i = next
+    } else if (name === '--max-cost') {
+      const { value, next } = flagValue(argv, i)
+      const usd = value !== undefined && value.trim() !== '' ? Number(value) : NaN
+      if (Number.isFinite(usd) && usd > 0) maxCostUsd = usd
+      else bad(`--max-cost must be a positive amount in US dollars, like 2 or 0.5 (got ${quoted(value)})`)
+      i = next
+    } else if (name === '--verify') {
+      const { value, next } = flagValue(argv, i)
+      if (value !== undefined && value.trim() !== '') verifyCommand = value
+      else bad('--verify needs a command to run, like --verify "npm test"')
       i = next
     } else if (name === '--continue') {
       continueSession = true
@@ -150,9 +293,15 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
     }
   }
 
-  if (prompt === undefined || prompt === '') return null
+  // `-p -` always reads stdin; a missing prompt does when stdin was piped in.
+  const promptFromStdin =
+    prompt === '-' ||
+    ((prompt === undefined || prompt === '') &&
+      stdin.stdinPiped === true &&
+      (promptFlag || stdin.bareStdinPrompt === true))
+  if (!promptFromStdin && (prompt === undefined || prompt === '')) return null
   return {
-    prompt,
+    prompt: promptFromStdin ? '' : (prompt as string),
     cwd,
     providerId,
     model,
@@ -162,8 +311,30 @@ export function parseHeadlessArgs(argv: string[], defaultCwd: string): HeadlessO
     onApproval: onApproval ?? (approvalPolicy === 'full-auto' ? 'allow' : 'deny'),
     json,
     continueSession,
-    resumeId
+    resumeId,
+    ...(promptFromStdin ? { promptFromStdin } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+    ...(verifyCommand !== undefined ? { verifyCommand } : {}),
+    ...(usageError !== undefined ? { usageError } : {})
   }
+}
+
+/** A flag value as it appears in an error message. */
+function quoted(value: string | undefined): string {
+  return value === undefined ? 'nothing' : JSON.stringify(value)
+}
+
+/** The run-level setting overrides a headless invocation's flags ask for. */
+export function headlessOverrides(opts: HeadlessOptions): RunSettingsOverrides | undefined {
+  const o: RunSettingsOverrides = {
+    ...(opts.effort !== undefined ? { reasoningEffort: opts.effort } : {}),
+    ...(opts.maxTurns !== undefined ? { maxIterations: opts.maxTurns } : {}),
+    ...(opts.maxCostUsd !== undefined ? { costCeilingUsd: opts.maxCostUsd } : {}),
+    ...(opts.verifyCommand !== undefined ? { verifyCommand: opts.verifyCommand } : {})
+  }
+  return Object.keys(o).length ? o : undefined
 }
 
 /**
@@ -241,6 +412,10 @@ export interface HeadlessDeps {
   out: (s: string) => void
   err: (s: string) => void
   newId?: () => string
+  /** Read all of stdin, for a prompt passed as `-p -` or piped in. */
+  readStdin?: () => Promise<string>
+  /** Milliseconds clock for the result's `durationMs`; injected so tests are exact. */
+  now?: () => number
   /**
    * Session persistence (shared with the TUI/GUI). When present, a headless run is
    * saved as a conversation — so `--continue`/`--resume` can pick it up later and
@@ -263,21 +438,56 @@ export interface HeadlessDeps {
 }
 
 /**
- * Run one prompt to completion and return an exit code (0 ok, 1 error). In
- * `--json` mode every agent event is emitted as a JSON line; otherwise assistant
- * text streams to stdout and tool activity to stderr. Approval prompts (from the
- * gating policies, and from the always-prompt cases every policy has: network/MCP
- * first use, unconfined or workspace-escaping shell) are resolved per
- * `opts.onApproval` since there's no human to ask — denied by default, approved
- * under full-auto or an explicit `--on-approval allow`.
+ * Run one prompt to completion and return an exit code (see HEADLESS_EXIT). In
+ * `--json` mode every agent event is emitted as a JSON line, then one final
+ * `result` line (see HeadlessResult); otherwise assistant text streams to stdout
+ * and tool activity to stderr. Approval prompts (from the gating policies, and
+ * from the always-prompt cases every policy has: network/MCP first use,
+ * unconfined or workspace-escaping shell) are resolved per `opts.onApproval`
+ * since there's no human to ask — denied by default, approved under full-auto or
+ * an explicit `--on-approval allow`.
  */
-export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Promise<number> {
+export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps): Promise<number> {
+  // A bad flag value stops here, before any model call, so a typo in a budget
+  // can't run with no budget at all.
+  if (inputOpts.usageError) {
+    deps.err(`${inputOpts.usageError}\n`)
+    return HEADLESS_EXIT.usage
+  }
+
+  let opts = inputOpts
+  if (opts.promptFromStdin) {
+    const text = deps.readStdin ? (await deps.readStdin()).trim() : ''
+    if (!text) {
+      deps.err('No prompt: stdin was empty. Pass -p "<prompt>", or pipe the prompt in.\n')
+      return HEADLESS_EXIT.usage
+    }
+    opts = { ...opts, prompt: text }
+  }
+
+  const now = deps.now ?? Date.now
   const settings = deps.getSettings()
+
+  // The `--json` summary line. Written for every run past flag validation, a
+  // failed preflight included, so a harness can always read the last line.
+  const writeResult = (r: Omit<HeadlessResult, 'type'>): void => {
+    if (opts.json) deps.out(`${JSON.stringify({ type: 'result', ...r } satisfies HeadlessResult)}\n`)
+  }
 
   const resolved = resolveHeadlessModel(settings, opts)
   if ('error' in resolved) {
     deps.err(`${resolved.error}\n`)
-    return 1
+    writeResult({
+      status: 'error',
+      stopReason: null,
+      turns: 0,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 0,
+      finalText: ''
+    })
+    return HEADLESS_EXIT.failed
   }
 
   // Session continuity: with --continue / --resume, seed the prior conversation's
@@ -327,14 +537,22 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
 
   // Verify-gate warning: the end-of-run verification command only runs after the
   // model modifies files, which a read-only ('plan') run never does — so a
-  // verifyOnStop-enabled profile silently gets no verification headless. Surface
-  // that once up front rather than letting it look like a broken setting. Only a
-  // policy that can actually edit ('auto-edit'/'full-auto') will exercise the gate.
-  if (settings.verifyOnStop === true && opts.approvalPolicy === 'plan') {
-    deps.err(
-      'warning: verifyOnStop is enabled but this headless run is read-only (plan mode); ' +
-        'pass --full-auto to run end-of-run verification.\n'
-    )
+  // verifyOnStop-enabled profile (or a --verify flag) silently gets no verification
+  // headless. Surface that once up front rather than letting it look like a broken
+  // setting. Only a policy that can actually edit ('auto-edit'/'full-auto') will
+  // exercise the gate.
+  if (opts.approvalPolicy === 'plan') {
+    if (opts.verifyCommand !== undefined) {
+      deps.err(
+        'warning: --verify has no effect in a read-only (plan mode) run; ' +
+          'pass --full-auto so the agent can edit and the check can run.\n'
+      )
+    } else if (settings.verifyOnStop === true) {
+      deps.err(
+        'warning: verifyOnStop is enabled but this headless run is read-only (plan mode); ' +
+          'pass --full-auto to run end-of-run verification.\n'
+      )
+    }
   }
 
   // Trusted folders: a headless run never prompts, so an undecided (or drifted)
@@ -362,6 +580,7 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
   }
 
   const runId = (deps.newId ?? randomUUID)()
+  const overrides = headlessOverrides(opts)
   const req: AgentRunRequest = {
     runId,
     ...(conversationId ? { conversationId } : {}),
@@ -369,15 +588,27 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     providerId: resolved.providerId,
     model: resolved.model,
     approvalPolicy: opts.approvalPolicy,
-    messages
+    messages,
+    // No one can answer ask_user here, so the loop doesn't offer it.
+    unattended: true,
+    ...(overrides ? { overrides } : {})
   }
 
-  let failed = false
+  // How the run ended, for the exit code and the --json result line.
+  let errored = false
+  let approvalDenied = false
+  let limitReason: HeadlessResult['limitReason']
+  let stopReason: StopReason | null = null
   // Accumulate token/cost so text mode can print a one-line total on completion
-  // (JSON mode carries the raw `usage` events instead).
+  // (JSON mode carries the raw `usage` events, then the totals on the result line).
   let inTok = 0
   let outTok = 0
   let cost = 0
+  let turns = 0
+  // The closing answer: text streamed since the last tool call. Tool activity (or a
+  // verification pass that sends the agent back to work) means the text so far was
+  // narration, so it clears the buffer.
+  let finalText = ''
   // Review findings print once per status change (see createFindingPrinter).
   const printFinding = createFindingPrinter()
   const send = (e: AgentEvent): void => {
@@ -386,9 +617,11 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     }
     switch (e.type) {
       case 'text':
+        finalText += e.delta
         if (!opts.json) deps.out(e.delta)
         break
       case 'tool_start':
+        finalText = ''
         if (!opts.json) deps.err(`· ${e.name}\n`)
         break
       case 'tool_result':
@@ -406,6 +639,10 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         inTok += e.inputTokens
         outTok += e.outputTokens
         cost += e.cost
+        // One usage event per model round of the agent itself. A subagent's or a
+        // review's rounds arrive rolled up as one event with inputTokens 0 (kept off
+        // the context meter), so they add cost but not turns.
+        if (e.inputTokens > 0) turns++
         break
       case 'tool_approval':
         // The full-auto shell-network consent gates only the sandbox's network, not the
@@ -435,14 +672,15 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
           if (!opts.json) {
             deps.err(`· denying ${e.name} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
           }
-          if (opts.onApproval === 'fail') failed = true
+          if (opts.onApproval === 'fail') approvalDenied = true
           deps.resolveApproval(e.runId, e.callId, 'deny')
         }
         break
       case 'tool_question':
-        // No interactive user in headless mode — auto-answer so an `ask_user`
-        // call can't hang the run forever. The agent gets a clear signal to
-        // proceed on its own rather than a silent empty string.
+        // A headless run is unattended, so the loop doesn't offer `ask_user` at all.
+        // This is the backstop for a model that calls it anyway: auto-answer so the
+        // call can't hang the run forever, with a clear signal to proceed on its own
+        // rather than a silent empty string.
         if (!opts.json) deps.err('· no interactive user (headless): auto-answering ask_user\n')
         deps.resolveQuestion(
           e.runId,
@@ -452,10 +690,11 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
         break
       case 'limit':
         // The loop ended by hitting a budget/guard rather than a natural stop.
-        // Surface every reason so a script can see WHY the run stopped short; a
-        // 'stalled' termination is a soft failure (the agent gave up looping), so
-        // it flips the exit code, while max-steps/max-output stay code 0 (the run
-        // did as much as its budget allowed — not an error).
+        // Surface every reason so a script can see WHY the run stopped short. A
+        // 'stalled' termination is a failure (the agent gave up looping); a budget
+        // stop (max-steps/max-output) gets its own exit code, so a harness can tell
+        // "ran out of room" from both a finished task and a crash.
+        limitReason = e.reason
         if (!opts.json) {
           const why =
             e.reason === 'stalled'
@@ -465,17 +704,19 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
                 : 'stopped: reached the maximum number of steps'
           deps.err(`· ${why}\n`)
         }
-        if (e.reason === 'stalled') failed = true
         break
       case 'verification':
         // The end-of-run verification command ran; report pass/fail. A failing
         // pass is fed back for self-correction inside the loop (it doesn't end the
         // run here), so this is informational — the final exit code follows 'done'.
+        // A failure sends the agent back to work, so the answer before it is no
+        // longer its last word; a pass follows the final answer and keeps it.
+        if (!e.passed) finalText = ''
         if (!opts.json)
           deps.err(`· verification ${e.passed ? 'passed' : 'failed'}\n`)
         break
       case 'error':
-        failed = true
+        errored = true
         deps.err(`Error: ${e.message}\n`)
         break
       case 'done':
@@ -483,7 +724,8 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
           deps.out('\n')
           if (inTok || outTok || cost) deps.err(`· ${inTok}+${outTok} tok · $${cost.toFixed(4)}\n`)
         }
-        if (e.stopReason === 'error' || e.stopReason === 'aborted') failed = true
+        stopReason = e.stopReason
+        if (e.stopReason === 'error' || e.stopReason === 'aborted') errored = true
         break
       case 'plan_ready':
         // No interactive reviewer in headless. Print the plan (the deliverable of a
@@ -549,8 +791,50 @@ export async function runHeadless(opts: HeadlessOptions, deps: HeadlessDeps): Pr
     }
   }
 
+  const startedAt = now()
   await deps.startRun(req, send, (m) => {
     if (deps.session && conversationId) deps.session.setMessages(conversationId, m)
   })
-  return failed ? 1 : 0
+
+  // A failure outranks a budget stop: a run that also hit an error or a refused
+  // approval didn't merely run out of room.
+  const status: HeadlessStatus = errored
+    ? 'error'
+    : approvalDenied
+      ? 'approval_denied'
+      : limitReason === 'stalled'
+        ? 'stalled'
+        : limitReason
+          ? 'limit'
+          : 'success'
+  writeResult({
+    status,
+    stopReason,
+    ...(limitReason ? { limitReason } : {}),
+    turns,
+    // Rounded past a millionth of a cent: the sum of per-round floats carries
+    // representation noise (0.024000000000000004) a harness shouldn't have to strip.
+    costUsd: Math.round(cost * 1e6) / 1e6,
+    inputTokens: inTok,
+    outputTokens: outTok,
+    durationMs: Math.max(0, now() - startedAt),
+    finalText
+  })
+  return headlessExitCode(status)
+}
+
+/** The process exit code for a run that ended with `status`. */
+export function headlessExitCode(status: HeadlessStatus): number {
+  switch (status) {
+    case 'success':
+      return HEADLESS_EXIT.ok
+    case 'limit':
+      return HEADLESS_EXIT.limit
+    case 'stalled':
+    case 'approval_denied':
+    case 'error':
+      return HEADLESS_EXIT.failed
+    default:
+      return assertNever(status, 'headless:unhandled status')
+  }
 }

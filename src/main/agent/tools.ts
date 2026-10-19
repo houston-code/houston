@@ -3806,6 +3806,11 @@ export interface BuiltinToolsetOptions {
   scheduler: boolean
   /** The run starts in plan mode; present_plan (the "exit plan mode" tool) is offered only then. */
   planMode: boolean
+  /**
+   * Someone can answer an ask_user question mid-run. False on an unattended run
+   * (headless), where the question could only get a canned reply. Absent counts as true.
+   */
+  askUser?: boolean
 }
 
 /**
@@ -3822,6 +3827,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
     if (name === PROPOSE_SESSION_NAME) return opts.spawn && opts.proposals !== false
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler
     if (name === PRESENT_PLAN_NAME) return opts.planMode
+    if (name === ASK_USER_NAME) return opts.askUser !== false
     return true
   })
 }

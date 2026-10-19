@@ -45,6 +45,7 @@ import { runQuarantineExtraction } from './untrusted'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt } from './prompt'
+import { applyRunOverrides } from './run-overrides'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig, mergeProjectMcpServers } from './projectConfig'
 import { loadManagedPolicy } from './managedPolicy'
@@ -894,7 +895,8 @@ export async function startRun(
       return false
     }
 
-    const settings = getSettings()
+    // This run's own overrides (headless flags) laid over the saved settings.
+    const settings = applyRunOverrides(getSettings(), req.overrides)
     const rules = await loadProjectRules(workspace)
     // Permission-rule precedence, highest first (first match wins):
     //   1. Admin managed policy — org-distributed, root-owned; deny/ask only.
@@ -998,7 +1000,10 @@ export async function startRun(
       // one-shot run with no conversation can't offer one.
       proposals: conversationId !== undefined,
       scheduler: schedulerAvailable,
-      planMode
+      planMode,
+      // Nobody can answer a question on an unattended run; the prompt built from
+      // this list then says so instead of naming ask_user.
+      askUser: req.unattended !== true
     }).map((t) => t.schema)
     let system = buildSystemPrompt(
       workspace,
@@ -2388,7 +2393,8 @@ export async function startRun(
       // takes effect on the next turn. This mirrors the live approval policy; the
       // natural granularity is per-turn because reasoning is a per-request param.
       // Everything else stays snapshotted so a run's behavior is otherwise stable.
-      const { reasoningEffort, reasoningSummary, verbosity } = getSettings()
+      // A per-run override (headless --effort) still wins over the live value.
+      const { reasoningEffort, reasoningSummary, verbosity } = applyRunOverrides(getSettings(), req.overrides)
 
       let assistantText = ''
       let toolCalls: ToolCall[] = []
