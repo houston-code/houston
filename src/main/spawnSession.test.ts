@@ -218,6 +218,31 @@ describe('createSpawnBackend', () => {
     expect(calls.runs).toHaveLength(0)
   })
 
+  it('lets the user start a session past the cap, and does not count it', async () => {
+    const counted: boolean[] = []
+    const { deps, calls } = fakeDeps({
+      liveSpawnCount: () => MAX_LIVE_SPAWNED_SESSIONS,
+      startBackgroundRun: (_id, _req, opts) => {
+        counted.push(opts.countsTowardCap)
+      }
+    })
+    await createSpawnBackend(deps).spawn({ ...baseInput, startedBy: 'user' })
+    expect(calls.created).toHaveLength(1)
+    expect(counted).toEqual([false])
+  })
+
+  it('counts an agent-started session toward the cap', async () => {
+    const counted: boolean[] = []
+    const { deps } = fakeDeps({
+      startBackgroundRun: (_id, _req, opts) => {
+        counted.push(opts.countsTowardCap)
+      }
+    })
+    await createSpawnBackend(deps).spawn(baseInput)
+    await createSpawnBackend(deps).spawn({ ...baseInput, startedBy: 'agent' })
+    expect(counted).toEqual([true, true])
+  })
+
   it('allows a spawn when live sessions are below the cap', async () => {
     const { deps, calls } = fakeDeps({ liveSpawnCount: () => MAX_LIVE_SPAWNED_SESSIONS - 1 })
     await createSpawnBackend(deps).spawn(baseInput)

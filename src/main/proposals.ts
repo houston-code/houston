@@ -159,6 +159,8 @@ async function spawnProposal(
     approvalPolicy,
     workspace: conv.workspace,
     parentConversationId: conv.id,
+    // The user's own click: exempt from the cap on agent-started sessions.
+    startedBy: 'user',
     ...(worktree ? { worktree } : {}),
     ...(args.context === 'fork' ? { history: forkableHistory(conv.messages) } : {})
   })

@@ -283,7 +283,8 @@ function makeBroadcastIo(): DrainIO {
  * {@link createSpawnBackend}); each id is dropped when its run settles.
  */
 function wireSpawnSession(): void {
-  const liveSpawnedRuns = new Set<string>()
+  // Live spawned runs → whether each counts toward the agent's concurrency cap.
+  const liveSpawnedRuns = new Map<string, boolean>()
   setSpawnBackend(
     createSpawnBackend({
       createWorktree,
@@ -294,13 +295,13 @@ function wireSpawnSession(): void {
       },
       getTitle: (id) => getConversation(id)?.title,
       rememberWorkspace,
-      liveSpawnCount: () => liveSpawnedRuns.size,
+      liveSpawnCount: () => [...liveSpawnedRuns.values()].filter(Boolean).length,
       removeWorktree: (wt) => removeWorktree(wt),
-      startBackgroundRun: (conversationId, req) => {
+      startBackgroundRun: (conversationId, req, { countsTowardCap }) => {
         // Fire-and-forget: the spawning turn shouldn't block on the child's run.
         // Owner is undefined — a background run any window can adopt and approve.
         // Track it as live for the concurrency cap; drop it when the run settles.
-        liveSpawnedRuns.add(conversationId)
+        liveSpawnedRuns.set(conversationId, countsTowardCap)
         return runAndDrain(makeBroadcastIo(), conversationId, req, undefined).finally(() =>
           liveSpawnedRuns.delete(conversationId)
         )

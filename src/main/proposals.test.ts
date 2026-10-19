@@ -112,7 +112,9 @@ describe('startProposal', () => {
       model: 'claude-sonnet-5',
       approvalPolicy: 'auto-edit',
       workspace: '/repo',
-      parentConversationId: 'parent'
+      parentConversationId: 'parent',
+      // The user's own click, so the agent's concurrency cap doesn't apply.
+      startedBy: 'user'
     })
     expect(spawned[0].worktree?.branch).toMatch(/^houston\/update-api-docs-[0-9a-f]{6}$/)
     expect(spawned[0].history).toBeUndefined()

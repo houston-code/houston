@@ -120,6 +120,13 @@ export interface SpawnSessionInput {
    * for a `fresh` context.
    */
   history?: ChatMessage[]
+  /**
+   * Who started the session. `agent` (the default): the model called `spawn_session`,
+   * which can auto-approve, so it counts toward the concurrency cap. `user`: the user
+   * started it themselves (a proposal card's Start session), which is its own
+   * consent, so it is neither capped nor counted.
+   */
+  startedBy?: 'agent' | 'user'
 }
 
 /** What the backend returns once the session exists and its background run has started. */
