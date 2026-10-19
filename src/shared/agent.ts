@@ -528,6 +528,9 @@ export interface SideChatTurn {
   at: number
 }
 
+/** Most exchanges a side chat keeps; past it the oldest drop off (and the panel says so). */
+export const MAX_SIDE_TURNS = 200
+
 /** A chat's persisted side chat. */
 export interface StoredSideChat {
   turns: SideChatTurn[]
@@ -535,12 +538,16 @@ export interface StoredSideChat {
   transcript?: ChatMessage[]
   /** How many main-chat messages the side agent has seen, so it can be caught up. */
   seenMessages?: number
+  /** How many of the oldest exchanges were dropped to stay within the cap. */
+  droppedTurns?: number
 }
 
 /** What a side chat panel shows: the stored exchanges plus the one in flight, if any. */
 export interface SideChatView {
   turns: SideChatTurn[]
   pending?: { id: string; question: string; progress?: string }
+  /** How many of the oldest exchanges were dropped to stay within the cap (0 or absent: none). */
+  droppedTurns?: number
 }
 
 /** The user's decision on a `propose_session` card. */

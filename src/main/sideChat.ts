@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   COMPACTION_SUMMARY_PREFIX,
+  MAX_SIDE_TURNS,
   SYSTEM_NOTE_PREFIX,
   type ChatMessage,
   type Conversation,
@@ -37,8 +38,8 @@ import { addUsage, getConversation, saveSideChat } from './conversations'
  * through `onChange`, so every window showing the chat stays in step.
  */
 
-/** Most exchanges kept per side chat; the oldest drop off the panel first. */
-export const MAX_SIDE_TURNS = 200
+/** Re-exported for callers and tests that already import it from here. */
+export { MAX_SIDE_TURNS }
 /**
  * Once the side agent's own transcript grows past this, the next question starts it
  * over from a fresh snapshot (plus a recap of the latest exchanges), so a long-lived
@@ -184,10 +185,12 @@ export interface SideChatDeps {
 
 /** What a side chat panel shows for `conversationId`. */
 export function sideChatView(conversationId: string, deps: Pick<SideChatDeps, 'getConversation'>): SideChatView {
-  const turns = deps.getConversation(conversationId)?.sideChat?.turns ?? []
+  const stored = deps.getConversation(conversationId)?.sideChat
+  const turns = stored?.turns ?? []
   const live = inFlight.get(conversationId)
   return {
     turns,
+    ...(stored?.droppedTurns ? { droppedTurns: stored.droppedTurns } : {}),
     ...(live
       ? { pending: { id: live.id, question: live.question, ...(live.progress ? { progress: live.progress } : {}) } }
       : {})
@@ -284,8 +287,12 @@ export async function askSideChat(
   const fresh = deps.getConversation(conv.id)
   if (fresh && !live.abort.signal.reason?.cleared) {
     const current: StoredSideChat = fresh.sideChat ?? { turns: [] }
+    const all = [...current.turns, turn]
+    // Keep the newest exchanges, and count what fell off so the panel can say so.
+    const dropped = (current.droppedTurns ?? 0) + Math.max(0, all.length - MAX_SIDE_TURNS)
     const next: StoredSideChat = {
-      turns: [...current.turns, turn].slice(-MAX_SIDE_TURNS),
+      turns: all.slice(-MAX_SIDE_TURNS),
+      ...(dropped ? { droppedTurns: dropped } : {}),
       // A clean answer moves the side agent forward; a failure keeps the last good
       // transcript (or, when starting over, keeps nothing to resume from).
       ...(turn.answer !== undefined && transcript

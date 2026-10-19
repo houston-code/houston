@@ -200,6 +200,18 @@ describe('askSideChat: read-only, stored with the chat', () => {
     expect(c.sideChat?.turns).toHaveLength(MAX_SIDE_TURNS)
     expect(c.sideChat?.turns[0].id).toBe('o1')
     expect(c.sideChat?.turns.at(-1)?.question).toBe('newest')
+    // What fell off is counted, and adds up, so the panel can say so.
+    expect(c.sideChat?.droppedTurns).toBe(1)
+    await ask(deps, 'one more')
+    expect(sideChatView('main', deps).droppedTurns).toBe(2)
+  })
+
+  it('reports nothing dropped below the cap, and clearing resets the count', async () => {
+    const { c, deps } = harness(conv({ sideChat: { turns: [], droppedTurns: 7 } }))
+    clearSideChat('main', deps)
+    await ask(deps)
+    expect(c.sideChat?.droppedTurns).toBeUndefined()
+    expect(sideChatView('main', deps).droppedTurns).toBeUndefined()
   })
 
   it('scrubs the question and hands the redactor to the subagent for its tool output', async () => {
