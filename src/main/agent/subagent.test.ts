@@ -1077,3 +1077,75 @@ describe('output limit and argument checks', () => {
     expect(report).toBe("part1 part2 part3 part4\n\n[subagent report cut off at the model's output limit]")
   })
 })
+
+describe('a stream that fails partway through a turn', () => {
+  // The subagent never streams to the user, so recovering a dropped turn needs no
+  // retraction: the partial attempt is thrown away and the whole turn re-requested.
+  const partials: Array<[string, ProviderStreamEvent[]]> = [
+    ['text', [{ type: 'text', text: 'half a rep' }]],
+    ['reasoning', [{ type: 'reasoning', text: 'let me think about th' }]],
+    [
+      'a tool call',
+      [
+        { type: 'text', text: 'Checking. ' },
+        { type: 'tool_call', call: { id: 'dead', name: 'read_file', arguments: { path: 'never.txt' } } }
+      ]
+    ]
+  ]
+
+  it.each(partials)('discards a turn cut off after %s and retries it whole', async (_kind, partial) => {
+    const sink = { system: '', messages: [] as ChatMessage[][] }
+    const provider = recordingProvider(
+      [
+        [...partial, { type: 'error', message: 'Overloaded', status: 529 }],
+        [{ type: 'text', text: 'The full report.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      sink
+    )
+    const progress: string[] = []
+    let transcript: ChatMessage[] = []
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'report',
+      signal: new AbortController().signal,
+      onProgress: (m) => progress.push(m),
+      onTranscript: (m) => {
+        transcript = m
+      }
+    })
+    expect(report).toBe('The full report.')
+    // The retry re-sent the same request: nothing from the dead attempt was appended.
+    expect(sink.messages).toHaveLength(2)
+    expect(sink.messages[1]).toEqual(sink.messages[0])
+    // Only the redo reached the transcript, and the collected call never ran.
+    expect(transcript.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(transcript[1].content).toBe('The full report.')
+    expect(transcript.some((m) => m.toolCalls?.length || m.role === 'tool')).toBe(false)
+    expect(progress.some((p) => p.includes('retrying (1)'))).toBe(true)
+  }, 10_000)
+
+  it('ends with the error when the failure after partial output is not transient', async () => {
+    const provider = scriptedProvider([
+      [
+        { type: 'text', text: 'half a rep' },
+        { type: 'error', message: 'invalid request body', status: 400 }
+      ],
+      [{ type: 'text', text: 'never requested' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    let transcribed = false
+    const report = await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'report',
+      signal: new AbortController().signal,
+      onTranscript: () => {
+        transcribed = true
+      }
+    })
+    expect(report).toBe('[subagent error: invalid request body]')
+    expect(transcribed).toBe(false)
+  })
+})

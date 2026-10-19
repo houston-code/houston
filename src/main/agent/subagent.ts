@@ -418,11 +418,14 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     // does: some models reject the next request of a tool loop without it.
     let reasoning: ReasoningBlock[] = []
     try {
-      // One turn of the subagent's own loop, retried on a transient failure. Retrying
-      // the whole turn is safe here even though the parent run streams: a subagent's
-      // text and tool calls are accumulated and only acted on once the stream ends, so
-      // a failed attempt has shown the user nothing to duplicate. Reset both
-      // accumulators per attempt or a retry would append to the dead one's remains.
+      // One turn of the subagent's own loop, retried on a transient failure, including
+      // one that drops partway through the stream. Retrying the whole turn is safe here
+      // even though the parent run streams: a subagent's text and tool calls are
+      // accumulated and only acted on once the stream ends, so a failed attempt has
+      // shown the user nothing to retract (the main loop's `turn_discarded`) and run no
+      // tool. Reset the accumulators per attempt or a retry would append to the dead
+      // one's remains. There is no fallback hop: a subagent runs on the model it was
+      // dispatched with.
       await withProviderRetry(
         async () => {
           text = ''

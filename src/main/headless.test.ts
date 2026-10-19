@@ -1412,3 +1412,92 @@ describe('live tool progress (text mode)', () => {
     expect(errJson.join('')).not.toContain('working')
   })
 })
+
+// Parity with the GUI reducer (items.test.ts) and the TUI (tui.test.ts): a turn the loop
+// throws away mid-stream and redoes must leave one copy of the reply. stdout can't be
+// taken back, so text mode holds each round's text until the round is over.
+describe('a turn the loop discarded and redid', () => {
+  const text = (delta: string): AgentEvent => ({ runId: 'run-1', type: 'text', delta })
+  const discarded: AgentEvent = {
+    runId: 'run-1',
+    type: 'turn_discarded',
+    attempt: 1,
+    reason: 'Overloaded',
+    textChars: 'The answer is forty'.length,
+    reasoningChars: 0
+  }
+  const retry: AgentEvent = { runId: 'run-1', type: 'retry', attempt: 1, max: 6, message: 'Overloaded' }
+  const done: AgentEvent = { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+
+  it('writes only the redo to stdout', async () => {
+    const { d, out, err } = deps([
+      text('The answer is '),
+      text('forty'),
+      discarded,
+      retry,
+      text('The answer is 42.'),
+      done
+    ])
+    expect(await runHeadless(baseOpts, d)).toBe(0)
+    expect(out.join('')).toBe('The answer is 42.\n')
+    expect(err.join('')).toContain('discarded a reply cut off mid-stream')
+    expect(err.join('')).toContain('retrying (1/6)')
+  })
+
+  it("releases each round's text when the round ends, ahead of what follows it", async () => {
+    const log: string[] = []
+    const { d } = deps(
+      [
+        text('Reading it.'),
+        { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'read_file', args: {} },
+        text('Half'),
+        { ...discarded, textChars: 4 },
+        retry,
+        text('Done.'),
+        done
+      ],
+      { out: (s) => log.push(`out:${s}`), err: (s) => log.push(`err:${s}`) }
+    )
+    await runHeadless(baseOpts, d)
+    expect(log[0]).toBe('out:Reading it.')
+    expect(log[1]).toBe('err:· read_file\n')
+    expect(log.filter((l) => l.startsWith('out:')).join('')).toBe('out:Reading it.out:Done.out:\n')
+  })
+
+  it('keeps a partial reply on stdout when the run ends on the failure', async () => {
+    // Not retried, so not discarded: the partial is all there is, ahead of the error.
+    const { d, out, err } = deps([text('Partial'), { runId: 'run-1', type: 'error', message: 'invalid request' }])
+    expect(await runHeadless(baseOpts, d)).toBe(1)
+    expect(out.join('')).toBe('Partial')
+    expect(err.join('')).toContain('invalid request')
+  })
+
+  it('passes the event through in --json mode, and keeps the partial out of the result', async () => {
+    const { d, out } = deps([
+      text('Reading. '),
+      { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'read_file', args: {} },
+      text('So: '),
+      text('The answer is forty'),
+      { ...discarded, textChars: 'So: The answer is forty'.length },
+      retry,
+      text('So: The answer is 42.'),
+      done
+    ])
+    await runHeadless({ ...baseOpts, json: true }, d)
+    const lines = out.map((l) => JSON.parse(l) as { type: string } & Record<string, unknown>)
+    expect(lines.map((e) => e.type)).toEqual([
+      'text',
+      'tool_start',
+      'text',
+      'text',
+      'turn_discarded',
+      'retry',
+      'text',
+      'done',
+      'result'
+    ])
+    expect(lines[4]).toMatchObject({ textChars: 23, reasoningChars: 0, attempt: 1 })
+    // The closing answer holds the redo once: the dropped round's text is taken back.
+    expect(lines.at(-1)).toMatchObject({ status: 'success', finalText: 'So: The answer is 42.' })
+  })
+})

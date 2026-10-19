@@ -1,9 +1,10 @@
 /**
  * Transient-failure handling for provider streaming. The SDKs retry the *initial*
- * request a couple of times, but a connection that fails before any output — or a
- * failure after their retries are exhausted — otherwise kills the whole run. The
- * loop retries such failures (only when nothing was streamed yet, so output can't
- * duplicate) with exponential backoff + jitter.
+ * request a couple of times, but a connection that drops mid-stream, or a failure
+ * after their retries are exhausted, otherwise kills the whole run. The loop retries
+ * such failures with exponential backoff + jitter; one that arrives after part of the
+ * turn has streamed discards that partial turn first (see `turn_discarded`), so the
+ * redo can't duplicate output the user already saw.
  */
 
 /**
@@ -200,8 +201,9 @@ export function retryDelayMs(
  *
  * Safe to retry wholesale *because* nothing is streamed: a failed attempt's partial text
  * is discarded and re-accumulated, so a retry can't duplicate output someone already
- * read. The main turn loop can't use this — it streams as it goes, so it enforces its own
- * `emitted` guard instead. Callers that stream to a user must do the same.
+ * read. The main turn loop can't use this: it streams as it goes, so before it retries a
+ * turn that had already streamed it emits `turn_discarded` for the clients to retract
+ * what they showed. Callers that stream to a user must do the same.
  *
  * `signal` is the caller's own abort (Stop, or a bounding timeout); an abort is never
  * retried, and it cuts a pending backoff short rather than waiting it out.
