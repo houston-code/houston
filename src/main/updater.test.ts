@@ -9,8 +9,8 @@ vi.mock('@shared/release-highlights', () => ({
 }))
 
 /**
- * The updater touches electron (`app`, `BrowserWindow`), electron-updater, and the
- * persisted update-state. All three are stubbed via the hoisted `h` state so each
+ * The updater touches electron (`app`, `BrowserWindow`, and the native `autoUpdater`,
+ * i.e. Squirrel.Mac), electron-updater, and the persisted update-state. All three are stubbed via the hoisted `h` state so each
  * test drives version / packaged / feed-result and inspects what got broadcast or
  * recorded. The module keeps top-level state (the staged "What's new", the
  * configured-once flag), so every test imports it fresh via `vi.resetModules()`.
@@ -31,6 +31,8 @@ const h = vi.hoisted(() => {
     dialogs: [] as Array<Record<string, unknown>>,
     opened: [] as string[],
     listeners: {} as Record<string, Array<(arg: unknown) => void>>,
+    /** Listeners on Electron's native autoUpdater (Squirrel.Mac's verdict events). */
+    nativeListeners: {} as Record<string, Array<(arg?: unknown) => void>>,
     // Assigned below so the methods can close over `self`.
     autoUpdater: undefined as unknown as {
       autoDownload: boolean
@@ -67,7 +69,22 @@ function fire(event: string, arg: unknown): void {
   for (const cb of h.listeners[event] ?? []) cb(arg)
 }
 
+/** Deliver Squirrel.Mac's verdict: an `update-downloaded` (accepted) or `error` (refused). */
+function fireNative(event: 'update-downloaded' | 'error', arg?: unknown): void {
+  for (const cb of h.nativeListeners[event] ?? []) cb(arg)
+}
+
+/** The refusal Squirrel.Mac reports for a release signed by a different Apple team. */
+const SIGNATURE_MISMATCH = new Error(
+  'Code signature at URL file:///tmp/Houston.app did not pass validation: code failed to satisfy specified code requirement(s)'
+)
+
 vi.mock('electron', () => ({
+  autoUpdater: {
+    on: (event: string, cb: (arg?: unknown) => void) => {
+      ;(h.nativeListeners[event] ??= []).push(cb)
+    }
+  },
   app: {
     get isPackaged() {
       return h.isPackaged
@@ -134,6 +151,7 @@ beforeEach(() => {
   h.dialogs = []
   h.opened = []
   h.listeners = {}
+  h.nativeListeners = {}
   h.autoUpdater.autoDownload = false
   h.autoUpdater.autoInstallOnAppQuit = false
 })
@@ -314,14 +332,80 @@ describe('auto-install (signed macOS)', () => {
     })
   })
 
-  it('broadcasts update-downloaded with the version', async () => {
+  it('broadcasts update-downloaded only once Squirrel.Mac accepts the download', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const { checkForUpdates } = await load()
     await checkForUpdates()
+    // electron-updater says "downloaded" before Squirrel has checked the signature.
     fire('update-downloaded', { version: '0.3.0' })
+    expect(h.sent.some((s) => s.channel === IPC.updateDownloaded)).toBe(false)
+    fireNative('update-downloaded')
     const done = h.sent.filter((s) => s.channel === IPC.updateDownloaded)
     expect(done).toHaveLength(1)
     expect(done[0].payload).toEqual({ version: '0.3.0' })
+    expect(h.sent.some((s) => s.channel === IPC.updateInstallFailed)).toBe(false)
+  })
+
+  it('offers the download page instead of a restart when Squirrel.Mac refuses it', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('error', SIGNATURE_MISMATCH)
+    const failed = h.sent.filter((s) => s.channel === IPC.updateInstallFailed)
+    expect(failed).toHaveLength(1)
+    expect(failed[0].payload).toEqual({
+      version: '0.3.0',
+      releaseUrl: 'https://houstoncode.ai/#download'
+    })
+    expect(h.sent.some((s) => s.channel === IPC.updateDownloaded)).toBe(false)
+  })
+
+  it('reports a refused version as a manual download on later checks', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    expect(await checkForUpdates()).toMatchObject({ autoInstall: true })
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('error', SIGNATURE_MISMATCH)
+
+    expect(await checkForUpdates()).toMatchObject({ latestVersion: '0.3.0', autoInstall: false })
+    const last = h.sent.filter((s) => s.channel === IPC.updateAvailable).at(-1)
+    expect(last?.payload).toMatchObject({ autoInstall: false })
+
+    // A newer release gets its own in-place attempt.
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.1' } }
+    expect(await checkForUpdates()).toMatchObject({ latestVersion: '0.3.1', autoInstall: true })
+  })
+
+  it('offers Restart to install again if Squirrel.Mac later accepts a refused version', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('error', new Error('Could not unzip the update'))
+
+    // The next check re-hands the cached download to Squirrel, and this time it passes.
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('update-downloaded')
+    const done = h.sent.filter((s) => s.channel === IPC.updateDownloaded)
+    expect(done.map((s) => s.payload)).toEqual([{ version: '0.3.0' }])
+    expect(await checkForUpdates()).toMatchObject({ autoInstall: true })
+  })
+
+  it('ignores Squirrel.Mac events when no download is waiting on its verdict', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fireNative('error', new Error('unrelated'))
+    fireNative('update-downloaded')
+    expect(h.sent.some((s) => s.channel === IPC.updateInstallFailed)).toBe(false)
+    expect(h.sent.some((s) => s.channel === IPC.updateDownloaded)).toBe(false)
   })
 
   it('installUpdate quits and installs', async () => {
@@ -391,10 +475,79 @@ describe('checkForUpdatesFromMenu', () => {
     const { checkForUpdates, checkForUpdatesFromMenu } = await load()
     await checkForUpdates()
     fire('update-downloaded', { version: '0.3.0' })
+    fireNative('update-downloaded')
     h.dialogResponses = [0]
     await checkForUpdatesFromMenu()
     expect(h.quitAndInstallCalls).toBe(1)
     expect(h.downloadUpdateCalls).toBe(0)
+  })
+
+  it('waits for Squirrel.Mac to verify the download before installing', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    let finish!: () => void
+    const download = new Promise<void>((r) => (finish = r))
+    h.checkResult = {
+      isUpdateAvailable: true,
+      updateInfo: { version: '0.3.0' },
+      downloadPromise: download
+    }
+    h.dialogResponses = [0] // Update
+    const { checkForUpdatesFromMenu } = await load()
+    const done = checkForUpdatesFromMenu()
+    await new Promise((r) => setTimeout(r, 0))
+    // electron-updater hands the file to Squirrel, then settles its download.
+    fire('update-downloaded', { version: '0.3.0' })
+    finish()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.quitAndInstallCalls).toBe(0) // Squirrel is still checking the signature
+    fireNative('update-downloaded')
+    await done
+    expect(h.quitAndInstallCalls).toBe(1)
+    expect(h.opened).toEqual([])
+  })
+
+  it('offers the download page when macOS refuses the update', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let finish!: () => void
+    const download = new Promise<void>((r) => (finish = r))
+    h.checkResult = {
+      isUpdateAvailable: true,
+      updateInfo: { version: '0.3.0' },
+      downloadPromise: download
+    }
+    h.dialogResponses = [0, 0] // Update, then "Open download page"
+    const { checkForUpdatesFromMenu } = await load()
+    const done = checkForUpdatesFromMenu()
+    await new Promise((r) => setTimeout(r, 0))
+    fire('update-downloaded', { version: '0.3.0' })
+    finish()
+    await new Promise((r) => setTimeout(r, 0))
+    fireNative('error', SIGNATURE_MISMATCH)
+    await done
+    expect(h.quitAndInstallCalls).toBe(0)
+    expect(h.dialogs[1]).toMatchObject({
+      message: 'Couldn’t install the update.',
+      detail: 'You can download the new version from the website instead.'
+    })
+    expect(JSON.stringify(h.dialogs[1])).not.toContain('code requirement')
+    expect(h.opened).toEqual(['https://houstoncode.ai/#download'])
+  })
+
+  it('sends a version macOS already refused straight to the download page', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates, checkForUpdatesFromMenu } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('error', SIGNATURE_MISMATCH)
+    h.dialogResponses = [0] // Update
+    await checkForUpdatesFromMenu()
+    expect(h.dialogs[0]).toMatchObject({ detail: expect.stringMatching(/download page/i) })
+    expect(h.downloadUpdateCalls).toBe(0)
+    expect(h.quitAndInstallCalls).toBe(0)
+    expect(h.opened).toEqual(['https://houstoncode.ai/#download'])
   })
 
   it('starts a download when none is in flight, then installs', async () => {
@@ -542,6 +695,8 @@ describe('without auto-install (unsigned Windows/Linux)', () => {
     fire('update-downloaded', { version: '0.3.0' })
     expect(h.sent.some((s) => s.channel === IPC.updateDownloadProgress)).toBe(false)
     expect(h.sent.some((s) => s.channel === IPC.updateDownloaded)).toBe(false)
+    // Squirrel.Mac is never involved off signed macOS.
+    expect(h.nativeListeners).toEqual({})
   })
 
   it('installUpdate is a no-op', async () => {

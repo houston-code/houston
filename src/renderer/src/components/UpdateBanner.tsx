@@ -1,10 +1,15 @@
-import type { UpdateCheckResult, UpdateDownloaded, UpdateDownloadProgress } from '@shared/update'
+import type {
+  UpdateCheckResult,
+  UpdateDownloaded,
+  UpdateDownloadProgress,
+  UpdateInstallFailed
+} from '@shared/update'
 
 /** The "update available" shape, the only one the banner renders. */
 type Available = Extract<UpdateCheckResult, { status: 'available' }>
 
 /**
- * Persistent update banner. Progresses through up to three states depending on the
+ * Persistent update banner. Progresses through up to four states depending on the
  * platform:
  *
  *  - **available** — a newer version exists. On unsigned builds (Windows/Linux) this
@@ -13,8 +18,11 @@ type Available = Extract<UpdateCheckResult, { status: 'available' }>
  *    shows "Downloading…" and moves on.
  *  - **downloading** — the signed-macOS auto-download is in flight; shows a progress
  *    bar + percentage.
- *  - **downloaded** — the update is ready; shows a "Restart to install" button that
- *    quits, applies, and relaunches (it would otherwise install on the next quit).
+ *  - **downloaded** — macOS has verified and staged the update; shows a "Restart to
+ *    install" button that quits, applies, and relaunches (it would otherwise install on
+ *    the next quit).
+ *  - **failed** — macOS refused the downloaded update (its signature didn't match the
+ *    installed app), so it can't install in place; shows the manual "Download" link.
  *
  * The user can dismiss it for the session; the next check (on launch, then every 6
  * hours) re-surfaces it until
@@ -24,12 +32,14 @@ export function UpdateBanner({
   update,
   progress,
   downloaded,
+  failed,
   onInstall,
   onDismiss
 }: {
   update: Available | null
   progress: UpdateDownloadProgress | null
   downloaded: UpdateDownloaded | null
+  failed: UpdateInstallFailed | null
   onInstall: () => void
   onDismiss: () => void
 }): JSX.Element | null {
@@ -43,6 +53,30 @@ export function UpdateBanner({
       ✕
     </button>
   )
+
+  // macOS refused the download, so a manual install is the only way forward. Takes
+  // precedence over every other state: none of them can install it anymore.
+  if (failed) {
+    return (
+      <div className="update-banner" role="status">
+        <span className="update-banner__icon" aria-hidden="true">
+          ↑
+        </span>
+        <span className="update-banner__label">
+          Houston <strong>{failed.version}</strong> couldn’t be installed automatically.
+        </span>
+        <a
+          className="btn btn--sm btn--accent"
+          href={failed.releaseUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Download
+        </a>
+        {dismiss}
+      </div>
+    )
+  }
 
   // Ready to install — takes precedence over the earlier states.
   if (downloaded) {
@@ -89,7 +123,7 @@ export function UpdateBanner({
           ↑
         </span>
         <span className="update-banner__label">
-          Houston <strong>{update.latestVersion}</strong> is available — you have{' '}
+          Houston <strong>{update.latestVersion}</strong> is available. You have{' '}
           {update.currentVersion}.
         </span>
         {update.autoInstall ? (

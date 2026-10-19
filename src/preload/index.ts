@@ -41,6 +41,7 @@ import type {
   UpdateCheckResult,
   UpdateDownloaded,
   UpdateDownloadProgress,
+  UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
@@ -464,6 +465,12 @@ const api = {
     const listener = (_event: IpcRendererEvent, payload: UpdateDownloaded): void => cb(payload)
     ipcRenderer.on(IPC.updateDownloaded, listener)
     return () => ipcRenderer.removeListener(IPC.updateDownloaded, listener)
+  },
+  /** Subscribe to macOS refusing a downloaded update (manual download needed). Returns an unsubscribe fn. */
+  onUpdateInstallFailed: (cb: (payload: UpdateInstallFailed) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: UpdateInstallFailed): void => cb(payload)
+    ipcRenderer.on(IPC.updateInstallFailed, listener)
+    return () => ipcRenderer.removeListener(IPC.updateInstallFailed, listener)
   },
   /** Install a downloaded update now (quit, apply, relaunch). */
   installUpdate: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateInstall)

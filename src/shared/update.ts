@@ -34,7 +34,8 @@ export type UpdateCheckResult =
       /**
        * True where this build auto-downloads + installs in place (signed macOS). The
        * banner then shows a progress bar + a "Restart to install" button instead of the
-       * manual-download link used on unsigned Windows/Linux.
+       * manual-download link used on unsigned Windows/Linux. False on signed macOS too
+       * for a version macOS already refused to install this session.
        */
       autoInstall?: boolean
     }
@@ -58,6 +59,17 @@ export interface UpdateDownloadProgress {
 /** An update finished downloading and is ready to install on restart. */
 export interface UpdateDownloaded {
   version: string
+}
+
+/**
+ * macOS refused to install a downloaded update: Squirrel.Mac's code-signature check
+ * against the running app failed (for example, the release was signed by a different
+ * Apple team). It can't be installed in place, so the banner offers the download page.
+ */
+export interface UpdateInstallFailed {
+  version: string
+  /** Download page for the new version ({@link DOWNLOAD_URL}). */
+  releaseUrl: string
 }
 
 /** The one-shot payload for the post-restart "What's new" popup. */

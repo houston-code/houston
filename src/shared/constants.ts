@@ -35,6 +35,8 @@ export const IPC = {
   updateDownloadProgress: 'update:downloadProgress',
   /** Main → renderer: an update finished downloading and is ready to install. */
   updateDownloaded: 'update:downloaded',
+  /** Main → renderer: macOS refused to install a downloaded update; offer a manual download. */
+  updateInstallFailed: 'update:installFailed',
   /** Renderer → main: install the downloaded update now (quit, apply, relaunch). */
   updateInstall: 'update:install',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */

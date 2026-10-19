@@ -788,7 +788,11 @@ dialog's **Update** button installs it directly. Restarting to install asks firs
 chats or background tasks (terminals, backgrounded commands) are still running. If you
 don't restart, it installs on the next quit (`autoDownload` / `autoInstallOnAppQuit` in
 [`src/main/updater.ts`](src/main/updater.ts), gated per-platform by
-`shouldAutoInstallUpdates`).
+`shouldAutoInstallUpdates`). **Restart to install** appears only after macOS (Squirrel.Mac)
+has checked the download's code signature against the installed app. If macOS refuses it,
+for example because the release was signed by a different Apple team, the banner switches
+to a **Download** link for a manual install, and later checks offer that version the same
+way.
 
 **Windows and Linux** builds are not OS-code-signed, so `electron-updater` has no
 package signature it can verify and auto-installing a remote package would make the
