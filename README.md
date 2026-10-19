@@ -387,24 +387,27 @@ Open source under the [Apache License 2.0](LICENSE).
   `git status` via `.git/info/exclude`. Deleting the chat offers to remove the
   worktree too (uncommitted or unmerged work is always kept).
 - **GitHub repos, PRs, issues & CI (first-class).** The [`gh` CLI](https://cli.github.com)
-  is an **optional, not-bundled** integration — without it these tools simply aren't
+  is an **optional, not-bundled** integration: without it these tools simply aren't
   offered and everything else works. When it's installed and authenticated
   (`gh auth login`), Houston gets dedicated tools for the whole GitHub loop:
-  - **Pull requests** — `gh_pr_create`, `gh_pr_list`, `gh_pr_view` (with diff),
-    `gh_pr_comment`, `gh_pr_checkout`, and `gh_pr_checks` (CI status rollup).
-  - **Issues** — `gh_issue_list`, `gh_issue_view` (with comments),
-    `gh_issue_create`, and `gh_issue_comment`.
-  - **CI runs** — `gh_run_list` and `gh_run_view` (set `log_failed` to read just
-    the failed steps' logs — the quickest way to diagnose a red build).
-  - **Repositories** — `gh_repo_create` (private by default, made from the
+  - **Pull requests:** `gh_pr_create`, `gh_pr_list`, `gh_pr_view` (with diff),
+    `gh_pr_comment`, `gh_pr_review` (approve, request changes, or comment),
+    `gh_pr_checkout`, `gh_pr_checks` (CI status rollup), `gh_pr_merge`, and
+    `gh_pr_set_state` (close, reopen, mark ready for review, or convert to draft).
+  - **Issues:** `gh_issue_list`, `gh_issue_view` (with comments),
+    `gh_issue_create`, `gh_issue_comment`, and `gh_issue_set_state` (close as
+    completed, not planned, or a duplicate, or reopen).
+  - **CI runs:** `gh_run_list` and `gh_run_view` (set `log_failed` to read just
+    the failed steps' logs, the quickest way to diagnose a red build).
+  - **Repositories:** `gh_repo_create` (private by default, made from the
     current project directory and pushed).
 
   It drives your local `gh`, so no token is stored
   in the app and `gh` owns the credentials. Each call is **network**-gated
-  (always prompts for approval) and the mutating ones (PR/issue create & comment,
-  PR checkout, repo create) are refused in plan mode. Because these tools run
-  `gh` *outside* the shell sandbox, they reach the network on approval — unlike a
-  raw `gh` in `run_shell`, which the sandbox blocks from the network unless the
+  (always prompts for approval) and the mutating ones (PR/issue create, comment,
+  and state changes, PR review, merge, and checkout, repo create) are refused in
+  plan mode. Because these tools run `gh` *outside* the shell sandbox, they reach
+  the network on approval, unlike a raw `gh` in `run_shell`, which the sandbox blocks from the network unless the
   run is full-auto or you pick "Allow for run." Houston tells the agent in its
   system prompt when `gh` is available, so it reaches for these instead of raw
   shell `gh`. Settings → *Tools & Permissions* → *Optional integrations* shows whether
