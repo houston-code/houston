@@ -858,11 +858,16 @@ implied by full auto: the sandbox can read your whole filesystem, so blanket
 outbound access plus full auto would be a one-command read-and-exfiltrate. Shell
 reaches the network only after a conscious per-run grant, either the one-time
 **shell-network consent** (full auto) or "Allow for run" on a shell command
-(ask / auto-edit). A command that needs the network (cloning, installing
-dependencies, `gh`, `curl`) is not impossible, it just needs that grant;
-declining runs the command offline instead of blocking it. Package-manager caches
-(npm, pip, yarn) are auto-redirected to a writable temp dir, so dependency
-installs need no cache workaround once network is on. **Additional folders**
+(ask / auto-edit). Plain "Allow" and "Always allow" run that one command offline,
+and until the run has the grant, each shell approval prompt says so. A command
+that needs the network (cloning, installing dependencies, `gh`, `curl`) is not
+impossible, it just needs that grant; declining runs the command offline instead
+of blocking it. Offline, npm, pip, and cargo skip their usual retries, so an
+install that needs the network fails in about a second instead of a minute or
+more. Package-manager caches (npm, pip, yarn) are auto-redirected to a writable
+temp dir, so dependency installs need no cache workaround once network is on. On
+macOS, Python's bytecode cache goes there too, since the system `python3` keeps it
+under `~/Library/Caches`, which the sandbox can't write. **Additional folders**
 (Settings) can be added to the file tools' allowed roots and the shell sandbox to
 work across more than one repo.
 

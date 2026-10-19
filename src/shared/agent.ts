@@ -935,6 +935,13 @@ export type AgentEvent =
        */
       shellNetwork?: boolean
       /**
+       * Present and `true` only on a shell command that will run with the sandbox's
+       * network off because the run has no shell-network grant yet. "Allow" and "Always
+       * allow" run it offline; only "Allow for run" also grants network. Lets the UI say
+       * so before the user picks, rather than after the command fails.
+       */
+      shellOffline?: boolean
+      /**
        * Present and `true` only when this read targets a credential / secret file (see
        * isSensitivePath) and so is prompting even in full-auto. Lets the UI explain why
        * a read — which normally never prompts — is asking.

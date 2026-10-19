@@ -398,6 +398,11 @@ function ToolRow({
               if it is overwritten, so Houston is checking first even in full auto.
             </p>
           )}
+          {item.shellOffline && (
+            <p className="tool-row__approval-note">
+              Runs without network. Choose "Allow for run" to also allow network for this run.
+            </p>
+          )}
           <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'allow')}>
             Allow
           </button>

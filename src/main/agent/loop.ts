@@ -288,6 +288,7 @@ interface RunState {
       preview?: FileDiffPreview[]
       sandboxed?: boolean
       shellNetwork?: boolean
+      shellOffline?: boolean
       sensitiveRead?: boolean
       sensitiveWrite?: boolean
     }
@@ -594,6 +595,7 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.preview ? { preview: a.preview } : {}),
       ...(a.sandboxed === false ? { sandboxed: false } : {}),
       ...(a.shellNetwork ? { shellNetwork: true } : {}),
+      ...(a.shellOffline ? { shellOffline: true } : {}),
       ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
       ...(a.sensitiveWrite ? { sensitiveWrite: true } : {})
     })
@@ -3122,6 +3124,16 @@ export async function startRun(
               !run.shellNetworkGranted &&
               !run.shellNetworkDecided
             const consentOnly = needsShellNetworkConsent && !mustApprove
+            // A shell command on a confining host with no shell-network grant yet runs
+            // offline when merely allowed. Flag it so the card can say only "Allow for
+            // run" also grants network. Not when the egress proxy failed to start: then
+            // no grant brings network back, so pointing at one would mislead.
+            const shellOffline =
+              tool.kind === 'shell' &&
+              !consentOnly &&
+              isSandboxed() &&
+              !run.shellNetworkGranted &&
+              !egressUnavailable
 
             // An `ask` mandated by the managed policy or the project guardrails can
             // never be skipped by a hook's `approve`: those tiers are tighten-only
@@ -3167,6 +3179,7 @@ export async function startRun(
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {}),
+                ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
@@ -3180,6 +3193,7 @@ export async function startRun(
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {}),
+                ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })

@@ -106,7 +106,10 @@ const h = vi.hoisted(() => ({
   // Forced OS-sandbox status for the `../sandbox` partial mock below. Null (the
   // default) keeps the host's real value, so existing tests are platform-honest;
   // the writable-subagent gate tests set false to simulate an unconfined host.
-  sandboxed: null as boolean | null
+  sandboxed: null as boolean | null,
+  // Makes the `./egress` partial mock below fail to start the egress proxy, so a test
+  // can drive the fail-closed path (shell network withheld for the whole run).
+  egressFails: false
 }))
 
 vi.mock('../agentHost', () => ({
@@ -170,6 +173,15 @@ vi.mock('../sandbox', async (importActual) => {
   return {
     ...actual,
     isSandboxed: () => h.sandboxed ?? actual.isSandboxed()
+  }
+})
+// Partial mock of the egress proxy startup: real unless a test sets h.egressFails.
+vi.mock('./egress', async (importActual) => {
+  const actual = await importActual<typeof import('./egress')>()
+  return {
+    ...actual,
+    egressEndpointsForRun: (...args: Parameters<typeof actual.egressEndpointsForRun>) =>
+      h.egressFails ? Promise.reject(new Error('proxy failed to start')) : actual.egressEndpointsForRun(...args)
   }
 })
 // Stub the plugin loader with a host that records every event the loop fires, so
@@ -254,6 +266,7 @@ beforeEach(() => {
   h.verifyRuns = []
   h.managedRules = []
   h.sandboxed = null
+  h.egressFails = false
   h.providerModels = []
   h.extraConfigs = {}
   h.extraClients = {}
@@ -5373,6 +5386,123 @@ describe('egress hardening', () => {
       expect(approvals).toHaveLength(1)
       expect((approvals[0] as { shellNetwork?: boolean }).shellNetwork).toBeUndefined()
       expect(shellSawNetwork).toBe(true)
+    })
+  })
+
+  describe('offline note on shell prompts (shellOffline)', () => {
+    // "Allow" runs a shell command offline until the run has a shell-network grant, and
+    // only "Allow for run" grants it, so the prompt carries a flag the UI turns into a
+    // note. Forced confining host, as in #3b; reset by the top-level beforeEach.
+    beforeEach(() => {
+      shellSawNetwork = undefined
+      shellNetPerCall.length = 0
+      h.sandboxed = true
+    })
+
+    const offlineFlags = (r: RunResult): Array<boolean | undefined> =>
+      r.events
+        .filter((e) => e.type === 'tool_approval')
+        .map((e) => (e as { shellOffline?: boolean }).shellOffline)
+
+    it('flags every shell prompt while plain "Allow" keeps the run offline', async () => {
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [shellCall('s2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['s1', 's2'])
+      expect(offlineFlags(r)).toEqual([true, true])
+      expect(shellSawNetwork).toBe(false)
+    })
+
+    it('drops the flag once "Allow for run" has granted shell network', async () => {
+      // s1 grants the run shell network; x2 still prompts (it names a path outside the
+      // project), but it will run online, so it carries no offline note.
+      h.probeTools = [probeRunShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        onApproval: (id, decide) => decide(id === 's1' ? 'always' : 'allow'),
+        turns: [
+          [runShellCall('s1', 'echo hi'), { type: 'done', stopReason: 'tool_use' }],
+          [runShellCall('x2', 'cat /etc/hosts'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['s1', 'x2'])
+      expect(offlineFlags(r)).toEqual([true, undefined])
+      expect(shellNetPerCall.map((c) => c.sawNetwork)).toEqual([true, true])
+    })
+
+    it('replays the flag when the conversation is re-adopted mid-prompt', async () => {
+      h.probeTools = [probeNetShell()]
+      let replayed: AgentEvent[] = []
+      await run({
+        policy: 'auto-edit',
+        conversationId: 'conv-offline-replay',
+        onApproval: (_id, decide) => {
+          replayed = pendingPromptsForConversation('conv-offline-replay')
+          decide('allow')
+        },
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(replayed).toHaveLength(1)
+      expect(replayed[0]).toMatchObject({ type: 'tool_approval', callId: 's1', shellOffline: true })
+    })
+
+    it('leaves the full-auto network consent prompt unflagged (it asks the network question itself)', async () => {
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('deny'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval')
+      expect(approvals).toHaveLength(1)
+      expect(approvals[0]).toMatchObject({ shellNetwork: true })
+      expect(offlineFlags(r)).toEqual([undefined])
+    })
+
+    it('does not point at "Allow for run" when the egress proxy failed (no grant can bring network back)', async () => {
+      h.egressFails = true
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['s1'])
+      expect(offlineFlags(r)).toEqual([undefined])
+      // Fail-closed: even "Allow for run" left the command offline.
+      expect(shellSawNetwork).toBe(false)
+    })
+
+    it('does not flag a shell prompt on a host without a sandbox (the command has network anyway)', async () => {
+      h.sandboxed = false
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['s1'])
+      expect(offlineFlags(r)).toEqual([undefined])
     })
   })
 })
