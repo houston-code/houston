@@ -958,12 +958,16 @@ around it.
 
 When the `gh` CLI is installed and authenticated, Houston offers dedicated tools
 for the GitHub loop: pull requests (`gh_pr_create`, `gh_pr_list`, `gh_pr_view`,
-`gh_pr_comment`, `gh_pr_review`, `gh_pr_checkout`, `gh_pr_checks`, `gh_pr_merge`),
-issues (`gh_issue_list`, `gh_issue_view`, `gh_issue_create`, `gh_issue_comment`),
-CI runs (`gh_run_list`, `gh_run_view`), and repositories (`gh_repo_create`).
-`gh_pr_review` submits an approve / request-changes / comment review, and
+`gh_pr_comment`, `gh_pr_review`, `gh_pr_checkout`, `gh_pr_checks`, `gh_pr_merge`,
+`gh_pr_set_state`), issues (`gh_issue_list`, `gh_issue_view`, `gh_issue_create`,
+`gh_issue_comment`, `gh_issue_set_state`), CI runs (`gh_run_list`, `gh_run_view`),
+and repositories (`gh_repo_create`).
+`gh_pr_review` submits an approve / request-changes / comment review,
 `gh_pr_merge` lands an open PR (merge commit, squash, or rebase, optionally
-deleting the branch). They drive the user's local
+deleting the branch), and `gh_pr_set_state` closes or reopens a PR, marks a draft
+ready for review, or converts it back to a draft. `gh_issue_set_state` closes an
+issue (as completed, not planned, or a duplicate of another issue) or reopens it.
+They drive the user's local
 `gh`, so no token is stored in the app. Each call is network-gated (always
 prompts for approval) and the mutating ones are refused in plan mode. Because
 these run `gh` outside the shell sandbox, they reach the network on approval,

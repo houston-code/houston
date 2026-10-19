@@ -2441,6 +2441,40 @@ function ghOutput(r: { ok: boolean; stdout: string; stderr: string; code: number
   return `gh failed (exit ${r.code ?? 'null'}): ${detail}`
 }
 
+/**
+ * Report a close/reopen/ready/draft in Houston's own words, with whatever gh printed
+ * fenced below it. gh's messages for these quote the PR or issue title ("is already
+ * closed", "can't be closed because it was already merged") and the branch name, and
+ * outsiders choose both, so gh's text is never the trusted part of the result.
+ */
+function ghStateOutput(r: { ok: boolean; stdout: string; stderr: string; code: number | null }, done: string): string {
+  const envelope = r.ok ? done : `gh failed (exit ${r.code ?? 'null'}).`
+  const said = [r.stdout.trim(), r.stderr.trim()].filter(Boolean).join('\n')
+  if (!said) return r.ok ? done : `${envelope} It printed no message.`
+  return presentUntrustedInline({
+    envelope,
+    parts: [{ text: capGh(said), source: 'gh output' }],
+    preamble: untrustedPreamble(
+      "the GitHub CLI's message",
+      'It can quote a pull request or issue title and a branch name, which whoever opened it chose, not the user'
+    ),
+    subject: 'gh output',
+    toolNames: builtinToolNames()
+  })
+}
+
+/**
+ * The optional `--comment` for a state change. `refusal` is set when this action takes
+ * no comment, and is thrown rather than dropping the text, so the agent never believes
+ * it posted something it did not.
+ */
+function stateCommentArgs(args: Record<string, unknown>, refusal?: string): string[] {
+  const comment = str(args, 'comment')
+  if (!comment.trim()) return []
+  if (refusal) throw new Error(refusal)
+  return ['--comment', comment]
+}
+
 /** Validate an optional positive-integer arg (PR/issue/run number) into argv (`["12"]`) or `[]`. */
 function intArg(args: Record<string, unknown>, key: string, label: string, required = false): string[] {
   const v = args[key]
@@ -3056,6 +3090,78 @@ const ghIssueComment: ToolDef = {
   }
 }
 
+const ISSUE_CLOSE_REASONS = ['completed', 'not_planned', 'duplicate'] as const
+
+/** gh issue close's --reason value for a schema reason (gh spells one with a space), or undefined. */
+function issueCloseReason(key: string): string | undefined {
+  if (!(ISSUE_CLOSE_REASONS as readonly string[]).includes(key)) return undefined
+  return key === 'not_planned' ? 'not planned' : key
+}
+
+const ghIssueSetState: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => {
+    const issue = `issue ${refOr(a, '?')}`
+    const action = str(a, 'action')
+    if (action === 'reopen') return `Reopen ${issue}`
+    if (action !== 'close') return `Change state of ${issue}`
+    const dup = idArg(a, 'duplicate_of')
+    const reason = dup ? `duplicate of #${dup}` : (issueCloseReason(str(a, 'reason')) ?? '')
+    return `Close ${issue}${reason ? ` (${reason})` : ''}`
+  },
+  schema: {
+    name: 'gh_issue_set_state',
+    description:
+      'Close or reopen a GitHub issue via the gh CLI. When closing, optionally give a reason (completed, not_planned, or duplicate) and, for a duplicate, the issue it duplicates. Visible to everyone on the issue, so it requires approval (network) and is refused in plan mode.',
+    parameters: objectSchema(
+      {
+        number: { type: 'number', description: 'The issue number.' },
+        action: { type: 'string', enum: ['close', 'reopen'], description: 'close or reopen.' },
+        reason: {
+          type: 'string',
+          enum: [...ISSUE_CLOSE_REASONS],
+          description: 'Why it is being closed: completed, not_planned, or duplicate. Only for close; GitHub defaults to completed.'
+        },
+        duplicate_of: {
+          type: 'number',
+          description: 'When closing as a duplicate, the number of the issue this one duplicates.'
+        },
+        comment: { type: 'string', description: 'A comment to post with the change (Markdown).' }
+      },
+      ['number', 'action']
+    )
+  },
+  async execute(args, ctx) {
+    const action = str(args, 'action')
+    if (action !== 'close' && action !== 'reopen') throw new Error('action is required: close or reopen.')
+    const number = intArg(args, 'number', 'number (the issue number)', true)
+    const argv = ['issue', action, ...number]
+    const reasonKey = str(args, 'reason')
+    const duplicateOf = intArg(args, 'duplicate_of', 'duplicate_of (the issue number it duplicates)')
+    if (action === 'reopen' && (reasonKey || duplicateOf.length)) {
+      throw new Error('reason and duplicate_of only apply when closing an issue.')
+    }
+    if (reasonKey) {
+      const reason = issueCloseReason(reasonKey)
+      if (!reason) throw new Error('reason must be one of completed, not_planned, or duplicate.')
+      if (duplicateOf.length && reasonKey !== 'duplicate') {
+        throw new Error('duplicate_of only goes with reason duplicate.')
+      }
+      argv.push('--reason', reason)
+    }
+    if (duplicateOf.length) {
+      if (duplicateOf[0] === number[0]) throw new Error('An issue cannot be a duplicate of itself.')
+      argv.push('--duplicate-of', duplicateOf[0])
+    }
+    argv.push(...stateCommentArgs(args))
+    return ghStateOutput(
+      await ghRunner(ctx)(argv, ctx.workspace, ctx.signal),
+      `Issue #${number[0]} is now ${action === 'close' ? 'closed' : 'open'}.`
+    )
+  }
+}
+
 interface CheckRun {
   name?: string
   state?: string
@@ -3226,6 +3332,93 @@ const ghPrMerge: ToolDef = {
       if (body) argv.push('--body', body)
     }
     return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+  }
+}
+
+const PR_STATE_ACTIONS = ['close', 'reopen', 'ready', 'draft'] as const
+type PrStateAction = (typeof PR_STATE_ACTIONS)[number]
+
+function prStateAction(args: Record<string, unknown>): PrStateAction | undefined {
+  const a = str(args, 'action')
+  return (PR_STATE_ACTIONS as readonly string[]).includes(a) ? (a as PrStateAction) : undefined
+}
+
+/** The state each action leaves a PR in, for the result line. */
+const PR_STATE_AFTER: Record<PrStateAction, string> = {
+  close: 'closed',
+  reopen: 'open',
+  ready: 'ready for review',
+  draft: 'a draft'
+}
+
+const ghPrSetState: ToolDef = {
+  kind: 'network',
+  blockedInPlan: true,
+  summarize: (a) => {
+    const pr = `PR ${refOr(a, '(current branch)')}`
+    switch (prStateAction(a)) {
+      case 'close':
+        return `Close ${pr}${a.delete_branch === true ? ' (delete branch)' : ''}`
+      case 'reopen':
+        return `Reopen ${pr}`
+      case 'ready':
+        return `Mark ${pr} ready for review`
+      case 'draft':
+        return `Convert ${pr} to draft`
+      default:
+        return `Change state of ${pr}`
+    }
+  },
+  schema: {
+    name: 'gh_pr_set_state',
+    description:
+      "Change a GitHub pull request's state via the gh CLI: close it (optionally deleting its branch), reopen it, mark a draft ready for review, or convert it back to a draft. close and reopen need the PR number; ready and draft use the current branch's PR when number is omitted. To land a PR use gh_pr_merge instead. Visible to everyone on the PR, so it requires approval (network) and is refused in plan mode.",
+    parameters: objectSchema(
+      {
+        number: {
+          type: 'number',
+          description: "PR number. Required for close and reopen; omit for ready or draft to use the current branch's PR."
+        },
+        action: {
+          type: 'string',
+          enum: [...PR_STATE_ACTIONS],
+          description: 'close, reopen, ready (mark ready for review), or draft (convert to draft).'
+        },
+        comment: {
+          type: 'string',
+          description: 'A comment to post with the change (Markdown). Only for close and reopen.'
+        },
+        delete_branch: {
+          type: 'boolean',
+          description: 'When closing, also delete the head branch, locally and on the remote (default false).'
+        }
+      },
+      ['action']
+    )
+  },
+  async execute(args, ctx) {
+    const action = prStateAction(args)
+    if (!action) throw new Error('action is required: one of close, reopen, ready, or draft.')
+    // gh pr close/reopen take no "current branch" default; only gh pr ready does.
+    const number = prNumberArgs(args, action === 'close' || action === 'reopen')
+    if (args.delete_branch === true && action !== 'close') {
+      throw new Error('delete_branch only applies when closing a PR.')
+    }
+    const argv = action === 'draft' ? ['pr', 'ready', ...number, '--undo'] : ['pr', action, ...number]
+    argv.push(
+      ...stateCommentArgs(
+        args,
+        action === 'close' || action === 'reopen'
+          ? undefined
+          : 'A comment can only be posted when closing or reopening a PR; post it separately with gh_pr_comment.'
+      )
+    )
+    if (action === 'close' && args.delete_branch === true) argv.push('--delete-branch')
+    const target = number.length ? `Pull request #${number[0]}` : "The current branch's pull request"
+    return ghStateOutput(
+      await ghRunner(ctx)(argv, ctx.workspace, ctx.signal),
+      `${target} is now ${PR_STATE_AFTER[action]}.`
+    )
   }
 }
 
@@ -3773,11 +3966,13 @@ export const TOOLS: ToolDef[] = [
   ghPrChecks,
   ghPrReview,
   ghPrMerge,
+  ghPrSetState,
   ghRepoCreate,
   ghIssueList,
   ghIssueView,
   ghIssueCreate,
   ghIssueComment,
+  ghIssueSetState,
   ghRunList,
   ghRunView
 ]

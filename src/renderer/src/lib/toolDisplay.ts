@@ -45,6 +45,22 @@ function prRef(v: unknown): string | undefined {
   return undefined
 }
 
+/** The row verb for a gh_pr_set_state action. */
+function prStateVerb(action: unknown): string {
+  switch (action) {
+    case 'close':
+      return 'Close PR'
+    case 'reopen':
+      return 'Reopen PR'
+    case 'ready':
+      return 'Mark PR ready'
+    case 'draft':
+      return 'Draft PR'
+    default:
+      return 'Update PR'
+  }
+}
+
 /**
  * The files an apply_patch envelope (or unified diff) touches, from its headers.
  * Display only: the main process does the real parsing.
@@ -150,6 +166,8 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Review PR', target: prRef(a.number) ?? '(current)', mono: false }
     case 'gh_pr_merge':
       return { verb: 'Merge PR', target: prRef(a.number) ?? '(current)', mono: false }
+    case 'gh_pr_set_state':
+      return { verb: prStateVerb(a.action), target: prRef(a.number) ?? '(current)', mono: false }
     case 'gh_issue_list':
       return { verb: 'List issues', target: str(a.state) ?? 'open', mono: false }
     case 'gh_issue_view':
@@ -158,6 +176,12 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Open issue', target: str(a.title) ?? '', mono: false }
     case 'gh_issue_comment':
       return { verb: 'Comment issue', target: prRef(a.number) ?? '', mono: false }
+    case 'gh_issue_set_state':
+      return {
+        verb: a.action === 'close' ? 'Close issue' : a.action === 'reopen' ? 'Reopen issue' : 'Update issue',
+        target: prRef(a.number) ?? '',
+        mono: false
+      }
     case 'gh_run_list':
       return { verb: 'List CI runs', target: str(a.branch) ?? str(a.workflow) ?? '', mono: false }
     case 'gh_run_view':

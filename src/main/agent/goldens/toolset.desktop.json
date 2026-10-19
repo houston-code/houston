@@ -1123,6 +1123,41 @@
     }
   },
   {
+    "name": "gh_pr_set_state",
+    "description": "Change a GitHub pull request's state via the gh CLI: close it (optionally deleting its branch), reopen it, mark a draft ready for review, or convert it back to a draft. close and reopen need the PR number; ready and draft use the current branch's PR when number is omitted. To land a PR use gh_pr_merge instead. Visible to everyone on the PR, so it requires approval (network) and is refused in plan mode.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "PR number. Required for close and reopen; omit for ready or draft to use the current branch's PR."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "close",
+            "reopen",
+            "ready",
+            "draft"
+          ],
+          "description": "close, reopen, ready (mark ready for review), or draft (convert to draft)."
+        },
+        "comment": {
+          "type": "string",
+          "description": "A comment to post with the change (Markdown). Only for close and reopen."
+        },
+        "delete_branch": {
+          "type": "boolean",
+          "description": "When closing, also delete the head branch, locally and on the remote (default false)."
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "gh_repo_create",
     "description": "Create a new GitHub repository via the gh CLI. By default it creates a private repo from the current project directory (adds it as the \"origin\" remote) and pushes the existing commits, so commit your work first (the directory must be a git repo with at least one commit; run `git init && git add -A && git commit` via run_shell if needed). Set source:false to instead create an empty remote repo with no local wiring. Requires approval (network) and is refused in plan mode. Returns the new repository URL.",
     "parameters": {
@@ -1268,6 +1303,49 @@
       "required": [
         "number",
         "body"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gh_issue_set_state",
+    "description": "Close or reopen a GitHub issue via the gh CLI. When closing, optionally give a reason (completed, not_planned, or duplicate) and, for a duplicate, the issue it duplicates. Visible to everyone on the issue, so it requires approval (network) and is refused in plan mode.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "number",
+          "description": "The issue number."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "close",
+            "reopen"
+          ],
+          "description": "close or reopen."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "not_planned",
+            "duplicate"
+          ],
+          "description": "Why it is being closed: completed, not_planned, or duplicate. Only for close; GitHub defaults to completed."
+        },
+        "duplicate_of": {
+          "type": "number",
+          "description": "When closing as a duplicate, the number of the issue this one duplicates."
+        },
+        "comment": {
+          "type": "string",
+          "description": "A comment to post with the change (Markdown)."
+        }
+      },
+      "required": [
+        "number",
+        "action"
       ],
       "additionalProperties": false
     }

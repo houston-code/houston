@@ -39,6 +39,30 @@ describe('describeTool', () => {
     expect(describeTool(tool('gh_run_view', { run_id: 123 })).target).toBe('123')
   })
 
+  it('labels each GitHub state change by what it does', () => {
+    expect(describeTool(tool('gh_pr_set_state', { number: 5, action: 'close' }))).toEqual({
+      verb: 'Close PR',
+      target: '#5',
+      mono: false
+    })
+    expect(describeTool(tool('gh_pr_set_state', { number: 5, action: 'reopen' })).verb).toBe('Reopen PR')
+    expect(describeTool(tool('gh_pr_set_state', { action: 'ready' }))).toEqual({
+      verb: 'Mark PR ready',
+      target: '(current)',
+      mono: false
+    })
+    expect(describeTool(tool('gh_pr_set_state', { action: 'draft' })).verb).toBe('Draft PR')
+    // An unknown action (or a key on Object.prototype) falls back rather than rendering junk.
+    expect(describeTool(tool('gh_pr_set_state', { action: 'constructor' })).verb).toBe('Update PR')
+    expect(describeTool(tool('gh_issue_set_state', { number: 7, action: 'close' }))).toEqual({
+      verb: 'Close issue',
+      target: '#7',
+      mono: false
+    })
+    expect(describeTool(tool('gh_issue_set_state', { number: 7, action: 'reopen' })).verb).toBe('Reopen issue')
+    expect(describeTool(tool('gh_issue_set_state', { number: 7 })).verb).toBe('Update issue')
+  })
+
   it('shows an MCP tool by its own name and server, not the namespaced identifier', () => {
     expect(describeTool(tool('mcp__linear__create_issue', {}))).toEqual({
       verb: 'create_issue',

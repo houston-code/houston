@@ -157,9 +157,11 @@ describe('buildSystemPrompt', () => {
         'gh_pr_checkout',
         'gh_pr_review',
         'gh_pr_merge',
+        'gh_pr_set_state',
         'gh_repo_create',
         'gh_issue_create',
-        'gh_issue_comment'
+        'gh_issue_comment',
+        'gh_issue_set_state'
       ]) {
         expect(line, name).toMatch(new RegExp(`\\b${name}\\b`))
       }
