@@ -107,9 +107,17 @@ describe('CI runs everything on every PR', () => {
     }
     // The full unit suite on every non-Linux leg (both macOS legs against the real Seatbelt
     // backend, Windows against its own; Linux runs it in `test`), and the e2e on macOS.
-    expect(pkg).toMatch(/if: runner\.os != 'Linux'\n {8}run: npm test /)
+    expect(pkg).toMatch(/if: runner\.os != 'Linux'\n {8}run: \|\n(?: {10}.*\n)*? {10}npm test /)
     expect(pkg).not.toContain('npx vitest run src/main/sandbox')
     expect(pkg).toMatch(/if: runner\.os == 'macOS'\n {8}run: npm run test:e2e/)
+  })
+
+  it('runs the Windows unit suite with its temp dirs on D:, off the OS disk', () => {
+    // %TEMP% on a Windows runner is under the user profile on C:, the OS disk, which is
+    // slower than D: and has stalled long enough to time tests out. RUNNER_TEMP is on D:.
+    expect(job('package')).toContain(
+      'if [ "$RUNNER_OS" = Windows ]; then export TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP"; fi\n          npm test '
+    )
   })
 })
 
