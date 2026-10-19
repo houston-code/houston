@@ -485,6 +485,15 @@ body.is-resizing {
   color: var(--warn);
   vertical-align: 1px;
 }
+/* A folded parent's tag: spawned sessions still running read in the running dot's
+   accent; a plain count of them stays neutral. */
+.conv__tag--running {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.conv__tag--count {
+  color: var(--text-dim);
+}
 .sidebar__list {
   flex: 1;
   min-height: 0;
@@ -592,6 +601,42 @@ body.is-resizing {
   color: var(--warn);
   font-size: 10px;
   flex-shrink: 0;
+}
+.conv-children {
+  margin-left: 14px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+/* The fold arrow and its placeholder share one slot size, so titles at a level
+   line up whether or not their row has spawned chats under it. */
+.conv__nest-toggle,
+.conv__nest-spacer {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-left: -4px;
+}
+.conv__nest-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: transform 0.12s ease;
+}
+.conv__nest-toggle--open {
+  transform: rotate(90deg);
+}
+.conv__nest-toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.conv__nest-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 /* Leading "running" dot: a chat with a live agent run. Same accent + cadence as
    the status-bar busy dot, so a running chat reads consistently in both places.
@@ -3995,6 +4040,22 @@ body.is-resizing .preview-dock__resizer::after {
 }
 .notice--handoff::before {
   content: '↳ ';
+}
+.notice__link {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.notice__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 /* Missing language runtime: a warning (not an error) with its one-click fix. */
 .notice--runtime {

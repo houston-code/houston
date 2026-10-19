@@ -448,3 +448,20 @@ describe('Transcript first-party prompt turns', () => {
     expect(screen.getByText('fix the login bug')).toBeInTheDocument()
   })
 })
+
+describe('Transcript: handoff banner link', () => {
+  it('links back to the chat that spawned this one', () => {
+    const onOpenConversation = vi.fn()
+    render(
+      <Transcript
+        items={[{ kind: 'notice', id: 'h', text: 'Handoff from “Add OAuth”', tone: 'handoff', openConversationId: 'p' }]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        onOpenConversation={onOpenConversation}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open that chat' }))
+    expect(onOpenConversation).toHaveBeenCalledWith('p')
+  })
+})

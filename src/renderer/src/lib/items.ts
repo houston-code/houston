@@ -100,6 +100,8 @@ export interface NoticeItem {
   runtime?: { label: string; installCommand?: string; url: string }
   /** A "retrying" notice; the next attempt updates it in place instead of stacking. */
   retry?: boolean
+  /** On a `handoff` banner: the chat that spawned this one, which the banner links to. */
+  openConversationId?: string
 }
 export interface QuestionItem {
   kind: 'question'

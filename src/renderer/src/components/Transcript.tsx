@@ -257,7 +257,8 @@ export function Transcript({
   onElicit,
   onOpenPlan,
   onRunInTerminal,
-  proposals
+  proposals,
+  onOpenConversation
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -270,6 +271,8 @@ export function Transcript({
   onRunInTerminal?: (command: string) => void
   /** Drives the propose_session cards; without it they show read-only. */
   proposals?: ProposalHandlers
+  /** Open another chat (the handoff banner's link back to the chat that spawned this one). */
+  onOpenConversation?: (id: string) => void
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -375,6 +378,15 @@ export function Transcript({
                 ) : (
                   <div key={node.id} className={`notice notice--${node.item.tone}`}>
                     {node.item.text}
+                    {node.item.openConversationId && onOpenConversation && (
+                      <button
+                        type="button"
+                        className="notice__link"
+                        onClick={() => onOpenConversation(node.item.openConversationId as string)}
+                      >
+                        Open that chat
+                      </button>
+                    )}
                   </div>
                 )
               default:
