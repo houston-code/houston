@@ -72,16 +72,20 @@ function osName(host: PromptHost): string {
 /**
  * The environment section: what run_shell can and cannot do on this host. Only the
  * Seatbelt and bubblewrap backends confine commands, and the egress allowlist exists
- * only behind them, so an unconfined host must not be told it has either.
+ * only behind them, so an unconfined host must not be told it has either. A run
+ * nobody is attending (headless) can't be granted shell network mid-run, so it is
+ * pointed at the `--allow-shell-network` flag instead of an approval prompt.
  */
-function environmentSection(host: PromptHost): string {
+function environmentSection(host: PromptHost, attended: boolean): string {
   const os = osName(host)
   const confined = host.sandboxBackend === 'seatbelt' || host.sandboxBackend === 'bubblewrap'
   const lines: string[] = []
   if (confined) {
     lines.push(
       `- Shell commands run inside an OS sandbox confined to the project: writes outside it are blocked. Package-manager caches (npm, pip, yarn) are redirected to a writable temp dir, so installs need no \`--cache\` workaround once network is on.`,
-      `- Network access from run_shell is off until the user grants it (the one-time network consent in full-auto, or "Allow for run" on a shell approval). It is gated, not unavailable: if a command needs the network (cloning, installing dependencies, curl), explain that and how to grant it rather than saying it is impossible.`,
+      attended
+        ? `- Network access from run_shell is off until the user grants it (the one-time network consent in full-auto, or "Allow for run" on a shell approval). It is gated, not unavailable: if a command needs the network (cloning, installing dependencies, curl), explain that and how to grant it rather than saying it is impossible.`
+        : `- Network access from run_shell depends on how this run was started: the user grants it with --allow-shell-network, and nobody can grant it while the run is going. It is gated, not unavailable: if a command fails because it needs the network (cloning, installing dependencies, curl), don't retry it; say in your final message that re-running with --allow-shell-network would allow it, rather than saying it is impossible.`,
       `- Granted network is limited to an allowlist of dev-infrastructure domains (package registries, VCS hosts, and any the user adds in Settings under "Sandbox egress"). A destination the allowlist refuses is policy, not an outage: don't retry it, and ask the user to add the domain if it is genuinely needed.`
     )
   } else {
@@ -203,7 +207,7 @@ ${approvalLine}
 - If you couldn't run a meaningful check (no tests, dependencies you couldn't install, no network), say exactly what you didn't verify and why. Never describe unverified work as tested or working.${viewLocalhostLine}
 - For a large or security-sensitive change, review_changes runs an independent multi-agent review: run it once, fix what it confirms, and verify those fixes directly. Small edits don't need it, and don't re-review the whole diff repeatedly (it is expensive; pass paths to scope a re-review).
 
-${environmentSection(host)}
+${environmentSection(host, attended)}
 
 # Communicating
 - Be concise and direct. Lead with the outcome or the answer, then the detail that supports it. A short paragraph or a few bullets is usually right; use headings and lists only when they make the answer easier to scan.

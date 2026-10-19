@@ -590,10 +590,17 @@ export interface AgentRunRequest {
    * Nobody is attending this run (the one-shot headless client), so nothing can
    * answer a question before it ends. The loop withholds `ask_user` and the system
    * prompt tells the model no user is available, rather than letting it spend a
-   * step on a question that only gets a canned reply. Interactive clients leave it
-   * unset.
+   * step on a question that only gets a canned reply. A shell command that fails
+   * for lack of network is pointed at `--allow-shell-network`, since no one can pick
+   * "Allow for run" either. Interactive clients leave it unset.
    */
   unattended?: boolean
+  /**
+   * The headless `--allow-shell-network` grant: seeds the run's shell-network grant up
+   * front, the one "Allow for run" or the full-auto consent gives interactively. Only
+   * the headless client sets it; the GUI's IPC builds its requests field by field.
+   */
+  allowShellNetwork?: boolean
   /** Per-run setting overrides (headless flags). Applied to this run only, never persisted. */
   overrides?: RunSettingsOverrides
 }

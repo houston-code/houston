@@ -30,6 +30,7 @@ import {
   formatRunLog,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
+  HEADLESS_NETWORK_BLOCKED_HINT,
   egressBlockHint,
   EGRESS_BLOCKED_HINT,
   sandboxWriteBlockHint,
@@ -2943,6 +2944,17 @@ describe('networkBlockHint', () => {
 
   it('stays silent for a non-network failure', () => {
     expect(networkBlockHint(false, failed, 'error: test "foo" failed: expected 1 got 2')).toBe('')
+  })
+
+  it('points a headless run at --allow-shell-network, since it has no approval prompt', () => {
+    expect(networkBlockHint(false, failed, dnsErr, true)).toBe(HEADLESS_NETWORK_BLOCKED_HINT)
+    expect(HEADLESS_NETWORK_BLOCKED_HINT).toContain('--allow-shell-network')
+    expect(HEADLESS_NETWORK_BLOCKED_HINT).not.toContain('Allow for run')
+    // The same gates as the interactive hint: granted network, success, or an
+    // unrelated failure stay silent.
+    expect(networkBlockHint(true, failed, dnsErr, true)).toBe('')
+    expect(networkBlockHint(false, { exitCode: 0 }, dnsErr, true)).toBe('')
+    expect(networkBlockHint(false, failed, 'error: test "foo" failed', true)).toBe('')
   })
 
   it('matches common runtimes (npm ENOTFOUND, curl connect, killed proc)', () => {

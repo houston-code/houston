@@ -253,6 +253,17 @@ describe('buildSystemPrompt', () => {
     expect(unattended).toContain('list any open questions that would change the plan in the plan itself')
   })
 
+  it('points an unattended run at --allow-shell-network for shell network, not an approval prompt', () => {
+    const attended = promptFor(toolNames())
+    expect(attended).toContain('"Allow for run" on a shell approval')
+    expect(attended).not.toContain('--allow-shell-network')
+    const unattended = promptFor(toolNames({ askUser: false }))
+    expect(unattended).toContain('re-running with --allow-shell-network')
+    expect(unattended).not.toContain('Allow for run')
+    // The allowlist bullet next to it survives the swap.
+    expect(unattended).toContain('- Granted network is limited to an allowlist')
+  })
+
   it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('schedule_run')
     const noScheduler = promptFor(toolNames({ scheduler: false }))

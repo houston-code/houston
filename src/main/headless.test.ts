@@ -40,6 +40,7 @@ describe('parseHeadlessArgs', () => {
       model: 'gpt',
       approvalPolicy: 'plan',
       onApproval: 'deny',
+      allowShellNetwork: false,
       json: true,
       continueSession: false,
       resumeId: undefined
@@ -228,6 +229,30 @@ describe('parseHeadlessArgs', () => {
       expect(parseHeadlessArgs([], '/d', { stdinPiped: false, bareStdinPrompt: true })).toBeNull()
     })
   })
+
+  it('grants shell network only on an explicit --allow-shell-network', () => {
+    expect(parseHeadlessArgs(['-p', 'x'], '/d')?.allowShellNetwork).toBe(false)
+    expect(
+      parseHeadlessArgs(['-p', 'x', '--approval', 'auto-edit', '--allow-shell-network'], '/d')?.allowShellNetwork
+    ).toBe(true)
+    // Approving calls is not the grant: plain "Allow" runs shell offline interactively too.
+    expect(
+      parseHeadlessArgs(['-p', 'x', '--approval', 'ask', '--on-approval', 'allow'], '/d')?.allowShellNetwork
+    ).toBe(false)
+    // A stdin prompt still sees the flag rather than taking it as the prompt text.
+    expect(parseHeadlessArgs(['-p', '--allow-shell-network'], '/d', { stdinPiped: true })).toMatchObject({
+      promptFromStdin: true,
+      allowShellNetwork: true
+    })
+  })
+
+  it('reports a value on --allow-shell-network as a usage error, never a grant', () => {
+    for (const v of ['false', 'true', '']) {
+      const o = parseHeadlessArgs(['-p', 'x', `--allow-shell-network=${v}`], '/d')!
+      expect(o.allowShellNetwork, v).toBe(false)
+      expect(o.usageError, v).toBe('--allow-shell-network takes no value; pass it on its own')
+    }
+  })
 })
 
 const settings = (over: Partial<AppSettings> = {}): AppSettings =>
@@ -364,6 +389,7 @@ const baseOpts: HeadlessOptions = {
   cwd: '/proj',
   approvalPolicy: 'plan',
   onApproval: 'deny', // the non-full-auto parse default
+  allowShellNetwork: false,
   json: false,
   continueSession: false
 }
@@ -537,6 +563,100 @@ describe('runHeadless', () => {
       expect(code).toBe(onApproval === 'fail' ? 1 : 0)
       expect(await decided).toBe(onApproval === 'allow' ? 'allow' : 'deny')
     }
+  })
+
+  describe('shell network', () => {
+    /** A startRun that records the request and emits `events`. */
+    const capturing = (events: AgentEvent[]) => {
+      const reqs: AgentRunRequest[] = []
+      const startRun: HeadlessDeps['startRun'] = async (req, send) => {
+        reqs.push(req)
+        for (const e of events) send(e)
+      }
+      return { reqs, startRun }
+    }
+    const shellPrompt = (callId: string, offline: boolean): AgentEvent => ({
+      runId: 'run-1',
+      type: 'tool_approval',
+      callId,
+      name: 'run_shell',
+      summary: 'npm install',
+      kind: 'shell',
+      ...(offline ? { shellOffline: true } : {})
+    })
+    const offlineShellPrompt = (callId: string): AgentEvent => shellPrompt(callId, true)
+    const done: AgentEvent = { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+
+    it('with --allow-shell-network, hands the loop the grant and says so once', async () => {
+      // With the grant seeded, the loop's shell prompts carry no shellOffline flag.
+      const { reqs, startRun } = capturing([shellPrompt('c1', false), done])
+      const { d, err, approvals } = deps([], { startRun })
+      const code = await runHeadless(
+        { ...baseOpts, approvalPolicy: 'auto-edit', onApproval: 'allow', allowShellNetwork: true },
+        d
+      )
+      expect(code).toBe(0)
+      expect(reqs[0]).toMatchObject({ unattended: true, allowShellNetwork: true })
+      // The command is still approved like any gated call; the network came from the flag.
+      expect(approvals).toEqual([['run-1', 'c1', 'allow']])
+      const text = err.join('')
+      expect(text.split('may reach the network').length - 1).toBe(1)
+      expect(text).not.toContain('without network')
+    })
+
+    it('without the flag, sends no grant and notes once that shell runs offline', async () => {
+      const { reqs, startRun } = capturing([offlineShellPrompt('c1'), offlineShellPrompt('c2'), done])
+      const { d, err, approvals } = deps([], { startRun })
+      const code = await runHeadless({ ...baseOpts, approvalPolicy: 'auto-edit', onApproval: 'allow' }, d)
+      expect(code).toBe(0)
+      expect(reqs[0].unattended).toBe(true)
+      expect(reqs[0]).not.toHaveProperty('allowShellNetwork')
+      // Plain 'allow', never 'always': --on-approval allow approves calls, it doesn't grant network.
+      expect(approvals).toEqual([
+        ['run-1', 'c1', 'allow'],
+        ['run-1', 'c2', 'allow']
+      ])
+      const text = err.join('')
+      expect(text.split('shell commands run without network').length - 1).toBe(1)
+      expect(text).toContain('--allow-shell-network')
+      expect(text).not.toContain('may reach the network')
+    })
+
+    it('says nothing about network in plan mode (no shell runs) or in --json mode', async () => {
+      const plan = deps([done])
+      await runHeadless({ ...baseOpts, allowShellNetwork: true }, plan.d)
+      expect(plan.err.join('')).not.toContain('network')
+
+      const json = deps([offlineShellPrompt('c1'), done])
+      await runHeadless(
+        { ...baseOpts, approvalPolicy: 'auto-edit', onApproval: 'allow', allowShellNetwork: true, json: true },
+        json.d
+      )
+      expect(json.err.join('')).toBe('')
+    })
+
+    it('resolves the full-auto network consent per --on-approval and names the flag when declining', async () => {
+      const consent: AgentEvent = {
+        runId: 'run-1',
+        type: 'tool_approval',
+        callId: 'n1',
+        name: 'run_shell',
+        summary: 'npm install',
+        kind: 'shell',
+        shellNetwork: true
+      }
+      for (const onApproval of ['allow', 'deny', 'fail'] as const) {
+        const { d, err, approvals } = deps([consent, done])
+        const code = await runHeadless({ ...baseOpts, approvalPolicy: 'full-auto', onApproval }, d)
+        // The consent decides only the network (the command runs either way), so even
+        // 'fail' doesn't make it a permission wall.
+        expect(code).toBe(0)
+        expect(approvals).toEqual([['run-1', 'n1', onApproval === 'allow' ? 'allow' : 'deny']])
+        expect(err.join('')).toContain(
+          onApproval === 'allow' ? 'allowing shell network access' : 'pass --allow-shell-network'
+        )
+      }
+    })
   })
 
   it('resolves a plan_ready (reject) and prints the plan so present_plan cannot hang', async () => {
