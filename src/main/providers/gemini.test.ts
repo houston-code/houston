@@ -432,3 +432,29 @@ describe('listGeminiModels', () => {
     ])
   })
 })
+
+describe('toGeminiContents: consecutive user turns', () => {
+  it('folds a plain user turn onto the one before it', () => {
+    const out = toGeminiContents([
+      { role: 'user', content: 'note' },
+      { role: 'user', content: 'question' }
+    ])
+    expect(out).toEqual([{ role: 'user', parts: [{ text: 'note' }, { text: 'question' }] }])
+  })
+
+  it('never folds onto a turn of function responses or the media split from one', () => {
+    const out = toGeminiContents([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read_file', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'c', toolName: 'read_file' },
+      { role: 'user', content: '', images: [{ mediaType: 'image/png', data: 'AAA' }] },
+      { role: 'user', content: 'and this' }
+    ])
+    const last = out[out.length - 1]
+    expect(out.filter((c) => c.parts?.some((p) => 'functionResponse' in p))[0].parts?.some((p) => 'inlineData' in p)).toBe(false)
+    // The media split off a tool-result turn stays its own turn, and the next message
+    // doesn't fold into it (the same rule as a tool's own images).
+    expect(last.parts).toEqual([{ text: 'and this' }])
+    expect(out[out.length - 2].parts?.every((p) => 'inlineData' in p)).toBe(true)
+  })
+})

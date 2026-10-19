@@ -199,6 +199,25 @@ describe('buildSystemPrompt', () => {
     expect(noSpawn).toContain('schedule_run')
   })
 
+  it('offers propose_session (and its guidance) only with a spawn backend and a saved chat', () => {
+    expect(toolNames()).toContain('propose_session')
+    expect(promptFor(toolNames())).toContain('propose it with propose_session')
+    // No spawn backend: neither tool. One-shot run with no chat: spawn only.
+    expect(toolNames({ spawn: false })).not.toContain('propose_session')
+    const noChat = toolNames({ proposals: false })
+    expect(noChat).not.toContain('propose_session')
+    expect(noChat).toContain('spawn_session')
+    const prompt = promptFor(noChat)
+    expect(prompt).not.toContain('propose_session')
+    expect(prompt).toContain('use web_search or web_fetch rather than guessing.')
+    // Plan mode is read-only, and proposing runs nothing, so it stays.
+    expect(toolNames({ planMode: true })).toContain('propose_session')
+    // A spawned session reports back only to a saved chat; the prompt says which.
+    expect(promptFor(toolNames())).toContain('It reports back here')
+    expect(prompt).toContain('It does not report back here')
+    expect(prompt).not.toContain('It reports back here')
+  })
+
   it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('schedule_run')
     const noScheduler = promptFor(toolNames({ scheduler: false }))

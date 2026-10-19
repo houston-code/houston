@@ -29,6 +29,8 @@ import { setSchedulerBackend } from './agent/scheduler'
 import { createSpawnBackend } from './spawnSession'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { createWorktree, removeWorktree } from './agent/worktree'
+import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
+import { askSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
@@ -75,7 +77,8 @@ import {
   getConversation,
   searchConversations,
   forkConversation,
-  setGeneratedTitle
+  setGeneratedTitle,
+  reportChildToParent
 } from './conversations'
 
 /**
@@ -233,7 +236,9 @@ export function wireTerminalSessionBackends(opts: {
         })
       pending.add(run)
       void run.finally(() => pending.delete(run))
-    }
+      return run
+    },
+    reportToParent: reportChildToParent
   })
   setSpawnBackend({
     // Terminal hosts run spawned sessions non-interactively; say so in the tool
@@ -456,6 +461,29 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),
       backgroundSessions: () => sessions.backgroundSessions(),
+      proposals: {
+        list: (conversationId) => {
+          const conv = getConversation(conversationId)
+          if (!conv) return []
+          return proposalsIn(conv.messages).map((p) => ({
+            callId: p.callId,
+            title: p.args.title,
+            prompt: p.args.prompt,
+            ...(conv.proposals?.[p.callId] ? { status: conv.proposals[p.callId].status } : {})
+          }))
+        },
+        start: async (conversationId, callId, policy) => {
+          const { result } = await startProposal(
+            { conversationId, callId, approvalPolicy: policy },
+            hostProposalDeps()
+          )
+          return { conversationId: result.conversationId, title: result.title }
+        },
+        decide: (conversationId, callId, status) => {
+          decideProposal({ conversationId, callId, status }, hostProposalDeps())
+        }
+      },
+      sideChat: (input) => askSideChat(input, hostSideChatDeps()),
       checkUpdate: async () => {
         const found = await checkForUpdate(version)
         latestUpdate = found ? { latest: found.latest, url: found.url } : null

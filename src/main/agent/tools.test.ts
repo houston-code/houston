@@ -102,6 +102,7 @@ describe('tool registry', () => {
       'notebook_edit',
       'pr_sweep',
       'present_plan',
+      'propose_session',
       'read_file',
       'read_shell_output',
       'recall_history',
@@ -121,6 +122,89 @@ describe('tool registry', () => {
 
   it('review_changes errors without a review dispatcher in context', async () => {
     await expect(run('review_changes', {})).rejects.toThrow(/not available/)
+  })
+})
+
+describe('spawn_session context and reporting back', () => {
+  it('forwards context "fork" and refuses an unknown context', async () => {
+    let received: unknown
+    const withSpawn: ToolContext = {
+      ...ctx,
+      spawnSession: async (input) => {
+        received = input
+        return { conversationId: 'c1', title: 't', workspace, reportsBack: true }
+      }
+    }
+    const out = await getTool('spawn_session')!.execute({ prompt: 'p', context: 'fork' }, withSpawn)
+    expect(received).toEqual({ prompt: 'p', context: 'fork' })
+    expect(out).toContain('report of how it went arrives')
+    await expect(
+      getTool('spawn_session')!.execute({ prompt: 'p', context: 'all' }, withSpawn)
+    ).rejects.toThrow(/context must be/)
+  })
+
+  it('omits a "fresh" context (the default) when forwarding', async () => {
+    let received: unknown
+    const withSpawn: ToolContext = {
+      ...ctx,
+      spawnSession: async (input) => {
+        received = input
+        return { conversationId: 'c1', title: 't', workspace }
+      }
+    }
+    await getTool('spawn_session')!.execute({ prompt: 'p', context: 'fresh' }, withSpawn)
+    expect(received).toEqual({ prompt: 'p' })
+  })
+})
+
+describe('propose_session', () => {
+  const proposeCtx = (onPropose: (input: { title: string }) => void = () => {}): ToolContext => ({
+    ...ctx,
+    proposeSession: onPropose
+  })
+
+  it('is a read tool: nothing runs until the user starts it, so no approval and allowed in plan mode', () => {
+    const tool = getTool('propose_session')!
+    expect(tool.kind).toBe('read')
+    expect(tool.blockedInPlan).toBeUndefined()
+  })
+
+  it('records the proposal and tells the model nothing runs yet', async () => {
+    const seen: string[] = []
+    const out = await getTool('propose_session')!.execute(
+      { title: '  Update   API docs ', prompt: 'Document /auth/*', context: 'fork', worktree: { branch: 'docs/auth' } },
+      proposeCtx((i) => void seen.push(i.title))
+    )
+    expect(seen).toEqual(['Update API docs'])
+    expect(out.startsWith('Proposed "Update API docs"')).toBe(true)
+    expect(out).toContain("don't do the proposed work here")
+  })
+
+  it('validates before recording anything', async () => {
+    const seen: string[] = []
+    const c = proposeCtx((i) => void seen.push(i.title))
+    const tool = getTool('propose_session')!
+    await expect(tool.execute({ prompt: 'p' }, c)).rejects.toThrow(/title is required/)
+    await expect(tool.execute({ title: 'x'.repeat(81), prompt: 'p' }, c)).rejects.toThrow(/too long/)
+    await expect(tool.execute({ title: 't', prompt: '  ' }, c)).rejects.toThrow(/prompt is required/)
+    await expect(tool.execute({ title: 't', prompt: 'p', worktree: { branch: '--force' } }, c)).rejects.toThrow(
+      /Invalid branch/
+    )
+    await expect(tool.execute({ title: 't', prompt: 'p', context: 'all' }, c)).rejects.toThrow(/context must be/)
+    expect(seen).toEqual([])
+  })
+
+  it('surfaces a refusal from the loop (cap or duplicate) as the tool error', async () => {
+    const c = proposeCtx(() => {
+      throw new Error('A session titled "t" was already proposed in this chat.')
+    })
+    await expect(getTool('propose_session')!.execute({ title: 't', prompt: 'p' }, c)).rejects.toThrow(
+      /already proposed/
+    )
+  })
+
+  it('errors without a proposeSession handler in context', async () => {
+    await expect(run('propose_session', { title: 't', prompt: 'p' })).rejects.toThrow(/not available/)
   })
 })
 

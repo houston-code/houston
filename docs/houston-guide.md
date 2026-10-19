@@ -144,7 +144,7 @@ on the client, but the common built-ins are:
 
 The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
-`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/fork`,
+`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/proposals`, `/btw`, `/fork`,
 `/cost`, `/mcp`, `/trust`, `/hooks`, `/theme`, `/image`, `/cwd`, `/share`, and `/exit`.
 
 **Themes.** `/theme` lists the terminal's palettes and `/theme <name>` switches:
@@ -568,6 +568,37 @@ non-interactively (anything needing an approval is declined automatically) and
 persist as ordinary conversations you can open later with `/resume` or
 `--resume <id>`; a one-shot headless run waits for its spawned sessions before
 exiting.
+
+A spawned session starts fresh with its prompt, or, with context "fork", with a
+copy of the spawning chat so far. When it finishes, the chat that started it gets
+a short report (title, whether it worked, the start of its answer) as a Houston
+note at the start of its next turn, and you see a notice in the transcript.
+
+## Proposed sessions
+
+When the agent spots parallel work you didn't ask for (a fix noticed in passing,
+the natural follow-up), it proposes it with `propose_session` instead of starting
+it. The desktop app shows a card: **Start session** runs it as its own chat (on
+its own git worktree when the project is a repository, under your current approval
+policy), **Do it here** asks for it in this chat instead (queued if a turn is
+running), and **Dismiss** declines it. Nothing runs until you choose. A turn can
+propose at most three sessions, and never the same title twice in one chat.
+
+In the terminal, `/proposals` lists the chat's proposals; `/proposals start <n>`,
+`/proposals here <n>`, and `/proposals dismiss <n>` act on one.
+
+## Side chat (/btw)
+
+The side chat answers a quick question about the open chat without adding
+anything to it. Open it from the titlebar (or the command palette); it sees the
+chat so far and can read the project, but it cannot edit files, run commands, or
+reach the network, and it works while the main chat's turn is still running.
+**Send to main** puts an exchange into the main chat as a message (queued if a
+turn is running), and **Continue in new chat** forks the chat with the exchange as
+a draft. Its tokens count toward the chat's cost.
+
+In the terminal, `/btw <question>` asks one; follow-ups in the same chat keep
+the side chat's context.
 
 ## Watching work you sent off (/spawned)
 

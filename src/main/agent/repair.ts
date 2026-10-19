@@ -108,3 +108,4 @@ export function repairDanglingToolResults(messages: ChatMessage[]): ChatMessage[
   if (out.length === messages.length && out.every((m, i) => m === messages[i])) return messages
   return out
 }
+

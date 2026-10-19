@@ -705,7 +705,7 @@
   },
   {
     "name": "spawn_session",
-    "description": "Spawn a separate chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into this turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it to run work in parallel, e.g. to hand off an independent feature onto its own git branch/worktree while you continue here. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. It starts fresh with no view of this conversation, so put everything it needs in `prompt`.",
+    "description": "Spawn a separate chat, seeded with a task you hand it, and start it running autonomously in the background. It appears in the sidebar with a live status; the user can open it to watch, answer an approval, or take over. Unlike dispatch_agent (an ephemeral read-only subagent that reports back into this turn), a spawned session is a persistent, independent conversation with its own context that keeps running after this turn ends. Use it only when the user asked for parallel or background work; to suggest parallel work yourself, use propose_session instead. The new session inherits your current approval policy (it is never more permissive), so its risky steps still pause for the user. By default it starts fresh with no view of this conversation, so put everything it needs in `prompt` (or pass context \"fork\").",
     "parameters": {
       "type": "object",
       "properties": {
@@ -734,9 +734,65 @@
             "branch"
           ],
           "additionalProperties": false
+        },
+        "context": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "fork"
+          ],
+          "description": "Optional: \"fresh\" (the default) starts the session with only your prompt; \"fork\" also gives it a copy of this conversation so far, so it knows what was read, decided, and tried. Prefer \"fork\" when the task builds on this conversation, and \"fresh\" for self-contained work."
         }
       },
       "required": [
+        "prompt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "propose_session",
+    "description": "Propose a separate session for a piece of work you noticed that could run in parallel with this one (independent of what you are doing here, and worth its own conversation). The user sees a card with Start session, Do it here, and Dismiss; nothing runs unless they choose. If they start it, it becomes its own background chat with this prompt, on its own git worktree when the project is a git repository, under the user's current approval policy, and reports back here when it finishes. Use it for real follow-ups, not one-line tweaks or speculation, and at most a few times per turn. Do not do the proposed work yourself unless the user asks for it here. Prefer this over spawn_session unless the user asked you to start parallel work.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Short title for the card and the new chat (a few words, under 60 characters)."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The full brief for the new session: the task, the files or area, and what done looks like. It becomes the session's first message, so make it self-contained (or pass context \"fork\")."
+        },
+        "worktree": {
+          "type": "object",
+          "description": "Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.",
+          "properties": {
+            "branch": {
+              "type": "string",
+              "description": "New branch name to create and check out for the session."
+            },
+            "base": {
+              "type": "string",
+              "description": "Optional base ref to branch from (defaults to the current HEAD)."
+            }
+          },
+          "required": [
+            "branch"
+          ],
+          "additionalProperties": false
+        },
+        "context": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "fork"
+          ],
+          "description": "Optional: \"fresh\" (the default) starts the session with only your prompt; \"fork\" also gives it a copy of this conversation so far, so it knows what was read, decided, and tried. Prefer \"fork\" when the task builds on this conversation, and \"fresh\" for self-contained work."
+        }
+      },
+      "required": [
+        "title",
         "prompt"
       ],
       "additionalProperties": false
