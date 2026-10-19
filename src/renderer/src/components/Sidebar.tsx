@@ -69,6 +69,10 @@ export interface SidebarProps {
   onToggleGroupCollapsed: (groupId: string) => void
   /** Collapsed state for the built-in sections ('pinned', 'ungrouped'). */
   collapsedSections: Record<string, boolean>
+  /** Chats whose spawned sessions are folded away (persisted by the app). */
+  collapsedParents?: ReadonlySet<string>
+  /** Fold or unfold a chat's spawned sessions. */
+  onToggleParentCollapsed?: (id: string) => void
   /** Toggle a built-in section's collapsed state (not a custom group). */
   onToggleSectionCollapsed: (sectionId: string) => void
 }
@@ -763,6 +767,8 @@ function SidebarSectionView({
   )
 }
 
+const NO_PARENTS: ReadonlySet<string> = new Set()
+
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
   const shortcut = props.toggleShortcut ? ` (${props.toggleShortcut})` : ''
@@ -770,15 +776,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // Which conversation/group is currently being renamed (id), if any.
   const [renamingConv, setRenamingConv] = useState<string | null>(null)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
-  // Parents whose spawned chats are folded away (expanded by default).
-  const [collapsedParents, setCollapsedParents] = useState<ReadonlySet<string>>(() => new Set())
-  const toggleParent = (id: string): void =>
-    setCollapsedParents((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  // Parents whose spawned chats are folded away (saved in settings; expanded by default).
+  const collapsedParents = props.collapsedParents ?? NO_PARENTS
+  const toggleParent = (id: string): void => props.onToggleParentCollapsed?.(id)
 
   // Collapsed: a thin rail with just the expand toggle and the most-used actions.
   if (props.collapsed) {

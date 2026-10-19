@@ -626,8 +626,8 @@ persist as ordinary conversations you can open later with `/resume` or
 exiting.
 
 In the sidebar, a spawned session sits under the chat that started it (the arrow
-beside the parent folds them away, and a folded parent says how many are still
-running). A session you pin or move into a group stays where you put it. Its
+beside the parent folds them away, a folded parent says how many are still
+running, and Houston remembers what you folded across restarts). A session you pin or move into a group stays where you put it. Its
 "Handoff from …" banner links back to the parent chat.
 
 A spawned session starts fresh with its prompt, or, with context "fork", with a

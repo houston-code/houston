@@ -633,6 +633,11 @@ export interface AppSettings {
    */
   collapsedSections?: Record<string, boolean>
   /**
+   * Chats whose spawned sessions are folded away in the sidebar (by chat id).
+   * Absent = every parent expanded. Ids of deleted chats are pruned on the next fold.
+   */
+  collapsedSpawnParents?: string[]
+  /**
    * Width (px) of the left sidebar. Clamped to [SIDEBAR_MIN_WIDTH,
    * SIDEBAR_MAX_WIDTH] on read; falls back to SIDEBAR_DEFAULT_WIDTH when unset.
    */

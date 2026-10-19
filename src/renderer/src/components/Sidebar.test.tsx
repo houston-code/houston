@@ -1,4 +1,5 @@
 import { createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
@@ -980,6 +981,26 @@ describe('Sidebar — row menu accessibility', () => {
   })
 })
 
+/** The Sidebar with fold state held the way the app holds it (outside the Sidebar). */
+function FoldingSidebar(props: SidebarProps & { onFold?: (id: string) => void }): JSX.Element {
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set())
+  return (
+    <Sidebar
+      {...props}
+      collapsedParents={folded}
+      onToggleParentCollapsed={(id) => {
+        props.onFold?.(id)
+        setFolded((prev) => {
+          const next = new Set(prev)
+          if (next.has(id)) next.delete(id)
+          else next.add(id)
+          return next
+        })
+      }}
+    />
+  )
+}
+
 describe('Sidebar: spawned chats nest under their parent', () => {
   const parent = makeConv({ id: 'p', title: 'Add OAuth', updatedAt: 1 })
   const kid = (id: string, title: string, updatedAt: number): ConversationMeta =>
@@ -987,14 +1008,14 @@ describe('Sidebar: spawned chats nest under their parent', () => {
   const convs = [parent, kid('k1', 'Update API docs', 3), kid('k2', 'Fix flaky e2e', 2)]
 
   it('shows spawned chats indented under the parent, in a labelled group', () => {
-    render(<Sidebar {...baseProps({ conversations: convs })} />)
+    render(<FoldingSidebar {...baseProps({ conversations: convs })} />)
     const group = screen.getByRole('group', { name: 'Spawned from Add OAuth' })
     expect(within(group).getByText('Update API docs')).toBeInTheDocument()
     expect(within(group).getByText('Fix flaky e2e')).toBeInTheDocument()
   })
 
   it('folds them away and shows how many are running instead', () => {
-    render(<Sidebar {...baseProps({ conversations: convs, runningIds: new Set(['k2']) })} />)
+    render(<FoldingSidebar {...baseProps({ conversations: convs, runningIds: new Set(['k2']) })} />)
     const toggle = screen.getByRole('button', { name: 'Hide 2 spawned sessions' })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(toggle)
@@ -1007,20 +1028,20 @@ describe('Sidebar: spawned chats nest under their parent', () => {
   })
 
   it('shows a neutral count when nothing under a folded parent is running', () => {
-    render(<Sidebar {...baseProps({ conversations: convs })} />)
+    render(<FoldingSidebar {...baseProps({ conversations: convs })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Hide 2 spawned sessions' }))
     expect(screen.getByText('2 spawned')).toHaveClass('conv__tag--count')
   })
 
   it('never folds away the open chat', () => {
-    render(<Sidebar {...baseProps({ conversations: convs, currentId: 'k1' })} />)
+    render(<FoldingSidebar {...baseProps({ conversations: convs, currentId: 'k1' })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Hide 2 spawned sessions' }))
     expect(screen.getByText('Update API docs')).toBeInTheDocument()
   })
 
   it("keeps titles in line: a sibling without spawned chats reserves the arrow's slot", () => {
     const other = makeConv({ id: 'x', title: 'Bump deps', updatedAt: 5 })
-    const { container, unmount } = render(<Sidebar {...baseProps({ conversations: [...convs, other] })} />)
+    const { container, unmount } = render(<FoldingSidebar {...baseProps({ conversations: [...convs, other] })} />)
     const row = (title: string): HTMLElement => screen.getByText(title).closest('.conv') as HTMLElement
     expect(row('Bump deps').querySelector('.conv__nest-spacer')).not.toBeNull()
     expect(row('Add OAuth').querySelector('.conv__nest-toggle')).not.toBeNull()
@@ -1028,17 +1049,35 @@ describe('Sidebar: spawned chats nest under their parent', () => {
     expect(row('Fix flaky e2e').querySelector('.conv__nest-spacer')).toBeNull()
     unmount()
     // A list with no nesting at all looks exactly as before.
-    render(<Sidebar {...baseProps({ conversations: [other] })} />)
+    render(<FoldingSidebar {...baseProps({ conversations: [other] })} />)
     expect(container.ownerDocument.querySelector('.conv__nest-spacer')).toBeNull()
   })
 
   it('opens a nested chat on click, and only top-level rows are draggable', () => {
     const onSelect = vi.fn()
-    render(<Sidebar {...baseProps({ conversations: convs, onSelect })} />)
+    render(<FoldingSidebar {...baseProps({ conversations: convs, onSelect })} />)
     fireEvent.click(screen.getByText('Fix flaky e2e'))
     expect(onSelect).toHaveBeenCalledWith('k2')
     const row = (title: string): HTMLElement => screen.getByText(title).closest('.conv') as HTMLElement
     expect(row('Add OAuth')).toHaveAttribute('draggable', 'true')
     expect(row('Fix flaky e2e')).toHaveAttribute('draggable', 'false')
+  })
+})
+
+describe('Sidebar: fold state comes from the app', () => {
+  const parent = makeConv({ id: 'p', title: 'Add OAuth', updatedAt: 1 })
+  const kid = makeConv({ id: 'k', title: 'Update API docs', updatedAt: 2, spawnedFrom: { conversationId: 'p', title: 'Add OAuth' } })
+
+  it('starts folded for a parent the app says is folded (saved across restarts)', () => {
+    render(<Sidebar {...baseProps({ conversations: [parent, kid], collapsedParents: new Set(['p']) })} />)
+    expect(screen.queryByText('Update API docs')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Show 1 spawned session' })).toBeInTheDocument()
+  })
+
+  it('asks the app to fold, rather than folding on its own', () => {
+    const onToggleParentCollapsed = vi.fn()
+    render(<Sidebar {...baseProps({ conversations: [parent, kid], onToggleParentCollapsed })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Hide 1 spawned session' }))
+    expect(onToggleParentCollapsed).toHaveBeenCalledWith('p')
   })
 })

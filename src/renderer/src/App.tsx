@@ -777,6 +777,22 @@ export default function App(): JSX.Element {
     setSettings(fresh)
   }, [])
 
+  // Fold a chat's spawned sessions in the sidebar. Saved in settings so it survives
+  // a restart; ids of chats that no longer exist are pruned on each save.
+  const onToggleParentCollapsed = useCallback(async (id: string) => {
+    const current = await window.api.getSettings()
+    const live = new Set((await window.api.listConversations()).map((c) => c.id))
+    const prev = (current.collapsedSpawnParents ?? []).filter((p) => live.has(p))
+    const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    const fresh = await window.api.saveSettings({ ...current, collapsedSpawnParents: next })
+    setSettings(fresh)
+  }, [])
+  const collapsedParents = useMemo(() => {
+    // settings.json is user-editable: anything but a list of ids means "none folded".
+    const raw: unknown = settings?.collapsedSpawnParents
+    return new Set(Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [])
+  }, [settings?.collapsedSpawnParents])
+
   const onDeleteGroup = useCallback(
     async (groupId: string) => {
       // Return member chats to "Ungrouped" before dropping the group.
@@ -1801,6 +1817,8 @@ export default function App(): JSX.Element {
         onToggleGroupCollapsed={onToggleGroupCollapsed}
         collapsedSections={settings.collapsedSections ?? {}}
         onToggleSectionCollapsed={onToggleSectionCollapsed}
+        collapsedParents={collapsedParents}
+        onToggleParentCollapsed={(id) => void onToggleParentCollapsed(id)}
       />
 
       {!sidebarCollapsed && (
