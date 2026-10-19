@@ -56,6 +56,7 @@ import type { PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
 import { occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './lib/overlays'
+import { baseName } from './lib/paths'
 import {
   clampSidebarWidth,
   SIDEBAR_COLLAPSE_AT,
@@ -1336,7 +1337,6 @@ export default function App(): JSX.Element {
   // The command palette's flat, searchable item list: app actions, approval modes,
   // the available models, and every chat as a switch target.
   const paletteItems = useMemo<PaletteItem[]>(() => {
-    const base = (p: string): string => p.replace(/\/+$/, '').split('/').pop() || p
     const items: PaletteItem[] = []
     items.push(
       {
@@ -1490,7 +1490,7 @@ export default function App(): JSX.Element {
       items.push({
         id: `chat-${c.id}`,
         title: c.title || 'Untitled chat',
-        subtitle: base(c.workspace),
+        subtitle: baseName(c.workspace),
         section: 'Switch chat',
         run: () => void selectConversation(c.id)
       })
@@ -1712,6 +1712,7 @@ export default function App(): JSX.Element {
         currentId={currentId}
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
+        toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
         runningIds={runningIds}
         onSelect={selectConversation}
         onNew={onNewChat}
@@ -1769,6 +1770,7 @@ export default function App(): JSX.Element {
           terminalOpen={terminalOpen}
           onToggleSideChat={currentId ? () => setSideChatOpen((o) => !o) : undefined}
           sideChatOpen={sideChatVisible}
+          terminalShortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
         />
 
         <UpdateBanner

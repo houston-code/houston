@@ -8,13 +8,9 @@ import {
 } from '@shared/usage'
 import { anthropicThinksByDefault } from '@shared/model-facts'
 import { branchNameError, canCreateWorktree } from '../lib/worktree'
+import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
-
-function basename(p: string): string {
-  const parts = p.replace(/\/+$/, '').split('/')
-  return parts[parts.length - 1] || p
-}
 
 export const POLICY_LABEL: Record<ApprovalPolicy, string> = {
   plan: 'Plan mode (read-only)',
@@ -96,7 +92,7 @@ export function ControlBar({
   // Always label the folder control with the repo (main worktree) name, never the
   // per-chat worktree directory — so it reads "myrepo", not "houston/feat-x".
   const repoRoot = repoInfo?.isRepo ? repoInfo.root : currentWorktree?.repoRoot
-  const folderLabel = repoRoot ? basename(repoRoot) : workspace ? basename(workspace) : null
+  const folderLabel = repoRoot ? baseName(repoRoot) : workspace ? baseName(workspace) : null
 
   // Resolve the model's context window and reasoning support from host-reported
   // metadata first (same source the model picker uses), falling back to name

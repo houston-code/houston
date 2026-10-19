@@ -286,6 +286,16 @@ describe('Sidebar — collapse / expand rail', () => {
     expect(props.onToggleCollapse).toHaveBeenCalledOnce()
   })
 
+  it('names the toggle shortcut for this platform instead of always saying ⌘B', () => {
+    const { rerender } = render(<Sidebar {...baseProps({ toggleShortcut: 'Ctrl+B' })} />)
+    expect(screen.getByLabelText('Collapse sidebar')).toHaveAttribute('title', 'Collapse sidebar (Ctrl+B)')
+    rerender(<Sidebar {...baseProps({ collapsed: true, toggleShortcut: 'Ctrl+B' })} />)
+    expect(screen.getByLabelText('Expand sidebar')).toHaveAttribute('title', 'Expand sidebar (Ctrl+B)')
+    // With no shortcut bound, the title doesn't advertise one.
+    rerender(<Sidebar {...baseProps()} />)
+    expect(screen.getByLabelText('Collapse sidebar')).toHaveAttribute('title', 'Collapse sidebar')
+  })
+
   it('the rail still exposes New chat and Settings affordances', () => {
     const props = baseProps({ collapsed: true })
     render(<Sidebar {...props} />)
@@ -950,5 +960,22 @@ describe('Sidebar — group header menu', () => {
     openGroupMenu('Work')
     fireEvent.click(screen.getByText('✕ Delete group'))
     expect(props.onDeleteGroup).toHaveBeenCalledWith('g1')
+  })
+})
+
+describe('Sidebar — row menu accessibility', () => {
+  it('names each row\u2019s ⋯ button for the chat it acts on, and reports the menu state', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ title: 'Fix the parser' })] })} />)
+    const more = screen.getByRole('button', { name: 'More actions for Fix the parser' })
+    expect(more).toHaveAttribute('aria-haspopup', 'menu')
+    expect(more).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(more)
+    expect(more).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('shows a Windows workspace as its folder name, not the whole path', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ workspace: 'C:\\Users\\me\\code\\houston' })] })} />)
+    expect(screen.getByText('houston')).toBeInTheDocument()
+    expect(screen.queryByText(/C:\\Users/)).not.toBeInTheDocument()
   })
 })

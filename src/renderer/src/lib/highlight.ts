@@ -1,4 +1,5 @@
 import hljs from 'highlight.js/lib/common'
+import { baseName } from './paths'
 
 /**
  * Syntax highlighting for the Files panel's code preview. Uses highlight.js's
@@ -34,7 +35,7 @@ export const MAX_HIGHLIGHT_BYTES = 100 * 1024
 
 /** The highlight.js language id for a path, or null if we shouldn't highlight it. */
 export function languageForPath(path: string): string | null {
-  const base = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  const base = baseName(path).toLowerCase()
   const dot = base.lastIndexOf('.')
   const lang = dot > 0 ? EXT_LANG[base.slice(dot + 1)] : NAME_LANG[base]
   return lang && hljs.getLanguage(lang) ? lang : null
