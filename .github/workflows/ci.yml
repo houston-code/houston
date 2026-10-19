@@ -235,45 +235,20 @@ jobs:
           retention-days: 7
           path: reports/junit.xml
           if-no-files-found: ignore
-      # `--publish never` is load-bearing on merge_group. Without an explicit policy,
-      # electron-builder publishes implicitly whenever it detects CI and the run is not a
-      # PR, and it recognises a PR only by GITHUB_BASE_REF, which a merge-queue candidate
-      # does not set. It then tries to create a GitHub release, fails for want of GH_TOKEN
-      # (ci.yml holds no credential, by design), and every queue entry is ejected.
+      # `--publish never` (passed by scripts/dist-with-retry.sh) is load-bearing on
+      # merge_group. Without an explicit policy, electron-builder publishes implicitly
+      # whenever it detects CI and the run is not a PR, and it recognises a PR only by
+      # GITHUB_BASE_REF, which a merge-queue candidate does not set. It then tries to create
+      # a GitHub release, fails for want of GH_TOKEN (ci.yml holds no credential, by
+      # design), and every queue entry is ejected.
       #
-      # macOS only, the dmg step can fail on a runner flake: something on the runner holds
-      # the freshly built dmg volume open, dmgbuild's own detach retries run out, and it
-      # force-detaches and fails with "Unable to detach device cleanly ... Resource busy".
-      # That ejected good PRs from the merge queue, so retry the whole dist on exactly that
-      # error (any other failure fails at once), after force-detaching any image still
-      # attached from this workspace.
+      # On macOS the script also retries electron-builder's dmg detach flake ("Unable to
+      # detach device cleanly ... Resource busy"), which used to eject good PRs from the
+      # merge queue. Any other failure fails at once.
       - name: Package
         env:
           DIST: ${{ matrix.dist }}
-        run: |
-          set -uo pipefail
-          log="$RUNNER_TEMP/dist.log"
-          max=3
-          for attempt in $(seq 1 "$max"); do
-            if npm run "$DIST" -- --publish never 2>&1 | tee "$log"; then
-              exit 0
-            fi
-            if [ "$RUNNER_OS" != macOS ] || [ "$attempt" -eq "$max" ] \
-              || ! grep -q 'Unable to detach device cleanly' "$log"; then
-              exit 1
-            fi
-            echo "::warning::dmg detach flake (hdiutil Resource busy) on attempt $attempt of $max, retrying"
-            hdiutil info | awk -v ws="$GITHUB_WORKSPACE/" '
-              /^image-path/ { path = substr($0, index($0, ":") + 2); next }
-              /^\/dev\/disk[0-9]+[[:space:]]/ && path != "" {
-                if (index(path, ws) == 1) print $1
-                path = ""
-              }' | while read -r dev; do
-              echo "force-detaching leftover $dev"
-              hdiutil detach -force "$dev" || true
-            done
-            sleep 15
-          done
+        run: bash scripts/dist-with-retry.sh "$DIST"
       - if: runner.os == 'macOS'
         run: npm run test:e2e
       # Playwright's error context and traces, so a red e2e can be diagnosed from the run.

@@ -114,7 +114,10 @@ jobs:
       # Build only. Nothing reaches the draft until this leg's checks below have passed
       # (signature + notarization, the packaged-app e2e, the binary SBOM and its vulnerability
       # policy), so a failed leg leaves no half-uploaded installers behind. The explicit
-      # `--publish never` also stops electron-builder's implicit publish-on-CI detection.
+      # `--publish never` (passed by scripts/dist-with-retry.sh) also stops electron-builder's
+      # implicit publish-on-CI detection. On the macOS legs the script retries the dmg detach
+      # flake ("Unable to detach device cleanly ... Resource busy"); a retry re-signs and
+      # re-notarizes the app, and anything else fails at once.
       - name: Package
         env:
           # macOS code-signing + notarization. SCOPED to the macOS legs via startsWith():
@@ -129,7 +132,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
           DIST: ${{ inputs.dist }}
-        run: npm run "$DIST" -- --publish never
+        run: bash scripts/dist-with-retry.sh "$DIST"
       - name: Verify code signature + notarization
         if: startsWith(inputs.os, 'macos')
         run: |

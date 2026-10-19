@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const workflow = readFileSync(resolve(repoRoot, '.github/workflows/release-publish.yml'), 'utf8')
 const leg = readFileSync(resolve(repoRoot, '.github/workflows/release-build.yml'), 'utf8')
+const distScript = readFileSync(resolve(repoRoot, 'scripts/dist-with-retry.sh'), 'utf8')
 
 /** A top-level job's block in release-publish.yml, from its key to the next job key. */
 function job(name: string): string {
@@ -268,7 +269,9 @@ describe('release legs verify before they upload', () => {
   it('never lets electron-builder publish', () => {
     // Its publisher uploads as it builds, before any check below has run.
     expect(leg).not.toContain('--publish always')
-    expect(leg).toContain('run: npm run "$DIST" -- --publish never')
+    expect(leg).toMatch(/DIST: \$\{\{ inputs\.dist \}\}\n {8}run: bash scripts\/dist-with-retry\.sh "\$DIST"\n/)
+    expect(distScript).toContain('npm run "$dist" -- --publish never')
+    expect(distScript).not.toMatch(/--publish (always|onTag|onTagOrDraft)/)
   })
 
   it('uploads installers only after the signature, e2e and binary vulnerability checks', () => {

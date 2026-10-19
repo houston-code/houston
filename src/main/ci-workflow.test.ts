@@ -22,6 +22,12 @@ const workflow = readFileSync(
   'utf8'
 )
 
+/** The dist wrapper the `package` job runs; it owns the `--publish` policy. */
+const distScript = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../scripts/dist-with-retry.sh'),
+  'utf8'
+)
+
 /** The `revert-guard:` job, from its key to the end of the file. */
 const revertGuardJob = workflow.slice(workflow.indexOf('\n  revert-guard:'))
 
@@ -164,7 +170,9 @@ describe('CI supports the merge queue', () => {
     // A merge_group run has no GITHUB_BASE_REF, so electron-builder does not see a PR and
     // publishes implicitly unless told not to. With no token that fails packaging, and the
     // queue ejects every entry.
-    expect(job('package')).toContain('npm run ${{ matrix.dist }} -- --publish never')
+    expect(job('package')).toMatch(/DIST: \$\{\{ matrix\.dist \}\}\n {8}run: bash scripts\/dist-with-retry\.sh "\$DIST"\n/)
+    expect(distScript).toContain('npm run "$dist" -- --publish never')
+    expect(distScript).not.toMatch(/--publish (always|onTag|onTagOrDraft)/)
   })
 })
 
