@@ -3,13 +3,19 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AppSettings } from '@shared/types'
-import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
+import type { AgentEvent, AgentRunRequest, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 import { loadProjectConfig } from './agent/projectConfig'
 import {
+  HEADLESS_EXIT,
+  headlessExitCode,
+  headlessOverrides,
   parseHeadlessArgs,
   resolveHeadlessModel,
   runHeadless,
-  type HeadlessDeps
+  type HeadlessDeps,
+  type HeadlessOptions,
+  type HeadlessResult,
+  type HeadlessStatus
 } from './headless'
 
 describe('parseHeadlessArgs', () => {
@@ -81,6 +87,146 @@ describe('parseHeadlessArgs', () => {
     // Falling back to the policy default would make a typo fail OPEN under
     // --full-auto (silently allow); an explicit-but-bogus value must deny.
     expect(parseHeadlessArgs(['-p', 'x', '--full-auto', '--on-approval', 'bogus'], '/d')?.onApproval).toBe('deny')
+  })
+
+  it('sets none of the run overrides when their flags are absent', () => {
+    const o = parseHeadlessArgs(['-p', 'x'], '/d')!
+    expect(o).not.toHaveProperty('effort')
+    expect(o).not.toHaveProperty('maxTurns')
+    expect(o).not.toHaveProperty('maxCostUsd')
+    expect(o).not.toHaveProperty('verifyCommand')
+    expect(o).not.toHaveProperty('usageError')
+    expect(o).not.toHaveProperty('promptFromStdin')
+    expect(headlessOverrides(o)).toBeUndefined()
+  })
+
+  describe('--effort', () => {
+    it('accepts every reasoning effort, in both flag forms', () => {
+      for (const effort of ['off', 'low', 'medium', 'high', 'xhigh']) {
+        expect(parseHeadlessArgs(['-p', 'x', '--effort', effort], '/d')?.effort).toBe(effort)
+        expect(parseHeadlessArgs(['-p', 'x', `--effort=${effort}`], '/d')?.effort).toBe(effort)
+      }
+    })
+
+    it('reports an unknown or missing effort as a usage error', () => {
+      const bogus = parseHeadlessArgs(['-p', 'x', '--effort', 'max'], '/d')!
+      expect(bogus.effort).toBeUndefined()
+      expect(bogus.usageError).toBe('--effort must be one of off, low, medium, high, xhigh (got "max")')
+      expect(parseHeadlessArgs(['-p', 'x', '--effort=HIGH'], '/d')?.usageError).toMatch(/^--effort must be/)
+      expect(parseHeadlessArgs(['-p', 'x', '--effort'], '/d')?.usageError).toContain('(got nothing)')
+    })
+  })
+
+  describe('--max-turns', () => {
+    it('accepts a whole number of at least 1', () => {
+      expect(parseHeadlessArgs(['-p', 'x', '--max-turns', '1'], '/d')?.maxTurns).toBe(1)
+      expect(parseHeadlessArgs(['-p', 'x', '--max-turns=250'], '/d')?.maxTurns).toBe(250)
+    })
+
+    it('reports zero, negatives, fractions, words, and a missing value as usage errors', () => {
+      for (const v of ['0', '000', '-3', '1.5', '1e3', 'ten', '', ' 5', '99999999999999999999']) {
+        const o = parseHeadlessArgs(['-p', 'x', `--max-turns=${v}`], '/d')!
+        expect(o.maxTurns, v).toBeUndefined()
+        expect(o.usageError, v).toMatch(/^--max-turns must be a whole number of at least 1/)
+      }
+      expect(parseHeadlessArgs(['-p', 'x', '--max-turns'], '/d')?.usageError).toContain('(got nothing)')
+    })
+  })
+
+  describe('--max-cost', () => {
+    it('accepts a positive dollar amount', () => {
+      expect(parseHeadlessArgs(['-p', 'x', '--max-cost', '2'], '/d')?.maxCostUsd).toBe(2)
+      expect(parseHeadlessArgs(['-p', 'x', '--max-cost=0.25'], '/d')?.maxCostUsd).toBe(0.25)
+    })
+
+    it('reports zero, negatives, non-numbers, and a missing value as usage errors', () => {
+      for (const v of ['0', '-1', 'abc', '', '   ', '$5', 'Infinity', 'NaN']) {
+        const o = parseHeadlessArgs(['-p', 'x', `--max-cost=${v}`], '/d')!
+        expect(o.maxCostUsd, v).toBeUndefined()
+        expect(o.usageError, v).toMatch(/^--max-cost must be a positive amount in US dollars/)
+      }
+      expect(parseHeadlessArgs(['-p', 'x', '--max-cost'], '/d')?.usageError).toContain('(got nothing)')
+    })
+  })
+
+  describe('--verify', () => {
+    it('takes the command verbatim', () => {
+      expect(parseHeadlessArgs(['-p', 'x', '--verify', 'npm test -- --run'], '/d')?.verifyCommand).toBe(
+        'npm test -- --run'
+      )
+      expect(parseHeadlessArgs(['-p', 'x', '--verify=make check'], '/d')?.verifyCommand).toBe('make check')
+    })
+
+    it('reports an empty or missing command as a usage error', () => {
+      for (const argv of [['--verify'], ['--verify', ''], ['--verify=  ']]) {
+        const o = parseHeadlessArgs(['-p', 'x', ...argv], '/d')!
+        expect(o.verifyCommand).toBeUndefined()
+        expect(o.usageError).toBe('--verify needs a command to run, like --verify "npm test"')
+      }
+    })
+  })
+
+  it('keeps the first bad flag value when several are wrong', () => {
+    const o = parseHeadlessArgs(['-p', 'x', '--max-turns', 'lots', '--effort', 'max'], '/d')!
+    expect(o.usageError).toMatch(/^--max-turns/)
+  })
+
+  it('maps the flags onto run overrides', () => {
+    const o = parseHeadlessArgs(
+      ['-p', 'x', '--effort', 'high', '--max-turns', '12', '--max-cost', '1.5', '--verify', 'npm test'],
+      '/d'
+    )!
+    expect(headlessOverrides(o)).toEqual({
+      reasoningEffort: 'high',
+      maxIterations: 12,
+      costCeilingUsd: 1.5,
+      verifyCommand: 'npm test'
+    })
+    expect(headlessOverrides(parseHeadlessArgs(['-p', 'x', '--effort', 'off'], '/d')!)).toEqual({
+      reasoningEffort: 'off'
+    })
+  })
+
+  describe('prompt from stdin', () => {
+    it('reads stdin for `-p -`, piped or not', () => {
+      for (const stdinPiped of [true, false]) {
+        const o = parseHeadlessArgs(['-p', '-', '--json'], '/d', { stdinPiped })
+        expect(o).toMatchObject({ prompt: '', promptFromStdin: true, json: true })
+      }
+      expect(parseHeadlessArgs(['--prompt=-'], '/d')?.promptFromStdin).toBe(true)
+    })
+
+    it('reads a piped stdin for a -p with no value', () => {
+      expect(parseHeadlessArgs(['-p'], '/d', { stdinPiped: true })).toMatchObject({ prompt: '', promptFromStdin: true })
+      expect(parseHeadlessArgs(['-p', ''], '/d', { stdinPiped: true })?.promptFromStdin).toBe(true)
+      // Nothing piped: still no prompt, so no headless run.
+      expect(parseHeadlessArgs(['-p'], '/d', { stdinPiped: false })).toBeNull()
+    })
+
+    it('does not swallow the next flag as the prompt', () => {
+      const o = parseHeadlessArgs(['-p', '--json', '--full-auto'], '/d', { stdinPiped: true })
+      expect(o).toMatchObject({ prompt: '', promptFromStdin: true, json: true, approvalPolicy: 'full-auto' })
+      expect(parseHeadlessArgs(['-p', '--max-turns', '3'], '/d', { stdinPiped: true })?.maxTurns).toBe(3)
+      // A prompt that is not one of the flags is still a prompt.
+      expect(parseHeadlessArgs(['-p', '-v is broken', '--json'], '/d')?.prompt).toBe('-v is broken')
+    })
+
+    it('prefers a prompt on the command line over a piped stdin', () => {
+      const o = parseHeadlessArgs(['-p', 'fix it'], '/d', { stdinPiped: true, bareStdinPrompt: true })!
+      expect(o.prompt).toBe('fix it')
+      expect(o.promptFromStdin).toBeUndefined()
+    })
+
+    it('reads a piped stdin with no -p only when the host opts in', () => {
+      // Desktop binary: a bare launch is the window, whatever stdin holds.
+      expect(parseHeadlessArgs(['--json'], '/d', { stdinPiped: true })).toBeNull()
+      // Standalone CLI: a bare `houston` in a pipe is a one-shot run.
+      expect(parseHeadlessArgs(['--json'], '/d', { stdinPiped: true, bareStdinPrompt: true })).toMatchObject({
+        promptFromStdin: true,
+        json: true
+      })
+      expect(parseHeadlessArgs([], '/d', { stdinPiped: false, bareStdinPrompt: true })).toBeNull()
+    })
   })
 })
 
@@ -213,13 +359,30 @@ function deps(events: AgentEvent[], extra: Partial<HeadlessDeps> = {}) {
   return { d, out, err, approvals, questions, plans, elicitations }
 }
 
-const baseOpts = {
+const baseOpts: HeadlessOptions = {
   prompt: 'hi',
   cwd: '/proj',
-  approvalPolicy: 'plan' as const,
-  onApproval: 'deny' as const, // the non-full-auto parse default
+  approvalPolicy: 'plan',
+  onApproval: 'deny', // the non-full-auto parse default
   json: false,
   continueSession: false
+}
+
+/** The parsed `--json` lines a run printed. */
+function jsonLines(out: string[]): Record<string, unknown>[] {
+  return out
+    .join('')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l) as Record<string, unknown>)
+}
+
+/** The `--json` result line, which must be the last line printed. */
+function resultLine(out: string[]): HeadlessResult {
+  const lines = jsonLines(out)
+  expect(lines.filter((l) => l.type === 'result')).toHaveLength(1)
+  expect(lines.at(-1)?.type).toBe('result')
+  return lines.at(-1) as unknown as HeadlessResult
 }
 
 describe('runHeadless', () => {
@@ -545,14 +708,25 @@ describe('runHeadless', () => {
     expect(JSON.parse(first)).toEqual({ type: 'session', conversationId: 'conv-1' })
   })
 
-  it('surfaces a max-steps limit in plain mode without failing the exit code', async () => {
+  it('surfaces a max-steps limit in plain mode and exits with the limit code', async () => {
     const { d, err } = deps([
       { runId: 'run-1', type: 'limit', reason: 'max-steps' },
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
     ])
     const code = await runHeadless(baseOpts, d)
-    expect(code).toBe(0)
+    // Not 0 (the task isn't finished) and not 1 (nothing broke): its own code.
+    expect(code).toBe(HEADLESS_EXIT.limit)
+    expect(code).toBe(3)
     expect(err.join('')).toContain('reached the maximum number of steps')
+  })
+
+  it('exits with the limit code when the model hits its output limit', async () => {
+    const { d, err } = deps([
+      { runId: 'run-1', type: 'limit', reason: 'max-output' },
+      { runId: 'run-1', type: 'done', stopReason: 'max_tokens' }
+    ])
+    expect(await runHeadless(baseOpts, d)).toBe(HEADLESS_EXIT.limit)
+    expect(err.join('')).toContain('hit its output limit')
   })
 
   it('surfaces a failed tool result in text mode, but not a successful one', async () => {
@@ -669,6 +843,392 @@ describe('runHeadless', () => {
     })
     await runHeadless({ ...baseOpts, approvalPolicy: 'full-auto' }, d)
     expect(err.join('')).not.toContain('verifyOnStop is enabled')
+  })
+  it('warns that --verify does nothing in a read-only plan run', async () => {
+    const plan = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    await runHeadless({ ...baseOpts, verifyCommand: 'npm test' }, plan.d)
+    expect(plan.err.join('')).toContain('--verify has no effect in a read-only (plan mode) run')
+    expect(plan.err.join('')).toContain('--full-auto')
+
+    const auto = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    await runHeadless({ ...baseOpts, approvalPolicy: 'full-auto', verifyCommand: 'npm test' }, auto.d)
+    expect(auto.err.join('')).not.toContain('--verify')
+  })
+})
+
+describe('runHeadless run request', () => {
+  /** Run once and return the request startRun received. */
+  async function requestFor(opts: Partial<HeadlessOptions>): Promise<AgentRunRequest> {
+    let seen: AgentRunRequest | undefined
+    const { d } = deps([], {
+      startRun: async (req, send) => {
+        seen = req
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    expect(await runHeadless({ ...baseOpts, ...opts }, d)).toBe(0)
+    return seen!
+  }
+
+  it('marks every headless run unattended, so the loop withholds ask_user', async () => {
+    expect((await requestFor({})).unattended).toBe(true)
+    expect((await requestFor({ approvalPolicy: 'full-auto' })).unattended).toBe(true)
+  })
+
+  it('sends no overrides when no override flag was given', async () => {
+    expect((await requestFor({})).overrides).toBeUndefined()
+  })
+
+  it('passes --effort, --max-turns, --max-cost, and --verify as run-only overrides', async () => {
+    const req = await requestFor({
+      approvalPolicy: 'full-auto',
+      effort: 'xhigh',
+      maxTurns: 25,
+      maxCostUsd: 3,
+      verifyCommand: 'npm test'
+    })
+    expect(req.overrides).toEqual({
+      reasoningEffort: 'xhigh',
+      maxIterations: 25,
+      costCeilingUsd: 3,
+      verifyCommand: 'npm test'
+    })
+  })
+
+  it('never writes an override into the saved settings', async () => {
+    const saved = settings({ selected: { providerId: 'anthropic', model: 'claude' }, reasoningEffort: 'low' })
+    const before = JSON.stringify(saved)
+    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], { getSettings: () => saved })
+    await runHeadless({ ...baseOpts, effort: 'high', maxTurns: 3, maxCostUsd: 1, verifyCommand: 'make' }, d)
+    expect(JSON.stringify(saved)).toBe(before)
+  })
+})
+
+describe('runHeadless usage errors', () => {
+  it('reports a bad flag value and exits 2 without starting a run', async () => {
+    let started = false
+    const { d, out, err } = deps([], {
+      startRun: async () => {
+        started = true
+      }
+    })
+    const code = await runHeadless({ ...baseOpts, json: true, usageError: '--max-turns must be a whole number' }, d)
+    expect(code).toBe(HEADLESS_EXIT.usage)
+    expect(code).toBe(2)
+    expect(started).toBe(false)
+    expect(err.join('')).toBe('--max-turns must be a whole number\n')
+    // A malformed invocation prints nothing on stdout, not even a result line.
+    expect(out).toEqual([])
+  })
+
+  it('reports each bad flag value from the command line the same way', async () => {
+    for (const argv of [
+      ['--effort', 'max'],
+      ['--max-turns', '0'],
+      ['--max-cost', 'free'],
+      ['--verify', '']
+    ]) {
+      const opts = parseHeadlessArgs(['-p', 'x', ...argv], '/proj')!
+      const { d, err } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+      expect(await runHeadless(opts, d), argv.join(' ')).toBe(HEADLESS_EXIT.usage)
+      expect(err.join(''), argv.join(' ')).toContain(argv[0])
+    }
+  })
+})
+
+describe('runHeadless prompt from stdin', () => {
+  it('runs the prompt read from stdin, trimmed', async () => {
+    let seen: AgentRunRequest | undefined
+    const { d } = deps([], {
+      readStdin: async () => '  fix the failing test\n\n',
+      startRun: async (req, send) => {
+        seen = req
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    expect(await runHeadless({ ...baseOpts, prompt: '', promptFromStdin: true }, d)).toBe(0)
+    expect(seen?.messages).toEqual([{ role: 'user', content: 'fix the failing test' }])
+  })
+
+  it('exits 2 without starting a run when stdin is empty', async () => {
+    let started = false
+    const { d, err } = deps([], {
+      readStdin: async () => ' \n',
+      startRun: async () => {
+        started = true
+      }
+    })
+    expect(await runHeadless({ ...baseOpts, prompt: '', promptFromStdin: true }, d)).toBe(HEADLESS_EXIT.usage)
+    expect(started).toBe(false)
+    expect(err.join('')).toContain('No prompt: stdin was empty')
+  })
+
+  it('exits 2 when the host wired no stdin reader', async () => {
+    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    expect(await runHeadless({ ...baseOpts, prompt: '', promptFromStdin: true }, d)).toBe(HEADLESS_EXIT.usage)
+  })
+
+  it('does not touch stdin when the prompt came on the command line', async () => {
+    let read = false
+    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
+      readStdin: async () => {
+        read = true
+        return 'other'
+      }
+    })
+    expect(await runHeadless(baseOpts, d)).toBe(0)
+    expect(read).toBe(false)
+  })
+})
+
+describe('runHeadless --json result line', () => {
+  /** A clock that advances 1500ms between the run's start and end. */
+  function clock(): () => number {
+    let t = 10_000
+    return () => {
+      const now = t
+      t += 1500
+      return now
+    }
+  }
+
+  it('ends a finished run with one result line carrying the totals', async () => {
+    const { d, out } = deps(
+      [
+        { runId: 'run-1', type: 'text', delta: 'Let me look.' },
+        { runId: 'run-1', type: 'usage', inputTokens: 1000, outputTokens: 50, cost: 0.01 },
+        { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'read_file', args: {} },
+        { runId: 'run-1', type: 'tool_result', callId: 'c1', name: 'read_file', ok: true, output: 'x' },
+        // A subagent's rounds roll up into one usage with inputTokens 0: cost, not a turn.
+        { runId: 'run-1', type: 'usage', inputTokens: 0, outputTokens: 30, cost: 0.002 },
+        { runId: 'run-1', type: 'text', delta: 'Fixed the ' },
+        { runId: 'run-1', type: 'text', delta: 'bug.' },
+        { runId: 'run-1', type: 'usage', inputTokens: 1200, outputTokens: 20, cost: 0.012 },
+        { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+      ],
+      { now: clock() }
+    )
+    expect(await runHeadless({ ...baseOpts, json: true }, d)).toBe(0)
+    const r = resultLine(out)
+    expect(r).toEqual({
+      type: 'result',
+      status: 'success',
+      stopReason: 'end_turn',
+      turns: 2,
+      costUsd: 0.024,
+      inputTokens: 2200,
+      outputTokens: 100,
+      durationMs: 1500,
+      finalText: 'Fixed the bug.'
+    })
+    expect(r).not.toHaveProperty('limitReason')
+  })
+
+  it('keeps a reply continued past the output limit whole, and drops text answered by a failed verification', async () => {
+    const continued = deps([
+      { runId: 'run-1', type: 'text', delta: 'part one, ' },
+      { runId: 'run-1', type: 'notice', message: 'continuing' },
+      { runId: 'run-1', type: 'text', delta: 'part two' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless({ ...baseOpts, json: true }, continued.d)
+    expect(resultLine(continued.out).finalText).toBe('part one, part two')
+
+    const reverified = deps([
+      { runId: 'run-1', type: 'text', delta: 'All done.' },
+      { runId: 'run-1', type: 'verification', passed: false },
+      { runId: 'run-1', type: 'text', delta: 'Fixed the type error.' },
+      { runId: 'run-1', type: 'verification', passed: true },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless({ ...baseOpts, json: true }, reverified.d)
+    expect(resultLine(reverified.out).finalText).toBe('Fixed the type error.')
+  })
+
+  it('reports an empty final text when the run ended on a tool call', async () => {
+    const { d, out } = deps([
+      { runId: 'run-1', type: 'text', delta: 'Running it.' },
+      { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'run_shell', args: {} },
+      { runId: 'run-1', type: 'error', message: 'provider down' }
+    ])
+    await runHeadless({ ...baseOpts, json: true }, d)
+    expect(resultLine(out).finalText).toBe('')
+  })
+
+  it('maps every way a run ends to its status, result fields, and exit code', async () => {
+    const cases: {
+      name: string
+      events: AgentEvent[]
+      onApproval?: HeadlessOptions['onApproval']
+      status: HeadlessStatus
+      code: number
+      stopReason: string | null
+      limitReason?: string
+    }[] = [
+      {
+        name: 'natural finish',
+        events: [{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }],
+        status: 'success',
+        code: 0,
+        stopReason: 'end_turn'
+      },
+      {
+        name: 'step cap',
+        events: [
+          { runId: 'run-1', type: 'limit', reason: 'max-steps' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        status: 'limit',
+        code: 3,
+        stopReason: 'end_turn',
+        limitReason: 'max-steps'
+      },
+      {
+        name: 'output limit',
+        events: [
+          { runId: 'run-1', type: 'limit', reason: 'max-output' },
+          { runId: 'run-1', type: 'done', stopReason: 'max_tokens' }
+        ],
+        status: 'limit',
+        code: 3,
+        stopReason: 'max_tokens',
+        limitReason: 'max-output'
+      },
+      {
+        name: 'stall',
+        events: [
+          { runId: 'run-1', type: 'limit', reason: 'stalled' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        status: 'stalled',
+        code: 1,
+        stopReason: 'end_turn',
+        limitReason: 'stalled'
+      },
+      {
+        name: 'error event with no done',
+        events: [{ runId: 'run-1', type: 'error', message: 'boom' }],
+        status: 'error',
+        code: 1,
+        stopReason: null
+      },
+      {
+        name: 'done with an error stop',
+        events: [{ runId: 'run-1', type: 'done', stopReason: 'error' }],
+        status: 'error',
+        code: 1,
+        stopReason: 'error'
+      },
+      {
+        name: 'aborted',
+        events: [{ runId: 'run-1', type: 'done', stopReason: 'aborted' }],
+        status: 'error',
+        code: 1,
+        stopReason: 'aborted'
+      },
+      {
+        name: 'approval refused under --on-approval fail',
+        events: [
+          { runId: 'run-1', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'x', kind: 'shell' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        onApproval: 'fail',
+        status: 'approval_denied',
+        code: 1,
+        stopReason: 'end_turn'
+      },
+      {
+        name: 'approval refused under --on-approval deny',
+        events: [
+          { runId: 'run-1', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'x', kind: 'shell' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        onApproval: 'deny',
+        status: 'success',
+        code: 0,
+        stopReason: 'end_turn'
+      },
+      {
+        // A failure outranks a budget stop: the run didn't merely run out of room.
+        name: 'refused approval, then the step cap',
+        events: [
+          { runId: 'run-1', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'x', kind: 'shell' },
+          { runId: 'run-1', type: 'limit', reason: 'max-steps' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        onApproval: 'fail',
+        status: 'approval_denied',
+        code: 1,
+        stopReason: 'end_turn',
+        limitReason: 'max-steps'
+      },
+      {
+        name: 'error after the step cap',
+        events: [
+          { runId: 'run-1', type: 'limit', reason: 'max-steps' },
+          { runId: 'run-1', type: 'error', message: 'boom' }
+        ],
+        status: 'error',
+        code: 1,
+        stopReason: null,
+        limitReason: 'max-steps'
+      }
+    ]
+    for (const c of cases) {
+      for (const json of [true, false]) {
+        const { d, out } = deps(c.events)
+        const code = await runHeadless({ ...baseOpts, json, onApproval: c.onApproval ?? 'deny' }, d)
+        expect(code, `${c.name} (json=${json})`).toBe(c.code)
+        if (!json) continue
+        const r = resultLine(out)
+        expect(r.status, c.name).toBe(c.status)
+        expect(r.stopReason, c.name).toBe(c.stopReason)
+        expect(r.limitReason, c.name).toBe(c.limitReason)
+        expect(headlessExitCode(r.status), c.name).toBe(c.code)
+      }
+    }
+  })
+
+  it('writes a result line when the run cannot start for want of a model', async () => {
+    const { d, out } = deps([], { getSettings: () => settings({ providers: [], selected: null }) })
+    expect(await runHeadless({ ...baseOpts, json: true }, d)).toBe(HEADLESS_EXIT.failed)
+    expect(resultLine(out)).toMatchObject({ type: 'result', status: 'error', stopReason: null, turns: 0 })
+  })
+
+  it('prints no result line in text mode', async () => {
+    const { d, out, err } = deps([
+      { runId: 'run-1', type: 'text', delta: 'answer' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    expect(out.join('')).toBe('answer\n')
+    expect(err.join('') + out.join('')).not.toContain('"result"')
+  })
+
+  it('puts the result after the session line and every event', async () => {
+    const { d, out } = deps([
+      { runId: 'run-1', type: 'text', delta: 'hi' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    d.session = {
+      load: () => null,
+      create: () => ({ id: 'conv-1' }),
+      setMessages: () => {},
+      setModel: () => {}
+    }
+    await runHeadless({ ...baseOpts, json: true }, d)
+    expect(jsonLines(out).map((l) => l.type)).toEqual(['session', 'text', 'done', 'result'])
+  })
+})
+
+describe('headlessExitCode', () => {
+  it('gives success 0, a budget stop 3, and every failure 1', () => {
+    expect(headlessExitCode('success')).toBe(0)
+    expect(headlessExitCode('limit')).toBe(3)
+    expect(headlessExitCode('stalled')).toBe(1)
+    expect(headlessExitCode('approval_denied')).toBe(1)
+    expect(headlessExitCode('error')).toBe(1)
+    expect(HEADLESS_EXIT).toEqual({ ok: 0, failed: 1, usage: 2, limit: 3 })
   })
 })
 

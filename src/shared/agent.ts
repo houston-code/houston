@@ -548,6 +548,34 @@ export interface AgentRunRequest {
   model: string
   approvalPolicy: ApprovalPolicy
   messages: ChatMessage[]
+  /**
+   * Nobody is attending this run (the one-shot headless client), so nothing can
+   * answer a question before it ends. The loop withholds `ask_user` and the system
+   * prompt tells the model no user is available, rather than letting it spend a
+   * step on a question that only gets a canned reply. Interactive clients leave it
+   * unset.
+   */
+  unattended?: boolean
+  /** Per-run setting overrides (headless flags). Applied to this run only, never persisted. */
+  overrides?: RunSettingsOverrides
+}
+
+/**
+ * Settings a single run can override without touching the saved settings: the
+ * headless `--effort`, `--max-turns`, `--max-cost`, and `--verify` flags. Each
+ * field, when set, wins over the matching `AppSettings` value for this run.
+ */
+export interface RunSettingsOverrides {
+  reasoningEffort?: ReasoningEffort
+  /**
+   * The turn's step cap. A hard cap: the run never auto-extends past it, the same
+   * as an explicit `maxIterations` with `autoExtendTurns` left unset.
+   */
+  maxIterations?: number
+  /** `costCeilingUsd`: the cost at which the run is told to wrap up. */
+  costCeilingUsd?: number
+  /** Turns the end-of-run verification gate on with this command (`verifyOnStop` + `verifyCommand`). */
+  verifyCommand?: string
 }
 
 /** What the renderer sends to start a turn in a conversation. */

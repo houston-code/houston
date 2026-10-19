@@ -10,6 +10,7 @@ import type {
   PlanPayload,
   Provider,
   ProviderStreamEvent,
+  RunSettingsOverrides,
   ToolApprovalDecision
 } from '@shared/agent'
 import {
@@ -286,6 +287,8 @@ async function run(
     onPlan?: (callId: string, plan: PlanPayload, decide: (d: PlanDecision) => void) => void
     conversationId?: string
     model?: string
+    unattended?: boolean
+    overrides?: RunSettingsOverrides
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -317,7 +320,9 @@ async function run(
       providerId: 'anthropic',
       model: opts.model ?? 'claude-test',
       approvalPolicy: opts.policy ?? 'ask',
-      messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }]
+      messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }],
+      ...(opts.unattended !== undefined ? { unattended: opts.unattended } : {}),
+      ...(opts.overrides ? { overrides: opts.overrides } : {})
     },
     send,
     (m) => {
@@ -4380,6 +4385,121 @@ describe('missing runtime', () => {
       turns: [shellCall('a'), [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
     })
     expect(r.events.some((e) => e.type === 'runtime_missing')).toBe(false)
+  })
+})
+
+describe('loop control — per-run overrides (headless flags)', () => {
+  /** Temporarily set extra settings on the holder for one test, then restore. */
+  async function withSettings<T>(extra: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+    const saved = { ...h.settings }
+    Object.assign(h.settings, extra)
+    try {
+      return await fn()
+    } finally {
+      for (const k of Object.keys(extra)) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+  }
+
+  /** A provider that writes a new file every turn and never finishes on its own. */
+  function endlessWriter(): Provider {
+    let n = 0
+    return {
+      async *streamChat() {
+        n++
+        yield {
+          type: 'tool_call',
+          call: { id: `w${n}`, name: 'write_file', arguments: { path: `gen/f${n}.txt`, content: `${n}\n` } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+  }
+
+  it('sends the effort override on every turn, over the saved and the live setting', async () => {
+    writeFileSync(join(ws, 'x.txt'), 'hi')
+    const seen: unknown[] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        seen.push(req.reasoningEffort)
+        if (seen.length === 1) {
+          // A mid-run settings change still loses to the run's own override.
+          h.settings = { ...h.settings, reasoningEffort: 'low' }
+          yield { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'x.txt' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const original = h.settings
+    try {
+      h.settings = { ...h.settings, reasoningEffort: 'medium' }
+      await run({ provider, overrides: { reasoningEffort: 'xhigh' } })
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+      // Run-only: the saved settings never took the override.
+      expect(h.settings.reasoningEffort).toBe('low')
+    } finally {
+      h.settings = original
+    }
+  })
+
+  it('makes a max-turns override a hard cap, even with auto-extension saved on', async () => {
+    const r = await withSettings({ maxIterations: 40, maxIterationsCeiling: 200, autoExtendTurns: true }, () =>
+      run({ provider: endlessWriter(), policy: 'full-auto', overrides: { maxIterations: 4 } })
+    )
+    // Three writes ran; the fourth (final) step drops its call. No extension notice.
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(3)
+    expect(r.events.some((e) => e.type === 'notice')).toBe(false)
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('max-steps')
+  })
+
+  it('runs the --verify command at a natural stop, with verifyOnStop off in settings', async () => {
+    let n = 0
+    const provider: Provider = {
+      async *streamChat() {
+        if (n++ === 0) {
+          yield { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'a' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const r = await withSettings({ verifyOnStop: false, verifyCommand: 'make old' }, async () => {
+      const result = await run({ provider, policy: 'full-auto', overrides: { verifyCommand: 'pytest -q' } })
+      // Run-only: the saved settings still have the gate off and the old command.
+      expect(h.settings).toMatchObject({ verifyOnStop: false, verifyCommand: 'make old' })
+      return result
+    })
+    expect(h.verifyRuns).toHaveLength(1)
+    expect(h.verifyRuns[0]).toMatchObject({ command: 'pytest -q' })
+    expect(r.events.some((e) => e.type === 'verification')).toBe(true)
+  })
+
+  it('withholds ask_user from an unattended run and tells the model no user is available', async () => {
+    const requests: ChatRequest[] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        requests.push(req)
+        yield { type: 'text', text: 'ok' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, unattended: true })
+    const names = (requests[0].tools ?? []).map((t) => t.name)
+    expect(names).not.toContain('ask_user')
+    expect(names).toContain('read_file')
+    expect(requests[0].system).toContain('No user is available during this run')
+    expect(requests[0].system).not.toContain('ask_user')
+
+    requests.length = 0
+    await run({ provider })
+    expect((requests[0].tools ?? []).map((t) => t.name)).toContain('ask_user')
+    expect(requests[0].system).not.toContain('No user is available')
   })
 })
 

@@ -35,6 +35,7 @@ import type {
   PlanDecision,
   Provider,
   ProviderStreamEvent,
+  RunSettingsOverrides,
   ToolApprovalDecision,
   ToolSchema
 } from '@shared/agent'
@@ -228,6 +229,10 @@ async function runScenario(opts: {
   onPlan?: (callId: string, decide: (d: PlanDecision) => void) => void
   /** The saved chat the run belongs to; omitted for a one-shot run with none. */
   conversationId?: string
+  /** A run nobody attends (headless). */
+  unattended?: boolean
+  /** Per-run setting overrides (the headless flags). */
+  overrides?: RunSettingsOverrides
 }): Promise<ScenarioResult> {
   const requests: CapturedRequest[] = []
   h.provider = capturingProvider(opts.turns, requests)
@@ -253,7 +258,9 @@ async function runScenario(opts: {
       providerId: opts.providerId ?? 'anthropic',
       model: opts.model ?? 'claude-sonnet-5',
       approvalPolicy: opts.policy ?? 'ask',
-      messages: [{ role: 'user', content: opts.userText ?? 'hello' }]
+      messages: [{ role: 'user', content: opts.userText ?? 'hello' }],
+      ...(opts.unattended ? { unattended: true } : {}),
+      ...(opts.overrides ? { overrides: opts.overrides } : {})
     },
     send
   )
@@ -505,6 +512,21 @@ describe('agent behavior goldens', () => {
     )
   })
 
+  it('headless (CLI backends, unattended, run overrides): no ask_user, a no-user prompt, flag effort', async () => {
+    // The one-shot headless client: the terminal entry's backends, no saved chat
+    // (so no propose_session), nobody to answer ask_user, and --effort/--max-turns.
+    configureCliBackends()
+    h.models = [{ id: 'claude-sonnet-5', caps: { reasoning: true } }]
+    const r = await runScenario({
+      unattended: true,
+      overrides: { reasoningEffort: 'high', maxIterations: 5 },
+      turns: [[{ type: 'text', text: 'Done.' }, doneTurn()]],
+      userText: 'Fix the failing test'
+    })
+    await expect(norm(r.requests[0].system)).toMatchFileSnapshot('goldens/system-prompt.headless.txt')
+    await expect(transcript('headless', r)).toMatchFileSnapshot('goldens/transcript.headless.txt')
+  })
+
   it('per-model request shape: reasoning/caching knobs and prompt addenda per family', async () => {
     configureDesktopBackends()
     h.settings = { ...h.settings, reasoningEffort: 'medium' }
@@ -640,6 +662,7 @@ async function firstRequest(opts: {
   policy?: ApprovalPolicy
   providerId?: string
   model?: string
+  unattended?: boolean
 }): Promise<CapturedRequest> {
   const r = await runScenario({ turns: [[{ type: 'text', text: 'ok' }, doneTurn()]], ...opts })
   return r.requests[0]
@@ -657,6 +680,15 @@ describe('system prompt names only tools the run offers', () => {
         expect(unadvertisedMentions(system, req.tools)).toEqual([])
       })
     }
+  }
+
+  for (const policy of ['ask', 'plan'] as const) {
+    it(`unattended (headless), ${policy === 'plan' ? 'plan mode' : 'ask'}`, async () => {
+      wireBackends({ capture: false, spawn: true, scheduler: true })
+      const req = await firstRequest({ policy, unattended: true })
+      expect(req.tools.map((t) => t.name)).not.toContain('ask_user')
+      expect(unadvertisedMentions(norm(req.system), req.tools)).toEqual([])
+    })
   }
 
   for (const family of [

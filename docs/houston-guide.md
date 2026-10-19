@@ -31,7 +31,29 @@ ships as a desktop app and as terminal clients.
   With no human to answer approval prompts, `--on-approval <allow|deny|fail>`
   decides what a gated tool call gets: denied by default (allowed under
   `--full-auto`), with `fail` also exiting non-zero so a script can tell the run
-  hit a permission wall.
+  hit a permission wall. Nobody can answer a question either, so a headless run
+  doesn't offer the agent `ask_user`: it is told no user is available, makes the
+  call itself, and states its assumptions in the final answer.
+  - **Prompt from stdin.** `-p -` reads the prompt from stdin, and so does a `-p`
+    with no value when input is piped in (`cat task.md | houston -p --json`). The
+    standalone CLI also reads a piped prompt with no `-p` at all.
+  - **Per-run settings.** These apply to the one run and never change your saved
+    settings: `--effort <off|low|medium|high|xhigh>` sets the reasoning effort;
+    `--max-turns <n>` caps the model steps (a hard cap that never auto-extends);
+    `--max-cost <usd>` tells the agent to wrap up once the run's estimated cost
+    reaches that amount (a soft ceiling: the step in flight still finishes);
+    `--verify <command>` runs that command when the agent stops after editing
+    files and sends a failure back for a bounded fix-up pass (it needs a policy
+    that can edit, such as `--full-auto`). A bad value exits 2 before anything runs.
+  - **`--json` result line.** After one JSON line per agent event, the last line
+    is a summary: `{"type":"result", "status", "stopReason", "limitReason"?,
+    "turns", "costUsd", "inputTokens", "outputTokens", "durationMs", "finalText"}`.
+    `status` is `success`, `limit`, `stalled`, `approval_denied`, or `error`;
+    `finalText` is the agent's closing answer (the text after its last tool call).
+  - **Exit codes.** 0: the agent finished on its own. 1: an error or aborted run,
+    a stalled agent, or a call refused under `--on-approval fail`. 2: a usage
+    error (a bad flag value, or an empty prompt on stdin); nothing ran. 3: the run
+    hit a budget before finishing (its step cap or the model's output limit).
 - **Standalone CLI.** The same `-p` and `-i` clients as a single self-contained
   Node script, with no desktop app and no browser engine. Runs on headless Linux
   servers; API keys come from environment variables.

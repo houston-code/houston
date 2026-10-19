@@ -231,8 +231,10 @@ Open source under the [Apache License 2.0](LICENSE).
   commands (e.g. `cd build` then `make`, or activate a virtualenv once and reuse
   it), so the agent gets "same terminal" behavior.
 - **Headless mode.** Run one prompt without the GUI and stream the result to
-  stdout — `Houston -p "<prompt>"` (read-only by default; add `--full-auto` to let
-  it edit/run, `--json` for machine-readable events). Good for scripts and CI.
+  stdout: `Houston -p "<prompt>"` (read-only by default; add `--full-auto` to let
+  it edit/run, `--json` for machine-readable events and a final summary line).
+  Per-run effort, turn and cost budgets, a verification command, and distinct exit
+  codes make it drivable from scripts, CI, and benchmark harnesses.
   See [Headless / scripting](#headless--scripting).
 - **Interactive terminal.** A stay-resident REPL in your terminal — `Houston -i`.
   Conversation streams live, tool approvals and questions are answered inline, and
@@ -485,8 +487,8 @@ Grab the artifact for your platform:
 
 ## Headless / scripting
 
-Run a single prompt without opening the window — useful for scripts, pipelines,
-and CI. Pass `-p`/`--prompt` to the app binary:
+Run a single prompt without opening the window: useful for scripts, pipelines,
+CI, and benchmark harnesses. Pass `-p`/`--prompt` to the app binary:
 
 ```bash
 # read-only by default (plan mode): analysis / Q&A, no edits or commands
@@ -501,10 +503,13 @@ Houston -p "Fix the lint errors" --approval auto-edit --on-approval allow
 # CI guard: exit non-zero if the run needs anything the policy doesn't auto-approve
 Houston -p "Summarize open TODOs" --on-approval fail
 
-# machine-readable: one JSON object per agent event
+# machine-readable: one JSON object per agent event, then a result summary
 Houston -p "List the TODOs" --json
 
-# continue the last session in this folder — then take over interactively
+# harness / CI: prompt on stdin, per-run budgets, and a check the agent must pass
+cat task.md | Houston -p - --full-auto --json --effort high --max-turns 60 --max-cost 5 --verify "npm test"
+
+# continue the last session in this folder, then take over interactively
 Houston -p "Now add tests for it" --continue
 Houston -i   # /resume picks up the same conversation
 ```
@@ -516,13 +521,67 @@ Flags: `--cwd <dir>` (project folder, default the current directory),
 session in the folder), `--resume <id>` (resume a specific one).
 Assistant text streams to stdout, tool activity (plus a one-line token/cost
 total, failed tools, and an early-stop notice if the run hits a step/output
-limit) to stderr, and the process exits non-zero on error. It
+limit) to stderr, and the exit code says how the run ended (below). It
 reuses your saved settings and Keychain-stored API keys. Each run is saved as a
 conversation (shared with the app and the interactive `-i` session), so you can
 script a prompt and then take over where it left off. The run prints its session
 id (`· session <id>` on stderr, or a `{"type":"session","conversationId":…}` line
 first in `--json`) so a script can capture it and `--resume <id>` that exact
 session later.
+
+**Prompt from stdin.** `-p -` reads the prompt from stdin, and so does a `-p` with
+no value when input is piped in (`cat task.md | Houston -p --json`), which keeps a
+long task description out of the command line. An empty stdin is a usage error.
+
+**Per-run settings.** These override your saved settings for this run only and
+are never written back:
+
+- `--effort <off|low|medium|high|xhigh>`: the model's reasoning effort.
+- `--max-turns <n>`: the most model steps the run may take. It is a hard cap: the
+  run never auto-extends past it, and hitting it exits 3.
+- `--max-cost <usd>`: once the run's estimated cost reaches this amount, the agent
+  is told to wrap up. It is a soft ceiling: the step in flight finishes and the
+  agent gets to summarize, so a run can end slightly above it.
+- `--verify <command>`: when the agent stops after editing files, run this command
+  (sandboxed like the agent's own shell). If it fails, its output goes back to the
+  agent for a bounded fix-up pass. It needs a policy that can edit, such as
+  `--full-auto`; under the default read-only policy it never runs.
+
+A value a flag can't take (`--max-turns 0`, `--effort max`, an empty `--verify`)
+exits 2 before anything runs, rather than running without the budget you meant.
+
+**`--json` result line.** After one JSON line per agent event, the last line is a
+summary a harness can read without folding the stream itself:
+
+```json
+{"type":"result","status":"success","stopReason":"end_turn","turns":7,"costUsd":0.0412,"inputTokens":51234,"outputTokens":2210,"durationMs":48120,"finalText":"Fixed the off-by-one in utils/date.ts and the suite passes."}
+```
+
+`status` is `success`, `limit`, `stalled`, `approval_denied`, or `error`.
+`limitReason` (`max-steps`, `max-output`, or `stalled`) is present when the loop
+stopped short. `turns` counts the agent's model steps (the unit `--max-turns`
+caps); `costUsd` and the token totals include subagent and review rounds.
+`finalText` is the agent's closing answer: the text it wrote after its last tool
+call. A run that fails before it starts (no model configured) still ends with a
+result line; a usage error (exit 2) prints only to stderr.
+
+**Exit codes.**
+
+| Code | Meaning | `status` |
+| --- | --- | --- |
+| 0 | The agent finished on its own. | `success` |
+| 1 | The run failed: an error or an aborted run, a stalled agent, or a call refused under `--on-approval fail`. | `error`, `stalled`, `approval_denied` |
+| 2 | Usage error: a bad flag value, or an empty prompt on stdin. Nothing ran. | (no result line) |
+| 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit) or the model's output limit. | `limit` |
+
+When several apply, a failure wins over a budget stop. The outcome of a
+`--verify` check doesn't change the code; in `--json` mode each check is a
+`verification` event.
+
+**Nobody to ask.** A headless run doesn't offer the agent `ask_user`. Its system
+prompt says no user is available, so it makes judgment calls itself and states
+the assumptions that matter in its final answer instead of spending a step on a
+question.
 
 **Approval prompts with no human.** Interactively, some tool calls pause for
 your approval: whatever the chosen `--approval` policy gates (shell commands
@@ -646,8 +705,10 @@ houston                              # interactive session (same as `houston -i`
 houston -p "quick one-shot"          # or script a single run
 ```
 
-A bare `houston` starts interactive only when it has a real terminal; in a pipe
-or CI (no TTY) it prints usage instead of hanging, so use `-p "<prompt>"` there.
+A bare `houston` starts interactive only when it has a real terminal. With a
+prompt piped in (`echo "fix the build" | houston --json`) it runs it one-shot, as
+`-p` would; in CI with nothing piped (no TTY) it prints usage instead of hanging,
+so use `-p "<prompt>"` there.
 `npm run install:cli` symlinks the built bundle (a rebuild is picked up with no
 reinstall) and, if the target dir isn't on your PATH yet, prints the line to add.
 Prefer npm's own linking? The package exposes a `houston` `bin`, so

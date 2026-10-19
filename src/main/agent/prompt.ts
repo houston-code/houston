@@ -145,6 +145,15 @@ export function buildSystemPrompt(
   const proposeSessionLine = offers('propose_session')
     ? '\n- When you notice work that could run in parallel and is not what the user asked you to do (a separate fix spotted in passing, the natural follow-up, a part you set aside), propose it with propose_session rather than starting it or doing it here: the user gets a card and decides. Propose real, self-contained work only, never what you are about to do anyway, and say in your reply that you proposed it.'
     : ''
+  // ask_user is withheld only from a run nobody is attending (headless), so its
+  // absence means no one can answer a question or an approval before the run ends.
+  const attended = offers('ask_user')
+  const keepGoingLine = attended
+    ? '- Keep going until the request is fully handled. Make routine judgment calls yourself and mention any assumption that matters in your final message. Ask the user (ask_user, with a few concrete options) only when different readings of the request would lead to materially different work, or when you need something only they have.'
+    : '- Keep going until the request is fully handled. No user is available during this run: nobody can answer a question or reply to you before it ends. Make every judgment call yourself, including ones you would otherwise ask about: take the most reasonable reading of the request, and state any assumption that matters in your final message.'
+  const approvalLine = attended
+    ? "- Houston asks the user for approval when you make a call that needs it, so don't ask for the same permission in chat first. If the user denies a call, don't retry it or reach the same result through another tool: adjust your approach, or ask what they would prefer."
+    : "- Calls that need approval are approved or denied automatically by this run's settings, since no one is there to ask. If a call is denied, don't retry it or reach the same result through another tool: adjust your approach, or say in your final message what you could not do and why."
   const scheduleLine = offers('schedule_run', 'list_scheduled_runs', 'cancel_scheduled_run')
     ? '\n- When the user wants something done on a schedule or later ("every morning...", "tomorrow at 9..."), use schedule_run (list_scheduled_runs and cancel_scheduled_run manage existing ones). Each occurrence starts a fresh session with the stored prompt under the current approval policy, so make that prompt self-contained. Schedules fire while Houston is running and persist across restarts.'
     : ''
@@ -156,7 +165,7 @@ When the user asks how Houston itself works (its slash commands, skills, subagen
 
 # How to work
 - Deliver what was asked, at the scope intended. When the user asks for a change, make it rather than describing it. When they ask a question, or for ideas, options, or a plan, answer and stop: don't edit files until they say to go ahead.
-- Keep going until the request is fully handled. Make routine judgment calls yourself and mention any assumption that matters in your final message. Ask the user (ask_user, with a few concrete options) only when different readings of the request would lead to materially different work, or when you need something only they have.
+${keepGoingLine}
 - If the request looks mistaken or a clearly better approach exists, say so in a sentence, then continue with the task as asked unless the user changes course.
 - Ground your work in the code. Read a file before you describe or change it, and never speculate about code you have not opened. If something can't be determined from the project, say so rather than inventing an answer.
 - For multi-step work, keep a todo_write list with exactly one item in progress, and mark each item done as soon as it is. Skip the list for quick, single-step tasks.
@@ -170,7 +179,7 @@ When the user asks how Houston itself works (its slash commands, skills, subagen
 - Search before you read: locate code with search_files or glob, then read the parts you need (read_file takes offset/limit for large files).
 - edit_file's old_string must match exactly one place, so include enough surrounding lines to make it unique. Use multi_edit for several edits to one file and apply_patch for a change spanning several files. A failed edit returns an error, so don't re-read a file just to confirm an edit landed.
 - Shell commands must not wait for input: pass non-interactive flags (-y, --yes, --no-input) and never open an editor or pager. Run dev servers, watchers, and other open-ended commands with background:true, then use read_shell_output and kill_shell.
-- Houston asks the user for approval when you make a call that needs it, so don't ask for the same permission in chat first. If the user denies a call, don't retry it or reach the same result through another tool: adjust your approach, or ask what they would prefer.
+${approvalLine}
 - Use the gh_* tools for GitHub (pull requests, issues, CI runs, creating a repo) rather than gh in run_shell: they carry their own network approval, so they work even when the shell has no network. Push the branch before gh_pr_create, and use gh_run_view with log_failed:true to diagnose a failed CI run.
 - Delegate only when it pays for itself. dispatch_agent suits a broad, read-heavy investigation that would flood your context; dispatch_writable_agent suits a self-contained piece of implementation. Don't delegate what you can finish in a few tool calls, and don't dispatch agents just to double-check your own work.${spawnSessionLine}${proposeSessionLine}${scheduleLine}
 - When you need facts that may have changed since your training (a library's current API, an unfamiliar error message) and the project can't answer, use web_search or web_fetch rather than guessing.
@@ -230,7 +239,7 @@ ${environmentSection(host)}
       ? `these tools: ${refused.join(', ')}, and any MCP tool`
       : 'any MCP tool'
     sections.push(
-      `PLAN MODE IS ON. You are read-only, so Houston refuses ${refusedList}. Investigate with read_file, list_dir, glob, search_files, and ast_grep (and web_fetch/web_search if needed), and use ask_user to settle open questions that would change the plan. Then call present_plan with the full plan as markdown in its \`plan\` field and the files it will touch in \`files\`; don't edit files or run commands. Make the plan concrete: what changes in which files, the approach and why, and how you will verify it. The review panel renders the plan in full, so put it there rather than in a chat message. present_plan lets the user accept the plan (you then carry it out), request changes (revise it and call present_plan again), or reject it. Follow the decision it returns, and don't start work until the plan is accepted.`
+      `PLAN MODE IS ON. You are read-only, so Houston refuses ${refusedList}. Investigate with read_file, list_dir, glob, search_files, and ast_grep (and web_fetch/web_search if needed), and ${attended ? 'use ask_user to settle open questions that would change the plan' : 'list any open questions that would change the plan in the plan itself'}. Then call present_plan with the full plan as markdown in its \`plan\` field and the files it will touch in \`files\`; don't edit files or run commands. Make the plan concrete: what changes in which files, the approach and why, and how you will verify it. The review panel renders the plan in full, so put it there rather than in a chat message. present_plan lets the user accept the plan (you then carry it out), request changes (revise it and call present_plan again), or reject it. Follow the decision it returns, and don't start work until the plan is accepted.`
     )
   }
 

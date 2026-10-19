@@ -218,6 +218,39 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('It reports back here')
   })
 
+  it('offers ask_user by default but withholds it from an unattended run', () => {
+    expect(toolNames()).toContain('ask_user')
+    expect(toolNames({ askUser: true })).toContain('ask_user')
+    expect(toolNames({ askUser: false })).not.toContain('ask_user')
+    // Only ask_user goes: every other tool stays offered.
+    expect(toolNames({ askUser: false })).toEqual(toolNames().filter((n) => n !== 'ask_user'))
+  })
+
+  it('tells an unattended run that no user is available, instead of naming ask_user', () => {
+    const attended = promptFor(toolNames())
+    expect(attended).toContain('Ask the user (ask_user')
+    expect(attended).toContain('or ask what they would prefer.')
+    expect(attended).not.toContain('No user is available')
+
+    const unattended = promptFor(toolNames({ askUser: false }))
+    expect(unattended).not.toContain('ask_user')
+    expect(unattended).toContain('No user is available during this run')
+    expect(unattended).toContain("approved or denied automatically by this run's settings")
+    expect(unattended).not.toContain('ask what they would prefer')
+    // The neighbouring bullets survive the swap.
+    expect(unattended).toContain('- If the request looks mistaken')
+    expect(unattended).toContain('- Use the gh_* tools for GitHub')
+  })
+
+  it('keeps plan mode from naming ask_user on an unattended run', () => {
+    const attended = promptFor(toolNames({ planMode: true }), true)
+    expect(attended).toContain('use ask_user to settle open questions')
+    const unattended = promptFor(toolNames({ planMode: true, askUser: false }), true)
+    expect(unattended).toContain('PLAN MODE IS ON')
+    expect(unattended).not.toContain('ask_user')
+    expect(unattended).toContain('list any open questions that would change the plan in the plan itself')
+  })
+
   it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('schedule_run')
     const noScheduler = promptFor(toolNames({ scheduler: false }))

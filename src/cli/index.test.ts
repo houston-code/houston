@@ -55,6 +55,31 @@ describe('selectRunMode', () => {
     expect(piped([]).kind).toBe('usage')
   })
 
+  it('a bare invocation with a prompt piped in runs headless, reading it from stdin', () => {
+    expect(selectRunMode([], '/cwd', false, true)).toMatchObject({
+      kind: 'headless',
+      options: { prompt: '', promptFromStdin: true }
+    })
+    expect(selectRunMode(['--json', '--max-turns', '5'], '/cwd', false, true)).toMatchObject({
+      kind: 'headless',
+      options: { promptFromStdin: true, json: true, maxTurns: 5 }
+    })
+    // An explicit prompt still wins over whatever is piped.
+    expect(selectRunMode(['-p', 'do it'], '/cwd', false, true)).toMatchObject({
+      kind: 'headless',
+      options: { prompt: 'do it' }
+    })
+    // -i is explicit too: a piped stdin doesn't turn it into a one-shot run.
+    expect(selectRunMode(['-i'], '/cwd', false, true).kind).toBe('tui')
+  })
+
+  it('`-p -` reads the prompt from stdin', () => {
+    expect(selectRunMode(['-p', '-'], '/cwd', false, true)).toMatchObject({
+      kind: 'headless',
+      options: { promptFromStdin: true }
+    })
+  })
+
   it('carries the resolved cwd into the interactive options', () => {
     expect(selectRunMode(['--cwd', '/proj'], '/cwd', true)).toMatchObject({
       kind: 'tui',
