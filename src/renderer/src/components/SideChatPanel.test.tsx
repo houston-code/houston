@@ -59,6 +59,19 @@ describe('SideChatPanel', () => {
     expect(screen.getByText('Why PKCE?')).toBeInTheDocument()
   })
 
+  it('says when older exchanges were dropped to stay within the cap', async () => {
+    installApi({ 'conv-1': { ...answered, droppedTurns: 3 } })
+    renderPanel()
+    expect(await screen.findByText(/3 older exchanges removed\. A side chat keeps its latest 200\./)).toBeInTheDocument()
+  })
+
+  it('says nothing about dropped exchanges when none were', async () => {
+    installApi({ 'conv-1': answered })
+    renderPanel()
+    await screen.findByText('public')
+    expect(screen.queryByText(/older exchange/)).toBeNull()
+  })
+
   it('asks with the selected model, shows the question at once, and the answer when main announces it', async () => {
     const fake = installApi()
     renderPanel()

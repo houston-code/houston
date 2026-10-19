@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import type { SideChatView } from '@shared/agent'
+import { MAX_SIDE_TURNS, type SideChatView } from '@shared/agent'
 import { Icon } from './Icon'
 import { Markdown } from './Markdown'
 
@@ -155,6 +155,12 @@ export function SideChatPanel({
       <div className="side-chat__list" ref={listRef} aria-live="polite">
         {view.turns.length === 0 && !pending && (
           <p className="side-chat__empty">Ask anything about this chat or the code.</p>
+        )}
+        {(view.droppedTurns ?? 0) > 0 && (
+          <p className="side-chat__trimmed">
+            {view.droppedTurns === 1 ? '1 older exchange' : `${view.droppedTurns} older exchanges`} removed. A side
+            chat keeps its latest {MAX_SIDE_TURNS}.
+          </p>
         )}
         {view.turns.map((t) => (
           <div key={t.id} className="side-chat__turn">
