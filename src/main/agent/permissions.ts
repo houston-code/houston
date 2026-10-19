@@ -840,13 +840,23 @@ const SHELL_INERT_CHAR = /^[A-Za-z0-9_\-./,:+@%^\u0080-￿]$/
  * `$"..."` string can be translated into other text when it runs, so its units sit
  * between the markers `"(` and `")` and it reads as itself only.
  *
- * Unquoted whitespace is collapsed and trimmed (after {@link normalizeShellCommand}, so
- * an empty `''` word leaves no double space); a quoted space is the unit `\ `.
+ * Unquoted whitespace is collapsed and trimmed (see {@link normalizeShellCommand}); a
+ * quoted space is the unit `\ `. A word that is only empty quotes (`''`, `""`, `$''`)
+ * is still a word to the shell, an empty one, so it is the unit `""` and never folds
+ * away: `'' rm -rf /` runs no `rm` at all, and `rm '' -rf x` passes `rm` an empty
+ * argument. Empty quotes inside a word add nothing to it (`r''m` is `rm`).
  */
 function literalShellUnits(s: string): string[] {
   const units: string[] = []
   const literal = (c: string): void => {
     units.push(SHELL_INERT_CHAR.test(c) ? c : `\\${c}`)
+  }
+  // Where the current word's units start, and whether it holds a quoted span.
+  let wordStart = 0
+  let quoted = false
+  const endWord = (): void => {
+    if (quoted && units.length === wordStart) units.push('""')
+    quoted = false
   }
   const text = normalizeShellCommand(s)
   // The double-quoted string opening at `text[i]`; returns the index past its close.
@@ -871,6 +881,7 @@ function literalShellUnits(s: string): string[] {
     } else if (c === '$' && text[i + 1] === "'") {
       const q = readAnsiCQuote(text, i)
       for (let k = 0; k < q.text.length; k++) literal(q.text[k])
+      quoted = true
       i = q.end
     } else if (c === '$' && text[i + 1] === '"') {
       units.push('"(')
@@ -881,21 +892,26 @@ function literalShellUnits(s: string): string[] {
       i += 2
     } else if (c === '"') {
       i = doubleQuoted(i)
+      quoted = true
     } else if (c === "'") {
       i += 1
       while (i < text.length && text[i] !== "'") {
         literal(text[i])
         i += 1
       }
+      quoted = true
       i += 1
     } else if (c === ' ') {
+      endWord()
       if (units.length && units[units.length - 1] !== ' ') units.push(' ')
+      wordStart = units.length
       i += 1
     } else {
       units.push(c)
       i += 1
     }
   }
+  endWord()
   if (units[units.length - 1] === ' ') units.pop()
   return units
 }
@@ -1397,7 +1413,8 @@ export function shellRulePatterns(command: string, roots?: string[]): string[] {
     const norm = normalizeShellCommand(seg.text)
     const tokens = tokenizeShellCommand(norm)
     const prog = tokens[0]
-    if (!prog || isWorkspaceCwdChange(seg, roots)) continue
+    // An empty program (`'' rm -rf x`) is still a sub-command to cover, not one to drop.
+    if (prog === undefined || isWorkspaceCwdChange(seg, roots)) continue
     const verb = tokens[1]
     if (CWD_BUILTINS.has(prog)) {
       patterns.add(norm)

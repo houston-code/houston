@@ -474,7 +474,9 @@ backslash escapes, and bash's `$'...'` escapes (so `deny *rm -rf*` still fires o
 where it changes nothing (`"git" status` is `git status`): a quoted or escaped `*`,
 `~`, `$`, space, or `>` is not the bare one, since the shell treats them
 differently. Allowing `rm '*'` (one file named `*`) never allows `rm *`, and
-allowing `rm -rf '~'` (or `rm -rf $'\x7e'`) never allows `rm -rf ~`.
+allowing `rm -rf '~'` (or `rm -rf $'\x7e'`) never allows `rm -rf ~`. An empty
+quoted argument counts as one: allowing `'' rm -rf /` (which runs nothing) never
+allows `rm -rf /`.
 An `apply_patch` call is checked against every file it adds, changes, deletes, or
 moves to: one denied file denies the whole patch, one `ask` file asks, and an
 `allow` covers it only when every file is allowed. "Always allow" or "Always deny"

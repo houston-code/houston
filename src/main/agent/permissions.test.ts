@@ -593,6 +593,46 @@ describe('matchRule', () => {
       expect(matchRule(exact, 'run_shell', "rm $'\\x2a'")).toBe('allow')
     })
 
+    it('an allow keeps an empty quoted word apart from no word at all', () => {
+      // bash runs nothing for `'' rm -rf /` (": command not found"), and passes `rm` an
+      // empty argument in `rm '' -rf x`, so neither is the command without the `''`.
+      const pairs: [string, string][] = [
+        ["'' rm -rf /", 'rm -rf /'],
+        ['"" rm -rf /', 'rm -rf /'],
+        ["$'' rm -rf /", 'rm -rf /'],
+        ["$'\\0' rm -rf /", 'rm -rf /'], // a NUL ends the string, leaving it empty
+        ['$"" rm -rf /', 'rm -rf /'],
+        ["rm '' -rf x", 'rm -rf x'],
+        ["rm -rf x ''", 'rm -rf x'],
+        ["rm -rf / '", 'rm -rf /'] // an unclosed quote is a syntax error: nothing runs
+      ]
+      for (const [approved, other] of pairs) {
+        const exact: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: approved, exact: true }]
+        expect(matchRule(exact, 'run_shell', approved)).toBe('allow')
+        expect(matchRule(exact, 'run_shell', other)).toBeNull()
+        expect(matchRule([allow('run_shell', approved)], 'run_shell', other)).toBeNull()
+        expect(matchRule([{ action: 'allow', tool: 'run_shell', match: other, exact: true }], 'run_shell', approved)).toBeNull()
+      }
+      expect(matchRule([allow('run_shell', 'rm -rf x')], 'run_shell', "rm '' -rf x")).toBeNull()
+      expect(matchRule([allow('run_shell', 'rm -rf /')], 'run_shell', "'' rm -rf /")).toBeNull()
+      // An empty word folds only with another empty word, however it is spelled or spaced.
+      const empty: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: "rm '' -rf x", exact: true }]
+      for (const cmd of ['rm "" -rf x', "rm $'' -rf x", "rm  ''   -rf x", `rm ''"" -rf x`]) {
+        expect(matchRule(empty, 'run_shell', cmd)).toBe('allow')
+      }
+      expect(matchRule(empty, 'run_shell', "rm '' '' -rf x")).toBeNull()
+      // Empty quotes inside a word add nothing to it, as in bash.
+      expect(matchRule([allow('run_shell', 'rm -f a')], 'run_shell', `r''m -f a"" ''`)).toBe('allow')
+      expect(matchRule([{ action: 'allow', tool: 'run_shell', match: 'rm -f a', exact: true }], 'run_shell', `''rm -f a""`)).toBe(
+        'allow'
+      )
+      // A hand-written `*` still covers an empty argument.
+      expect(matchRule([allow('run_shell', 'git commit -m "*"')], 'run_shell', `git commit -m ''`)).toBe('allow')
+      // A deny still reads past the empty word, so it fires on more, never less.
+      expect(matchRule(denyRm, 'run_shell', "'' rm -rf /tmp/x")).toBe('deny')
+      expect(matchRule(denyRm, 'run_shell', "rm '' -rf /tmp/x")).toBe('deny')
+    })
+
     it("an allow reads `$'...'` like other quoting: a decoded `*` or `~` is never the bare one", () => {
       const pairs: [string, string][] = [
         ["rm $'*'", 'rm *'],
@@ -1107,6 +1147,23 @@ describe('a saved "Always allow" covers only the approved target', () => {
     expect(matchRule(tilde, 'run_shell', 'rm -rf ~/.ssh', ROOTS)).toBeNull()
   })
 
+  it('run_shell: approving a command with an empty quoted word does not allow it without one', () => {
+    // `'' rm -rf /` runs nothing, so it looks harmless to approve; its rule must not cover `rm -rf /`.
+    const noop = saved('run_shell', { command: "'' rm -rf /" })
+    expect(noop).toEqual([{ action: 'allow', tool: 'run_shell', match: "'' rm -rf /" }])
+    expect(matchRule(noop, 'run_shell', "'' rm -rf /", ROOTS)).toBe('allow')
+    for (const cmd of ['rm -rf /', 'rm -rf / x', '"rm" -rf /', 'cd /work/project && rm -rf /']) {
+      expect(matchRule(noop, 'run_shell', cmd, ROOTS)).toBeNull()
+    }
+    // In a chain the empty-led sub-command keeps its own verbatim rule.
+    const chained = saved('run_shell', { command: "'' rm -rf / && git status" })
+    expect(chained.map((r) => r.match)).toEqual(["'' rm -rf /", 'git status'])
+    expect(matchRule(chained, 'run_shell', 'rm -rf / && git status', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: "rm '' -rf x" }), 'run_shell', 'rm -rf x', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: "find . -delete ''" }), 'run_shell', 'find . -delete', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: "ls '" }), 'run_shell', 'ls -la ~/.ssh', ROOTS)).toBeNull()
+  })
+
   it('run_shell: every saved rule set auto-approves the command it was saved for', () => {
     for (const command of [
       'rm *',
@@ -1144,7 +1201,12 @@ describe('a saved "Always allow" covers only the approved target', () => {
       'cd {..,} && cat config',
       'cd $(echo ~/).ssh && cat config',
       'cd ~/.ssh && cat config',
-      'cd /etc && git status'
+      'cd /etc && git status',
+      "'' rm -rf /",
+      "rm '' -rf x",
+      "'' rm -rf / && git status",
+      `git commit -m '' && printf "%s\\n" "" $'' | wc -l`,
+      "ls '"
     ]) {
       expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS), command).toBe('allow')
     }
@@ -1404,6 +1466,8 @@ describe('shellRulePatterns', () => {
       expect(shellRulePatterns(cmd)).toEqual([cmd])
     }
     expect(shellRulePatterns("t'ail' -n \"5\"")).toEqual(['tail'])
+    // An empty quoted program is a word too (bash runs nothing), not a sub-command to drop.
+    expect(shellRulePatterns("'' rm -rf / && git status")).toEqual(["'' rm -rf /", 'git status'])
   })
 
   it('keeps command-wrapper-prefixed commands exact (never broadens to `sudo rm`)', () => {
