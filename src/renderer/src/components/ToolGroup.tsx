@@ -392,6 +392,12 @@ function ToolRow({
               about credential reads for the rest of this conversation.
             </p>
           )}
+          {item.sensitiveWrite && (
+            <p className="tool-row__approval-note">
+              This changes a credential or secret file, such as .env. Only you can restore one
+              if it is overwritten, so Houston is checking first even in full auto.
+            </p>
+          )}
           <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'allow')}>
             Allow
           </button>

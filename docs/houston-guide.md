@@ -422,7 +422,10 @@ Approval is layered. From most to least restrictive:
   and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
   and the like) prompts even here, since reads otherwise never do. "Allow for run" on
   that prompt stops it asking about credential reads for the rest of the conversation,
-  and an `allow` permission rule opts a path in permanently.
+  and an `allow` permission rule opts a path in permanently. **Changing a credential
+  file** prompts too: a file edit that writes one, or a shell command that redirects
+  into, copies over, edits in place, or removes one (`> .env`, `cp .env.example .env`,
+  `sed -i … .env`, `rm .env`). Templates such as `.env.example` don't count.
 
 **Reading the diff.** A file edit shows a real diff before you approve it: the
 changed part with a few lines of context (long untouched stretches are folded away
@@ -788,6 +791,16 @@ is reachable only from that same command: not from the Preview panel,
 `view_localhost`, or later commands. Granting shell network with "All domains"
 restores the shared network there. The agent is told this on Linux and checks web
 apps with requests from the command that starts the server.
+
+**Secret redaction.** Tool results, the transcript, and logs are scrubbed before
+the model or the UI sees them: well-known token formats and this install's stored
+secrets become `[redacted:…]`. A `NAME=value` line whose name marks it as a secret
+(`SESSION_SECRET`, `ADMIN_PASSWORD`, `GITHUB_TOKEN`, `STRIPE_API_KEY`, and the like),
+as `cat .env`, `env`, or `grep` prints it, keeps its name but shows the value as
+`[redacted:env-secret]`. The agent therefore refers to such a value by variable and
+file rather than repeating it, and a file write that would put a `[redacted:…]`
+placeholder where a value goes is refused, so writing back a file it read cannot
+replace the real secret with the placeholder.
 
 **Credential masking on egress.** Houston's own network tools refuse to *send* a
 credential: before a `web_fetch` or `web_search` leaves the machine, its URL or

@@ -555,6 +555,68 @@ describe('notebook_edit', () => {
   })
 })
 
+describe('writes that would replace a secret with its redaction marker', () => {
+  const ENV = 'ADMIN_PASSWORD=hunter2hunter2\nSESSION_SECRET=6b37636167dc8a5726e48166\nPORT=3000\n'
+  const MASKED = 'ADMIN_PASSWORD=[redacted:env-secret]\nSESSION_SECRET=[redacted:env-secret]\nPORT=3000\n'
+
+  it('refuses write_file of a masked .env over the real one, leaving it intact', async () => {
+    writeFileSync(join(workspace, '.env'), ENV)
+    await expect(run('write_file', { path: '.env', content: MASKED + 'DEBUG=1\n' })).rejects.toThrow(
+      /replace a secret with a \[redacted:/
+    )
+    expect(readFileSync(join(workspace, '.env'), 'utf8')).toBe(ENV)
+  })
+
+  it('refuses an edit_file whose new text carries a masked value', async () => {
+    writeFileSync(join(workspace, '.env'), ENV)
+    await expect(
+      run('edit_file', {
+        path: '.env',
+        old_string: 'PORT=3000',
+        new_string: 'PORT=4000\nAPI_TOKEN=[redacted:env-secret]'
+      })
+    ).rejects.toThrow(/redacted/)
+    expect(readFileSync(join(workspace, '.env'), 'utf8')).toBe(ENV)
+  })
+
+  it('refuses the same through multi_edit and apply_patch', async () => {
+    writeFileSync(join(workspace, '.env'), ENV)
+    await expect(
+      run('multi_edit', {
+        path: '.env',
+        edits: [{ old_string: 'PORT=3000', new_string: 'GITHUB_TOKEN="[redacted:github-token]"' }]
+      })
+    ).rejects.toThrow(/redacted/)
+    await expect(
+      run('apply_patch', {
+        patch: '*** Begin Patch\n*** Add File: .env.local\n+SECRET=[redacted:env-secret]\n*** End Patch'
+      })
+    ).rejects.toThrow(/redacted/)
+    expect(existsSync(join(workspace, '.env.local'))).toBe(false)
+    expect(readFileSync(join(workspace, '.env'), 'utf8')).toBe(ENV)
+  })
+
+  it('allows editing other lines of a .env without touching the secrets', async () => {
+    writeFileSync(join(workspace, '.env'), ENV)
+    await run('edit_file', { path: '.env', old_string: 'PORT=3000', new_string: 'PORT=4000' })
+    expect(readFileSync(join(workspace, '.env'), 'utf8')).toBe(ENV.replace('PORT=3000', 'PORT=4000'))
+  })
+
+  it('allows code that only mentions a marker, and files that already hold markers', async () => {
+    await run('write_file', {
+      path: 'r.test.ts',
+      content: "expect(redact(x)).toBe('[redacted:secret]')\n"
+    })
+    writeFileSync(join(workspace, 'fixture.env'), 'TOKEN=[redacted:env-secret]\n')
+    await run('edit_file', {
+      path: 'fixture.env',
+      old_string: 'TOKEN=[redacted:env-secret]',
+      new_string: 'TOKEN=[redacted:env-secret]\nMODE=dev'
+    })
+    expect(readFileSync(join(workspace, 'fixture.env'), 'utf8')).toContain('MODE=dev')
+  })
+})
+
 describe('multi_edit', () => {
   it('applies several edits in order, atomically', async () => {
     await run('write_file', { path: 'm.txt', content: 'one two three' })

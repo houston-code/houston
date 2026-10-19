@@ -90,6 +90,7 @@ import {
   networkDestination,
   patchSubjectPaths,
   permissionSubject,
+  isSensitiveWrite,
   shellReferencesExternalPath,
   shellRulePatterns
 } from './permissions'
@@ -282,6 +283,7 @@ interface RunState {
       sandboxed?: boolean
       shellNetwork?: boolean
       sensitiveRead?: boolean
+      sensitiveWrite?: boolean
     }
   >
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
@@ -586,7 +588,8 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.preview ? { preview: a.preview } : {}),
       ...(a.sandboxed === false ? { sandboxed: false } : {}),
       ...(a.shellNetwork ? { shellNetwork: true } : {}),
-      ...(a.sensitiveRead ? { sensitiveRead: true } : {})
+      ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
+      ...(a.sensitiveWrite ? { sensitiveWrite: true } : {})
     })
   }
   for (const [callId, q] of run.pendingQuestions) {
@@ -1229,13 +1232,26 @@ export async function startRun(
       unsandboxedShell: boolean
       /** A credential-file read: the card carries the same warning the main loop's does. */
       sensitiveRead?: boolean
+      /** A change to a credential file: likewise. */
+      sensitiveWrite?: boolean
       /** A write's per-file diffs, for the approval card and the live row. */
       preview?: FileDiffPreview[] | null
       denyNote: string
       runCall: () => Promise<string>
     }): Promise<string> => {
-      const { subCallId, name, args, kind, mustApprove, unsandboxedShell, sensitiveRead, preview, denyNote, runCall } =
-        input
+      const {
+        subCallId,
+        name,
+        args,
+        kind,
+        mustApprove,
+        unsandboxedShell,
+        sensitiveRead,
+        sensitiveWrite,
+        preview,
+        denyNote,
+        runCall
+      } = input
       const summary = `Subagent: ${getTool(name)!.summarize(args)}`
       if (mustApprove) {
         // Track + emit like any approval so re-adopt replay and cancelRun
@@ -1247,7 +1263,8 @@ export async function startRun(
           kind,
           ...(preview ? { preview } : {}),
           ...(unsandboxedShell ? { sandboxed: false } : {}),
-          ...(sensitiveRead ? { sensitiveRead: true } : {})
+          ...(sensitiveRead ? { sensitiveRead: true } : {}),
+          ...(sensitiveWrite ? { sensitiveWrite: true } : {})
         })
         emit({
           type: 'tool_approval',
@@ -1258,7 +1275,8 @@ export async function startRun(
           kind,
           ...(preview ? { preview } : {}),
           ...(unsandboxedShell ? { sandboxed: false } : {}),
-          ...(sensitiveRead ? { sensitiveRead: true } : {})
+          ...(sensitiveRead ? { sensitiveRead: true } : {}),
+          ...(sensitiveWrite ? { sensitiveWrite: true } : {})
         })
         const { decision, note } = await waitForApproval(run, subCallId)
         run.pendingApprovals.delete(subCallId)
@@ -1305,6 +1323,9 @@ export async function startRun(
      *   unless an allow rule covers it, as it does in the main loop: the sandbox may
      *   still let it read `~/.ssh` or `/etc`, so the dispatch's consent to work in
      *   the project does not extend to it.
+     * - So does an edit or command that changes a credential file (`.env`, a key),
+     *   unless an allow rule or this run's override for that kind covers it: consent
+     *   to edit the project is not consent to overwrite what only the user can restore.
      */
     const gateSubagentLocal =
       (callId: string) =>
@@ -1322,6 +1343,7 @@ export async function startRun(
           name === 'run_shell' &&
           typeof gateArgs.command === 'string' &&
           shellReferencesExternalPath(gateArgs.command, roots)
+        const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs)
         const mustApprove =
           kind === 'read'
             ? decideApproval({
@@ -1333,7 +1355,9 @@ export async function startRun(
                 shellUnsandboxedOverride: run.shellUnsandboxedOverride,
                 sensitiveRead
               }).mustApprove
-            : ruleAction === 'ask' || (shellEscapesWorkspace && ruleAction !== 'allow')
+            : ruleAction === 'ask' ||
+              (shellEscapesWorkspace && ruleAction !== 'allow') ||
+              (sensitiveWrite && ruleAction !== 'allow' && !run.override.has(kind))
         if (!mustApprove) return runCall()
         return promptGatedCall({
           subCallId: mintSubCallId(callId, kind),
@@ -1343,6 +1367,7 @@ export async function startRun(
           mustApprove: true,
           unsandboxedShell: false,
           sensitiveRead,
+          sensitiveWrite,
           preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
           denyNote: 'Denied by the user. Do not retry this call; work around it or note it in your report.',
           runCall
@@ -2972,6 +2997,10 @@ export async function startRun(
             // that keeps a committed `.env` or private key from flowing into the
             // transcript unasked.
             const sensitiveRead = isSensitiveRead(tool.kind, execArgs)
+            // Writing one (a file tool targeting it, or a shell command redirecting into,
+            // copying over, or removing it) prompts the same way: only the user can
+            // restore a `.env` an agent overwrote.
+            const sensitiveWrite = isSensitiveWrite(tool.kind, call.name, execArgs)
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.
@@ -2986,7 +3015,8 @@ export async function startRun(
               shellSandboxed: isSandboxed(),
               shellUnsandboxedOverride: run.shellUnsandboxedOverride,
               shellEscapesWorkspace,
-              sensitiveRead
+              sensitiveRead,
+              sensitiveWrite
             })
 
             // #3b: in full-auto on a confining host, the first shell command pauses once
@@ -3048,7 +3078,8 @@ export async function startRun(
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {}),
-                ...(sensitiveRead ? { sensitiveRead: true } : {})
+                ...(sensitiveRead ? { sensitiveRead: true } : {}),
+                ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
               emit({
                 type: 'tool_approval',
@@ -3060,7 +3091,8 @@ export async function startRun(
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(consentOnly ? { shellNetwork: true } : {}),
-                ...(sensitiveRead ? { sensitiveRead: true } : {})
+                ...(sensitiveRead ? { sensitiveRead: true } : {}),
+                ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
               const { decision, note: denyGuidance } = await waitForApproval(run, call.id)
               // Resolved (or cancelled) — it's no longer awaiting the user.
