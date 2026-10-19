@@ -117,6 +117,16 @@ export interface HeadlessOptions {
    * instead of being silently rubber-stamped into full-auto.
    */
   onApproval: HeadlessApprovalMode
+  /**
+   * `--allow-shell-network`: let shell commands reach the network this run. Interactively
+   * that takes a conscious "Allow for run" (or, under full-auto, the one-time network
+   * consent), because the shell sandbox can read the whole filesystem. Headless has no
+   * prompt to pick it from, and `--on-approval allow` approves each call the way plain
+   * "Allow" does, which runs shell offline. So the grant is its own explicit flag rather
+   * than a side effect of approving calls. Under full-auto, `--on-approval allow` still
+   * answers the network consent too.
+   */
+  allowShellNetwork: boolean
   json: boolean
   /** `--continue`: resume the most recent session in this folder (script → take over). */
   continueSession: boolean
@@ -171,6 +181,7 @@ const HEADLESS_FLAGS = new Set([
   '--approval',
   '--full-auto',
   '--on-approval',
+  '--allow-shell-network',
   '--json',
   '--effort',
   '--max-turns',
@@ -212,6 +223,7 @@ export function parseHeadlessArgs(
   let model: string | undefined
   let approvalPolicy: ApprovalPolicy = 'plan'
   let onApproval: HeadlessApprovalMode | undefined
+  let allowShellNetwork = false
   let json = false
   let continueSession = false
   let resumeId: string | undefined
@@ -288,6 +300,12 @@ export function parseHeadlessArgs(
       // the policy default, which under --full-auto would silently be 'allow'.
       onApproval = isHeadlessApprovalMode(value) ? value : 'deny'
       i = next
+    } else if (name === '--allow-shell-network') {
+      // A bare switch. A value form is a usage error rather than ignored or read as a
+      // grant, so `--allow-shell-network=false` can't turn network on, and a script
+      // that wrote `=true` learns that it didn't.
+      if (argv[i].includes('=')) bad('--allow-shell-network takes no value; pass it on its own')
+      else allowShellNetwork = true
     } else if (name === '--json') {
       json = true
     }
@@ -309,6 +327,7 @@ export function parseHeadlessArgs(
     // An explicit --on-approval wins regardless of flag order; otherwise the
     // policy picks: full-auto keeps auto-approving, the gating policies deny.
     onApproval: onApproval ?? (approvalPolicy === 'full-auto' ? 'allow' : 'deny'),
+    allowShellNetwork,
     json,
     continueSession,
     resumeId,
@@ -591,7 +610,12 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
     messages,
     // No one can answer ask_user here, so the loop doesn't offer it.
     unattended: true,
+    ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {}),
     ...(overrides ? { overrides } : {})
+  }
+  // Plan mode runs no shell, so the grant would be moot there.
+  if (opts.allowShellNetwork && opts.approvalPolicy !== 'plan' && !opts.json) {
+    deps.err('· shell commands may reach the network this run (--allow-shell-network)\n')
   }
 
   // How the run ended, for the exit code and the --json result line.
@@ -599,6 +623,8 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   let approvalDenied = false
   let limitReason: HeadlessResult['limitReason']
   let stopReason: StopReason | null = null
+  // Say once that approved shell commands run offline, the first time a prompt says so.
+  let notedOffline = false
   // Accumulate token/cost so text mode can print a one-line total on completion
   // (JSON mode carries the raw `usage` events, then the totals on the result line).
   let inTok = 0
@@ -655,7 +681,7 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
             deps.err(
               grant
                 ? '· allowing shell network access for this run\n'
-                : '· shell commands will run offline (pass --on-approval allow to permit network)\n'
+                : '· shell commands will run offline (pass --allow-shell-network to permit network)\n'
             )
           }
           deps.resolveApproval(e.runId, e.callId, grant ? 'allow' : 'deny')
@@ -667,6 +693,12 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
         // the exit code so a script can tell the run hit a permission wall).
         if (opts.onApproval === 'allow') {
           if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
+          // 'allow' is plain "Allow", which runs shell offline until the run has the
+          // shell-network grant, and only --allow-shell-network gives that here.
+          if (e.shellOffline && !notedOffline && !opts.json) {
+            notedOffline = true
+            deps.err('· shell commands run without network (pass --allow-shell-network to permit it)\n')
+          }
           deps.resolveApproval(e.runId, e.callId, 'allow')
         } else {
           if (!opts.json) {

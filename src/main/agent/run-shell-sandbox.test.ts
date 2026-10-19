@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   available: true,
   sandboxed: true,
   timedOut: false,
+  // Makes the runner fail the way an offline `curl` does (resolver error, exit 6).
+  offlineFailure: false,
   lastOpts: undefined as { timeoutMs?: number; egressProxy?: { tcpPort: number } } | undefined,
   lastSpawnOpts: undefined as { egressProxy?: { tcpPort: number } } | undefined
 }))
@@ -19,6 +21,15 @@ vi.mock('../sandbox', async (importOriginal) => {
     sandboxAvailable: () => h.available,
     runSandboxed: async (opts: { timeoutMs?: number }) => {
       h.lastOpts = opts
+      if (h.offlineFailure) {
+        return {
+          stdout: '',
+          stderr: 'curl: (6) Could not resolve host: example.com',
+          exitCode: 6,
+          timedOut: false,
+          sandboxed: h.sandboxed
+        }
+      }
       return {
         stdout: 'out',
         stderr: '',
@@ -39,7 +50,13 @@ vi.mock('../sandbox', async (importOriginal) => {
   }
 })
 
-import { getTool, UNSANDBOXED_SHELL_NOTE, type ToolContext } from './tools'
+import {
+  getTool,
+  HEADLESS_NETWORK_BLOCKED_HINT,
+  NETWORK_BLOCKED_HINT,
+  UNSANDBOXED_SHELL_NOTE,
+  type ToolContext
+} from './tools'
 
 const ctx: ToolContext = { workspace: '/ws', allowNetwork: false }
 const runShell = (args: Record<string, unknown>): Promise<string> =>
@@ -128,5 +145,35 @@ describe('run_shell threads the egress-proxy endpoints into the sandbox', () => 
   it('an absent egressProxy (mode "all") threads as undefined — legacy full network', async () => {
     await runShell({ command: 'echo hi' })
     expect(h.lastOpts?.egressProxy).toBeUndefined()
+  })
+})
+
+describe('run_shell names the grant that fits the client in its network-blocked hint', () => {
+  it('points an interactive run at "Allow for run"', async () => {
+    h.available = true
+    h.sandboxed = true
+    h.offlineFailure = true
+    try {
+      const out = await runShell({ command: 'curl https://example.com' })
+      expect(out).toContain(NETWORK_BLOCKED_HINT)
+    } finally {
+      h.offlineFailure = false
+    }
+  })
+
+  it('points a headless run at --allow-shell-network', async () => {
+    h.available = true
+    h.sandboxed = true
+    h.offlineFailure = true
+    try {
+      const out = await getTool('run_shell')!.execute(
+        { command: 'curl https://example.com' },
+        { ...ctx, unattended: true }
+      )
+      expect(out).toContain(HEADLESS_NETWORK_BLOCKED_HINT)
+      expect(out).not.toContain(NETWORK_BLOCKED_HINT)
+    } finally {
+      h.offlineFailure = false
+    }
   })
 })

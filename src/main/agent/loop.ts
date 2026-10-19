@@ -343,8 +343,9 @@ interface RunState {
   /**
    * Whether shell commands may reach the network this run. Drives the sandbox's network
    * switch — network egress is all-or-nothing at the OS layer, so this is one boolean,
-   * not a per-host set. Set by the one-time full-auto shell-network consent, or by
-   * "Allow for run" on a shell command (auto-edit/ask). When false, shell runs offline.
+   * not a per-host set. Set by the one-time full-auto shell-network consent, by
+   * "Allow for run" on a shell command (auto-edit/ask), or up front by a headless
+   * `--allow-shell-network`. When false, shell runs offline.
    */
   shellNetworkGranted: boolean
   /**
@@ -743,6 +744,11 @@ export async function startRun(
   // Seed "Allow for run" consent from any the user granted earlier in this
   // conversation, so it carries across turns rather than resetting each message.
   const seededOverride = overrideForConversation(conversationId)
+  // A headless `--allow-shell-network` is the run's shell-network grant, made up front
+  // because no one is there to answer "Allow for run" or the full-auto consent. It
+  // counts as decided, so full-auto doesn't pause on the consent. Not recorded on the
+  // conversation: it is a property of this invocation, and the next one passes it again.
+  const seededShellNetwork = req.allowShellNetwork === true
   const run: RunState = {
     abort,
     steering: [],
@@ -758,8 +764,8 @@ export async function startRun(
     override: seededOverride.kinds,
     networkHosts: seededOverride.networkHosts,
     shellUnsandboxedOverride: seededOverride.unsandboxedShell,
-    shellNetworkGranted: seededOverride.shellNetworkGranted,
-    shellNetworkDecided: seededOverride.shellNetworkDecided,
+    shellNetworkGranted: seededOverride.shellNetworkGranted || seededShellNetwork,
+    shellNetworkDecided: seededOverride.shellNetworkDecided || seededShellNetwork,
     policy: req.approvalPolicy,
     transcript: [],
     ...(owner !== undefined ? { owner } : {})
@@ -1674,7 +1680,8 @@ export async function startRun(
     // access; it is NO LONGER implied by full-auto — the sandbox reads the whole
     // filesystem, so blanket egress + full-auto is an exfiltration channel. Shell now
     // reaches the network only after a conscious per-run grant (the shell-network
-    // consent, or "Allow for run" on a shell command). See needsShellNetworkConsent.
+    // consent, "Allow for run" on a shell command, or headless --allow-shell-network).
+    // See needsShellNetworkConsent.
     const makeToolContext = (
       callId: string,
       attachImage: (i: ImageAttachment) => void,
@@ -1686,6 +1693,7 @@ export async function startRun(
       egressProxy,
       signal: abort.signal,
       ...(conversationId ? { conversationId } : {}),
+      ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
       ghExec,

@@ -303,6 +303,7 @@ async function run(
     model?: string
     unattended?: boolean
     overrides?: RunSettingsOverrides
+    allowShellNetwork?: boolean
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -336,7 +337,8 @@ async function run(
       approvalPolicy: opts.policy ?? 'ask',
       messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }],
       ...(opts.unattended !== undefined ? { unattended: opts.unattended } : {}),
-      ...(opts.overrides ? { overrides: opts.overrides } : {})
+      ...(opts.overrides ? { overrides: opts.overrides } : {}),
+      ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {})
     },
     send,
     (m) => {
@@ -5146,6 +5148,7 @@ describe('egress hardening', () => {
   // A shell-kind stand-in that reports the sandbox network flag it was handed, so we
   // can prove the shell-network consent actually flips (or withholds) network.
   let shellSawNetwork: boolean | undefined
+  let shellSawUnattended: boolean | undefined
   const probeNetShell = (): ToolDef => ({
     kind: 'shell',
     summarize: () => 'net shell',
@@ -5156,6 +5159,7 @@ describe('egress hardening', () => {
     },
     execute: async (_a, ctx) => {
       shellSawNetwork = ctx.allowNetwork
+      shellSawUnattended = ctx.unattended
       return 'ran'
     }
   })
@@ -5503,6 +5507,114 @@ describe('egress hardening', () => {
       })
       expect(approvalCallIds(r)).toEqual(['s1'])
       expect(offlineFlags(r)).toEqual([undefined])
+    })
+  })
+
+  describe('headless --allow-shell-network (req.allowShellNetwork)', () => {
+    // Headless has nobody to pick "Allow for run", so its grant arrives on the request.
+    // Forced confining host, as in #3b; reset by the top-level beforeEach.
+    beforeEach(() => {
+      shellSawNetwork = undefined
+      shellSawUnattended = undefined
+      h.sandboxed = true
+    })
+
+    const offlineFlags = (r: RunResult): Array<boolean | undefined> =>
+      r.events
+        .filter((e) => e.type === 'tool_approval')
+        .map((e) => (e as { shellOffline?: boolean }).shellOffline)
+
+    it('seeds the grant: a shell command approved with plain "Allow" runs online, unflagged', async () => {
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        unattended: true,
+        allowShellNetwork: true,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // auto-edit still gates the command itself; only its network changes.
+      expect(approvalCallIds(r)).toEqual(['s1'])
+      expect(offlineFlags(r)).toEqual([undefined])
+      expect(shellSawNetwork).toBe(true)
+      expect(shellSawUnattended).toBe(true)
+    })
+
+    it('counts as the full-auto network consent, so full-auto never pauses for it', async () => {
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        unattended: true,
+        allowShellNetwork: true,
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      expect(shellSawNetwork).toBe(true)
+    })
+
+    it('without the flag, plain "Allow" keeps a headless run offline and marks the context unattended', async () => {
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        unattended: true,
+        allowShellNetwork: false,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(offlineFlags(r)).toEqual([true])
+      expect(shellSawNetwork).toBe(false)
+      // The marker that switches the network-blocked hint to the CLI flag.
+      expect(shellSawUnattended).toBe(true)
+    })
+
+    it('leaves an interactive run unmarked, so it keeps the "Allow for run" hint', async () => {
+      h.probeTools = [probeNetShell()]
+      await run({
+        policy: 'auto-edit',
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(shellSawUnattended).toBeUndefined()
+    })
+
+    it('is not remembered on the conversation: a later turn without the flag runs offline', async () => {
+      h.probeTools = [probeNetShell()]
+      const conversationId = 'conv-headless-net'
+      const turn = (): ProviderStreamEvent[][] => [
+        [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'done', stopReason: 'end_turn' }]
+      ]
+      await run({
+        policy: 'auto-edit',
+        conversationId,
+        unattended: true,
+        allowShellNetwork: true,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: turn()
+      })
+      expect(shellSawNetwork).toBe(true)
+      const r = await run({
+        policy: 'auto-edit',
+        conversationId,
+        unattended: true,
+        allowShellNetwork: false,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: turn()
+      })
+      expect(offlineFlags(r)).toEqual([true])
+      expect(shellSawNetwork).toBe(false)
     })
   })
 })
