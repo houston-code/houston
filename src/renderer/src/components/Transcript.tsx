@@ -156,7 +156,8 @@ function PlanMarker({
         <Icon name="clipboard" />
       </span>
       <span className="plan-marker__text">
-        <span className="plan-marker__label">Plan ready</span>
+        {/* "ready" only while it awaits a decision; a decided plan reads "Plan · Rejected". */}
+        <span className="plan-marker__label">{status === 'pending' ? 'Plan ready' : 'Plan'}</span>
         <span className="plan-marker__title">{title}</span>
       </span>
       <span className={`plan-marker__status plan-marker__status--${status}`}>{label}</span>

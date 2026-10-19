@@ -206,6 +206,31 @@ describe('present_plan', () => {
   })
 })
 
+describe('reduceEvent — retry', () => {
+  const retry = (attempt: number): AgentEvent => ({
+    runId: 'r',
+    type: 'retry',
+    attempt,
+    max: 6,
+    message: 'Connection error.'
+  })
+
+  it('updates one notice in place across consecutive attempts', () => {
+    let items: DisplayItem[] = []
+    for (const n of [1, 2, 3]) items = reduceEvent(items, retry(n))
+    const notices = items.filter((i): i is NoticeItem => i.kind === 'notice')
+    expect(notices).toHaveLength(1)
+    expect(notices[0].text).toContain('retrying (3/6)')
+  })
+
+  it('starts a new notice when other output came between attempts', () => {
+    let items = reduceEvent([], retry(1))
+    items = reduceEvent(items, { runId: 'r', type: 'text', delta: 'partial reply' })
+    items = reduceEvent(items, retry(1))
+    expect(items.filter((i) => i.kind === 'notice')).toHaveLength(2)
+  })
+})
+
 describe('reduceEvent — ask_user', () => {
   const question: AgentEvent = {
     runId: 'r',

@@ -15,6 +15,7 @@ import type {
   UserItem
 } from './items'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
+import { parseMcpToolName } from '@shared/mcp'
 import { shortenPath } from './paths'
 
 export { shortenPath }
@@ -44,6 +45,21 @@ function prRef(v: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * The files an apply_patch envelope (or unified diff) touches, from its headers.
+ * Display only: the main process does the real parsing.
+ */
+function patchFiles(patch: string): string[] {
+  const files = new Set<string>()
+  for (const line of patch.split('\n')) {
+    const envelope = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line)
+    const unified = /^\+\+\+ (?:b\/)?(.+)$/.exec(line)
+    const path = (envelope?.[1] ?? unified?.[1])?.trim()
+    if (path && path !== '/dev/null') files.add(path)
+  }
+  return [...files]
+}
+
 /** A concise verb + target for a tool call, used in the compact row. */
 export function describeTool(item: ToolItem): ToolDescription {
   const a = item.args ?? {}
@@ -54,7 +70,17 @@ export function describeTool(item: ToolItem): ToolDescription {
     case 'write_file':
       return { verb: 'Write', target: path ? shortenPath(path) : '', mono: true }
     case 'edit_file':
+    case 'multi_edit':
       return { verb: 'Edit', target: path ? shortenPath(path) : '', mono: true }
+    case 'apply_patch': {
+      const files = patchFiles(str(a.patch) ?? '')
+      const target = files.length === 1 ? shortenPath(files[0]) : files.length > 1 ? `${files.length} files` : ''
+      return { verb: 'Patch', target, mono: files.length === 1 }
+    }
+    case 'git_status':
+      return { verb: 'Git status', target: '', mono: false }
+    case 'git_diff':
+      return { verb: 'Git diff', target: path ? shortenPath(path) : '', mono: true }
     case 'notebook_edit': {
       const cell = typeof a.cell === 'number' ? a.cell : undefined
       const mode = str(a.mode) ?? 'replace'
@@ -118,8 +144,37 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Comment PR', target: prRef(a.number) ?? '(current)', mono: false }
     case 'gh_pr_checkout':
       return { verb: 'Checkout PR', target: prRef(a.number) ?? '', mono: false }
-    default:
+    case 'gh_pr_checks':
+      return { verb: 'PR checks', target: prRef(a.number) ?? '(current)', mono: false }
+    case 'gh_pr_review':
+      return { verb: 'Review PR', target: prRef(a.number) ?? '(current)', mono: false }
+    case 'gh_pr_merge':
+      return { verb: 'Merge PR', target: prRef(a.number) ?? '(current)', mono: false }
+    case 'gh_issue_list':
+      return { verb: 'List issues', target: str(a.state) ?? 'open', mono: false }
+    case 'gh_issue_view':
+      return { verb: 'View issue', target: prRef(a.number) ?? '', mono: false }
+    case 'gh_issue_create':
+      return { verb: 'Open issue', target: str(a.title) ?? '', mono: false }
+    case 'gh_issue_comment':
+      return { verb: 'Comment issue', target: prRef(a.number) ?? '', mono: false }
+    case 'gh_run_list':
+      return { verb: 'List CI runs', target: str(a.branch) ?? str(a.workflow) ?? '', mono: false }
+    case 'gh_run_view':
+      return { verb: 'View CI run', target: str(a.run_id) ?? (typeof a.run_id === 'number' ? String(a.run_id) : ''), mono: true }
+    case 'gh_repo_create':
+      return { verb: 'Create repo', target: str(a.name) ?? '', mono: true }
+    case 'skill':
+      return { verb: 'Skill', target: str(a.name) ?? '', mono: false }
+    case 'recall_history':
+      return { verb: 'Recall', target: str(a.query) ?? '', mono: false }
+    default: {
+      // An MCP tool's wire name is mcp__<server>__<tool>; show it as "<tool>" from
+      // "<server>" rather than the mangled identifier.
+      const mcp = parseMcpToolName(item.name)
+      if (mcp) return { verb: mcp.toolName, target: item.summary ?? `via ${mcp.serverId}`, mono: false }
       return { verb: item.name, target: item.summary ?? str(a.path) ?? str(a.url) ?? '', mono: true }
+    }
   }
 }
 
