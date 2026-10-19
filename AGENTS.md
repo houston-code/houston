@@ -150,7 +150,12 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   lowercased, shell commands dequoted and `$'...'` decoded) so a re-spelling of a denied
   subject cannot slip past a rule. An allow reads a shell command the other way: a
   quoted `*`, `~`, `$`, or space stays distinct from a bare one, and an empty `''` word
-  from no word at all, so approving a literal never approves the expansion. The
+  from no word at all, so approving a literal never approves the expansion. Words split
+  only on unquoted space, tab, and newline, as in bash: quoted or escaped whitespace is
+  kept as written when matched and when "Always allow" saves a rule, so approving
+  `find . -delete \ ` never allows `find . -delete`. A deny or ask still collapses all
+  whitespace. An allow pattern ending in a lone backslash (one an earlier version saved
+  after trimming an escaped space) matches nothing. The
   workspace-escape check and the `cd` skip read a command's words as bash builds them
   (`"cd"k` is `cdk`, `$'/etc'` is `/etc`), so quoting can't hide a path or pass a
   program off as `cd`. The escape check also ends a word at an unquoted operator and

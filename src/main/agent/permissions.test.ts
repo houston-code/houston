@@ -731,6 +731,48 @@ describe('matchRule', () => {
       expect(matchRule(denyRm, 'run_shell', "rm '' -rf /tmp/x")).toBe('deny')
     })
 
+    it('an allow keeps quoted or escaped whitespace as written', () => {
+      // bash splits words only on unquoted spaces, tabs, and newlines. `rm 'my  file'`
+      // names a file with two spaces; `rm \  -rf x` passes rm " ", -rf, and x, while
+      // `rm \ -rf x` passes " -rf" and x; `find . -delete \ ` passes find a lone " ", so
+      // it errors and deletes nothing. A no-break space or `\r` is part of a word to bash.
+      const pairs: [string, string][] = [
+        ["rm 'my  file'", "rm 'my file'"],
+        ['rm "my  file"', 'rm "my file"'],
+        ["rm 'my\tfile'", "rm 'my file'"],
+        ["rm $'my  file'", "rm $'my file'"],
+        ['rm \\  -rf x', 'rm \\ -rf x'],
+        ['find . -delete \\ ', 'find . -delete'],
+        ['find . -delete \\\t', 'find . -delete'],
+        ['find . -delete \\ ', 'find . -delete \\'], // bash drops a trailing lone backslash
+        ["find . -delete ' '", 'find . -delete'],
+        ['find . -delete ', 'find . -delete'],
+        ['find . -delete\r', 'find . -delete'],
+        ['rm -rf x', 'rm -rf x']
+      ]
+      for (const [approved, other] of pairs) {
+        const exact: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: approved, exact: true }]
+        expect(matchRule(exact, 'run_shell', approved)).toBe('allow')
+        expect(matchRule(exact, 'run_shell', other)).toBeNull()
+        expect(matchRule([allow('run_shell', approved)], 'run_shell', other)).toBeNull()
+        expect(matchRule([{ action: 'allow', tool: 'run_shell', match: other, exact: true }], 'run_shell', approved)).toBeNull()
+      }
+      // Unquoted blanks still fold, however many there are and wherever they sit.
+      for (const cmd of ['git status', 'git   status -s', '\tgit\tstatus', '  git status  ', 'git status\t-s']) {
+        expect(matchRule([allow('run_shell', 'git  status')], 'run_shell', cmd)).toBe('allow')
+        expect(matchRule([allow('run_shell', ' git\tstatus ')], 'run_shell', cmd)).toBe('allow')
+      }
+      const file: PermissionRule[] = [{ action: 'allow', tool: 'run_shell', match: "rm 'my  file'", exact: true }]
+      for (const cmd of ["  rm   'my  file'  ", "rm\t'my  file'", 'rm "my  file"', 'rm my\\ \\ file']) {
+        expect(matchRule(file, 'run_shell', cmd)).toBe('allow')
+      }
+      // A deny or ask still folds all whitespace, so it fires on each of these.
+      expect(matchRule([deny('run_shell', 'find . -delete')], 'run_shell', 'find . -delete \\ ')).toBe('deny')
+      expect(matchRule([deny('run_shell', "rm 'my file'")], 'run_shell', "rm 'my  file'")).toBe('deny')
+      expect(matchRule([deny('run_shell', 'rm -rf*')], 'run_shell', 'rm \\  -rf x')).toBe('deny')
+      expect(matchRule([{ action: 'ask', tool: 'run_shell', match: 'rm -rf x' }], 'run_shell', 'rm -rf x')).toBe('ask')
+    })
+
     it("an allow reads `$'...'` like other quoting: a decoded `*` or `~` is never the bare one", () => {
       const pairs: [string, string][] = [
         ["rm $'*'", 'rm *'],
@@ -1262,6 +1304,46 @@ describe('a saved "Always allow" covers only the approved target', () => {
     expect(matchRule(saved('run_shell', { command: "ls '" }), 'run_shell', 'ls -la ~/.ssh', ROOTS)).toBeNull()
   })
 
+  it('run_shell: approving a command saves its quoted and escaped whitespace as written', () => {
+    // bash passes find a lone " " here, so it errors and deletes nothing; its rule must
+    // not allow `find . -delete`, nor that spelled with a trailing backslash bash drops.
+    const noop = saved('run_shell', { command: 'find . -delete \\ ' })
+    expect(noop).toEqual([{ action: 'allow', tool: 'run_shell', match: 'find . -delete \\ ' }])
+    expect(matchRule(noop, 'run_shell', 'find . -delete \\ ', ROOTS)).toBe('allow')
+    for (const cmd of ['find . -delete', 'find . -delete \\', 'find . -delete x', 'cd /work/project && find . -delete']) {
+      expect(matchRule(noop, 'run_shell', cmd, ROOTS)).toBeNull()
+    }
+    // Only unquoted blanks collapse in the saved rule.
+    const file = saved('run_shell', { command: "rm   'my  file'" })
+    expect(file.map((r) => r.match)).toEqual(["rm 'my  file'"])
+    expect(matchRule(file, 'run_shell', "rm 'my file'", ROOTS)).toBeNull()
+    // `rm \ -rf x` removes " -rf" and x; `rm \  -rf x` removes " " and x, recursively.
+    expect(matchRule(saved('run_shell', { command: 'rm \\ -rf x' }), 'run_shell', 'rm \\  -rf x', ROOTS)).toBeNull()
+    expect(matchRule(saved('run_shell', { command: 'rm \\  -rf x' }), 'run_shell', 'rm \\ -rf x', ROOTS)).toBeNull()
+    // A no-break space is part of the word to bash, so it is kept, never trimmed.
+    expect(matchRule(saved('run_shell', { command: 'find . -delete ' }), 'run_shell', 'find . -delete', ROOTS)).toBeNull()
+    // `\$(x)` is no substitution to bash; read as one, its leftover `rm \ ` still names
+    // the escaped space and never saves a bare `rm`.
+    expect(matchRule(saved('run_shell', { command: 'rm \\$(x)' }), 'run_shell', 'rm -rf /', ROOTS)).toBeNull()
+  })
+
+  it('run_shell: a rule saved by an earlier version reads as its text does', () => {
+    // Earlier versions collapsed whitespace before reading quotes. A collapsed quoted run
+    // now allows what the rule says, not the command it was saved from.
+    const collapsed: PermissionRule[] = [allow('run_shell', "rm 'my file'")]
+    expect(matchRule(collapsed, 'run_shell', "rm 'my file'", ROOTS)).toBe('allow')
+    expect(matchRule(collapsed, 'run_shell', "rm 'my  file'", ROOTS)).toBeNull()
+    // They also trimmed `find . -delete \ ` to `find . -delete \`, whose trailing backslash
+    // bash drops. No rule is saved ending in a lone backslash now, so such a rule is inert.
+    for (const old of [allow('run_shell', 'find . -delete \\'), { ...allow('run_shell', 'find . -delete \\'), exact: true }]) {
+      for (const cmd of ['find . -delete', 'find . -delete \\', 'find . -delete \\ ', 'find . -delete x']) {
+        expect(matchRule([old], 'run_shell', cmd, ROOTS)).toBeNull()
+      }
+    }
+    // An escaped backslash is no lone one.
+    expect(matchRule([allow('run_shell', 'ls \\\\')], 'run_shell', "ls '\\'", ROOTS)).toBe('allow')
+  })
+
   it('run_shell: every saved rule set auto-approves the command it was saved for', () => {
     for (const command of [
       'rm *',
@@ -1304,7 +1386,19 @@ describe('a saved "Always allow" covers only the approved target', () => {
       "rm '' -rf x",
       "'' rm -rf / && git status",
       `git commit -m '' && printf "%s\\n" "" $'' | wc -l`,
-      "ls '"
+      "ls '",
+      'find . -delete \\ ',
+      'find . -delete \\\t && ls',
+      "rm   'my  file'",
+      'rm \\  -rf x',
+      'rm \\ -rf x',
+      "grep 'a\tb' notes.txt",
+      "printf $'%s  %s' a b",
+      'find . -name x -exec rm {} \\;',
+      'echo hi \\',
+      'find . -delete ',
+      'git status\r',
+      'rm \\$(x)'
     ]) {
       expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS), command).toBe('allow')
     }
@@ -1400,6 +1494,13 @@ describe('splitShellCommand', () => {
     expect(splitShellCommand('make &>> build.log')).toEqual(['make &>> build.log'])
     expect(splitShellCommand('echo oops >&2')).toEqual(['echo oops >&2'])
     expect(splitShellCommand('read x <&3')).toEqual(['read x <&3'])
+  })
+
+  it('keeps a trailing escaped or non-blank space on a sub-command', () => {
+    // `\ ` is an argument to bash, and only space, tab, and newline separate words.
+    expect(splitShellCommand('find . -delete \\  && ls  ')).toEqual(['find . -delete \\ ', 'ls'])
+    expect(splitShellCommand('find . -delete\u00a0; ls')).toEqual(['find . -delete\u00a0', 'ls'])
+    expect(splitShellCommand("echo 'a\\' ; ls")).toEqual(["echo 'a\\'", 'ls'])
   })
 
   it('still splits a background & and the operators around a redirection', () => {
@@ -1568,6 +1669,17 @@ describe('shellRulePatterns', () => {
     expect(shellRulePatterns("'' rm -rf / && git status")).toEqual(["'' rm -rf /", 'git status'])
   })
 
+  it('keeps quoted and escaped whitespace as written, collapsing only unquoted blanks', () => {
+    expect(shellRulePatterns('  find  .  -delete \\ ')).toEqual(['find . -delete \\ '])
+    expect(shellRulePatterns("rm\t'my  file'   x")).toEqual(["rm 'my  file' x"])
+    expect(shellRulePatterns('rm \\  -rf x')).toEqual(['rm \\  -rf x'])
+    expect(shellRulePatterns("printf $'%s\t %s' a")).toEqual(["printf $'%s\t %s' a"])
+    expect(shellRulePatterns('git  status   -s')).toEqual(['git status'])
+    // A trailing lone backslash adds nothing to what bash runs, so it is not saved.
+    expect(shellRulePatterns('find . -name x -exec rm {} \\;')).toEqual(['find . -name x -exec rm {}'])
+    expect(shellRulePatterns('ls -la \\')).toEqual(['ls -la'])
+  })
+
   it('keeps command-wrapper-prefixed commands exact (never broadens to `sudo rm`)', () => {
     // A wrapper's second token is a program, not a sub-command verb — generalizing
     // `sudo rm -rf /tmp/build` to `sudo rm` would then auto-approve `sudo rm -rf /`.
@@ -1610,6 +1722,12 @@ describe('alreadyAllowedAsRule', () => {
     expect(alreadyAllowedAsRule([allow('run_shell', 'git *')], 'run_shell', 'npm ci')).toBe(false)
     expect(alreadyAllowedAsRule([deny('run_shell', 'git *')], 'run_shell', 'git status')).toBe(false)
     expect(alreadyAllowedAsRule([], 'run_shell', 'ls')).toBe(false)
+  })
+
+  it('reads a shell sample as written, quoted whitespace included', () => {
+    expect(alreadyAllowedAsRule([allow('run_shell', "rm 'my file'")], 'run_shell', "rm 'my  file'")).toBe(false)
+    expect(alreadyAllowedAsRule([allow('run_shell', 'find . -delete \\ ')], 'run_shell', 'find . -delete \\ ')).toBe(true)
+    expect(alreadyAllowedAsRule([allow('run_shell', 'git  status')], 'run_shell', 'git status')).toBe(true)
   })
 
   it('handles non-shell tools via the subject matcher', () => {
@@ -1785,6 +1903,20 @@ describe('cleanupPermissionRules', () => {
       deny('run_shell', '2')
     ]
     expect(cleanupPermissionRules(rules)).toEqual([allow('run_shell', 'echo venv-ok'), deny('run_shell', '2')])
+  })
+
+  it('drops a shell allow ending in a lone backslash, which no saved rule ends in now', () => {
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'find . -delete \\'),
+      { action: 'allow', tool: 'run_shell', match: 'find . -name x -exec rm {} \\', exact: true },
+      allow('run_shell', 'git status'),
+      deny('run_shell', 'curl x \\')
+    ]
+    expect(cleanupPermissionRules(rules)).toEqual([allow('run_shell', 'git status'), deny('run_shell', 'curl x \\')])
+    // An escaped trailing space, or an escaped backslash, is no lone backslash.
+    const kept: PermissionRule[] = [allow('run_shell', 'find . -delete \\ '), allow('run_shell', 'ls \\\\')]
+    expect(cleanupPermissionRules(kept)).toEqual(kept)
+    expect(cleanupPermissionRules([allow('run_shell', "rm   'my  file'")])).toEqual([allow('run_shell', "rm 'my  file'")])
   })
 
   describe('exact rules', () => {

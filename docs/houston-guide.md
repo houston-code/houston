@@ -480,7 +480,13 @@ where it changes nothing (`"git" status` is `git status`): a quoted or escaped `
 differently. Allowing `rm '*'` (one file named `*`) never allows `rm *`, and
 allowing `rm -rf '~'` (or `rm -rf $'\x7e'`) never allows `rm -rf ~`. An empty
 quoted argument counts as one: allowing `'' rm -rf /` (which runs nothing) never
-allows `rm -rf /`.
+allows `rm -rf /`. Quoted or escaped whitespace is part of an argument, as in bash,
+so an allow keeps it as written: allowing `rm 'my  file'` (two spaces) never allows
+`rm 'my file'`, and allowing `find . -delete \ ` (find gets a lone space and stops)
+never allows `find . -delete`. Spacing outside quotes doesn't matter. A rule an
+earlier version of Houston saved with that whitespace collapsed allows what its text
+says; one that ends in a lone backslash matches nothing, and **Clean up rules**
+removes it.
 An `apply_patch` call is checked against every file it adds, changes, deletes, or
 moves to: one denied file denies the whole patch, one `ask` file asks, and an
 `allow` covers it only when every file is allowed. "Always allow" or "Always deny"
