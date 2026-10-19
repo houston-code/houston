@@ -1,4 +1,4 @@
-import { BrowserWindow, session, type Session } from 'electron'
+import { BrowserWindow, session, type Session, type WebContents } from 'electron'
 import { isLoopbackHost } from './agent/loopback'
 import { hardenUntrustedSession } from './hardenedSession'
 import {
@@ -26,8 +26,12 @@ import {
 const PAINT_SETTLE_MS = 350
 /** Longest a click, double click, or key press waits for the navigation it started (a form post, a link). */
 const CLICK_NAV_TIMEOUT_MS = 15_000
-/** Poll interval while waiting on navigation or a `wait_for` selector. */
+/** Poll interval while waiting on navigation, a `wait_for` selector, or an `expect_text` condition. */
 const POLL_MS = 100
+/** Most page text read back over IPC; formatPageText cuts it much shorter. */
+const RAW_PAGE_TEXT_CHARS = 50_000
+/** What a fill step's script returns instead of 'ok' when it typed into a password field. */
+const FILLED_PASSWORD = 'ok:password'
 
 /**
  * Prepended to every step script. The capture window is hidden, so a native
@@ -79,7 +83,9 @@ const FOCUSED_FILE_INPUT = `document.activeElement instanceof HTMLInputElement &
  * The page-side script for a fill, click, or dblclick step, or the setup before
  * a press (focus the target; the key itself is sent as real input afterwards).
  * The selector and value are embedded as JSON string literals so they can't
- * break out of the expression. Returns 'ok' or a reason the step could not run.
+ * break out of the expression. Returns 'ok' (FILLED_PASSWORD for a fill into a
+ * password field, so the value can be scrubbed from what the capture reports) or
+ * a reason the step could not run.
  */
 export function stepScript(step: Extract<CaptureStep, { action: 'fill' | 'click' | 'dblclick' | 'press' }>): string {
   if (step.action === 'press' && step.selector === undefined) {
@@ -136,9 +142,53 @@ export function stepScript(step: Extract<CaptureStep, { action: 'fill' | 'click'
     else el.value = ${JSON.stringify(step.value)};
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    return 'ok';
+    return el instanceof HTMLInputElement && el.type === 'password' ? ${JSON.stringify(FILLED_PASSWORD)} : 'ok';
   })()`
 }
+
+/**
+ * Page-side check for an `expect_text` step. It matches rendered text
+ * (`innerText`, so hidden elements and form field values don't count), with runs
+ * of whitespace collapsed and case ignored, since CSS `text-transform` changes
+ * the case `innerText` reports. With a selector, any visible matching element
+ * counts. Returns 'found', 'missing', 'none' (no visible element to look in), or
+ * 'invalid' for a selector the page can't parse.
+ */
+export function textScript(step: Extract<CaptureStep, { action: 'expect_text' }>): string {
+  const scope =
+    step.selector === undefined
+      ? 'const els = document.body ? [document.body] : [];'
+      : `let els;
+    try { els = Array.from(document.querySelectorAll(${JSON.stringify(step.selector)})); } catch { return 'invalid'; }`
+  return `(() => {
+    const norm = (s) => String(s).replace(/\\s+/g, ' ').trim().toLowerCase();
+    const want = norm(${JSON.stringify(step.text)});
+    ${scope}
+    const shown = els.filter((el) => el.checkVisibility({ visibilityProperty: true }));
+    if (!shown.length) return 'none';
+    return shown.some((el) => norm(el.innerText || '').includes(want)) ? 'found' : 'missing';
+  })()`
+}
+
+/** Why an `expect_text` step failed, from the last result its page check returned. */
+export function expectTextError(step: Extract<CaptureStep, { action: 'expect_text' }>, last: unknown): string {
+  if (last === 'none') {
+    return step.selector === undefined ? 'the page has no visible body' : 'no visible element matches the selector'
+  }
+  return step.absent
+    ? `the text is still visible after ${step.timeoutMs}ms`
+    : `the text is not visible within ${step.timeoutMs}ms`
+}
+
+/**
+ * The page's rendered text, capped in the page so a huge document can't flood
+ * IPC; `formatPageText` trims it to the returned size. A body that isn't rendered
+ * reports nothing, since `innerText` would fall back to its raw `textContent`.
+ */
+export const PAGE_TEXT_SCRIPT = `(() => {
+  const b = document.body;
+  return b && b.getClientRects().length ? b.innerText.slice(0, ${RAW_PAGE_TEXT_CHARS}) : '';
+})()`
 
 /**
  * Page-side check for a `wait_for` step: does the selector match a visible
@@ -157,6 +207,32 @@ export function visibleScript(selector: string): string {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Evaluate `script` every POLL_MS until `settled` accepts its result or
+ * `timeoutMs` passes, and return the last result (undefined if it never
+ * evaluated). Evaluation can fail transiently mid-navigation, so a throw only
+ * means "not yet".
+ */
+async function pollPage(
+  wc: WebContents,
+  script: string,
+  timeoutMs: number,
+  settled: (result: unknown) => boolean
+): Promise<unknown> {
+  const deadline = Date.now() + timeoutMs
+  let last: unknown
+  for (;;) {
+    try {
+      last = await wc.executeJavaScript(script, true)
+      if (settled(last)) return last
+    } catch {
+      // Keep polling until the deadline.
+    }
+    if (Date.now() >= deadline) return last
+    await sleep(POLL_MS)
+  }
+}
 
 /** Normalize a console-message level (number in old Electron, string in new) to a name. */
 function consoleLevelName(level: unknown): string {
@@ -262,6 +338,7 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
   wc.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   const entries: ConsoleEntry[] = []
+  const typedSecrets: string[] = []
   // The `console-message` payload shape changed across Electron majors — accept both.
   wc.on('console-message', (eventOrLevel: unknown, level?: unknown, message?: unknown) => {
     const e = eventOrLevel as { level?: unknown; message?: unknown } | undefined
@@ -314,23 +391,26 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
           return { ok: true }
         }
         if (step.action === 'wait_for') {
-          const deadline = Date.now() + step.timeoutMs
-          for (;;) {
-            try {
-              const seen = await wc.executeJavaScript(visibleScript(step.selector), true)
-              if (seen === 'invalid') return { ok: false, error: INVALID_SELECTOR }
-              if (seen === true) return { ok: true }
-            } catch {
-              // Evaluation can fail transiently mid-navigation; keep polling until the deadline.
-            }
-            if (Date.now() >= deadline) {
-              return { ok: false, error: `no visible element matched within ${step.timeoutMs}ms` }
-            }
-            await sleep(POLL_MS)
-          }
+          const seen = await pollPage(
+            wc,
+            visibleScript(step.selector),
+            step.timeoutMs,
+            (r) => r === true || r === 'invalid'
+          )
+          if (seen === 'invalid') return { ok: false, error: INVALID_SELECTOR }
+          if (seen === true) return { ok: true }
+          return { ok: false, error: `no visible element matched within ${step.timeoutMs}ms` }
+        }
+        if (step.action === 'expect_text') {
+          const pass = step.absent ? 'missing' : 'found'
+          const last = await pollPage(wc, textScript(step), step.timeoutMs, (r) => r === pass || r === 'invalid')
+          if (last === 'invalid') return { ok: false, error: INVALID_SELECTOR }
+          if (last === pass) return { ok: true }
+          return { ok: false, error: expectTextError(step, last) }
         }
         const result = (await wc.executeJavaScript(stepScript(step), true)) as string
-        if (result !== 'ok') return { ok: false, error: result }
+        if (result === FILLED_PASSWORD && step.action === 'fill') typedSecrets.push(step.value)
+        else if (result !== 'ok') return { ok: false, error: result }
         if (step.action === 'press') {
           // Real input, not a synthetic KeyboardEvent: only a trusted key press
           // submits a form on Enter or activates a focused button.
@@ -351,6 +431,15 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
         return { ok: false, error: e instanceof Error ? e.message : String(e) }
       }
     },
+    async pageText() {
+      try {
+        const text: unknown = await wc.executeJavaScript(PAGE_TEXT_SCRIPT, true)
+        return typeof text === 'string' ? text : null
+      } catch {
+        return null
+      }
+    },
+    typedSecrets: () => typedSecrets,
     close: () => {
       if (!win.isDestroyed()) win.destroy()
     }

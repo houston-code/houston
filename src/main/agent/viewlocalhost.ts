@@ -39,13 +39,18 @@ export const MAX_STEPS = 20
 export const STEPS_BUDGET_MS = 60_000
 /** Longest a single `wait` step may pause. */
 export const MAX_WAIT_MS = 5_000
-/** Longest a `wait_for` step may wait for its selector (also its default). */
+/** Longest a `wait_for` step may wait for its selector (also its default), and the most an `expect_text` may wait. */
 export const MAX_WAIT_FOR_MS = 10_000
+/** How long an `expect_text` step waits for its condition by default. */
+export const DEFAULT_EXPECT_MS = 3_000
+/** Cap on the page text returned with each capture, so a long page can't swamp the context. */
+export const MAX_PAGE_TEXT_CHARS = 3_000
 const MAX_SELECTOR_CHARS = 500
 const MAX_VALUE_CHARS = 10_000
+const MAX_EXPECT_CHARS = 500
 
 /** The step actions, in the order the schema and error messages list them. */
-export const STEP_ACTIONS = ['fill', 'click', 'dblclick', 'press', 'wait_for', 'wait'] as const
+export const STEP_ACTIONS = ['fill', 'click', 'dblclick', 'press', 'wait_for', 'expect_text', 'wait'] as const
 
 /**
  * Keys a `press` step may send, by their DOM `KeyboardEvent.key` names. A fixed
@@ -78,7 +83,10 @@ export type PressKey = (typeof PRESS_KEYS)[number]
  * same with a double click (inline-edit UIs); `press` sends a real key press to
  * the selector's element, or to whatever has focus when no selector is given
  * (so fill then press Enter submits); `wait_for` waits until a selector matches
- * a visible element; `wait` pauses.
+ * a visible element; `expect_text` asserts that text is (or, with `absent`, is
+ * not) in the visible text of the page or of the elements matching a selector,
+ * waiting up to its timeout for that to become true, so a flow's outcome is a
+ * pass/fail fact rather than something read off the screenshot; `wait` pauses.
  */
 export type CaptureStep =
   | { action: 'fill'; selector: string; value: string }
@@ -86,6 +94,7 @@ export type CaptureStep =
   | { action: 'dblclick'; selector: string }
   | { action: 'press'; key: PressKey; selector?: string }
   | { action: 'wait_for'; selector: string; timeoutMs: number }
+  | { action: 'expect_text'; text: string; selector?: string; absent: boolean; timeoutMs: number }
   | { action: 'wait'; ms: number }
 
 export interface StepResult {
@@ -134,6 +143,40 @@ export interface LocalhostCapture {
   selectorMissed?: boolean
   /** One entry per step that ran, in order; stops after the first failure. */
   steps?: StepResult[]
+  /**
+   * The page's visible text after the steps (see {@link formatPageText}): rendered
+   * text only, so no form field values, with anything typed into a password field
+   * scrubbed. Absent when the page's text could not be read.
+   */
+  pageText?: string
+  /** True when {@link pageText} was cut to {@link MAX_PAGE_TEXT_CHARS}. */
+  pageTextTruncated?: boolean
+}
+
+/** Stands in for a password field's value anywhere the capture reports page output. */
+export const REDACTED_PASSWORD = '[password]'
+
+/** Replace every occurrence of each secret in `text` (literal match, not a pattern). */
+export function scrubTypedPasswords(text: string, secrets: readonly string[]): string {
+  let out = text
+  for (const secret of secrets) if (secret) out = out.split(secret).join(REDACTED_PASSWORD)
+  return out
+}
+
+/**
+ * Turn the page's raw rendered text into the compact snapshot returned with each
+ * capture: values typed into password fields scrubbed (a page can echo what was
+ * typed, e.g. a live preview), each line trimmed with runs of spaces collapsed,
+ * blank lines dropped, and the result cut to {@link MAX_PAGE_TEXT_CHARS}.
+ */
+export function formatPageText(raw: string, secrets: readonly string[]): { text: string; truncated: boolean } {
+  const text = scrubTypedPasswords(raw, secrets)
+    .split('\n')
+    .map((line) => line.replace(/[^\S\n]+/g, ' ').trim())
+    .filter((line) => line.length > 0)
+    .join('\n')
+  if (text.length <= MAX_PAGE_TEXT_CHARS) return { text, truncated: false }
+  return { text: text.slice(0, MAX_PAGE_TEXT_CHARS), truncated: true }
 }
 
 /** Format collected console entries into capped "LEVEL: text" lines. */
@@ -163,6 +206,10 @@ export interface CaptureSession {
   consoleEntries(): ConsoleEntry[]
   /** Run one interaction step in the loaded page. Never throws for a page-level failure. */
   runStep(step: CaptureStep): Promise<{ ok: true } | { ok: false; error: string }>
+  /** The page's rendered text (`innerText`), possibly capped; null if it can't be read. */
+  pageText(): Promise<string | null>
+  /** Values this session's steps typed into password fields, to scrub from what it reports. */
+  typedSecrets(): string[]
   close(): void
 }
 
@@ -276,16 +323,21 @@ export async function captureLocalhost(
     }
 
     const png = await session.screenshot(rect)
+    const secrets = session.typedSecrets()
+    const raw = await session.pageText()
+    const page = raw === null ? undefined : formatPageText(raw, secrets)
+    const consoleEntries = session.consoleEntries().map((e) => ({ ...e, text: scrubTypedPasswords(e.text, secrets) }))
     return {
       png,
-      console: formatConsole(session.consoleEntries()),
+      console: formatConsole(consoleEntries),
       title: session.title(),
       finalUrl: session.url() || url.toString(),
       width: rect ? rect.width : VIEWPORT.width,
       height: rect ? rect.height : VIEWPORT.height,
       ...(loadError ? { loadError } : {}),
       ...(selectorMissed ? { selectorMissed: true } : {}),
-      ...(steps ? { steps } : {})
+      ...(steps ? { steps } : {}),
+      ...(page ? { pageText: page.text, ...(page.truncated ? { pageTextTruncated: true } : {}) } : {})
     }
   } finally {
     session.close()
@@ -305,6 +357,10 @@ export function describeStep(step: CaptureStep): string {
       return step.selector ? `press ${step.key} on ${JSON.stringify(step.selector)}` : `press ${step.key}`
     case 'wait_for':
       return `wait for ${JSON.stringify(step.selector)}`
+    case 'expect_text': {
+      const what = `${step.absent ? 'expect no text' : 'expect text'} ${JSON.stringify(step.text)}`
+      return step.selector ? `${what} in ${JSON.stringify(step.selector)}` : what
+    }
     case 'wait':
       return `wait ${step.ms}ms`
   }
@@ -332,6 +388,11 @@ export function parseSteps(raw: unknown): CaptureStep[] {
       }
       return o.selector
     }
+    // For actions whose selector is optional: an empty one means "none".
+    const optionalSelector = (): string | undefined =>
+      o.selector === undefined || o.selector === null || (typeof o.selector === 'string' && !o.selector.trim())
+        ? undefined
+        : selector()
     const ms = (v: unknown, max: number, dflt: number): number =>
       typeof v === 'number' && Number.isFinite(v) ? Math.min(Math.max(0, Math.floor(v)), max) : dflt
     switch (o.action) {
@@ -351,10 +412,9 @@ export function parseSteps(raw: unknown): CaptureStep[] {
         const wanted = typeof o.key === 'string' ? o.key.toLowerCase() : undefined
         const key = PRESS_KEYS.find((k) => k.toLowerCase() === wanted)
         if (!key) throw new Error(`${where}.key must be one of ${PRESS_KEYS.join(', ')}.`)
-        // The selector is optional here: without one the key goes to whatever has focus.
-        const omitted =
-          o.selector === undefined || o.selector === null || (typeof o.selector === 'string' && !o.selector.trim())
-        return omitted ? { action: 'press', key } : { action: 'press', key, selector: selector() }
+        // Without a selector the key goes to whatever has focus.
+        const target = optionalSelector()
+        return target === undefined ? { action: 'press', key } : { action: 'press', key, selector: target }
       }
       case 'wait_for':
         return {
@@ -362,6 +422,23 @@ export function parseSteps(raw: unknown): CaptureStep[] {
           selector: selector(),
           timeoutMs: ms(o.timeout_ms, MAX_WAIT_FOR_MS, MAX_WAIT_FOR_MS)
         }
+      case 'expect_text': {
+        if (typeof o.value !== 'string' || !o.value.trim()) {
+          throw new Error(`${where}.value is required for "expect_text" (the text to look for).`)
+        }
+        if (o.value.length > MAX_EXPECT_CHARS) {
+          throw new Error(`${where}.value is longer than ${MAX_EXPECT_CHARS} characters.`)
+        }
+        // Without a selector the whole page's visible text is checked.
+        const scope = optionalSelector()
+        return {
+          action: 'expect_text',
+          text: o.value,
+          ...(scope === undefined ? {} : { selector: scope }),
+          absent: o.absent === true,
+          timeoutMs: ms(o.timeout_ms, MAX_WAIT_FOR_MS, DEFAULT_EXPECT_MS)
+        }
+      }
       case 'wait':
         return { action: 'wait', ms: ms(o.ms, MAX_WAIT_MS, 500) }
       default:

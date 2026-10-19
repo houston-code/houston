@@ -1,14 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  DEFAULT_EXPECT_MS,
+  MAX_PAGE_TEXT_CHARS,
   MAX_STEPS,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_MS,
+  REDACTED_PASSWORD,
   PRESS_KEYS,
   STEP_ACTIONS,
   captureLocalhost,
   describeStep,
   formatConsole,
+  formatPageText,
   parseSteps,
+  scrubTypedPasswords,
   runSteps,
   type CaptureStep,
   isBlockedSubresourceHost,
@@ -136,6 +141,8 @@ function fakeSession(over: Partial<CaptureSession> = {}): {
     screenshot: over.screenshot ?? (async () => Buffer.from('PNGBYTES')),
     consoleEntries: over.consoleEntries ?? (() => []),
     runStep: over.runStep ?? (async () => ({ ok: true as const })),
+    pageText: over.pageText ?? (async () => 'Hello'),
+    typedSecrets: over.typedSecrets ?? (() => []),
     close: () => {
       closed = true
       over.close?.()
@@ -325,8 +332,37 @@ describe('parseSteps', () => {
     expect(() => parseSteps([{ action: 'hover', selector: 'a' }])).toThrow(
       `steps[0].action must be one of ${STEP_ACTIONS.join(', ')}.`
     )
-    expect(STEP_ACTIONS).toEqual(['fill', 'click', 'dblclick', 'press', 'wait_for', 'wait'])
+    expect(STEP_ACTIONS).toEqual(['fill', 'click', 'dblclick', 'press', 'wait_for', 'expect_text', 'wait'])
     expect(() => parseSteps([{ action: 'press', key: 'F5' }])).toThrow(PRESS_KEYS.join(', '))
+  })
+
+  it('accepts expect_text, scoped or page-wide, present or absent', () => {
+    expect(
+      parseSteps([
+        { action: 'expect_text', value: 'Buy milk' },
+        { action: 'expect_text', value: 'Buy milk', selector: '.todo-list li', timeout_ms: 1500 },
+        { action: 'expect_text', value: 'Error', absent: true, selector: '' }
+      ])
+    ).toEqual([
+      { action: 'expect_text', text: 'Buy milk', absent: false, timeoutMs: DEFAULT_EXPECT_MS },
+      { action: 'expect_text', text: 'Buy milk', selector: '.todo-list li', absent: false, timeoutMs: 1500 },
+      { action: 'expect_text', text: 'Error', absent: true, timeoutMs: DEFAULT_EXPECT_MS }
+    ])
+  })
+
+  it('clamps an expect_text timeout and only takes absent when it is true', () => {
+    expect(parseSteps([{ action: 'expect_text', value: 'x', timeout_ms: 60_000, absent: 'yes' }])).toEqual([
+      { action: 'expect_text', text: 'x', absent: false, timeoutMs: MAX_WAIT_FOR_MS }
+    ])
+  })
+
+  it('rejects an expect_text without text to look for', () => {
+    expect(() => parseSteps([{ action: 'expect_text' }])).toThrow(/steps\[0\]\.value is required for "expect_text"/)
+    expect(() => parseSteps([{ action: 'expect_text', value: '   ' }])).toThrow(/value is required/)
+    expect(() => parseSteps([{ action: 'expect_text', value: 'v'.repeat(501) }])).toThrow(/longer than 500/)
+    expect(() => parseSteps([{ action: 'expect_text', value: 'v', selector: 's'.repeat(501) }])).toThrow(
+      /selector is longer than/
+    )
   })
 
   it('treats a missing steps argument as no steps', () => {
@@ -371,6 +407,49 @@ describe('describeStep', () => {
     expect(describeStep({ action: 'dblclick', selector: '.todo label' })).toBe('double-click ".todo label"')
     expect(describeStep({ action: 'press', key: 'Enter' })).toBe('press Enter')
     expect(describeStep({ action: 'press', key: 'Escape', selector: '.edit' })).toBe('press Escape on ".edit"')
+  })
+
+  it('describes text expectations, including what is expected', () => {
+    const step = { action: 'expect_text' as const, text: 'Buy milk', absent: false, timeoutMs: 3000 }
+    expect(describeStep(step)).toBe('expect text "Buy milk"')
+    expect(describeStep({ ...step, selector: 'li' })).toBe('expect text "Buy milk" in "li"')
+    expect(describeStep({ ...step, absent: true })).toBe('expect no text "Buy milk"')
+    expect(describeStep({ ...step, absent: true, selector: '.err' })).toBe('expect no text "Buy milk" in ".err"')
+  })
+})
+
+describe('formatPageText', () => {
+  it('trims lines, collapses runs of spaces, and drops blank lines', () => {
+    expect(formatPageText('  todos \n\n\t What  needs\u00a0to be done? \n\n\nBuy milk\n', [])).toEqual({
+      text: 'todos\nWhat needs to be done?\nBuy milk',
+      truncated: false
+    })
+  })
+
+  it('cuts long text to the cap and says so', () => {
+    const { text, truncated } = formatPageText('x'.repeat(MAX_PAGE_TEXT_CHARS + 50), [])
+    expect(text).toHaveLength(MAX_PAGE_TEXT_CHARS)
+    expect(truncated).toBe(true)
+    expect(formatPageText('x'.repeat(MAX_PAGE_TEXT_CHARS), []).truncated).toBe(false)
+  })
+
+  it('scrubs every value typed into a password field, before cutting', () => {
+    const raw = `Signed in. Preview: hunter2!x\n${'y'.repeat(MAX_PAGE_TEXT_CHARS)}`
+    const { text } = formatPageText(raw, ['hunter2!x'])
+    expect(text).not.toContain('hunter2')
+    expect(text.startsWith(`Signed in. Preview: ${REDACTED_PASSWORD}`)).toBe(true)
+  })
+})
+
+describe('scrubTypedPasswords', () => {
+  it('replaces every literal occurrence, treating regex characters literally', () => {
+    expect(scrubTypedPasswords('a.b+c a.b+c abxc', ['a.b+c'])).toBe(
+      `${REDACTED_PASSWORD} ${REDACTED_PASSWORD} abxc`
+    )
+  })
+
+  it('ignores empty secrets', () => {
+    expect(scrubTypedPasswords('abc', ['', 'zz'])).toBe('abc')
   })
 })
 
@@ -443,6 +522,59 @@ describe('runSteps', () => {
       }
     })
     await expect(runSteps(session, steps, ac.signal)).rejects.toThrow(/cancelled/)
+  })
+})
+
+describe('captureLocalhost page text', () => {
+  it('returns the formatted visible text', async () => {
+    const { session } = fakeSession({ pageText: async () => '  Todos \n\n Buy milk ' })
+    const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    expect(cap.pageText).toBe('Todos\nBuy milk')
+    expect(cap.pageTextTruncated).toBeUndefined()
+  })
+
+  it('flags text cut to the cap', async () => {
+    const { session } = fakeSession({ pageText: async () => 'z'.repeat(MAX_PAGE_TEXT_CHARS * 2) })
+    const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    expect(cap.pageText).toHaveLength(MAX_PAGE_TEXT_CHARS)
+    expect(cap.pageTextTruncated).toBe(true)
+  })
+
+  it('omits the text when the page could not be read', async () => {
+    const { session } = fakeSession({ pageText: async () => null })
+    const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    expect('pageText' in cap).toBe(false)
+  })
+
+  it('reads the text after the steps have run', async () => {
+    const order: string[] = []
+    const { session } = fakeSession({
+      runStep: async (s) => {
+        order.push(s.action)
+        return { ok: true }
+      },
+      pageText: async () => {
+        order.push('pageText')
+        return ''
+      }
+    })
+    const cap = await captureLocalhost(
+      { url: 'http://localhost:3000', steps: [{ action: 'press', key: 'Enter' }] },
+      { open: async () => session }
+    )
+    expect(order).toEqual(['press', 'pageText'])
+    expect(cap.pageText).toBe('')
+  })
+
+  it('never reports a value typed into a password field, in the page text or the console', async () => {
+    const { session } = fakeSession({
+      typedSecrets: () => ['test-only-pass'],
+      pageText: async () => 'Welcome back\nYour password is test-only-pass',
+      consoleEntries: () => [{ level: 'log', text: 'submitting {"password":"test-only-pass"}' }]
+    })
+    const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    expect(cap.pageText).toBe(`Welcome back\nYour password is ${REDACTED_PASSWORD}`)
+    expect(cap.console).toEqual([`LOG: submitting {"password":"${REDACTED_PASSWORD}"}`])
   })
 })
 
