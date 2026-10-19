@@ -217,6 +217,11 @@ export class MarkdownStream {
     return out
   }
 
+  /** Drop the unfinished block without rendering it (text that was taken back). */
+  discard(): void {
+    this.buf = ''
+  }
+
   /** True when nothing is buffered — used to decide whether a flush is needed. */
   get empty(): boolean {
     return this.buf.length === 0

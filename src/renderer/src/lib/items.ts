@@ -223,6 +223,27 @@ function finalizeStreaming(items: DisplayItem[]): DisplayItem[] {
   return items
 }
 
+/**
+ * Take back the last `textChars` of streamed text and `reasoningChars` of streamed
+ * reasoning from the streaming assistant bubble. While a model turn streams, only its
+ * text and reasoning deltas arrive, and they all append to that one bubble, so a
+ * discarded turn is exactly its tail. Earlier text in the same bubble (a reply the
+ * previous iteration began, which this turn was continuing) stays. A bubble left
+ * with nothing in it is removed rather than shown empty.
+ */
+function retractStreamed(items: DisplayItem[], textChars: number, reasoningChars: number): DisplayItem[] {
+  const last = items[items.length - 1]
+  if (!last || last.kind !== 'assistant' || !last.streaming) return items
+  if (textChars <= 0 && reasoningChars <= 0) return items
+  const text = last.text.slice(0, Math.max(0, last.text.length - Math.max(0, textChars)))
+  const prior = last.reasoning ?? ''
+  const reasoning = prior.slice(0, Math.max(0, prior.length - Math.max(0, reasoningChars)))
+  if (!text && !reasoning) return items.slice(0, -1)
+  const kept: AssistantItem = { kind: 'assistant', id: last.id, text, streaming: true }
+  if (reasoning) kept.reasoning = reasoning
+  return [...items.slice(0, -1), kept]
+}
+
 function updateTool(items: DisplayItem[], callId: string, patch: Partial<ToolItem>): DisplayItem[] {
   return items.map((it) => (it.kind === 'tool' && it.id === callId ? { ...it, ...patch } : it))
 }
@@ -484,6 +505,11 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       if (last?.kind === 'notice' && last.retry) return [...finalized.slice(0, -1), { ...last, text }]
       return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'info', retry: true }]
     }
+    // A model turn dropped mid-stream and is being redone. Retract what it showed so
+    // the redo is the only copy of the reply; the retry or fallback notice that always
+    // follows says why it vanished. The loop never persisted it, so a reload agrees.
+    case 'turn_discarded':
+      return retractStreamed(items, e.textChars, e.reasoningChars)
     case 'model_fallback': {
       const finalized = finalizeStreaming(items)
       return [

@@ -1412,3 +1412,89 @@ describe('live tool progress (text mode)', () => {
     expect(errJson.join('')).not.toContain('working')
   })
 })
+
+// Parity with the GUI reducer (items.test.ts) and the TUI (tui.test.ts): a turn the loop
+// throws away mid-stream and redoes must leave one copy of the reply. stdout can't be
+// taken back, so text mode holds each round's text until the round is over.
+describe('a turn the loop discarded and redid', () => {
+  const text = (delta: string): AgentEvent => ({ runId: 'run-1', type: 'text', delta })
+  const discarded: AgentEvent = {
+    runId: 'run-1',
+    type: 'turn_discarded',
+    attempt: 1,
+    reason: 'Overloaded',
+    textChars: 'The answer is forty'.length,
+    reasoningChars: 0
+  }
+  const retry: AgentEvent = { runId: 'run-1', type: 'retry', attempt: 1, max: 6, message: 'Overloaded' }
+  const done: AgentEvent = { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+
+  it('writes only the redo to stdout', async () => {
+    const { d, out, err } = deps([
+      text('The answer is '),
+      text('forty'),
+      discarded,
+      retry,
+      text('The answer is 42.'),
+      done
+    ])
+    expect(await runHeadless(baseOpts, d)).toBe(0)
+    expect(out.join('')).toBe('The answer is 42.\n')
+    expect(err.join('')).toContain('discarded a reply cut off mid-stream')
+    expect(err.join('')).toContain('retrying (1/6)')
+  })
+
+  it("releases each round's text when the round ends, ahead of what follows it", async () => {
+    const log: string[] = []
+    const { d } = deps(
+      [
+        text('Reading it.'),
+        { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'read_file', args: {} },
+        text('Half'),
+        { ...discarded, textChars: 4 },
+        retry,
+        text('Done.'),
+        done
+      ],
+      { out: (s) => log.push(`out:${s}`), err: (s) => log.push(`err:${s}`) }
+    )
+    await runHeadless(baseOpts, d)
+    expect(log[0]).toBe('out:Reading it.')
+    expect(log[1]).toBe('err:· read_file\n')
+    expect(log.filter((l) => l.startsWith('out:')).join('')).toBe('out:Reading it.out:Done.out:\n')
+  })
+
+  it('keeps a partial reply on stdout when the run ends on the failure', async () => {
+    // Not retried, so not discarded: the partial is all there is, ahead of the error.
+    const { d, out, err } = deps([text('Partial'), { runId: 'run-1', type: 'error', message: 'invalid request' }])
+    expect(await runHeadless(baseOpts, d)).toBe(1)
+    expect(out.join('')).toBe('Partial')
+    expect(err.join('')).toContain('invalid request')
+  })
+
+  it('leaves the discarded tail out of the --json final text', async () => {
+    // Text from earlier in the reply (here, before a continuation) stays; only what the
+    // discard retracted goes, so the redo isn't reported twice.
+    const { d, out } = deps([
+      text('Part one. '),
+      { runId: 'run-1', type: 'notice', message: 'continuing' },
+      text('The answer is forty'),
+      discarded,
+      retry,
+      text('The answer is 42.'),
+      done
+    ])
+    await runHeadless({ ...baseOpts, json: true }, d)
+    expect(resultLine(out).finalText).toBe('Part one. The answer is 42.')
+  })
+
+  it('passes the event through in --json mode for the consumer to retract', async () => {
+    const { d, out } = deps([text('The answer is forty'), discarded, retry, text('42'), done])
+    await runHeadless({ ...baseOpts, json: true }, d)
+    // Every agent event, ahead of the closing result line.
+    const events = out.slice(0, -1).map((l) => JSON.parse(l) as AgentEvent)
+    expect(events.map((e) => e.type)).toEqual(['text', 'turn_discarded', 'retry', 'text', 'done'])
+    expect(resultLine(out).type).toBe('result')
+    expect(events[1]).toMatchObject({ textChars: 19, reasoningChars: 0, attempt: 1 })
+  })
+})

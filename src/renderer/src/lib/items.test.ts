@@ -231,6 +231,70 @@ describe('reduceEvent — retry', () => {
   })
 })
 
+describe('reduceEvent — turn_discarded', () => {
+  const text = (delta: string): AgentEvent => ({ runId: 'r', type: 'text', delta })
+  const reasoning = (delta: string): AgentEvent => ({ runId: 'r', type: 'reasoning', delta })
+  const discarded = (textChars: number, reasoningChars: number): AgentEvent => ({
+    runId: 'r',
+    type: 'turn_discarded',
+    attempt: 1,
+    reason: 'Overloaded',
+    textChars,
+    reasoningChars
+  })
+  const retry: AgentEvent = { runId: 'r', type: 'retry', attempt: 1, max: 6, message: 'Overloaded' }
+  const replay = (events: AgentEvent[], start: DisplayItem[] = []): DisplayItem[] =>
+    events.reduce((acc, e) => reduceEvent(acc, e), start)
+  const assistants = (items: DisplayItem[]) =>
+    items.filter((i) => i.kind === 'assistant').map((i) => (i.kind === 'assistant' ? [i.text, i.reasoning] : []))
+
+  it('removes a partial reply so the redo is the only copy', () => {
+    const items = replay([
+      reasoning('Let me '),
+      reasoning('think.'),
+      text('The answer is '),
+      text('forty'),
+      discarded('The answer is forty'.length, 'Let me think.'.length),
+      retry,
+      text('The answer is 42.')
+    ])
+    expect(assistants(items)).toEqual([['The answer is 42.', undefined]])
+    expect(items.map((i) => i.kind)).toEqual(['notice', 'assistant'])
+  })
+
+  it('takes back only the discarded tail of a bubble a continuation was extending', () => {
+    // The previous iteration's reply ran into the output cap, so this turn was
+    // continuing it in the same bubble when it dropped.
+    const items = replay([text('First half, '), reasoning('carry on'), text('second ha'), discarded(9, 8), retry])
+    expect(assistants(items)).toEqual([['First half, ', undefined]])
+  })
+
+  it('leaves the transcript alone when the dropped turn showed nothing', () => {
+    // Only tool calls had arrived: they are collected, never shown.
+    const before = replay([text('Done reading.')])
+    expect(reduceEvent(before, discarded(0, 0))).toBe(before)
+  })
+
+  it('never strips a finished bubble', () => {
+    const before = replay([text('A tool call follows.'), retry])
+    expect(reduceEvent(before, discarded(5, 0))).toBe(before)
+  })
+
+  it('replays the same way on a mid-turn re-open', () => {
+    // A renderer that re-opens mid-turn rebuilds from the saved log, then replays the
+    // live buffer, which still holds the dropped attempt and its discard.
+    const saved = itemsFromMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'Earlier reply.' }
+    ])
+    const items = replay([text('partial'), discarded(7, 0), retry, text('full')], saved)
+    expect(assistants(items)).toEqual([
+      ['Earlier reply.', undefined],
+      ['full', undefined]
+    ])
+  })
+})
+
 describe('reduceEvent — ask_user', () => {
   const question: AgentEvent = {
     runId: 'r',

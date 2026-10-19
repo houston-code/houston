@@ -25,9 +25,10 @@ ships as a desktop app and as terminal clients.
   Conversation streams live, approvals and questions are answered inline, and
   slash commands switch settings mid-session. See "The terminal composer" below
   for how to type, paste, and edit a message.
-- **Headless (`houston -p "<prompt>"`).** Runs one prompt and streams the result
-  to stdout, then exits. Read-only by default; add `--full-auto` to let it edit
-  and run commands, `--json` for machine-readable events. Good for scripts and CI.
+- **Headless (`houston -p "<prompt>"`).** Runs one prompt and writes the result
+  to stdout, each model round's text once that round has finished, then exits.
+  Read-only by default; add `--full-auto` to let it edit and run commands,
+  `--json` for machine-readable events. Good for scripts and CI.
   With no human to answer approval prompts, `--on-approval <allow|deny|fail>`
   decides what a gated tool call gets: denied by default (allowed under
   `--full-auto`), with `fail` also exiting non-zero so a script can tell the run
@@ -128,6 +129,17 @@ deployment name: add the names you created in the Azure portal, and Houston send
 each request to that deployment. One provider covers as many deployments as you
 have, so a resource with separate GPT deployments needs only one entry here.
 
+### Dropped connections
+
+When the provider is overloaded, rate-limiting, or drops the connection, Houston
+retries the turn with a growing pause between attempts, telling you it is
+retrying. That holds even when part of the reply had already appeared: the
+partial reply is discarded and the turn starts over, so you only ever keep one
+copy of the answer. The desktop app removes the partial text, the terminal
+marks it as discarded (it can't erase what it printed), and headless mode never
+writes it to stdout. Any tool calls in a discarded reply never run. A failure
+that isn't transient (a bad key, a malformed request) ends the turn instead.
+
 ### Fallback models
 
 You can name next-choice models that Houston tries when your selected model
@@ -144,12 +156,12 @@ window even after compacting. Set them as an ordered list in settings.json:
 
 Entries are tried in order and may name any provider you have configured. One
 that no longer resolves (you removed the provider, or its key is missing) is
-skipped rather than failing the run. Houston only switches before any of the
-reply has appeared, so a fallback never splices two models' output together, and
-it tells you in the transcript when a reply came from a fallback. A request that
-failed for its own reasons (a bad key, a malformed request) is not retried on
-another model, since it would fail there too. Leave the list unset to have a
-failing model simply end the turn.
+skipped rather than failing the run. Any part of the reply that had already
+appeared is discarded before Houston switches, so a fallback never splices two
+models' output together, and it tells you in the transcript when a reply came
+from a fallback. A request that failed for its own reasons (a bad key, a
+malformed request) is not retried on another model, since it would fail there
+too. Leave the list unset to have a failing model simply end the turn.
 
 ## Slash commands
 

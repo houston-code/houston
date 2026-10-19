@@ -1018,9 +1018,26 @@ export type AgentEvent =
   | { runId: string; type: 'compaction'; summarized: number }
   | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
   | {
+      // A model turn failed transiently after part of it had streamed, and the loop
+      // threw that partial turn away to retry it: nothing from it was persisted, and
+      // the tool calls it had collected never ran. Clients retract what it showed:
+      // the last `textChars` of streamed text and `reasoningChars` of streamed
+      // reasoning (counted in UTF-16 code units, as `string.length` does), both of
+      // which belong to the turn now streaming. Always followed by a `retry` or a
+      // `model_fallback`, so the redo is the only copy of the reply the user keeps.
+      runId: string
+      type: 'turn_discarded'
+      /** The 1-based attempt that failed on the serving model, numbered like `retry`. */
+      attempt: number
+      reason: string
+      textChars: number
+      reasoningChars: number
+    }
+  | {
       // The turn gave up on one model and moved to the next entry in the user's
-      // fallback chain (see `AppSettings.fallbackModels`). Emitted only before any
-      // output has streamed, so it always precedes the reply the user actually sees.
+      // fallback chain (see `AppSettings.fallbackModels`). Anything the failing
+      // model had streamed is retracted first (`turn_discarded`), so the hop always
+      // precedes the reply the user actually sees.
       // `from`/`to` are display labels, not ids — the run's model is reported
       // separately via usage/cost.
       runId: string

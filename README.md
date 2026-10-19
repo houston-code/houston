@@ -330,10 +330,11 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
   *Appearance*; *System* follows your macOS appearance and switches live.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
-  dropped connections) are retried with exponential backoff — shown inline as a
-  "retrying…" notice — as long as nothing has streamed yet, so a blip mid-run no
-  longer throws the whole turn away. If a turn still fails, a **Retry** button
-  re-runs it without you re-typing.
+  dropped connections) are retried with exponential backoff, shown inline as a
+  "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
+  reply that drops partway through is discarded and started over, never shown
+  twice. If a turn still fails, a **Retry** button re-runs it without you
+  re-typing.
 - **Secure key storage.** API keys are encrypted with the macOS Keychain
   (Electron `safeStorage`) and never leave the main process or touch the renderer.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
