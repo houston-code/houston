@@ -272,9 +272,10 @@ Open source under the [Apache License 2.0](LICENSE).
   checked before the policy; first match wins.
 - **Hooks.** Run your own shell commands around tool calls (Settings → *Hooks*):
   a *PreToolUse* hook can block a call by exiting non-zero, and a *PostToolUse*
-  hook's output is fed back to the agent — e.g. auto-format after every edit, or
+  hook's output is fed back to the agent, e.g. auto-format after every edit, or
   run tests after a write. Hooks run sandboxed to the project; the call's context
-  is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT`.
+  is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT` (or, for an input over 16 KB,
+  a temp file named by `$HOUSTON_TOOL_INPUT_FILE`).
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
   lifecycle hooks — `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
   fn)` — for logging, metrics, or notifications. Plugins are local trusted files

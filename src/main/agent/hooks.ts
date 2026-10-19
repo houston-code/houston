@@ -1,3 +1,6 @@
+import { promises as fs } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { Hook } from '@shared/types'
 import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
@@ -8,7 +11,9 @@ import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../
  * and runs inside the same Seatbelt sandbox as run_shell — confined to the
  * workspace, no network — so a buggy hook can't escape the project. Context is
  * passed via HOUSTON_* environment variables (never interpolated into the command,
- * so there's no injection).
+ * so there's no injection). A payload too large for an environment variable is
+ * written to a private temp file instead, named by the matching `*_FILE` variable
+ * (see {@link prepareHookEnv}).
  *
  * Events:
  * - PreToolUse: before a tool runs. Can block the call, auto-approve it (skip the
@@ -68,16 +73,72 @@ export function matchingHooks(hooks: Hook[] | undefined, event: HookEvent, subje
 
 type Runner = (opts: SandboxRunOptions) => Promise<SandboxRunResult>
 
-function hookEnv(event: HookEvent, ctx: HookContext): NodeJS.ProcessEnv {
+/**
+ * Largest payload, in bytes, passed directly in an environment variable. The OS caps
+ * them: Linux refuses any single variable over 128 KB, macOS refuses the whole
+ * environment past about 1 MB, and Windows caps a variable at 32,767 characters.
+ * Past those, the hook couldn't even be launched (`spawn E2BIG`), so a large write or
+ * a long pasted prompt failed every matching hook. Kept well below all three, with
+ * room for several payloads and the inherited environment.
+ */
+export const HOOK_ENV_PAYLOAD_MAX_BYTES = 16 * 1024
+
+/** The payload variables, each with a `*_FILE` twin used when the payload is large. */
+const PAYLOAD_VARS = ['HOUSTON_TOOL_INPUT', 'HOUSTON_TOOL_RESULT', 'HOUSTON_USER_PROMPT'] as const
+
+/** A hook's environment, plus the cleanup for any payload files it references. */
+interface PreparedHookEnv {
+  env: NodeJS.ProcessEnv
+  cleanup: () => Promise<void>
+}
+
+/**
+ * Build the environment a hook runs with. Each payload (the tool input as JSON, the
+ * tool result, the submitted prompt) is passed in its variable when it fits in
+ * {@link HOOK_ENV_PAYLOAD_MAX_BYTES}. A larger one is written to a file in a private
+ * temp directory (0700, the file 0600) and `<VAR>_FILE` names it, with `<VAR>` left
+ * unset, so a hook reads whichever of the two is present. The temp dir is under the
+ * OS temp dir, which every sandbox backend can read. Call `cleanup` once the hooks
+ * have run. Exported for testing.
+ */
+export async function prepareHookEnv(event: HookEvent, ctx: HookContext): Promise<PreparedHookEnv> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOUSTON_HOOK_EVENT: event,
-    HOUSTON_TOOL_NAME: ctx.tool,
-    HOUSTON_TOOL_INPUT: JSON.stringify(ctx.input ?? {})
+    HOUSTON_TOOL_NAME: ctx.tool
   }
-  if (ctx.result !== undefined) env.HOUSTON_TOOL_RESULT = ctx.result
-  if (ctx.prompt !== undefined) env.HOUSTON_USER_PROMPT = ctx.prompt
-  return env
+  // Never pass along a payload inherited from the environment Houston itself was
+  // launched with: a hook must only ever see this call's values.
+  for (const name of PAYLOAD_VARS) {
+    delete env[name]
+    delete env[`${name}_FILE`]
+  }
+  const payloads: [(typeof PAYLOAD_VARS)[number], string][] = [
+    ['HOUSTON_TOOL_INPUT', JSON.stringify(ctx.input ?? {})]
+  ]
+  if (ctx.result !== undefined) payloads.push(['HOUSTON_TOOL_RESULT', ctx.result])
+  if (ctx.prompt !== undefined) payloads.push(['HOUSTON_USER_PROMPT', ctx.prompt])
+
+  let dir: string | null = null
+  const cleanup = async (): Promise<void> => {
+    if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+  try {
+    for (const [name, value] of payloads) {
+      if (Buffer.byteLength(value, 'utf8') <= HOOK_ENV_PAYLOAD_MAX_BYTES) {
+        env[name] = value
+        continue
+      }
+      dir ??= await fs.mkdtemp(join(tmpdir(), 'houston-hook-'))
+      const file = join(dir, `${name.toLowerCase()}.txt`)
+      await fs.writeFile(file, value, { encoding: 'utf8', mode: 0o600 })
+      env[`${name}_FILE`] = file
+    }
+  } catch (e) {
+    await cleanup()
+    throw e
+  }
+  return { env, cleanup }
 }
 
 /** A structured directive a hook may print as a single JSON object on stdout. */
@@ -156,30 +217,59 @@ export async function runHooks(
   let approved = false
   let updatedInput: Record<string, unknown> | undefined
 
-  for (const hook of matched) {
-    const res = await run({
-      command: hook.command,
-      cwd: workspace,
-      workspace,
-      allowNetwork: false,
-      signal,
-      env: hookEnv(event, ctx)
-    })
-    const directive = parseDirective(res.stdout)
-    if (directive) {
-      if (directive.reason) reasons.push(directive.reason)
-      if (directive.additionalContext) contexts.push(directive.additionalContext)
-      if (directive.systemMessage) systemMsgs.push(directive.systemMessage)
-      if (directive.updatedInput) updatedInput = directive.updatedInput
-      if (directive.decision === 'block') blocked = true
-      else if (directive.decision === 'approve') approved = true
-    } else {
-      // Backward-compatible plain-text feedback (stdout + stderr).
-      const out = [res.stdout?.trimEnd(), res.stderr?.trimEnd()].filter(Boolean).join('\n').trim()
-      if (out) reasons.push(out)
+  // A hook that can't be given its input, or can't be launched, never throws out of
+  // here (that ended the whole turn). It counts as a failed hook instead: a blocking
+  // event fails closed, so a guard hook that couldn't run never lets the action through.
+  const failure = (what: string, e: unknown): HookOutcome => ({
+    blocked: blocking,
+    approved: false,
+    message: `${what}: ${e instanceof Error ? e.message : String(e)}`
+  })
+
+  let prepared: PreparedHookEnv
+  try {
+    prepared = await prepareHookEnv(event, ctx)
+  } catch (e) {
+    return failure('Could not pass the hook its input', e)
+  }
+
+  try {
+    for (const hook of matched) {
+      let res: SandboxRunResult
+      try {
+        res = await run({
+          command: hook.command,
+          cwd: workspace,
+          workspace,
+          allowNetwork: false,
+          signal,
+          env: prepared.env
+        })
+      } catch (e) {
+        if (blocking) blocked = true
+        // The command itself stays out of the message: it can hold a token, and this
+        // text can reach an error the user sees.
+        reasons.push(`A ${event} hook could not be started: ${e instanceof Error ? e.message : String(e)}`)
+        continue
+      }
+      const directive = parseDirective(res.stdout)
+      if (directive) {
+        if (directive.reason) reasons.push(directive.reason)
+        if (directive.additionalContext) contexts.push(directive.additionalContext)
+        if (directive.systemMessage) systemMsgs.push(directive.systemMessage)
+        if (directive.updatedInput) updatedInput = directive.updatedInput
+        if (directive.decision === 'block') blocked = true
+        else if (directive.decision === 'approve') approved = true
+      } else {
+        // Backward-compatible plain-text feedback (stdout + stderr).
+        const out = [res.stdout?.trimEnd(), res.stderr?.trimEnd()].filter(Boolean).join('\n').trim()
+        if (out) reasons.push(out)
+      }
+      // A non-zero exit still blocks a blocking event, regardless of any directive.
+      if (blocking && res.exitCode !== 0) blocked = true
     }
-    // A non-zero exit still blocks a blocking event, regardless of any directive.
-    if (blocking && res.exitCode !== 0) blocked = true
+  } finally {
+    await prepared.cleanup()
   }
 
   // A block always wins over an approve.

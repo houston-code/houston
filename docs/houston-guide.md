@@ -669,7 +669,15 @@ When several hooks match, they run in order; any block wins, and the last
 rewrite wins. Hooks run in the same project sandbox as `run_shell` (no
 network). Context arrives in environment variables: `$HOUSTON_HOOK_EVENT`,
 `$HOUSTON_TOOL_NAME`, and `$HOUSTON_TOOL_INPUT`, plus `$HOUSTON_TOOL_RESULT`
-(PostToolUse) and `$HOUSTON_USER_PROMPT` (UserPromptSubmit).
+(PostToolUse) and `$HOUSTON_USER_PROMPT` (UserPromptSubmit). A payload over
+16 KB (a large write, a long tool output, a long pasted prompt) is too big for an
+environment variable, so it is written to a private temp file instead: the
+variable is left unset and `$HOUSTON_TOOL_INPUT_FILE`, `$HOUSTON_TOOL_RESULT_FILE`,
+or `$HOUSTON_USER_PROMPT_FILE` holds the file's path. A hook that may see large
+payloads should read whichever of the two is set. The file is removed once the
+hooks finish. A hook that can't be started counts as a failed hook, so a
+PreToolUse or UserPromptSubmit hook that can't run blocks rather than lets the
+action through.
 
 ## Plugins
 
