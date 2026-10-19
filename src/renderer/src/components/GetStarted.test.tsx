@@ -3,9 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChecklistFacts } from '@shared/onboarding'
 import { GetStarted } from './GetStarted'
 
-function setup(facts: Partial<ChecklistFacts> = {}) {
+function setup(facts: Partial<ChecklistFacts> = {}, modelSummary?: string) {
   const props = {
     facts: { modelReady: false, hasWorkspace: false, hasConversation: false, ...facts },
+    modelSummary,
     onConnectModel: vi.fn(),
     onChooseFolder: vi.fn(),
     onSkip: vi.fn()
@@ -52,5 +53,23 @@ describe('GetStarted', () => {
     const p = setup()
     fireEvent.click(screen.getByRole('button', { name: 'Skip setup' }))
     expect(p.onSkip).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets a finished step 1 be changed, showing what it connected', () => {
+    const p = setup({ modelReady: true }, 'Anthropic · Claude Sonnet 5.5')
+    expect(screen.getByText('Anthropic · Claude Sonnet 5.5')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Change model' }))
+    expect(p.onConnectModel).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers Change only on step 1, and only once it is done', () => {
+    setup()
+    expect(screen.queryByRole('button', { name: 'Change model' })).not.toBeInTheDocument()
+  })
+
+  it('keeps Change available after the folder step is done too', () => {
+    setup({ modelReady: true, hasWorkspace: true }, 'OpenAI · GPT 6.1 Sol')
+    expect(screen.getAllByRole('button', { name: /Change/ })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Change model' })).toBeInTheDocument()
   })
 })

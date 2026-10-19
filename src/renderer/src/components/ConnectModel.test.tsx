@@ -63,7 +63,8 @@ describe('ConnectModel', () => {
     const { onConnected } = renderPanel()
     fireEvent.change(keyInput(), { target: { value: '  sk-test  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
-    await waitFor(() => expect(onConnected).toHaveBeenCalledWith(fresh, 'anthropic'))
+    // A first connection picks no model; the app selects the provider's default.
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith(fresh, 'anthropic', undefined))
     expect(api.testKey).toHaveBeenCalledWith('anthropic', 'sk-test')
     expect(api.setKey).toHaveBeenCalledWith('anthropic', 'sk-test')
     expect(api.testKey.mock.invocationCallOrder[0]).toBeLessThan(api.setKey.mock.invocationCallOrder[0])
@@ -169,5 +170,72 @@ describe('ipcErrorMessage', () => {
       )
     ).toBe('401 invalid x-api-key')
     expect(ipcErrorMessage(new Error('plain'))).toBe('plain')
+  })
+})
+
+describe('ConnectModel reopened from a finished step 1', () => {
+  /** Anthropic connected (key stored) and selected; OpenAI has no key. */
+  function connected(): AppSettings {
+    const base = settings()
+    return {
+      ...base,
+      providers: base.providers.map((p) => (p.id === 'anthropic' ? { ...p, hasKey: true } : p)),
+      selected: { providerId: 'anthropic', model: 'claude-opus-5-5' }
+    }
+  }
+
+  it('starts on what is set: the selected provider, a saved key, and the current model', () => {
+    installApi()
+    renderPanel(connected())
+    expect(screen.getByRole('radio', { name: /Anthropic/ })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: /Anthropic/ })).toHaveTextContent('(connected)')
+    expect(screen.getByText('Key saved for Anthropic')).toBeInTheDocument()
+    expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Model')).toHaveValue('claude-opus-5-5')
+  })
+
+  it('switches models without touching the key', async () => {
+    const { api, fresh } = installApi()
+    const { onConnected } = renderPanel(connected())
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-haiku-5-5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use this model' }))
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith(fresh, 'anthropic', 'claude-haiku-5-5'))
+    expect(api.setKey).not.toHaveBeenCalled()
+    expect(api.testKey).not.toHaveBeenCalled()
+  })
+
+  it('Replace key brings back the key box, checks the new key, and keeps the picked model', async () => {
+    const { api, fresh } = installApi()
+    const { onConnected } = renderPanel(connected())
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-haiku-5-5' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Replace key' }))
+    fireEvent.change(keyInput(), { target: { value: 'sk-new' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith(fresh, 'anthropic', 'claude-haiku-5-5'))
+    expect(api.testKey).toHaveBeenCalledWith('anthropic', 'sk-new')
+  })
+
+  it('a provider without a key still asks for one', () => {
+    installApi()
+    renderPanel(connected())
+    fireEvent.click(screen.getByRole('radio', { name: 'OpenAI' }))
+    expect(screen.getByLabelText('API key')).toBeInTheDocument()
+    expect(screen.queryByText(/Key saved/)).not.toBeInTheDocument()
+  })
+
+  it('a running local host shows its models, with Check again instead of Replace key', () => {
+    installApi()
+    const base = connected()
+    renderPanel({
+      ...base,
+      providers: base.providers.map((p) =>
+        p.id === 'ollama' ? { ...p, models: [{ id: 'llama3.1' }, { id: 'qwen3' }] } : p
+      ),
+      selected: { providerId: 'ollama', model: 'qwen3' }
+    })
+    expect(screen.getByText('Ollama is running with 2 models')).toBeInTheDocument()
+    expect(screen.getByLabelText('Model')).toHaveValue('qwen3')
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    expect(screen.getByRole('button', { name: 'Check connection' })).toBeInTheDocument()
   })
 })

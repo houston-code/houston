@@ -14,12 +14,20 @@ const STEPS: { id: ChecklistStep; title: string; hint: string }[] = [
 
 export interface GetStartedProps {
   facts: ChecklistFacts
+  /** What step 1 connected, e.g. "Anthropic · Claude Sonnet 5.5", shown once it's done. */
+  modelSummary?: string
   onConnectModel: () => void
   onChooseFolder: () => void
   onSkip: () => void
 }
 
-export function GetStarted({ facts, onConnectModel, onChooseFolder, onSkip }: GetStartedProps): JSX.Element {
+export function GetStarted({
+  facts,
+  modelSummary,
+  onConnectModel,
+  onChooseFolder,
+  onSkip
+}: GetStartedProps): JSX.Element {
   const view = checklistView(facts)
   const action: Partial<Record<ChecklistStep, { label: string; run: () => void }>> = {
     model: { label: 'Connect', run: onConnectModel },
@@ -56,6 +64,9 @@ export function GetStarted({ facts, onConnectModel, onChooseFolder, onSkip }: Ge
                   {done && <span className="sr-only"> (done)</span>}
                 </span>
                 {!done && <span className="get-started__hint">{step.hint}</span>}
+                {done && step.id === 'model' && modelSummary && (
+                  <span className="get-started__hint">{modelSummary}</span>
+                )}
               </span>
               {act && !done && (
                 <button
@@ -64,6 +75,17 @@ export function GetStarted({ facts, onConnectModel, onChooseFolder, onSkip }: Ge
                   onClick={act.run}
                 >
                   {act.label}
+                </button>
+              )}
+              {done && step.id === 'model' && (
+                // Back to step 1 while setup is still open: switch model or provider.
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  aria-label="Change model"
+                  onClick={onConnectModel}
+                >
+                  Change
                 </button>
               )}
             </li>
