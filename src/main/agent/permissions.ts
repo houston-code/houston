@@ -984,6 +984,30 @@ export function shellRulePatterns(command: string): string[] {
 }
 
 /**
+ * The rule pattern(s) an "Always allow" / "Always deny" on a call persists, each saved
+ * as a rule for the call's own tool.
+ *
+ * - An ALLOW on `run_shell` stores generalized per-sub-command prefixes (see
+ *   {@link shellRulePatterns}); a shell deny stays exact (a broadened deny is risky).
+ * - `apply_patch` stores one path per file the patch touches (see
+ *   {@link patchSubjectPaths}), since a rule over the whole list would match no single
+ *   file. A patch that names no file stores nothing: the only pattern left would be
+ *   `*`, which would allow (or deny) every patch to every file.
+ * - Anything else stores its exact subject, or `*` for a tool whose calls carry no
+ *   subject at all (the rule then names the tool itself).
+ */
+export function persistedRulePatterns(
+  action: 'allow' | 'deny',
+  toolName: string,
+  args: Record<string, unknown>
+): string[] {
+  const subject = permissionSubject(toolName, args)
+  if (toolName === 'apply_patch') return patchSubjectPaths(subject)
+  if (action === 'allow' && toolName === 'run_shell' && subject) return shellRulePatterns(subject)
+  return [subject || '*']
+}
+
+/**
  * Whether the current `rules` already resolve `sample` (a command, path, URL, or query
  * that a new rule would target) to ALLOW. Used to skip persisting a rule an existing,
  * broader rule already covers, so "Always allow" never piles up redundant entries.

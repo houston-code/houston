@@ -9,6 +9,7 @@ import {
   parseTightenOnlyRules,
   patchSubjectPaths,
   permissionSubject,
+  persistedRulePatterns,
   shellReferencesExternalPath,
   shellRulePatterns,
   shellWritesSensitivePath,
@@ -556,6 +557,110 @@ describe('matchRule', () => {
     it('normalizes whitespace so spacing tricks cannot dodge a deny rule', () => {
       expect(matchRule(rules, 'run_shell', 'rm    -rf   /tmp/x')).toBe('deny')
     })
+  })
+})
+
+/** A patch envelope from per-op header lines (bodies filled in per op). */
+function patchOf(...ops: string[][]): string {
+  return ['*** Begin Patch', ...ops.flat(), '*** End Patch'].join('\n')
+}
+const addOp = (path: string): string[] => [`*** Add File: ${path}`, '+x']
+const updateOp = (path: string, moveTo?: string): string[] => [
+  `*** Update File: ${path}`,
+  ...(moveTo ? [`*** Move to: ${moveTo}`] : []),
+  '@@',
+  '-a',
+  '+b'
+]
+const deleteOp = (path: string): string[] => [`*** Delete File: ${path}`]
+
+describe('apply_patch files and rules', () => {
+  const ROOTS = ['/work/project']
+  const denySecrets: PermissionRule[] = [deny('*', 'secrets/*')]
+  const files = (patch: string): string[] => patchSubjectPaths(permissionSubject('apply_patch', { patch }))
+  const matchPatch = (rules: PermissionRule[], patch: string): PermissionRule['action'] | null =>
+    matchRule(rules, 'apply_patch', permissionSubject('apply_patch', { patch }), ROOTS)
+
+  it('lists every file an apply_patch touches, both ends of a move included, once each', () => {
+    const patch = patchOf(
+      addOp('added.txt'),
+      updateOp('changed.txt'),
+      updateOp('from.txt', 'to/moved.txt'),
+      deleteOp('gone.txt'),
+      updateOp('added.txt')
+    )
+    expect(files(patch)).toEqual(['added.txt', 'changed.txt', 'from.txt', 'to/moved.txt', 'gone.txt'])
+  })
+
+  it('reads the paths of a unified diff too', () => {
+    const patch = ['--- /dev/null', '+++ b/secrets/new.txt', '@@ -0,0 +1 @@', '+x'].join('\n')
+    expect(files(patch)).toEqual(['secrets/new.txt'])
+  })
+
+  it('names no file for a patch that does not parse', () => {
+    expect(files('not a patch')).toEqual([])
+    expect(permissionSubject('apply_patch', {})).toBe('')
+  })
+
+  it('denies a patch when any one file is denied, whatever allows the rest', () => {
+    const rules: PermissionRule[] = [...denySecrets, allow('apply_patch', '*')]
+    expect(matchPatch(rules, patchOf(addOp('src/ok.ts'), updateOp('secrets/keys.txt')))).toBe('deny')
+  })
+
+  it('denies an update, a delete, a move out of, and a move into a denied directory', () => {
+    for (const ops of [updateOp('secrets/a.txt'), deleteOp('secrets/a.txt'), updateOp('secrets/a.txt', 'a.txt'), updateOp('a.txt', 'secrets/a.txt')]) {
+      expect(matchPatch(denySecrets, patchOf(ops))).toBe('deny')
+    }
+  })
+
+  it('asks when any file asks, even if every other file is allowed', () => {
+    const rules: PermissionRule[] = [{ action: 'ask', tool: 'apply_patch', match: 'prod/*' }, allow('*', '*')]
+    expect(matchPatch(rules, patchOf(addOp('src/a.ts'), updateOp('prod/deploy.ts')))).toBe('ask')
+  })
+
+  it('allows only when every file is allowed', () => {
+    const rules: PermissionRule[] = [allow('apply_patch', 'src/*')]
+    expect(matchPatch(rules, patchOf(addOp('src/a.ts'), updateOp('src/b.ts')))).toBe('allow')
+    // One file outside the allow falls back to the policy, which prompts for it.
+    expect(matchPatch(rules, patchOf(addOp('src/a.ts'), addOp('docs/b.md')))).toBeNull()
+  })
+
+  it('canonicalizes each patch path, so a respelled or absolute path cannot dodge a deny', () => {
+    for (const p of ['src/../secrets/x.txt', '/work/project/secrets/x.txt', './secrets/x.txt']) {
+      expect(matchPatch(denySecrets, patchOf(addOp(p)))).toBe('deny')
+    }
+  })
+
+  it('matches a patch that names no file as the empty subject (only a match-all rule)', () => {
+    expect(matchPatch(denySecrets, 'not a patch')).toBeNull()
+    expect(matchPatch([deny('apply_patch', '*')], 'not a patch')).toBe('deny')
+  })
+})
+
+describe('persistedRulePatterns', () => {
+  it('stores one path per file an apply_patch touches, for allow and deny', () => {
+    const patch = patchOf(addOp('a.txt'), updateOp('b.txt', 'c/b.txt'))
+    expect(persistedRulePatterns('allow', 'apply_patch', { patch })).toEqual(['a.txt', 'b.txt', 'c/b.txt'])
+    expect(persistedRulePatterns('deny', 'apply_patch', { patch })).toEqual(['a.txt', 'b.txt', 'c/b.txt'])
+  })
+
+  it('never stores a match-all rule for a patch that names no file', () => {
+    expect(persistedRulePatterns('allow', 'apply_patch', { patch: 'not a patch' })).toEqual([])
+    expect(persistedRulePatterns('deny', 'apply_patch', {})).toEqual([])
+  })
+
+  it('generalizes a shell allow but keeps a shell deny exact', () => {
+    expect(persistedRulePatterns('allow', 'run_shell', { command: 'cd /repo && npm install lodash' })).toEqual([
+      'npm install'
+    ])
+    expect(persistedRulePatterns('deny', 'run_shell', { command: 'npm install lodash' })).toEqual([
+      'npm install lodash'
+    ])
+  })
+
+  it('stores the exact subject, or `*` for a tool whose calls carry none', () => {
+    expect(persistedRulePatterns('allow', 'write_file', { path: 'notes.txt', content: '' })).toEqual(['notes.txt'])
+    expect(persistedRulePatterns('allow', 'dispatch_writable_agent', { prompt: 'go' })).toEqual(['*'])
   })
 })
 

@@ -227,6 +227,16 @@ const writeTurns = (path: string): ProviderStreamEvent[][] => [
 const rewriteTo = (path: string, extra: Record<string, unknown> = {}): Partial<SandboxRunResult> => ({
   stdout: JSON.stringify({ updatedInput: { path, content: 'rewritten' }, ...extra })
 })
+/** An apply_patch envelope that adds each named file. */
+const addPatch = (...paths: string[]): string =>
+  ['*** Begin Patch', ...paths.flatMap((p) => [`*** Add File: ${p}`, '+x']), '*** End Patch'].join('\n')
+const patchTurns = (patch: string): ProviderStreamEvent[][] => [
+  [
+    { type: 'tool_call', call: { id: 'p1', name: 'apply_patch', arguments: { patch } } },
+    { type: 'done', stopReason: 'tool_use' }
+  ],
+  [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+]
 const toolResult = (events: AgentEvent[]): string => {
   const e = events.find((x) => x.type === 'tool_result')
   return e && 'output' in e ? String(e.output) : ''
@@ -402,6 +412,23 @@ describe('PreToolUse rewrites are re-matched against permission rules', () => {
     expect(readFileSync(join(ws, 'allowed.txt'), 'utf8')).toBe('rewritten')
     expect(existsSync(join(ws, 'draft.txt'))).toBe(false)
   })
+
+  it('a rewrite of a patch that adds a file under a managed-deny path is refused', async () => {
+    h.managedRules = [{ action: 'deny', tool: '*', match: 'secrets/*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'apply_patch', command: 'rw' }]
+    // The rewrite keeps the original file and slips a denied one in beside it.
+    h.static = {
+      rw: { stdout: JSON.stringify({ updatedInput: { patch: addPatch('ok.txt', 'secrets/x.txt') }, decision: 'approve' }) }
+    }
+    const { events } = await run({
+      turns: patchTurns(addPatch('ok.txt')),
+      onApproval: (_id, decide) => decide('allow') // hang-proofing; must never fire
+    })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(false)
+    expect(toolResult(events)).toContain("denied by your organization's managed policy")
+    expect(existsSync(join(ws, 'ok.txt'))).toBe(false)
+    expect(existsSync(join(ws, 'secrets', 'x.txt'))).toBe(false)
+  })
 })
 
 // A PreToolUse hook's `{decision:"approve"}` skips the approval prompt — but only
@@ -456,6 +483,20 @@ describe('hook approve cannot skip a guardrail-mandated ask', () => {
     })
     expect(events.some((e) => e.type === 'tool_approval')).toBe(false)
     expect(readFileSync(join(ws, 'guarded.txt'), 'utf8')).toBe('hello')
+  })
+
+  it('a managed ask on one file of a patch still prompts when the hook approves', async () => {
+    h.managedRules = [{ action: 'ask', tool: '*', match: 'guarded/*' }]
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'apply_patch', command: 'ok' }]
+    h.static = { ok: approve }
+    const { events } = await run({
+      turns: patchTurns(addPatch('free.txt', 'guarded/b.txt')),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(true)
+    expect(toolResult(events)).toContain('Denied by the user')
+    expect(existsSync(join(ws, 'free.txt'))).toBe(false)
+    expect(existsSync(join(ws, 'guarded', 'b.txt'))).toBe(false)
   })
 
   it('a rewrite into managed-ask territory prompts on the rewritten args despite the approve', async () => {

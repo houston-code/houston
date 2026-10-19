@@ -89,11 +89,10 @@ import {
   alreadyAllowedAsRule,
   matchRule,
   networkDestination,
-  patchSubjectPaths,
   permissionSubject,
+  persistedRulePatterns,
   isSensitiveWrite,
-  shellReferencesExternalPath,
-  shellRulePatterns
+  shellReferencesExternalPath
 } from './permissions'
 import {
   grantConversationNetworkHost,
@@ -1197,17 +1196,11 @@ export async function startRun(
         // (dropping the `cd` prelude) instead of the exact command, and skip any
         // pattern an existing rule already allows — so repeated commands don't pile
         // up one near-identical rule each. Deny stays exact (a broad deny is risky).
+        // An apply_patch decision is saved per file it touched, and a patch that names
+        // no file saves nothing rather than a `*` rule over every patch (see
+        // persistedRulePatterns).
         const action = decision === 'rule-allow' ? 'allow' : 'deny'
-        const subject = permissionSubject(toolName, execArgs)
-        // An apply_patch decision is saved per file it touched: the subject lists them,
-        // and a rule over the whole list would match no single file.
-        const matches =
-          action === 'allow' && toolName === 'run_shell' && subject
-            ? shellRulePatterns(subject)
-            : toolName === 'apply_patch' && subject
-              ? patchSubjectPaths(subject)
-              : [subject || '*']
-        for (const match of matches) {
+        for (const match of persistedRulePatterns(action, toolName, execArgs)) {
           if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, match)) {
             continue
           }
