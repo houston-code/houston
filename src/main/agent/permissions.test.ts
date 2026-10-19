@@ -405,6 +405,57 @@ describe('shellReferencesExternalPath', () => {
     expect(ext("cut -d/ -f2 x && awk -F/ '{print $1}' x && sed -i~ 's/a/b/' f")).toBe(false)
   })
 
+  it('reads the word a `${...}` expansion falls back to or swaps in', () => {
+    expect(ext('cat ${x:-/etc/passwd}')).toBe(true)
+    expect(ext('cat "${HOME_DIR:-~/.ssh}/id_rsa"')).toBe(true)
+    expect(ext('cat ${x-/etc/x}')).toBe(true)
+    expect(ext('cat ${x:+/etc/x}')).toBe(true)
+    expect(ext('cat ${x+/etc/x}')).toBe(true)
+    expect(ext('cat ${x:?/etc/x}')).toBe(true)
+    expect(ext('cat ${x?/etc/x}')).toBe(true)
+    expect(ext("cat ${x:-'/etc/passwd'} ")).toBe(true)
+    expect(ext('cat ${arr[0]:-/etc/passwd}')).toBe(true)
+    expect(ext('cat ${1:-/etc/passwd}')).toBe(true)
+    expect(ext('cat ${!ref:-/etc/passwd}')).toBe(true)
+    // The word stands where the expansion was, so what it joins and the peels still count.
+    expect(ext('cat a${x:-/../../secret}')).toBe(true)
+    expect(ext('grep x --file=${F:-/etc/hosts}')).toBe(true)
+    expect(ext('grep -f${F:-/etc/hosts} x')).toBe(true)
+    expect(ext('cat ${x:-${y:-/etc/passwd}}')).toBe(true)
+    expect(ext('echo x >${LOG:-/var/log/x}')).toBe(true)
+    // A default starting with `~` is tilde-expanded wherever it sits.
+    expect(ext('grep -f${F:-~/.netrc} x')).toBe(true)
+    // In-workspace and relative defaults are not escapes, nor are the other expansions,
+    // and `$$` is the PID, so `$${x:-/etc}` opens no expansion.
+    expect(ext('cat ${x:-src/a.ts} "${OUT:-/work/project/out}" ${x:-./b} ${PORT:-3000} ${x:-}')).toBe(false)
+    expect(ext('echo ${#x} ${x:1:2} ${x: -1} ${x%/*} ${x#*/} "${BASH_SOURCE%/*}" $${x:-/etc}')).toBe(false)
+  })
+
+  it('reads the tilde forms bash expands at the start of a word or in an assignment', () => {
+    expect(ext('cat ~root/.ssh/id_rsa')).toBe(true)
+    expect(ext('ls ~postgres')).toBe(true)
+    expect(ext('cat ~_www/x')).toBe(true)
+    // `~+` is the working directory, so `~+/..` climbs out; `~-`, the previous
+    // directory, is not known here.
+    expect(ext('cat ~+/../secret')).toBe(true)
+    expect(ext('cat ~-/x')).toBe(true)
+    expect(ext('ls ~-')).toBe(true)
+    // A redirection target, an `=` value, and the parts of an assignment after a `:`.
+    expect(ext('cat <~root/.profile')).toBe(true)
+    expect(ext('X=~root/x make')).toBe(true)
+    expect(ext('export PATH=$PATH:~/.local/bin')).toBe(true)
+    expect(ext('PATH=/work/project/bin:~root/bin make')).toBe(true)
+    expect(ext('CDPATH=.:~-')).toBe(true)
+    // A path in `~+` stays inside, a `~` past the start of a word is literal, and a `:`
+    // starts nothing outside an assignment.
+    expect(ext('cat ~+/src/a.ts && ls ~+ && PATH=~+/bin:$PATH make')).toBe(false)
+    expect(ext("sed -i~ 's/a/b/' f && git diff HEAD~1 && cp a a~ && echo x~root")).toBe(false)
+    expect(ext('echo --opt=a:~root x:~root --format=~%h ~~done')).toBe(false)
+    // A directory-stack entry holds only what the same command pushed (read where it is
+    // named), and no account name starts with a digit: prose like `~15` stays quiet.
+    expect(ext('pushd src && ls ~1 ~+1 ~-0 && echo ~15 ~1s ~44px')).toBe(false)
+  })
+
   it('reads a command string handed to a shell as a command', () => {
     expect(ext('bash -c "cat /etc/passwd"')).toBe(true)
     expect(ext("sh -lc 'cat ~/.ssh/id_rsa'")).toBe(true)

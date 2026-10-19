@@ -459,6 +459,14 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
   // quoting. Peel a surrounding pair so the value is analysed.
   seg = stripSurroundingQuotes(seg)
   if (!seg) return false
+  // bash's other tilde-prefixes: `~+` is the working directory, read as `.`; the
+  // previous directory (`~-`, which a shell session can carry in from earlier commands)
+  // and another account's home (`~root`, `~_www`) are places this can't resolve, so
+  // they count as outside. A directory-stack entry (`~2`, `~+1`) only holds directories
+  // the same command pushed, each read where it is named, so it reads as written, and so
+  // does a name no account starts with (prose like `~15` or `~1s`).
+  if (seg === '~+' || seg.startsWith('~+/')) seg = `.${seg.slice(2)}`
+  else if (seg === '~-' || seg.startsWith('~-/') || /^~[A-Za-z_]/.test(seg)) return true
   const abs = absoluteTarget(seg)
   if (abs !== null) return !isWithinRoots(abs, roots) && !isScratchTarget(abs)
   // Relative. Treat backslashes as separators too, so Windows-style relative climbs
@@ -483,8 +491,11 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * Whether a `run_shell` command references a filesystem path outside the workspace
  * `roots` — an absolute/home path that resolves outside every root, or a relative
  * path that climbs above the workspace root. Also inspects the value side of an `=`
- * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught) and a
- * value glued to a one-letter option (`-f/etc/x`). The words are read as bash builds
+ * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught), a
+ * value glued to a one-letter option (`-f/etc/x`), the word a `${x:-word}`-style
+ * default stands for (see {@link parameterDefaultWords}), and bash's other tilde forms
+ * (`~root`, `~+/..`, `~-`, and a `~` after a `:` in an assignment, as in
+ * `PATH=$PATH:~/bin`). The words are read as bash builds
  * them (see {@link tokenizeShellCommand}), so quoting or escaping a path (`$'/etc'`,
  * `\/etc`, `x"/../.."/y`) doesn't hide it, and again with backslashes kept (see
  * {@link plainShellWords}), so a Windows path is seen too. They
@@ -617,18 +628,36 @@ export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<
 }
 
 /**
- * Whether one token of a command names a path outside the `roots`: the token itself, a
- * redirection target glued to it, the value after an `=`, or a value glued to an option.
+ * Whether one token of a command names a path outside the `roots`, read as written and
+ * with each `${x:-word}`-style default in place (see {@link parameterDefaultWords}).
  */
 function tokenEscapesWorkspace(token: string, roots: string[]): boolean {
+  const defaults = parameterDefaultWords(token)
+  if (defaults === null) return true // too many to read: over-flagging only asks
+  return wordEscapesWorkspace(token, roots) || defaults.some((word) => wordEscapesWorkspace(word, roots))
+}
+
+/** A word that bash reads as an assignment, so a `~` after a `:` in its value expands. */
+const ASSIGNMENT_RE = /^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=/
+
+/**
+ * Whether one word of a command names a path outside the `roots`: the word itself, a
+ * redirection target glued to it, the value after an `=`, or a value glued to an option.
+ */
+function wordEscapesWorkspace(token: string, roots: string[]): boolean {
   if (segmentEscapesWorkspace(token, roots)) return true
   // A redirection glued to its target (`>/etc/cron.d/evil`, `<~/.ssh/id_rsa`,
   // `2>/abs/log`) keeps the operator inside the token; peel it so the path is seen.
   const redir = stripRedirection(token)
   if (redir !== null && segmentEscapesWorkspace(redir, roots)) return true
-  // `KEY=value` / `--flag=value`: the path may sit after the first `=`.
+  // `KEY=value` / `--flag=value`: the path may sit after the first `=`, and in an
+  // assignment bash also expands a `~` after each `:` (`PATH=$PATH:~/.local/bin`).
   const eq = token.indexOf('=')
   if (eq >= 0 && segmentEscapesWorkspace(token.slice(eq + 1), roots)) return true
+  if (eq >= 0 && ASSIGNMENT_RE.test(token)) {
+    const parts = token.slice(eq + 1).split(':')
+    if (parts.some((part, k) => k > 0 && part.startsWith('~') && segmentEscapesWorkspace(part, roots))) return true
+  }
   // A value glued to a one-letter option (`grep -f/etc/passwd`, `git -C/etc`, `gcc
   // -I../include`, `-f$HOME/x`); `-Isrc/include` is the relative `src/include`. A lone
   // `/` is a delimiter there (`cut -d/`, `awk -F/`), not the root, and a `~` is literal
@@ -637,6 +666,91 @@ function tokenEscapesWorkspace(token: string, roots: string[]): boolean {
     return true
   }
   return false
+}
+
+/**
+ * The start of a `${...}` expansion that can stand for a word of its own: an optional
+ * `!` or `#`, then the parameter (a name, a number, or a special one such as `@` or
+ * `-`). An array subscript may follow it; then {@link PARAM_DEFAULT_OP_RE}.
+ */
+const PARAM_NAME_RE = /[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!0-])/y
+
+/** The operators that make `${x<op>word}` stand for its word: `:-`, `-`, `:=`, `=`, `:?`, `?`, `:+`, `+`. */
+const PARAM_DEFAULT_OP_RE = /:?[-=?+]/y
+
+/** Cap on the `~` defaults {@link parameterDefaultWords} returns on their own; more is flagged. */
+const MAX_TILDE_DEFAULTS = 16
+
+/**
+ * The token read with each `${x:-word}`-style expansion (see {@link PARAM_DEFAULT_OP_RE})
+ * replaced by its word, as bash reads it when `x` is unset (set, for `:+` and `+`):
+ * `${x:-/etc/passwd}` reads `/etc/passwd`, and `${D:-~/.ssh}/id_rsa` reads
+ * `~/.ssh/id_rsa`. bash tilde-expands a default that starts with `~` wherever it sits,
+ * so one past the token's start is also returned on its own (`-f${F:-~/.netrc}` yields
+ * `~/.netrc`). Other expansions (`${#x}`, `${x%/*}`) are kept as written, `$$` is the
+ * PID (`$${x:-y}` opens nothing), a `}` closes the innermost `${` (bash pairs no bare
+ * `{`), and an unclosed `${` runs to the end of the token.
+ *
+ * Empty when the token holds no such expansion; null when more than
+ * {@link MAX_TILDE_DEFAULTS} defaults would be returned on their own.
+ */
+function parameterDefaultWords(token: string): string[] | null {
+  if (!token.includes('${')) return []
+  let out = ''
+  let from = 0 // the start of the token text not yet copied to `out`
+  let found = false
+  const tildeWords: string[] = []
+  // Per open `${`: false when it is kept as written; else the index in `out` where its
+  // word starts, or -1 when that word is not returned on its own.
+  const open: (number | false)[] = []
+  // The first `]` at or after the last subscript looked at (token.length when none), so
+  // a run of unclosed subscripts searches the token once.
+  let bracket = -1
+  const takeTildeWord = (start: number | false): boolean => {
+    if (start === false || start < 0) return true
+    if (tildeWords.length >= MAX_TILDE_DEFAULTS) return false
+    tildeWords.push(out.slice(start))
+    return true
+  }
+  for (let i = 0; i < token.length; ) {
+    if (token[i] === '$' && token[i + 1] === '$') {
+      i += 2
+    } else if (token[i] === '$' && token[i + 1] === '{') {
+      out += token.slice(from, i)
+      PARAM_NAME_RE.lastIndex = i + 2
+      let at = PARAM_NAME_RE.test(token) ? PARAM_NAME_RE.lastIndex : -1
+      if (at !== -1 && token[at] === '[') {
+        if (bracket < at) {
+          bracket = token.indexOf(']', at)
+          if (bracket === -1) bracket = token.length
+        }
+        at = bracket + 1
+      }
+      PARAM_DEFAULT_OP_RE.lastIndex = at
+      if (at !== -1 && PARAM_DEFAULT_OP_RE.test(token)) {
+        found = true
+        i = PARAM_DEFAULT_OP_RE.lastIndex
+        open.push(token[i] === '~' && out.length > 0 ? out.length : -1)
+      } else {
+        out += '${'
+        i += 2
+        open.push(false)
+      }
+      from = i
+    } else if (token[i] === '}' && open.length) {
+      out += token.slice(from, i)
+      const start = open.pop()!
+      if (start === false) out += '}'
+      else if (!takeTildeWord(start)) return null
+      i += 1
+      from = i
+    } else {
+      i += 1
+    }
+  }
+  out += token.slice(from)
+  for (const start of open) if (!takeTildeWord(start)) return null
+  return found ? [out, ...tildeWords] : []
 }
 
 /** Shells, and `su`, whose `-c` hands them the command string in the next word. */
