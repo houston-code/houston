@@ -607,9 +607,74 @@ function matchOne(
   return null
 }
 
-/** Collapse whitespace runs so trivial spacing variants match the same rule. */
+/**
+ * Collapse every whitespace run, quoted or not, and trim: how a deny or ask rule reads
+ * a command, so trivial spacing variants match the same rule. An allow reads
+ * whitespace the way bash does instead (see {@link literalShellUnits}).
+ */
 function normalizeShellCommand(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Whether `c` is a blank bash splits words on: space, tab, or newline. Other
+ * whitespace (`\r`, `\v`, `\f`, a no-break space) is part of a word to bash.
+ */
+function isShellBlank(c: string): boolean {
+  return c === ' ' || c === '\t' || c === '\n'
+}
+
+/**
+ * `s` without the unquoted blanks (see {@link isShellBlank}) at either end. A quoted
+ * or escaped one stays: the space in `find . -delete \ ` is an argument to bash.
+ */
+function trimShellBlanks(s: string): string {
+  let start = 0
+  while (start < s.length && isShellBlank(s[start])) start += 1
+  let end = start
+  for (let i = start; i < s.length; ) {
+    const next = readShellSpan(s, i)?.end ?? i + 1
+    if (!isShellBlank(s[i])) end = Math.min(next, s.length)
+    i = next
+  }
+  return s.slice(start, end)
+}
+
+/** Whether `s` ends in a backslash that escapes nothing, which bash drops. */
+function endsInLoneBackslash(s: string): boolean {
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === '\\' && i === s.length - 1) return true
+    i = readShellSpan(s, i)?.end ?? i + 1
+  }
+  return false
+}
+
+/**
+ * Shell text as an allow rule saves it: each run of unquoted blanks (see
+ * {@link isShellBlank}) becomes one space and those at either end go, while quoted and
+ * escaped text, whitespace included, stays as written. So `rm   'my  file'` is saved
+ * as `rm 'my  file'`, and `find . -delete \ ` keeps its escaped space. A trailing lone
+ * backslash is dropped, since bash drops it too: a saved rule never ends in one (see
+ * {@link shellAllowMatches}). {@link literalShellUnits} reads the result as it reads `s`.
+ */
+function shellRuleText(s: string): string {
+  let out = ''
+  let gap = false
+  for (let i = 0; i < s.length; ) {
+    if (isShellBlank(s[i])) {
+      gap = out !== ''
+      i += 1
+    } else if (s[i] === '\\' && i === s.length - 1) {
+      i += 1
+    } else {
+      if (gap) out += ' '
+      gap = false
+      const end = readShellSpan(s, i)?.end ?? i + 1
+      out += s.slice(i, end)
+      i = end
+    }
+  }
+  return out
 }
 
 /** The single-character escapes of bash's ANSI-C quoting (`$'...'`). */
@@ -840,13 +905,20 @@ const SHELL_INERT_CHAR = /^[A-Za-z0-9_\-./,:+@%^\u0080-￿]$/
  * `$"..."` string can be translated into other text when it runs, so its units sit
  * between the markers `"(` and `")` and it reads as itself only.
  *
- * Unquoted whitespace is collapsed and trimmed (see {@link normalizeShellCommand}); a
- * quoted space is the unit `\ `. A word that is only empty quotes (`''`, `""`, `$''`)
- * is still a word to the shell, an empty one, so it is the unit `""` and never folds
- * away: `'' rm -rf /` runs no `rm` at all, and `rm '' -rf x` passes `rm` an empty
- * argument. Empty quotes inside a word add nothing to it (`r''m` is `rm`).
+ * Words split where bash splits them: a run of unquoted blanks (space, tab, or newline;
+ * see {@link isShellBlank}) reads as one space, and those at either end are dropped.
+ * Quoted or escaped whitespace belongs to its word and reads as written (a quoted space
+ * is the unit `\ `), so `rm 'my  file'` is never `rm 'my file'`, `rm \  -rf x` (the
+ * arguments " ", `-rf`, `x`) is never `rm \ -rf x` (" -rf", `x`), and
+ * `find . -delete \ `, which passes find a lone " ", is never `find . -delete`. Other
+ * whitespace (`\r`, a no-break space) is part of a word to bash, and here. A trailing
+ * lone backslash, which bash drops, reads as nothing. A word that is only empty quotes
+ * (`''`, `""`, `$''`) is still a word to the shell, an empty one, so it is the unit
+ * `""` and never folds away: `'' rm -rf /` runs no `rm` at all, and `rm '' -rf x`
+ * passes `rm` an empty argument. Empty quotes inside a word add nothing to it (`r''m`
+ * is `rm`).
  */
-function literalShellUnits(s: string): string[] {
+function literalShellUnits(text: string): string[] {
   const units: string[] = []
   const literal = (c: string): void => {
     units.push(SHELL_INERT_CHAR.test(c) ? c : `\\${c}`)
@@ -858,7 +930,6 @@ function literalShellUnits(s: string): string[] {
     if (quoted && units.length === wordStart) units.push('""')
     quoted = false
   }
-  const text = normalizeShellCommand(s)
   // The double-quoted string opening at `text[i]`; returns the index past its close.
   const doubleQuoted = (i: number): number => {
     for (i += 1; i < text.length && text[i] !== '"'; ) {
@@ -901,7 +972,7 @@ function literalShellUnits(s: string): string[] {
       }
       quoted = true
       i += 1
-    } else if (c === ' ') {
+    } else if (isShellBlank(c)) {
       endWord()
       if (units.length && units[units.length - 1] !== ' ') units.push(' ')
       wordStart = units.length
@@ -934,9 +1005,16 @@ function isShellStarUnit(u: string | undefined): boolean {
  * the bare one a pattern names (`rm -rf '~'` covers `rm -rf '~' x`, never `rm -rf ~`).
  * Every `*` in the pattern is still its wildcard, quoted or not, so a hand-written
  * `git commit -m "*"` covers any message; a literal `*` takes an exact rule.
+ *
+ * A pattern ending in a lone backslash matches nothing. Houston never saves one (see
+ * {@link shellRuleText}), but earlier versions trimmed `find . -delete \ ` to
+ * `find . -delete \` before saving it, and bash drops that backslash, so the text reads
+ * as `find . -delete`: a harmless command's approval that would allow a destructive one.
+ * Any other rule an earlier version saved with its quoted whitespace collapsed reads as
+ * its text does (`rm 'my file'` allows that file, not `rm 'my  file'`).
  */
 function shellAllowMatches(pattern: string, command: string): boolean {
-  if (!pattern.trim()) return false
+  if (!pattern.trim() || endsInLoneBackslash(pattern)) return false
   const p = literalShellUnits(pattern)
   if (!p.length) return false
   const c = literalShellUnits(command).join('')
@@ -952,20 +1030,24 @@ function shellAllowMatches(pattern: string, command: string): boolean {
 
 /**
  * {@link shellCommandEquals} for an ALLOW rule: the same command read as
- * {@link literalShellUnits}, so an exact `rm '*'` never allows `rm *`.
+ * {@link literalShellUnits}, so an exact `rm '*'` never allows `rm *`. A pattern ending
+ * in a lone backslash matches nothing, as in {@link shellAllowMatches}.
  */
 function shellAllowEquals(pattern: string, command: string): boolean {
-  if (!pattern.trim()) return false
+  if (!pattern.trim() || endsInLoneBackslash(pattern)) return false
   const p = literalShellUnits(pattern).join('')
   return p !== '' && p === literalShellUnits(command).join('')
 }
 
 /**
  * First matching rule's action for a single shell sub-command, or null. An allow rule
- * reads the command as {@link literalShellUnits}, a deny or ask rule as
- * {@link dequoteShell}: a quoted `*` or `~` is the bare one to a deny, never to an allow.
+ * reads the command as written, through {@link literalShellUnits}; a deny or ask rule
+ * reads it with all its whitespace collapsed (see {@link normalizeShellCommand}) and
+ * through {@link dequoteShell}: a quoted `*`, `~`, or space is the bare one to a deny,
+ * never to an allow.
  */
 function matchOneShell(rules: PermissionRule[], command: string): PermissionRule['action'] | null {
+  const norm = normalizeShellCommand(command)
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== 'run_shell') continue
     const match = r.match ?? ''
@@ -975,8 +1057,8 @@ function matchOneShell(rules: PermissionRule[], command: string): PermissionRule
           ? shellAllowEquals(match, command)
           : shellAllowMatches(match, command)
         : r.exact
-          ? shellCommandEquals(match, command)
-          : shellCommandMatches(match, command)
+          ? shellCommandEquals(match, norm)
+          : shellCommandMatches(match, norm)
     if (hit) return r.action
   }
   return null
@@ -1122,9 +1204,16 @@ const SHELL_FUNC_DEF = /^(?:function\s+[A-Za-z_][\w.:-]*(?:\s*\(\s*\))?|[A-Za-z_
  * `case` is deliberately NOT handled: its `pattern)` arms sit in front of the commands
  * and can't be told apart from them without a real parser, so a case segment stays
  * whole and gated (over-segmenting is the safe direction).
+ *
+ * Only unquoted blanks come off the ends (see {@link trimShellBlanks}): the escaped
+ * space in `find . -delete \ ` is an argument, and so is a trailing no-break space.
+ * Whitespace bash doesn't split on also stays at the start when no scaffolding precedes
+ * the command.
  */
 function stripShellScaffolding(segment: string): string {
-  let s = segment.trim()
+  const text = trimShellBlanks(segment)
+  const lead = text.trimStart()
+  let s = lead
   for (;;) {
     const before = s
     s = s.replace(SHELL_FUNC_DEF, '')
@@ -1141,7 +1230,7 @@ function stripShellScaffolding(segment: string): string {
   if (!first || SHELL_CLOSERS.has(first)) return ''
   // `for NAME …` / `select NAME …` only; a C-style `for ((…))` header stays gated.
   if (/^(?:for|select)\s+[A-Za-z_]\w*(?:\s|$)/.test(s)) return ''
-  return s
+  return s === lead ? text : s
 }
 
 /** Index of the `)` that closes the `(` at `open` (honoring nesting), or -1 if unbalanced. */
@@ -1250,8 +1339,7 @@ export function matchShellRule(
   let anyAsk = false
   let sawGated = false
   for (const seg of shellSegments(command)) {
-    const norm = normalizeShellCommand(seg.text)
-    const action = matchOneShell(rules, norm)
+    const action = matchOneShell(rules, seg.text)
     if (action === 'deny') return 'deny' // a denied sub-command denies the whole call
     // A directory change that provably stays in the workspace is plumbing, not a gated command.
     if (action == null && isWorkspaceCwdChange(seg, roots)) continue
@@ -1398,6 +1486,10 @@ function isCountOnlyPager(tokens: string[]): boolean {
  *   verbatim rather than saving a `\sudo rm` prefix that covers `sudo rm -rf /`, and
  *   `"cd"k deploy` is the command `cdk deploy`, not a dropped `cd`. A word shaped like
  *   `VAR=value` once its quotes come off (`F"OO"=1`) stays verbatim too.
+ * - A verbatim sub-command is saved with only its unquoted blanks collapsed (see
+ *   {@link shellRuleText}): `rm   'my  file'` is saved as `rm 'my  file'`, and
+ *   `find . -delete \ ` keeps the escaped space that makes it a different command
+ *   from `find . -delete`.
  *
  * - A `head`/`tail` whose arguments are only line/byte counts (`tail -60`, `head -c 4000`,
  *   `head -n 30`) collapses to the bare program: it's slicing piped output, and keeping
@@ -1410,14 +1502,14 @@ function isCountOnlyPager(tokens: string[]): boolean {
 export function shellRulePatterns(command: string, roots?: string[]): string[] {
   const patterns = new Set<string>()
   for (const seg of shellSegments(command)) {
-    const norm = normalizeShellCommand(seg.text)
-    const tokens = tokenizeShellCommand(norm)
+    const text = shellRuleText(seg.text)
+    const tokens = tokenizeShellCommand(text)
     const prog = tokens[0]
     // An empty program (`'' rm -rf x`) is still a sub-command to cover, not one to drop.
     if (prog === undefined || isWorkspaceCwdChange(seg, roots)) continue
     const verb = tokens[1]
     if (CWD_BUILTINS.has(prog)) {
-      patterns.add(norm)
+      patterns.add(text)
     } else if (isCountOnlyPager(tokens)) {
       patterns.add(prog)
     } else if (
@@ -1426,14 +1518,14 @@ export function shellRulePatterns(command: string, roots?: string[]): string[] {
       !holdsShellStar(prog) &&
       verb &&
       SUBCOMMAND_VERB.test(verb) &&
-      shellAllowMatches(`${prog} ${verb}`, norm)
+      shellAllowMatches(`${prog} ${verb}`, text)
     ) {
       patterns.add(`${prog} ${verb}`)
     } else {
-      patterns.add(norm)
+      patterns.add(text)
     }
   }
-  if (patterns.size === 0) patterns.add(normalizeShellCommand(command))
+  if (patterns.size === 0) patterns.add(shellRuleText(command))
   return [...patterns]
 }
 
@@ -1525,7 +1617,7 @@ export function alreadyAllowedAsRule(
   sample: string,
   roots: string[] = []
 ): boolean {
-  if (toolName === 'run_shell') return matchOneShell(rules, normalizeShellCommand(sample)) === 'allow'
+  if (toolName === 'run_shell') return matchOneShell(rules, sample) === 'allow'
   return matchOne(rules, toolName, sample, roots) === 'allow'
 }
 
@@ -1533,12 +1625,13 @@ export function alreadyAllowedAsRule(
 const DEAD_SHELL_FRAGMENT = /^\d+$|[<>]$/
 
 /**
- * A dead fragment, or pure scaffolding (`done`, `fi`, `for f`) that the splitter now
- * strips before matching, so the rule can no longer match anything.
+ * A dead fragment, pure scaffolding (`done`, `fi`, `for f`) that the splitter now
+ * strips before matching, or a pattern ending in a lone backslash (which an allow never
+ * matches, see {@link shellAllowMatches}), so the rule can no longer match anything.
  */
 function isDeadShellPattern(match: string): boolean {
   const m = match.trim()
-  return DEAD_SHELL_FRAGMENT.test(m) || (m !== '' && stripShellScaffolding(m) === '')
+  return DEAD_SHELL_FRAGMENT.test(m) || (m !== '' && stripShellScaffolding(m) === '') || endsInLoneBackslash(match)
 }
 
 /**
@@ -1601,7 +1694,7 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
     let expanded: PermissionRule[] = [r]
     if (isShellAllow(r) && !r.exact) {
       const pats = shellRulePatterns(r.match ?? '')
-      const own = normalizeShellCommand(r.match ?? '')
+      const own = shellRuleText(r.match ?? '')
       // Keep the rule as it is if generalizing it could shadow a narrower deny.
       expanded = pats.some(wouldShadowDeny)
         ? [r]
@@ -1624,7 +1717,7 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
   const kept = [...out]
   for (const r of out) {
     if (!isShellAllow(r)) continue
-    const m = (r.match ?? '').trim()
+    const m = trimShellBlanks(r.match ?? '')
     if (!m || /[*?[]/.test(m) || overlapsAny(gates, m)) continue
     const covered = kept.some(
       (o) =>
