@@ -787,13 +787,12 @@ function markDesktopHasRun(): void {
 }
 
 describe('settings migration — onboarding (v10)', () => {
-  it('gives an existing desktop install the tour invitation and marks the tips seen', async () => {
+  it('marks every tip seen for an existing desktop install, so nothing appears on its own', async () => {
     markDesktopHasRun()
     writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
     const { getSettings } = await loadStore()
     expect(getSettings().onboarding).toEqual({
-      seenTips: ['approval', 'worktree', 'changes', 'revert'],
-      tourInvite: 'pending'
+      seenTips: ['approval', 'worktree', 'changes', 'revert']
     })
   })
 
@@ -801,7 +800,7 @@ describe('settings migration — onboarding (v10)', () => {
     markDesktopHasRun()
     writeSettings({ providers: [openaiProvider(['gpt-5.5'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().onboarding?.tourInvite).toBe('pending')
+    expect(getSettings().onboarding?.seenTips).toHaveLength(4)
   })
 
   it('treats a terminal-only profile as new to the desktop app (tips stay unseen)', async () => {
@@ -836,15 +835,15 @@ describe('settings migration — onboarding (v10)', () => {
     expect(getSettings().onboarding).toBeUndefined()
   })
 
-  it('does not re-invite once the invitation was dismissed', async () => {
+  it('keeps onboarding progress already recorded at v10', async () => {
     markDesktopHasRun()
     writeSettings({
       schemaVersion: 10,
       providers: [openaiProvider(['gpt-5.5'])],
-      onboarding: { tourInvite: 'done', seenTips: [] }
+      onboarding: { checklistDone: true, seenTips: ['approval'] }
     })
     const { getSettings } = await loadStore()
-    expect(getSettings().onboarding).toEqual({ tourInvite: 'done', seenTips: [] })
+    expect(getSettings().onboarding).toEqual({ checklistDone: true, seenTips: ['approval'] })
   })
 
   it('round-trips onboarding progress through a save', async () => {

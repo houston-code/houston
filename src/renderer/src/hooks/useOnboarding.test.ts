@@ -66,9 +66,9 @@ describe('useOnboarding', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('reads the persisted state from the first render', () => {
-    installApi({ tourInvite: 'pending' })
-    const { result } = setup({ tourInvite: 'pending' })
-    expect(result.current.hook.state).toEqual({ tourInvite: 'pending' })
+    installApi({ seenTips: ['approval'] })
+    const { result } = setup({ seenTips: ['approval'] })
+    expect(result.current.hook.state).toEqual({ seenTips: ['approval'] })
   })
 
   it('composes quick successive changes instead of dropping one', async () => {
@@ -87,10 +87,10 @@ describe('useOnboarding', () => {
     const env = installApi({})
     const { result } = setup({})
     act(() => result.current.hook.update({ seenTips: ['approval'] }))
-    act(() => result.current.hook.update((s) => ({ ...s, tourInvite: 'done' })))
+    act(() => result.current.hook.update((s) => ({ ...s, checklistDone: true })))
     await env.flush()
-    expect(env.saves.at(-1)).toEqual({ seenTips: ['approval'], tourInvite: 'done' })
-    expect(result.current.hook.state).toEqual({ seenTips: ['approval'], tourInvite: 'done' })
+    expect(env.saves.at(-1)).toEqual({ seenTips: ['approval'], checklistDone: true })
+    expect(result.current.hook.state).toEqual({ seenTips: ['approval'], checklistDone: true })
   })
 
   it('is not rolled back when the app adopts older settings from main', async () => {
@@ -126,15 +126,12 @@ describe('useOnboarding', () => {
     expect(result.current.hook.state.checklistDone).toBeUndefined()
   })
 
-  it('startTour clears seen tips, settles the invite, and starts touring; endTour stops', async () => {
-    installApi({ seenTips: ['approval', 'worktree', 'changes', 'revert'], tourInvite: 'pending' })
-    const { result } = setup({
-      seenTips: ['approval', 'worktree', 'changes', 'revert'],
-      tourInvite: 'pending'
-    })
+  it('startTour clears seen tips and starts touring; endTour stops', async () => {
+    installApi({ seenTips: ['approval', 'worktree', 'changes', 'revert'] })
+    const { result } = setup({ seenTips: ['approval', 'worktree', 'changes', 'revert'] })
     act(() => result.current.hook.startTour())
     expect(result.current.hook.touring).toBe(true)
-    expect(result.current.hook.state).toEqual({ seenTips: [], tourInvite: 'done' })
+    expect(result.current.hook.state).toEqual({ seenTips: [] })
     act(() => result.current.hook.endTour())
     expect(result.current.hook.touring).toBe(false)
     await waitFor(() => expect(window.api.saveSettings).toHaveBeenCalled())

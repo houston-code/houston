@@ -234,8 +234,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
     providers = backfillDefaultModels(providers, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
   }
   // v10: first-run onboarding. Only a settings file written before it shipped reaches
-  // this gate (a fresh install has no file to migrate). Existing desktop users skip the
-  // contextual tips and get a single dismissible tour invitation instead.
+  // this gate (a fresh install has no file to migrate). Existing desktop users already
+  // know their way around, so every tip is marked seen and nothing appears on its own.
   // The profile is shared with the terminal clients, so "existing" means the desktop
   // app has run here before (it records its version on every launch, after this
   // migration). Someone who has only used the terminal is new to the desktop app.
