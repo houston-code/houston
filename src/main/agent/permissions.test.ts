@@ -335,6 +335,66 @@ describe('shellReferencesExternalPath', () => {
     // Quoting or escaping that leaves an in-workspace path is still not an escape.
     expect(ext("cat $'src/a.ts' \\./b a\"/b\"/../c")).toBe(false)
   })
+
+  it('flags a redirection glued to the word before it', () => {
+    // An unquoted operator ends a word, so its target stands alone mid-token.
+    expect(ext('echo x>/etc/cron.d/y')).toBe(true)
+    expect(ext('cat x</etc/passwd')).toBe(true)
+    expect(ext('echo x>>~/.bashrc')).toBe(true)
+    expect(ext('cat x<../secret')).toBe(true)
+    expect(ext('echo x>|/etc/y')).toBe(true)
+    expect(ext('cmd&>/etc/y')).toBe(true)
+    expect(ext('echo x>"/etc/y"')).toBe(true)
+    // `x2` is a word, not a file descriptor.
+    expect(ext('run x2>/var/log/x')).toBe(true)
+    // A second redirection into the workspace doesn't hide the first.
+    expect(ext('cat x</etc/passwd>/work/project/out')).toBe(true)
+    // Control operators end a word too.
+    expect(ext('(~/.local/bin/tool list)')).toBe(true)
+    expect(ext('true;/etc/rc.local')).toBe(true)
+    // In-workspace, scratch, and file-descriptor targets are not escapes.
+    expect(ext('echo x>out.txt')).toBe(false)
+    expect(ext('echo x>/work/project/out.txt')).toBe(false)
+    expect(ext('run x>&2 x2>&1 x2>/dev/null x>/tmp/log')).toBe(false)
+    // A quoted `<` or `>` is text: a closing tag in a pattern is not the path `/footer`.
+    expect(ext('grep -n "nav\\|</footer>" index.html')).toBe(false)
+    expect(ext("sed -i 's#<p>x</p>#<p>y</p>#' index.html")).toBe(false)
+  })
+
+  it('reads a command substitution as a command, inside double quotes too', () => {
+    expect(ext('echo "$(cat /etc/passwd)"')).toBe(true)
+    expect(ext('echo "`cat ~/.ssh/id_rsa`"')).toBe(true)
+    expect(ext('echo "$(cat</etc/passwd)"')).toBe(true)
+    expect(ext('echo "${x:-$(cat /etc/passwd)}"')).toBe(true)
+    // The body is read with its own quoting, so a quoted `)` doesn't end it.
+    expect(ext(`echo "$(echo ')'; cat /etc/passwd)"`)).toBe(true)
+    // A substitution in an unquoted here-document runs.
+    expect(ext('cat <<EOF\n"$(cat /etc/passwd)"\nEOF')).toBe(true)
+    // In-workspace and scratch paths in a body are not escapes, and neither is a path
+    // built on a substitution's output: `$(pwd)/x` is not the absolute `/x`.
+    expect(ext('echo "$(cat src/a.ts)" "$(git rev-parse HEAD 2>/dev/null)"')).toBe(false)
+    expect(ext('export PATH=$(pwd)/node_modules/.bin:$PATH')).toBe(false)
+    expect(ext('node "$(dirname "$0")/../lib/x.js"')).toBe(false)
+    expect(ext('echo $((1<<2)) "$(date +%Y/%m/%d)"')).toBe(false)
+  })
+
+  it('does not read text that never runs as a command', () => {
+    // Nothing runs in single quotes, as escaped backticks, or in a quoted here-document,
+    // and a here-document in a substitution is input, not words: a commit message
+    // written as `"$(cat <<'EOF' ... EOF)"` stays quiet whatever paths it names.
+    expect(ext("git commit -m 'Read `/etc/hosts` once'")).toBe(false)
+    expect(ext('echo "\\`cat /etc/passwd\\`"')).toBe(false)
+    expect(ext("git commit -m \"$(cat <<'EOF'\nFix `/etc/hosts` and /usr/local handling\nEOF\n)\"")).toBe(false)
+    expect(ext("git commit -F- <<'EOF'\nSee `~/.config` and `<div>`\nEOF")).toBe(false)
+    // What follows a here-document is read again, after its delimiter line or, inside
+    // a `$(...)`, after a delimiter that the closing `)` follows.
+    expect(ext("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\" && cat \"$(echo /etc/passwd)\"")).toBe(true)
+    expect(ext("x=\"$(cat <<'EOF'\nmsg\nEOF)\"; echo \"$(cat /etc/passwd)\"")).toBe(true)
+  })
+
+  it('flags substitutions nested too deep to read', () => {
+    expect(ext(`${'echo "$('.repeat(40)}x${')"'.repeat(40)}`)).toBe(true)
+  })
 })
 
 describe('matchRule', () => {

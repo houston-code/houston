@@ -153,6 +153,196 @@ function plainShellWords(command: string): string[] {
   return words
 }
 
+/** A here-document waiting for the end of its line: its delimiter, and how it reads. */
+interface PendingHeredoc {
+  delim: string
+  /** The delimiter was quoted (`<<'EOF'`), so nothing in the text expands or runs. */
+  quoted: boolean
+  /** `<<-`: leading tabs come off each line, the delimiter line included. */
+  tabs: boolean
+}
+
+/**
+ * The here-document whose `<<` ends just before `s[i]`: a `-` for `<<-`, then (past any
+ * blanks) the delimiter word, which is quoted if any of it is. `end` is the index past it.
+ */
+function heredocDelimiter(s: string, i: number): PendingHeredoc & { end: number } {
+  const tabs = s[i] === '-'
+  if (tabs) i += 1
+  while (s[i] === ' ' || s[i] === '\t') i += 1
+  let delim = ''
+  let quoted = false
+  while (i < s.length && !/[\s<>|&;()]/.test(s[i])) {
+    const span = readShellSpan(s, i)
+    if (span && !s.startsWith('$$', i)) quoted = true
+    delim += span ? span.text : s[i]
+    i = span ? span.end : i + 1
+  }
+  return { delim, quoted, tabs, end: i }
+}
+
+/** A redirection operator: a run of `<` and `>`, with a `&` or `|` right after it. */
+const REDIRECT_OP_RE = /[<>]+[&|]?/y
+
+/**
+ * The words of `command`, and of every command or process substitution in it that runs,
+ * read as bash builds them. Unlike {@link tokenizeShellCommand}, an unquoted operator
+ * (`<`, `>`, `|`, `&`, `;`, `(`, `)`) ends a word, so `echo x>/etc/y` yields `/etc/y`;
+ * and a substitution's body is read as a command of its own wherever it runs, inside
+ * double quotes or an unquoted here-document too, so `echo "$(cat /etc/passwd)"`
+ * yields `/etc/passwd`. A word holding a substitution keeps it as written (`"$(pwd)/x"`
+ * is `$(pwd)/x`, not `/x`). A here-document's text is input, not words, and nothing
+ * runs in single quotes or a quoted here-document, so commit-message text in
+ * `"$(cat <<'EOF' ... EOF)"` yields no words. A `#` comment yields nothing.
+ *
+ * Returns null when substitutions nest deeper than {@link MAX_SUBST_DEPTH}. Not a full
+ * parser: nothing is expanded, a `case` pattern's `)` ends a `$(...)` early, and a `<<`
+ * shift in arithmetic reads as a here-document. {@link shellReferencesExternalPath}
+ * reads these words alongside its other readings, never instead of them.
+ */
+function shellRunWords(command: string): string[] | null {
+  const words: string[] = []
+  let tooDeep = false
+
+  // The substitution opening at `s[i]` (`$(`, `<(`, `>(`, or a backtick), read as a
+  // command; returns the index past it. A `$(` body ends at the `)` that closes it,
+  // read with its own quoting; a backtick body at the next unescaped backtick.
+  const substitution = (s: string, i: number, depth: number): number => {
+    if (depth >= MAX_SUBST_DEPTH) {
+      tooDeep = true
+      return s.length
+    }
+    if (s[i] !== '`') return readCommand(s, i + 2, true, depth + 1)
+    let j = i + 1
+    while (j < s.length && s[j] !== '`') j += s[j] === '\\' ? 2 : 1
+    readCommand(s.slice(i + 1, Math.min(j, s.length)), 0, false, depth + 1)
+    return Math.min(j + 1, s.length)
+  }
+
+  // The double-quoted string opening at `s[i]`: its text, as readShellSpan reads it,
+  // and the index past its close. A `$(` or backtick in it still runs.
+  const doubleQuoted = (s: string, i: number, depth: number): { text: string; end: number } => {
+    let text = ''
+    let j = i + 1
+    while (j < s.length && s[j] !== '"') {
+      if (s[j] === '\\' && j + 1 < s.length && '"`$\\\n'.includes(s[j + 1])) {
+        text += s[j + 1]
+        j += 2
+      } else if ((s[j] === '$' && s[j + 1] === '(') || s[j] === '`') {
+        const close = substitution(s, j, depth)
+        text += s.slice(j, close)
+        j = close
+      } else {
+        text += s[j]
+        j += 1
+      }
+    }
+    return { text, end: j + 1 }
+  }
+
+  // The text of the here-documents a line opened, which starts at `s[i]`; returns the
+  // index past the last one's delimiter line. A substitution in an unquoted one runs.
+  // Inside a `$(...)` (`nested`), bash also ends one at its delimiter followed by the
+  // `)`, which is left to close the substitution.
+  const heredocText = (s: string, i: number, docs: PendingHeredoc[], nested: boolean, depth: number): number => {
+    for (const doc of docs) {
+      while (i < s.length) {
+        let end = s.indexOf('\n', i)
+        if (end === -1) end = s.length
+        const raw = s.slice(i, end)
+        const line = doc.tabs ? raw.replace(/^\t+/, '') : raw
+        if (line === doc.delim) {
+          i = end + 1
+          break
+        }
+        if (nested && line.startsWith(`${doc.delim})`)) return i + raw.length - line.length + doc.delim.length
+        for (let j = i; !doc.quoted && j < end; ) {
+          if (s[j] === '\\') {
+            j += 2
+          } else if ((s[j] === '$' && s[j + 1] === '(') || s[j] === '`') {
+            j = substitution(s, j, depth)
+            // A substitution can run past this line; the text resumes after it.
+            if (j > end) {
+              end = s.indexOf('\n', j)
+              if (end === -1) end = s.length
+            }
+          } else {
+            j += 1
+          }
+        }
+        i = end + 1
+      }
+    }
+    return i
+  }
+
+  // Command text from `s[i]`: to the end of `s`, or when `nested` (a `$(...)` body), to
+  // past the `)` that closes it. Returns the index it stopped at.
+  const readCommand = (s: string, i: number, nested: boolean, depth: number): number => {
+    let word: string | null = null
+    let parens = 0
+    const docs: PendingHeredoc[] = []
+    while (i < s.length && !tooDeep) {
+      const c = s[i]
+      const next = s[i + 1]
+      if (c === '\\' && next === '\n') {
+        i += 2 // a line continuation: no character, and no word break
+        continue
+      }
+      if (c === '"' || (c === '$' && next === '"')) {
+        const q = doubleQuoted(s, c === '$' ? i + 1 : i, depth)
+        word = (word ?? '') + q.text
+        i = q.end
+        continue
+      }
+      if (((c === '$' || c === '<' || c === '>') && next === '(') || c === '`') {
+        const close = substitution(s, i, depth)
+        word = (word ?? '') + s.slice(i, close)
+        i = close
+        continue
+      }
+      if (c === '#' && word === null) {
+        while (i < s.length && s[i] !== '\n') i += 1 // a comment, to the end of the line
+        continue
+      }
+      if (!/[\s<>|&;()]/.test(c)) {
+        const span = readShellSpan(s, i)
+        word = (word ?? '') + (span ? span.text : c)
+        i = span ? span.end : i + 1
+        continue
+      }
+      // An unquoted blank or operator ends the word.
+      if (word !== null) words.push(word)
+      word = null
+      if (c === '\n') {
+        i = heredocText(s, i + 1, docs, nested, depth)
+        docs.length = 0
+      } else if (c === '<' || c === '>') {
+        REDIRECT_OP_RE.lastIndex = i
+        const op = REDIRECT_OP_RE.exec(s)![0]
+        i += op.length
+        if (op === '<<') {
+          const doc = heredocDelimiter(s, i)
+          if (doc.delim) docs.push(doc)
+          i = doc.end
+        }
+      } else if (c === ')') {
+        i += 1
+        if (nested && parens === 0) return i
+        parens = Math.max(parens - 1, 0)
+      } else {
+        if (c === '(') parens += 1
+        i += 1
+      }
+    }
+    if (word !== null) words.push(word)
+    return i
+  }
+
+  readCommand(command, 0, false, 0)
+  return tooDeep ? null : words
+}
+
 /**
  * The absolute filesystem location a path-like segment points at, or `null` when the
  * segment is not an absolute/home/Windows path (i.e. it is relative). `~`, `$HOME`,
@@ -282,16 +472,23 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught). The
  * words are read as bash builds them (see {@link tokenizeShellCommand}), so quoting or
  * escaping a path (`$'/etc'`, `\/etc`, `x"/../.."/y`) doesn't hide it, and again with
- * backslashes kept (see {@link plainShellWords}), so a Windows path is seen too.
+ * backslashes kept (see {@link plainShellWords}), so a Windows path is seen too. They
+ * are read a third time split at operators and with each substitution's body read as a
+ * command (see {@link shellRunWords}), so a redirection glued to the word before it
+ * (`echo x>/etc/y`) or a substitution in double quotes (`"$(cat /etc/passwd)"`) is seen.
  *
  * Best-effort and deliberately conservative: a command that escapes is escalated
- * for approval, never silently auto-run. It can't catch paths hidden behind
- * variable or command substitution — those defeat any static scan — so it's a
- * tripwire, not a sandbox. The sandbox remains the real confinement boundary.
+ * for approval, never silently auto-run. It can't catch a path that only appears once
+ * a variable or a substitution's output is expanded (`cat $(echo L2V0Yw== | base64
+ * -d)`), which defeats any static scan, so it's a tripwire, not a sandbox. The sandbox
+ * remains the real confinement boundary.
  */
 export function shellReferencesExternalPath(command: string, roots: string[]): boolean {
-  // Either reading naming an outside path flags the command: over-flagging only asks.
-  for (const token of [...tokenizeShellCommand(command), ...plainShellWords(command)]) {
+  // Substitutions nested too deep to read are flagged: over-flagging only asks.
+  const runWords = shellRunWords(command)
+  if (runWords === null) return true
+  // Any reading naming an outside path flags the command.
+  for (const token of [...tokenizeShellCommand(command), ...plainShellWords(command), ...runWords]) {
     if (segmentEscapesWorkspace(token, roots)) return true
     // A redirection glued to its target (`>/etc/cron.d/evil`, `<~/.ssh/id_rsa`,
     // `2>/abs/log`) keeps the operator inside the token; peel it so the path is seen.
