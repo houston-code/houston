@@ -175,3 +175,21 @@ describe('useFocusTrap', () => {
     opener.remove()
   })
 })
+
+describe('useFocusTrap data-autofocus', () => {
+  function Marked(): ReactElement {
+    const ref = useRef<HTMLDivElement>(null)
+    useFocusTrap(ref, () => {})
+    return createElement(
+      'div',
+      { ref, role: 'dialog', tabIndex: -1 },
+      createElement('button', { key: 'a' }, 'refresh'),
+      createElement('input', { key: 'b', 'aria-label': 'filter', 'data-autofocus': true })
+    )
+  }
+
+  it('focuses the element marked data-autofocus instead of the first control', () => {
+    render(createElement(Marked))
+    expect(document.activeElement).toBe(screen.getByLabelText('filter'))
+  })
+})

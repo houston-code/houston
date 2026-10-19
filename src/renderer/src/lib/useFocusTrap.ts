@@ -5,8 +5,9 @@ const FOCUSABLE =
 
 /**
  * Trap keyboard focus inside `ref` while it's mounted (for modal dialogs): focus
- * the first control on open, keep Tab/Shift+Tab within the dialog, close on
- * Escape, and restore focus to the previously-focused element on unmount.
+ * the first control on open (or the one marked `data-autofocus`, e.g. a panel's
+ * filter field), keep Tab/Shift+Tab within the dialog, close on Escape, and restore
+ * focus to the previously-focused element on unmount.
  *
  * `onClose` is read through a ref so a caller passing an inline arrow (a fresh
  * identity every render — the common case) doesn't re-run the effect: re-running
@@ -26,7 +27,7 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, onClose: () => 
     const focusable = (): HTMLElement[] =>
       Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((e) => e.offsetParent !== null)
 
-    ;(focusable()[0] ?? el).focus()
+    ;(el.querySelector<HTMLElement>('[data-autofocus]') ?? focusable()[0] ?? el).focus()
 
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {

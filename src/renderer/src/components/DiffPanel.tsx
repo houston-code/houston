@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import { chooseShipAction, type ShipAction } from '@shared/shipAction'
 import { useInitGitRepo } from '../hooks/useInitGitRepo'
 import { DiffView } from './DiffView'
+import { useFocusTrap } from '../lib/useFocusTrap'
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
@@ -76,6 +77,10 @@ export function DiffPanel({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { initializing, initError, initRepo } = useInitGitRepo(workspace)
+  // A modal drawer: take focus on open, keep Tab inside it, close on Esc, and hand
+  // focus back to whatever opened it.
+  const panelRef = useRef<HTMLElement>(null)
+  useFocusTrap(panelRef, onClose)
 
   const load = useCallback(async (): Promise<void> => {
     if (!workspace) {
@@ -104,10 +109,13 @@ export function DiffPanel({
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <aside
+        ref={panelRef}
         className="drawer changes-panel"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label="Working-tree changes"
+        tabIndex={-1}
       >
         <header className="changes-panel__head">
           <div className="changes-panel__titles">
@@ -132,7 +140,7 @@ export function DiffPanel({
           >
             ⟳
           </button>
-          <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
+          <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close" data-autofocus>
             ✕
           </button>
         </header>

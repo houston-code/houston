@@ -29,6 +29,15 @@ const dir = (name: string, path: string): FileEntry => ({ name, path, isDirector
 const file = (name: string, path: string): FileEntry => ({ name, path, isDirectory: false })
 
 describe('FilesPanel', () => {
+  it('starts focus in the filter field and closes on Esc', async () => {
+    installApi({ '': [file('README.md', 'README.md')] })
+    const onClose = vi.fn()
+    render(<FilesPanel workspace="/ws" onClose={onClose} />)
+    expect(document.activeElement).toBe(screen.getByLabelText('Filter files'))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('lists the workspace root', async () => {
     installApi({ '': [dir('src', 'src'), file('README.md', 'README.md')] })
     render(<FilesPanel workspace="/repo" onClose={vi.fn()} />)

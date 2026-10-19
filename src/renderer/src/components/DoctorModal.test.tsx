@@ -77,10 +77,9 @@ describe('DoctorModal', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 
-  // Esc is deliberately NOT handled here: it's owned by App's global key handler,
-  // which knows the modal is open and suppresses run-cancel/cycle-mode while it is.
-  // A private Esc listener here fired first and let App's handler fall through to
-  // cancel a running turn (the bug this modal's Esc handling was removed to fix).
+  // No document-level Esc listener: one here once fired first and let App's handler
+  // fall through to cancel a running turn. Esc is handled by the focus trap on the
+  // dialog itself, which stops it there (next test).
   it('does not register its own Escape listener', async () => {
     installApi(facts())
     const onClose = vi.fn()
@@ -88,5 +87,23 @@ describe('DoctorModal', () => {
     await waitFor(() => expect(screen.getByText('Everything looks healthy.')).toBeInTheDocument())
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('takes focus on open and closes on Esc without letting it reach the app', async () => {
+    installApi(facts())
+    const onClose = vi.fn()
+    const appHandler = vi.fn()
+    window.addEventListener('keydown', appHandler)
+    try {
+      render(<DoctorModal workspace={null} onClose={onClose} />)
+      const dialog = screen.getByRole('dialog')
+      expect(dialog.contains(document.activeElement)).toBe(true)
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+      expect(onClose).toHaveBeenCalledTimes(1)
+      // App's global handler would read a stray Esc as "stop the running turn".
+      expect(appHandler).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', appHandler)
+    }
   })
 })
