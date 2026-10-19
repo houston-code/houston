@@ -442,6 +442,23 @@ export interface ChatGroup {
   collapsed?: boolean
 }
 
+/**
+ * A command from the native File menu, run by the renderer with the same handlers
+ * the command palette and sidebar use. `new-chat-in-workspace` (File → Open Recent)
+ * carries a folder main has already checked against the recents list.
+ */
+export type MenuCommand =
+  | { type: 'new-chat' }
+  | { type: 'new-chat-in-folder' }
+  | { type: 'new-chat-in-workspace'; workspace: string }
+  | { type: 'import-chat' }
+  | { type: 'export-chat'; format: 'json' | 'html' }
+
+/** Renderer UI state the native menu reflects (Export is greyed out with no chat open). */
+export interface MenuState {
+  hasConversation: boolean
+}
+
 export interface AppSettings {
   schemaVersion: number
   providers: ProviderConfig[]

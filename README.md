@@ -313,7 +313,8 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready / Responding… / Running a tool / Awaiting approval) and the active
   model.
-- **Keyboard shortcuts.** A ⌘K command palette, ⌘N new chat, ⌘1–9 / ⌃Tab to switch
+- **Keyboard shortcuts.** A ⌘K command palette, ⌘N new chat (⇧⌘N in another
+  folder, also in the File menu with recent folders), ⌘1–9 / ⌃Tab to switch
   chats, Shift+Tab to cycle approval mode, ⌘F find-in-conversation, ⌘⇧M to switch
   model, ↑/↓ to recall earlier prompts, Esc Esc to edit your last message, and Esc
   to stop a running turn. Press ⌘/ (or ?) for the full list; rebind any of them

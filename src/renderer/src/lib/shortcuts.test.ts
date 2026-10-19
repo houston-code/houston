@@ -54,8 +54,36 @@ describe('matchShortcut', () => {
     expect(matchShortcut(ev('Escape'))).toBe('escape')
   })
 
-  it('ignores Shift on a non-shift chord (⇧⌘N still triggers new-chat)', () => {
-    expect(matchShortcut(ev('N', true, { shiftKey: true }))).toBe('new-chat')
+  it('maps Cmd/Ctrl+Shift+N to new-chat-in-folder, not new-chat', () => {
+    expect(matchShortcut(ev('N', true, { shiftKey: true }))).toBe('new-chat-in-folder')
+    expect(matchShortcut({ key: 'n', metaKey: false, ctrlKey: true, shiftKey: true })).toBe(
+      'new-chat-in-folder'
+    )
+  })
+
+  it('ignores Shift on a non-shift chord when no chord names it (⇧⌘B still toggles)', () => {
+    expect(matchShortcut(ev('B', true, { shiftKey: true }))).toBe('toggle-sidebar')
+  })
+
+  it('prefers a chord naming Shift over an earlier shift-ignoring one', () => {
+    const defs = [
+      {
+        id: 'new-chat' as const,
+        chords: [{ key: 'n', mod: true }],
+        label: '',
+        category: 'General' as const
+      },
+      {
+        id: 'new-chat-in-folder' as const,
+        chords: [{ key: 'n', mod: true, shift: true }],
+        label: '',
+        category: 'General' as const
+      }
+    ]
+    expect(matchShortcut(ev('n', true, { shiftKey: true }), defs)).toBe('new-chat-in-folder')
+    expect(matchShortcut(ev('n', true), defs)).toBe('new-chat')
+    // With the shift chord unbound, ⇧⌘N falls back to the shift-ignoring chord.
+    expect(matchShortcut(ev('n', true, { shiftKey: true }), [defs[0]])).toBe('new-chat')
   })
 
   it('ignores plain keys and unmodified letters', () => {

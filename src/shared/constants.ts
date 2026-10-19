@@ -41,6 +41,10 @@ export const IPC = {
   updateInstall: 'update:install',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
   menuOpenSettings: 'menu:openSettings',
+  /** Main → renderer: a native File-menu command was chosen (see MenuCommand). */
+  menuCommand: 'menu:command',
+  /** Renderer → main: UI state the native menu depends on (see MenuState). */
+  menuState: 'menu:state',
   /** Renderer → main: share Houston (macOS share menu, else copy the invite). */
   shareHouston: 'share:houston',
   /** Renderer → main: run a fixed share action (copy the invite, or email it). */
