@@ -117,14 +117,42 @@ describe('Composer', () => {
     expect(input.value).toBe('') // composer clears after queuing
   })
 
-  it('queues slash-command text verbatim while running (no command runs)', () => {
+  // Queuing a command as text while running sent the model a literal "/plan" and the
+  // command never ran. Mode switches already apply live mid-run (dropdown, Shift+Tab).
+  it('runs a built-in command while a run is in progress instead of queuing its text', () => {
     const props = baseProps({ running: true })
     render(<Composer {...props} />)
 
-    const input = type('/new')
+    const input = type('/plan ')
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(props.onSend).toHaveBeenCalledWith('/new', undefined)
+    expect(props.onCommand).toHaveBeenCalledWith(expect.objectContaining({ name: 'plan' }), '')
+    expect(props.onSend).not.toHaveBeenCalled()
+    expect(input.value).toBe('')
+  })
+
+  it('holds /compact while a run is in progress, keeping the text', () => {
+    const compact: Command = { name: 'compact', description: 'Compact the conversation' }
+    const props = baseProps({ running: true, commands: [...COMMANDS, compact] })
+    render(<Composer {...props} />)
+
+    const input = type('/compact ')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(props.onCommand).not.toHaveBeenCalled()
+    expect(props.onSend).not.toHaveBeenCalled()
+    expect(input.value).toBe('/compact ')
+    expect(screen.getByText(/can't run while the agent is working/)).toBeInTheDocument()
+  })
+
+  it('still queues an unknown /word while running, as a message', () => {
+    const props = baseProps({ running: true })
+    render(<Composer {...props} />)
+
+    const input = type('/usr/local/bin is not on PATH')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(props.onSend).toHaveBeenCalledWith('/usr/local/bin is not on PATH', undefined)
     expect(props.onCommand).not.toHaveBeenCalled()
   })
 
@@ -542,6 +570,15 @@ describe('Composer + attachment menu', () => {
       expect(props.onSteer).toHaveBeenCalledWith('actually, use staging')
       expect(props.onSend).not.toHaveBeenCalled() // steer is not a queue
       expect(input.value).toBe('')
+    })
+
+    it('runs a command instead of steering with it', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn() })
+      render(<Composer {...props} />)
+      type('/plan')
+      fireEvent.click(screen.getByRole('button', { name: 'Steer' }))
+      expect(props.onSteer).not.toHaveBeenCalled()
+      expect(props.onCommand).toHaveBeenCalledWith(expect.objectContaining({ name: 'plan' }), '')
     })
 
     it('leaves the queue (Enter / the send button) untouched while running', () => {

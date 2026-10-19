@@ -2564,8 +2564,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let atComposer = false
   // A line typed mid-run goes to the turn that is running, so "no, not that" lands
   // while it can still change the outcome. With no live run there is nothing to
-  // steer, and the io layer queues it as a follow-up instead.
-  deps.io.onSteer?.((text) => (activeRunId ? (deps.steerRun?.(activeRunId, text) ?? false) : false))
+  // steer, and the io layer queues it as a follow-up instead. A slash command is
+  // never steering: injected into the run it reached the model as the literal text
+  // "/plan" and the command never ran. Declining it queues it, so it runs as a
+  // command once the turn ends.
+  deps.io.onSteer?.((text) => {
+    if (!activeRunId) return false
+    const slash = parseSlashCommand(text.trim(), deps.getSettings(), customCommands)
+    if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
+    return deps.steerRun?.(activeRunId, text) ?? false
+  })
   deps.io.onInterrupt?.(() => {
     if (activeRunId) {
       deps.cancelRun(activeRunId)

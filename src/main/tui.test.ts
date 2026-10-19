@@ -4547,6 +4547,32 @@ describe('steering a running turn', () => {
     await runTui(opts, d)
   })
 
+  // Steering "/plan" into the run sent the model the literal text and never ran
+  // the command. A command is declined, so the io layer queues it for after the turn.
+  it('never steers with a slash command, so it runs as a command after the turn', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    const steers: string[] = []
+    d.steerRun = (_runId, text) => {
+      steers.push(text)
+      return true
+    }
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    d.startRun = async (req, send) => {
+      expect(hold.steer?.('/approval plan')).toBe(false)
+      expect(hold.steer?.('/help')).toBe(false)
+      // Not a known command (a path, say): still ordinary steering text.
+      expect(hold.steer?.('/usr/local/bin is not on PATH')).toBe(true)
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(steers).toEqual(['/usr/local/bin is not on PATH'])
+  })
+
   it('says nothing to steer when no turn is running', async () => {
     const { d } = deps(done)
     const t = fakeIo([null])

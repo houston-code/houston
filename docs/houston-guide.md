@@ -269,6 +269,10 @@ no second `Enter`. Several such messages go together as one.
   `Ctrl-C`).
 - Stopping a run also drops anything still waiting: those messages were follow-ups
   to work you just threw away.
+- A slash command typed while the agent works is run as a command, never sent to
+  the model as text. In the terminal it runs once the turn ends. In the desktop app
+  it runs right away (switching the approval mode applies to the running turn),
+  except `/compact`, which waits until the turn ends.
 
 ## How long a turn runs
 
