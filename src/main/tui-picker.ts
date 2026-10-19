@@ -20,6 +20,7 @@ export interface PickerOption {
 }
 
 export interface PickerSpec {
+  /** Heading line above the options; empty when the caller already printed the question. */
   title: string
   options: PickerOption[]
   /** Allow selecting more than one (checkboxes); commit joins the chosen values. */
@@ -139,7 +140,7 @@ export function reducePicker(s: PickerState, key: PickerKey): { state: PickerSta
  * adapter owns positioning). The count lets the adapter erase precisely on redraw.
  */
 export function renderPicker(s: PickerState, paint: Painter): string[] {
-  const lines = [paint(s.spec.title, 'bold')]
+  const lines = s.spec.title ? [paint(s.spec.title, 'bold')] : []
   s.spec.options.forEach((o, i) => {
     const pointer = i === s.cursor ? paint('›', 'cyan') : ' '
     const box = s.spec.multiSelect ? (s.checked.has(i) ? '[x] ' : '[ ] ') : ''

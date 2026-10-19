@@ -69,7 +69,7 @@ import { PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
 import { truncateVisible, stripControlChars, osc52Copy } from './tui-wrap'
 import { SHARE_MESSAGE } from '@shared/share'
-import { MarkdownStream } from './markdown-ansi'
+import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { renderPreviewView } from './tui-diff'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
@@ -864,7 +864,8 @@ export function renderWorkingTree(
       f.status === 'added' ? paint('A', 'green')
         : f.status === 'deleted' ? paint('D', 'red')
           : f.status === 'renamed' ? paint('R', 'magenta')
-            : paint('M', 'yellow')
+            : f.status === 'untracked' ? paint('?', 'green')
+              : paint('M', 'yellow')
     const stat = `${paint(`+${f.added}`, 'green')} ${paint(`-${f.removed}`, 'red')}`
     return `  ${mark} ${f.path.padEnd(width)}  ${stat}`
   })
@@ -933,6 +934,24 @@ export function formatRelativeTime(then: number, now: number): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
+/** The question line of an `ask_user` prompt. */
+export function renderQuestionHeader(question: string, paint: Painter): string {
+  return `\n${paint('? ', 'magenta')}${paint(question, 'bold')}`
+}
+
+/** The numbered options + typing hint for answering an `ask_user` question by hand. */
+export function renderQuestionChoices(options: QuestionOption[], multiSelect: boolean, paint: Painter): string {
+  const lines = options.map((o, i) => {
+    const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
+    return `  ${paint(String(i + 1), 'cyan')}. ${o.label}${desc}`
+  })
+  const hint = multiSelect
+    ? 'Enter numbers (comma-separated) or type an answer'
+    : 'Enter a number or type an answer'
+  lines.push(paint(`  ${hint}`, 'dim'))
+  return lines.join('\n')
+}
+
 /** The prompt shown for an `ask_user` question: the question plus numbered options. */
 export function renderQuestion(
   question: string,
@@ -940,16 +959,7 @@ export function renderQuestion(
   multiSelect: boolean,
   paint: Painter
 ): string {
-  const lines = [`\n${paint('? ', 'magenta')}${paint(question, 'bold')}`]
-  options.forEach((o, i) => {
-    const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${o.label}${desc}`)
-  })
-  const hint = multiSelect
-    ? 'Enter numbers (comma-separated) or type an answer'
-    : 'Enter a number or type an answer'
-  lines.push(paint(`  ${hint}`, 'dim'))
-  return lines.join('\n')
+  return `${renderQuestionHeader(question, paint)}\n${renderQuestionChoices(options, multiSelect, paint)}`
 }
 
 /**
@@ -999,21 +1009,33 @@ export const PLAN_ACTIONS: { key: string; action: PlanAction; label: string; des
   { key: 'r', action: 'reject', label: 'Reject', description: 'discard; keep planning' }
 ]
 
-/** Render a presented plan (title, body, affected files) plus the decision menu. */
-export function renderPlan(plan: PlanPayload, paint: Painter): string {
+/** The plan-review actions with their typed shortcut keys. */
+export function renderPlanActions(paint: Painter): string {
+  return PLAN_ACTIONS.map(
+    (a) => `  ${paint(`[${a.key}]`, 'cyan')} ${a.label}  ${paint(`(${a.description})`, 'dim')}`
+  ).join('\n')
+}
+
+/**
+ * Render a presented plan (title, body, affected files), plus the typed decision
+ * menu unless `actions` is false (the arrow-key picker lists the actions instead).
+ * The body is markdown, rendered the way assistant text is.
+ */
+export function renderPlan(
+  plan: PlanPayload,
+  paint: Painter,
+  opts: { actions?: boolean; width?: number; highlight?: (lang: string, code: string) => string } = {}
+): string {
   const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(plan.title, 'bold')}`]
   const body = plan.body?.trim()
   if (body) {
-    lines.push('', body)
+    lines.push('', renderMarkdownAnsi(body, { paint, width: opts.width ?? 0, highlight: opts.highlight }))
   } else {
     if (plan.overview) lines.push('', plan.overview)
     for (const step of plan.steps ?? []) lines.push(`  • ${step}`)
   }
   if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.join(', ')}`, 'dim'))
-  lines.push('')
-  for (const a of PLAN_ACTIONS) {
-    lines.push(`  ${paint(`[${a.key}]`, 'cyan')} ${a.label}  ${paint(`(${a.description})`, 'dim')}`)
-  }
+  if (opts.actions !== false) lines.push('', renderPlanActions(paint))
   return lines.join('\n')
 }
 
@@ -1348,6 +1370,7 @@ export const HELP_TEXT = [
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
+  "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   '  /theme [name]         list or switch color theme (default | bright | mono)',
   '  /image [path]         attach an image — from your clipboard, or a file',
   '  /cwd                  show the working directory',
@@ -2444,6 +2467,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let policy = opts.approvalPolicy
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
+  // Prints whatever assistant text the running turn is still holding back (markdown
+  // renders block by block, so a paragraph waits for its end). The interrupt handler
+  // calls it first, so the text the user stopped lands above "^C interrupted", not
+  // after it.
+  let flushStreamedText: () => void = () => {}
   // The last turn's run id. Checkpoints are keyed by run, so this is what /undo
   // needs; the conversation lookup is only a way to find it across restarts.
   let lastRunId: string | null = null
@@ -2542,6 +2570,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (activeRunId) {
       deps.cancelRun(activeRunId)
       deps.io.stopSpinner?.()
+      flushStreamedText()
       // Whatever was queued was a follow-up to the turn being thrown away; sending
       // it into the wreckage would be worse than dropping it.
       deps.io.clearQueued?.()
@@ -3350,6 +3379,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const s = md.flush()
       if (s) deps.io.out(s)
     }
+    flushStreamedText = flushMd
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.startSpinner?.('Working')
 
@@ -3503,18 +3533,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         case 'tool_question':
           enqueue(async () => {
-            deps.io.out(`${renderQuestion(e.question, e.options, e.multiSelect ?? false, paint)}\n`)
-            let answer: string | null = null
-            // Only offer the arrow-key picker when there's something to pick — an
+            const multi = e.multiSelect ?? false
+            // Only offer the arrow-key picker when there's something to pick: an
             // options-less question is a free-text prompt, so go straight to typing.
-            if (deps.io.select && e.options.length > 0) {
+            const usePicker = !!deps.io.select && e.options.length > 0
+            // With the picker, the picker is the one list of options. Printing the
+            // numbered list as well showed the question and every option twice; it
+            // is printed only if the answer falls back to typing (which takes numbers).
+            deps.io.out(
+              `${usePicker ? renderQuestionHeader(e.question, paint) : renderQuestion(e.question, e.options, multi, paint)}\n`
+            )
+            let answer: string | null = null
+            if (usePicker && deps.io.select) {
               const r = await deps.io.select({
-                title: e.question,
-                multiSelect: e.multiSelect ?? false,
+                title: '',
+                multiSelect: multi,
                 options: e.options.map((o) => ({ label: o.label, value: o.label, description: o.description }))
               })
               if (r.kind === 'commit') answer = r.value
               // cancel/type → fall through so the user can still type a custom answer
+              else deps.io.out(`${renderQuestionChoices(e.options, multi, paint)}\n`)
             }
             if (answer === null) {
               const ans = await deps.io.readLine('> ', { discardPending: true })
@@ -3631,7 +3669,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // Render it and collect the same accept / suggest / reject decision the
           // GUI's plan panel does, then unblock present_plan via resolvePlan.
           enqueue(async () => {
-            deps.io.out(`${renderPlan(e.plan, paint)}\n`)
+            // The picker lists the actions itself; the typed [key] menu is printed
+            // only when answering falls back to typing, so it isn't shown twice.
+            deps.io.out(
+              `${renderPlan(e.plan, paint, { actions: !deps.io.select, width: columns(), highlight })}\n`
+            )
             let action: PlanAction | null = null
             if (deps.io.select) {
               const r = await deps.io.select({
@@ -3639,7 +3681,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 options: PLAN_ACTIONS.map((a) => ({ label: a.label, value: a.action, description: a.description }))
               })
               if (r.kind === 'commit') action = r.value as PlanAction
-              // cancel/type → fall through to the typed prompt
+              // cancel/type → fall through to the typed prompt, with its keys shown
+              else deps.io.out(`${renderPlanActions(paint)}\n`)
             }
             if (action === null) {
               const ans = await deps.io.readLine('> ', { discardPending: true })
@@ -3688,6 +3731,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // can't crash the run (a throw here has no catch on the startRun side).
       persistMessages(m)
     })
+    flushStreamedText = () => {}
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts

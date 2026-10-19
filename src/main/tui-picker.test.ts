@@ -118,6 +118,11 @@ describe('renderPicker', () => {
     // Exactly title + 3 options + hint.
     expect(lines).toHaveLength(5)
   })
+  it('omits the heading line when the title is empty', () => {
+    const lines = renderPicker(initialPickerState({ ...spec, title: '' }), paint)
+    expect(lines[0]).toContain('› Allow')
+    expect(lines).toHaveLength(4) // 3 options + hint, no blank heading row
+  })
   it('shows checkboxes in multi-select', () => {
     let s = initialPickerState(multi)
     s = reducePicker(s, { type: 'space' }).state // check A

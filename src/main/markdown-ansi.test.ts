@@ -56,6 +56,16 @@ describe('renderMarkdownAnsi', () => {
     expect(out).toContain('2')
   })
 
+  it('keeps wrapped list items inside the width, indent included', () => {
+    const long = 'another nested bullet with a very long line that should wrap inside the column'
+    for (const src of [`- ${long}`, `1. ${long}`, `- top\n  - ${long}`, `1. top\n2. second\n   - ${long}`]) {
+      const lines = render(src, 30).split('\n')
+      expect(lines.every((l) => l.length <= 30)).toBe(true)
+      // No word is split across lines: every word of the item survives intact.
+      for (const word of long.split(' ')) expect(lines.some((l) => l.includes(word))).toBe(true)
+    }
+  })
+
   it('wraps paragraphs at the given width', () => {
     const out = render('the quick brown fox jumps', 9)
     expect(out.split('\n').every((l) => l.length <= 9)).toBe(true)

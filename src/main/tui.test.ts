@@ -17,6 +17,7 @@ import {
   renderApprovalPrompt,
   parseApprovalAnswer,
   renderQuestion,
+  HELP_TEXT,
   resolveQuestionAnswer,
   parseSlashCommand,
   resolveModelArg,
@@ -86,6 +87,8 @@ import {
   type TuiPersist,
   type ResumeEntry
 } from './tui'
+import type { PickerOutcome, PickerSpec } from './tui-picker'
+import { COMMANDS } from './tui-complete'
 
 /** A full ProviderConfig from a partial — fills kind/label/builtIn for /login tests. */
 const prov = (over: Partial<ProviderConfig>): ProviderConfig =>
@@ -1171,6 +1174,40 @@ describe('runTui', () => {
     expect(rec.questions).toEqual([['run-1', 'q1', 'Beta']])
   })
 
+  // The picker lists the options; the numbered list used to print above it as well,
+  // so the question and every option appeared twice.
+  it('prints the question once and leaves the options to the picker', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which db?', options: [{ label: 'Alpha' }, { label: 'Beta' }] },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['choose', null])
+    const specs: PickerSpec[] = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'commit', value: 'Beta' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text().split('Which db?')).toHaveLength(2) // exactly once
+    expect(t.text()).not.toContain('1. Alpha')
+    expect(specs[0].title).toBe('') // the question is already printed above it
+    expect(specs[0].options.map((o) => o.label)).toEqual(['Alpha', 'Beta'])
+  })
+
+  it('shows the numbered options when the picker falls back to typing', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_question', callId: 'q1', question: 'Which db?', options: [{ label: 'Alpha' }, { label: 'Beta' }] },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['choose', '2', null])
+    t.io.select = async () => ({ kind: 'type' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('2. Beta')
+    expect(rec.questions).toEqual([['run-1', 'q1', 'Beta']])
+  })
+
   it('prompts for and resolves an ask_user question by option number', async () => {
     const { d, rec } = deps([
       {
@@ -1412,6 +1449,22 @@ describe('runTui', () => {
     // The interrupt is acknowledged visibly rather than stopping silently.
     expect(t.text()).toContain('^C interrupted')
     void runs
+  })
+
+  it('prints the text it was streaming before the interrupt marker, not after', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['long task', null])
+    d.io = t.io
+    d.startRun = async (req, send) => {
+      // A paragraph still streaming: markdown holds it until the block ends.
+      send({ runId: req.runId, type: 'text', delta: 'Half a thought that never ends' })
+      t.fireInterrupt()
+      send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+    }
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out.indexOf('Half a thought')).toBeGreaterThan(-1)
+    expect(out.indexOf('Half a thought')).toBeLessThan(out.indexOf('^C interrupted'))
   })
 
   it('Ctrl-C at the composer discards the input, hints, and keeps the session', async () => {
@@ -1944,6 +1997,13 @@ describe('runTui', () => {
     expect(t.text()).not.toContain('Unknown command')
   })
 
+  // /help is hand-written; the menu and Tab completion come from the shared catalog.
+  // A command in the catalog but not in /help works but can't be found from /help.
+  it('lists every built-in terminal command in /help', () => {
+    const missing = COMMANDS.filter((c) => !new RegExp(`/${c.name}\\b`).test(HELP_TEXT)).map((c) => c.name)
+    expect(missing).toEqual([])
+  })
+
   it('lists custom commands under /help', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     d.commands = async () => [{ name: 'ship', description: 'Ship the release', template: 'go' }]
@@ -2282,6 +2342,34 @@ describe('runTui — plan review (present_plan)', () => {
     expect(t.text()).toContain('Refactor auth')
     expect(t.text()).toContain('Move the guard to middleware.')
     expect(rec.plans).toEqual([['run-1', 'p1', { kind: 'accept', mode: 'auto-edit' }]])
+  })
+
+  it('renders the plan body as markdown', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'plan_ready', callId: 'p1', plan: { title: 'Greeting', body: '## Steps\n\nAdd `greet.ts` with **tests**.' } },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['do it', 'r', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Add greet.ts with tests.')
+    expect(t.text()).not.toContain('`greet.ts`')
+    expect(t.text()).not.toContain('**tests**')
+  })
+
+  it('leaves the plan actions to the picker, and shows the typed keys only on fallback', async () => {
+    const run = async (outcome: PickerOutcome, inputs: (string | null)[]): Promise<string> => {
+      const { d } = deps(withPlan())
+      const t = fakeIo(inputs)
+      t.io.select = async () => outcome
+      d.io = t.io
+      await runTui(opts, d)
+      return t.text()
+    }
+    const picked = await run({ kind: 'commit', value: 'reject' }, ['do it', null])
+    expect(picked).not.toContain('[a] Accept & run')
+    const typed = await run({ kind: 'type' }, ['do it', 'r', null])
+    expect(typed).toContain('[a] Accept & run')
   })
 
   it('resolves accept-ask (approve each edit)', async () => {
@@ -4228,9 +4316,10 @@ describe('/undo, /redo and /changes', () => {
         branch: 'feat/x',
         files: [
           { path: 'src/a.ts', status: 'modified', added: 3, removed: 1 },
-          { path: 'src/b.ts', status: 'added', added: 10, removed: 0 }
+          { path: 'src/b.ts', status: 'added', added: 10, removed: 0 },
+          { path: 'notes.md', status: 'untracked', added: 2, removed: 0 }
         ],
-        added: 13,
+        added: 15,
         removed: 1
       },
       paintNo
@@ -4238,7 +4327,9 @@ describe('/undo, /redo and /changes', () => {
     expect(out).toContain('Changes on feat/x')
     expect(out).toContain('M src/a.ts')
     expect(out).toContain('A src/b.ts')
-    expect(out).toContain('2 files, +13 -1')
+    // An untracked file is new to git, not modified (it used to read "M").
+    expect(out).toContain('? notes.md')
+    expect(out).toContain('3 files, +15 -1')
   })
 
   it('handles a clean tree and a non-repo', () => {
