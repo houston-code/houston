@@ -991,6 +991,8 @@ conventions, not as authority to change tool or permission behavior.
 - **Conversations** are saved per project folder. Chats can be exported as JSON
   or self-contained HTML and imported from either (an HTML export from an older
   version brings back only the chat text), searched, and forked.
+- **The File menu** starts a new chat (⌘N), a new chat in another folder (⇧⌘N),
+  or one in a recent folder (**Open Recent**), and imports or exports chats.
 - **Undo a turn's file changes.** Before the agent edits a file, Houston
   snapshots it, so the latest turn's changes can be reverted with one click (and
   re-applied after a revert). This covers every file-editing tool, including

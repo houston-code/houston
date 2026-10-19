@@ -536,6 +536,22 @@ describe('recent workspaces — existence pruning', () => {
       rmSync(b, { recursive: true, force: true })
     }
   })
+
+  it('onSettingsSaved notifies on every save until unsubscribed', async () => {
+    const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
+    try {
+      const { rememberWorkspace, onSettingsSaved } = await loadStore()
+      const seen: string[][] = []
+      const off = onSettingsSaved((s) => seen.push(s.recentWorkspaces))
+      rememberWorkspace(a)
+      expect(seen).toEqual([[a]])
+      off()
+      rememberWorkspace(a)
+      expect(seen).toHaveLength(1)
+    } finally {
+      rmSync(a, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('git-init dismissal — "don\'t ask again for this folder"', () => {

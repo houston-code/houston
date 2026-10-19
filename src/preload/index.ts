@@ -8,6 +8,8 @@ import type {
   FolderTrustStatus,
   IntegrationsInfo,
   McpServerStatus,
+  MenuCommand,
+  MenuState,
   ModelOption,
   PermissionRule
 } from '@shared/types'
@@ -403,6 +405,15 @@ const api = {
     ipcRenderer.on(IPC.terminalCloseActive, listener)
     return () => ipcRenderer.removeListener(IPC.terminalCloseActive, listener)
   },
+
+  /** Subscribe to native File-menu commands (New Chat, Open Recent, …). Returns an unsubscribe fn. */
+  onMenuCommand: (cb: (cmd: MenuCommand) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, cmd: MenuCommand): void => cb(cmd)
+    ipcRenderer.on(IPC.menuCommand, listener)
+    return () => ipcRenderer.removeListener(IPC.menuCommand, listener)
+  },
+  /** Report the UI state the native menu reflects (e.g. whether a chat is open). */
+  setMenuState: (state: MenuState): void => ipcRenderer.send(IPC.menuState, state),
 
   /** Subscribe to the native menu's "Settings…" item. Returns an unsubscribe fn. */
   onOpenSettings: (cb: () => void): (() => void) => {

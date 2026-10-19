@@ -14,6 +14,7 @@
 
 export type ShortcutId =
   | 'new-chat'
+  | 'new-chat-in-folder'
   | 'command-palette'
   | 'switch-model'
   | 'find-in-chat'
@@ -101,6 +102,12 @@ export const SHORTCUTS: ShortcutDef[] = [
     id: 'new-chat',
     chords: [{ key: 'n', mod: true }],
     label: 'New chat',
+    category: 'General'
+  },
+  {
+    id: 'new-chat-in-folder',
+    chords: [{ key: 'n', mod: true, shift: true }],
+    label: 'New chat in another folder',
     category: 'General'
   },
   {
@@ -217,7 +224,12 @@ export interface Keyish {
   altKey?: boolean
 }
 
-function chordMatches(e: Keyish, c: KeyChord): boolean {
+/**
+ * Whether a key event satisfies a chord. With `strict`, an unset Shift requirement
+ * is read as "Shift forbidden", so a chord that names Shift explicitly wins over
+ * one that merely ignores it (see {@link matchShortcut}).
+ */
+function chordMatches(e: Keyish, c: KeyChord, strict = false): boolean {
   if (c.ctrl !== undefined) {
     // Raw-Control binding: match Control exactly and never with ⌘ held.
     if (e.ctrlKey !== c.ctrl || e.metaKey) return false
@@ -226,10 +238,10 @@ function chordMatches(e: Keyish, c: KeyChord): boolean {
     if ((c.mod ?? false) !== mod) return false
   }
   if ((c.alt ?? false) !== Boolean(e.altKey)) return false
-  // Shift: enforced when true, forbidden when false, ignored when unset. The ignore
-  // case keeps ⇧⌘N matching the ⌘N chord; the explicit cases let ⌃Tab / ⌃⇧Tab split.
+  // Shift: enforced when true, forbidden when false, ignored when unset (outside
+  // strict mode). The explicit cases let ⌃Tab / ⌃⇧Tab and ⌘N / ⇧⌘N split.
   if (c.shift === true && !e.shiftKey) return false
-  if (c.shift === false && e.shiftKey) return false
+  if ((c.shift === false || (strict && c.shift === undefined)) && e.shiftKey) return false
   return e.key.toLowerCase() === c.key.toLowerCase()
 }
 
@@ -239,10 +251,14 @@ function chordMatches(e: Keyish, c: KeyChord): boolean {
  * Pass a resolved registry (defaults + user overrides) to honour customizations.
  */
 export function matchShortcut(e: Keyish, defs: ShortcutDef[] = SHORTCUTS): ShortcutId | null {
-  for (const def of defs) {
-    if ((def.scope ?? 'global') !== 'global') continue
-    for (const c of def.chords) {
-      if (chordMatches(e, c)) return def.id
+  // Exact matches first, so ⇧⌘N reaches a chord bound to ⇧⌘N rather than ⌘N's
+  // shift-ignoring chord, even when that one is listed earlier or was re-recorded.
+  for (const strict of [true, false]) {
+    for (const def of defs) {
+      if ((def.scope ?? 'global') !== 'global') continue
+      for (const c of def.chords) {
+        if (chordMatches(e, c, strict)) return def.id
+      }
     }
   }
   return null

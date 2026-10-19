@@ -444,6 +444,8 @@ export function getSettings(): AppSettings {
   return withKeyFlags(cache)
 }
 
+const settingsListeners = new Set<(settings: AppSettings) => void>()
+
 export function saveSettings(next: AppSettings): AppSettings {
   // Removing the selected model in Settings only rewrites `providers`; reconcile so the
   // now-dangling `selected` is re-pointed to a valid model (or cleared) as part of the
@@ -458,7 +460,18 @@ export function saveSettings(next: AppSettings): AppSettings {
   })
   cache = settings
   persist(cache)
+  for (const listener of settingsListeners) listener(cache)
   return withKeyFlags(cache)
+}
+
+
+/**
+ * Run `listener` after every settings save (e.g. so the native menu can follow the
+ * recents list and keybindings). Returns an unsubscribe fn.
+ */
+export function onSettingsSaved(listener: (settings: AppSettings) => void): () => void {
+  settingsListeners.add(listener)
+  return () => settingsListeners.delete(listener)
 }
 
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
@@ -493,7 +506,7 @@ export function getProvider(providerId: string): ProviderConfig | undefined {
 }
 
 /** True when `path` is still an existing directory we can open as a workspace. */
-function workspaceExists(path: string): boolean {
+export function workspaceExists(path: string): boolean {
   try {
     return statSync(path).isDirectory()
   } catch {

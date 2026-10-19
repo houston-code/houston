@@ -1391,9 +1391,10 @@ export default function App(): JSX.Element {
       },
       {
         id: 'act-change-folder',
-        title: 'Open a different project folder',
+        title: 'New chat in another folder',
         section: 'Actions',
-        keywords: 'workspace directory cwd',
+        hint: shortcutHint('new-chat-in-folder', mac, shortcuts),
+        keywords: 'open project workspace directory cwd',
         run: () => void onChangeWorkspace()
       },
       {
@@ -1558,10 +1559,37 @@ export default function App(): JSX.Element {
   }
   const overlaysRef = useRef(overlays)
   overlaysRef.current = overlays
+  // The native File menu (main/menu.ts) sends its commands here so they run through
+  // the same handlers as the palette and sidebar, and it greys out Export when no
+  // chat is open, so report that as it changes.
+  useEffect(
+    () =>
+      window.api.onMenuCommand((cmd) => {
+        if (cmd.type === 'new-chat') void onNewChat()
+        else if (cmd.type === 'new-chat-in-folder') void onChangeWorkspace()
+        else if (cmd.type === 'new-chat-in-workspace') enterNewChat(cmd.workspace)
+        else if (cmd.type === 'import-chat') void onImportConversation()
+        else if (cmd.type === 'export-chat' && currentId) {
+          if (cmd.format === 'html') void onExportConversationHtml(currentId)
+          else void onExportConversation(currentId)
+        }
+      }),
+    [
+      onNewChat,
+      onChangeWorkspace,
+      enterNewChat,
+      onImportConversation,
+      onExportConversation,
+      onExportConversationHtml,
+      currentId
+    ]
+  )
+  useEffect(() => window.api.setMenuState({ hasConversation: currentId !== null }), [currentId])
 
   // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
-  // ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab cycle mode, ⌘F find, ⌘⇧M model,
-  // ⌘/ or ? help, ⌃` terminal, Esc to stop a run / close a dialog.
+  // ⇧⌘N new chat in another folder, ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab
+  // cycle mode, ⌘F find, ⌘⇧M model, ⌘/ or ? help, ⌃` terminal, Esc to stop a run /
+  // close a dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       // A handler nearer the event's target already consumed this key (e.g. a menu
@@ -1582,6 +1610,9 @@ export default function App(): JSX.Element {
       if (action === 'new-chat') {
         e.preventDefault()
         void onNewChat()
+      } else if (action === 'new-chat-in-folder') {
+        e.preventDefault()
+        void onChangeWorkspace()
       } else if (action === 'command-palette') {
         e.preventDefault()
         setPaletteSeed('')
@@ -1646,6 +1677,7 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     onNewChat,
+    onChangeWorkspace,
     toggleSidebar,
     toggleTerminal,
     jumpToChat,

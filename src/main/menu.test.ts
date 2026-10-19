@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   appMenuTemplate,
+  bindingToAccelerator,
+  recentFolderLabel,
   resolveCloseAction,
   setTerminalFocused,
   isTerminalFocused,
@@ -80,5 +82,124 @@ describe('Help menu', () => {
       expect(url.startsWith('https://')).toBe(true)
       expect(isSafeExternalUrl(url)).toBe(true)
     }
+  })
+})
+
+describe('File menu', () => {
+  type Item = {
+    label?: string
+    role?: string
+    type?: string
+    accelerator?: string
+    registerAccelerator?: boolean
+    enabled?: boolean
+    submenu?: Item[]
+  }
+  const fileMenu = (template: unknown[]): Item[] =>
+    ((template as Item[]).find((m) => m.label === 'File')?.submenu ?? []) as Item[]
+  const item = (items: Item[], label: string): Item => {
+    const found = items.find((i) => i.label === label)
+    expect(found, `missing "${label}"`).toBeDefined()
+    return found!
+  }
+  const ctx = { recentWorkspaces: [] as string[], hasConversation: true }
+
+  it('lists the chat items above Close on every platform', () => {
+    for (const mac of [true, false]) {
+      const labels = fileMenu(appMenuTemplate(mac, ctx)).map((i) => i.label ?? i.role ?? i.type)
+      expect(labels.slice(0, 7)).toEqual([
+        'New Chat',
+        'New Chat in Another Folder…',
+        'Open Recent',
+        'separator',
+        'Import Chat…',
+        'Export Chat',
+        'separator'
+      ])
+      expect(labels[7]).toBe('Close')
+      expect(labels.includes('quit')).toBe(!mac)
+    }
+  })
+
+  it('shows the new-chat shortcuts without registering them (the renderer owns the keys)', () => {
+    const items = fileMenu(appMenuTemplate(true, ctx))
+    expect(item(items, 'New Chat')).toMatchObject({
+      accelerator: 'CmdOrCtrl+N',
+      registerAccelerator: false
+    })
+    expect(item(items, 'New Chat in Another Folder…')).toMatchObject({
+      accelerator: 'CmdOrCtrl+Shift+N',
+      registerAccelerator: false
+    })
+    // ⌘W stays a real accelerator: main routes it (terminal tab vs window).
+    expect(item(items, 'Close').registerAccelerator).toBeUndefined()
+  })
+
+  it('follows user keybinding overrides, and shows nothing for an unbound one', () => {
+    const items = fileMenu(
+      appMenuTemplate(true, {
+        ...ctx,
+        keybindings: { 'new-chat': 'mod+alt+j', 'new-chat-in-folder': null }
+      })
+    )
+    expect(item(items, 'New Chat').accelerator).toBe('CmdOrCtrl+Alt+J')
+    expect(item(items, 'New Chat in Another Folder…').accelerator).toBeUndefined()
+  })
+
+  it('greys out Export Chat when no chat is open', () => {
+    expect(item(fileMenu(appMenuTemplate(true, ctx)), 'Export Chat').enabled).toBe(true)
+    const none = fileMenu(appMenuTemplate(true, { ...ctx, hasConversation: false }))
+    expect(item(none, 'Export Chat').enabled).toBe(false)
+    expect(item(none, 'Export Chat').submenu!.map((i) => i.label)).toEqual([
+      'As JSON…',
+      'As HTML…'
+    ])
+  })
+
+  it('lists recent folders under Open Recent, with a disabled placeholder when empty', () => {
+    const empty = item(fileMenu(appMenuTemplate(true, ctx)), 'Open Recent').submenu!
+    expect(empty).toEqual([{ label: 'No Recent Folders', enabled: false }])
+    const recents = item(
+      fileMenu(appMenuTemplate(true, { ...ctx, recentWorkspaces: ['/srv/a', '/srv/b'] })),
+      'Open Recent'
+    ).submenu!
+    expect(recents.map((i) => i.label)).toEqual(['/srv/a', '/srv/b'])
+  })
+})
+
+describe('bindingToAccelerator', () => {
+  it('maps the renderer chord format to Electron accelerators', () => {
+    expect(bindingToAccelerator('mod+n')).toBe('CmdOrCtrl+N')
+    expect(bindingToAccelerator('mod+shift+n')).toBe('CmdOrCtrl+Shift+N')
+    expect(bindingToAccelerator('ctrl+alt+Tab')).toBe('Ctrl+Alt+Tab')
+    expect(bindingToAccelerator('mod+/')).toBe('CmdOrCtrl+/')
+    expect(bindingToAccelerator('mod++')).toBe('CmdOrCtrl+Plus')
+    expect(bindingToAccelerator('mod+ArrowUp')).toBe('CmdOrCtrl+Up')
+    expect(bindingToAccelerator('F5')).toBe('F5')
+  })
+
+  it('returns undefined for unbound, modifier-only, or unrenderable bindings', () => {
+    expect(bindingToAccelerator(null)).toBeUndefined()
+    expect(bindingToAccelerator(undefined)).toBeUndefined()
+    expect(bindingToAccelerator('')).toBeUndefined()
+    expect(bindingToAccelerator('mod+shift+')).toBeUndefined()
+    expect(bindingToAccelerator('mod+MediaPlayPause')).toBeUndefined()
+  })
+})
+
+describe('recentFolderLabel', () => {
+  it('shortens the home directory to ~', () => {
+    expect(recentFolderLabel('/home/x/code/app', true, '/home/x')).toBe('~/code/app')
+    expect(recentFolderLabel('/home/x', true, '/home/x')).toBe('~')
+    // A sibling that merely shares the prefix is left alone.
+    expect(recentFolderLabel('/home/xy/app', true, '/home/x')).toBe('/home/xy/app')
+    // Windows paths use backslashes.
+    expect(recentFolderLabel('C:\\Users\\x\\code', false, 'C:\\Users\\x')).toBe('~\\code')
+    expect(recentFolderLabel('C:\\Users\\xy', false, 'C:\\Users\\x')).toBe('C:\\Users\\xy')
+  })
+
+  it('escapes & on Windows/Linux, where it marks a mnemonic', () => {
+    expect(recentFolderLabel('/srv/R&D', false, '/home/x')).toBe('/srv/R&&D')
+    expect(recentFolderLabel('/srv/R&D', true, '/home/x')).toBe('/srv/R&D')
   })
 })

@@ -2,7 +2,7 @@ import { ipcMain, dialog, BrowserWindow, clipboard, nativeImage, shell } from 'e
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
-import type { AppSettings, FolderTrustStatus, PermissionRule } from '@shared/types'
+import type { AppSettings, FolderTrustStatus, MenuState, PermissionRule } from '@shared/types'
 import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
@@ -85,7 +85,7 @@ import {
   conversationForLatestRun
 } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
-import { setTerminalFocused } from './menu'
+import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
@@ -1319,6 +1319,7 @@ export function registerIpc(): void {
   // Fire-and-forget focus signal so the ⌘W menu handler knows whether to close
   // the active terminal tab or the window.
   ipcMain.on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
+  ipcMain.on(IPC.menuState, (_event, state: MenuState) => setMenuState(state))
 
   // ---- Live preview dock (started dev servers) ----
 
