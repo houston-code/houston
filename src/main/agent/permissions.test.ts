@@ -392,8 +392,46 @@ describe('shellReferencesExternalPath', () => {
     expect(ext("x=\"$(cat <<'EOF'\nmsg\nEOF)\"; echo \"$(cat /etc/passwd)\"")).toBe(true)
   })
 
-  it('flags substitutions nested too deep to read', () => {
+  it('flags a path glued to a one-letter option', () => {
+    expect(ext('grep -f/etc/passwd x')).toBe(true)
+    expect(ext('git -C/etc status')).toBe(true)
+    expect(ext('gcc -I../include x.c')).toBe(true)
+    expect(ext('grep -f$HOME/.netrc x')).toBe(true)
+    // The value is everything after the letter: `-Isrc/include` is `src/include`.
+    expect(ext('gcc -I./include -Isrc/include x.c')).toBe(false)
+    expect(ext("git log -S'build/icon.png'")).toBe(false)
+    expect(ext('git -C/work/project/sub status && curl -o/dev/null http://x && tar -C/tmp -xf a.tgz')).toBe(false)
+    // A lone `/` is a delimiter, and a `~` past the start of a word is literal.
+    expect(ext("cut -d/ -f2 x && awk -F/ '{print $1}' x && sed -i~ 's/a/b/' f")).toBe(false)
+  })
+
+  it('reads a command string handed to a shell as a command', () => {
+    expect(ext('bash -c "cat /etc/passwd"')).toBe(true)
+    expect(ext("sh -lc 'cat ~/.ssh/id_rsa'")).toBe(true)
+    expect(ext("zsh -o pipefail -c 'cat ../secret'")).toBe(true)
+    expect(ext("sudo sh -c 'echo x >> /etc/hosts'")).toBe(true)
+    expect(ext("su - root -c 'cat /etc/shadow'")).toBe(true)
+    expect(ext("find . -name x -exec sh -c 'cat ../secret' \\;")).toBe(true)
+    expect(ext("eval 'cat /etc/passwd'")).toBe(true)
+    expect(ext("ssh -p 22 host 'cat ~/.ssh/id_rsa'")).toBe(true)
+    expect(ext("watch -n1 'cat /etc/hosts'")).toBe(true)
+    // Inside a substitution, and inside another command string.
+    expect(ext(`echo "$(bash -c 'cat /etc/passwd')"`)).toBe(true)
+    expect(ext(`bash -c "sh -c 'cat /etc/passwd'"`)).toBe(true)
+    // An in-workspace command string is not an escape, and no other quoted word is read
+    // as a command: a commit message naming a path is text.
+    expect(ext('bash -c "npm test" && bash scripts/build.sh')).toBe(false)
+    expect(ext("bash -c 'cd /work/project && make' && ssh host 'ls -la'")).toBe(false)
+    expect(ext('git commit -m "fix /etc handling"')).toBe(false)
+    expect(ext('eval "$(ssh-agent -s)" && git commit -m "fix /etc handling"')).toBe(false)
+  })
+
+  it('flags substitutions or command strings nested too deep to read', () => {
     expect(ext(`${'echo "$('.repeat(40)}x${')"'.repeat(40)}`)).toBe(true)
+    expect(ext(`${'eval '.repeat(40)}x`)).toBe(true)
+    let nested = 'cat src/a.ts'
+    for (let k = 0; k < 12; k++) nested = `bash -c ${JSON.stringify(nested)}`
+    expect(ext(nested)).toBe(true)
   })
 })
 

@@ -185,23 +185,24 @@ function heredocDelimiter(s: string, i: number): PendingHeredoc & { end: number 
 const REDIRECT_OP_RE = /[<>]+[&|]?/y
 
 /**
- * The words of `command`, and of every command or process substitution in it that runs,
- * read as bash builds them. Unlike {@link tokenizeShellCommand}, an unquoted operator
- * (`<`, `>`, `|`, `&`, `;`, `(`, `)`) ends a word, so `echo x>/etc/y` yields `/etc/y`;
+ * The simple commands that run in `command`, each as the words bash builds for it: the
+ * ones it chains, and the ones in every command or process substitution it holds.
+ * Unlike {@link tokenizeShellCommand}, an unquoted operator ends a word (`< >`, and the
+ * `| & ; ( )` and newline that also end a command), so `echo x>/etc/y` yields `/etc/y`;
  * and a substitution's body is read as a command of its own wherever it runs, inside
  * double quotes or an unquoted here-document too, so `echo "$(cat /etc/passwd)"`
- * yields `/etc/passwd`. A word holding a substitution keeps it as written (`"$(pwd)/x"`
- * is `$(pwd)/x`, not `/x`). A here-document's text is input, not words, and nothing
- * runs in single quotes or a quoted here-document, so commit-message text in
- * `"$(cat <<'EOF' ... EOF)"` yields no words. A `#` comment yields nothing.
+ * yields `cat /etc/passwd`. A word holding a substitution keeps it as written
+ * (`"$(pwd)/x"` is `$(pwd)/x`, not `/x`). A here-document's text is input, not words,
+ * and nothing runs in single quotes or a quoted here-document, so commit-message text
+ * in `"$(cat <<'EOF' ... EOF)"` yields no words. A `#` comment yields nothing.
  *
  * Returns null when substitutions nest deeper than {@link MAX_SUBST_DEPTH}. Not a full
  * parser: nothing is expanded, a `case` pattern's `)` ends a `$(...)` early, and a `<<`
  * shift in arithmetic reads as a here-document. {@link shellReferencesExternalPath}
  * reads these words alongside its other readings, never instead of them.
  */
-function shellRunWords(command: string): string[] | null {
-  const words: string[] = []
+function shellRunCommands(command: string): string[][] | null {
+  const commands: string[][] = []
   let tooDeep = false
 
   // The substitution opening at `s[i]` (`$(`, `<(`, `>(`, or a backtick), read as a
@@ -280,6 +281,7 @@ function shellRunWords(command: string): string[] | null {
   // past the `)` that closes it. Returns the index it stopped at.
   const readCommand = (s: string, i: number, nested: boolean, depth: number): number => {
     let word: string | null = null
+    let cmd: string[] = []
     let parens = 0
     const docs: PendingHeredoc[] = []
     while (i < s.length && !tooDeep) {
@@ -312,20 +314,31 @@ function shellRunWords(command: string): string[] | null {
         continue
       }
       // An unquoted blank or operator ends the word.
-      if (word !== null) words.push(word)
+      if (word !== null) cmd.push(word)
       word = null
-      if (c === '\n') {
-        i = heredocText(s, i + 1, docs, nested, depth)
-        docs.length = 0
-      } else if (c === '<' || c === '>') {
-        REDIRECT_OP_RE.lastIndex = i
+      if (c === '<' || c === '>' || (c === '&' && next === '>')) {
+        // A redirection (`&>` too): its target is a word of this same command.
+        const at = c === '&' ? i + 1 : i
+        REDIRECT_OP_RE.lastIndex = at
         const op = REDIRECT_OP_RE.exec(s)![0]
-        i += op.length
+        i = at + op.length
         if (op === '<<') {
           const doc = heredocDelimiter(s, i)
           if (doc.delim) docs.push(doc)
           i = doc.end
         }
+        continue
+      }
+      if (c !== '\n' && /\s/.test(c)) {
+        i += 1
+        continue
+      }
+      // `|`, `&`, `;`, `(`, `)`, and a newline end the command too.
+      if (cmd.length) commands.push(cmd)
+      cmd = []
+      if (c === '\n') {
+        i = heredocText(s, i + 1, docs, nested, depth)
+        docs.length = 0
       } else if (c === ')') {
         i += 1
         if (nested && parens === 0) return i
@@ -335,12 +348,13 @@ function shellRunWords(command: string): string[] | null {
         i += 1
       }
     }
-    if (word !== null) words.push(word)
+    if (word !== null) cmd.push(word)
+    if (cmd.length) commands.push(cmd)
     return i
   }
 
   readCommand(command, 0, false, 0)
-  return tooDeep ? null : words
+  return tooDeep ? null : commands
 }
 
 /**
@@ -469,13 +483,16 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * Whether a `run_shell` command references a filesystem path outside the workspace
  * `roots` — an absolute/home path that resolves outside every root, or a relative
  * path that climbs above the workspace root. Also inspects the value side of an `=`
- * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught). The
- * words are read as bash builds them (see {@link tokenizeShellCommand}), so quoting or
- * escaping a path (`$'/etc'`, `\/etc`, `x"/../.."/y`) doesn't hide it, and again with
- * backslashes kept (see {@link plainShellWords}), so a Windows path is seen too. They
+ * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught) and a
+ * value glued to a one-letter option (`-f/etc/x`). The words are read as bash builds
+ * them (see {@link tokenizeShellCommand}), so quoting or escaping a path (`$'/etc'`,
+ * `\/etc`, `x"/../.."/y`) doesn't hide it, and again with backslashes kept (see
+ * {@link plainShellWords}), so a Windows path is seen too. They
  * are read a third time split at operators and with each substitution's body read as a
- * command (see {@link shellRunWords}), so a redirection glued to the word before it
+ * command (see {@link shellRunCommands}), so a redirection glued to the word before it
  * (`echo x>/etc/y`) or a substitution in double quotes (`"$(cat /etc/passwd)"`) is seen.
+ * A command string handed to a shell (`bash -c "cat /etc/passwd"`, `eval`, `ssh host
+ * '...'`; see {@link nestedCommandString}) is read as a command of its own.
  *
  * Best-effort and deliberately conservative: a command that escapes is escalated
  * for approval, never silently auto-run. It can't catch a path that only appears once
@@ -484,19 +501,22 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * remains the real confinement boundary.
  */
 export function shellReferencesExternalPath(command: string, roots: string[]): boolean {
-  // Substitutions nested too deep to read are flagged: over-flagging only asks.
-  const runWords = shellRunWords(command)
-  if (runWords === null) return true
+  return commandReferencesExternalPath(command, roots, 0)
+}
+
+/** {@link shellReferencesExternalPath} for a command string nested `depth` shells deep. */
+function commandReferencesExternalPath(command: string, roots: string[], depth: number): boolean {
+  // Substitutions or command strings nested too deep to read are flagged: over-flagging
+  // only asks.
+  const commands = depth <= MAX_NESTED_SHELL_DEPTH ? shellRunCommands(command) : null
+  if (commands === null) return true
   // Any reading naming an outside path flags the command.
-  for (const token of [...tokenizeShellCommand(command), ...plainShellWords(command), ...runWords]) {
-    if (segmentEscapesWorkspace(token, roots)) return true
-    // A redirection glued to its target (`>/etc/cron.d/evil`, `<~/.ssh/id_rsa`,
-    // `2>/abs/log`) keeps the operator inside the token; peel it so the path is seen.
-    const redir = stripRedirection(token)
-    if (redir !== null && segmentEscapesWorkspace(redir, roots)) return true
-    // `KEY=value` / `--flag=value`: the path may sit after the first `=`.
-    const eq = token.indexOf('=')
-    if (eq >= 0 && segmentEscapesWorkspace(token.slice(eq + 1), roots)) return true
+  for (const token of [...tokenizeShellCommand(command), ...plainShellWords(command), ...commands.flat()]) {
+    if (tokenEscapesWorkspace(token, roots)) return true
+  }
+  for (const words of commands) {
+    const nested = nestedCommandString(words)
+    if (nested !== null && commandReferencesExternalPath(nested, roots, depth + 1)) return true
   }
   return false
 }
@@ -594,6 +614,63 @@ export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<
     typeof args.command === 'string' &&
     shellWritesSensitivePath(args.command)
   )
+}
+
+/**
+ * Whether one token of a command names a path outside the `roots`: the token itself, a
+ * redirection target glued to it, the value after an `=`, or a value glued to an option.
+ */
+function tokenEscapesWorkspace(token: string, roots: string[]): boolean {
+  if (segmentEscapesWorkspace(token, roots)) return true
+  // A redirection glued to its target (`>/etc/cron.d/evil`, `<~/.ssh/id_rsa`,
+  // `2>/abs/log`) keeps the operator inside the token; peel it so the path is seen.
+  const redir = stripRedirection(token)
+  if (redir !== null && segmentEscapesWorkspace(redir, roots)) return true
+  // `KEY=value` / `--flag=value`: the path may sit after the first `=`.
+  const eq = token.indexOf('=')
+  if (eq >= 0 && segmentEscapesWorkspace(token.slice(eq + 1), roots)) return true
+  // A value glued to a one-letter option (`grep -f/etc/passwd`, `git -C/etc`, `gcc
+  // -I../include`, `-f$HOME/x`); `-Isrc/include` is the relative `src/include`. A lone
+  // `/` is a delimiter there (`cut -d/`, `awk -F/`), not the root, and a `~` is literal
+  // (bash expands one only at the start of a word).
+  if (/^-[A-Za-z][/.$]/.test(token) && token.slice(2) !== '/' && segmentEscapesWorkspace(token.slice(2), roots)) {
+    return true
+  }
+  return false
+}
+
+/** Shells, and `su`, whose `-c` hands them the command string in the next word. */
+const SHELL_PROGRAMS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'fish', 'su'])
+
+/** Programs that join the words after them into one command string and run it. */
+const JOINED_COMMAND_PROGRAMS = new Set(['eval', 'ssh', 'watch'])
+
+/**
+ * Cap on command strings nested in command strings (`bash -c "eval '...'"`). Each level
+ * rereads the text once, so this bounds the work; a deeper command is flagged.
+ */
+const MAX_NESTED_SHELL_DEPTH = 8
+
+/**
+ * The command string a simple command hands to a shell to run, or null: the word after
+ * a `-c` given to a shell (`bash -lc "cat /etc/passwd"`, `sudo sh -c '...'`), or the
+ * words after `eval`, `ssh`, or `watch`, joined with spaces as they join them (`ssh
+ * host 'cat ~/.ssh/id_rsa'`; an ssh option or destination in the join reads as it did
+ * on its own).
+ * Only the first such program in `words` counts, so `eval eval ...` can't multiply the
+ * work. Any other quoted word stays a word: `git commit -m "fix /etc handling"` is not
+ * read as a command.
+ */
+function nestedCommandString(words: string[]): string | null {
+  for (const [i, word] of words.entries()) {
+    const program = word.slice(word.lastIndexOf('/') + 1)
+    if (JOINED_COMMAND_PROGRAMS.has(program)) return words.slice(i + 1).join(' ')
+    if (SHELL_PROGRAMS.has(program)) {
+      const c = words.findIndex((w, k) => k > i && /^-[A-Za-z]*c[A-Za-z]*$/.test(w))
+      return c === -1 ? null : (words[c + 1] ?? null)
+    }
+  }
+  return null
 }
 
 /**

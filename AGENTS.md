@@ -154,12 +154,14 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   workspace-escape check and the `cd` skip read a command's words as bash builds them
   (`"cd"k` is `cdk`, `$'/etc'` is `/etc`), so quoting can't hide a path or pass a
   program off as `cd`. The escape check also ends a word at an unquoted operator and
-  reads every command substitution that runs as a command, quoted or not
-  (`echo x>/etc/y`, `"$(cat /etc/passwd)"`), while text that never runs (a
-  single-quoted string, a here-document body) is not read as a command. The skip passes
-  only a `cd` or `pushd` whose words name a directory in the workspace: a bare `cd`,
-  `cd -`, `popd`, `~+`, a `$`, a glob, or a brace (`.[.]` and `{..,}` are `..`) stays
-  gated, and so does a relative name while `CDPATH` is set.
+  reads every command substitution that runs as a command, quoted or not (`echo
+  x>/etc/y`, `"$(cat /etc/passwd)"`), as it does a string handed to a shell (`bash -c`,
+  `eval`, `ssh host '...'`) and a path glued to a one-letter option (`-f/etc/x`), while
+  text that never runs (a single-quoted string, a here-document body, a commit message)
+  is not read as a command. The skip passes only a `cd` or `pushd` whose words name a
+  directory in the workspace: a bare `cd`, `cd -`, `popd`, `~+`, a `$`, a glob, or a
+  brace (`.[.]` and `{..,}` are `..`) stays gated, and so does a relative name while
+  `CDPATH` is set.
 - `src/main/sandbox/` — the per-OS sandbox backends and their conformance suite. The
   `linux-sandbox` CI job is the only one that exercises the real bubblewrap backend; the
   `test` job can only skip it.
