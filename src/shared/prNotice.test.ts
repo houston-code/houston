@@ -41,6 +41,16 @@ describe('prNoticeFromToolResult', () => {
     expect(prNoticeFromToolResult('gh_pr_view', true, withDiff)?.event).toBe('merged')
   })
 
+  it('never takes the merged URL from the fenced PR body', () => {
+    // No envelope URL (gh sent none, or it failed validation), and the body links elsewhere.
+    const noUrl = MERGED_VIEW.replace('https://github.com/acme/houston/pull/42\n', '').replace(
+      'Some body text.',
+      'See https://evil.test/acme/houston/pull/9 for details.'
+    )
+    expect(noUrl).toContain('source="https://github.com/acme/houston/pull/42"')
+    expect(prNoticeFromToolResult('gh_pr_view', true, noUrl)).toEqual({ event: 'merged', number: 42, url: undefined })
+  })
+
   it('stays quiet for a PR that is open or closed-but-not-merged', () => {
     expect(prNoticeFromToolResult('gh_pr_view', true, OPEN_VIEW)).toBeNull()
     expect(

@@ -2425,25 +2425,6 @@ function ghRunner(ctx: ToolContext): GhExec {
   return runGh(ghPath)
 }
 
-/**
- * Turn a read tool's gh result into tool output: stdout on success, a useful error
- * otherwise. Writes go through {@link ghWriteOutput}, which fences gh's text.
- */
-function ghOutput(r: { ok: boolean; stdout: string; stderr: string; code: number | null }): string {
-  if (r.ok) {
-    const out = r.stdout.trim() || '[no output]'
-    return out.length > MAX_GH_OUTPUT_CHARS
-      ? `${out.slice(0, MAX_GH_OUTPUT_CHARS)}\n[truncated]`
-      : out
-  }
-  const detail = (r.stderr.trim() || r.stdout.trim() || `gh exited with code ${r.code ?? 'null'}`).slice(
-    0,
-    MAX_GH_OUTPUT_CHARS
-  )
-  // gh's own auth error is actionable; pass it through verbatim.
-  return `gh failed (exit ${r.code ?? 'null'}): ${detail}`
-}
-
 /** `https://<host>/<owner>/<repo>`, which every URL a gh write prints starts with. */
 const GH_REPO_URL = String.raw`https?://[A-Za-z0-9.-]+(?::\d+)?/[\w.-]+/[\w.-]+`
 
@@ -2511,6 +2492,17 @@ function ghWriteOutput(
     subject: 'gh output',
     toolNames: builtinToolNames()
   })
+}
+
+/**
+ * A read tool's failed gh call, reported like a write's: a Houston-written
+ * `gh failed (exit N).` line (with the sign-in fix when that's the cause) and gh's own
+ * message fenced below it. gh's errors can quote a title or branch name ("no pull
+ * requests found for branch '<head>'"), so they are never the trusted part. Success
+ * output goes through each tool's own formatter instead.
+ */
+function ghReadFailure(r: { ok: boolean; stdout: string; stderr: string; code: number | null }): string {
+  return ghWriteOutput({ ...r, ok: false }, '')
 }
 
 /**
@@ -2634,7 +2626,7 @@ const ghPrList: ToolDef = {
     argv.push(...refFlag(args, 'base', '--base'))
 
     const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
-    if (!r.ok) return ghOutput(r)
+    if (!r.ok) return ghReadFailure(r)
     return formatPrList(r.stdout)
   }
 }
@@ -2712,7 +2704,7 @@ const ghPrView: ToolDef = {
       'number,title,state,isDraft,url,headRefName,baseRefName,author,additions,deletions,changedFiles,body'
     ]
     const r = await run(viewArgs, ctx.workspace, ctx.signal)
-    if (!r.ok) return ghOutput(r)
+    if (!r.ok) return ghReadFailure(r)
     if (args.diff !== true) return formatPrView(r.stdout)
     const d = await run(['pr', 'diff', ...positional], ctx.workspace, ctx.signal)
     return formatPrView(r.stdout, d.ok ? { diff: d.stdout.trim() } : { diffError: d.stderr.trim() })
@@ -2770,6 +2762,10 @@ export function formatPrView(json: string, extra: { diff?: string; diffError?: s
   if (extra.diff !== undefined) {
     parts.push({ label: 'Diff:', text: capGh(extra.diff), source: `${source} (diff)`, score: false })
   }
+  // gh's own message for a failed diff, fenced like any other gh text.
+  if (extra.diffError) {
+    parts.push({ label: 'Could not load the diff. gh said:', text: capGh(extra.diffError, 500), source: 'gh output' })
+  }
   return presentUntrustedInline({
     envelope,
     parts,
@@ -2779,7 +2775,7 @@ export function formatPrView(json: string, extra: { diff?: string; diffError?: s
     ),
     subject: 'pull request',
     toolNames: builtinToolNames(),
-    trailer: extra.diffError !== undefined ? `\n\n[could not load diff: ${capGh(extra.diffError, 500)}]` : ''
+    trailer: extra.diffError === '' ? '\n\n[could not load diff]' : ''
   })
 }
 
@@ -3071,7 +3067,7 @@ const ghIssueList: ToolDef = {
     const label = str(args, 'label')
     if (label) argv.push('--label', label)
     const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
-    if (!r.ok) return ghOutput(r)
+    if (!r.ok) return ghReadFailure(r)
     return formatIssueList(r.stdout)
   }
 }
@@ -3095,7 +3091,7 @@ const ghIssueView: ToolDef = {
     const fields = `number,title,state,url,author,labels,body${args.comments === true ? ',comments' : ''}`
     const argv = ['issue', 'view', ...intArg(args, 'number', 'number (the issue number)', true), '--json', fields]
     const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
-    if (!r.ok) return ghOutput(r)
+    if (!r.ok) return ghReadFailure(r)
     return formatIssueView(r.stdout)
   }
 }
@@ -3303,7 +3299,8 @@ const ghPrChecks: ToolDef = {
     // gh exits non-zero when checks fail/are pending; that's informational, so
     // format whatever JSON came back and only fall through to the error path when
     // there's genuinely no output (e.g. not authenticated, or no PR for the branch).
-    return r.stdout.trim() ? formatChecks(r.stdout) : ghOutput(r)
+    if (r.stdout.trim()) return formatChecks(r.stdout)
+    return r.ok ? ghWriteOutput(r, 'gh reported no checks.') : ghReadFailure(r)
   }
 }
 
@@ -3601,7 +3598,7 @@ const ghRunList: ToolDef = {
     const status = str(args, 'status')
     if (status) argv.push('--status', status)
     const r = await ghRunner(ctx)(argv, ctx.workspace, ctx.signal)
-    if (!r.ok) return ghOutput(r)
+    if (!r.ok) return ghReadFailure(r)
     return formatRunList(r.stdout)
   }
 }
@@ -3724,7 +3721,7 @@ const ghRunView: ToolDef = {
     const run = ghRunner(ctx)
     if (args.log_failed === true) {
       const r = await run(['run', 'view', runId, '--log-failed'], ctx.workspace, ctx.signal)
-      if (!r.ok) return ghOutput(r)
+      if (!r.ok) return ghReadFailure(r)
       return formatRunLog(runId, r.stdout)
     }
     const r = await run(
@@ -3738,7 +3735,7 @@ const ghRunView: ToolDef = {
       ctx.workspace,
       ctx.signal
     )
-    if (!r.ok) return ghOutput(r)
+    if (!r.ok) return ghReadFailure(r)
     return formatRunView(r.stdout)
   }
 }

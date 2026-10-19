@@ -54,7 +54,10 @@ export function prNoticeFromToolResult(
     const num = firstLine.match(/^#(\d+)\b/)
     const tag = firstLine.match(/\[(\w+)\]\s*$/)
     if (!num || !tag || tag[1].toLowerCase() !== 'merged') return null
-    const url = output.match(PR_URL)
+    // Only the trusted envelope above the first fence: a URL in the PR's body must
+    // never stand in for a missing envelope URL in the banner or OS notification.
+    const fence = output.indexOf('<untrusted-content-')
+    const url = (fence >= 0 ? output.slice(0, fence) : output).match(PR_URL)
     return { event: 'merged', number: Number(num[1]), url: url?.[1] }
   }
 

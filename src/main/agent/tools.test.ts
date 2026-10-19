@@ -2446,6 +2446,51 @@ describe('github (gh) tools', () => {
       expect(out).toContain('looks like a prompt-injection attempt')
     })
 
+    /** Every read tool, with arguments it accepts. */
+    const READS: [string, Record<string, unknown>][] = [
+      ['gh_pr_view', { number: 12 }],
+      ['gh_pr_list', {}],
+      ['gh_pr_checks', { number: 12 }],
+      ['gh_issue_view', { number: 12 }],
+      ['gh_issue_list', {}],
+      ['gh_run_list', {}],
+      ['gh_run_view', { run_id: 12 }],
+      ['gh_run_view', { run_id: 12, log_failed: true }]
+    ]
+
+    it.each(READS)('%s fences a failure message that quotes an outsider-chosen title', async (name, args) => {
+      const { ctx } = ghCtx(fail(`no pull requests found for branch "${TITLE}"`))
+      const out = await exec(name, args, ctx)
+      const { inside, outside } = splitFences(out)
+      expect(outside.startsWith('gh failed (exit 1).\n\n')).toBe(true)
+      expect(outside).not.toContain('evil.test')
+      expect(outside).not.toContain('Ignore all previous')
+      expect(outside).not.toContain('no pull requests found')
+      expect(inside).toEqual([`no pull requests found for branch "${TITLE}"`])
+      expect(out).toContain('looks like a prompt-injection attempt')
+    })
+
+    it.each(READS)('%s keeps the sign-in hint outside the fence', async (name, args) => {
+      const { ctx } = ghCtx(fail('To get started with GitHub CLI, please run:  gh auth login', 4))
+      const { inside, outside } = splitFences(await exec(name, args, ctx))
+      expect(outside).toContain('the user needs to run `gh auth login`')
+      expect(inside).toHaveLength(1)
+    })
+
+    it("gh_pr_view fences gh's message when the diff can't be loaded", async () => {
+      const view = JSON.stringify({ number: 12, title: 't', state: 'OPEN', url: 'https://github.com/o/r/pull/12' })
+      const { ctx } = ghCtx((argv) => (argv[1] === 'diff' ? fail(`could not find "${TITLE}"`) : ok(view)))
+      const { inside, outside } = splitFences(await exec('gh_pr_view', { number: 12, diff: true }, ctx))
+      expect(outside).toContain('Could not load the diff. gh said:')
+      expect(outside).not.toContain('evil.test')
+      expect(inside).toContain(`could not find "${TITLE}"`)
+    })
+
+    it('gh_pr_checks reports an empty success without inventing output', async () => {
+      const { ctx } = ghCtx(ok(''))
+      expect(await exec('gh_pr_checks', { number: 12 }, ctx)).toBe('gh reported no checks.')
+    })
+
     it.each(WRITES)('%s fences what gh printed on success, too', async (name, args) => {
       const { ctx } = ghCtx({ ok: true, stdout: '', stderr: `Switched to branch '${TITLE}'`, code: 0 })
       const { inside, outside } = splitFences(await exec(name, args, ctx))
@@ -2542,8 +2587,11 @@ describe('github (gh) tools', () => {
 
   it('surfaces a gh failure (e.g. not authenticated) as a useful message', async () => {
     const { ctx } = ghCtx(fail('gh auth login required', 4))
-    const out = await getTool('gh_pr_view')!.execute({ number: 1 }, ctx)
-    expect(out).toMatch(/gh failed \(exit 4\): gh auth login required/)
+    const out = (await getTool('gh_pr_view')!.execute({ number: 1 }, ctx)) as string
+    const { inside, outside } = splitFences(out)
+    expect(outside.startsWith('gh failed (exit 4). gh is not signed in to GitHub')).toBe(true)
+    expect(outside).toContain('`gh auth login`')
+    expect(inside).toEqual(['gh auth login required'])
   })
 
   it('gh_repo_create is a network tool, blocked in plan mode', () => {
