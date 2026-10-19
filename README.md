@@ -141,8 +141,10 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Side chat.** The titlebar's side chat button opens a panel for quick questions
   about the open chat, answered by a read-only aside that sees the chat so far and
   can read the project but never writes into the chat. It works while a turn is
-  still running. Send an exchange to the main chat (queued if a turn is running)
-  or continue it in a new chat. In the terminal, `/btw <question>`.
+  still running. Each chat keeps its own side chat across closing the panel,
+  switching chats, and restarts; **New side chat** starts it over. Send an exchange
+  to the main chat (queued if a turn is running) or continue it in a new chat. In
+  the terminal, `/btw <question>` (and `/btw clear`).
 - **Scheduled runs.** Ask for something recurring ("every morning at 9, run the
   tests and summarize failures") and the agent stores a schedule with
   `schedule_run`; at each occurrence a fresh background session starts with the

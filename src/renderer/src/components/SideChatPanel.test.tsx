@@ -1,29 +1,33 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { SideChatView } from '@shared/agent'
 import { SideChatPanel } from './SideChatPanel'
 
-interface Api {
-  askSideChat: ReturnType<typeof vi.fn>
-  cancelSideChat: ReturnType<typeof vi.fn>
-  closeSideChat: ReturnType<typeof vi.fn>
-  emitProgress: (p: { sideId: string; message: string }) => void
-}
-
-function installApi(ask: (...args: unknown[]) => Promise<string>): Api {
-  let progress: ((p: { sideId: string; message: string }) => void) | null = null
+/** A fake main process: per-chat stored views, plus a way to announce a change. */
+function installApi(views: Record<string, SideChatView> = {}) {
+  let listener: ((p: { conversationId: string }) => void) | null = null
   const api = {
-    askSideChat: vi.fn(ask),
+    getSideChat: vi.fn(async (id: string) => views[id] ?? { turns: [] }),
+    askSideChat: vi.fn(async () => ({ id: 'x', question: 'q', at: 1 })),
     cancelSideChat: vi.fn(async () => {}),
-    closeSideChat: vi.fn(async () => {}),
-    onSideChatProgress: (cb: (p: { sideId: string; message: string }) => void) => {
-      progress = cb
+    clearSideChat: vi.fn(async () => {}),
+    onSideChatChanged: (cb: (p: { conversationId: string }) => void) => {
+      listener = cb
       return () => {
-        progress = null
+        listener = null
       }
     }
   }
   window.api = api as unknown as typeof window.api
-  return { ...api, emitProgress: (p) => progress?.(p) }
+  return {
+    api,
+    views,
+    /** Main says `id`'s side chat changed (with its new stored view). */
+    change: (id: string, view: SideChatView) => {
+      views[id] = view
+      act(() => listener?.({ conversationId: id }))
+    }
+  }
 }
 
 function renderPanel(over: Partial<Parameters<typeof SideChatPanel>[0]> = {}) {
@@ -41,86 +45,110 @@ function renderPanel(over: Partial<Parameters<typeof SideChatPanel>[0]> = {}) {
 }
 
 const input = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: 'Side chat question' })
+const answered: SideChatView = {
+  turns: [{ id: 't1', question: 'Why PKCE?', answer: 'Because the client is **public**.', at: 1 }]
+}
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('SideChatPanel', () => {
-  it('asks about this chat with the selected model and shows the answer', async () => {
-    const api = installApi(async () => 'Because the client is **public**.')
+  it("shows the chat's stored side chat when it opens (it outlives the panel)", async () => {
+    installApi({ 'conv-1': answered })
+    renderPanel()
+    expect(await screen.findByText('public')).toBeInTheDocument()
+    expect(screen.getByText('Why PKCE?')).toBeInTheDocument()
+  })
+
+  it('asks with the selected model, shows the question at once, and the answer when main announces it', async () => {
+    const fake = installApi()
     renderPanel()
     fireEvent.change(input(), { target: { value: 'Why PKCE?' } })
     fireEvent.keyDown(input(), { key: 'Enter' })
-    expect(await screen.findByText('public')).toBeInTheDocument()
-    const [sideId, conv, question, provider, model] = api.askSideChat.mock.calls[0]
-    expect(typeof sideId).toBe('string')
-    expect([conv, question, provider, model]).toEqual(['conv-1', 'Why PKCE?', 'anthropic', 'claude-sonnet-5'])
+    expect(fake.api.askSideChat).toHaveBeenCalledWith('conv-1', 'Why PKCE?', 'anthropic', 'claude-sonnet-5')
+    expect(screen.getByText('Why PKCE?')).toBeInTheDocument()
+    expect(screen.getByText('Thinking…')).toBeInTheDocument()
     expect(input().value).toBe('')
+    fake.change('conv-1', { turns: [], pending: { id: 't1', question: 'Why PKCE?', progress: 'Reading auth.ts' } })
+    expect(await screen.findByText('Reading auth.ts')).toBeInTheDocument()
+    fake.change('conv-1', answered)
+    expect(await screen.findByText('public')).toBeInTheDocument()
+    expect(screen.queryByText('Thinking…')).toBeNull()
   })
 
-  it('refuses an empty question with an inline message', () => {
-    const api = installApi(async () => 'x')
+  it("ignores another chat's changes", async () => {
+    const fake = installApi()
     renderPanel()
+    await waitFor(() => expect(fake.api.getSideChat).toHaveBeenCalledTimes(1))
+    fake.change('conv-2', answered)
+    expect(fake.api.getSideChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('puts a question that was never asked back to edit, with the reason', async () => {
+    const fake = installApi()
+    fake.api.askSideChat.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'sideChat:ask': Error: Wait for the current answer, or stop it first.")
+    )
+    renderPanel()
+    fireEvent.change(input(), { target: { value: 'q' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    expect(await screen.findByText('Wait for the current answer, or stop it first.')).toBeInTheDocument()
+    expect(input().value).toBe('q')
+  })
+
+  it('refuses an empty question, or no model, with an inline message', () => {
+    const fake = installApi()
+    const { unmount } = renderPanel()
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
     expect(screen.getByText('Type a question first.')).toBeInTheDocument()
-    expect(api.askSideChat).not.toHaveBeenCalled()
-    fireEvent.change(input(), { target: { value: 'a' } })
-    expect(screen.queryByText('Type a question first.')).toBeNull()
-  })
-
-  it('shows progress for its own side chat, and Stop cancels it', async () => {
-    let resolve!: (v: string) => void
-    const api = installApi(() => new Promise<string>((r) => (resolve = r)))
-    renderPanel()
-    fireEvent.change(input(), { target: { value: 'q' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
-    expect(screen.getByText('Thinking…')).toBeInTheDocument()
-    const sideId = api.askSideChat.mock.calls[0][0] as string
-    act(() => api.emitProgress({ sideId: 'someone-else', message: 'nope' }))
-    act(() => api.emitProgress({ sideId, message: 'Reading auth.ts' }))
-    expect(screen.getByText('Reading auth.ts')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
-    expect(api.cancelSideChat).toHaveBeenCalledWith(sideId)
-    await act(async () => resolve('Stopped.'))
-    expect(screen.getByRole('button', { name: 'Ask' })).toBeInTheDocument()
-  })
-
-  it('shows a failure as an alert without the IPC prefix', async () => {
-    installApi(async () => {
-      throw new Error("Error invoking remote method 'sideChat:ask': Error: Unknown provider: x")
-    })
-    renderPanel()
-    fireEvent.change(input(), { target: { value: 'q' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(/^Unknown provider: x$/)
-  })
-
-  it('sends an exchange to the main chat once, or continues it in a new chat', async () => {
-    installApi(async () => 'An answer')
-    const { props } = renderPanel()
-    fireEvent.change(input(), { target: { value: 'A question' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
-    const send = await screen.findByRole('button', { name: 'Send to main' })
-    fireEvent.click(send)
-    expect(props.onSendToMain).toHaveBeenCalledWith('A question', 'An answer')
-    expect(screen.getByRole('button', { name: 'Sent to main' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Continue in new chat' }))
-    expect(props.onContinueInNewChat).toHaveBeenCalledWith('A question', 'An answer')
-  })
-
-  it('forgets its side chat in main when it closes', async () => {
-    const api = installApi(async () => 'x')
-    const { unmount, props } = renderPanel()
-    fireEvent.click(screen.getByRole('button', { name: 'Close side chat' }))
-    expect(props.onClose).toHaveBeenCalled()
     unmount()
-    await waitFor(() => expect(api.closeSideChat).toHaveBeenCalledTimes(1))
-  })
-  it('asks for a model before asking without one', () => {
-    const api = installApi(async () => 'x')
     renderPanel({ providerId: undefined, model: undefined })
     fireEvent.change(input(), { target: { value: 'q' } })
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }))
     expect(screen.getByText('Pick a model first.')).toBeInTheDocument()
-    expect(api.askSideChat).not.toHaveBeenCalled()
+    expect(fake.api.askSideChat).not.toHaveBeenCalled()
+  })
+
+  it('shows a stored failure, and Stop cancels the answer in flight', async () => {
+    const fake = installApi({
+      'conv-1': {
+        turns: [{ id: 't1', question: 'q', error: 'rate limited', at: 1 }],
+        pending: { id: 't2', question: 'again?' }
+      }
+    })
+    renderPanel()
+    expect(await screen.findByRole('alert')).toHaveTextContent('rate limited')
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(fake.api.cancelSideChat).toHaveBeenCalledWith('conv-1')
+  })
+
+  it('sends an exchange to the main chat once, or continues it in a new chat', async () => {
+    installApi({ 'conv-1': answered })
+    const { props } = renderPanel()
+    fireEvent.click(await screen.findByRole('button', { name: 'Send to main' }))
+    expect(props.onSendToMain).toHaveBeenCalledWith('Why PKCE?', 'Because the client is **public**.')
+    expect(screen.getByRole('button', { name: 'Sent to main' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue in new chat' }))
+    expect(props.onContinueInNewChat).toHaveBeenCalledWith('Why PKCE?', 'Because the client is **public**.')
+  })
+
+  it('"New side chat" clears it in main; closing never does', async () => {
+    const fake = installApi({ 'conv-1': answered })
+    const { props, unmount } = renderPanel()
+    fireEvent.click(await screen.findByRole('button', { name: 'New side chat' }))
+    expect(fake.api.clearSideChat).toHaveBeenCalledWith('conv-1')
+    fireEvent.click(screen.getByRole('button', { name: 'Close side chat' }))
+    expect(props.onClose).toHaveBeenCalled()
+    unmount()
+    expect(fake.api.clearSideChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays mounted while hidden (a plan review has the column), keeping the draft', () => {
+    installApi()
+    const { rerender, props, container } = renderPanel()
+    fireEvent.change(input(), { target: { value: 'half-typed' } })
+    rerender(<SideChatPanel {...props} hidden />)
+    expect(container.querySelector('aside.side-chat')).toHaveAttribute('hidden')
+    rerender(<SideChatPanel {...props} hidden={false} />)
+    expect(input().value).toBe('half-typed')
   })
 })

@@ -12,6 +12,7 @@ import {
   forkConversation,
   listConversations,
   reportChildToParent,
+  saveSideChat,
   setProposalState,
   takeChildReports,
   deriveTitle,
@@ -328,5 +329,32 @@ describe('proposals and child reports (persisted)', () => {
     const fork = forkConversation(parent.id)!
     expect(fork.childReports).toBeUndefined()
     expect(fork.proposals).toEqual({ 'call-1': { status: 'dismissed', at: 1 } })
+  })
+})
+
+describe('saveSideChat (persisted)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('stores and forgets a side chat without reordering the chat, and keeps it out of the list and forks', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const before = getConversation(c.id)!.updatedAt
+    const sideChat = { turns: [{ id: 't', question: 'q', answer: 'a', at: 1 }], seenMessages: 0 }
+    saveSideChat(c.id, sideChat)
+    expect(getConversation(c.id)!.sideChat).toEqual(sideChat)
+    expect(getConversation(c.id)!.updatedAt).toBe(before)
+    const meta = listConversations().find((m) => m.id === c.id) as unknown as Record<string, unknown>
+    expect(meta.sideChat).toBeUndefined()
+    expect(forkConversation(c.id)!.sideChat).toBeUndefined()
+    saveSideChat(c.id, null)
+    expect(getConversation(c.id)!.sideChat).toBeUndefined()
+    saveSideChat('missing-id', sideChat) // a gone chat is a no-op
   })
 })

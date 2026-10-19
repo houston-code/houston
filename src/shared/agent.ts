@@ -510,6 +510,37 @@ export interface Conversation extends ConversationMeta {
    * and clears the list, so a report is delivered exactly once.
    */
   childReports?: ChildReport[]
+  /**
+   * The chat's side chat (see main/sideChat.ts): what the user asked on the side and
+   * what came back, plus the side agent's own transcript so follow-ups keep their
+   * context. Never part of `messages`: the main chat's model never sees it.
+   */
+  sideChat?: StoredSideChat
+}
+
+/** One side-chat exchange. `error` instead of `answer` when it failed or was stopped. */
+export interface SideChatTurn {
+  id: string
+  question: string
+  answer?: string
+  error?: string
+  /** Epoch ms the question was asked. */
+  at: number
+}
+
+/** A chat's persisted side chat. */
+export interface StoredSideChat {
+  turns: SideChatTurn[]
+  /** The side agent's transcript after its last clean answer, to resume from. */
+  transcript?: ChatMessage[]
+  /** How many main-chat messages the side agent has seen, so it can be caught up. */
+  seenMessages?: number
+}
+
+/** What a side chat panel shows: the stored exchanges plus the one in flight, if any. */
+export interface SideChatView {
+  turns: SideChatTurn[]
+  pending?: { id: string; question: string; progress?: string }
 }
 
 /** The user's decision on a `propose_session` card. */

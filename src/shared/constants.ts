@@ -154,12 +154,15 @@ export const IPC = {
   proposalStart: 'proposal:start',
   /** Renderer → main: record "do it here" or "dismiss" on a proposal card. */
   proposalSetState: 'proposal:setState',
-  // Side chat (a read-only aside about the open conversation)
+  // Side chat (a read-only aside about the open conversation, persisted per chat)
   sideChatAsk: 'sideChat:ask',
+  /** Query a chat's side chat: its stored exchanges and the one in flight. */
+  sideChatGet: 'sideChat:get',
   sideChatCancel: 'sideChat:cancel',
-  sideChatClose: 'sideChat:close',
-  /** Main → renderer: a progress line from a side-chat answer in flight. */
-  sideChatProgress: 'sideChat:progress',
+  /** Renderer → main: start the chat's side chat over (forget its exchanges). */
+  sideChatClear: 'sideChat:clear',
+  /** Main → renderer: a chat's side chat changed (asked, progressed, answered, cleared). */
+  sideChatChanged: 'sideChat:changed',
   /** Query the background shells (run_shell background mode) for the tasks indicator. */
   shellList: 'shell:list',
   /** Main → renderer: the background-shell registry changed (one started or exited). */

@@ -118,12 +118,13 @@ import {
   setMessages,
   setGeneratedTitle,
   updateConversationMeta,
-  reportChildToParent
+  reportChildToParent,
+  saveSideChat
 } from './conversations'
 import { createSpawnBackend } from './spawnSession'
 import { setSpawnBackend } from './agent/spawn'
 import { decideProposal, hostProposalDeps, startProposal } from './proposals'
-import { askSideChat, cancelSideChat, closeSideChat, hostSideChatDeps, isSideChatId } from './sideChat'
+import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps, sideChatView } from './sideChat'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 
@@ -849,7 +850,11 @@ export function registerIpc(): void {
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
     if (res.canceled || !res.filePath) return null
-    writeFileSync(res.filePath, JSON.stringify(conv, null, 2), 'utf8')
+    // A side chat exports as its exchanges only: the side agent's own transcript is
+    // internal resume state, often far larger than the exchanges themselves.
+    const { sideChat, ...rest } = conv
+    const exported = sideChat ? { ...rest, sideChat: { turns: sideChat.turns } } : rest
+    writeFileSync(res.filePath, JSON.stringify(exported, null, 2), 'utf8')
     return res.filePath
   })
 
@@ -1161,20 +1166,18 @@ export function registerIpc(): void {
     }
   )
 
-  // Side chat: answer a question about a conversation with a read-only subagent,
-  // outside the conversation's log. Progress lines go back to the asking window only.
+  // Side chat: a read-only aside per conversation, stored with it. Every change is
+  // broadcast (not sender-scoped): the same chat can be open in two windows, and an
+  // answer keeps going after its panel closes, so any window may need to refetch.
+  const broadcastSideChat = (conversationId: string): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.sideChatChanged, { conversationId })
+    }
+  }
   ipcMain.handle(
     IPC.sideChatAsk,
-    async (
-      event,
-      sideId: unknown,
-      conversationId: unknown,
-      question: unknown,
-      providerId: unknown,
-      model: unknown
-    ): Promise<string> => {
+    async (_event, conversationId: unknown, question: unknown, providerId: unknown, model: unknown) => {
       if (
-        !isSideChatId(sideId) ||
         typeof conversationId !== 'string' ||
         typeof question !== 'string' ||
         typeof providerId !== 'string' ||
@@ -1182,27 +1185,20 @@ export function registerIpc(): void {
       ) {
         throw new Error('Invalid side chat request.')
       }
-      const sender = event.sender
-      return askSideChat(
-        {
-          sideId,
-          conversationId,
-          question,
-          providerId,
-          model,
-          onProgress: (message) => {
-            if (!sender.isDestroyed()) sender.send(IPC.sideChatProgress, { sideId, message })
-          }
-        },
-        hostSideChatDeps()
-      )
+      return askSideChat({ conversationId, question, providerId, model }, hostSideChatDeps(broadcastSideChat))
     }
   )
-  ipcMain.handle(IPC.sideChatCancel, (_event, sideId: unknown) => {
-    if (isSideChatId(sideId)) cancelSideChat(sideId)
+  ipcMain.handle(IPC.sideChatGet, (_event, conversationId: unknown) => {
+    if (typeof conversationId !== 'string') throw new Error('Invalid side chat request.')
+    return sideChatView(conversationId, { getConversation })
   })
-  ipcMain.handle(IPC.sideChatClose, (_event, sideId: unknown) => {
-    if (isSideChatId(sideId)) closeSideChat(sideId)
+  ipcMain.handle(IPC.sideChatCancel, (_event, conversationId: unknown) => {
+    if (typeof conversationId === 'string') cancelSideChat(conversationId)
+  })
+  ipcMain.handle(IPC.sideChatClear, (_event, conversationId: unknown) => {
+    if (typeof conversationId === 'string') {
+      clearSideChat(conversationId, { saveSideChat, onChange: broadcastSideChat })
+    }
   })
 
   ipcMain.handle(IPC.agentSteer, (event, runId: string, text: unknown): boolean => {
