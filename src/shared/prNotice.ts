@@ -31,8 +31,10 @@ const PR_URL = /(https?:\/\/[^\s)]+\/pull\/(\d+))/
  *   ({@link formatPrView} renders the state as a `[merged]` tag on the first line).
  *
  * `gh_pr_list` is deliberately ignored: a "merged" listing is a bulk query, not a
- * just-happened event, and would spam one banner per row. Failed gh calls return
- * a `gh failed …` string with no PR URL / `[merged]` tag, so they match nothing.
+ * just-happened event, and would spam one banner per row. Only the first line of
+ * either result is read for its signal. A failed gh call starts `gh failed …`, and what
+ * gh printed is fenced below it, so a PR URL it quotes (an "already exists" failure
+ * names the existing PR) or a title's text never reads as the event.
  */
 export function prNoticeFromToolResult(
   name: string,
@@ -42,7 +44,7 @@ export function prNoticeFromToolResult(
   if (!ok || !output) return null
 
   if (name === 'gh_pr_create') {
-    const m = output.match(PR_URL)
+    const m = (output.split('\n', 1)[0] ?? '').match(PR_URL)
     if (!m) return null
     return { event: 'created', number: Number(m[2]), url: m[1] }
   }

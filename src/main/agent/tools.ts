@@ -2425,7 +2425,10 @@ function ghRunner(ctx: ToolContext): GhExec {
   return runGh(ghPath)
 }
 
-/** Turn a gh result into tool output: stdout on success, a useful error otherwise. */
+/**
+ * Turn a read tool's gh result into tool output: stdout on success, a useful error
+ * otherwise. Writes go through {@link ghWriteOutput}, which fences gh's text.
+ */
 function ghOutput(r: { ok: boolean; stdout: string; stderr: string; code: number | null }): string {
   if (r.ok) {
     const out = r.stdout.trim() || '[no output]'
@@ -2441,16 +2444,63 @@ function ghOutput(r: { ok: boolean; stdout: string; stderr: string; code: number
   return `gh failed (exit ${r.code ?? 'null'}): ${detail}`
 }
 
+/** `https://<host>/<owner>/<repo>`, which every URL a gh write prints starts with. */
+const GH_REPO_URL = String.raw`https?://[A-Za-z0-9.-]+(?::\d+)?/[\w.-]+/[\w.-]+`
+
 /**
- * Report a close/reopen/ready/draft in Houston's own words, with whatever gh printed
- * fenced below it. gh's messages for these quote the PR or issue title ("is already
- * closed", "can't be closed because it was already merged") and the branch name, and
- * outsiders choose both, so gh's text is never the trusted part of the result.
+ * The URL each kind of write prints on success, on a line of its own. Only a line that
+ * is exactly one of these shapes is trusted: GitHub builds it from the repository's
+ * name and a number, so no outsider chose any of it.
  */
-function ghStateOutput(r: { ok: boolean; stdout: string; stderr: string; code: number | null }, done: string): string {
-  const envelope = r.ok ? done : `gh failed (exit ${r.code ?? 'null'}).`
-  const said = [r.stdout.trim(), r.stderr.trim()].filter(Boolean).join('\n')
-  if (!said) return r.ok ? done : `${envelope} It printed no message.`
+const GH_WRITE_URL = {
+  pr: new RegExp(`^${GH_REPO_URL}/pull/\\d+$`),
+  issue: new RegExp(`^${GH_REPO_URL}/issues/\\d+$`),
+  comment: new RegExp(`^${GH_REPO_URL}/(?:pull|issues)/\\d+#issuecomment-\\d+$`),
+  repo: new RegExp(`^${GH_REPO_URL}$`)
+}
+
+/**
+ * gh's sign-in failures: exit code 4, or a line in gh's own words (a rejected token
+ * exits 1 with "Try authenticating with:  gh auth login"). Anchored to a line start,
+ * so a title quoted in the middle of some other message can't raise the hint.
+ */
+const GH_SIGN_IN_FAILURE =
+  /^(?:To get started with GitHub CLI, please run:|Try authenticating with:)\s+gh auth login\s*$|^gh: To use GitHub CLI in (?:automation|a GitHub Actions workflow), set the GH_TOKEN environment variable/m
+
+const GH_SIGN_IN_HINT =
+  'gh is not signed in to GitHub, or its token was rejected: the user needs to run `gh auth login` (or set GH_TOKEN), then try again.'
+
+/**
+ * Report a gh write (create, comment, review, merge, checkout, state change) in
+ * Houston's own words, with whatever gh printed fenced below it. gh's messages quote
+ * PR and issue titles and branch names ("Pull request o/r#12 (<title>) was already
+ * merged", git's "Switched to branch '<head>'"), and outsiders choose those, so gh's
+ * text is never the trusted part of the result. What stays outside the fence: `done`,
+ * written from validated arguments; the result URL when gh printed one of the `url`
+ * shape, in place of `done` since it says what was made; and on failure the exit code
+ * and, when gh isn't signed in, the fix, so the hint survives the fence.
+ */
+function ghWriteOutput(
+  r: { ok: boolean; stdout: string; stderr: string; code: number | null },
+  done: string,
+  url?: RegExp
+): string {
+  let envelope = done
+  let rest = [r.stdout, r.stderr]
+  if (!r.ok) {
+    const signIn = r.code === 4 || GH_SIGN_IN_FAILURE.test(r.stderr)
+    envelope = `gh failed (exit ${r.code ?? 'null'}).${signIn ? ` ${GH_SIGN_IN_HINT}` : ''}`
+  } else if (url) {
+    const lines = r.stdout.split('\n')
+    const at = lines.findIndex((l) => ghUrl(l.trim()) !== '' && url.test(l.trim()))
+    if (at >= 0) {
+      envelope = lines[at].trim()
+      lines.splice(at, 1)
+      rest = [lines.join('\n'), r.stderr]
+    }
+  }
+  const said = rest.map((t) => t.trim()).filter(Boolean).join('\n')
+  if (!said) return r.ok ? envelope : `${envelope} It printed no message.`
   return presentUntrustedInline({
     envelope,
     parts: [{ text: capGh(said), source: 'gh output' }],
@@ -2490,6 +2540,11 @@ function intArg(args: Record<string, unknown>, key: string, label: string, requi
 /** Validate an optional positional PR number into argv (`["12"]`) or `[]`. */
 function prNumberArgs(args: Record<string, unknown>, required = false): string[] {
   return intArg(args, 'number', 'number (the PR number)', required)
+}
+
+/** The PR a result line names: by number, or the current branch's when none was given. */
+function prTarget(number: string[]): string {
+  return number.length ? `pull request #${number[0]}` : "the current branch's pull request"
 }
 
 /** Validate an optional git ref (branch) flag, rejecting option-like injection. */
@@ -2532,7 +2587,7 @@ const ghPrCreate: ToolDef = {
     argv.push(...refFlag(args, 'base', '--base'))
     argv.push(...refFlag(args, 'head', '--head'))
     if (args.draft === true) argv.push('--draft')
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    return ghWriteOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal), 'Opened the pull request.', GH_WRITE_URL.pr)
   }
 }
 
@@ -2747,8 +2802,13 @@ const ghPrComment: ToolDef = {
   async execute(args, ctx) {
     const body = str(args, 'body')
     if (!body.trim()) throw new Error('body is required.')
-    const argv = ['pr', 'comment', ...prNumberArgs(args), '--body', body]
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    const number = prNumberArgs(args)
+    const argv = ['pr', 'comment', ...number, '--body', body]
+    return ghWriteOutput(
+      await ghRunner(ctx)(argv, ctx.workspace, ctx.signal),
+      `Posted the comment on ${prTarget(number)}.`,
+      GH_WRITE_URL.comment
+    )
   }
 }
 
@@ -2766,8 +2826,12 @@ const ghPrCheckout: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const argv = ['pr', 'checkout', ...prNumberArgs(args, true)]
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    const number = prNumberArgs(args, true)
+    // git's output names the local branch, which a fork's author chose, so it stays fenced.
+    return ghWriteOutput(
+      await ghRunner(ctx)(['pr', 'checkout', ...number], ctx.workspace, ctx.signal),
+      `Checked out pull request #${number[0]}.`
+    )
   }
 }
 
@@ -2842,7 +2906,7 @@ const ghRepoCreate: ToolDef = {
     } else if (clone) {
       argv.push('--clone')
     }
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    return ghWriteOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal), `Created repository ${name}.`, GH_WRITE_URL.repo)
   }
 }
 
@@ -3062,7 +3126,7 @@ const ghIssueCreate: ToolDef = {
     if (label) argv.push('--label', label)
     const assignee = str(args, 'assignee')
     if (assignee) argv.push('--assignee', assignee)
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    return ghWriteOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal), 'Opened the issue.', GH_WRITE_URL.issue)
   }
 }
 
@@ -3085,8 +3149,13 @@ const ghIssueComment: ToolDef = {
   async execute(args, ctx) {
     const body = str(args, 'body')
     if (!body.trim()) throw new Error('body is required.')
-    const argv = ['issue', 'comment', ...intArg(args, 'number', 'number (the issue number)', true), '--body', body]
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    const number = intArg(args, 'number', 'number (the issue number)', true)
+    const argv = ['issue', 'comment', ...number, '--body', body]
+    return ghWriteOutput(
+      await ghRunner(ctx)(argv, ctx.workspace, ctx.signal),
+      `Posted the comment on issue #${number[0]}.`,
+      GH_WRITE_URL.comment
+    )
   }
 }
 
@@ -3155,7 +3224,7 @@ const ghIssueSetState: ToolDef = {
       argv.push('--duplicate-of', duplicateOf[0])
     }
     argv.push(...stateCommentArgs(args))
-    return ghStateOutput(
+    return ghWriteOutput(
       await ghRunner(ctx)(argv, ctx.workspace, ctx.signal),
       `Issue #${number[0]} is now ${action === 'close' ? 'closed' : 'open'}.`
     )
@@ -3271,9 +3340,17 @@ const ghPrReview: ToolDef = {
       throw new Error(`A review body is required to ${action === 'comment' ? 'comment on' : 'request changes on'} a PR.`)
     }
     const flag = action === 'approve' ? '--approve' : action === 'request_changes' ? '--request-changes' : '--comment'
-    const argv = ['pr', 'review', ...prNumberArgs(args), flag]
+    const number = prNumberArgs(args)
+    const argv = ['pr', 'review', ...number, flag]
     if (body.trim()) argv.push('--body', body)
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    const target = prTarget(number)
+    const done =
+      action === 'approve'
+        ? `Approved ${target}.`
+        : action === 'request_changes'
+          ? `Requested changes on ${target}.`
+          : `Posted a review comment on ${target}.`
+    return ghWriteOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal), done)
   }
 }
 
@@ -3321,7 +3398,8 @@ const ghPrMerge: ToolDef = {
   async execute(args, ctx) {
     const methodRaw = str(args, 'method') || 'merge'
     const method = ['merge', 'squash', 'rebase'].includes(methodRaw) ? methodRaw : 'merge'
-    const argv = ['pr', 'merge', ...prNumberArgs(args), `--${method}`]
+    const number = prNumberArgs(args)
+    const argv = ['pr', 'merge', ...number, `--${method}`]
     if (args.delete_branch === true) argv.push('--delete-branch')
     // --subject/--body only apply to a merge commit or squash; gh rejects them with
     // --rebase, so drop them there rather than surface a confusing gh error.
@@ -3331,7 +3409,14 @@ const ghPrMerge: ToolDef = {
       const body = str(args, 'body')
       if (body) argv.push('--body', body)
     }
-    return ghOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal))
+    // Run without a terminal, gh prints nothing on success, even when the base branch's
+    // merge queue only queued the PR, so this line can't claim the merge happened.
+    const how = `${method}${args.delete_branch === true ? ', delete branch' : ''}`
+    return ghWriteOutput(
+      await ghRunner(ctx)(argv, ctx.workspace, ctx.signal),
+      `gh accepted the merge of ${prTarget(number)} (${how}). If the base branch has a merge queue, that only ` +
+        'queued it; check gh_pr_view before reporting it merged.'
+    )
   }
 }
 
@@ -3415,7 +3500,7 @@ const ghPrSetState: ToolDef = {
     )
     if (action === 'close' && args.delete_branch === true) argv.push('--delete-branch')
     const target = number.length ? `Pull request #${number[0]}` : "The current branch's pull request"
-    return ghStateOutput(
+    return ghWriteOutput(
       await ghRunner(ctx)(argv, ctx.workspace, ctx.signal),
       `${target} is now ${PR_STATE_AFTER[action]}.`
     )
