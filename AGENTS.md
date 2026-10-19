@@ -161,7 +161,9 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   program off as `cd`. The skip passes only a `cd` or `pushd` whose words name a
   directory in the workspace: a bare `cd`, `cd -`, `popd`, `~+`, a `$`, a glob, or a
   brace (`.[.]` and `{..,}` are `..`) stays gated, and so does a relative name while
-  `CDPATH` is set.
+  `CDPATH` is set. A command holding a line continuation (backslash-newline) is read
+  twice, split as written and with its continuations joined: a deny fires on either
+  reading and an allow must cover both, so splitting a word across lines dodges neither.
 - `src/main/sandbox/` — the per-OS sandbox backends and their conformance suite. The
   `linux-sandbox` CI job is the only one that exercises the real bubblewrap backend; the
   `test` job can only skip it.

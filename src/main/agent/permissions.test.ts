@@ -910,6 +910,47 @@ describe('matchRule', () => {
     it('normalizes whitespace so spacing tricks cannot dodge a deny rule', () => {
       expect(matchRule(rules, 'run_shell', 'rm    -rf   /tmp/x')).toBe('deny')
     })
+
+    it('joins a line continuation, so splitting a word across lines cannot dodge a deny', () => {
+      // Bash deletes a backslash-newline before it reads words: each of these runs `rm -rf`.
+      for (const cmd of [
+        'r\\\nm -rf /tmp/x',
+        'rm -r\\\nf /tmp/x',
+        '"r\\\nm" -rf /tmp/x',
+        'git status && r\\\nm -rf /tmp/x',
+        'echo $(r\\\nm -rf /tmp/x)',
+        // A quote in a heredoc body is no quote to bash, and can't hide the continuation.
+        "cat <<EOF\nit's\nEOF\nr\\\nm -rf /tmp/x",
+        // A nested shell joins one inside single quotes when it runs the string.
+        "sh -c 'r\\\nm -rf /tmp/x'"
+      ]) {
+        expect(matchRule(rules, 'run_shell', cmd)).toBe('deny')
+      }
+      expect(matchRule([deny('run_shell', 'rm -rf*')], 'run_shell', 'r\\\nm -rf /tmp/x')).toBe('deny')
+    })
+
+    it('still denies a piece of a command split at a line continuation', () => {
+      // Bash runs `echo rm -rf /tmp/x`, but a deny on the piece as written still fires.
+      const anchored = [deny('run_shell', 'rm -rf*')]
+      expect(matchRule(anchored, 'run_shell', 'echo \\\nrm -rf /tmp/x')).toBe('deny')
+      // An escaped backslash then a newline is no continuation: the newline splits.
+      expect(matchRule(anchored, 'run_shell', 'echo \\\\\nrm -rf /tmp/x')).toBe('deny')
+    })
+
+    it('does not approve a command a line continuation joins from allows on its pieces', () => {
+      const pieces = [allow('run_shell', 'r'), allow('run_shell', 'm -rf /tmp/x')]
+      expect(matchRule(pieces, 'run_shell', 'r\\\nm -rf /tmp/x')).toBeNull()
+      // The pieces as written still need covering too.
+      const joined = allow('run_shell', 'rm -rf /tmp/x')
+      expect(matchRule([joined], 'run_shell', 'r\\\nm -rf /tmp/x')).toBeNull()
+      expect(matchRule([...pieces, joined], 'run_shell', 'r\\\nm -rf /tmp/x')).toBe('allow')
+    })
+
+    it('still splits at a newline inside quotes', () => {
+      // A deny sees the command after it, and an allow must cover it.
+      expect(matchRule(rules, 'run_shell', 'echo "x\nrm -rf /tmp/x"')).toBe('deny')
+      expect(matchRule([allow('run_shell', 'echo')], 'run_shell', 'echo "x\nrm -rf /tmp/x"')).toBeNull()
+    })
   })
 })
 
@@ -1300,7 +1341,13 @@ describe('a saved "Always allow" covers only the approved target', () => {
       'echo hi \\',
       'find . -delete ',
       'git status\r',
-      'rm \\$(x)'
+      'rm \\$(x)',
+      'r\\\nm -f x',
+      'docker run \\\n  -v a:b \\\n  img',
+      'git commit -m "fix \\\n  it"',
+      "echo 'a\\\nb'",
+      "cat <<EOF\nit's\nEOF\nec\\\nho done",
+      'echo \\\\\nls'
     ]) {
       expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS), command).toBe('allow')
     }
@@ -1476,6 +1523,22 @@ describe('splitShellCommand', () => {
   it('returns the whole command for a simple command', () => {
     expect(splitShellCommand('npm test -- --watch')).toEqual(['npm test -- --watch'])
   })
+
+  it('reads a command with a line continuation both as written and joined', () => {
+    expect(splitShellCommand('r\\\nm -rf x')).toEqual(['r\\', 'm -rf x', 'rm -rf x'])
+    expect(splitShellCommand('docker run \\\n  -v a:b \\\n  img && ls')).toEqual([
+      'docker run \\',
+      '-v a:b \\',
+      'img',
+      'ls',
+      'docker run   -v a:b   img'
+    ])
+    // In double quotes too, as in bash.
+    expect(splitShellCommand('echo "a\\\nb"')).toEqual(['echo "a\\', 'b"', 'echo "ab"'])
+    // An escaped backslash then a newline is no continuation.
+    expect(splitShellCommand('echo \\\\\nls')).toEqual(['echo \\\\', 'ls'])
+    expect(splitShellCommand('echo \\\\\\\nls')).toEqual(['echo \\\\\\', 'ls', 'echo \\\\ls'])
+  })
 })
 
 describe('shellRulePatterns', () => {
@@ -1483,6 +1546,12 @@ describe('shellRulePatterns', () => {
     const pats = shellRulePatterns('cd backend && python manage.py runserver > /tmp/django.log 2>&1 &\nsleep 2')
     expect(pats).not.toContain('1')
     expect(pats).toEqual(['python manage.py', 'sleep 2'])
+  })
+
+  it('saves a rule for the command a line continuation joins, beside its pieces', () => {
+    expect(shellRulePatterns('r\\\nm -f x')).toEqual(['r', 'm -f x', 'rm -f x'])
+    // A prefix the pieces already save covers the joined command, and is saved once.
+    expect(shellRulePatterns('git commit \\\n  -m wip')).toEqual(['git commit', '-m wip'])
   })
 
   it('collapses count-only head/tail pagers to the bare program', () => {
