@@ -27,8 +27,9 @@ import {
  * check as the in-Settings button. Both render on every macOS architecture; there
  * is no arch-specific gating.
  *
- * Every platform gets a Help menu (role 'help', always last) with the product
- * guide and an issue link. On macOS the role is what makes AppKit add its native
+ * Every platform gets a Help menu (role 'help', always last) with Take the Tour…
+ * (replays the getting-started tips, like the command palette entry), the product
+ * guide, and an issue link. On macOS the role is what makes AppKit add its native
  * search field, which finds any menu item by name. Windows and Linux have no app
  * submenu, so "Check for Updates…" lives under Help there too, the platform
  * convention. Without it the only manual check on those platforms was buried in
@@ -265,12 +266,15 @@ function macAppMenu(): MenuItemConstructorOptions {
 export const GUIDE_URL = 'https://github.com/houston-code/houston/blob/main/docs/houston-guide.md'
 export const ISSUES_URL = 'https://github.com/houston-code/houston/issues/new'
 
-/** Help menu. On Windows/Linux it also carries the manual update check and
- * sharing, which live in the app menu on macOS. */
+/** Help menu: the tour (same as the command palette's "Take the tour"), then the
+ * guide and issue links. On Windows/Linux it also carries the manual update check
+ * and sharing, which live in the app menu on macOS. */
 function helpMenu(isMac: boolean): MenuItemConstructorOptions {
   return {
     role: 'help',
     submenu: [
+      { label: 'Take the Tour…', click: () => sendMenuCommand({ type: 'take-tour' }) },
+      { type: 'separator' },
       { label: 'Houston Guide', click: () => openExternalSafely(GUIDE_URL) },
       { label: 'Report an Issue', click: () => openExternalSafely(ISSUES_URL) },
       ...(isMac

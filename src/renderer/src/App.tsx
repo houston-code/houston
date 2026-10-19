@@ -249,6 +249,7 @@ export default function App(): JSX.Element {
     conversationsLoaded,
     hasConversation: conversations.length > 0
   })
+  const { startTour } = onboarding
 
   useEffect(() => {
     void (async () => {
@@ -1597,6 +1598,7 @@ export default function App(): JSX.Element {
         else if (cmd.type === 'new-chat-in-folder') void onChangeWorkspace()
         else if (cmd.type === 'new-chat-in-workspace') enterNewChat(cmd.workspace)
         else if (cmd.type === 'import-chat') void onImportConversation()
+        else if (cmd.type === 'take-tour') startTour()
         else if (cmd.type === 'export-chat' && currentId) {
           if (cmd.format === 'html') void onExportConversationHtml(currentId)
           else void onExportConversation(currentId)
@@ -1609,7 +1611,8 @@ export default function App(): JSX.Element {
       onImportConversation,
       onExportConversation,
       onExportConversationHtml,
-      currentId
+      currentId,
+      startTour
     ]
   )
   useEffect(() => window.api.setMenuState({ hasConversation: currentId !== null }), [currentId])
