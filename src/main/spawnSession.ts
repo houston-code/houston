@@ -20,7 +20,9 @@ import type { SpawnBackend, SpawnSessionInput, SpawnSessionResult } from './agen
  */
 
 /**
- * Ceiling on how many spawned sessions may be running in the background at once.
+ * Ceiling on how many sessions the AGENT may have running in the background at once.
+ * Sessions the user starts themselves (a proposal's Start session) are neither
+ * refused nor counted: each is a deliberate click, so there is no fan-out to bound.
  * Each spawned session is itself an agent that can call `spawn_session`, and in
  * `auto-edit` / `full-auto` the call auto-approves — so without a bound a run could
  * fan out into an unbounded tree of autonomous background runs (LLM-credit and
@@ -58,7 +60,7 @@ export interface SpawnDeps {
    * worktree path, which gets torn down). Mirrors the interactive new-worktree chat.
    */
   rememberWorkspace(dir: string): void
-  /** How many spawned sessions are currently running (for the concurrency cap). */
+  /** How many agent-started sessions are currently running (for the concurrency cap). */
   liveSpawnCount(): number
   /**
    * Tear down a worktree created moments ago, if a later step of the spawn fails —
@@ -80,7 +82,9 @@ export interface SpawnDeps {
       model: string
       approvalPolicy: ApprovalPolicy
       messages: ChatMessage[]
-    }
+    },
+    /** Whether the run counts toward the cap (`liveSpawnCount`) while it's live. */
+    opts: { countsTowardCap: boolean }
   ): void | Promise<unknown>
   /**
    * Queue a finished child's report on the chat that spawned it, so the parent's
@@ -102,8 +106,10 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
 
       // Bound the concurrent fan-out before doing any work (so a refusal never
       // leaves a worktree behind). Checked here, not at approval time, so it holds
-      // even in full-auto where the spawn call auto-approves.
-      if (deps.liveSpawnCount() >= MAX_LIVE_SPAWNED_SESSIONS) {
+      // even in full-auto where the spawn call auto-approves. A session the user
+      // started themselves is their own consent, so it's exempt.
+      const countsTowardCap = input.startedBy !== 'user'
+      if (countsTowardCap && deps.liveSpawnCount() >= MAX_LIVE_SPAWNED_SESSIONS) {
         throw new Error(
           `Too many background sessions are already running (${MAX_LIVE_SPAWNED_SESSIONS}). ` +
             'Wait for one to finish before spawning another.'
@@ -169,7 +175,7 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           model: input.model,
           approvalPolicy: input.approvalPolicy,
           messages: seeded
-        })
+        }, { countsTowardCap })
         // When the child's run settles (success or failure), tell its parent. Never
         // throws into the spawning turn: the report is best-effort bookkeeping.
         if (run && parentId && deps.reportToParent) {

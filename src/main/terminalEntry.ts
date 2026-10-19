@@ -201,7 +201,8 @@ export function wireTerminalSessionBackends(opts: {
    */
   backgroundSessions: () => BackgroundSession[]
 } {
-  const liveSpawnedRuns = new Set<string>()
+  // Live spawned runs → whether each counts toward the agent's concurrency cap.
+  const liveSpawnedRuns = new Map<string, boolean>()
   // Everything spawned this session, so a finished one is still listable (and
   // openable) rather than vanishing the moment its run ends.
   const spawned: { id: string; startedAt: number }[] = []
@@ -220,10 +221,10 @@ export function wireTerminalSessionBackends(opts: {
     getTitle: (id) => getConversation(id)?.title,
     // Terminal hosts keep no recent-workspace list (that's the GUI's welcome screen).
     rememberWorkspace: () => {},
-    liveSpawnCount: () => liveSpawnedRuns.size,
+    liveSpawnCount: () => [...liveSpawnedRuns.values()].filter(Boolean).length,
     removeWorktree: (wt) => removeWorktree(wt),
-    startBackgroundRun: (conversationId, req) => {
-      liveSpawnedRuns.add(conversationId)
+    startBackgroundRun: (conversationId, req, { countsTowardCap }) => {
+      liveSpawnedRuns.set(conversationId, countsTowardCap)
       spawned.push({ id: conversationId, startedAt: Date.now() })
       const run = startRun(req, backgroundSend, (m) => setMessages(conversationId, m))
         .catch((e) => {
