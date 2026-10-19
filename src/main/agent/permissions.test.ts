@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import {
   alreadyAllowedAsRule,
   cleanupPermissionRules,
@@ -23,6 +23,15 @@ const ask = (tool: string, match: string): PermissionRule => ({ action: 'ask', t
 
 /** An apply_patch envelope from its body lines. */
 const envelope = (...body: string[]): string => ['*** Begin Patch', ...body, '*** End Patch'].join('\n')
+
+// A relative `cd` is skipped only while CDPATH is unset (see matchShellRule), so keep a
+// CDPATH exported in the shell running the tests from changing what they expect.
+beforeEach(() => {
+  vi.stubEnv('CDPATH', '')
+})
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
 
 describe('permissionSubject', () => {
   it('picks the right field per tool', () => {
@@ -674,6 +683,86 @@ describe('matchRule', () => {
       expect(matchRule(allowCat, 'run_shell', 'cd ~/.ssh && cat config', ['/repo'])).toBeNull()
     })
 
+    it('keeps a `cd` gated when bash takes its target from anywhere but its words', () => {
+      const rules = [allow('run_shell', 'cat config'), allow('run_shell', 'cat .ssh/config'), allow('run_shell', 'echo')]
+      const roots = ['/work/project']
+      for (const cmd of [
+        // No target: `cd` goes to $HOME, `pushd`/`popd` to the directory stack, so a
+        // relative path after them is not under the workspace.
+        'cd && cd .ssh && cat config',
+        'cd -- && cat .ssh/config',
+        'cd -L && cat .ssh/config',
+        'pushd && cat config',
+        'popd && cat config',
+        'pushd +1 && cat config',
+        'popd -n && cat config',
+        // `-` is $OLDPWD; `~+`, `~-`, and `~user` are $PWD, $OLDPWD, and another home.
+        'cd - && cat config',
+        'cd -- - && cat config',
+        'cd ~+/.. && cat config',
+        'cd ~- && cat config',
+        'cd ~root && cat config',
+        // An expansion: `$PWD/..` climbs, though it reads as a relative path that doesn't.
+        'cd $PWD/.. && cat config',
+        'cd ${PWD}/.. && cat config',
+        'cd "$DIR" && cat config',
+        // A substitution's output is never scanned (its body is a segment of its own).
+        'cd "$(echo ~/.ssh)" && cat config',
+        'cd "`echo ~/.ssh`" && cat config',
+        'cd $(echo ~/.ssh) && cat config',
+        // One glued to the target leaves no blank once its body is lifted out (`cd .ssh`).
+        'cd $(echo ~/).ssh && cat config',
+        'cd `echo ~/`.ssh && cat config',
+        'cd .ssh$(echo /../..) && cat config',
+        'cd /work/project$(echo /../..) && cat config',
+        'echo $(cd $(echo ~/).ssh && cat config)',
+        // A glob or brace that expands to `..`.
+        'cd .[.] && cat config',
+        'cd {..,} && cat config',
+        'cd {..,}/{..,}/etc && cat config',
+        // `#` starts a comment, so this is a bare `cd`, and `cat` runs in $HOME.
+        'cd #\ncat .ssh/config',
+        // A second argument or a redirection is more than a change of directory.
+        'cd src extra && cat config',
+        'cd src > notes.txt && cat config'
+      ]) {
+        expect(matchRule(rules, 'run_shell', cmd, roots), cmd).toBeNull()
+      }
+    })
+
+    it('still skips a `cd` or `pushd` into the workspace that names its target', () => {
+      const allowStatus = [allow('run_shell', 'git status')]
+      const roots = ['/work/project']
+      for (const cmd of [
+        'cd src && git status',
+        'cd . && git status',
+        'cd -- src && git status',
+        'cd -P /work/project && git status',
+        'cd -L src/../lib && git status',
+        'pushd src && git status',
+        'pushd -- /work/project/src && git status'
+      ]) {
+        expect(matchRule(allowStatus, 'run_shell', cmd, roots), cmd).toBe('allow')
+      }
+      // A substitution elsewhere in the command leaves the `cd` segment alone.
+      const allowCommit = [...allowStatus, allow('run_shell', 'git commit'), allow('run_shell', 'cat msg.txt')]
+      expect(matchRule(allowCommit, 'run_shell', 'cd src && git commit -m "$(cat msg.txt)"', roots)).toBe('allow')
+    })
+
+    it('keeps a relative `cd` gated while CDPATH is set, since bash looks there first', () => {
+      const allowCat = [allow('run_shell', 'cat config')]
+      const roots = ['/work/project']
+      vi.stubEnv('CDPATH', homedir())
+      expect(matchRule(allowCat, 'run_shell', 'cd .ssh && cat config', roots)).toBeNull()
+      expect(matchRule(allowCat, 'run_shell', 'pushd .ssh && cat config', roots)).toBeNull()
+      // A name led by `/`, `./`, or `../` (or `.` itself) is never looked up there.
+      for (const cmd of ['cd ./.ssh && cat config', 'cd . && cat config', 'cd /work/project/x && cat config']) {
+        expect(matchRule(allowCat, 'run_shell', cmd, roots), cmd).toBe('allow')
+      }
+      vi.stubEnv('CDPATH', '')
+      expect(matchRule(allowCat, 'run_shell', 'cd .ssh && cat config', roots)).toBe('allow')
+    })
+
     it('reads a segment\'s program as bash does, so `"cd"k` is not skipped as a `cd`', () => {
       const allowStatus = [allow('run_shell', 'git status')]
       const roots = ['/work/project']
@@ -864,6 +953,25 @@ describe('persistedRules', () => {
     expect(persistedRules('deny', 'run_shell', { command: 'rm *' })).toEqual([deny('run_shell', 'rm *')])
   })
 
+  it('saves a directory change the gate would prompt for, exact', () => {
+    // As a prefix, `cd` would cover every directory change.
+    expect(persistedRules('allow', 'run_shell', { command: 'cd && make' })).toEqual([
+      exactAllow('run_shell', 'cd'),
+      allow('run_shell', 'make')
+    ])
+    expect(persistedRules('allow', 'run_shell', { command: 'pushd src && make && popd' })).toEqual([
+      allow('run_shell', 'make'),
+      exactAllow('run_shell', 'popd')
+    ])
+    // Given the run's roots, a `cd` out of them is saved too; one into them is dropped.
+    expect(
+      persistedRules('allow', 'run_shell', { command: 'cd ~/.ssh && cat config' }, ['/work/project'])
+    ).toEqual([exactAllow('run_shell', 'cd ~/.ssh'), allow('run_shell', 'cat config')])
+    expect(
+      persistedRules('allow', 'run_shell', { command: 'cd /work/project && cat config' }, ['/work/project'])
+    ).toEqual([allow('run_shell', 'cat config')])
+  })
+
   it('stores an exact allow for the subject, or `*` for a tool whose calls carry none', () => {
     expect(persistedRules('allow', 'write_file', { path: 'notes.txt', content: '' })).toEqual([
       exactAllow('write_file', 'notes.txt')
@@ -889,7 +997,7 @@ describe('persistedRules', () => {
 describe('a saved "Always allow" covers only the approved target', () => {
   const ROOTS = ['/work/project']
   const saved = (tool: string, args: Record<string, unknown>): PermissionRule[] =>
-    persistedRules('allow', tool, args)
+    persistedRules('allow', tool, args, ROOTS)
 
   it.each(['write_file', 'edit_file', 'multi_edit', 'notebook_edit'])(
     '%s: a path named `*` allows only that file, not every path',
@@ -1028,10 +1136,28 @@ describe('a saved "Always allow" covers only the approved target', () => {
       'git status && "cd"k deploy',
       "\\g\\it $'status' -s",
       '\\sudo rm -rf /tmp/build',
-      "t'ail' -n \"5\""
+      "t'ail' -n \"5\"",
+      'cd - && npm test',
+      'cd && cd .ssh && cat config',
+      'pushd src && make && popd',
+      'cd $PWD/.. && ls',
+      'cd {..,} && cat config',
+      'cd $(echo ~/).ssh && cat config',
+      'cd ~/.ssh && cat config',
+      'cd /etc && git status'
     ]) {
-      expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS)).toBe('allow')
+      expect(matchRule(saved('run_shell', { command }), 'run_shell', command, ROOTS), command).toBe('allow')
     }
+  })
+
+  it('run_shell: a saved directory change covers that one only', () => {
+    const bare = saved('run_shell', { command: 'cd && make' })
+    for (const cmd of ['cd /etc && make', 'cd ~/.ssh && make', 'cd - && make', 'cd -P && make']) {
+      expect(matchRule(bare, 'run_shell', cmd, ROOTS), cmd).toBeNull()
+    }
+    const back = saved('run_shell', { command: 'cd - && make' })
+    expect(matchRule(back, 'run_shell', 'cd - && make -j4', ROOTS)).toBe('allow')
+    expect(matchRule(back, 'run_shell', 'cd - x && make', ROOTS)).toBeNull()
   })
 
   it('run_shell: an escaped or quoted wrapper is not generalized into a `sudo rm` rule', () => {
@@ -1218,6 +1344,20 @@ describe('shellRulePatterns', () => {
   it('drops the `cd` prelude and generalizes to a <program> <verb> prefix', () => {
     expect(shellRulePatterns('cd /Users/me/repo && npm install lodash')).toEqual(['npm install'])
     expect(shellRulePatterns('cd /work/project && git status')).toEqual(['git status'])
+  })
+
+  it('keeps a directory change the gate would prompt for, verbatim', () => {
+    // Bash takes these targets from $HOME, $OLDPWD, the directory stack, or an
+    // expansion, so the matcher gates them and a saved rule set has to cover them.
+    expect(shellRulePatterns('cd - && npm test')).toEqual(['cd -', 'npm test'])
+    expect(shellRulePatterns('cd && make')).toEqual(['cd', 'make'])
+    expect(shellRulePatterns('pushd src && make && popd')).toEqual(['make', 'popd'])
+    expect(shellRulePatterns('cd $PWD/.. status && ls')).toEqual(['cd $PWD/.. status', 'ls'])
+    expect(shellRulePatterns('cd {..,} && ls')).toEqual(['cd {..,}', 'ls'])
+    // A literal one is dropped as before; given the run's roots, one out of them is kept.
+    expect(shellRulePatterns('cd ~/.ssh && cat config')).toEqual(['cat config'])
+    expect(shellRulePatterns('cd ~/.ssh && cat config', ['/work/project'])).toEqual(['cd ~/.ssh', 'cat config'])
+    expect(shellRulePatterns('cd /work/project && cat config', ['/work/project'])).toEqual(['cat config'])
   })
 
   it('collapses differing trailing args onto the same prefix', () => {

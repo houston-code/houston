@@ -1199,9 +1199,10 @@ export async function startRun(
         // so a path holding `*`, or naming a directory, can't widen it. apply_patch
         // stores one rule per file it touches, and a patch that names no file stores
         // none, so an empty subject never becomes a `*` rule covering every patch
-        // (see persistedRules). The dedupe matches with the run's roots, as the gate does.
+        // (see persistedRules). The rules and the dedupe use the run's roots, as the gate
+        // does, so a `cd` out of the workspace is saved rather than dropped.
         const action = decision === 'rule-allow' ? 'allow' : 'deny'
-        for (const rule of persistedRules(action, toolName, execArgs)) {
+        for (const rule of persistedRules(action, toolName, execArgs, roots)) {
           if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, rule.match, roots)) {
             continue
           }

