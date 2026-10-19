@@ -1686,13 +1686,15 @@ export function SettingsModal({
                   desc={
                     <>
                       Shell commands run at points in the agent loop (sandboxed to the project, no
-                      network). <strong>PreToolUse</strong> runs before a tool — a non-zero exit
+                      network). <strong>PreToolUse</strong> runs before a tool, and a non-zero exit
                       blocks it; <strong>PostToolUse</strong> runs after, and its output is shown to
                       the agent. <strong>UserPromptSubmit</strong> / <strong>SessionStart</strong> /{' '}
                       <strong>Stop</strong> / <strong>PreCompact</strong> run around the turn (a Stop
                       hook that exits non-zero makes the agent keep working). Context is in{' '}
                       <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code> /{' '}
-                      <code>$HOUSTON_USER_PROMPT</code>. A hook can also print a JSON directive (
+                      <code>$HOUSTON_USER_PROMPT</code> (a value over 16 KB is in a temp file named
+                      by the same variable with <code>_FILE</code> added). A hook can also print a
+                      JSON directive (
                       <code>{'{ decision, reason, additionalContext, updatedInput }'}</code>) on
                       stdout to steer the loop.
                     </>

@@ -794,6 +794,9 @@ export async function startRun(
   // Hoisted above the try so the `finally` can backfill results for any tool call
   // left dangling by an interruption (see the repair calls below).
   const messages: ChatMessage[] = [...req.messages]
+  // Scrubs an unexpected error's message before it reaches the client (see the catch
+  // below). Swapped for the run's secret redactor once that is built.
+  let scrubError = (text: string): string => text
   // Titles this run has proposed (propose_session), for its per-turn cap.
   const proposedThisRun = new Set<string>()
 
@@ -1070,6 +1073,7 @@ export async function startRun(
     // secret boundary read from one list.
     const knownSecrets = collectSecrets()
     const redact = createSecretRedactor(knownSecrets)
+    scrubError = redact
 
     // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
     // Emit-only by design: it never lands in `messages`, so the model never sees it
@@ -3363,6 +3367,18 @@ export async function startRun(
     // than finishing. Signal it instead of emitting a normal "done".
     emit({ type: 'limit', reason: 'max-steps' })
     emit({ type: 'done', stopReason: 'end_turn' })
+  } catch (e) {
+    // The contract above is that startRun never throws: every way a run ends reaches
+    // the client as an event. An exception nothing else handled (a hook that could not
+    // be launched, a filesystem error outside a tool's own try) used to escape here
+    // instead, so the run ended with neither an `error` nor a `done` event: the desktop
+    // kept its Stop button lit with no message, and the terminal client exited.
+    if (abort.signal.aborted) {
+      emit({ type: 'done', stopReason: 'aborted' })
+    } else {
+      const detail = e instanceof Error ? e.message : String(e)
+      emit({ type: 'error', message: scrubError(`The turn stopped on an unexpected error: ${detail}`) })
+    }
   } finally {
     // A turn stopped mid-tool — the user hit Stop, or an exception unwound after
     // the assistant `tool_use` was persisted but before its result — would leave a

@@ -90,6 +90,9 @@ const h = vi.hoisted(() => ({
   } as Record<string, unknown>,
   // Records every plugin lifecycle event the loop fires, for assertions.
   pluginEvents: [] as Array<{ event: string; payload: unknown }>,
+  // A plugin event whose emit throws, standing in for an error nothing in the loop
+  // handles. Null (the default) never throws.
+  pluginThrowOn: null as string | null,
   // Known secret values the tool-result redactor should strip; set per test.
   secrets: [] as string[],
   // Models the mock provider config lists, for dispatch/review model-override tests.
@@ -180,6 +183,7 @@ vi.mock('./plugins', () => {
     },
     emit: async (event: string, payload: unknown) => {
       h.pluginEvents.push({ event, payload })
+      if (h.pluginThrowOn === event) throw new Error(`unhandled failure in ${event}`)
     }
   }
   const emptyHost = { has: () => false, size: 0, emit: async () => {} }
@@ -241,6 +245,7 @@ let ws: string
 beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loop-'))
   h.pluginEvents = []
+  h.pluginThrowOn = null
   h.addedRules = []
   h.secrets = []
   h.verifyRunner = null
@@ -1046,6 +1051,29 @@ describe('startRun', () => {
       await run({ provider: alwaysOverloaded() })
       expect(seen).toEqual(['m2'])
     }, 30_000)
+  })
+
+  it('ends a run that hit an unhandled error with an error event, never a throw', async () => {
+    // startRun promises it never throws. An exception nothing else caught (a hook
+    // that couldn't launch, here a throwing plugin) used to escape it, ending the run
+    // with no error or done event: the GUI kept its Stop button lit, the TUI exited.
+    h.pluginThrowOn = 'onToolStart'
+    const conversationId = 'conv-unhandled'
+    const r = await run({
+      conversationId,
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'list_dir', arguments: {} } },
+          { type: 'done', stopReason: 'tool_use' }
+        ]
+      ]
+    })
+    const last = r.events.at(-1) as { type: string; message?: string }
+    expect(last.type).toBe('error')
+    expect(last.message).toContain('unhandled failure in onToolStart')
+    // The run is fully released, and the interrupted tool call still has a result.
+    expect(activeRunForConversation(conversationId)).toBeNull()
+    expect(r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'r1')).toBeDefined()
   })
 
   it('replaces a "model does not support tools" error with actionable guidance', async () => {

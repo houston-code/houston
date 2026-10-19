@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { matchingHooks, runHooks } from './hooks'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { HOOK_ENV_PAYLOAD_MAX_BYTES, matchingHooks, runHooks } from './hooks'
 import type { Hook } from '@shared/types'
-import type { SandboxRunOptions, SandboxRunResult } from '../sandbox'
+import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
 
 const hooks: Hook[] = [
   { event: 'PreToolUse', matcher: 'write_file', command: 'guard' },
@@ -253,5 +256,167 @@ describe('runHooks', () => {
       expect(r.blocked).toBe(false)
       expect(r.additionalContext).toBe('branch: main')
     })
+  })
+
+  describe('large payloads', () => {
+    // Over the OS limits (Linux refuses a single variable past 128 KB, macOS the whole
+    // environment past ~1 MB), the hook used to fail to launch with `spawn E2BIG`,
+    // which escaped and ended the turn.
+    const big = 'x'.repeat(HOOK_ENV_PAYLOAD_MAX_BYTES + 1)
+
+    /** Runner that captures each call's env and what its payload files held at run time. */
+    function capturing(): {
+      run: (o: SandboxRunOptions) => Promise<SandboxRunResult>
+      envs: NodeJS.ProcessEnv[]
+      files: Record<string, { content: string; mode: number }>
+    } {
+      const envs: NodeJS.ProcessEnv[] = []
+      const files: Record<string, { content: string; mode: number }> = {}
+      return {
+        envs,
+        files,
+        run: async (o) => {
+          envs.push(o.env ?? {})
+          for (const [k, v] of Object.entries(o.env ?? {})) {
+            if (k.startsWith('HOUSTON_') && k.endsWith('_FILE') && v) {
+              files[k] = { content: readFileSync(v, 'utf8'), mode: statSync(v).mode & 0o777 }
+            }
+          }
+          return { stdout: '', stderr: '', exitCode: 0, timedOut: false, sandboxed: true }
+        }
+      }
+    }
+
+    it('keeps a small payload in its environment variable, with no file', async () => {
+      const c = capturing()
+      await runHooks(
+        [{ event: 'PreToolUse', matcher: '*', command: 'c' }],
+        'PreToolUse',
+        { tool: 'write_file', input: { content: 'small' } },
+        '/ws',
+        sig,
+        c.run
+      )
+      expect(JSON.parse(c.envs[0].HOUSTON_TOOL_INPUT ?? '')).toEqual({ content: 'small' })
+      expect(c.envs[0].HOUSTON_TOOL_INPUT_FILE).toBeUndefined()
+    })
+
+    it('moves a large tool input to a private file named by HOUSTON_TOOL_INPUT_FILE, then removes it', async () => {
+      const c = capturing()
+      const r = await runHooks(
+        [{ event: 'PreToolUse', matcher: '*', command: 'c' }],
+        'PreToolUse',
+        { tool: 'write_file', input: { content: big } },
+        '/ws',
+        sig,
+        c.run
+      )
+      expect(r.blocked).toBe(false)
+      const env = c.envs[0]
+      expect(env.HOUSTON_TOOL_INPUT).toBeUndefined()
+      const file = env.HOUSTON_TOOL_INPUT_FILE as string
+      expect(JSON.parse(c.files.HOUSTON_TOOL_INPUT_FILE.content)).toEqual({ content: big })
+      if (process.platform !== 'win32') {
+        expect(c.files.HOUSTON_TOOL_INPUT_FILE.mode).toBe(0o600)
+      }
+      expect(existsSync(file)).toBe(false)
+      expect(existsSync(dirname(file))).toBe(false)
+    })
+
+    it('moves a large tool result and a large prompt the same way, each on its own', async () => {
+      const post = capturing()
+      await runHooks(
+        [{ event: 'PostToolUse', matcher: '*', command: 'c' }],
+        'PostToolUse',
+        { tool: 'run_shell', input: { command: 'ls' }, result: big },
+        '/ws',
+        sig,
+        post.run
+      )
+      // The small input stays inline even though the result went to a file.
+      expect(JSON.parse(post.envs[0].HOUSTON_TOOL_INPUT ?? '')).toEqual({ command: 'ls' })
+      expect(post.envs[0].HOUSTON_TOOL_RESULT).toBeUndefined()
+      expect(post.files.HOUSTON_TOOL_RESULT_FILE.content).toBe(big)
+
+      const submit = capturing()
+      await runHooks(
+        [{ event: 'UserPromptSubmit', matcher: '*', command: 'c' }],
+        'UserPromptSubmit',
+        { tool: 'UserPromptSubmit', input: {}, prompt: big },
+        '/ws',
+        sig,
+        submit.run
+      )
+      expect(submit.envs[0].HOUSTON_USER_PROMPT).toBeUndefined()
+      expect(submit.files.HOUSTON_USER_PROMPT_FILE.content).toBe(big)
+    })
+
+    it('never hands a hook a payload inherited from the environment Houston was launched with', async () => {
+      const saved = { ...process.env }
+      process.env.HOUSTON_TOOL_RESULT = 'stale result'
+      process.env.HOUSTON_TOOL_INPUT_FILE = '/tmp/stale.txt'
+      try {
+        const c = capturing()
+        await runHooks(
+          [{ event: 'PreToolUse', matcher: '*', command: 'c' }],
+          'PreToolUse',
+          { tool: 'read_file', input: { path: 'a' } },
+          '/ws',
+          sig,
+          c.run
+        )
+        expect(c.envs[0].HOUSTON_TOOL_RESULT).toBeUndefined()
+        expect(c.envs[0].HOUSTON_TOOL_INPUT_FILE).toBeUndefined()
+      } finally {
+        process.env = saved
+      }
+    })
+
+    it('fails a blocking hook closed when it cannot be launched, instead of throwing', async () => {
+      const throwing = async (): Promise<SandboxRunResult> => {
+        throw Object.assign(new Error('spawn E2BIG'), { code: 'E2BIG' })
+      }
+      const pre = await runHooks(
+        [{ event: 'PreToolUse', matcher: '*', command: 'guard --token secret' }],
+        'PreToolUse',
+        { tool: 'write_file', input: {} },
+        '/ws',
+        sig,
+        throwing
+      )
+      expect(pre.blocked).toBe(true)
+      expect(pre.approved).toBe(false)
+      expect(pre.message).toContain('could not be started: spawn E2BIG')
+      // The command (which can hold a token) is not echoed back.
+      expect(pre.message).not.toContain('secret')
+
+      const post = await runHooks(
+        [{ event: 'PostToolUse', matcher: '*', command: 'log' }],
+        'PostToolUse',
+        { tool: 'write_file', input: {}, result: 'ok' },
+        '/ws',
+        sig,
+        throwing
+      )
+      expect(post.blocked).toBe(false)
+      expect(post.message).toContain('could not be started')
+    })
+
+    // A real launch: a 2 MB input is over the limit on every OS. The hook reads its
+    // input from the file and reports the size; before, spawn threw E2BIG.
+    it.skipIf(process.platform === 'win32')('runs a real hook whose input is far over the OS limit', async () => {
+      const ws = realpathSync(mkdtempSync(join(tmpdir(), 'houston-hook-ws-')))
+      const input = { content: 'y'.repeat(2_000_000) }
+      const r = await runHooks(
+        [{ event: 'PreToolUse', matcher: '*', command: 'wc -c < "$HOUSTON_TOOL_INPUT_FILE"' }],
+        'PreToolUse',
+        { tool: 'write_file', input },
+        ws,
+        sig,
+        runSandboxed
+      )
+      expect(r.blocked).toBe(false)
+      expect(Number(r.message.trim())).toBe(Buffer.byteLength(JSON.stringify(input)))
+    }, 30_000)
   })
 })
