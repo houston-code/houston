@@ -28,7 +28,8 @@ import {
   restoreCheckpoint,
   reapplyCheckpoint,
   getConversationCheckpoint,
-  clearCheckpoints
+  clearCheckpoints,
+  flushCheckpoints
 } from './checkpoints'
 import { toAnthropicMessages } from '../providers/anthropic'
 import { resetUserDataDir, setUserDataDir } from '../userData'
@@ -333,6 +334,16 @@ async function run(
 }
 
 const types = (r: RunResult): string[] => r.events.map((e) => e.type)
+
+/**
+ * Remove a per-test userData dir. A run on a saved chat queues a checkpoints/index.json
+ * write that startRun doesn't await (noteConversationRun); it can still be in flight
+ * when the test ends, and rmSync racing its temp-file-then-rename fails with ENOTEMPTY.
+ */
+async function removeUserData(dir: string): Promise<void> {
+  await flushCheckpoints()
+  rmSync(dir, { recursive: true, force: true })
+}
 
 /**
  * Ids of any `tool_use` whose `tool_result` is not in the contiguous tool block
@@ -1684,9 +1695,9 @@ describe('system prompt stability across runs', () => {
     setUserDataDir(userData)
     h.gitContext = 'Git: on branch "main", working tree clean.'
   })
-  afterEach(() => {
+  afterEach(async () => {
     resetUserDataDir()
-    rmSync(userData, { recursive: true, force: true })
+    await removeUserData(userData)
   })
 
   /** A provider that records the system prompt of every request. */
@@ -1750,9 +1761,9 @@ describe('compaction persistence across runs', () => {
     userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
     setUserDataDir(userData)
   })
-  afterEach(() => {
+  afterEach(async () => {
     resetUserDataDir()
-    rmSync(userData, { recursive: true, force: true })
+    await removeUserData(userData)
   })
 
   /** `turns` user/assistant pairs (padded to ~`pad` chars each) plus a final user turn. */
@@ -1864,9 +1875,9 @@ describe('prompt-cache-aware window assembly', () => {
     userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
     setUserDataDir(userData)
   })
-  afterEach(() => {
+  afterEach(async () => {
     resetUserDataDir()
-    rmSync(userData, { recursive: true, force: true })
+    await removeUserData(userData)
   })
 
   // `read_file` is what makes the pinned block volatile: every call rewrites its
@@ -2023,9 +2034,9 @@ describe('context management inside a long turn', () => {
     userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
     setUserDataDir(userData)
   })
-  afterEach(() => {
+  afterEach(async () => {
     resetUserDataDir()
-    rmSync(userData, { recursive: true, force: true })
+    await removeUserData(userData)
     h.settings.compactionThreshold = 0
   })
 
@@ -6131,10 +6142,10 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
       }
     })
   })
-  afterEach(() => {
+  afterEach(async () => {
     resetSpawnBackend()
     resetUserDataDir()
-    rmSync(userData, { recursive: true, force: true })
+    await removeUserData(userData)
   })
 
   const propose = (id: string, title: string): ProviderStreamEvent => ({
