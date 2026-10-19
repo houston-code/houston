@@ -474,7 +474,9 @@ by respelling it: a file rule is resolved and anchored to the workspace (so
 like `src/../../etc/passwd` does not slip past it), a URL rule is
 case-insensitive on scheme and host, and a shell rule sees through quoting,
 backslash escapes, and bash's `$'...'` escapes (so `deny *rm -rf*` still fires on
-`"rm" -rf`, `r\m -rf`, or `$'\x72m' -rf`). An allow rule sees through quoting only
+`"rm" -rf`, `r\m -rf`, or `$'\x72m' -rf`). A line that ends in a backslash continues
+onto the next, as in bash, so a deny also fires on `rm` split across two lines, and
+an allow must cover the joined command. An allow rule sees through quoting only
 where it changes nothing (`"git" status` is `git status`): a quoted or escaped `*`,
 `~`, `$`, space, or `>` is not the bare one, since the shell treats them
 differently. Allowing `rm '*'` (one file named `*`) never allows `rm *`, and

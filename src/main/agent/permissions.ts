@@ -1174,7 +1174,8 @@ function readAnsiCQuote(s: string, start: number): { text: string; end: number }
  * The quoted or escaped span of shell text that starts at `s[i]`, read as the shell
  * reads it, and the index past it; null when `s[i]` is an ordinary character. A
  * backslash escapes the next character (and is dropped); single quotes are literal; in
- * double quotes a backslash escapes only `"`, `` ` ``, `$`, `\`, and newline. A `$'...'`
+ * double quotes a backslash escapes only `"`, `` ` ``, `$`, and `\`, and a
+ * backslash-newline is deleted there (a line continuation, as in bash). A `$'...'`
  * string is decoded (see {@link decodeAnsiC}), and a `$"..."` one reads as the plain
  * double-quoted string (its text untranslated). `$$` is the shell's PID, read as a pair
  * so the `'` after it opens a plain single-quoted string. An unclosed quote runs to the
@@ -1198,7 +1199,7 @@ function readShellSpan(s: string, i: number): { text: string; end: number } | nu
   let j = i + 1
   while (j < s.length && s[j] !== '"') {
     if (s[j] === '\\' && j + 1 < s.length && '"`$\\\n'.includes(s[j + 1])) {
-      text += s[j + 1]
+      if (s[j + 1] !== '\n') text += s[j + 1]
       j += 2
     } else {
       text += s[j]
@@ -1322,7 +1323,7 @@ function literalShellUnits(text: string): string[] {
   const doubleQuoted = (i: number): number => {
     for (i += 1; i < text.length && text[i] !== '"'; ) {
       if (text[i] === '\\' && i + 1 < text.length && '"`$\\\n'.includes(text[i + 1])) {
-        literal(text[i + 1])
+        if (text[i + 1] !== '\n') literal(text[i + 1])
         i += 2
       } else {
         if (text[i] === '$') units.push('"$')
@@ -1472,6 +1473,23 @@ function matchOneShell(rules: PermissionRule[], command: string): PermissionRule
  * Each segment also has its compound-command scaffolding peeled off (see
  * {@link stripShellScaffolding}), so `for f in *; do rm -rf ~; done` yields `rm -rf ~`,
  * not `do rm -rf ~` (which a deny on `rm` missed and a junk allow on `do` approved).
+ *
+ * A line continuation (backslash-newline) is no break to bash: it is deleted, so
+ * `r\<newline>m -rf x` runs `rm -rf x`, which a split at that newline reads as `r\` and
+ * `m -rf x`, and a deny on `*rm -rf*` matches neither. So a command holding one is read
+ * twice, as written and with its continuations joined (see
+ * {@link joinLineContinuations}), and the segments of the second reading not in the
+ * first are added. A deny fires on a segment of either, so one that fires on a piece as
+ * written still does, and an allow must cover both: allows on the pieces `r` and
+ * `m -rf x` never approve `rm -rf x`.
+ *
+ * A newline inside quotes still splits, though to bash it is part of a word. Each piece
+ * must then be allowed (stricter), and a deny sees both, missing only a pattern that
+ * spans the newline, which bash runs as a word holding a newline (`r"<newline>"m` is the
+ * program `r<newline>m`, not `rm`). Not splitting there would take reading the quoting
+ * as bash does, and a quote in a comment or a heredoc body is not one: a reader thrown
+ * out of step by it would take the next command for quoted text and hide it from an
+ * allow.
  */
 export function splitShellCommand(command: string): string[] {
   return shellSegments(command).map((s) => s.text)
@@ -1491,7 +1509,41 @@ interface ShellSegment {
 function shellSegments(command: string): ShellSegment[] {
   const segments: ShellSegment[] = []
   collectShellSegments(command, segments, 0)
+  const joined = joinLineContinuations(command)
+  if (joined !== command) {
+    // The joined reading's sub-commands not already read as written. A duplicate keeps
+    // the stricter `lifted` of the two, so neither reading loosens the other.
+    const byText = new Map(segments.map((seg) => [seg.text, seg]))
+    const more: ShellSegment[] = []
+    collectShellSegments(joined, more, 0)
+    for (const seg of more) {
+      const prior = byText.get(seg.text)
+      if (prior) {
+        if (seg.lifted) prior.lifted = true
+        continue
+      }
+      segments.push(seg)
+      byText.set(seg.text, seg)
+    }
+  }
   return segments.length ? segments : [{ text: command.trim(), lifted: false }]
+}
+
+/**
+ * `command` with every line continuation (a backslash-newline) deleted, as bash deletes
+ * one before it reads words. Backslashes pair left to right, so `\\` then a newline is an
+ * escaped backslash and a real line break, not a continuation.
+ *
+ * Every pair goes, quoted or not, which also joins one that bash keeps: in single quotes
+ * or `$'...'`, in a comment, or in a heredoc body with a quoted delimiter. Telling those
+ * apart takes a full parser, since a quote inside a comment or a heredoc body is not a
+ * quote, and a reader that took one for a quote would leave the next continuation in
+ * place. Joining too much is safe where this is used, since {@link splitShellCommand}
+ * keeps the reading as written too, and a string a nested shell runs
+ * (`sh -c 'r\<newline>m -rf x'`) is joined the same way when it runs.
+ */
+function joinLineContinuations(command: string): string {
+  return command.replace(/\\[\s\S]/g, (pair) => (pair === '\\\n' ? '' : pair))
 }
 
 /**
