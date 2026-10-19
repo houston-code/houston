@@ -2043,6 +2043,84 @@ describe('cleanupPermissionRules', () => {
     expect(cleanupPermissionRules([allow('run_shell', "rm   'my  file'")])).toEqual([allow('run_shell', "rm 'my  file'")])
   })
 
+  it('keeps a substitution rule whole instead of allowing what it lifts out', () => {
+    for (const match of ['rm -rf $(cat list)', 'rm -rf `cat list`', 'diff <(cat list) b']) {
+      const cleaned = cleanupPermissionRules([allow('run_shell', match)])
+      expect(cleaned).toEqual([allow('run_shell', match)])
+      expect(matchRule(cleaned, 'run_shell', 'cat list')).toBeNull()
+      expect(matchRule(cleaned, 'run_shell', 'rm -rf ~')).toBeNull()
+      expect(matchRule(cleaned, 'run_shell', 'diff b ~/.ssh/id_rsa')).toBeNull()
+    }
+    // Even where only one piece is left: the outer command lost the text in its blank,
+    // and a lone substitution runs its output as a command.
+    for (const match of ['rm -rf $(cd x)', '$(git status)']) {
+      const cleaned = cleanupPermissionRules([allow('run_shell', match)])
+      expect(cleaned).toEqual([allow('run_shell', match)])
+      expect(matchRule(cleaned, 'run_shell', 'rm -rf ~')).toBeNull()
+      expect(matchRule(cleaned, 'run_shell', 'git status')).toBeNull()
+    }
+  })
+
+  it('keeps a chained rule whole instead of allowing each command on its own', () => {
+    const cleaned = cleanupPermissionRules([allow('run_shell', 'git status && rm -rf x')])
+    expect(cleaned).toEqual([allow('run_shell', 'git status && rm -rf x')])
+    expect(matchRule(cleaned, 'run_shell', 'rm -rf x')).toBeNull()
+    expect(matchRule(cleaned, 'run_shell', 'git status')).toBeNull()
+    // A `cd` the gate gates is a piece of its own too.
+    const back = cleanupPermissionRules([allow('run_shell', 'cd - && npm install foo')])
+    expect(back).toEqual([allow('run_shell', 'cd - && npm install foo')])
+    expect(matchRule(back, 'run_shell', 'npm install')).toBeNull()
+  })
+
+  it('drops a chained rule whose every command another allow already grants', () => {
+    const lsTs: PermissionRule = { action: 'allow', tool: 'run_shell', match: 'ls *.ts', exact: true }
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'npm test'),
+      allow('run_shell', 'cd /repo && npm test && npm run lint'),
+      allow('run_shell', 'npm run'),
+      lsTs,
+      allow('run_shell', 'cd /repo && ls *.ts | wc -l'),
+      allow('run_shell', 'cd /repo && ls *.ts; npm test')
+    ]
+    // `wc -l` has no allow of its own, so that rule stays whole.
+    expect(cleanupPermissionRules(rules)).toEqual([
+      allow('run_shell', 'npm test'),
+      allow('run_shell', 'npm run'),
+      lsTs,
+      allow('run_shell', 'cd /repo && ls *.ts | wc -l')
+    ])
+    // Only an allow that covers every extension counts: an exact `npm run`, or a glob
+    // that matches the text `npm run` but not `npm run lint`, does not grant the prefix.
+    for (const other of [
+      { action: 'allow' as const, tool: 'run_shell', match: 'npm run', exact: true },
+      allow('run_shell', 'npm r*n')
+    ]) {
+      const narrow: PermissionRule[] = [allow('run_shell', 'npm test'), other, allow('run_shell', 'npm test; npm run lint')]
+      expect(cleanupPermissionRules(narrow)).toEqual(narrow)
+    }
+  })
+
+  it('does not move a granted command ahead of an ask that came before its allow', () => {
+    const rules: PermissionRule[] = [
+      allow('run_shell', 'git status && git log'),
+      { action: 'ask', tool: 'run_shell', match: 'git log --all*' },
+      allow('run_shell', 'git status'),
+      allow('run_shell', 'git log')
+    ]
+    const cleaned = cleanupPermissionRules(rules)
+    expect(matchRule(rules, 'run_shell', 'git log --all')).toBe('ask')
+    expect(matchRule(cleaned, 'run_shell', 'git log --all')).toBe('ask')
+    expect(matchRule(cleaned, 'run_shell', 'git log -3')).toBe('allow')
+    // An allow that already came first answers before the ask either way.
+    const first: PermissionRule[] = [
+      allow('run_shell', 'git status'),
+      allow('run_shell', 'git log'),
+      { action: 'ask', tool: 'run_shell', match: 'git log --all*' },
+      allow('run_shell', 'cd /r && git status && git log')
+    ]
+    expect(cleanupPermissionRules(first)).toEqual(first.slice(0, 3))
+  })
+
   describe('exact rules', () => {
     const exactAllow = (tool: string, match: string): PermissionRule => ({ action: 'allow', tool, match, exact: true })
 
