@@ -653,8 +653,14 @@ reach the network, and it works while the main chat's turn is still running.
 turn is running), and **Continue in new chat** forks the chat with the exchange as
 a draft. Its tokens count toward the chat's cost.
 
-In the terminal, `/btw <question>` asks one; follow-ups in the same chat keep
-the side chat's context.
+Each chat has one side chat, kept with the chat: closing the panel, switching to
+another chat, a plan review taking over the panel, or restarting Houston never
+loses it, and an answer still coming in keeps going and shows up when you come
+back. Before each follow-up it catches up on what the main chat said since the
+last answer. **New side chat** (the + in its header) clears it and starts over.
+
+In the terminal, `/btw <question>` asks the same chat's side chat (shared with the
+desktop app's panel), and `/btw clear` starts it over.
 
 ## Watching work you sent off (/spawned)
 

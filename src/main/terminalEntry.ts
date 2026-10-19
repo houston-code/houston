@@ -31,7 +31,7 @@ import { createSpawnBackend } from './spawnSession'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
-import { askSideChat, hostSideChatDeps } from './sideChat'
+import { askSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
@@ -79,7 +79,8 @@ import {
   searchConversations,
   forkConversation,
   setGeneratedTitle,
-  reportChildToParent
+  reportChildToParent,
+  saveSideChat
 } from './conversations'
 
 /**
@@ -513,7 +514,10 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
           decideProposal({ conversationId, callId, status }, hostProposalDeps())
         }
       },
-      sideChat: (input) => askSideChat(input, hostSideChatDeps()),
+      sideChat: {
+        ask: (input) => askSideChat(input, hostSideChatDeps()),
+        clear: (conversationId) => clearSideChat(conversationId, { saveSideChat })
+      },
       checkUpdate: async () => {
         const found = await checkForUpdate(version)
         latestUpdate = found ? { latest: found.latest, url: found.url } : null

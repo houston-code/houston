@@ -1356,6 +1356,7 @@ export const HELP_TEXT = [
   '  /spawned              list the background sessions the agent started; open one',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
+  '  /btw clear            start this chat\'s side chat over',
   '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
   '  /skills /agents       list workspace skills / custom agents',
@@ -2136,16 +2137,20 @@ export interface TuiDeps {
     decide: (conversationId: string, callId: string, status: 'here' | 'dismissed') => void
   }
   /**
-   * Answer a side question about a saved chat with a read-only aside (`/btw`). The
-   * answer is printed, never added to the chat. Absent ⇒ unavailable here.
+   * The saved chat's side chat (`/btw`): a read-only aside, stored with the chat and
+   * shared with the desktop app's side chat panel. Its answers are printed, never
+   * added to the chat. Absent ⇒ unavailable here.
    */
-  sideChat?: (input: {
-    sideId: string
-    conversationId: string
-    question: string
-    providerId: string
-    model: string
-  }) => Promise<string>
+  sideChat?: {
+    ask: (input: {
+      conversationId: string
+      question: string
+      providerId: string
+      model: string
+    }) => Promise<{ answer?: string; error?: string }>
+    /** Start the chat's side chat over (`/btw clear`). */
+    clear: (conversationId: string) => void
+  }
   /**
    * Append a standing instruction to the project's or the user's rules file (the
    * `#` capture). Returns the path written, so the user can see where it went —
@@ -3204,24 +3209,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         if (!result.question) {
-          deps.io.out(paint('· usage: /btw <question>\n', 'dim'))
+          deps.io.out(paint('· usage: /btw <question>, or /btw clear to start the side chat over\n', 'dim'))
           continue
         }
         if (!conversationId || !providerId || !model) {
           deps.io.out(paint('· side chat needs a saved chat: send a message first\n', 'dim'))
           continue
         }
+        if (result.question === 'clear') {
+          deps.sideChat.clear(conversationId)
+          deps.io.out(paint('· side chat cleared; the next /btw starts a new one\n', 'dim'))
+          continue
+        }
         deps.io.startSpinner?.('Side chat')
         try {
-          const answer = await deps.sideChat({
-            // One side chat per main chat, so follow-up questions keep its context.
-            sideId: `tui-${conversationId}`,
-            conversationId,
-            question: result.question,
-            providerId,
-            model
-          })
-          deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${answer.trim()}\n`)
+          // The chat's one side chat, stored with it: follow-ups keep its context.
+          const turn = await deps.sideChat.ask({ conversationId, question: result.question, providerId, model })
+          if (turn.answer !== undefined) {
+            deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${turn.answer.trim()}\n`)
+          } else {
+            deps.io.out(paint(`· side chat failed: ${turn.error ?? 'no answer'}\n`, 'red'))
+          }
         } catch (e) {
           deps.io.out(paint(`· side chat failed: ${(e as Error).message}\n`, 'red'))
         } finally {

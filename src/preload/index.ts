@@ -32,6 +32,8 @@ import type {
   ElicitationResult,
   ImportConversationResult,
   ProposalState,
+  SideChatTurn,
+  SideChatView,
   PlanDecision,
   RepoInfo,
   ToolApprovalDecision
@@ -344,22 +346,25 @@ const api = {
   ): Promise<Record<string, ProposalState>> =>
     ipcRenderer.invoke(IPC.proposalSetState, conversationId, callId, status),
 
-  // Side chat: a read-only aside about the open conversation (never enters its log)
+  // Side chat: a read-only aside about a conversation, stored with it (never in its log)
   askSideChat: (
-    sideId: string,
     conversationId: string,
     question: string,
     providerId: string,
     model: string
-  ): Promise<string> =>
-    ipcRenderer.invoke(IPC.sideChatAsk, sideId, conversationId, question, providerId, model),
-  cancelSideChat: (sideId: string): Promise<void> => ipcRenderer.invoke(IPC.sideChatCancel, sideId),
-  closeSideChat: (sideId: string): Promise<void> => ipcRenderer.invoke(IPC.sideChatClose, sideId),
-  onSideChatProgress: (cb: (p: { sideId: string; message: string }) => void): (() => void) => {
-    const listener = (_event: IpcRendererEvent, payload: { sideId: string; message: string }): void =>
-      cb(payload)
-    ipcRenderer.on(IPC.sideChatProgress, listener)
-    return () => ipcRenderer.removeListener(IPC.sideChatProgress, listener)
+  ): Promise<SideChatTurn> =>
+    ipcRenderer.invoke(IPC.sideChatAsk, conversationId, question, providerId, model),
+  getSideChat: (conversationId: string): Promise<SideChatView> =>
+    ipcRenderer.invoke(IPC.sideChatGet, conversationId),
+  cancelSideChat: (conversationId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.sideChatCancel, conversationId),
+  clearSideChat: (conversationId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.sideChatClear, conversationId),
+  /** A conversation's side chat changed (asked, progressed, answered, cleared): refetch it. */
+  onSideChatChanged: (cb: (p: { conversationId: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { conversationId: string }): void => cb(payload)
+    ipcRenderer.on(IPC.sideChatChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.sideChatChanged, listener)
   },
 
   onAgentEvent: (cb: (e: AgentEvent) => void): (() => void) => {

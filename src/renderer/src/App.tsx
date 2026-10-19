@@ -2055,10 +2055,13 @@ export default function App(): JSX.Element {
         </Suspense>
       )}
 
-      {sideChatVisible && currentId && (
+      {sideChatOpen && currentId && (
         <SideChatPanel
-          // Remount per chat: a side chat belongs to the chat it was opened on.
+          // One panel per chat (its side chat is stored with the chat, so switching
+          // back shows it again). While a plan review has the column the panel stays
+          // mounted but hidden, rather than unmounted, so nothing in it is lost.
           key={currentId}
+          hidden={!sideChatVisible}
           conversationId={currentId}
           providerId={settings.selected?.providerId}
           model={settings.selected?.model}

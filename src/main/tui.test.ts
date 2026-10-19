@@ -4644,7 +4644,12 @@ describe('/proposals and /btw', () => {
     const t = fakeIo(inputs)
     d.io = t.io
     d.persist = fakePersist().persist
-    const calls = { started: [] as Array<[string, string, string]>, decided: [] as Array<[string, string, string]>, asked: [] as string[] }
+    const calls = {
+      started: [] as Array<[string, string, string]>,
+      decided: [] as Array<[string, string, string]>,
+      asked: [] as string[],
+      cleared: [] as string[]
+    }
     d.proposals = {
       list: () => list,
       start: async (conv, callId, policy) => {
@@ -4653,9 +4658,12 @@ describe('/proposals and /btw', () => {
       },
       decide: (conv, callId, status) => void calls.decided.push([conv, callId, status])
     }
-    d.sideChat = async (input) => {
-      calls.asked.push(`${input.sideId}|${input.conversationId}|${input.question}`)
-      return 'Because the client is public.'
+    d.sideChat = {
+      ask: async (input) => {
+        calls.asked.push(`${input.conversationId}|${input.question}`)
+        return input.question.includes('fail') ? { error: 'rate limited' } : { answer: 'Because the client is public.' }
+      },
+      clear: (conv) => void calls.cleared.push(conv)
     }
     return { d, rec, t, calls }
   }
@@ -4687,7 +4695,7 @@ describe('/proposals and /btw', () => {
   it('answers a side question without adding it to the chat', async () => {
     const { d, rec, t, calls } = wired(['hello', '/btw why PKCE?', 'next', null])
     await runTui(opts, d)
-    expect(calls.asked).toEqual(['tui-conv-1|conv-1|why PKCE?'])
+    expect(calls.asked).toEqual(['conv-1|why PKCE?'])
     expect(t.text()).toContain('Because the client is public.')
     // A spinner shows while it works, and is stopped after.
     const i = t.spinner.indexOf('start:Side chat')
@@ -4695,6 +4703,15 @@ describe('/proposals and /btw', () => {
     expect(t.spinner.slice(i)).toContain('stop')
     // The next real turn's history has no trace of the aside.
     expect(rec.runs[1].messages.map((m) => m.content)).toEqual(['hello', 'next'])
+  })
+
+  it('prints a failed side answer as an error, and /btw clear starts it over', async () => {
+    const { d, t, calls } = wired(['hello', '/btw this will fail', '/btw clear', null])
+    await runTui(opts, d)
+    expect(t.text()).toContain('side chat failed: rate limited')
+    expect(calls.cleared).toEqual(['conv-1'])
+    expect(t.text()).toContain('side chat cleared')
+    expect(calls.asked).toEqual(['conv-1|this will fail'])
   })
 
   it('needs a saved chat and a question first', async () => {

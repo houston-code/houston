@@ -5932,6 +5932,10 @@ body.is-resizing .plan-panel__resizer::after {
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
 }
+.side-chat[hidden] {
+  /* Kept mounted (draft intact) while a plan review has the column. */
+  display: none;
+}
 .side-chat__hint {
   flex: 0 0 auto;
   margin: 0;

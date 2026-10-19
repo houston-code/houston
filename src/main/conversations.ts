@@ -15,7 +15,8 @@ import type {
   ConversationWorktree,
   PromptSnapshot,
   ProposalState,
-  SpawnedFrom
+  SpawnedFrom,
+  StoredSideChat
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 import { accumulateModelUsage } from '@shared/usage'
@@ -290,6 +291,7 @@ function toMeta(conv: Conversation): ConversationMeta {
     promptSnapshot: _promptSnapshot,
     proposals: _proposals,
     childReports: _childReports,
+    sideChat: _sideChat,
     ...rest
   } = conv
   return { ...rest, errored: !!lastError }
@@ -431,6 +433,19 @@ export function reportChildToParent(parentId: string, childId: string): void {
   const rest = (parent.childReports ?? []).filter((r) => r.conversationId !== childId)
   parent.childReports = [...rest, report].slice(-MAX_PENDING_CHILD_REPORTS)
   write(parent)
+}
+
+/**
+ * Replace a chat's stored side chat (null forgets it). Does not bump `updatedAt`: a
+ * side question isn't activity in the chat itself, so it mustn't reorder the sidebar.
+ */
+export function saveSideChat(id: string, sideChat: StoredSideChat | null): void {
+  const conv = read(id)
+  if (!conv) return
+  if (sideChat) conv.sideChat = sideChat
+  else if (conv.sideChat === undefined) return
+  else delete conv.sideChat
+  write(conv)
 }
 
 /** Take (and clear) a chat's pending finished-child reports. */
