@@ -33,6 +33,7 @@ import {
   type SelectedModel
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
+import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
@@ -430,11 +431,11 @@ export function cancelRun(runId: string): void {
   const run = runs.get(runId)
   if (!run) return
   for (const resolve of run.approvals.values())
-    resolve({ decision: 'deny', note: 'The user interrupted the run before answering this prompt.' })
+    resolve({ decision: 'deny', note: APPROVAL_INTERRUPTED_NOTE })
   run.approvals.clear()
   run.pendingApprovals.clear()
   // Unblock any pending question so its tool call returns instead of hanging.
-  for (const resolve of run.questions.values()) resolve('[The user stopped the agent without answering.]')
+  for (const resolve of run.questions.values()) resolve(QUESTION_STOPPED_ANSWER)
   run.questions.clear()
   run.pendingQuestions.clear()
   // Unblock any pending plan review (treated as a reject) so present_plan returns.

@@ -23,6 +23,7 @@ import {
 } from '@shared/sweep'
 import { isSafeGitRef } from '@shared/git'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
+import { QUESTION_EMPTY_ANSWER } from '@shared/promptOutcome'
 import { getSearchProviderInfo } from '@shared/search'
 import {
   MAX_ATTACH_IMAGE_BYTES,
@@ -3449,7 +3450,7 @@ const askUser: ToolDef = {
     const options = parseQuestionOptions(args.options)
     const multiSelect = args.multiSelect === true
     const answer = await ctx.askUser({ question, options, multiSelect })
-    return answer.trim() ? answer : '[The user did not provide an answer.]'
+    return answer.trim() ? answer : QUESTION_EMPTY_ANSWER
   }
 }
 

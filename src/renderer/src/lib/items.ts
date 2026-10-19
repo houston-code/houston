@@ -13,6 +13,7 @@ import type { FileDiffPreview } from '@shared/diff'
 import type { ImageAttachment } from '@shared/images'
 import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
+import { planOutcome } from '@shared/promptOutcome'
 import { upsertFinding } from '@shared/reviewFindings'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
@@ -198,14 +199,6 @@ function planFromArgs(args: Record<string, unknown>): PlanPayload {
     ...(steps.length ? { steps } : {}),
     ...(files.length ? { files } : {})
   }
-}
-
-/** Derive a plan's outcome from the `present_plan` tool-result text. */
-function planStatusFromResult(output: string | undefined): PlanStatus {
-  if (output?.startsWith('The user ACCEPTED')) return 'accepted'
-  if (output?.startsWith('The user REJECTED')) return 'rejected'
-  // No result, or a "wants changes" result — the plan is no longer actionable here.
-  return 'superseded'
 }
 
 let counter = 0
@@ -412,7 +405,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       // A present_plan result records the user's decision — fold it into the plan
       // marker's status (a backstop; the click handler updates it optimistically).
       if (e.name === PRESENT_PLAN_TOOL) {
-        const status = planStatusFromResult(e.output)
+        const status = planOutcome(e.output)
         return items.map((it) => (it.kind === 'plan' && it.id === e.callId ? { ...it, status } : it))
       }
       const status: ToolStatus = e.ok
@@ -633,7 +626,7 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
             kind: 'plan',
             id: tc.id,
             plan: planFromArgs(tc.arguments),
-            status: planStatusFromResult(res?.output)
+            status: planOutcome(res?.output)
           })
           continue
         }
