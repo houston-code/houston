@@ -224,13 +224,18 @@ describe('checkpoints', () => {
     })
 
     it('evicts the oldest checkpoints beyond the cap', async () => {
-      // MAX_CHECKPOINTS is 50; create 51 distinct runs, each touching one file.
+      // MAX_CHECKPOINTS is 50; create 51 distinct runs, each snapshotting one file.
+      // Eviction is keyed by run, not by path, so every run snapshots the SAME file.
+      // Creating a fresh file per run made this the test most exposed to Windows CI
+      // runners' temp-disk stalls, where each new file can cost ~100ms (it once took
+      // 5.3s against a ~100ms norm and hit the 5s timeout).
+      writeFileSync(join(ws, 'f.txt'), 'x')
       for (let i = 0; i < 51; i++) {
-        writeFileSync(join(ws, `f${i}.txt`), 'x')
-        await recordOriginal(`run-${i}`, [ws], `f${i}.txt`)
+        await recordOriginal(`run-${i}`, [ws], 'f.txt')
       }
-      // The oldest (run-0) should have been evicted; the newest retained.
+      // Only the oldest (run-0) should have been evicted; the 50 newest retained.
       expect(checkpointFileCount('run-0')).toBe(0)
+      expect(checkpointFileCount('run-1')).toBe(1)
       expect(checkpointFileCount('run-50')).toBe(1)
     })
 
@@ -579,16 +584,18 @@ describe('checkpoints', () => {
     })
 
     it('prunes the oldest run files beyond the cap', async () => {
-      // MAX_CHECKPOINTS is 50; record 51 runs, each touching one file.
+      // MAX_CHECKPOINTS is 50; record 51 runs, each snapshotting the same one file
+      // (see the in-memory eviction test: the per-run checkpoint files are the disk
+      // writes under test here, a fresh workspace file per run is not).
+      writeFileSync(join(ws, 'f.txt'), 'x')
       for (let i = 0; i < 51; i++) {
-        writeFileSync(join(ws, `f${i}.txt`), 'x')
-        await recordOriginal(`run-${i}`, [ws], `f${i}.txt`)
+        await recordOriginal(`run-${i}`, [ws], 'f.txt')
       }
       await flushCheckpoints()
       const files = readdirSync(join(dataDir, 'checkpoints')).filter(
         (f) => f.endsWith('.json') && f !== 'index.json'
       )
-      expect(files.length).toBeLessThanOrEqual(50)
+      expect(files).toHaveLength(50)
       expect(files).toContain('run-50.json')
     })
 
