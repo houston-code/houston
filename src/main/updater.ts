@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, autoUpdater as nativeUpdater, BrowserWindow, dialog } from 'electron'
 import type { MessageBoxOptions } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { UpdateInfo } from 'electron-updater'
@@ -10,6 +10,7 @@ import {
   type UpdateCheckResult,
   type UpdateDownloaded,
   type UpdateDownloadProgress,
+  type UpdateInstallFailed,
   type WhatsNew
 } from '@shared/update'
 import { shouldAutoInstallUpdates, shouldAutoUpdate, shouldShowWhatsNew } from './update-policy'
@@ -38,6 +39,13 @@ import { openExternalSafely } from './safeExternal'
  * installing an unverifiable package would make the release pipeline a remote-code-
  * execution boundary, which is why the gate is per-platform rather than global.
  *
+ * On macOS electron-updater downloads the zip, then hands it to Squirrel.Mac (Electron's
+ * native `autoUpdater`), which installs it only if its code signature satisfies the
+ * running app's designated requirement, Team ID included. electron-updater reports
+ * "downloaded" before that check runs, so "Restart to install" waits for Squirrel's own
+ * verdict; a refusal switches the banner to the manual download instead of leaving a
+ * restart button that can never install anything.
+ *
  * Failures are logged, never thrown — a missing/unreachable feed must not crash.
  */
 
@@ -50,8 +58,26 @@ let pendingWhatsNew: WhatsNew | null = null
 
 let configured = false
 
-/** Version electron-updater has finished downloading (signed macOS), ready to install. */
+/** Version Squirrel.Mac has verified and staged (signed macOS), ready to install. */
 let downloadedVersion: string | null = null
+
+/**
+ * The download electron-updater just handed to Squirrel.Mac, whose signature check hasn't
+ * finished yet. `verdict` resolves when Squirrel accepts it and rejects (with an
+ * {@link UpdateRefusedError}) when it refuses; only the menu's Update button awaits it.
+ */
+let verifying: {
+  version: string
+  verdict: Promise<void>
+  accept: () => void
+  refuse: (error: Error) => void
+} | null = null
+
+/** Version Squirrel.Mac refused this session; later checks offer it as a manual download. */
+let refusedVersion: string | null = null
+
+/** Squirrel.Mac refused a downloaded update, so it can't be installed in place. */
+class UpdateRefusedError extends Error {}
 
 /** The in-flight background download kicked off by the last check, if any. */
 let pendingDownload: Promise<unknown> | null = null
@@ -98,15 +124,63 @@ function configureUpdater(): typeof electronUpdater.autoUpdater {
         broadcast(IPC.updateDownloadProgress, payload)
       })
       autoUpdater.on('update-downloaded', (info) => {
-        console.log('[updater] downloaded', info?.version, '(ready to install)')
-        downloadedVersion = info?.version ?? ''
-        const payload: UpdateDownloaded = { version: info?.version ?? '' }
-        broadcast(IPC.updateDownloaded, payload)
+        console.log('[updater] downloaded', info?.version, '(waiting for the signature check)')
+        beginVerification(info?.version ?? '')
       })
+      // Squirrel.Mac's verdict on that download. Its errors only come from the update
+      // electron-updater handed it, so one while a check is pending is a refusal.
+      nativeUpdater.on('update-downloaded', () => acceptVerified())
+      nativeUpdater.on('error', (err) => refuseVerified(err))
     }
     configured = true
   }
   return autoUpdater
+}
+
+/** Track a download Squirrel.Mac is now checking, ahead of its verdict. */
+function beginVerification(version: string): void {
+  const previous = verifying
+  // A re-check of the same version re-hands the cached download to Squirrel; keep
+  // waiting on the check already underway.
+  if (previous?.version === version) return
+  let accept!: () => void
+  let refuse!: (error: Error) => void
+  const verdict = new Promise<void>((resolve, reject) => {
+    accept = resolve
+    refuse = reject
+  })
+  // A refusal reaches the banner by broadcast, so nobody has to be awaiting this.
+  verdict.catch(() => {})
+  // Anyone still waiting on a superseded check gets this one's outcome instead.
+  if (previous) verdict.then(previous.accept, previous.refuse)
+  verifying = { version, verdict, accept, refuse }
+}
+
+/** Squirrel.Mac accepted the download: it's staged, so offer "Restart to install". */
+function acceptVerified(): void {
+  if (!verifying) return
+  const { version, accept } = verifying
+  verifying = null
+  downloadedVersion = version
+  if (refusedVersion === version) refusedVersion = null
+  console.log('[updater]', version, 'verified (ready to install)')
+  const payload: UpdateDownloaded = { version }
+  broadcast(IPC.updateDownloaded, payload)
+  accept()
+}
+
+/** Squirrel.Mac refused the download: switch the banner to the manual download. */
+function refuseVerified(err: unknown): void {
+  if (!verifying) return
+  const { version, refuse } = verifying
+  verifying = null
+  if (downloadedVersion === version) downloadedVersion = null
+  refusedVersion = version
+  const message = (err as Error)?.message ?? String(err)
+  console.error('[updater] macOS refused to install', version, ':', message)
+  const payload: UpdateInstallFailed = { version, releaseUrl: DOWNLOAD_URL }
+  broadcast(IPC.updateInstallFailed, payload)
+  refuse(new UpdateRefusedError(message))
 }
 
 /**
@@ -131,12 +205,19 @@ export async function installUpdate(): Promise<boolean> {
 
 /**
  * The menu dialog's Update action on auto-install builds: finish the background
- * download if it's still running (starting one if none is), then install. Throws if
- * the download fails, so the caller can offer the manual route instead.
+ * download if it's still running (starting one if none is), wait for Squirrel.Mac to
+ * verify it, then install. Throws if the download fails or macOS refuses it, so the
+ * caller can offer the manual route instead.
  */
 async function downloadAndInstall(): Promise<boolean> {
   if (downloadedVersion === null) {
     await (pendingDownload ?? configureUpdater().downloadUpdate())
+    // The download settles once Squirrel has fetched the file, before its signature
+    // check finishes, so wait for that verdict too.
+    if (verifying) await verifying.verdict
+    else if (downloadedVersion === null && refusedVersion !== null) {
+      throw new UpdateRefusedError(`macOS refused to install ${refusedVersion}`)
+    }
   }
   return installUpdate()
 }
@@ -209,7 +290,8 @@ async function runCheck(): Promise<UpdateCheckResult> {
         latestVersion: result.updateInfo.version,
         releaseUrl: DOWNLOAD_URL,
         notes: notesText(result.updateInfo),
-        autoInstall: shouldAutoInstallUpdates()
+        // A version macOS already refused would only be refused again.
+        autoInstall: shouldAutoInstallUpdates() && result.updateInfo.version !== refusedVersion
       }
       broadcast(IPC.updateAvailable, payload)
       return payload
@@ -329,15 +411,16 @@ export async function checkForUpdatesFromMenu(): Promise<void> {
   try {
     await downloadAndInstall()
   } catch (e) {
-    console.error('[updater] download failed:', (e as Error)?.message ?? e)
-    const hint = updateErrorHint((e as Error)?.message ?? String(e))
+    const refused = e instanceof UpdateRefusedError
+    if (!refused) console.error('[updater] download failed:', (e as Error)?.message ?? e)
+    const hint = refused ? null : updateErrorHint((e as Error)?.message ?? String(e))
     const choice = await showBox({
       type: 'warning',
       buttons: ['Open download page', 'Close'],
       defaultId: 0,
       cancelId: 1,
       title: 'Update',
-      message: 'Couldn’t download the update.',
+      message: refused ? 'Couldn’t install the update.' : 'Couldn’t download the update.',
       detail: hint ?? 'You can download the new version from the website instead.'
     })
     if (choice === 0) openExternalSafely(DOWNLOAD_URL)

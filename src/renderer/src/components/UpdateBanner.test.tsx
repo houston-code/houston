@@ -19,6 +19,7 @@ describe('UpdateBanner', () => {
         update={null}
         progress={null}
         downloaded={null}
+        failed={null}
         onInstall={noop}
         onDismiss={noop}
       />
@@ -32,6 +33,7 @@ describe('UpdateBanner', () => {
         update={available}
         progress={null}
         downloaded={null}
+        failed={null}
         onInstall={noop}
         onDismiss={noop}
       />
@@ -49,6 +51,7 @@ describe('UpdateBanner', () => {
         update={{ ...available, autoInstall: true }}
         progress={null}
         downloaded={null}
+        failed={null}
         onInstall={noop}
         onDismiss={noop}
       />
@@ -63,6 +66,7 @@ describe('UpdateBanner', () => {
         update={available}
         progress={{ percent: 42, bytesPerSecond: 1000, transferred: 4, total: 10 }}
         downloaded={null}
+        failed={null}
         onInstall={noop}
         onDismiss={noop}
       />
@@ -77,6 +81,7 @@ describe('UpdateBanner', () => {
         update={available}
         progress={null}
         downloaded={{ version: '0.2.0' }}
+        failed={null}
         onInstall={onInstall}
         onDismiss={noop}
       />
@@ -91,12 +96,52 @@ describe('UpdateBanner', () => {
         update={available}
         progress={{ percent: 90, bytesPerSecond: 1, transferred: 9, total: 10 }}
         downloaded={{ version: '0.2.0' }}
+        failed={null}
         onInstall={noop}
         onDismiss={noop}
       />
     )
     expect(screen.getByRole('button', { name: /restart to install/i })).toBeInTheDocument()
     expect(screen.queryByText(/90%/)).not.toBeInTheDocument()
+  })
+
+  it('swaps Restart to install for a Download link when macOS refused the update', () => {
+    const onInstall = vi.fn()
+    render(
+      <UpdateBanner
+        update={{ ...available, autoInstall: true }}
+        progress={{ percent: 100, bytesPerSecond: 1, transferred: 10, total: 10 }}
+        downloaded={{ version: '0.2.0' }}
+        failed={{ version: '0.2.0', releaseUrl: 'https://houstoncode.ai/#download' }}
+        onInstall={onInstall}
+        onDismiss={noop}
+      />
+    )
+    expect(screen.getByText(/couldn’t be installed automatically/i)).toBeInTheDocument()
+    expect(screen.getByText('0.2.0')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: /download/i })
+    expect(link).toHaveAttribute('href', 'https://houstoncode.ai/#download')
+    expect(link).toHaveAttribute('target', '_blank')
+    // Nothing left that claims the update can still install in place.
+    expect(screen.queryByRole('button', { name: /restart to install/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/100%/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/downloading/i)).not.toBeInTheDocument()
+  })
+
+  it('lets the refused-update notice be dismissed', () => {
+    const onDismiss = vi.fn()
+    render(
+      <UpdateBanner
+        update={null}
+        progress={null}
+        downloaded={null}
+        failed={{ version: '0.2.0', releaseUrl: 'https://houstoncode.ai/#download' }}
+        onInstall={noop}
+        onDismiss={onDismiss}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }))
+    expect(onDismiss).toHaveBeenCalledOnce()
   })
 
   it('calls onDismiss when the dismiss button is clicked', () => {
@@ -106,6 +151,7 @@ describe('UpdateBanner', () => {
         update={available}
         progress={null}
         downloaded={null}
+        failed={null}
         onInstall={noop}
         onDismiss={onDismiss}
       />
