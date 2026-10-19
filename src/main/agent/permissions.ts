@@ -1557,6 +1557,12 @@ function joinLineContinuations(command: string): string {
  */
 const SHELL_CONTROL_OPERATOR = /\|\||&&|[;\n|]|(?<![<>])&(?!>)/
 
+/**
+ * Where {@link collectShellSegments} lifts a command or process substitution out of a
+ * command: at every `$(`, `<(`, `>(`, and backtick, quoted or not.
+ */
+const SHELL_SUBSTITUTION_OPENER = /\$\(|[<>]\(|`/
+
 /** Cap on substitution nesting so a pathologically deep command can't recurse forever. */
 const MAX_SUBST_DEPTH = 32
 
@@ -2082,6 +2088,18 @@ function isDeadShellPattern(match: string): boolean {
  *   pile of exact, `cd`-prefixed commands onto a handful of generalized prefixes —
  *   EXCEPT a rule is left exactly as-is when any generalization of it would newly cover
  *   an existing deny rule, so a narrower deny is never silently shadowed.
+ * - Leaves a `run_shell` allow as it is when it splits into more than one sub-command:
+ *   one that chains commands (`git status && rm -rf x`), or one a command or process
+ *   substitution comes out of (`rm -rf $(cat list)`, even `$(git status)`). Split up, it
+ *   would allow each piece on its own, which no one approved: `rm -rf x` alone, or
+ *   `cat list` and the prefix `rm -rf`, which covers `rm -rf ~`. A `cd` into the
+ *   workspace is no piece (the matcher skips it), so `cd /r && npm install foo` still
+ *   becomes `npm install`, while `cd - && npm install foo` stays whole. Such a rule is
+ *   split only when, for each piece, another shell allow already allows all of it and
+ *   either comes first or no deny/ask overlaps the piece, so splitting allows nothing
+ *   new (and the pieces mostly go as redundant). For a prefix piece that takes a plain
+ *   prefix allow it extends: an exact rule or a glob can match the piece's text and
+ *   still miss its extensions.
  * - Drops any allow rule already covered by an earlier kept allow rule, and any exact
  *   duplicate — preserving order, so first-match-wins semantics are unchanged.
  * - Drops a `run_shell` allow covered by a LATER, broader allow (`ls -la "dir"` before
@@ -2101,9 +2119,12 @@ function isDeadShellPattern(match: string): boolean {
  *   pattern (`rm *`, `git *`) is left as it is: nothing records whether "Always allow"
  *   saved it or the user typed it as a glob on purpose, and the two read the same.
  *
- * Every drop removes an allow, so the result is never looser than the input. Deny/ask
- * rules and non-shell rules are preserved verbatim (only exact dedupe applies). Pure
- * and order-stable, so the caller can diff old vs new before saving.
+ * The one broadening is the generalization itself: a lone sub-command becomes the
+ * prefix "Always allow" would save for it (`git status -s` becomes `git status`).
+ * Beyond that, every change drops an allow or splits one into pieces the rules already
+ * allow, so the result never allows a command the input didn't. Deny/ask rules and
+ * non-shell rules are preserved verbatim (only exact dedupe applies). Pure and
+ * order-stable, so the caller can diff old vs new before saving.
  */
 export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[] {
   const overlapsAny = (gates: PermissionRule[], pattern: string): boolean =>
@@ -2122,6 +2143,22 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
   const gates = rules.filter((r) => r.action !== 'allow')
   const wouldShadowDeny = (pattern: string): boolean => overlapsAny(denies, pattern)
   const isShellAllow = (r: PermissionRule): boolean => r.action === 'allow' && r.tool === 'run_shell'
+  // Whether one shell allow other than rules[at] already allows every command `e` does.
+  // A prefix `e` needs a plain prefix allow it extends: an exact rule or a glob can match
+  // its text and still miss `e <args…>`. That allow must come first, or no deny/ask may
+  // overlap `e`: put in rules[at]'s place, `e` would answer before a gate that sat
+  // between the two.
+  const grantedElsewhere = (e: PermissionRule, at: number): boolean => {
+    const m = e.match ?? ''
+    return rules.some(
+      (o, j) =>
+        j !== at &&
+        isShellAllow(o) &&
+        (e.exact || (!o.exact && !holdsShellStar(o.match ?? '') && !holdsShellStar(m))) &&
+        alreadyAllowedAsRule([o], 'run_shell', m) &&
+        (j < at || !overlapsAny(gates, m))
+    )
+  }
   const out: PermissionRule[] = []
   const seen = new Set<string>()
   // NUL separates the fields because it cannot appear in any of them. Write it as an
@@ -2129,16 +2166,20 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
   // file as binary and skip it.
   const key = (r: PermissionRule): string =>
     `${r.action}\u0000${r.tool}\u0000${r.match}\u0000${r.exact ? 'exact' : ''}`
-  for (const r of rules) {
+  for (const [i, r] of rules.entries()) {
     if (isShellAllow(r) && isDeadShellPattern(r.match ?? '')) continue
     let expanded: PermissionRule[] = [r]
     if (isShellAllow(r) && !r.exact) {
       const pats = shellRulePatterns(r.match ?? '')
       const own = shellRuleText(r.match ?? '')
-      // Keep the rule as it is if generalizing it could shadow a narrower deny.
-      expanded = pats.some(wouldShadowDeny)
-        ? [r]
-        : pats.map((match) => (match === own ? { ...r, match } : { ...r, ...shellAllowRule(match) }))
+      const pieces = pats.map((match) => (match === own ? { ...r, match } : { ...r, ...shellAllowRule(match) }))
+      // Saved apart, the commands a chain runs, or a substitution's body and the command
+      // it was lifted out of, would each be allowed on their own.
+      const splits = pats.length > 1 || SHELL_SUBSTITUTION_OPENER.test(joinLineContinuations(r.match ?? ''))
+      // Keep the rule as it is if generalizing it could shadow a narrower deny, or if it
+      // splits into pieces the other rules don't already allow.
+      const keep = pats.some(wouldShadowDeny) || (splits && !pieces.every((e) => grantedElsewhere(e, i)))
+      expanded = keep ? [r] : pieces
     }
     for (const e of expanded) {
       if (seen.has(key(e))) continue
