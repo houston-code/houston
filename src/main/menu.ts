@@ -1,7 +1,6 @@
 import { Menu, BrowserWindow, dialog } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import { homedir } from 'os'
-import { sep } from 'path'
 import { APP_NAME, IPC } from '@shared/constants'
 import type { MenuCommand, MenuState } from '@shared/types'
 import { checkForUpdatesFromMenu } from './updater'
@@ -166,9 +165,9 @@ function menuAccelerator(
 
 /** A recent folder as a menu label: home shortened to `~`, `&` kept literal on Windows/Linux. */
 export function recentFolderLabel(path: string, isMac: boolean, home = homedir()): string {
-  const short = home && (path === home || path.startsWith(home + sep))
-    ? '~' + path.slice(home.length)
-    : path
+  const underHome =
+    path === home || path.startsWith(home + '/') || path.startsWith(home + '\\')
+  const short = home && underHome ? '~' + path.slice(home.length) : path
   // Windows/Linux read `&` as a mnemonic marker; `&&` renders one literal ampersand.
   return isMac ? short : short.replace(/&/g, '&&')
 }

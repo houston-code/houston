@@ -193,6 +193,9 @@ describe('recentFolderLabel', () => {
     expect(recentFolderLabel('/home/x', true, '/home/x')).toBe('~')
     // A sibling that merely shares the prefix is left alone.
     expect(recentFolderLabel('/home/xy/app', true, '/home/x')).toBe('/home/xy/app')
+    // Windows paths use backslashes.
+    expect(recentFolderLabel('C:\\Users\\x\\code', false, 'C:\\Users\\x')).toBe('~\\code')
+    expect(recentFolderLabel('C:\\Users\\xy', false, 'C:\\Users\\x')).toBe('C:\\Users\\xy')
   })
 
   it('escapes & on Windows/Linux, where it marks a mnemonic', () => {
