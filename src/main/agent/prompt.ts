@@ -133,7 +133,7 @@ export function buildSystemPrompt(
     ? ''
     : host.sandboxBackend === 'bubblewrap'
       ? LINUX_VIEW_LOCALHOST_LINE
-      : '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot plus console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps (fill the form, click submit, wait_for what should appear next) with test data, and check the step results and the final screenshot.'
+      : '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot, page text, and console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps in one call (fill the form, click submit, expect_text what should appear next) with test data, and judge it by the step results and the page text, not the screenshot alone.'
   // A finished session reports back only to a saved chat, which is also exactly when
   // propose_session is offered (a proposal card is stored on the chat).
   const spawnReport = offers('propose_session')

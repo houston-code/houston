@@ -710,9 +710,13 @@ an occurrence missed while Houston was closed fires once at the next launch.
   or process a batch of existing open PRs).
 - **`view_localhost`** (desktop app) loads a page from a dev server running on
   your computer in a hidden browser and shows the agent a screenshot plus the
-  page's console output. It can also run steps first (fill a field, click, wait
-  for an element), so the agent can try a flow such as logging in or submitting
-  a form and see where it ends up. Every call asks for approval. A call with steps
+  page's visible text and console output. It can also run steps first (fill a
+  field, click or double-click, press a key such as Enter or Escape, wait for an
+  element, check that some text is or isn't shown), so the agent can try a flow
+  such as logging in or submitting a form and get a pass or fail for each step.
+  Each call starts from a fresh page load, so a flow runs within one call. Text
+  typed into a password field is never shown back to the agent. Every call asks
+  for approval. A call with steps
   is approved separately from plain views, and the approval lists each step
   (never the text being typed). Steps can't download files, upload files, or use
   your camera, microphone, or location, and the page can't leave localhost.

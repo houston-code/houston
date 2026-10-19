@@ -63,7 +63,15 @@ import {
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument } from './webfetch'
 import { assertNoRedactedValues, findSecret } from './redact'
-import { describeStep, parseSteps, type CaptureInput, type LocalhostCapture } from './viewlocalhost'
+import {
+  describeStep,
+  MAX_PAGE_TEXT_CHARS,
+  parseSteps,
+  PRESS_KEYS,
+  STEP_ACTIONS,
+  type CaptureInput,
+  type LocalhostCapture
+} from './viewlocalhost'
 import { getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
@@ -1592,7 +1600,7 @@ const viewLocalhost: ToolDef = {
   schema: {
     name: VIEW_LOCALHOST_NAME,
     description:
-      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step\'s result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Use test data, not the user\'s real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.',
+      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s visible text and console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step\'s result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Judge whether a flow worked with expect_text steps or the returned page text, not from the screenshot alone. Every call is a fresh page load: typed input and other in-page state from an earlier call are gone (cookies and localStorage persist), so put a whole flow in one call\'s steps. Use test data, not the user\'s real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.',
     parameters: objectSchema(
       {
         url: { type: 'string', description: 'A loopback URL to load, e.g. "http://localhost:3000".' },
@@ -1604,14 +1612,20 @@ const viewLocalhost: ToolDef = {
         steps: {
           type: 'array',
           description:
-            'Optional interactions run in order after the page loads and before the screenshot (at most 20). fill sets an input, textarea, or select value; click clicks an element and waits for any page load it starts; wait_for waits until a selector matches a visible element (timeout_ms, default and max 10000); wait pauses (ms, max 5000).',
+            'Optional interactions run in order after the page loads and before the screenshot (at most 20). fill sets an input, textarea, or select value and leaves it focused; click clicks an element and waits for any page load it starts; dblclick double-clicks an element; press presses a key on the selector\'s element, or on the focused element when selector is omitted; wait_for waits until a selector matches a visible element (timeout_ms, default and max 10000); expect_text passes once value appears in the visible text of the page, or of an element matching selector (case-insensitive; form field values are not visible text), or with absent: true once it does not, failing after timeout_ms (default 3000, max 10000); wait pauses (ms, max 5000).',
           items: {
             type: 'object',
             properties: {
-              action: { type: 'string', enum: ['fill', 'click', 'wait_for', 'wait'] },
-              selector: { type: 'string', description: 'CSS selector (fill, click, wait_for).' },
-              value: { type: 'string', description: 'Text to enter (fill).' },
-              timeout_ms: { type: 'number', description: 'How long wait_for waits.' },
+              action: { type: 'string', enum: [...STEP_ACTIONS] },
+              selector: {
+                type: 'string',
+                description:
+                  'Standard CSS selector, no :contains() or :has-text() (fill, click, dblclick, wait_for; optional for press and expect_text).'
+              },
+              value: { type: 'string', description: 'Text to enter (fill), or the text to look for (expect_text).' },
+              key: { type: 'string', enum: [...PRESS_KEYS], description: 'Key to press (press).' },
+              absent: { type: 'boolean', description: 'expect_text: pass only when the text is not visible.' },
+              timeout_ms: { type: 'number', description: 'How long wait_for or expect_text waits.' },
               ms: { type: 'number', description: 'How long wait pauses.' }
             },
             required: ['action'],
@@ -1672,13 +1686,44 @@ const viewLocalhost: ToolDef = {
       lines.push(`[screenshot (${humanSize(bytes)}) attached below for viewing]`)
     }
 
-    lines.push('')
-    lines.push(
-      cap.console.length
-        ? `Console output (${cap.console.length} line${cap.console.length === 1 ? '' : 's'}):\n${cap.console.join('\n')}`
-        : 'Console output: (none)'
-    )
-    return lines.join('\n')
+    // The page's text and console output are whatever the dev server serves, which
+    // can carry text from anywhere (stored user input, fetched data, third-party
+    // scripts), so both are fenced. Empty ones are reported in the trusted envelope.
+    const parts: UntrustedPart[] = []
+    if (cap.pageText) {
+      parts.push({
+        label: cap.pageTextTruncated
+          ? `Visible page text (first ${MAX_PAGE_TEXT_CHARS} characters):`
+          : 'Visible page text:',
+        text: cap.pageText,
+        source: `${cap.finalUrl} (page text)`
+      })
+    } else if (cap.pageText !== undefined) {
+      lines.push('', 'Visible page text: (none)')
+    }
+    if (cap.console.length) {
+      parts.push({
+        label: `Console output (${cap.console.length} line${cap.console.length === 1 ? '' : 's'}):`,
+        text: cap.console.join('\n'),
+        source: `${cap.finalUrl} (console)`
+      })
+    } else {
+      lines.push('', 'Console output: (none)')
+    }
+    if (!parts.length) return lines.join('\n')
+    return presentUntrustedInline({
+      envelope: lines.join('\n'),
+      parts,
+      preamble: untrustedPreamble(
+        "the loaded page's visible text and console output",
+        'A local dev server can serve text from anywhere (stored user input, fetched data, third-party scripts)'
+      ),
+      subject: 'page',
+      toolNames: builtinToolNames(),
+      // The title and a failed step's error can carry the page's own words, and both
+      // render outside the fence.
+      alsoScore: [cap.title, ...(cap.steps ?? []).map((r) => r.error ?? '')].join('\n')
+    })
   }
 }
 
