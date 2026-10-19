@@ -786,7 +786,8 @@ function readAnsiCQuote(s: string, start: number): { text: string; end: number }
  * The quoted or escaped span of shell text that starts at `s[i]`, read as the shell
  * reads it, and the index past it; null when `s[i]` is an ordinary character. A
  * backslash escapes the next character (and is dropped); single quotes are literal; in
- * double quotes a backslash escapes only `"`, `` ` ``, `$`, `\`, and newline. A `$'...'`
+ * double quotes a backslash escapes only `"`, `` ` ``, `$`, and `\`, and a
+ * backslash-newline is deleted there (a line continuation, as in bash). A `$'...'`
  * string is decoded (see {@link decodeAnsiC}), and a `$"..."` one reads as the plain
  * double-quoted string (its text untranslated). `$$` is the shell's PID, read as a pair
  * so the `'` after it opens a plain single-quoted string. An unclosed quote runs to the
@@ -810,7 +811,7 @@ function readShellSpan(s: string, i: number): { text: string; end: number } | nu
   let j = i + 1
   while (j < s.length && s[j] !== '"') {
     if (s[j] === '\\' && j + 1 < s.length && '"`$\\\n'.includes(s[j + 1])) {
-      text += s[j + 1]
+      if (s[j + 1] !== '\n') text += s[j + 1]
       j += 2
     } else {
       text += s[j]
@@ -934,7 +935,7 @@ function literalShellUnits(text: string): string[] {
   const doubleQuoted = (i: number): number => {
     for (i += 1; i < text.length && text[i] !== '"'; ) {
       if (text[i] === '\\' && i + 1 < text.length && '"`$\\\n'.includes(text[i + 1])) {
-        literal(text[i + 1])
+        if (text[i + 1] !== '\n') literal(text[i + 1])
         i += 2
       } else {
         if (text[i] === '$') units.push('"$')

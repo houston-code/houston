@@ -332,6 +332,10 @@ describe('shellReferencesExternalPath', () => {
     expect(ext("cat ''../secret")).toBe(true)
     // A line continuation joins, it does not start a word.
     expect(ext('cat \\\n/etc/passwd')).toBe(true)
+    // Bash deletes one inside double quotes too, where it can't hide a path either.
+    expect(ext('cat "$HOME\\\n/.ssh/id_rsa"')).toBe(true)
+    expect(ext('cat ".\\\n./secret"')).toBe(true)
+    expect(ext('cat "src\\\n/a.ts"')).toBe(false)
     // Quoting or escaping that leaves an in-workspace path is still not an escape.
     expect(ext("cat $'src/a.ts' \\./b a\"/b\"/../c")).toBe(false)
   })
