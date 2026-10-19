@@ -6,13 +6,16 @@ import { CONVERSATION_SCHEMA_VERSION } from '@shared/agent'
 import type {
   AgentEvent,
   ChatMessage,
+  ChildReport,
   Conversation,
   ConversationCompaction,
   ConversationError,
   ConversationMeta,
   ConversationUsage,
   ConversationWorktree,
-  PromptSnapshot
+  PromptSnapshot,
+  ProposalState,
+  SpawnedFrom
 } from '@shared/agent'
 import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
 import { accumulateModelUsage } from '@shared/usage'
@@ -159,7 +162,7 @@ export function createConversation(input: {
   /** When set, the chat runs in this Houston-created git worktree. */
   worktree?: ConversationWorktree
   /** When set, the chat was spawned by another chat (see `spawn_session`). */
-  spawnedFrom?: { conversationId: string; title: string }
+  spawnedFrom?: SpawnedFrom
 }): Conversation {
   const now = Date.now()
   const conv: Conversation = {
@@ -285,6 +288,8 @@ function toMeta(conv: Conversation): ConversationMeta {
     schemaVersion: _schemaVersion,
     compaction: _compaction,
     promptSnapshot: _promptSnapshot,
+    proposals: _proposals,
+    childReports: _childReports,
     ...rest
   } = conv
   return { ...rest, errored: !!lastError }
@@ -363,6 +368,79 @@ export function deriveTitle(messages: ChatMessage[]): string | null {
 export function needsGeneratedTitle(conv: Conversation): boolean {
   if (conv.titleCustom || conv.titleGenerated) return false
   return conv.messages.some((m) => m.role === 'user')
+}
+
+/**
+ * Record the user's decision on a `propose_session` card. Does not bump `updatedAt`:
+ * clicking a card shouldn't reorder the sidebar. Returns the chat's full proposal map
+ * after the write (empty when the chat doesn't exist).
+ */
+export function setProposalState(
+  id: string,
+  callId: string,
+  state: ProposalState
+): Record<string, ProposalState> {
+  const conv = read(id)
+  if (!conv) return {}
+  conv.proposals = { ...(conv.proposals ?? {}), [callId]: state }
+  write(conv)
+  return conv.proposals
+}
+
+/** Most finished-child reports kept pending on one parent; older ones drop first. */
+export const MAX_PENDING_CHILD_REPORTS = 20
+/** Longest summary kept per report (the child's own chat holds the full answer). */
+export const CHILD_REPORT_SUMMARY_CHARS = 400
+
+/**
+ * Build a finished child session's report from its persisted log: its title, whether
+ * its last run failed, and the start of its final answer. Pure, so the truncation and
+ * fallback wording are testable without a store.
+ */
+export function childReportFrom(child: Conversation, now: number): ChildReport {
+  const lastAnswer = [...child.messages]
+    .reverse()
+    .find((m) => m.role === 'assistant' && m.content.trim())
+  const raw = child.lastError
+    ? child.lastError.message
+    : (lastAnswer?.content ?? 'It finished without a written answer.')
+  const flat = raw.replace(/\s+/g, ' ').trim()
+  const summary =
+    flat.length > CHILD_REPORT_SUMMARY_CHARS
+      ? `${flat.slice(0, CHILD_REPORT_SUMMARY_CHARS - 1)}…`
+      : flat
+  return {
+    conversationId: child.id,
+    title: child.title,
+    outcome: child.lastError ? 'error' : 'done',
+    summary,
+    finishedAt: now
+  }
+}
+
+/**
+ * Queue a finished spawned session's report on the chat that spawned it, for the
+ * parent's next turn. A no-op when either chat is gone. Does not bump `updatedAt`.
+ */
+export function reportChildToParent(parentId: string, childId: string): void {
+  const parent = read(parentId)
+  const child = read(childId)
+  if (!parent || !child) return
+  const report = childReportFrom(child, Date.now())
+  // One report per child: a later run of the same child replaces its earlier report.
+  const rest = (parent.childReports ?? []).filter((r) => r.conversationId !== childId)
+  parent.childReports = [...rest, report].slice(-MAX_PENDING_CHILD_REPORTS)
+  write(parent)
+}
+
+/** Take (and clear) a chat's pending finished-child reports. */
+export function takeChildReports(id: string): ChildReport[] {
+  const conv = read(id)
+  const reports = conv?.childReports ?? []
+  if (!conv || reports.length === 0) return []
+  delete conv.childReports
+  write(conv)
+  return reports
 }
 
 /**

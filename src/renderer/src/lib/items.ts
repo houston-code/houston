@@ -13,6 +13,7 @@ import type { FileDiffPreview } from '@shared/diff'
 import type { ImageAttachment } from '@shared/images'
 import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
+import { planOutcome } from '@shared/promptOutcome'
 import { upsertFinding } from '@shared/reviewFindings'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
@@ -77,6 +78,8 @@ export interface ToolItem {
    * unusually, is asking — even in full-auto — so the card can explain why.
    */
   sensitiveRead?: boolean
+  /** The awaited call writes a credential / secret file, so it prompts even in full auto. */
+  sensitiveWrite?: boolean
   output?: string
   /** Latest progress line from a long-running tool (e.g. a review's current phase). */
   progress?: string
@@ -200,14 +203,6 @@ function planFromArgs(args: Record<string, unknown>): PlanPayload {
   }
 }
 
-/** Derive a plan's outcome from the `present_plan` tool-result text. */
-function planStatusFromResult(output: string | undefined): PlanStatus {
-  if (output?.startsWith('The user ACCEPTED')) return 'accepted'
-  if (output?.startsWith('The user REJECTED')) return 'rejected'
-  // No result, or a "wants changes" result — the plan is no longer actionable here.
-  return 'superseded'
-}
-
 let counter = 0
 const nextId = (): string => `i${Date.now().toString(36)}-${counter++}`
 
@@ -268,6 +263,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           toolKind: e.kind,
           shellNetwork: e.shellNetwork === true,
           sensitiveRead: e.sensitiveRead === true,
+          sensitiveWrite: e.sensitiveWrite === true,
           status: 'awaiting-approval'
         })
       }
@@ -283,6 +279,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           toolKind: e.kind,
           ...(e.shellNetwork ? { shellNetwork: true } : {}),
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
+          ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),
           status: 'awaiting-approval'
         }
       ]
@@ -412,7 +409,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       // A present_plan result records the user's decision — fold it into the plan
       // marker's status (a backstop; the click handler updates it optimistically).
       if (e.name === PRESENT_PLAN_TOOL) {
-        const status = planStatusFromResult(e.output)
+        const status = planOutcome(e.output)
         return items.map((it) => (it.kind === 'plan' && it.id === e.callId ? { ...it, status } : it))
       }
       const status: ToolStatus = e.ok
@@ -633,7 +630,7 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
             kind: 'plan',
             id: tc.id,
             plan: planFromArgs(tc.arguments),
-            status: planStatusFromResult(res?.output)
+            status: planOutcome(res?.output)
           })
           continue
         }

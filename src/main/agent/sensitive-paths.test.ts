@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isSensitivePath, isSensitiveRead } from './sensitive-paths'
+import { isSensitivePath, isSensitiveRead, writesSensitivePath } from './sensitive-paths'
 
 describe('isSensitivePath', () => {
   it('flags dotenv files', () => {
@@ -80,5 +80,26 @@ describe('isSensitiveRead', () => {
     expect(isSensitiveRead('read', {})).toBe(false)
     // A write to .env is gated by the write path's own approval, not this check.
     expect(isSensitiveRead('write', { path: '.env' })).toBe(false)
+  })
+})
+
+describe('writesSensitivePath', () => {
+  it('checks the path of the single-file write tools', () => {
+    expect(writesSensitivePath('write_file', { path: '.env', content: 'A=1' })).toBe(true)
+    expect(writesSensitivePath('edit_file', { path: 'apps/api/.env.local' })).toBe(true)
+    expect(writesSensitivePath('write_file', { path: '.env.example', content: 'A=' })).toBe(false)
+    expect(writesSensitivePath('write_file', { path: 'src/env.ts' })).toBe(false)
+  })
+
+  it('checks every path an apply_patch touches, including a move target', () => {
+    const add = '*** Begin Patch\n*** Add File: .env\n+A=1\n*** End Patch'
+    const move = '*** Begin Patch\n*** Update File: tmp.txt\n*** Move to: .env\n@@\n-a\n+b\n*** End Patch'
+    const del = '*** Begin Patch\n*** Delete File: certs/server.key\n*** End Patch'
+    const plain = '*** Begin Patch\n*** Add File: README.md\n+hi\n*** End Patch'
+    expect(writesSensitivePath('apply_patch', { patch: add })).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: move })).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: del })).toBe(true)
+    expect(writesSensitivePath('apply_patch', { patch: plain })).toBe(false)
+    expect(writesSensitivePath('apply_patch', { patch: 'not a patch' })).toBe(false)
   })
 })

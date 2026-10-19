@@ -1,5 +1,7 @@
 import type { ApprovalPolicy } from '@shared/types'
-import type { ConversationWorktree } from '@shared/agent'
+import type { ChatMessage, ConversationWorktree, ToolCall } from '@shared/agent'
+import { PROPOSE_SESSION_TOOL } from '@shared/constants'
+import { repairDanglingToolResults } from './repair'
 
 /**
  * The agent's `spawn_session` tool — spin off a *separate* chat, seeded with a
@@ -23,6 +25,67 @@ import type { ConversationWorktree } from '@shared/agent'
 
 /** Tool name — single source, imported by the loop's schema filter. */
 export const SPAWN_SESSION_NAME = 'spawn_session'
+
+/**
+ * The agent's `propose_session` tool: the same hand-off as `spawn_session`, but it
+ * only puts a card in front of the user. Nothing runs until they start it, so the
+ * tool needs no approval and is allowed in plan mode.
+ */
+export const PROPOSE_SESSION_NAME = PROPOSE_SESSION_TOOL
+
+/** The result text that marks a `propose_session` call as a card the user can act on. */
+export const PROPOSAL_ACCEPTED_PREFIX = 'Proposed "'
+
+/**
+ * The `propose_session` calls in a log that became cards, oldest first: those whose
+ * result says the proposal went through. A refused call (over the per-turn cap, a
+ * duplicate title, bad arguments) is not a card.
+ */
+export function acceptedProposalCalls(messages: ChatMessage[]): ToolCall[] {
+  const accepted = new Set(
+    messages
+      .filter(
+        (m) =>
+          m.role === 'tool' &&
+          m.toolName === PROPOSE_SESSION_NAME &&
+          m.content.startsWith(PROPOSAL_ACCEPTED_PREFIX)
+      )
+      .map((m) => m.toolCallId)
+  )
+  return messages.flatMap((m) =>
+    (m.toolCalls ?? []).filter((c) => c.name === PROPOSE_SESSION_NAME && accepted.has(c.id))
+  )
+}
+
+/**
+ * What a spawned or proposed session starts from: `fresh` sees only its prompt;
+ * `fork` also carries a copy of the spawning chat's history up to the hand-off.
+ */
+export type SessionContext = 'fresh' | 'fork'
+
+/**
+ * The spawning chat's history in a form a new session can continue from. The turn
+ * that is handing off is still in flight, so its assistant message (and any results
+ * that already came back for it) is dropped: replaying a tool call without all its
+ * results is a provider 400. Anything else left unbalanced is backfilled by
+ * {@link repairDanglingToolResults}. Returns a new array of copied messages.
+ */
+export function forkableHistory(messages: ChatMessage[]): ChatMessage[] {
+  let cut = messages.length
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role !== 'assistant' || !(m.toolCalls?.length ?? 0)) continue
+    const answered = new Set(
+      messages
+        .slice(i + 1)
+        .filter((r) => r.role === 'tool' && r.toolCallId)
+        .map((r) => r.toolCallId)
+    )
+    if (!(m.toolCalls ?? []).every((c) => answered.has(c.id))) cut = i
+    break
+  }
+  return repairDanglingToolResults(messages.slice(0, cut).map((m) => ({ ...m })))
+}
 
 /** What the loop hands the backend, with the run-scoped fields (provider/model/policy) filled in. */
 export interface SpawnSessionInput {
@@ -51,6 +114,12 @@ export interface SpawnSessionInput {
   parentConversationId?: string
   /** When set, create a fresh branch + worktree and run the child there. */
   worktree?: { branch: string; base?: string }
+  /**
+   * The history the child continues from (a `fork` context, already passed through
+   * {@link forkableHistory}). The prompt is appended as the next user turn. Absent
+   * for a `fresh` context.
+   */
+  history?: ChatMessage[]
 }
 
 /** What the backend returns once the session exists and its background run has started. */
@@ -68,6 +137,8 @@ export interface SpawnSessionResult {
    * has no window for the user to answer them in.
    */
   note?: string
+  /** True when the child's outcome will be reported back to the spawning chat. */
+  reportsBack?: boolean
 }
 
 /** The shell-side capability injected at startup. */

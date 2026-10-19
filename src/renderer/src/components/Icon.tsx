@@ -38,6 +38,8 @@ export type IconName =
   | 'shield'
   | 'share'
   | 'mail'
+  | 'sideChat'
+  | 'split'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Funnel.
@@ -162,6 +164,23 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   stop: <path d="M4.8 4.8h6.4v6.4H4.8z" />,
+  // Speech bubble with a tail — the side chat (ask aside, off the main thread).
+  sideChat: (
+    <>
+      <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
+      <path d="M5.5 6.5h5" />
+    </>
+  ),
+  // A path forking in two — split off parallel work into its own session.
+  split: (
+    <>
+      <path d="M8 13.5V8.5" />
+      <path d="M8 8.5 4 4.5" />
+      <path d="M8 8.5l4-4" />
+      <path d="M3.5 7V4h3" />
+      <path d="M12.5 7V4h-3" />
+    </>
+  ),
   // X — dismiss a chip.
   close: (
     <>

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ReviewFinding } from '@shared/agent'
+import { APPROVAL_INTERRUPTED_NOTE } from '@shared/promptOutcome'
 import type { ToolItem } from '../lib/items'
 import { ToolGroup } from './ToolGroup'
 
@@ -20,6 +21,22 @@ function tool(over: Partial<ToolItem> & Pick<ToolItem, 'id' | 'name' | 'status'>
 }
 
 describe('ToolGroup', () => {
+  it('shows an approval the run was stopped in front of as not run, not as the user\u2019s words', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 'a',
+        name: 'run_shell',
+        status: 'denied',
+        args: { command: 'npm test' },
+        output: `Denied by the user. They said: ${APPROVAL_INTERRUPTED_NOTE}`
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    fireEvent.click(container.querySelector('.tool-row__head')!)
+    expect(screen.getByText('Not run: the run was stopped before it was approved.')).toBeInTheDocument()
+    expect(screen.queryByText(/They said/)).not.toBeInTheDocument()
+  })
+
   it('renders one row per call with its verb and target', () => {
     const items: ToolItem[] = [
       tool({ id: 'a', name: 'run_shell', status: 'done', args: { command: 'npm test' } }),

@@ -189,6 +189,16 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'List the background sessions the agent started, and open one',
     clients: ['tui']
   },
+  {
+    name: 'proposals',
+    description: 'List the sessions the agent proposed, and start, ask here, or dismiss one',
+    clients: ['tui']
+  },
+  {
+    name: 'btw',
+    description: 'Ask a quick side question; the answer stays out of this chat',
+    clients: ['tui']
+  },
   { name: 'fork', description: 'Branch the current session into a copy', clients: ['tui'] },
   { name: 'cost', description: 'Session token and cost totals', clients: ['tui'] },
   {

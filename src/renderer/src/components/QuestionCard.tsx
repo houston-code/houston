@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { QUESTION_STOPPED_ANSWER, isUnansweredQuestion } from '@shared/promptOutcome'
 import type { QuestionItem } from '../lib/items'
 import { Markdown } from './Markdown'
 
@@ -36,14 +37,28 @@ export function QuestionCard({
   }
 
   if (answered) {
+    // The loop answers the model with a bracketed note when nothing was chosen (the
+    // run was stopped, or the reply was empty). That note is for the model; under an
+    // "Answered" label it read as if the user had said it.
+    const unanswered = isUnansweredQuestion(item.answer)
     return (
       <div className="question question--answered">
         <div className="question__text">
           <Markdown text={item.question} />
         </div>
         <div className="question__answer">
-          <span className="question__answer-label">Answered</span>
-          <span className="question__answer-text">{item.answer}</span>
+          <span
+            className={`question__answer-label${unanswered ? ' question__answer-label--none' : ''}`}
+          >
+            {unanswered ? 'Not answered' : 'Answered'}
+          </span>
+          <span className="question__answer-text">
+            {!unanswered
+              ? item.answer
+              : item.answer === QUESTION_STOPPED_ANSWER
+                ? 'The run was stopped before you answered.'
+                : 'No answer was given.'}
+          </span>
         </div>
       </div>
     )

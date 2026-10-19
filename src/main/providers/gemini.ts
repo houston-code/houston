@@ -41,6 +41,9 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
   // turn, so an image turn between two parallel results is a 400 (the response
   // parts no longer match the call parts).
   let toolImages: Part[] = []
+  // Whether the last emitted turn came from a plain user message (not tool results
+  // or a tool's images), so a second plain user message can fold onto it.
+  let lastPlainUser = false
   const flushToolImages = (): void => {
     if (!toolImages.length) return
     out.push({ role: 'user', parts: toolImages })
@@ -51,6 +54,7 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
   }
   for (const m of messages) {
     if (m.role !== 'tool') flushToolImages()
+    if (m.role !== 'user') lastPlainUser = false
     if (m.role === 'user') {
       const parts: Content['parts'] = []
       if (m.content) parts!.push({ text: m.content })
@@ -71,11 +75,22 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
           out.push({ role: 'user', parts: mediaParts })
           mergingToolResults = false
         }
+        lastPlainUser = false
         continue
       }
       mergingToolResults = false
+      // Two plain user messages in a row (an automated note queued just ahead of the
+      // user's message, or a forked history ending on a user turn before the hand-off
+      // prompt) fold together, for the same alternation rule. Only onto a turn that
+      // was itself a plain user message: never onto function responses (which can't
+      // share a turn with inline media) or a tool's image turn (kept on its own).
+      if (lastPlainUser && last?.parts) {
+        last.parts.push(...parts!)
+        continue
+      }
       if (!parts!.length) parts!.push({ text: '' }) // Gemini rejects an empty parts array
       out.push({ role: 'user', parts })
+      lastPlainUser = true
     } else if (m.role === 'assistant') {
       mergingToolResults = false
       const parts: Content['parts'] = []

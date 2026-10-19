@@ -21,6 +21,7 @@ import { recordOriginal, recordResult, writeTargets } from './checkpoints'
 import type { ShellSession } from './shell-session'
 import { isSandboxed } from '../sandbox'
 import { isSensitiveRead } from './sensitive-paths'
+import { isSensitiveWrite } from './permissions'
 
 /**
  * A nested subagent: the main agent delegates a scoped task to a fresh loop with
@@ -606,6 +607,11 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               `Reading ${String(call.arguments.path)} needs the user's approval because it looks like a ` +
               'credential or secret file, and this subagent cannot ask for it. Do not retry; note in ' +
               'your report that the main agent can read it with approval if it is needed.'
+          } else if (isSensitiveWrite(tool.kind, call.name, call.arguments)) {
+            output =
+              "This call changes a credential or secret file (such as .env), which needs the user's " +
+              'approval, and this subagent cannot ask for it. Do not retry; note in your report what ' +
+              'should change so the main agent can make the change with approval.'
           } else {
             output = await runLocal()
           }

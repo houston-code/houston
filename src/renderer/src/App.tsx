@@ -10,10 +10,24 @@ import {
 } from 'react'
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
-import type { ConversationMeta, PlanDecision, ReasoningEffort, RepoInfo } from '@shared/agent'
+import type {
+  ConversationMeta,
+  PlanDecision,
+  ProposalState,
+  ReasoningEffort,
+  RepoInfo
+} from '@shared/agent'
 import { mergeCommands, builtinCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
-import { agentTurn, shipTurn, type InvokedTurn, type PromptInvocation } from '@shared/promptInvocation'
+import {
+  agentTurn,
+  proposalHereTurn,
+  shipTurn,
+  sideChatExchangeText,
+  sideChatTurn,
+  type InvokedTurn,
+  type PromptInvocation
+} from '@shared/promptInvocation'
 import { resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { pickDefaultModel } from '@shared/models'
 import {
@@ -66,6 +80,8 @@ import { Titlebar } from './components/Titlebar'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { PlanPanel } from './components/PlanPanel'
+import { SideChatPanel } from './components/SideChatPanel'
+import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
@@ -152,6 +168,9 @@ export default function App(): JSX.Element {
   const [doctorOpen, setDoctorOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  const [sideChatOpen, setSideChatOpen] = useState(false)
+  // The open chat's decisions on its propose_session cards (keyed by call id).
+  const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
   const [scorecardOpen, setScorecardOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -523,19 +542,26 @@ export default function App(): JSX.Element {
       if (!conv) return
       setCurrentId(id)
       setLastWorkspace(conv.workspace)
+      setProposalStates(conv.proposals ?? {})
       // Restore a persisted failure: re-show the error notice in the transcript and
       // flag `errored` so the "last turn failed / Retry" banner returns after reload.
-      const items = itemsFromMessages(conv.messages)
-      // A spawned chat opens with a "handoff from …" banner above its seeded first
-      // message, so it reads as handed off rather than typed by the user.
-      if (conv.spawnedFrom) {
-        items.unshift({
-          kind: 'notice',
-          id: `handoff-${id}`,
-          text: `Handoff from “${conv.spawnedFrom.title}”`,
-          tone: 'handoff'
-        })
-      }
+      // A spawned chat shows a "handoff from …" banner above its seeded hand-off
+      // message, so it reads as handed off rather than typed by the user. A forked
+      // child's log starts with the parent's copied history, so the banner goes
+      // after that, right above the hand-off itself.
+      const forked = conv.spawnedFrom?.historyLength ?? 0
+      const items = conv.spawnedFrom
+        ? [
+            ...itemsFromMessages(conv.messages.slice(0, forked)),
+            {
+              kind: 'notice' as const,
+              id: `handoff-${id}`,
+              text: `Handoff from “${conv.spawnedFrom.title}”`,
+              tone: 'handoff' as const
+            },
+            ...itemsFromMessages(conv.messages.slice(forked))
+          ]
+        : itemsFromMessages(conv.messages)
       if (conv.lastError) {
         items.push({ kind: 'notice', id: `lasterror-${id}`, text: conv.lastError.message, tone: 'error' })
       }
@@ -568,6 +594,7 @@ export default function App(): JSX.Element {
     (ws: string) => {
       setLastWorkspace(ws)
       setCurrentId(null)
+      setProposalStates({})
       chat.reset([])
     },
     [chat]
@@ -990,6 +1017,8 @@ export default function App(): JSX.Element {
   const pendingPlan = chat.pendingPlan
   // The panel shows whenever a plan is pending unless the user has dismissed it.
   const planPanelOpen = pendingPlan !== null && !planClosed
+  // The side chat shares the plan panel's column; a plan awaiting review takes it.
+  const sideChatVisible = sideChatOpen && currentId !== null && !planPanelOpen
 
   // A newly presented plan (or a revision) re-opens the panel even if the previous
   // one was dismissed. Keyed on the callId so re-opening is per-plan.
@@ -1143,6 +1172,48 @@ export default function App(): JSX.Element {
   // standing prompt (Create PR / Publish to GitHub / Commit & push, see
   // @shared/shipAction) as a normal turn, so the git and gh work runs through the
   // agent's tools and approval gate rather than the renderer touching git.
+  // propose_session cards: start one as its own chat, ask for it here, or dismiss it.
+  // Each decision is persisted on the chat (main returns the updated map).
+  const proposalHandlers = useMemo<ProposalHandlers | undefined>(() => {
+    if (!currentId || !settings) return undefined
+    const convId = currentId
+    return {
+      states: proposalStates,
+      start: async (callId) => {
+        const res = await window.api.startProposal(convId, callId, settings.approvalPolicy)
+        setProposalStates(res.proposals)
+        await refreshConversations()
+      },
+      here: async (callId, title, prompt) => {
+        // onSend quietly does nothing without a model or project, so check first:
+        // recording "asked here" for a message that never went out would strand the
+        // card with no way to start it.
+        if (!settings.selected || !workspace) throw new Error('Pick a model first.')
+        setProposalStates(await window.api.decideProposal(convId, callId, 'here'))
+        onInvoke(proposalHereTurn({ title, prompt }))
+      },
+      dismiss: async (callId) => {
+        setProposalStates(await window.api.decideProposal(convId, callId, 'dismissed'))
+      },
+      open: (id) => void selectConversation(id)
+    }
+  }, [currentId, settings, workspace, proposalStates, refreshConversations, onInvoke, selectConversation])
+
+  // Side chat: "Continue in new chat" forks this chat and leaves the exchange as the
+  // fork's composer draft, so the user decides what to send.
+  const onSideChatContinue = useCallback(
+    async (text: string) => {
+      if (!currentId) return
+      const fork = await window.api.forkConversation(currentId)
+      if (!fork) return
+      saveComposerDraft(fork.id, text)
+      setSideChatOpen(false)
+      await refreshConversations()
+      await selectConversation(fork.id)
+    },
+    [currentId, refreshConversations, selectConversation]
+  )
+
   const onShip = useCallback(
     (action: ShipAction) => {
       setChangesOpen(false)
@@ -1375,6 +1446,13 @@ export default function App(): JSX.Element {
     }
     if (currentId) {
       items.push({
+        id: 'act-side-chat',
+        title: sideChatOpen ? 'Close side chat' : 'Open side chat',
+        section: 'Actions',
+        keywords: 'aside btw question ask sidebar',
+        run: () => setSideChatOpen((o) => !o)
+      })
+      items.push({
         id: 'act-compact',
         title: 'Compact conversation',
         section: 'Actions',
@@ -1425,6 +1503,7 @@ export default function App(): JSX.Element {
     currentId,
     sidebarCollapsed,
     previewOpen,
+    sideChatOpen,
     settings?.approvalPolicy,
     settings?.providers,
     settings?.selected,
@@ -1621,7 +1700,7 @@ export default function App(): JSX.Element {
           '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`,
           '--terminal-h': `${terminalHeight}px`,
           '--preview-w': `${previewOpen ? previewWidth : 0}px`,
-          '--plan-w': `${planPanelOpen ? planWidth : 0}px`
+          '--plan-w': `${planPanelOpen || sideChatVisible ? planWidth : 0}px`
         } as CSSProperties
       }
     >
@@ -1688,6 +1767,8 @@ export default function App(): JSX.Element {
           previewCount={previewableCount}
           onToggleTerminal={toggleTerminal}
           terminalOpen={terminalOpen}
+          onToggleSideChat={currentId ? () => setSideChatOpen((o) => !o) : undefined}
+          sideChatOpen={sideChatVisible}
         />
 
         <UpdateBanner
@@ -1752,6 +1833,7 @@ export default function App(): JSX.Element {
             onElicit={chat.answerElicitation}
             onOpenPlan={onOpenPlan}
             onRunInTerminal={(command) => void runInTerminal(command)}
+            proposals={proposalHandlers}
           />
         )}
 
@@ -1915,6 +1997,20 @@ export default function App(): JSX.Element {
             onClose={togglePreview}
           />
         </Suspense>
+      )}
+
+      {sideChatVisible && currentId && (
+        <SideChatPanel
+          // Remount per chat: a side chat belongs to the chat it was opened on.
+          key={currentId}
+          conversationId={currentId}
+          providerId={settings.selected?.providerId}
+          model={settings.selected?.model}
+          onClose={() => setSideChatOpen(false)}
+          onSendToMain={(question, answer) => onInvoke(sideChatTurn(question, answer))}
+          onContinueInNewChat={(question, answer) => void onSideChatContinue(sideChatExchangeText(question, answer))}
+          onResizeMouseDown={onPlanResizeMouseDown}
+        />
       )}
 
       {planPanelOpen && pendingPlan && (

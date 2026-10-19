@@ -182,3 +182,27 @@ describe('foldReadRuns', () => {
     expect(runs.map((r) => r.kind)).toEqual(['single', 'single', 'single'])
   })
 })
+
+describe('groupItems: proposal cards', () => {
+  const proposal = (over: Partial<ToolItem> = {}): ToolItem => ({
+    kind: 'tool',
+    id: 'p1',
+    name: 'propose_session',
+    args: { title: 'Docs', prompt: 'p' },
+    status: 'done',
+    output: 'Proposed "Docs" to the user as a card.',
+    ...over
+  })
+
+  it('lifts an accepted proposal out of the tool group into its own card', () => {
+    const nodes = groupItems([tool('read_file', { path: 'a' }, 't1'), proposal(), tool('read_file', { path: 'b' }, 't2')])
+    expect(nodes.map((n) => n.kind)).toEqual(['toolgroup', 'proposal', 'toolgroup'])
+  })
+
+  it('keeps a running or refused proposal as an ordinary tool row', () => {
+    expect(groupItems([proposal({ status: 'running', output: undefined })]).map((n) => n.kind)).toEqual(['toolgroup'])
+    expect(
+      groupItems([proposal({ status: 'error', output: 'Error: already proposed' })]).map((n) => n.kind)
+    ).toEqual(['toolgroup'])
+  })
+})

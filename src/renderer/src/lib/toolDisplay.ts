@@ -14,6 +14,7 @@ import type {
   ToolItem,
   UserItem
 } from './items'
+import { PROPOSE_SESSION_TOOL } from '@shared/constants'
 
 export interface ToolDescription {
   /** Short action label, e.g. "Read", "Run", "Search". */
@@ -136,9 +137,20 @@ export type RenderNode =
   | { kind: 'plan'; id: string; item: PlanItem }
   | { kind: 'elicitation'; id: string; item: ElicitationItem }
   | { kind: 'toolgroup'; id: string; items: ToolItem[] }
+  /** A propose_session call that became a card (its own node, not a tool row). */
+  | { kind: 'proposal'; id: string; item: ToolItem }
 
 /** Tool names that are pure navigation noise and never get their own row. */
 const HIDDEN_TOOLS = new Set(['list_dir'])
+
+/** Whether a tool row is a `propose_session` call that became a card. */
+export function isProposalCard(item: ToolItem): boolean {
+  return (
+    item.name === PROPOSE_SESSION_TOOL &&
+    item.status === 'done' &&
+    (item.output ?? '').startsWith('Proposed "')
+  )
+}
 
 /**
  * Fold consecutive tool items into a single tool group, leaving text and notices
@@ -163,6 +175,13 @@ export function groupItems(items: DisplayItem[]): RenderNode[] {
       // user's approval (a permission rule can force a prompt on any tool). Hiding
       // it then would leave the run wedged on a prompt that renders nothing.
       if (HIDDEN_TOOLS.has(item.name) && item.status !== 'awaiting-approval') continue
+      // A proposal that went through renders as a card the user acts on. One that is
+      // still running or was refused stays an ordinary tool row.
+      if (isProposalCard(item)) {
+        flush()
+        nodes.push({ kind: 'proposal', id: item.id, item })
+        continue
+      }
       if (!group) group = []
       group.push(item)
       continue

@@ -129,6 +129,20 @@ export function toAnthropicMessages(
       }
       foldIntoPreviousUser = false
       mergingToolResults = false
+      // Two plain user turns in a row are a 400 as well. They happen when Houston
+      // queues an automated note just ahead of the user's message (a finished
+      // background session's report), or a forked history ends on a user turn and
+      // the hand-off prompt follows it. Fold this one onto the previous turn.
+      if (last && last.role === 'user') {
+        const prev: unknown[] =
+          typeof last.content === 'string'
+            ? last.content
+              ? [{ type: 'text', text: last.content }]
+              : []
+            : (last.content as unknown[])
+        last.content = [...prev, ...blocks] as Anthropic.MessageParam['content']
+        continue
+      }
       // No images ⇒ keep the compact string form the model (and cache) expects.
       if (m.images?.length) {
         out.push({ role: 'user', content: blocks as Anthropic.MessageParam['content'] })

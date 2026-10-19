@@ -15,6 +15,10 @@ export const ASK_USER_TOOL = 'ask_user'
  * so the main process, the loop, and the renderer agree on the one string. */
 export const PRESENT_PLAN_TOOL = 'present_plan'
 
+/** Name of the tool that proposes a parallel session as a card the user starts. Shared
+ * so the main process, the loop, and the renderer agree on the one string. */
+export const PROPOSE_SESSION_TOOL = 'propose_session'
+
 /** IPC channel names. Keep in one place so main + preload + renderer agree. */
 export const IPC = {
   // App / system
@@ -139,6 +143,17 @@ export const IPC = {
   /** Main → renderer: the set of conversations with a live run changed (started/ended). */
   agentRunsChanged: 'agent:runsChanged',
   agentEvent: 'agent:event',
+  // Session proposals (propose_session cards)
+  /** Renderer → main: start a proposed session as its own chat. */
+  proposalStart: 'proposal:start',
+  /** Renderer → main: record "do it here" or "dismiss" on a proposal card. */
+  proposalSetState: 'proposal:setState',
+  // Side chat (a read-only aside about the open conversation)
+  sideChatAsk: 'sideChat:ask',
+  sideChatCancel: 'sideChat:cancel',
+  sideChatClose: 'sideChat:close',
+  /** Main → renderer: a progress line from a side-chat answer in flight. */
+  sideChatProgress: 'sideChat:progress',
   /** Query the background shells (run_shell background mode) for the tasks indicator. */
   shellList: 'shell:list',
   /** Main → renderer: the background-shell registry changed (one started or exited). */

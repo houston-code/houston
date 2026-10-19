@@ -2,6 +2,8 @@ import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
 import type { PermissionRule } from '@shared/types'
 import { parsePatch } from './apply-patch'
+import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
+import type { ToolKind } from './tools'
 
 /**
  * User-defined permission rules, consulted before the coarse approval policy.
@@ -267,6 +269,98 @@ export function shellReferencesExternalPath(command: string, roots: string[]): b
     if (eq >= 0 && segmentEscapesWorkspace(token.slice(eq + 1), roots)) return true
   }
   return false
+}
+
+/** Commands that create, overwrite, or remove the files named in their arguments. */
+const FILE_WRITING_COMMANDS = new Set([
+  'tee',
+  'cp',
+  'mv',
+  'install',
+  'ln',
+  'rsync',
+  'truncate',
+  'rm',
+  'unlink',
+  'shred',
+  'dd'
+])
+
+/** Editors that rewrite a file in place when given `-i` (`sed -i`, `perl -pi`, `ruby -i`). */
+const IN_PLACE_EDITORS = new Set(['sed', 'gsed', 'perl', 'ruby'])
+
+/** Words that run the next word as the command (`sudo cp …`, `env FOO=1 tee …`). */
+const COMMAND_PREFIXES = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice'])
+
+/**
+ * Whether a `run_shell` command writes to, or removes, a credential / secret file
+ * (see isSensitivePath): an output redirection into one (`> .env`, `>>.env`,
+ * `&> .env`), a file-writing command naming one (`cp .env.example .env`, `tee .env`,
+ * `rm .env`, `dd of=.env`), or an in-place edit of one (`sed -i … .env`). Reading
+ * (`cat .env`, `source .env`) doesn't count. Like {@link shellReferencesExternalPath}
+ * it is a static tripwire: a path built from variables or substitutions isn't seen.
+ */
+export function shellWritesSensitivePath(command: string): boolean {
+  for (const segment of splitShellCommand(command)) {
+    const tokens = tokenizeShellCommand(segment)
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i]!
+      // Output redirection, spaced (`> .env`) or glued (`>.env`, `2>>.env`). `>&2` is a
+      // descriptor duplication, not a file.
+      if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
+        const target = tokens[i + 1]
+        if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
+        continue
+      }
+      const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
+      if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
+    }
+    // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
+    let c = 0
+    while (
+      c < tokens.length &&
+      (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[c]!) || COMMAND_PREFIXES.has(tokens[c]!))
+    ) {
+      c++
+    }
+    const word = tokens[c]
+    if (word === undefined) continue
+    const cmd = word.slice(word.lastIndexOf('/') + 1)
+    const args = tokens.slice(c + 1)
+    const namesSensitive = (): boolean =>
+      args.some((a) => {
+        if (a.startsWith('-')) return false
+        // `dd of=.env`, `--target=.env`: the path may follow an `=`.
+        const eq = a.indexOf('=')
+        return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
+      })
+    if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
+    if (
+      IN_PLACE_EDITORS.has(cmd) &&
+      args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')) &&
+      namesSensitive()
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Whether a tool call creates, overwrites, or removes a credential / secret file: a
+ * write tool targeting one (see writesSensitivePath) or a `run_shell` command that
+ * writes one (see {@link shellWritesSensitivePath}). The one definition shared by the
+ * main loop's approval gate and the subagent gate, so neither can judge benign a
+ * call the other would have prompted for.
+ */
+export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<string, unknown>): boolean {
+  if (kind === 'write') return writesSensitivePath(toolName, args)
+  return (
+    kind === 'shell' &&
+    toolName === 'run_shell' &&
+    typeof args.command === 'string' &&
+    shellWritesSensitivePath(args.command)
+  )
 }
 
 /**

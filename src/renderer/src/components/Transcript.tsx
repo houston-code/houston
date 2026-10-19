@@ -12,6 +12,7 @@ import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
 import { ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
+import { ProposalCard, type ProposalHandlers } from './ProposalCard'
 import { ElicitationCard } from './ElicitationCard'
 import { Markdown } from './Markdown'
 import { Icon, type IconName } from './Icon'
@@ -254,7 +255,8 @@ export function Transcript({
   onAnswer,
   onElicit,
   onOpenPlan,
-  onRunInTerminal
+  onRunInTerminal,
+  proposals
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -265,6 +267,8 @@ export function Transcript({
   onOpenPlan?: (callId: string) => void
   /** Run a command in a new integrated-terminal tab (a missing runtime's install). */
   onRunInTerminal?: (command: string) => void
+  /** Drives the propose_session cards; without it they show read-only. */
+  proposals?: ProposalHandlers
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -346,6 +350,8 @@ export function Transcript({
                 return <ToolGroup key={node.id} items={node.items} onApprove={onApprove} />
               case 'question':
                 return <QuestionCard key={node.id} item={node.item} onAnswer={onAnswer} />
+              case 'proposal':
+                return <ProposalCard key={node.id} item={node.item} handlers={proposals} />
               case 'elicitation':
                 return <ElicitationCard key={node.id} item={node.item} onResolve={onElicit} />
               case 'plan':

@@ -7,6 +7,7 @@ import { catalogForPlatform } from '@shared/provider-catalog'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
+import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import {
   parseTuiArgs,
   makePainter,
@@ -57,6 +58,8 @@ import {
   renderBackgroundSessions,
   parseSessionSelection,
   type BackgroundSession,
+  renderProposals,
+  type TuiProposal,
   formatSessionCost,
   parseResumeSelection,
   formatRelativeTime,
@@ -647,6 +650,26 @@ describe('renderToolResult', () => {
   })
   it('is empty for successful no-output results', () => {
     expect(renderToolResult('x', true, '   \n  ', paint)).toBe('')
+  })
+
+  // Stopping the run answers open prompts for the model ("Denied by the user. They
+  // said: The user interrupted…"); printing that read as if the user had said it.
+  it('says a prompt was stopped rather than echoing the model-facing denial', () => {
+    const denied = `Denied by the user. They said: ${APPROVAL_INTERRUPTED_NOTE}`
+    const out = renderToolResult('run_shell', false, denied, paint)
+    expect(out).toContain('Not run: the run was stopped before it was approved.')
+    expect(out).not.toContain('failed')
+    expect(out).not.toContain('They said')
+    expect(renderToolResult('ask_user', true, QUESTION_STOPPED_ANSWER, paint)).toContain(
+      'Not answered: the run was stopped.'
+    )
+  })
+
+  it('prints a plan review as its decision, not the instructions sent to the model', () => {
+    const rejected = 'The user REJECTED this plan. Do not make any changes. Briefly acknowledge and wait.'
+    expect(renderToolResult('present_plan', true, rejected, paint)).toBe('  ↳ Plan rejected')
+    const accepted = 'The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now.'
+    expect(renderToolResult('present_plan', true, accepted, paint)).toBe('  ↳ Plan accepted')
   })
 
   // A failure used to render as "✗ run_shell failed" and throw the error away —
@@ -4471,5 +4494,120 @@ describe('steering a running turn', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('steering: use YAML instead')
+  })
+})
+
+describe('/proposals and /btw', () => {
+  const paintNo = makePainter(false)
+  const list: TuiProposal[] = [
+    { callId: 'p1', title: 'Update API docs', prompt: 'Document /auth/*' },
+    { callId: 'p2', title: 'Fix flaky e2e', prompt: 'Stabilize login.spec', status: 'started' }
+  ]
+
+  it('parses the commands and their aliases', () => {
+    const s = settings({})
+    expect(parseSlashCommand('/proposals', s)).toEqual({ kind: 'proposals', op: 'list' })
+    expect(parseSlashCommand('/proposals start 2', s)).toEqual({ kind: 'proposals', op: 'start', index: 2 })
+    expect(parseSlashCommand('/proposed here 1', s)).toEqual({ kind: 'proposals', op: 'here', index: 1 })
+    expect(parseSlashCommand('/proposals dismiss x', s)).toEqual({ kind: 'proposals', op: 'list' })
+    expect(parseSlashCommand('/btw why PKCE?', s)).toEqual({ kind: 'btw', question: 'why PKCE?' })
+    expect(parseSlashCommand('/aside', s)).toEqual({ kind: 'btw', question: '' })
+  })
+
+  it('lists proposals numbered, with their state', () => {
+    const out = renderProposals(list, paintNo)
+    expect(out).toContain('1. Update API docs  open')
+    expect(out).toContain('2. Fix flaky e2e  started')
+    expect(renderProposals([], paintNo)).toContain('No sessions proposed')
+  })
+
+  /** Deps with a saved chat (created by the first turn) and recording proposal/side-chat fakes. */
+  function wired(inputs: Array<string | null>) {
+    const { d, rec } = deps([])
+    const t = fakeIo(inputs)
+    d.io = t.io
+    d.persist = fakePersist().persist
+    const calls = { started: [] as Array<[string, string, string]>, decided: [] as Array<[string, string, string]>, asked: [] as string[] }
+    d.proposals = {
+      list: () => list,
+      start: async (conv, callId, policy) => {
+        calls.started.push([conv, callId, policy])
+        return { conversationId: 'child', title: 'Update API docs' }
+      },
+      decide: (conv, callId, status) => void calls.decided.push([conv, callId, status])
+    }
+    d.sideChat = async (input) => {
+      calls.asked.push(`${input.sideId}|${input.conversationId}|${input.question}`)
+      return 'Because the client is public.'
+    }
+    return { d, rec, t, calls }
+  }
+
+  it("starts a proposal under the session's current policy", async () => {
+    const { d, t, calls } = wired(['hello', '/proposals start 1', null])
+    await runTui(opts, d)
+    expect(calls.started).toEqual([['conv-1', 'p1', 'ask']])
+    expect(t.text()).toContain('started "Update API docs" in the background')
+  })
+
+  it('"here" records the decision and runs the brief as a turn in this chat', async () => {
+    const { d, rec, calls } = wired(['hello', '/proposals here 1', null])
+    await runTui(opts, d)
+    expect(calls.decided).toEqual([['conv-1', 'p1', 'here']])
+    const last = rec.runs[1].messages.at(-1)!
+    expect(last.content).toContain('"Update API docs"')
+    expect(last.content).toContain('Document /auth/*')
+  })
+
+  it('refuses to restart a started proposal and to act on a missing one', async () => {
+    const { d, t, calls } = wired(['hello', '/proposals start 2', '/proposals dismiss 9', null])
+    await runTui(opts, d)
+    expect(calls.started).toEqual([])
+    expect(t.text()).toContain('already started')
+    expect(t.text()).toContain('no proposal 9')
+  })
+
+  it('answers a side question without adding it to the chat', async () => {
+    const { d, rec, t, calls } = wired(['hello', '/btw why PKCE?', 'next', null])
+    await runTui(opts, d)
+    expect(calls.asked).toEqual(['tui-conv-1|conv-1|why PKCE?'])
+    expect(t.text()).toContain('Because the client is public.')
+    // A spinner shows while it works, and is stopped after.
+    const i = t.spinner.indexOf('start:Side chat')
+    expect(i).toBeGreaterThan(-1)
+    expect(t.spinner.slice(i)).toContain('stop')
+    // The next real turn's history has no trace of the aside.
+    expect(rec.runs[1].messages.map((m) => m.content)).toEqual(['hello', 'next'])
+  })
+
+  it('needs a saved chat and a question first', async () => {
+    const { d, t, calls } = wired(['/btw early?', '/btw', null])
+    await runTui(opts, d)
+    expect(calls.asked).toEqual([])
+    expect(t.text()).toContain('send a message first')
+    expect(t.text()).toContain('usage: /btw <question>')
+  })
+
+  it('says so when the host has neither', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/btw hi', '/proposals', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('side chat is unavailable here')
+    expect(t.text()).toContain('proposals are unavailable here')
+  })
+})
+
+describe('propose_session in the terminal', () => {
+  it('prints a proposal as a line pointing at /proposals', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'p1', name: 'propose_session', args: { title: 'Update API docs', prompt: 'p' } },
+      { runId: 'x', type: 'tool_result', callId: 'p1', name: 'propose_session', ok: true, output: 'Proposed "Update API docs" to the user as a card.' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ] as AgentEvent[])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('proposed a session: Update API docs. /proposals to start it')
   })
 })

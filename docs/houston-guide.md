@@ -144,7 +144,7 @@ on the client, but the common built-ins are:
 
 The interactive terminal adds terminal-specific commands such as `/model` (list
 or switch model), `/login` (set an API key, also `/providers`), `/approval`,
-`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/fork`,
+`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/proposals`, `/btw`, `/fork`,
 `/cost`, `/mcp`, `/trust`, `/hooks`, `/theme`, `/image`, `/cwd`, `/share`, and `/exit`.
 
 **Themes.** `/theme` lists the terminal's palettes and `/theme <name>` switches:
@@ -422,7 +422,10 @@ Approval is layered. From most to least restrictive:
   and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
   and the like) prompts even here, since reads otherwise never do. "Allow for run" on
   that prompt stops it asking about credential reads for the rest of the conversation,
-  and an `allow` permission rule opts a path in permanently.
+  and an `allow` permission rule opts a path in permanently. **Changing a credential
+  file** prompts too: a file edit that writes one, or a shell command that redirects
+  into, copies over, edits in place, or removes one (`> .env`, `cp .env.example .env`,
+  `sed -i … .env`, `rm .env`). Templates such as `.env.example` don't count.
 
 **Reading the diff.** A file edit shows a real diff before you approve it: the
 changed part with a few lines of context (long untouched stretches are folded away
@@ -565,6 +568,37 @@ non-interactively (anything needing an approval is declined automatically) and
 persist as ordinary conversations you can open later with `/resume` or
 `--resume <id>`; a one-shot headless run waits for its spawned sessions before
 exiting.
+
+A spawned session starts fresh with its prompt, or, with context "fork", with a
+copy of the spawning chat so far. When it finishes, the chat that started it gets
+a short report (title, whether it worked, the start of its answer) as a Houston
+note at the start of its next turn, and you see a notice in the transcript.
+
+## Proposed sessions
+
+When the agent spots parallel work you didn't ask for (a fix noticed in passing,
+the natural follow-up), it proposes it with `propose_session` instead of starting
+it. The desktop app shows a card: **Start session** runs it as its own chat (on
+its own git worktree when the project is a repository, under your current approval
+policy), **Do it here** asks for it in this chat instead (queued if a turn is
+running), and **Dismiss** declines it. Nothing runs until you choose. A turn can
+propose at most three sessions, and never the same title twice in one chat.
+
+In the terminal, `/proposals` lists the chat's proposals; `/proposals start <n>`,
+`/proposals here <n>`, and `/proposals dismiss <n>` act on one.
+
+## Side chat (/btw)
+
+The side chat answers a quick question about the open chat without adding
+anything to it. Open it from the titlebar (or the command palette); it sees the
+chat so far and can read the project, but it cannot edit files, run commands, or
+reach the network, and it works while the main chat's turn is still running.
+**Send to main** puts an exchange into the main chat as a message (queued if a
+turn is running), and **Continue in new chat** forks the chat with the exchange as
+a draft. Its tokens count toward the chat's cost.
+
+In the terminal, `/btw <question>` asks one; follow-ups in the same chat keep
+the side chat's context.
 
 ## Watching work you sent off (/spawned)
 
@@ -796,6 +830,16 @@ is reachable only from that same command: not from the Preview panel,
 `view_localhost`, or later commands. Granting shell network with "All domains"
 restores the shared network there. The agent is told this on Linux and checks web
 apps with requests from the command that starts the server.
+
+**Secret redaction.** Tool results, the transcript, and logs are scrubbed before
+the model or the UI sees them: well-known token formats and this install's stored
+secrets become `[redacted:…]`. A `NAME=value` line whose name marks it as a secret
+(`SESSION_SECRET`, `ADMIN_PASSWORD`, `GITHUB_TOKEN`, `STRIPE_API_KEY`, and the like),
+as `cat .env`, `env`, or `grep` prints it, keeps its name but shows the value as
+`[redacted:env-secret]`. The agent therefore refers to such a value by variable and
+file rather than repeating it, and a file write that would put a `[redacted:…]`
+placeholder where a value goes is refused, so writing back a file it read cannot
+replace the real secret with the placeholder.
 
 **Credential masking on egress.** Houston's own network tools refuse to *send* a
 credential: before a `web_fetch` or `web_search` leaves the machine, its URL or

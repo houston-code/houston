@@ -134,3 +134,33 @@ export function spawnedTurn(prompt: string): InvokedTurn {
     invokedAs: { kind: 'spawned', label: 'Handed-off task', ...(detail ? { detail } : {}) }
   }
 }
+
+/**
+ * "Do it here" on a propose_session card: the proposal's own brief, asked for in
+ * this chat instead of a separate session. The chip names the proposal.
+ */
+export function proposalHereTurn(args: { title: string; prompt: string }): InvokedTurn {
+  return {
+    text: `Go ahead with the session you proposed, "${args.title}", here in this chat instead of a separate session:\n\n${args.prompt}`,
+    invokedAs: { kind: 'action', label: 'Do it here', detail: clip(args.title, MAX_DETAIL) ?? args.title }
+  }
+}
+
+/**
+ * "Send to main" from the side chat: one question and its answer, handed to the
+ * main chat as context. The chip carries the question.
+ */
+export function sideChatTurn(question: string, answer: string): InvokedTurn {
+  return {
+    text: sideChatExchangeText(question, answer),
+    invokedAs: { kind: 'action', label: 'From side chat', ...(clip(question, MAX_DETAIL) ? { detail: clip(question, MAX_DETAIL) } : {}) }
+  }
+}
+
+/**
+ * One side-chat exchange as plain text: the body of {@link sideChatTurn}, and the
+ * draft "Continue in new chat" leaves for the user to edit and send themselves.
+ */
+export function sideChatExchangeText(question: string, answer: string): string {
+  return `From a side chat:\n\nQuestion: ${question}\n\nAnswer: ${answer}`
+}

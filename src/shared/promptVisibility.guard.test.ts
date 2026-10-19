@@ -88,8 +88,8 @@ describe('prompt visibility guard', () => {
   // Every renderer call that starts or queues a turn.
   const RENDERER_SEND_SITES: Record<string, { count: number; why: string }> = {
     'renderer/src/App.tsx': {
-      count: 8,
-      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent invocations, and the steer fallback (user text)'
+      count: 10,
+      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" invocations, and the steer fallback (user text)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
     'renderer/src/hooks/useChat.ts': { count: 1, why: 'startAgent, forwarding invokedAs' },
@@ -110,9 +110,13 @@ describe('prompt visibility guard', () => {
       'shared/promptInvocation.ts': 2,
       'main/tui.ts': 2
     })
-    // A ship action's prompt is read only by shipTurn; the renderer's one other
-    // `.prompt` is the spawn_session tool's argument in a tool row.
-    expect(occurrences(['renderer/src'], /\.prompt\b/)).toEqual({ 'renderer/src/lib/toolDisplay.ts': 1 })
+    // A ship action's prompt is read only by shipTurn; the renderer's other
+    // `.prompt`s are tool arguments shown to the user: spawn_session's in a tool
+    // row, and propose_session's brief on its card (sent only via proposalHereTurn).
+    expect(occurrences(['renderer/src'], /\.prompt\b/)).toEqual({
+      'renderer/src/lib/toolDisplay.ts': 1,
+      'renderer/src/components/ProposalCard.tsx': 1
+    })
     expect(occurrences(['shared'], /\baction\.prompt\b/)).toEqual({ 'shared/promptInvocation.ts': 1 })
   })
 })

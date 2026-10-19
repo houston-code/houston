@@ -11,6 +11,7 @@ import {
   permissionSubject,
   shellReferencesExternalPath,
   shellRulePatterns,
+  shellWritesSensitivePath,
   splitShellCommand
 } from './permissions'
 import type { PermissionRule } from '@shared/types'
@@ -119,6 +120,43 @@ describe('networkDestination', () => {
     expect(networkDestination('web_fetch', { url: 'not a url' })).toBe('web_fetch')
     expect(networkDestination('web_fetch', {})).toBe('web_fetch')
     expect(networkDestination('some_future_net_tool', {})).toBe('some_future_net_tool')
+  })
+})
+
+describe('shellWritesSensitivePath', () => {
+  const w = shellWritesSensitivePath
+
+  it('catches redirections into a secret file, spaced or glued', () => {
+    expect(w('echo "ADMIN_PASSWORD=testpass" > .env')).toBe(true)
+    expect(w('echo X >> .env.local')).toBe(true)
+    expect(w('printf x >.env')).toBe(true)
+    expect(w('cmd 2>>apps/web/.env')).toBe(true)
+    expect(w('cmd &> ".env"')).toBe(true)
+    expect(w('cp -n .env.example .env; echo "ADMIN_PASSWORD=testpass" > .env; npx next build')).toBe(true)
+  })
+
+  it('catches file-writing commands and in-place edits naming one', () => {
+    expect(w('cp -n .env.example .env')).toBe(true)
+    expect(w('mv tmp .env')).toBe(true)
+    expect(w('echo X | tee -a .env')).toBe(true)
+    expect(w('rm -f .env')).toBe(true)
+    expect(w('sudo cp a .env.production')).toBe(true)
+    expect(w('dd if=/dev/zero of=.env count=1')).toBe(true)
+    expect(w("sed -i '' 's/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=changeme/' .env")).toBe(true)
+    expect(w("perl -pi -e 's/a/b/' .env")).toBe(true)
+    expect(w('cp key.pem ~/.ssh/id_ed25519')).toBe(true)
+  })
+
+  it('ignores reads, templates, descriptor duplication, and unrelated writes', () => {
+    expect(w('cat .env')).toBe(false)
+    expect(w('source .env && npm run dev')).toBe(false)
+    expect(w("grep -n SECRET .env | sed 's/=.*/=***/'")).toBe(false)
+    expect(w("sed 's/a/b/' .env")).toBe(false)
+    expect(w('cp .env.example .env.sample')).toBe(false)
+    expect(w('echo hi > .env.example')).toBe(false)
+    expect(w('npm test > out.log 2>&1')).toBe(false)
+    expect(w('cmd >&2')).toBe(false)
+    expect(w('test -f .env || echo missing')).toBe(false)
   })
 })
 
