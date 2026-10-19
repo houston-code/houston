@@ -68,6 +68,20 @@ describe('parseProjectAllowRules (the elevating counterpart)', () => {
     ).toEqual([{ action: 'allow', tool: 'run_shell', match: 'npm test*' }])
     expect(parseProjectAllowRules(undefined)).toEqual([])
   })
+
+  it('keeps `exact: true`, so an exact allow is not widened into a glob', () => {
+    expect(
+      parseProjectAllowRules({
+        permissionRules: [
+          { action: 'allow', tool: 'write_file', match: 'src', exact: true },
+          { action: 'allow', tool: 'write_file', match: 'docs', exact: 1 }
+        ]
+      })
+    ).toEqual([
+      { action: 'allow', tool: 'write_file', match: 'src', exact: true },
+      { action: 'allow', tool: 'write_file', match: 'docs' }
+    ])
+  })
 })
 
 describe('parseProjectHooks', () => {

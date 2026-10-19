@@ -471,6 +471,20 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
     addPermissionRule({ action: 'allow', tool: 'web_fetch', match: 'https://x.com' })
     expect(getSettings().permissionRules).toEqual([rule])
   })
+
+  it('keeps an exact rule and a glob rule for the same pattern apart, and persists `exact`', async () => {
+    const glob: PermissionRule = { action: 'allow', tool: 'write_file', match: 'src' }
+    seed([glob])
+    const { addPermissionRule, getSettings } = await loadStore()
+    const exact: PermissionRule = { action: 'allow', tool: 'write_file', match: 'src', exact: true }
+    addPermissionRule(exact)
+    addPermissionRule({ ...exact })
+    expect(getSettings().permissionRules).toEqual([exact, glob])
+    // A fresh load reads `exact` back from disk.
+    vi.resetModules()
+    const reloaded = await loadStore()
+    expect(reloaded.getSettings().permissionRules).toEqual([exact, glob])
+  })
 })
 
 describe('recent workspaces — existence pruning', () => {

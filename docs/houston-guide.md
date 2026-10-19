@@ -421,8 +421,9 @@ Approval is layered. From most to least restrictive:
   egress is granted **per destination** (approving a fetch to one host does not open
   egress to another), the first shell command pauses once for a **shell-network
   consent** so blanket outbound access is never automatic (declining runs commands
-  offline), a shell command that **names a path outside the project** asks first
-  (`/dev/null` and the temp directory the sandbox can already write to don't count),
+  offline), a shell command that **names a path outside the project**, quoted or
+  not, asks first (`/dev/null` and the temp directory the sandbox can already write
+  to don't count),
   and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
   and the like) prompts even here, since reads otherwise never do. "Allow for run" on
   that prompt stops it asking about credential reads for the rest of the conversation,
@@ -471,12 +472,33 @@ the first match wins. Matching normalizes the target so a rule cannot be dodged
 by respelling it: a file rule is resolved and anchored to the workspace (so
 `src/*` covers the same file written as an absolute path, and a relative climb
 like `src/../../etc/passwd` does not slip past it), a URL rule is
-case-insensitive on scheme and host, and a shell rule sees through quoting and
-backslash escapes (so `deny *rm -rf*` still fires on `"rm" -rf` or `r\m -rf`).
+case-insensitive on scheme and host, and a shell rule sees through quoting,
+backslash escapes, and bash's `$'...'` escapes (so `deny *rm -rf*` still fires on
+`"rm" -rf`, `r\m -rf`, or `$'\x72m' -rf`). An allow rule sees through quoting only
+where it changes nothing (`"git" status` is `git status`): a quoted or escaped `*`,
+`~`, `$`, space, or `>` is not the bare one, since the shell treats them
+differently. Allowing `rm '*'` (one file named `*`) never allows `rm *`, and
+allowing `rm -rf '~'` (or `rm -rf $'\x7e'`) never allows `rm -rf ~`. An empty
+quoted argument counts as one: allowing `'' rm -rf /` (which runs nothing) never
+allows `rm -rf /`.
 An `apply_patch` call is checked against every file it adds, changes, deletes, or
 moves to: one denied file denies the whole patch, one `ask` file asks, and an
 `allow` covers it only when every file is allowed. "Always allow" or "Always deny"
 on a patch saves one rule per file.
+
+A rule marked **Exact** matches only its one target: `*` is an ordinary
+character and a folder does not cover the files inside it. **Always allow** on a
+file, URL, or search saves an exact rule, so approving a write to a file named
+`*`, or to a folder path, allows that path and nothing else. On a shell command
+it saves a command prefix instead, such as `npm install`. A command it can't
+shorten to a prefix is saved whole, and exact when it holds `*`, so approving
+`rm *` never allows `rm -rf ~`. A `cd` into the project needs no rule (an allowed
+`npm install` also covers `cd src && npm install`), so it is left out. Any other
+change of directory, such as `cd -`, `popd`, `cd $DIR`, or a `cd` out of the
+project, still asks, and is saved whole and exact. A shell rule like `rm *` saved
+by an earlier version is still a pattern: tick **Exact** on it to narrow it.
+**Always deny** saves a regular pattern, which can only be broader than the call
+it blocked.
 
 **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
 `deny` / `ask` rules, checked before the user's global rules. Those guardrails

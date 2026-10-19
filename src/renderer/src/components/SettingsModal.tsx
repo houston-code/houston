@@ -1561,7 +1561,11 @@ export function SettingsModal({
                       Rules are checked before the approval policy (first match wins).{' '}
                       <strong>Allow</strong> auto-approves, <strong>Deny</strong> refuses,{' '}
                       <strong>Ask</strong> always prompts. The pattern is a glob over the call&apos;s
-                      command, path, URL, or query. These are your global rules; a project&apos;s{' '}
+                      command, path, URL, or query; an <strong>Exact</strong> rule matches only
+                      that one target. <strong>Always allow</strong> on a file, URL, or search
+                      saves an exact rule, as it does for a shell command holding <code>*</code>{' '}
+                      that it can&apos;t shorten to a prefix. These are your global rules; a
+                      project&apos;s{' '}
                       <code>.houston/settings.json</code> may add stricter deny/ask rules that apply
                       first and aren&apos;t shown here.
                     </>
@@ -1638,10 +1642,27 @@ export function SettingsModal({
                               </select>
                               <input
                                 className="rule__match"
-                                placeholder="pattern, e.g. git * or src/**"
+                                placeholder={
+                                  rule.exact
+                                    ? 'exact path, URL, query, or command'
+                                    : 'pattern, e.g. git * or src/**'
+                                }
                                 value={rule.match}
                                 onChange={(e) => patchRule(index, { match: e.target.value })}
                               />
+                              <label
+                                className="rule__exact"
+                                title="Match only this exact target: * is an ordinary character, and a folder does not cover the files inside it"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={!!rule.exact}
+                                  onChange={(e) =>
+                                    patchRule(index, { exact: e.target.checked || undefined })
+                                  }
+                                />
+                                Exact
+                              </label>
                               <button
                                 className="btn btn--sm btn--danger"
                                 onClick={() => removeRule(index)}

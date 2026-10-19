@@ -410,8 +410,19 @@ export interface PermissionRule {
   action: 'allow' | 'deny' | 'ask'
   /** Tool name, or `*` for any tool. */
   tool: string
-  /** Glob over the call's subject. Empty or `*` matches anything for that tool. */
+  /**
+   * Glob over the call's subject. Empty matches nothing; `*` matches anything for that
+   * tool. With {@link exact}, the literal subject instead.
+   */
   match: string
+  /**
+   * Match `match` as the one literal subject: the same path, URL, query, or command
+   * after the matcher's normal canonicalization, with `*` an ordinary character and no
+   * directory or prefix extension. "Always allow" on a file, URL, or search saves its
+   * rule this way, so approving one file can't allow a directory or a glob. Absent on
+   * older saved rules, which keep their glob meaning.
+   */
+  exact?: boolean
 }
 
 export interface SelectedModel {

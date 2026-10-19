@@ -30,7 +30,6 @@ import {
   isApprovalPolicy,
   type ApprovalPolicy,
   type ModelCaps,
-  type PermissionRule,
   type SelectedModel
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
@@ -89,11 +88,10 @@ import {
   alreadyAllowedAsRule,
   matchRule,
   networkDestination,
-  patchSubjectPaths,
   permissionSubject,
+  persistedRules,
   isSensitiveWrite,
-  shellReferencesExternalPath,
-  shellRulePatterns
+  shellReferencesExternalPath
 } from './permissions'
 import {
   grantConversationNetworkHost,
@@ -1201,21 +1199,17 @@ export async function startRun(
         // (dropping the `cd` prelude) instead of the exact command, and skip any
         // pattern an existing rule already allows — so repeated commands don't pile
         // up one near-identical rule each. Deny stays exact (a broad deny is risky).
+        // Any other allow is an `exact` rule for the approved path, URL, or query,
+        // so a path holding `*`, or naming a directory, can't widen it. apply_patch
+        // stores one rule per file it touches, and a patch that names no file stores
+        // none, so an empty subject never becomes a `*` rule covering every patch
+        // (see persistedRules). The rules and the dedupe use the run's roots, as the gate
+        // does, so a `cd` out of the workspace is saved rather than dropped.
         const action = decision === 'rule-allow' ? 'allow' : 'deny'
-        const subject = permissionSubject(toolName, execArgs)
-        // An apply_patch decision is saved per file it touched: the subject lists them,
-        // and a rule over the whole list would match no single file.
-        const matches =
-          action === 'allow' && toolName === 'run_shell' && subject
-            ? shellRulePatterns(subject)
-            : toolName === 'apply_patch' && subject
-              ? patchSubjectPaths(subject)
-              : [subject || '*']
-        for (const match of matches) {
-          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, match)) {
+        for (const rule of persistedRules(action, toolName, execArgs, roots)) {
+          if (action === 'allow' && alreadyAllowedAsRule(permissionRules, toolName, rule.match, roots)) {
             continue
           }
-          const rule: PermissionRule = { action, tool: toolName, match }
           addPermissionRule(rule)
           permissionRules.splice(guardrailRuleCount, 0, rule)
         }
