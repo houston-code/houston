@@ -932,7 +932,10 @@ and everything its steps print to the log:
   agent can rely on them, while titles, bodies, labels, branch names, diffs,
   workflow, job, step, and check names, and CI logs go inside. Each comment gets
   its own fence with its author shown outside it, so one comment cannot pass
-  itself off as a maintainer's reply.
+  itself off as a maintainer's reply. The GitHub tools that write (opening,
+  commenting, reviewing, merging, checking out, closing, reopening) report the
+  outcome in a line Houston writes, plus the new item's URL, and fence everything
+  `gh` printed, because its messages quote titles and branch names.
 - **Isolation.** Content is scored for injection signals: text telling the
   reader to ignore prior instructions, a new persona, an instruction to send data
   to a URL, references to key material, text telling the reader to call Houston's
