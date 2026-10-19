@@ -4,6 +4,7 @@ import type { ChatGroup } from '@shared/types'
 import type { EditorId, EditorStatus } from '@shared/editors'
 import {
   buildSidebarSections,
+  descendantsOf,
   dropIndexForY,
   reorderedIds,
   type SidebarSection
@@ -180,7 +181,9 @@ function ConvRow({
   renaming,
   onStartRename,
   onStopRename,
-  onStartRenameGroup
+  onStartRenameGroup,
+  depth = 0,
+  nested
 }: {
   conv: ConversationMeta
   active: boolean
@@ -190,6 +193,10 @@ function ConvRow({
   onStartRename: () => void
   onStopRename: () => void
   onStartRenameGroup: (id: string) => void
+  /** 0 for a top-level row; 1+ for a spawned chat nested under its parent. */
+  depth?: number
+  /** Present when spawned chats nest under this row: their count, how many run, and the toggle. */
+  nested?: { count: number; running: number; expanded: boolean; onToggle: () => void }
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -209,14 +216,17 @@ function ConvRow({
 
   return (
     <div
-      className={`conv ${active ? 'conv--active' : ''} ${dragging ? 'conv--dragging' : ''}`}
+      className={`conv ${active ? 'conv--active' : ''} ${dragging ? 'conv--dragging' : ''}${depth > 0 ? ' conv--child' : ''}`}
+      // Only top-level rows take part in drag-to-reorder (see dropIndexFromEvent);
+      // a nested chat goes where its parent goes.
+      data-depth={depth}
       // Keyboard-reachable so a row can be opened without the mouse. Not renaming:
       // the inline input owns focus/keys then. `aria-current` marks the open chat.
       tabIndex={renaming ? -1 : 0}
       aria-current={active ? 'true' : undefined}
       aria-label={conv.title}
       // Renaming swaps in a text input; dragging would hijack its selection.
-      draggable={!renaming}
+      draggable={!renaming && depth === 0}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData(CONV_DRAG_MIME, conv.id)
@@ -242,6 +252,21 @@ function ConvRow({
           ? { role: 'img', 'aria-label': 'Running', title: 'Running' }
           : { 'aria-hidden': true })}
       />
+      {nested && (
+        <button
+          type="button"
+          className={`conv__nest-toggle${nested.expanded ? ' conv__nest-toggle--open' : ''}`}
+          aria-expanded={nested.expanded}
+          aria-label={`${nested.expanded ? 'Hide' : 'Show'} ${nested.count} spawned session${nested.count === 1 ? '' : 's'}`}
+          title={`${nested.expanded ? 'Hide' : 'Show'} spawned sessions`}
+          onClick={(e) => {
+            e.stopPropagation()
+            nested.onToggle()
+          }}
+        >
+          ›
+        </button>
+      )}
       {conv.pinned && <span className="conv__pin" title="Pinned">★</span>}
       <div className="conv__main">
         {renaming ? (
@@ -263,6 +288,11 @@ function ConvRow({
               (i.e. in search results), so the active list isn't noisy. */}
           {conv.archived && props.statusFilter === 'active' && (
             <span className="conv__tag" title="Archived">Archived</span>
+          )}
+          {nested && !nested.expanded && (
+            <span className="conv__tag" title="Spawned sessions under this chat">
+              {nested.running > 0 ? `${nested.running} running` : `${nested.count} spawned`}
+            </span>
           )}
           {conv.worktree ? (
             <>
@@ -560,7 +590,8 @@ function FilterButton({
 
 /** Pointer location → drop slot, read from the section's currently rendered rows. */
 function dropIndexFromEvent(section: Element, clientY: number): number {
-  const rows = Array.from(section.querySelectorAll<HTMLElement>('.conv'))
+  // Top-level rows only: nested spawned chats aren't reorderable slots.
+  const rows = Array.from(section.querySelectorAll<HTMLElement>('.conv[data-depth="0"]'))
   return dropIndexForY(
     rows.map((r) => r.getBoundingClientRect()),
     clientY
@@ -581,7 +612,9 @@ function SidebarSectionView({
   renamingConv,
   renamingGroup,
   setRenamingConv,
-  setRenamingGroup
+  setRenamingGroup,
+  collapsedParents,
+  toggleParent
 }: {
   section: SidebarSection
   props: SidebarProps
@@ -590,6 +623,9 @@ function SidebarSectionView({
   renamingGroup: string | null
   setRenamingConv: (id: string | null) => void
   setRenamingGroup: (id: string | null) => void
+  /** Parents whose spawned chats the user folded away. */
+  collapsedParents: ReadonlySet<string>
+  toggleParent: (id: string) => void
 }): JSX.Element {
   const { groups } = props
   // Slot the drop indicator sits at while dragging over this section, or null.
@@ -633,6 +669,46 @@ function SidebarSectionView({
     props.onReorder(orderedIds, move)
   }
 
+  // A row plus, unless folded away, the spawned chats nested under it (recursively).
+  // A parent holding the open chat stays unfolded, so the open chat is never hidden.
+  const renderTree = (c: ConversationMeta, depth: number): JSX.Element => {
+    const kids = section.children[c.id] ?? []
+    const all = kids.length ? descendantsOf(c.id, section.children) : []
+    const expanded = !collapsedParents.has(c.id) || all.some((d) => d.id === currentId)
+    return (
+      <>
+        <ConvRow
+          conv={c}
+          active={c.id === currentId}
+          groups={groups}
+          props={props}
+          renaming={renamingConv === c.id}
+          onStartRename={() => setRenamingConv(c.id)}
+          onStopRename={() => setRenamingConv(null)}
+          onStartRenameGroup={(id) => setRenamingGroup(id)}
+          depth={depth}
+          {...(kids.length
+            ? {
+                nested: {
+                  count: all.length,
+                  running: all.filter((d) => props.runningIds.has(d.id)).length,
+                  expanded,
+                  onToggle: () => toggleParent(c.id)
+                }
+              }
+            : {})}
+        />
+        {expanded && kids.length > 0 && (
+          <div className="conv-children" role="group" aria-label={`Spawned from ${c.title}`}>
+            {kids.map((k) => (
+              <Fragment key={k.id}>{renderTree(k, depth + 1)}</Fragment>
+            ))}
+          </div>
+        )}
+      </>
+    )
+  }
+
   return (
     <div
       className="section"
@@ -653,16 +729,7 @@ function SidebarSectionView({
         section.conversations.map((c, i) => (
           <Fragment key={c.id}>
             {dropAt === i && <div className="conv-drop-line" aria-hidden="true" />}
-            <ConvRow
-              conv={c}
-              active={c.id === currentId}
-              groups={groups}
-              props={props}
-              renaming={renamingConv === c.id}
-              onStartRename={() => setRenamingConv(c.id)}
-              onStopRename={() => setRenamingConv(null)}
-              onStartRenameGroup={(id) => setRenamingGroup(id)}
-            />
+            {renderTree(c, 0)}
           </Fragment>
         ))}
       {!section.collapsed && rowCount > 0 && dropAt === rowCount && (
@@ -682,6 +749,15 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // Which conversation/group is currently being renamed (id), if any.
   const [renamingConv, setRenamingConv] = useState<string | null>(null)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
+  // Parents whose spawned chats are folded away (expanded by default).
+  const [collapsedParents, setCollapsedParents] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleParent = (id: string): void =>
+    setCollapsedParents((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   // Collapsed: a thin rail with just the expand toggle and the most-used actions.
   if (props.collapsed) {
@@ -768,6 +844,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             renamingGroup={renamingGroup}
             setRenamingConv={setRenamingConv}
             setRenamingGroup={setRenamingGroup}
+            collapsedParents={collapsedParents}
+            toggleParent={toggleParent}
           />
         ))}
       </div>

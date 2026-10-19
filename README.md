@@ -123,7 +123,8 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Spawn separate sessions.** Where a subagent reports back into the current turn,
   `spawn_session` spins off a *separate* chat: the agent hands it a task, optionally
   on its own git branch and worktree, and sets it running autonomously in the
-  background. It appears in the sidebar with a live running indicator, seeded with
+  background. It appears in the sidebar nested under the chat that started it, with a
+  live running indicator, seeded with
   the handed-off context as its first message (open it to watch, answer an
   approval, or take over), or with a copy of the current chat when the agent
   forks it. The spawned session inherits your current approval policy, so it is

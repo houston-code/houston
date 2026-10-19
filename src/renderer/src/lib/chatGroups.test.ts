@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
-import { buildSidebarSections, dropIndexForY, newGroupId, reorderedIds } from './chatGroups'
+import { buildSidebarSections, descendantsOf, dropIndexForY, nestSpawned, newGroupId, reorderedIds } from './chatGroups'
 
 function conv(id: string, updatedAt: number, extra: Partial<ConversationMeta> = {}): ConversationMeta {
   return {
@@ -160,5 +160,58 @@ describe('newGroupId', () => {
     const b = newGroupId()
     expect(a).toMatch(/^grp-/)
     expect(a).not.toBe(b)
+  })
+})
+
+describe('nesting spawned chats under their parent', () => {
+  const child = (id: string, parent: string, t: number, extra: Partial<ConversationMeta> = {}): ConversationMeta =>
+    conv(id, t, { spawnedFrom: { conversationId: parent, title: parent }, ...extra })
+
+  it('takes a spawned chat out of the list and under its parent, newest first', () => {
+    const [section] = buildSidebarSections([conv('p', 1), child('k1', 'p', 5), child('k2', 'p', 9), conv('x', 3)], [])
+    // p sorts first: its newest child (9) is newer than x (3).
+    expect(section.conversations.map((c) => c.id)).toEqual(['p', 'x'])
+    expect(section.children.p.map((c) => c.id)).toEqual(['k2', 'k1'])
+  })
+
+  it('sorts a parent by the latest activity anywhere under it', () => {
+    const [section] = buildSidebarSections([conv('p', 1), conv('x', 5), child('k', 'p', 2), child('g', 'k', 9)], [])
+    expect(section.conversations.map((c) => c.id)).toEqual(['p', 'x'])
+  })
+
+  it('nests at any depth, and lists every descendant', () => {
+    const all = [conv('p', 1), child('k', 'p', 2), child('g', 'k', 3)]
+    const [section] = buildSidebarSections(all, [])
+    expect(section.conversations.map((c) => c.id)).toEqual(['p'])
+    expect(section.children.k.map((c) => c.id)).toEqual(['g'])
+    expect(descendantsOf('p', section.children).map((c) => c.id)).toEqual(['k', 'g'])
+  })
+
+  it("follows its parent into the parent's section", () => {
+    const sections = buildSidebarSections([conv('p', 1, { pinned: true }), child('k', 'p', 2)], [])
+    expect(sections.map((s) => s.kind)).toEqual(['pinned'])
+    expect(sections[0].children.p.map((c) => c.id)).toEqual(['k'])
+  })
+
+  it('keeps a chat the user pinned or filed into a group where they put it', () => {
+    const groups: ChatGroup[] = [{ id: 'g1', name: 'Work' }]
+    const sections = buildSidebarSections(
+      [conv('p', 1), child('pinned', 'p', 2, { pinned: true }), child('filed', 'p', 3, { groupId: 'g1' })],
+      groups
+    )
+    const byKind = Object.fromEntries(sections.map((s) => [s.kind, s.conversations.map((c) => c.id)]))
+    expect(byKind).toEqual({ pinned: ['pinned'], group: ['filed'], ungrouped: ['p'] })
+    expect(sections[0].children.p).toBeUndefined()
+  })
+
+  it('leaves a chat at the top level when its parent is not shown (deleted, filtered, archived away)', () => {
+    const [section] = buildSidebarSections([child('k', 'gone', 2), conv('x', 1)], [])
+    expect(section.conversations.map((c) => c.id)).toEqual(['k', 'x'])
+    expect(section.children).toEqual({})
+  })
+
+  it('nests nothing on a cycle of parent links, and ignores a chat naming itself', () => {
+    const { parentOf } = nestSpawned([child('a', 'b', 1), child('b', 'a', 2), child('self', 'self', 3)])
+    expect(parentOf.size).toBe(0)
   })
 })

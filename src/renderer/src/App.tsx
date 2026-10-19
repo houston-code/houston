@@ -573,7 +573,8 @@ export default function App(): JSX.Element {
               kind: 'notice' as const,
               id: `handoff-${id}`,
               text: `Handoff from “${conv.spawnedFrom.title}”`,
-              tone: 'handoff' as const
+              tone: 'handoff' as const,
+              openConversationId: conv.spawnedFrom.conversationId
             },
             ...itemsFromMessages(conv.messages.slice(forked))
           ]
@@ -1219,6 +1220,18 @@ export default function App(): JSX.Element {
       open: (id) => void selectConversation(id)
     }
   }, [currentId, settings, workspace, proposalStates, refreshConversations, onInvoke, selectConversation])
+
+  // The handoff banner's link back to the chat that spawned this one. That chat may
+  // have been deleted since; say so rather than doing nothing.
+  const onOpenLinkedConversation = useCallback(
+    (id: string) => {
+      void window.api.getConversation(id).then((conv) => {
+        if (conv) void selectConversation(id)
+        else chat.notify('The chat this was handed off from no longer exists.', 'error')
+      })
+    },
+    [selectConversation, chat]
+  )
 
   // Side chat: "Continue in new chat" forks this chat and leaves the exchange as the
   // fork's composer draft, so the user decides what to send.
@@ -1890,6 +1903,7 @@ export default function App(): JSX.Element {
             onOpenPlan={onOpenPlan}
             onRunInTerminal={(command) => void runInTerminal(command)}
             proposals={proposalHandlers}
+            onOpenConversation={onOpenLinkedConversation}
           />
         )}
 

@@ -979,3 +979,44 @@ describe('Sidebar — row menu accessibility', () => {
     expect(screen.queryByText(/C:\\Users/)).not.toBeInTheDocument()
   })
 })
+
+describe('Sidebar: spawned chats nest under their parent', () => {
+  const parent = makeConv({ id: 'p', title: 'Add OAuth', updatedAt: 1 })
+  const kid = (id: string, title: string, updatedAt: number): ConversationMeta =>
+    makeConv({ id, title, updatedAt, spawnedFrom: { conversationId: 'p', title: 'Add OAuth' } })
+  const convs = [parent, kid('k1', 'Update API docs', 3), kid('k2', 'Fix flaky e2e', 2)]
+
+  it('shows spawned chats indented under the parent, in a labelled group', () => {
+    render(<Sidebar {...baseProps({ conversations: convs })} />)
+    const group = screen.getByRole('group', { name: 'Spawned from Add OAuth' })
+    expect(within(group).getByText('Update API docs')).toBeInTheDocument()
+    expect(within(group).getByText('Fix flaky e2e')).toBeInTheDocument()
+  })
+
+  it('folds them away and shows how many are running instead', () => {
+    render(<Sidebar {...baseProps({ conversations: convs, runningIds: new Set(['k2']) })} />)
+    const toggle = screen.getByRole('button', { name: 'Hide 2 spawned sessions' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(toggle)
+    expect(screen.queryByText('Update API docs')).toBeNull()
+    expect(screen.getByText('1 running')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show 2 spawned sessions' }))
+    expect(screen.getByText('Update API docs')).toBeInTheDocument()
+  })
+
+  it('never folds away the open chat', () => {
+    render(<Sidebar {...baseProps({ conversations: convs, currentId: 'k1' })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Hide 2 spawned sessions' }))
+    expect(screen.getByText('Update API docs')).toBeInTheDocument()
+  })
+
+  it('opens a nested chat on click, and only top-level rows are draggable', () => {
+    const onSelect = vi.fn()
+    render(<Sidebar {...baseProps({ conversations: convs, onSelect })} />)
+    fireEvent.click(screen.getByText('Fix flaky e2e'))
+    expect(onSelect).toHaveBeenCalledWith('k2')
+    const row = (title: string): HTMLElement => screen.getByText(title).closest('.conv') as HTMLElement
+    expect(row('Add OAuth')).toHaveAttribute('draggable', 'true')
+    expect(row('Fix flaky e2e')).toHaveAttribute('draggable', 'false')
+  })
+})

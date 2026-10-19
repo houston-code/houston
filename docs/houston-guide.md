@@ -625,6 +625,11 @@ persist as ordinary conversations you can open later with `/resume` or
 `--resume <id>`; a one-shot headless run waits for its spawned sessions before
 exiting.
 
+In the sidebar, a spawned session sits under the chat that started it (the arrow
+beside the parent folds them away, and a folded parent says how many are still
+running). A session you pin or move into a group stays where you put it. Its
+"Handoff from …" banner links back to the parent chat.
+
 A spawned session starts fresh with its prompt, or, with context "fork", with a
 copy of the spawning chat so far. When it finishes, the chat that started it gets
 a short report (title, whether it worked, the start of its answer) as a Houston
