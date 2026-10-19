@@ -219,8 +219,14 @@ jobs:
         with:
           install: full
           electron-cache: full
+      # Windows: the suite's temp dirs (os.tmpdir()) default to %TEMP% under the user profile
+      # on C:, the OS disk, which is slower than D: and has stalled for seconds at a time,
+      # timing out tests that do temp-dir I/O. $RUNNER_TEMP is on D: beside the workspace
+      # (outside it, so git never sees a parent repo) and is emptied per job.
       - if: runner.os != 'Linux'
-        run: npm test -- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then export TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP"; fi
+          npm test -- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
       - name: Upload test results
         if: ${{ !cancelled() && runner.os != 'Linux' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
