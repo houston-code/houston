@@ -55,6 +55,7 @@ import { resolveShortcuts } from './lib/keybindingOverrides'
 import type { PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
+import { checkpointNotice } from './lib/checkpointNotice'
 import { occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './lib/overlays'
 import { baseName } from './lib/paths'
 import {
@@ -1081,9 +1082,12 @@ export default function App(): JSX.Element {
     [chat, onChangePolicy]
   )
 
+  // The bar itself flips to "Reverted … / Redo"; see checkpointNotice for what is said.
   const onRevert = useCallback(async () => {
+    const expected = chat.checkpoint?.files ?? 0
     const n = await chat.revertCheckpoint()
-    if (n > 0) alert(`Reverted ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
+    const notice = checkpointNotice('revert', n, expected)
+    if (notice) chat.notify(notice, 'error')
   }, [chat])
 
   const onRetry = useCallback(() => {
@@ -1097,8 +1101,10 @@ export default function App(): JSX.Element {
   }, [chat, settings, currentId])
 
   const onReapply = useCallback(async () => {
+    const expected = chat.checkpoint?.files ?? 0
     const n = await chat.reapplyCheckpoint()
-    if (n > 0) alert(`Re-applied ${n} file change${n === 1 ? '' : 's'} from the last turn.`)
+    const notice = checkpointNotice('redo', n, expected)
+    if (notice) chat.notify(notice, 'error')
   }, [chat])
 
   const dispatch = useCallback(
