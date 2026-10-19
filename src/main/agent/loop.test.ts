@@ -1580,6 +1580,12 @@ describe('startRun', () => {
     const r = await run({
       policy: 'full-auto',
       turns: [
+        // Read it first (approved below): a write over a file the run hasn't read is
+        // refused before any prompt, which would hide the prompt under test.
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: '.env' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
         [
           { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: '.env', content: 'ADMIN_PASSWORD=testpass\n' } } },
           { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'notes.txt', content: 'x' } } },
@@ -1587,13 +1593,165 @@ describe('startRun', () => {
         ],
         [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
       ],
-      onApproval: (_callId, decide) => decide('deny')
+      onApproval: (callId, decide) => decide(callId === 'r1' ? 'allow' : 'deny')
     })
-    const prompts = r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string; sensitiveWrite?: boolean }>
+    const prompts = (r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string; sensitiveWrite?: boolean }>).filter(
+      (e) => e.callId !== 'r1'
+    )
     // Only the .env write asked; the ordinary write ran unprompted, as full-auto does.
     expect(prompts.map((e) => [e.callId, e.sensitiveWrite])).toEqual([['w1', true]])
     expect(readFileSync(join(ws, '.env'), 'utf8')).toBe('ADMIN_PASSWORD=mine\n')
     expect(existsSync(join(ws, 'notes.txt'))).toBe(true)
+  })
+
+  it('refuses a write over a file the run has not read, without asking the user to approve it', async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'the user wrote this\n')
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'notes.txt', content: 'blind\n' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'notes.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'notes.txt', content: 'informed\n' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // Only the write that follows the read reaches the approval prompt.
+    expect(r.events.filter((e) => e.type === 'tool_approval').map((e) => (e as { callId: string }).callId)).toEqual(['w2'])
+    const blind = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'w1')!
+    expect(blind.content).toMatch(/^Error: notes\.txt already exists and you have not read it yet\. Read it with read_file first/)
+    expect(r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'r1')!.content).toBe('1\tthe user wrote this')
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('informed\n')
+  })
+
+  it('refuses an edit when the file changed on disk after the read, mid-run', async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'v1\n')
+    const turns: ProviderStreamEvent[][] = [
+      [
+        { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'notes.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [
+        { type: 'tool_call', call: { id: 'e1', name: 'edit_file', arguments: { path: 'notes.txt', old_string: 'v1', new_string: 'agent' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    // The user saves the file in their editor between the agent's read and its edit.
+    const base = scripted(turns)
+    let call = 0
+    const provider: Provider = {
+      ...base,
+      streamChat: (...args: Parameters<Provider['streamChat']>) => {
+        if (call++ === 1) writeFileSync(join(ws, 'notes.txt'), 'v1 plus the user\n')
+        return base.streamChat(...args)
+      }
+    }
+    const r = await run({ provider, policy: 'full-auto' })
+    const edit = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'e1')!
+    expect(edit.content).toMatch(/^Error: notes\.txt has changed on disk since you last read or wrote it/)
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('v1 plus the user\n')
+  })
+
+  it("carries a conversation's reads into its next turn, unless the history no longer holds them", async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'alpha\n')
+    const conversationId = 'conv-stale-write-carry'
+    const first = await run({
+      conversationId,
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'notes.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'read it' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const editTurn = (id: string, from: string, to: string): ProviderStreamEvent[][] => [
+      [
+        { type: 'tool_call', call: { id, name: 'edit_file', arguments: { path: 'notes.txt', old_string: from, new_string: to } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'edited' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    // Next turn, same history: the file is unchanged since the read, so no re-read.
+    const second = await run({
+      conversationId,
+      policy: 'full-auto',
+      messages: [...first.messages, { role: 'user', content: 'now edit it' }],
+      turns: editTurn('e1', 'alpha', 'beta')
+    })
+    expect(second.messages.find((m) => m.toolCallId === 'e1')!.content).toBe('Edited notes.txt (1 replacement).')
+    // A turn whose history no longer holds that read or write (the conversation was
+    // rewound or cleared) has to read the file again.
+    const third = await run({
+      conversationId,
+      policy: 'full-auto',
+      messages: [{ role: 'user', content: 'edit it again' }],
+      turns: editTurn('e2', 'beta', 'gamma')
+    })
+    expect(third.messages.find((m) => m.toolCallId === 'e2')!.content).toMatch(/^Error: You have not read notes\.txt yet/)
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('beta\n')
+  })
+
+  it('stops counting a file as read once compaction folds its read away mid-run', async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'alpha\n')
+    const conversationId = 'conv-stale-write-compaction'
+    // Turn 1 reads the file, so the conversation's tracker has it.
+    const first = await run({
+      conversationId,
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'notes.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'read it' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const history: ChatMessage[] = [...first.messages]
+    for (let t = 0; t < 4; t++) {
+      history.push({ role: 'user', content: `old question ${t}` })
+      history.push({ role: 'assistant', content: `old answer ${t}` })
+    }
+    history.push({ role: 'user', content: 'now edit it' })
+    // Turn 2's first send overflows, the head (holding the read) is summarized, and
+    // only then does the model edit the file.
+    let mainSends = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (req.maxTokens != null) {
+          yield { type: 'text', text: 'SUMMARY' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        mainSends++
+        if (mainSends === 1) {
+          yield { type: 'error', message: 'prompt is too long: 212129 tokens > 200000 maximum' }
+          return
+        }
+        if (mainSends === 2) {
+          yield { type: 'tool_call', call: { id: 'e1', name: 'edit_file', arguments: { path: 'notes.txt', old_string: 'alpha', new_string: 'beta' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const second = await run({ conversationId, policy: 'full-auto', provider, messages: history })
+    expect(types(second)).toContain('compaction')
+    expect(second.messages.find((m) => m.toolCallId === 'e1')!.content).toMatch(/^Error: You have not read notes\.txt yet/)
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('alpha\n')
   })
 
   it('a user\'s mid-run "Always allow" cannot shadow a managed `ask` (stays gated)', async () => {

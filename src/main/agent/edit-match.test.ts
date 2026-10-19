@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveEdit } from './edit-match'
+import { EditNotFoundError, resolveEdit } from './edit-match'
 
 describe('resolveEdit — exact', () => {
   it('replaces a unique exact substring', () => {
@@ -163,5 +163,117 @@ describe('resolveEdit — line endings & BOM', () => {
     const file = 'x\nfoo\ny\n'
     const r = resolveEdit(file, '  foo\n', 'bar\n')
     expect(r.content).toBe('x\nbar\ny\n')
+  })
+})
+
+describe('resolveEdit — regions', () => {
+  it('reports where each replacement landed in the edited content', () => {
+    const r = resolveEdit('a\nb\nc\nb\n', 'b', 'B1\nB2', true)
+    expect(r.content).toBe('a\nB1\nB2\nc\nB1\nB2\n')
+    // The second region starts one line later than its original line 4, because
+    // the first replacement added a line above it.
+    expect(r.regions).toEqual([
+      { startLine: 2, lineCount: 2, lineDelta: 1 },
+      { startLine: 5, lineCount: 2, lineDelta: 1 }
+    ])
+  })
+
+  it('reports a deletion as a zero-line region with a negative delta', () => {
+    const r = resolveEdit('keep\ndrop1\ndrop2\nkeep2\n', 'drop1\ndrop2\n', '')
+    expect(r.content).toBe('keep\nkeep2\n')
+    expect(r.regions).toEqual([{ startLine: 2, lineCount: 0, lineDelta: -2 }])
+  })
+
+  it('counts lines across CRLF and a BOM the same as LF', () => {
+    const r = resolveEdit('﻿a\r\nb\r\nc\r\n', 'c', 'C')
+    expect(r.regions).toEqual([{ startLine: 3, lineCount: 1, lineDelta: 0 }])
+  })
+})
+
+describe('resolveEdit — copied line numbers', () => {
+  it('strips read_file prefixes from old_string and new_string when old only matches without them', () => {
+    const r = resolveEdit('one\ntwo\nthree\n', '2\ttwo\n3\tthree', '2\tTWO\n3\tTHREE')
+    expect(r.content).toBe('one\nTWO\nTHREE\n')
+    expect(r.strippedLineNumbers).toBe('both')
+  })
+
+  it('strips old_string alone when new_string was written fresh', () => {
+    const r = resolveEdit('one\ntwo\n', ' 2\ttwo', 'TWO')
+    expect(r.content).toBe('one\nTWO\n')
+    expect(r.strippedLineNumbers).toBe('old')
+  })
+
+  it('never alters numbered-looking text that really is in the file', () => {
+    // A tab-separated table whose first column counts up: matched as written, so
+    // neither string is stripped.
+    const file = 'id\tname\n1\talice\n2\tbob\n'
+    const r = resolveEdit(file, '1\talice\n2\tbob', '1\talice\n2\tbobby')
+    expect(r.content).toBe('id\tname\n1\talice\n2\tbobby\n')
+    expect(r.strippedLineNumbers).toBeUndefined()
+  })
+
+  it('leaves new_string numbered when not every line carries a prefix', () => {
+    const r = resolveEdit('one\ntwo\n', '2\ttwo', '2\ttwo\nadded')
+    expect(r.content).toBe('one\n2\ttwo\nadded\n')
+    expect(r.strippedLineNumbers).toBe('old')
+  })
+
+  it('does not strip prefixes whose numbers skip, as copied text never does', () => {
+    expect(() => resolveEdit('one\ntwo\nthree\n', '1\tone\n3\tthree', 'x')).toThrow(/not found/)
+  })
+
+  it('refuses a stripped edit that would change nothing', () => {
+    expect(() => resolveEdit('one\ntwo\n', '2\ttwo', 'two')).toThrow(/identical/)
+  })
+})
+
+describe('resolveEdit — closest region when not found', () => {
+  const file = [
+    'function add(a, b) {',
+    '  return a + b',
+    '}',
+    '',
+    'function scale(v, k) {',
+    '  const out = v * k',
+    '  return out',
+    '}',
+    ''
+  ].join('\n')
+
+  it('names and numbers the most similar region', () => {
+    let msg = ''
+    try {
+      resolveEdit(file, 'function scale(v, factor) {\n  const out = v * factor', 'x')
+    } catch (e) {
+      expect(e).toBeInstanceOf(EditNotFoundError)
+      expect((e as EditNotFoundError).hasCandidate).toBe(true)
+      msg = (e as Error).message
+    }
+    expect(msg).toMatch(/^old_string was not found in the file\. The closest match is lines 5-6 \(\d+% similar\):\n/)
+    expect(msg).toContain('5\tfunction scale(v, k) {\n6\t  const out = v * k\n')
+  })
+
+  it('says nothing is close rather than offering an unrelated region', () => {
+    let err: unknown
+    try {
+      resolveEdit(file, 'class Totally { different() }', 'x')
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(EditNotFoundError)
+    expect((err as EditNotFoundError).hasCandidate).toBe(false)
+    expect((err as Error).message).toMatch(/no part of the file is close to it\. Read the file again/)
+  })
+
+  it('looks for the stripped text when old_string carried copied line numbers', () => {
+    expect(() => resolveEdit(file, '6\t  const out = v * kk\n7\t  return out', 'x')).toThrow(
+      /closest match is lines 6-7/
+    )
+  })
+
+  it('cuts a long candidate region short', () => {
+    const big = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n')
+    const needle = Array.from({ length: 60 }, (_, i) => `line ${i} changed`).join('\n')
+    expect(() => resolveEdit(big, needle, 'x')).toThrow(/lines 1-60 .*\n[\s\S]*\n\[20 more lines not shown\]/)
   })
 })

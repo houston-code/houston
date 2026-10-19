@@ -26,6 +26,9 @@ const h = vi.hoisted(() => ({
   script: {} as Record<string, Array<Partial<SandboxRunResult>>>,
   static: {} as Record<string, Partial<SandboxRunResult>>,
   calls: [] as SandboxRunOptions[],
+  // Side effects a hook command has when it runs (e.g. rewriting a file, the way
+  // a formatter hook would), keyed like `script`.
+  effects: {} as Record<string, () => void>,
   // Admin managed-policy rules (highest-precedence, tighten-only tier), injected
   // through the `./managedPolicy` mock below; default none.
   managedRules: [] as PermissionRule[],
@@ -65,6 +68,7 @@ vi.mock('../sandbox', async (importActual) => {
     isSandboxed: () => h.sandboxed,
     runSandboxed: async (o: SandboxRunOptions): Promise<SandboxRunResult> => {
       h.calls.push(o)
+      h.effects[o.command]?.()
       const queued = h.script[o.command]?.shift()
       const r = queued ?? h.static[o.command] ?? {}
       return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0, timedOut: false, sandboxed: true }
@@ -94,6 +98,7 @@ beforeEach(() => {
   h.script = {}
   h.static = {}
   h.calls = []
+  h.effects = {}
   h.managedRules = []
   h.sandboxed = true
 })
@@ -293,6 +298,30 @@ describe('hook systemMessage → user-facing notice', () => {
     const log = messages.map((m) => m.content).join('\n')
     expect(log).not.toContain('pre note')
     expect(log).not.toContain('post note')
+  })
+
+  it("a PostToolUse hook that rewrites the file does not make the agent's next edit stale", async () => {
+    // A formatter hook reflows what the agent wrote. That is a change made on the
+    // agent's behalf, not someone else's edit, so the follow-up edit must not be
+    // refused as "changed on disk since you last read or wrote it".
+    h.settings.hooks = [{ event: 'PostToolUse', matcher: 'write_file', command: 'fmt' }]
+    h.effects = { fmt: () => writeFileSync(join(ws, 'a.txt'), 'formatted\n') }
+    const { messages } = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'raw' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'e1', name: 'edit_file', arguments: { path: 'a.txt', old_string: 'formatted', new_string: 'edited' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(messages.find((m) => m.toolCallId === 'e1')!.content).toBe('Edited a.txt (1 replacement).')
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('edited\n')
   })
 
   it('PreCompact emits the note when compaction runs', async () => {

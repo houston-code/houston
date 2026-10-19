@@ -8,6 +8,7 @@ import {
   type ToolCall
 } from '@shared/agent'
 import { getTool, type ToolContext, type ToolKind } from './tools'
+import { FileReadTracker } from './readCache'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
   MAX_OUTPUT_CONTINUATIONS,
@@ -340,6 +341,9 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     roots,
     allowNetwork: false,
     signal,
+    // The subagent's own record of what it has read: it must read a file before
+    // changing it, like the main agent, and what the parent read doesn't count.
+    fileTracker: new FileReadTracker(),
     ...(opts.shellSession ? { shellSession: opts.shellSession } : {}),
     ...(opts.shellOutputMaxBytes ? { shellOutputMaxBytes: opts.shellOutputMaxBytes } : {}),
     // Network-tool plumbing (web_search key lookup, egress credential masking) —

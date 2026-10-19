@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import type { ImageAttachment } from '@shared/images'
 import type { DocumentAttachment } from '@shared/agent'
@@ -364,4 +365,164 @@ export function writePaths(
  */
 export function writeTouchesUnknownPaths(resolved: string[]): boolean {
   return resolved.length === 0
+}
+
+/**
+ * The bytes' identity for {@link FileReadTracker}: a SHA-256 digest. Content, not a
+ * stat stamp, because the question is whether the file still says what the agent
+ * last saw, and a rewrite can keep both size and mtime (a whole-second filesystem,
+ * a tool that preserves mtime) while a `touch` or a no-op save changes mtime alone.
+ */
+export function contentDigest(data: Buffer | string): string {
+  return createHash('sha256').update(data).digest('base64')
+}
+
+/** Why a write was refused: never read here, or changed on disk since. */
+export type StaleWriteReason = 'unread' | 'changed'
+
+/**
+ * Which files the agent has seen, and what they said when it last did, so a write
+ * can be refused when it would land on content the agent never saw.
+ *
+ * `read_file` records the file it returned and every successful write records what
+ * it left on disk. Before overwriting or editing an existing file, the write tools
+ * ask {@link check}: a file that was never recorded has not been read, and one whose
+ * bytes no longer match the record was changed by someone else (the user in their
+ * editor, a shell command, a formatter, a subagent), so the agent's picture of it
+ * is out of date. Either way the model is told to read it again first.
+ *
+ * Bounded: past `maxEntries` the oldest record is dropped, which only means that
+ * file must be read again before the next write.
+ */
+export class FileReadTracker {
+  private readonly seen = new Map<string, string>()
+  private readonly maxEntries: number
+
+  constructor(opts: { seed?: Iterable<[string, string]>; maxEntries?: number } = {}) {
+    this.maxEntries = opts.maxEntries ?? 1024
+    for (const [abs, digest] of opts.seed ?? []) this.remember(abs, digest)
+  }
+
+  /** Record that `abs` was read and held `data`. */
+  noteRead(abs: string, data: Buffer | string): void {
+    this.remember(abs, contentDigest(data))
+  }
+
+  /** Record that this run wrote `data` to `abs`. */
+  noteWrite(abs: string, data: Buffer | string): void {
+    this.remember(abs, contentDigest(data))
+  }
+
+  /** Drop the record for `abs` (it was deleted, or its state is unknown). */
+  forget(abs: string): void {
+    this.seen.delete(abs)
+  }
+
+  /**
+   * Re-record `abs` from disk if it is tracked. For changes made on the agent's
+   * behalf right after its own write (a PostToolUse hook, format-on-save): the agent
+   * did not see them, but they are not someone else's edits to protect, and
+   * refusing the next edit over a reformat would only cost a pointless re-read.
+   */
+  async refresh(abs: string): Promise<void> {
+    if (!this.seen.has(abs)) return
+    try {
+      this.remember(abs, contentDigest(await fs.readFile(abs)))
+    } catch {
+      this.seen.delete(abs)
+    }
+  }
+
+  /**
+   * Whether writing over `abs`, which currently holds `current`, would land on
+   * content the agent has not seen: `'unread'` when it was never recorded,
+   * `'changed'` when its bytes differ from the record, `null` when the write is
+   * safe.
+   */
+  check(abs: string, current: Buffer | string): StaleWriteReason | null {
+    const digest = this.seen.get(abs)
+    if (digest === undefined) return 'unread'
+    return digest === contentDigest(current) ? null : 'changed'
+  }
+
+  /** Whether `abs` has a record. */
+  has(abs: string): boolean {
+    return this.seen.has(abs)
+  }
+
+  /** Keep only the records for paths in `keep`. */
+  retainOnly(keep: ReadonlySet<string>): void {
+    for (const abs of [...this.seen.keys()]) if (!keep.has(abs)) this.seen.delete(abs)
+  }
+
+  /** Current record count, for tests. */
+  get size(): number {
+    return this.seen.size
+  }
+
+  private remember(abs: string, digest: string): void {
+    // Re-inserting moves the path to the young end, so eviction drops the stalest.
+    this.seen.delete(abs)
+    this.seen.set(abs, digest)
+    if (this.seen.size > this.maxEntries) {
+      const oldest = this.seen.keys().next().value
+      if (oldest !== undefined) this.seen.delete(oldest)
+    }
+  }
+}
+
+/** Conversations whose read records are kept between runs; older ones are dropped. */
+const MAX_TRACKED_CONVERSATIONS = 64
+
+const conversationTrackers = new Map<string, FileReadTracker>()
+
+/**
+ * The read tracker a run starts with.
+ *
+ * A run is one turn, and the files a model read on an earlier turn of the same
+ * conversation are still in its context, so the records carry across turns: a
+ * follow-up edit to an unchanged file needs no re-read, while one the user changed
+ * between turns is caught by the content check. Only records whose read or write is
+ * still in the history the model is shown survive (`visiblePaths`), so a rewound,
+ * cleared, or compacted-away read no longer counts as seen. Like "Allow for run"
+ * consent, this is in-memory only: a fresh launch starts with nothing read. A run
+ * with no conversation (headless) gets a tracker of its own.
+ */
+export function fileTrackerForRun(
+  conversationId: string | undefined,
+  visiblePaths: ReadonlySet<string>
+): FileReadTracker {
+  if (!conversationId) return new FileReadTracker()
+  const tracker = conversationTrackers.get(conversationId) ?? new FileReadTracker()
+  tracker.retainOnly(visiblePaths)
+  conversationTrackers.delete(conversationId)
+  conversationTrackers.set(conversationId, tracker)
+  if (conversationTrackers.size > MAX_TRACKED_CONVERSATIONS) {
+    const oldest = conversationTrackers.keys().next().value
+    if (oldest !== undefined) conversationTrackers.delete(oldest)
+  }
+  return tracker
+}
+
+/** Tools whose call shows the model a file, or leaves on disk content it wrote. */
+const FILE_SEEING_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'multi_edit', 'notebook_edit', 'apply_patch'])
+
+/**
+ * Canonical paths the given history's file tools read or wrote, for
+ * {@link fileTrackerForRun}. `resolvePath` and `patchPaths` are the same mappers
+ * {@link writePaths} takes; a path that no longer resolves is skipped.
+ */
+export function pathsSeenInHistory(
+  messages: readonly { toolCalls?: { name: string; arguments: Record<string, unknown> }[] }[],
+  resolvePath: (rel: string) => string,
+  patchPaths: (patch: string) => string[]
+): Set<string> {
+  const out = new Set<string>()
+  for (const m of messages) {
+    for (const call of m.toolCalls ?? []) {
+      if (!FILE_SEEING_TOOLS.has(call.name)) continue
+      for (const abs of writePaths(call.name, call.arguments, resolvePath, patchPaths)) out.add(abs)
+    }
+  }
+  return out
 }

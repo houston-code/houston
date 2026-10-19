@@ -268,6 +268,25 @@ conversation, not a log. Two ways to see more:
 
 Very long output is capped with a note saying how much was left out.
 
+## Editing files while it works
+
+You can keep working in your own editor while a turn runs. Before the agent
+overwrites or edits a file, Houston checks two things: that the agent has read the
+file in this conversation, and that the file still says what the agent last saw. If
+you changed it in the meantime (or a shell command, a formatter, or a subagent did),
+the write is refused and the agent reads the file again first, so your change is
+never replaced by an older copy. Creating a new file needs no read. Reads carry over
+between messages of one conversation for files nobody has changed since; after the
+app restarts, or once a read has been compacted out of the conversation, the agent
+reads a file again before changing it. Changes Houston makes on the agent's behalf
+right after a write (format-on-save, a PostToolUse hook) don't count as yours.
+
+The agent sees files with line numbers, so it can cite exact lines and page through
+a large file by them. When an edit lands somewhere the agent didn't spell out
+exactly (its snippet had drifted from the file, or carried copied line numbers), the
+result shows the edited lines so it can check them. An edit whose snippet matches
+nothing points the agent at the closest part of the file instead of only failing.
+
 ## Typing while it works (steering)
 
 You do not have to wait for a turn to finish before saying the next thing. Type

@@ -75,7 +75,10 @@ import {
 import { getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
 import { resolveAstGrep, searchStructural } from './astgrep'
-import { resolveEdit } from './edit-match'
+import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
+import { displayLines, numberedLine, numberLines, numberWidth } from './line-numbers'
+import type { FileReadTracker, StaleWriteReason } from './readCache'
+import { isSensitivePath } from './sensitive-paths'
 import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
@@ -240,6 +243,14 @@ export interface ToolContext {
    * model-facing reason when refused. Present wherever `spawnSession` is.
    */
   proposeSession?: (input: { title: string }) => void
+  /**
+   * What this run has read and written (injected by the loop and the subagent
+   * runner). `read_file` records into it; `write_file`, `edit_file`, and
+   * `multi_edit` refuse to change an existing file the run has not read, or one
+   * that changed on disk since its last read or write (see {@link staleWriteRefusal}).
+   * Absent on hosts that drive the tools directly, where nothing is enforced.
+   */
+  fileTracker?: FileReadTracker
 }
 
 export interface ToolDef {
@@ -412,7 +423,7 @@ const readFile: ToolDef = {
   schema: {
     name: 'read_file',
     description:
-      'Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit. Files that are not text are reported as binary rather than returned as garbled bytes.',
+      'Read a file within the project. Text comes back with each line prefixed by its line number and a tab (e.g. "  12\\tconst x = 1"); the prefix is not part of the file, so leave it out of edit_file and multi_edit strings. Pass offset/limit (1-based line numbers) to read just a slice of a large file; output that runs too long is cut at a whole line, with a note giving the offset to continue from. Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit. Files that are not text are reported as binary rather than returned as garbled bytes.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
@@ -437,6 +448,9 @@ const readFile: ToolDef = {
     const imageType = imageMediaTypeForPath(rel)
     if (imageType) {
       const buf = await fs.readFile(abs)
+      // Every outcome below counts as read, even the ones that can't attach: a write
+      // refused as "unread" would send the model back to a read that can't show more.
+      ctx.fileTracker?.noteRead(abs, buf)
       if (buf.byteLength > MAX_ATTACH_IMAGE_BYTES) {
         return `[image: ${rel} (${humanSize(buf.byteLength)}): too large to attach; limit is ${humanSize(MAX_ATTACH_IMAGE_BYTES)}]`
       }
@@ -448,6 +462,7 @@ const readFile: ToolDef = {
     }
     if (isPdfPath(rel)) {
       const buf = await fs.readFile(abs)
+      ctx.fileTracker?.noteRead(abs, buf)
       if (buf.byteLength > MAX_PDF_BYTES) {
         return `[pdf: ${rel} (${humanSize(buf.byteLength)}): too large to attach; limit is ${humanSize(MAX_PDF_BYTES)}. Extract its text with run_shell (e.g. pdftotext) instead.]`
       }
@@ -463,21 +478,23 @@ const readFile: ToolDef = {
     // yields replacement characters — so without this check the model would be
     // handed a wall of mojibake and left to infer that the file was never text.
     const buf = await fs.readFile(abs)
+    ctx.fileTracker?.noteRead(abs, buf)
     if (looksBinary(buf)) {
       return `[binary file: ${rel} (${humanSize(buf.byteLength)}): not text, so there is nothing to show. Inspect it with run_shell (e.g. file, xxd, strings).]`
     }
 
+    const offset = num(args, 'offset')
+    const limit = num(args, 'limit')
+
+    if (!isNotebookPath(rel)) return numberedRead(buf.toString('utf8'), offset, limit)
+
     // A notebook is JSON, so it would "read" fine as text — as a wall of escaped
     // source split across line arrays and interleaved with base64 outputs. Render
     // it as numbered cells instead; notebook_edit takes those same numbers. The
-    // rendering substitutes for the file's text and then slices/truncates exactly
-    // like any other file, so offset/limit keep working on a large notebook.
-    const data = isNotebookPath(rel)
-      ? renderNotebook(parseNotebook(buf.toString('utf8')), { path: rel })
-      : buf.toString('utf8')
-
-    const offset = num(args, 'offset')
-    const limit = num(args, 'limit')
+    // rendering substitutes for the file's text and then slices/truncates like a
+    // plain file did before reads were line-numbered, so offset/limit keep working
+    // on a large notebook.
+    const data = renderNotebook(parseNotebook(buf.toString('utf8')), { path: rel })
 
     if (offset !== undefined || limit !== undefined) {
       const lines = data.split('\n')
@@ -503,13 +520,167 @@ const readFile: ToolDef = {
   }
 }
 
+/**
+ * A text file as `read_file` shows it: each line prefixed with its number (see
+ * line-numbers.ts), `offset`/`limit` selecting a 1-based range, and the output cut
+ * at a whole line once it reaches {@link MAX_READ_CHARS}. A range carries a
+ * `[lines a-b of n]` header; a cut says which line it stopped after and where to
+ * pick up, so the model can page through a large file without guessing.
+ */
+export function numberedRead(text: string, offset?: number, limit?: number): string {
+  const lines = displayLines(text)
+  const total = lines.length
+  if (total === 0) return '[empty file]'
+  const ranged = offset !== undefined || limit !== undefined
+  const start = Math.max(0, Math.floor(offset ?? 1) - 1)
+  const end = limit !== undefined ? Math.min(total, start + Math.max(0, Math.floor(limit))) : total
+  if (start >= end) {
+    return `[no lines in range: offset ${start + 1}, file has ${total} line${total === 1 ? '' : 's'}]`
+  }
+
+  const width = numberWidth(total)
+  const rows: string[] = []
+  let size = 0
+  for (let i = start; i < end; i++) {
+    const row = numberedLine(i + 1, width, lines[i])
+    if (rows.length > 0 && size + 1 + row.length > MAX_READ_CHARS) break
+    rows.push(row)
+    size += (rows.length > 1 ? 1 : 0) + row.length
+  }
+  const last = start + rows.length // 1-based number of the last line shown
+  let notice = ''
+  if (rows[0].length > MAX_READ_CHARS) {
+    // A single line longer than the whole budget (minified code, a data blob) can't
+    // be shown whole; cut it rather than show nothing, and say so.
+    rows[0] = rows[0].slice(0, MAX_READ_CHARS)
+    notice = `\n[truncated: line ${start + 1} is ${lines[start].length} chars, cut at ${MAX_READ_CHARS}. The file has ${total} line${total === 1 ? '' : 's'}${last < total ? `; the next one is ${last + 1}` : ''}. Inspect long lines with run_shell (e.g. cut -c or fold).]`
+  } else if (last < end) {
+    notice = `\n[truncated at ${MAX_READ_CHARS} chars: showing lines ${start + 1}-${last} of ${total}. Continue with offset ${last + 1}.]`
+  }
+  const header = ranged ? `[lines ${start + 1}-${last} of ${total}]\n` : ''
+  return `${header}${rows.join('\n')}${notice}`
+}
+
+/** The tools {@link staleWriteRefusal} guards: the ones that change an existing file in place. */
+const GUARDED_WRITES = new Set(['write_file', 'edit_file', 'multi_edit'])
+
+/** The refusal the model sees when a write would land on content it has not seen. */
+function staleWriteMessage(rel: string, reason: StaleWriteReason, name: string): string {
+  const verb = name === 'write_file' ? 'write' : 'edit'
+  if (reason === 'unread') {
+    return name === 'write_file'
+      ? `${rel} already exists and you have not read it yet. Read it with read_file first, so you can see what writing it would replace, then write it again (to change only part of it, use edit_file).`
+      : `You have not read ${rel} yet. Read it with read_file first (a range around the change is enough), then retry the edit.`
+  }
+  return `${rel} has changed on disk since you last read or wrote it, so the user or another program may have edited it. Read it again with read_file and base the ${verb} on what it says now, so those changes are not lost.`
+}
+
+/** Throw the stale-write refusal when writing over `abs` (holding `current`) would clobber unseen content. */
+function assertSeen(ctx: ToolContext, name: string, abs: string, rel: string, current: Buffer): void {
+  const reason = ctx.fileTracker?.check(abs, current)
+  if (reason) throw new Error(staleWriteMessage(rel, reason, name))
+}
+
+/** The file's bytes, or null when it can't be read (most often: it does not exist). */
+async function readIfPresent(abs: string): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(abs)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The refusal a guarded write would fail with, checked before the call runs, or
+ * null when it may go ahead. The tools enforce this themselves when they execute;
+ * the loop also asks up front so the user is never asked to approve a write that
+ * is about to be refused. A path that won't resolve, or a file that doesn't exist,
+ * is left for the tool to report.
+ */
+export async function staleWriteRefusal(
+  name: string,
+  args: Record<string, unknown>,
+  roots: string[],
+  tracker: FileReadTracker | undefined
+): Promise<string | null> {
+  if (!tracker || !GUARDED_WRITES.has(name)) return null
+  const rel = str(args, 'path')
+  let abs: string
+  try {
+    abs = resolveInRoots(roots, rel)
+  } catch {
+    return null
+  }
+  const current = await readIfPresent(abs)
+  if (current === null) return null
+  const reason = tracker.check(abs, current)
+  return reason ? staleWriteMessage(rel, reason, name) : null
+}
+
+/** Lines shown on each side of an edited region in edit feedback. */
+const EDIT_CONTEXT_LINES = 2
+/** Longest snippet shown for one region before its middle is elided. */
+const MAX_SNIPPET_LINES = 30
+/** Regions shown for one edit; a replace_all past this says how many it left out. */
+const MAX_SNIPPET_REGIONS = 3
+
+/**
+ * Why edit feedback on a credential file (see isSensitivePath) shows no lines: the
+ * write was approved, but reading such a file asks first, and a snippet or a
+ * closest-region listing would read it out without asking.
+ */
+const SENSITIVE_SNIPPET_NOTE = 'The edited lines are not shown because the file may hold credentials.'
+
+/** One region of the edited file, numbered, with a little context either side. */
+function regionSnippet(lines: string[], region: EditRegion, width: number): string {
+  if (lines.length === 0) return '[the file is now empty]'
+  const from = Math.max(1, region.startLine - EDIT_CONTEXT_LINES)
+  const to = Math.min(lines.length, region.startLine + Math.max(region.lineCount, 1) - 1 + EDIT_CONTEXT_LINES)
+  if (to - from + 1 <= MAX_SNIPPET_LINES) return numberLines(lines, from, to, width)
+  const headTo = from + MAX_SNIPPET_LINES - 11
+  const tailFrom = to - 4
+  return `${numberLines(lines, from, headTo, width)}\n[${tailFrom - headTo - 1} lines not shown]\n${numberLines(lines, tailFrom, to, width)}`
+}
+
+/** `lines a-b` (or `line a`) for a region, as a reader of the snippet would cite it. */
+function regionLabel(region: EditRegion): string {
+  const last = region.startLine + Math.max(region.lineCount, 1) - 1
+  return last === region.startLine ? `line ${region.startLine}` : `lines ${region.startLine}-${last}`
+}
+
+/**
+ * Why an edit's landing spot deserves a look, or null when it matched exactly as
+ * written: a fuzzy tier chose where it went, or copied line numbers were removed
+ * first. Either way the model is trusting a match it didn't spell out.
+ */
+function matchNote(r: EditResult): string | null {
+  const parts: string[] = []
+  if (r.strippedLineNumbers) {
+    parts.push(
+      r.strippedLineNumbers === 'both'
+        ? 'line-number prefixes were removed from old_string and new_string before matching'
+        : 'line-number prefixes were removed from old_string before matching'
+    )
+  }
+  if (r.strategy !== 'exact') parts.push('old_string did not match exactly')
+  return parts.length ? parts.join(', and ') : null
+}
+
+/** The numbered snippets for one edit's regions in the edited `lines`. */
+function editSnippets(lines: string[], regions: EditRegion[]): string {
+  const width = numberWidth(lines.length)
+  const shown = regions.slice(0, MAX_SNIPPET_REGIONS).map((r) => regionSnippet(lines, r, width))
+  const more = regions.length - shown.length
+  return shown.join('\n...\n') + (more > 0 ? `\n[${more} more replacement${more === 1 ? '' : 's'} not shown]` : '')
+}
+
 const writeFile: ToolDef = {
   kind: 'write',
   summarize: (a) => `Write ${str(a, 'path')}`,
   schema: {
     name: 'write_file',
     description:
-      'Create or overwrite a text file within the project with the given content. Creates parent directories as needed.',
+      'Create a text file within the project, or replace an existing one, with the given content. Creates parent directories as needed. To overwrite an existing file you must have read it with read_file first, and the write is refused if the file changed on disk since you last read or wrote it. To change part of an existing file, prefer edit_file.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
@@ -519,14 +690,19 @@ const writeFile: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const abs = resolveInRoots(rootsOf(ctx), str(args, 'path'))
+    const rel = str(args, 'path')
+    const abs = resolveInRoots(rootsOf(ctx), rel)
     const content = str(args, 'content')
-    if (content.includes('[redacted:')) {
-      assertNoRedactedValues(await fs.readFile(abs, 'utf8').catch(() => ''), content)
+    const redacted = content.includes('[redacted:')
+    const current = ctx.fileTracker || redacted ? await readIfPresent(abs) : null
+    if (current !== null) assertSeen(ctx, 'write_file', abs, rel, current)
+    if (redacted) {
+      assertNoRedactedValues(current?.toString('utf8') ?? '', content)
     }
     await fs.mkdir(dirname(abs), { recursive: true })
     await fs.writeFile(abs, content, 'utf8')
-    return `Wrote ${Buffer.byteLength(content)} bytes to ${str(args, 'path')}.`
+    ctx.fileTracker?.noteWrite(abs, content)
+    return `Wrote ${Buffer.byteLength(content)} bytes to ${rel}.`
   }
 }
 
@@ -536,11 +712,14 @@ const editFile: ToolDef = {
   schema: {
     name: 'edit_file',
     description:
-      'Replace a string in a file with a new string. The old string is matched verbatim first; if that fails it is matched ignoring each line\'s indentation/whitespace (so minor drift does not lose the edit). By default the old string must resolve to exactly one match; set replace_all to replace every occurrence.',
+      'Replace a string in a file with a new string. Read the file with read_file first (a range around the change is enough); the edit is refused if the file changed on disk since you last read or wrote it. The old string is matched verbatim first; if that fails it is matched ignoring each line\'s indentation/whitespace (so minor drift does not lose the edit), and the result then shows the edited lines, numbered, so you can check where it landed. If nothing matches, the error shows the closest region of the file. By default the old string must resolve to exactly one match; set replace_all to replace every occurrence.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
-        old_string: { type: 'string', description: 'The exact text to replace.' },
+        old_string: {
+          type: 'string',
+          description: 'The exact text to replace, as it appears in the file (without read_file\'s line-number prefixes).'
+        },
         new_string: { type: 'string', description: 'The replacement text.' },
         replace_all: { type: 'boolean', description: 'Replace every occurrence (default false).' }
       },
@@ -548,18 +727,27 @@ const editFile: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const abs = resolveInRoots(rootsOf(ctx), str(args, 'path'))
+    const rel = str(args, 'path')
+    const abs = resolveInRoots(rootsOf(ctx), rel)
     const oldStr = str(args, 'old_string')
     const newStr = str(args, 'new_string')
     const replaceAll = args.replace_all === true
-    const data = await fs.readFile(abs, 'utf8')
-    const { content, strategy, replacements } = resolveEdit(data, oldStr, newStr, replaceAll)
-    assertNoRedactedValues(data, content)
-    await fs.writeFile(abs, content, 'utf8')
-    const fuzzy = strategy === 'exact' ? '' : ` [matched via ${strategy}]`
-    return `Edited ${str(args, 'path')} (${replacements} replacement${
-      replacements === 1 ? '' : 's'
-    })${fuzzy}.`
+    const buf = await fs.readFile(abs)
+    assertSeen(ctx, 'edit_file', abs, rel, buf)
+    const data = buf.toString('utf8')
+    const sensitive = isSensitivePath(rel)
+    const result = resolveEdit(data, oldStr, newStr, replaceAll, { showCandidate: !sensitive })
+    assertNoRedactedValues(data, result.content)
+    await fs.writeFile(abs, result.content, 'utf8')
+    ctx.fileTracker?.noteWrite(abs, result.content)
+    const n = result.replacements
+    const fuzzy = result.strategy === 'exact' ? '' : ` [matched via ${result.strategy}]`
+    const done = `Edited ${rel} (${n} replacement${n === 1 ? '' : 's'})${fuzzy}.`
+    const note = matchNote(result)
+    if (!note) return done
+    const where = result.regions.length === 1 ? ` (${regionLabel(result.regions[0])})` : ''
+    if (sensitive) return `${done} Because ${note}, check the result${where} with read_file. ${SENSITIVE_SNIPPET_NOTE}`
+    return `${done} Because ${note}, check the result as written${where}:\n${editSnippets(displayLines(result.content), result.regions)}`
   }
 }
 
@@ -570,14 +758,37 @@ interface EditSpec {
 }
 
 /** Apply one find/replace to `data` via the resilient matcher, with per-edit error context. */
-function applyEdit(data: string, edit: EditSpec, index: number): string {
+function applyEdit(data: string, edit: EditSpec, index: number, showCandidate: boolean): EditResult {
   const oldStr = typeof edit.old_string === 'string' ? edit.old_string : ''
   const newStr = typeof edit.new_string === 'string' ? edit.new_string : ''
   try {
-    return resolveEdit(data, oldStr, newStr, edit.replace_all === true).content
+    return resolveEdit(data, oldStr, newStr, edit.replace_all === true, { showCandidate })
   } catch (e) {
-    throw new Error(`edit ${index + 1}: ${(e as Error).message}`, { cause: e })
+    // A closest-region listing is numbered against the file with the earlier edits
+    // applied in memory, which is not what is on disk (nothing was written): say so.
+    const asOf =
+      index > 0 && e instanceof EditNotFoundError && e.hasCandidate
+        ? ` (Those line numbers count ${index === 1 ? 'edit 1' : `edits 1-${index}`} as already applied; nothing was written.)`
+        : ''
+    throw new Error(`edit ${index + 1}: ${(e as Error).message}${asOf}`, { cause: e })
   }
+}
+
+/**
+ * `region` (numbered before `later` was applied) renumbered for the content after
+ * it. `later`'s regions are in post-edit numbering, so each one's original start is
+ * recovered by undoing the shifts of the ones before it; every replacement that
+ * started above `region` moves it by the lines that replacement added or removed.
+ */
+function shiftRegion(region: EditRegion, later: EditRegion[]): EditRegion {
+  let undo = 0
+  let shift = 0
+  for (const r of later) {
+    const originalStart = r.startLine - undo
+    if (originalStart < region.startLine) shift += r.lineDelta
+    undo += r.lineDelta
+  }
+  return { ...region, startLine: region.startLine + shift }
 }
 
 const multiEdit: ToolDef = {
@@ -589,7 +800,7 @@ const multiEdit: ToolDef = {
   schema: {
     name: 'multi_edit',
     description:
-      'Apply several exact-string replacements to a single file in one atomic operation. The edits are applied in order (each later edit sees the result of the earlier ones), and the file is only written if every edit succeeds. Each edit follows the same rules as edit_file: old_string must occur exactly once unless replace_all is set. Prefer this over multiple edit_file calls when changing several places in the same file.',
+      'Apply several exact-string replacements to a single file in one atomic operation. The edits are applied in order (each later edit sees the result of the earlier ones), and the file is only written if every edit succeeds. Each edit follows the same rules as edit_file: the file must have been read with read_file first and not changed on disk since, and old_string must occur exactly once unless replace_all is set. Prefer this over multiple edit_file calls when changing several places in the same file.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
@@ -599,7 +810,10 @@ const multiEdit: ToolDef = {
           items: {
             type: 'object',
             properties: {
-              old_string: { type: 'string', description: 'The exact text to replace.' },
+              old_string: {
+                type: 'string',
+                description: 'The exact text to replace, as it appears in the file (without read_file\'s line-number prefixes).'
+              },
               new_string: { type: 'string', description: 'The replacement text.' },
               replace_all: {
                 type: 'boolean',
@@ -615,19 +829,40 @@ const multiEdit: ToolDef = {
     )
   },
   async execute(args, ctx) {
-    const abs = resolveInRoots(rootsOf(ctx), str(args, 'path'))
+    const rel = str(args, 'path')
+    const abs = resolveInRoots(rootsOf(ctx), rel)
     const edits = args.edits
     if (!Array.isArray(edits) || edits.length === 0) {
       throw new Error('edits must be a non-empty array.')
     }
-    const original = await fs.readFile(abs, 'utf8')
+    const buf = await fs.readFile(abs)
+    assertSeen(ctx, 'multi_edit', abs, rel, buf)
+    const original = buf.toString('utf8')
     let data = original
+    // Edits whose landing spot deserves a look, with their regions kept current as
+    // later edits move lines around, so the snippets cite the file as written.
+    const flagged: { index: number; note: string; strategy: EditStrategy; regions: EditRegion[] }[] = []
+    const sensitive = isSensitivePath(rel)
     edits.forEach((edit, i) => {
-      data = applyEdit(data, (edit ?? {}) as EditSpec, i)
+      const result = applyEdit(data, (edit ?? {}) as EditSpec, i, !sensitive)
+      for (const f of flagged) f.regions = f.regions.map((r) => shiftRegion(r, result.regions))
+      const note = matchNote(result)
+      if (note) flagged.push({ index: i, note, strategy: result.strategy, regions: result.regions })
+      data = result.content
     })
     assertNoRedactedValues(original, data)
     await fs.writeFile(abs, data, 'utf8')
-    return `Edited ${str(args, 'path')} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
+    ctx.fileTracker?.noteWrite(abs, data)
+    const done = `Edited ${rel} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
+    if (flagged.length === 0) return done
+    const lines = displayLines(data)
+    const sections = flagged.map((f) => {
+      const where = f.regions.length === 1 ? ` (${regionLabel(f.regions[0])})` : ''
+      const fuzzy = f.strategy === 'exact' ? '' : ` [matched via ${f.strategy}]`
+      if (sensitive) return `Edit ${f.index + 1}${fuzzy}: ${f.note}, so check the result${where} with read_file.`
+      return `Edit ${f.index + 1}${fuzzy}: ${f.note}, so check the result as written${where}:\n${editSnippets(lines, f.regions)}`
+    })
+    return `${done}\n${sections.join('\n')}${sensitive ? `\n${SENSITIVE_SNIPPET_NOTE}` : ''}`
   }
 }
 
@@ -696,7 +931,9 @@ const notebookEdit: ToolDef = {
       source: typeof args.source === 'string' ? args.source : undefined,
       cellType: typeof args.cell_type === 'string' ? args.cell_type : undefined
     })
-    await fs.writeFile(abs, serializeNotebook(updated), 'utf8')
+    const serialized = serializeNotebook(updated)
+    await fs.writeFile(abs, serialized, 'utf8')
+    ctx.fileTracker?.noteWrite(abs, serialized)
     const what =
       mode === 'insert'
         ? `Inserted a ${updated.cells[cell - 1].cell_type} cell at ${cell}`
@@ -867,7 +1104,20 @@ const applyPatch: ToolDef = {
           throw new Error(`Update File: ${op.path} does not exist.`)
         }
         const original = data
-        for (const hunk of op.hunks) data = resolveEdit(data, hunk.oldText, hunk.newText).content
+        op.hunks.forEach((hunk, h) => {
+          try {
+            data = resolveEdit(data, hunk.oldText, hunk.newText, false, { showCandidate: !isSensitivePath(op.path) }).content
+          } catch (e) {
+            // Name the file and hunk: the matcher's message alone doesn't say which of
+            // the patch's changes failed. A closest-region listing counts this file's
+            // earlier hunks as applied, which nothing on disk does yet.
+            const asOf =
+              h > 0 && e instanceof EditNotFoundError && e.hasCandidate
+                ? ` (Those line numbers count ${h === 1 ? 'hunk 1' : `hunks 1-${h}`} as already applied; nothing was written.)`
+                : ''
+            throw new Error(`Update File: ${op.path}, hunk ${h + 1}: ${(e as Error).message}${asOf}`, { cause: e })
+          }
+        })
         assertNoRedactedValues(original, data)
         if (op.moveTo) {
           const target = resolveInRoots(roots, op.moveTo)
@@ -932,6 +1182,11 @@ const applyPatch: ToolDef = {
       )
     }
 
+    // What the patch left on disk is what the agent now knows each file to hold.
+    for (const change of staged) {
+      if (change.content === null) ctx.fileTracker?.forget(change.abs)
+      else ctx.fileTracker?.noteWrite(change.abs, change.content)
+    }
     return `Applied patch: ${ops.length} file${ops.length === 1 ? '' : 's'} (${added} added, ${updated} updated, ${deleted} deleted).`
   }
 }

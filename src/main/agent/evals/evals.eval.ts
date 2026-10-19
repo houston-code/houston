@@ -387,7 +387,11 @@ describe.skipIf(LIVE)('grading integrity', () => {
   it('fails a run whose only work was rewriting the test', async () => {
     const cheat: EvalTask = {
       ...TASKS[0],
-      script: [turn(callTool('cheat', 'write_file', { path: 'test.mjs', content: 'process.exit(0)\n' }))]
+      // Read first: write_file refuses to overwrite a file the run hasn't seen.
+      script: [
+        turn(callTool('look', 'read_file', { path: 'test.mjs' })),
+        turn(callTool('cheat', 'write_file', { path: 'test.mjs', content: 'process.exit(0)\n' }))
+      ]
     }
     const r = await runTask(cheat)
     expect(r.toolsUsed, 'the cheat should have actually run').toContain('write_file')
