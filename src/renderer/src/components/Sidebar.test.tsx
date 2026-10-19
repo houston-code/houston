@@ -1010,6 +1010,20 @@ describe('Sidebar: spawned chats nest under their parent', () => {
     expect(screen.getByText('Update API docs')).toBeInTheDocument()
   })
 
+  it("keeps titles in line: a sibling without spawned chats reserves the arrow's slot", () => {
+    const other = makeConv({ id: 'x', title: 'Bump deps', updatedAt: 5 })
+    const { container, unmount } = render(<Sidebar {...baseProps({ conversations: [...convs, other] })} />)
+    const row = (title: string): HTMLElement => screen.getByText(title).closest('.conv') as HTMLElement
+    expect(row('Bump deps').querySelector('.conv__nest-spacer')).not.toBeNull()
+    expect(row('Add OAuth').querySelector('.conv__nest-toggle')).not.toBeNull()
+    // Nested rows: none of these siblings has children, so no slot is reserved.
+    expect(row('Fix flaky e2e').querySelector('.conv__nest-spacer')).toBeNull()
+    unmount()
+    // A list with no nesting at all looks exactly as before.
+    render(<Sidebar {...baseProps({ conversations: [other] })} />)
+    expect(container.ownerDocument.querySelector('.conv__nest-spacer')).toBeNull()
+  })
+
   it('opens a nested chat on click, and only top-level rows are draggable', () => {
     const onSelect = vi.fn()
     render(<Sidebar {...baseProps({ conversations: convs, onSelect })} />)

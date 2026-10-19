@@ -601,11 +601,16 @@ body.is-resizing {
   padding-left: 6px;
   border-left: 1px solid var(--border);
 }
-.conv__nest-toggle {
+/* The fold arrow and its placeholder share one slot size, so titles at a level
+   line up whether or not their row has spawned chats under it. */
+.conv__nest-toggle,
+.conv__nest-spacer {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
   margin-left: -4px;
+}
+.conv__nest-toggle {
   padding: 0;
   border: 0;
   background: transparent;

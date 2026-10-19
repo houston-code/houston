@@ -183,7 +183,8 @@ function ConvRow({
   onStopRename,
   onStartRenameGroup,
   depth = 0,
-  nested
+  nested,
+  gutter = false
 }: {
   conv: ConversationMeta
   active: boolean
@@ -197,6 +198,12 @@ function ConvRow({
   depth?: number
   /** Present when spawned chats nest under this row: their count, how many run, and the toggle. */
   nested?: { count: number; running: number; expanded: boolean; onToggle: () => void }
+  /**
+   * Reserve the fold arrow's slot even without one, so this row's title lines up
+   * with a sibling's that has the arrow. Set for every row at a level where any row
+   * has spawned chats under it.
+   */
+  gutter?: boolean
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -267,6 +274,7 @@ function ConvRow({
           ›
         </button>
       )}
+      {!nested && gutter && <span className="conv__nest-spacer" aria-hidden="true" />}
       {conv.pinned && <span className="conv__pin" title="Pinned">★</span>}
       <div className="conv__main">
         {renaming ? (
@@ -671,7 +679,12 @@ function SidebarSectionView({
 
   // A row plus, unless folded away, the spawned chats nested under it (recursively).
   // A parent holding the open chat stays unfolded, so the open chat is never hidden.
-  const renderTree = (c: ConversationMeta, depth: number): JSX.Element => {
+  // Whether any of these sibling rows has spawned chats under it (so all of them
+  // reserve the fold arrow's slot and their titles stay in line).
+  const needsGutter = (siblings: ConversationMeta[]): boolean =>
+    siblings.some((c) => (section.children[c.id]?.length ?? 0) > 0)
+  const topGutter = needsGutter(section.conversations)
+  const renderTree = (c: ConversationMeta, depth: number, gutter: boolean): JSX.Element => {
     const kids = section.children[c.id] ?? []
     const all = kids.length ? descendantsOf(c.id, section.children) : []
     const expanded = !collapsedParents.has(c.id) || all.some((d) => d.id === currentId)
@@ -687,6 +700,7 @@ function SidebarSectionView({
           onStopRename={() => setRenamingConv(null)}
           onStartRenameGroup={(id) => setRenamingGroup(id)}
           depth={depth}
+          gutter={gutter}
           {...(kids.length
             ? {
                 nested: {
@@ -701,7 +715,7 @@ function SidebarSectionView({
         {expanded && kids.length > 0 && (
           <div className="conv-children" role="group" aria-label={`Spawned from ${c.title}`}>
             {kids.map((k) => (
-              <Fragment key={k.id}>{renderTree(k, depth + 1)}</Fragment>
+              <Fragment key={k.id}>{renderTree(k, depth + 1, needsGutter(kids))}</Fragment>
             ))}
           </div>
         )}
@@ -729,7 +743,7 @@ function SidebarSectionView({
         section.conversations.map((c, i) => (
           <Fragment key={c.id}>
             {dropAt === i && <div className="conv-drop-line" aria-hidden="true" />}
-            {renderTree(c, 0)}
+            {renderTree(c, 0, topGutter)}
           </Fragment>
         ))}
       {!section.collapsed && rowCount > 0 && dropAt === rowCount && (
