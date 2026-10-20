@@ -1,8 +1,8 @@
 import { spawn, execFileSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, win32 } from 'node:path'
+import { dirname, join, resolve, win32 } from 'node:path'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
 import { sanitizeChildEnv } from '../childEnv'
 import type {
@@ -205,6 +205,83 @@ export interface SandboxEnvOptions {
   offline?: boolean
   /** Host platform; injectable for tests. */
   platform?: NodeJS.Platform
+  /** Version of the node-gyp the npm on `path` bundles, or null; injectable for tests. */
+  nodeGypVersion?: (path: string, platform: NodeJS.Platform) => string | null
+}
+
+/**
+ * The install directory of the first `npm` on `path` (the folder holding npm's own
+ * package.json), or null when it can't be told: no npm, or a shim that doesn't resolve
+ * into an npm install. POSIX installs link `bin/npm` to
+ * `lib/node_modules/npm/bin/npm-cli.js`; Windows puts `npm.cmd` next to `node_modules/npm`.
+ */
+export function npmRootOnPath(path: string, platform: NodeJS.Platform = process.platform): string | null {
+  const delim = platform === 'win32' ? ';' : ':'
+  for (const dir of path.split(delim).filter(Boolean)) {
+    const bin = join(dir, platform === 'win32' ? 'npm.cmd' : 'npm')
+    if (!existsSync(bin)) continue
+    if (platform === 'win32') return join(dir, 'node_modules', 'npm')
+    try {
+      const real = realpathSync(bin)
+      return real.endsWith(join('bin', 'npm-cli.js')) ? resolve(dirname(real), '..') : null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/**
+ * The version of the node-gyp bundled with the first `npm` on `path` (the one npm runs
+ * for packages' native builds), or null when it can't be told.
+ */
+export function bundledNodeGypVersion(path: string, platform: NodeJS.Platform = process.platform): string | null {
+  const root = npmRootOnPath(path, platform)
+  if (!root) return null
+  try {
+    const pkg = JSON.parse(readFileSync(join(root, 'node_modules', 'node-gyp', 'package.json'), 'utf8')) as {
+      version?: unknown
+    }
+    return typeof pkg.version === 'string' ? pkg.version : null
+  } catch {
+    return null
+  }
+}
+
+/** {@link bundledNodeGypVersion}, memoized per PATH: the answer only changes with PATH. */
+const nodeGypVersionCache = new Map<string, string | null>()
+function cachedNodeGypVersion(path: string, platform: NodeJS.Platform): string | null {
+  const key = `${platform}\0${path}`
+  if (!nodeGypVersionCache.has(key)) {
+    if (nodeGypVersionCache.size >= 16) nodeGypVersionCache.clear()
+    nodeGypVersionCache.set(key, bundledNodeGypVersion(path, platform))
+  }
+  return nodeGypVersionCache.get(key) ?? null
+}
+
+/** Whether a node-gyp version reads options from `npm_package_config_node_gyp_<key>` (11.4.0+). */
+export function readsPackageConfigEnv(version: string | null): boolean {
+  const m = version?.match(/^(\d+)\.(\d+)\./)
+  if (!m) return false
+  const [major, minor] = [Number(m[1]), Number(m[2])]
+  return major > 11 || (major === 11 && minor >= 4)
+}
+
+/**
+ * Env that points node-gyp's header cache (its "devdir", `~/Library/Caches/node-gyp`
+ * or `~/.cache/node-gyp` by default) at `devdir`, so a native build step under the
+ * sandbox doesn't fail on that write. node-gyp 11.4+ reads its options from
+ * `npm_package_config_node_gyp_<key>`, which npm ignores. Older node-gyp reads only
+ * `npm_config_<key>`, and npm 11+ warns on every command about an `npm_config_` key it
+ * doesn't define ("Unknown env config "devdir" ... will error in a future major
+ * version"), so that spelling is added only when the bundled node-gyp is known to be
+ * older, or can't be told: a warning is better than a native build that can't write.
+ */
+export function nodeGypDevdirEnv(devdir: string, nodeGypVersion: string | null): Record<string, string> {
+  return {
+    npm_package_config_node_gyp_devdir: devdir,
+    ...(readsPackageConfigEnv(nodeGypVersion) ? {} : { npm_config_devdir: devdir })
+  }
 }
 
 /**
@@ -226,9 +303,11 @@ export function sandboxEnv(
 ): NodeJS.ProcessEnv {
   const cache = pkgCacheDir(baseEnv)
   const platform = opts.platform ?? process.platform
+  const path = augmentPath(baseEnv)
+  const nodeGypVersion = (opts.nodeGypVersion ?? cachedNodeGypVersion)(path, platform)
   return {
     ...sanitizeChildEnv(baseEnv),
-    PATH: augmentPath(baseEnv),
+    PATH: path,
     npm_config_cache: join(cache, 'npm'),
     YARN_CACHE_FOLDER: join(cache, 'yarn'),
     PIP_CACHE_DIR: join(cache, 'pip'),
@@ -245,10 +324,10 @@ export function sandboxEnv(
     // or private-registry credentials there can still set CARGO_HOME per command.
     CARGO_HOME: join(cache, 'cargo'),
     // node-gyp caches the downloaded Node headers/libs it compiles native addons
-    // against under `~/.node-gyp` (its "devdir"), so `npm install` of any package
-    // with a native build step fails on that write under the sandbox. Redirect the
-    // devdir via the npm config env so node-gyp (standalone or via npm) picks it up.
-    npm_config_devdir: join(cache, 'node-gyp'),
+    // against under $HOME (its "devdir"), so `npm install` of any package with a
+    // native build step fails on that write under the sandbox. Redirect it, in the
+    // spelling the npm on PATH won't warn about (see nodeGypDevdirEnv).
+    ...nodeGypDevdirEnv(join(cache, 'node-gyp'), nodeGypVersion),
     // More build toolchains whose caches default under $HOME, so a sandboxed
     // build/install fails on the cache write. Deno and Bun expose a dedicated
     // cache-dir env; Gradle only has GRADLE_USER_HOME (cache + config together), so

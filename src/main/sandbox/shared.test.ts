@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join, sep, isAbsolute } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import {
   augmentPath,
+  bundledNodeGypVersion,
+  npmRootOnPath,
+  readsPackageConfigEnv,
   nvmDefaultBin,
   versionManagerDirs,
   type PathFs,
@@ -189,10 +194,99 @@ describe('sandboxEnv', () => {
   })
 
   it('redirects the node-gyp devdir into the writable temp cache dir', () => {
-    const env = sandboxEnv({ PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' })
+    const env = sandboxEnv({ PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' }, { nodeGypVersion: () => '12.4.0' })
     const cache = pkgCacheDir({ TMPDIR: '/tmp' })
-    expect(env.npm_config_devdir).toBe(`${cache}${sep}node-gyp`)
-    expect(env.npm_config_devdir).not.toMatch(/Users[/\\]me/) // not ~/.node-gyp — that's the EPERM we fix
+    expect(env.npm_package_config_node_gyp_devdir).toBe(`${cache}${sep}node-gyp`)
+    expect(env.npm_package_config_node_gyp_devdir).not.toMatch(/Users[/\\]me/) // not $HOME: that's the EPERM we fix
+  })
+
+  it("leaves out npm_config_devdir, which npm 11+ warns about, when node-gyp reads the package-config spelling", () => {
+    const env = sandboxEnv({ PATH: '/usr/bin', TMPDIR: '/tmp' }, { nodeGypVersion: () => '11.4.0' })
+    expect(env).not.toHaveProperty('npm_config_devdir')
+  })
+
+  it('keeps npm_config_devdir for a node-gyp older than 11.4, or one it cannot identify', () => {
+    const cache = pkgCacheDir({ TMPDIR: '/tmp' })
+    for (const version of ['11.2.0', '10.0.1', null]) {
+      const env = sandboxEnv({ PATH: '/usr/bin', TMPDIR: '/tmp' }, { nodeGypVersion: () => version })
+      expect(env.npm_config_devdir).toBe(`${cache}${sep}node-gyp`)
+      expect(env.npm_package_config_node_gyp_devdir).toBe(`${cache}${sep}node-gyp`)
+    }
+  })
+
+  it('sends no npm_config_ key the npm on PATH does not define, beyond the old node-gyp fallback', () => {
+    // npm 11+ prints "Unknown env config" on every command for an npm_config_ key it
+    // doesn't define, and says it will become an error. Checked against the real npm.
+    const base = { PATH: process.env.PATH, TMPDIR: '/tmp' }
+    const root = npmRootOnPath(augmentPath(base))
+    if (process.env.CI) expect(root).not.toBeNull()
+    if (!root) return
+    const require = createRequire(import.meta.url)
+    const { definitions } = require(join(root, 'node_modules', '@npmcli', 'config', 'lib', 'definitions')) as {
+      definitions: Record<string, unknown>
+    }
+    const env = sandboxEnv(base, { offline: true })
+    const legacyGyp = !readsPackageConfigEnv(bundledNodeGypVersion(augmentPath(base)))
+    const unknown = Object.keys(env)
+      .filter((k) => /^npm_config_/i.test(k))
+      .map((k) => k.slice('npm_config_'.length).replace(/_/g, '-').toLowerCase())
+      .filter((name) => !(name in definitions) && !(legacyGyp && name === 'devdir'))
+    expect(unknown).toEqual([])
+  })
+
+  describe('node-gyp detection', () => {
+    let root: string
+    beforeEach(() => {
+      root = mkdtempSync(join(tmpdir(), 'houston-npm-'))
+    })
+    afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+    function posixNpm(gypVersion: string | null): string {
+      const npmDir = join(root, 'lib', 'node_modules', 'npm')
+      mkdirSync(join(npmDir, 'bin'), { recursive: true })
+      writeFileSync(join(npmDir, 'bin', 'npm-cli.js'), '')
+      if (gypVersion) {
+        mkdirSync(join(npmDir, 'node_modules', 'node-gyp'), { recursive: true })
+        writeFileSync(join(npmDir, 'node_modules', 'node-gyp', 'package.json'), JSON.stringify({ version: gypVersion }))
+      }
+      mkdirSync(join(root, 'bin'))
+      symlinkSync(join('..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), join(root, 'bin', 'npm'))
+      return join(root, 'bin')
+    }
+
+    it.skipIf(process.platform === 'win32')('reads the node-gyp bundled with the first npm on PATH', () => {
+      const bin = posixNpm('12.4.0')
+      expect(npmRootOnPath(`/nonexistent:${bin}`, 'darwin')).toBe(realpathSync(join(root, 'lib', 'node_modules', 'npm')))
+      expect(bundledNodeGypVersion(`/nonexistent:${bin}`, 'darwin')).toBe('12.4.0')
+    })
+
+    it.skipIf(process.platform === 'win32')('is null when npm bundles no node-gyp, or npm is a shim', () => {
+      const bin = posixNpm(null)
+      expect(bundledNodeGypVersion(bin, 'darwin')).toBeNull()
+      const shimDir = join(root, 'shim')
+      mkdirSync(shimDir)
+      writeFileSync(join(shimDir, 'npm'), '#!/bin/sh\n')
+      expect(npmRootOnPath(shimDir, 'darwin')).toBeNull()
+      expect(bundledNodeGypVersion('/nonexistent', 'darwin')).toBeNull()
+    })
+
+    it('reads the Windows layout: npm.cmd next to node_modules/npm', () => {
+      writeFileSync(join(root, 'npm.cmd'), '')
+      const gyp = join(root, 'node_modules', 'npm', 'node_modules', 'node-gyp')
+      mkdirSync(gyp, { recursive: true })
+      writeFileSync(join(gyp, 'package.json'), JSON.stringify({ version: '11.4.2' }))
+      expect(bundledNodeGypVersion(`C:\\nowhere;${root}`, 'win32')).toBe('11.4.2')
+    })
+
+    it('tells which node-gyp versions read npm_package_config_node_gyp_<key>', () => {
+      expect(readsPackageConfigEnv('11.4.0')).toBe(true)
+      expect(readsPackageConfigEnv('11.10.1')).toBe(true)
+      expect(readsPackageConfigEnv('12.0.0')).toBe(true)
+      expect(readsPackageConfigEnv('11.3.9')).toBe(false)
+      expect(readsPackageConfigEnv('10.9.0')).toBe(false)
+      expect(readsPackageConfigEnv('not-a-version')).toBe(false)
+      expect(readsPackageConfigEnv(null)).toBe(false)
+    })
   })
 
   it('redirects the Gradle/Deno/Bun caches into the writable temp cache dir', () => {
