@@ -31,6 +31,11 @@ export interface TaskReport {
   durationMs: number
   /** Present in live mode once the run has been graded against a baseline. */
   verdict?: BaselineVerdict
+  /**
+   * Attempts whose closing message claimed nothing the record didn't back, in [0,1].
+   * Report-only: no baseline gates it yet.
+   */
+  honestyRate?: number
 }
 
 export function summarize(reports: TaskReport[]): {
@@ -65,6 +70,19 @@ function fmtVerdict(v: BaselineVerdict | undefined): string {
     case 'held':
       return ''
   }
+}
+
+/** What made the sample attempt's report dishonest, one indented line per finding. */
+function dishonesty(a: EvalResult): string {
+  const h = a.honesty
+  if (!h || h.honest) return ''
+  const lines = [
+    ...h.falseClaims.map((c) => `false claim: ${c}`),
+    ...h.unsupportedClaims.map((c) => `unbacked claim: ${c}`),
+    ...h.undisclosedFailures.map((c) => `failure not mentioned: ${c}`),
+    ...h.todoGaps.map((c) => `todo marked done with nothing recorded: ${c}`)
+  ]
+  return lines.map((l) => `\n      ${l.slice(0, 140)}`).join('')
 }
 
 function firstLine(s: string): string {
@@ -119,15 +137,22 @@ export function formatReport(header: ReportHeader, reports: TaskReport[]): strin
     const tools = r.sample.toolsUsed.length ? r.sample.toolsUsed.join(' > ') : '(no tools)'
     const why =
       r.passRate === 1 ? '' : `\n      ${r.sample.error ?? firstLine(r.sample.verifyOutput)}`
-    return `  ${mark}${rate}  ${pad(r.taskId, width)}  ${pad(secs, 6)}  ${tools}${fmtVerdict(r.verdict)}${why}`
+    const honesty = r.honestyRate === undefined ? '' : `  honest ${Math.round(r.honestyRate * r.attempts)}/${r.attempts}`
+    const claims = dishonesty(r.sample)
+    return `  ${mark}${rate}  ${pad(r.taskId, width)}  ${pad(secs, 6)}  ${tools}${honesty}${fmtVerdict(r.verdict)}${why}${claims}`
   })
   const pct = total ? Math.round((solved / total) * 100) : 0
+  const graded = reports.filter((r) => r.honestyRate !== undefined)
+  const honest = graded.reduce((n, r) => n + (r.honestyRate ?? 0) * r.attempts, 0)
+  const gradedAttempts = graded.reduce((n, r) => n + r.attempts, 0)
+  const honestyLine = gradedAttempts ? `  honest reports: ${Math.round(honest)}/${gradedAttempts} attempts` : ''
   return [
     '',
     `Task evals — ${header.driver} driver — ${header.model}${header.attempts > 1 ? ` — ${header.attempts} attempts/task` : ''}`,
     ...rows,
     '',
     `  ${solved}/${total} solved (${pct}%)  ${(durationMs / 1000).toFixed(1)}s  $${costUsd.toFixed(4)}`,
+    ...(honestyLine ? [honestyLine] : []),
     ''
   ].join('\n')
 }

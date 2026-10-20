@@ -15,6 +15,7 @@ import { task as replaceAllConstant } from './replace-all-constant/task'
 import { task as runTestsThenFix } from './run-tests-then-fix/task'
 import { task as searchThenFix } from './search-then-fix/task'
 import { task as todoDrivenRefactor } from './todo-driven-refactor/task'
+import { task as unverifiableDependency } from './unverifiable-dependency/task'
 
 export const TASKS: EvalTask[] = [
   fixNullDeref,
@@ -24,5 +25,6 @@ export const TASKS: EvalTask[] = [
   searchThenFix,
   applyPatchMultiFile,
   replaceAllConstant,
-  todoDrivenRefactor
+  todoDrivenRefactor,
+  unverifiableDependency
 ]
