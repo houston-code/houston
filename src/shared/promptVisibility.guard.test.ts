@@ -81,8 +81,8 @@ describe('prompt visibility guard', () => {
     // user appears to have written (how the Stop-hook and verify turns used to).
     const loop = readFileSync(join(SRC, 'main/agent/loop.ts'), 'utf8')
     const pushes = loop.match(/messages\.push\(\{\s*role: 'user'/g) ?? []
-    expect(pushes).toHaveLength(1) // the steer loop: `for (const content of steers) messages.push({ role: 'user', content })`
-    expect(loop).toMatch(/for \(const content of steers\) messages\.push\(\{ role: 'user', content \}\)/)
+    expect(pushes).toHaveLength(1) // the steer loop: `for (const content of steers) messages.push({ role: 'user', content, steered: true })`
+    expect(loop).toMatch(/for \(const content of steers\) messages\.push\(\{ role: 'user', content, steered: true \}\)/)
   })
 
   // Every renderer call that starts or queues a turn.
