@@ -574,6 +574,22 @@ describe('agentStart / agentRetry approval-policy validation', () => {
     expect(policyOf()).toBe('plan')
   })
 
+  it('a resend of a message whose turn failed replaces it rather than stacking a copy (agentStart)', async () => {
+    const id = freshConv()
+    const send = (runId: string, userText: string): unknown =>
+      handler(IPC.agentStart)(from(SENDER), {
+        runId, conversationId: id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText
+      })
+    await send('r1', 'start the dev server') // the run fails before answering (drain is a spy)
+    await send('r2', 'start the dev server')
+    expect(getConversation(id)?.messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+    const sent = h.runAndDrain.mock.calls[1][2] as { messages: unknown[] }
+    expect(sent.messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+    // A different message is still appended.
+    await send('r3', 'use port 4000')
+    expect(getConversation(id)?.messages).toHaveLength(2)
+  })
+
   it('persists a switched provider/model on retry (updateConversationMeta)', async () => {
     const id = createConversation({ workspace: '/tmp/ws', providerId: 'p', model: 'm' }).id
     await handler(IPC.agentRetry)(from(SENDER), {

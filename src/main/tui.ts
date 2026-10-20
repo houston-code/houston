@@ -14,6 +14,7 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
+import { appendUserTurn } from './agent/userTurn'
 import {
   catalogForPlatform,
   catalogEntryToProvider,
@@ -3324,7 +3325,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       continue
     }
 
-    messages.push({
+    // A resend of a message whose turn failed replaces it rather than repeating it.
+    messages = appendUserTurn(messages, {
       role: 'user',
       content: text,
       ...(pendingImages.length ? { images: pendingImages } : {}),

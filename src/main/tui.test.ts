@@ -1118,6 +1118,15 @@ describe('runTui', () => {
     expect(rec.questions).toEqual([['run-1', 'q1', 'my answer']])
   })
 
+  it('resending a message whose turn failed replaces it instead of stacking a copy', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'error', message: 'boom' }])
+    const t = fakeIo(['start the dev server', 'start the dev server', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[1].messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+  })
+
   it('prompts for and records an approval decision', async () => {
     const { d, rec } = deps([
       { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },

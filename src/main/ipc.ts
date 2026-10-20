@@ -126,6 +126,7 @@ import { setSpawnBackend } from './agent/spawn'
 import { decideProposal, hostProposalDeps, startProposal } from './proposals'
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps, sideChatView } from './sideChat'
 import { setSchedulerBackend } from './agent/scheduler'
+import { appendUserTurn } from './agent/userTurn'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 
 /** Longest pasted key accepted by testKey; real provider keys are far shorter. */
@@ -943,7 +944,8 @@ export function registerIpc(): void {
       ...(images.length ? { images } : {}),
       ...(invokedAs ? { invokedAs } : {})
     }
-    const messages = [...conv.messages, userMessage]
+    // A resend of a message whose turn failed replaces it rather than repeating it.
+    const messages = appendUserTurn(conv.messages, userMessage)
     setMessages(conv.id, messages)
     updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
 
