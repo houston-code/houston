@@ -490,9 +490,10 @@ jobs:
           echo "Published $tag (latest: $LATEST)."
 
   # Brings the release to main: its CHANGELOG section (placed in version order), and for an
-  # X.Y.0 release the version in package.json and package-lock.json. Opened with the release
-  # PAT (a PR opened by GITHUB_TOKEN would run no checks) and queued with auto-merge, so it
-  # lands through the merge queue once CI passes.
+  # X.Y.0 release the version in package.json and package-lock.json. The branch is pushed with
+  # the workflow's own token; the PR is opened with the release PAT (a PR opened by GITHUB_TOKEN
+  # would run no checks) and queued with auto-merge, so it lands through the merge queue once
+  # CI passes.
   sync-main:
     needs: [source, finalize]
     if: ${{ !inputs.dry_run }}
@@ -500,6 +501,8 @@ jobs:
     runs-on: ubuntu-24.04
     # RELEASE_PR_TOKEN lives in the `release-pr` environment (deployment branches: main only).
     environment: release-pr
+    permissions:
+      contents: write # pushes the sync branch
     env:
       VERSION: ${{ needs.source.outputs.version }}
       SHA: ${{ needs.source.outputs.sha }}
@@ -545,11 +548,13 @@ jobs:
           git add CHANGELOG.md package.json package-lock.json
           git commit -qm "chore(release): sync v$VERSION notes to main"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-      # The PAT is scoped to this one step: never persisted to .git/config, never in the
-      # environment of the step above.
+      # Neither token is persisted to .git/config or in the environment of the step above. A push
+      # from GITHUB_TOKEN doesn't re-run an open PR's checks, so an earlier sync PR for this
+      # version (a re-run) is closed and reopened with the PAT, which runs them.
       - name: Open the sync PR and queue it
         if: steps.sync.outputs.changed == 'true'
         env:
+          PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
         run: |
           set -euo pipefail
@@ -558,12 +563,17 @@ jobs:
             exit 1
           fi
           branch="release-sync/v$VERSION"
-          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
+          git push --quiet --force "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
           url=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$branch" --state open --json url --jq '.[0].url')
-          if [ -z "$url" ]; then
+          if [ -n "$url" ]; then
+            gh pr close "$url" -R "$GITHUB_REPOSITORY"
+            gh pr reopen "$url" -R "$GITHUB_REPOSITORY"
+          else
             url=$(gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$branch" \
               --title "chore(release): sync v$VERSION notes to main" \
               --body "Brings the published v$VERSION release notes to main's CHANGELOG.md (and, for an X.Y.0 release, the version). Opened by Release - publish.")
           fi
-          gh pr merge --auto --merge "$url"
           echo "Sync PR: $url"
+          # Queue it. If the token can't turn on auto-merge, the PR still exists: say so.
+          gh pr merge --auto --merge "$url" \
+            || echo "::warning::Couldn't turn on auto-merge for $url; add it to the merge queue yourself."

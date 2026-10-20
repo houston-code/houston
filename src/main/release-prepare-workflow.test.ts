@@ -43,23 +43,43 @@ describe('release-prepare release-PR token', () => {
     expect(open).toContain('exit 1')
   })
 
-  it('references the PAT only in the two steps that push or create a branch', () => {
+  it('references the PAT only to open the PR', () => {
     // Earlier steps run npm install and the note generator (third-party code); the PAT must
     // not reach their environment or the checkout's persisted credentials.
-    expect(workflow.match(/secrets\.RELEASE_PR_TOKEN/g)).toHaveLength(2)
+    expect(workflow.match(/secrets\.RELEASE_PR_TOKEN/g)).toHaveLength(1)
     expect(step('Open release PR')).toContain('GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}')
-    expect(step('Create the release line')).toContain('GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}')
     expect(workflow).not.toMatch(/token: \$\{\{ secrets\.RELEASE_PR_TOKEN/)
   })
 
   it('reads the PAT from the main-only release-pr environment', () => {
-    for (const name of ['prepare', 'line-only']) expect(job(name)).toMatch(/^ {4}environment: release-pr$/m)
+    expect(job('prepare')).toMatch(/^ {4}environment: release-pr$/m)
   })
 
-  it("pushes the release branch with the PAT, so the PR's checks run on an update too", () => {
+  it("creates branches and pushes with the workflow's own token, which the PAT lacks rights for", () => {
+    // The first real run failed creating release/0.9 with the PAT ("Resource not accessible
+    // by personal access token"): it can open PRs but not write contents.
     const open = step('Open release PR')
-    expect(open).toContain('git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"')
+    expect(open).toContain('PUSH_TOKEN: ${{ secrets.GITHUB_TOKEN }}')
+    expect(open).toContain('GH_TOKEN="$PUSH_TOKEN" gh api "repos/$GITHUB_REPOSITORY/git/refs"')
+    expect(open).toContain('git push --quiet --force "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"')
+    expect(open).not.toContain('x-access-token:${GH_TOKEN}')
+    expect(job('prepare')).toContain('contents: write')
     expect(job('prepare')).toContain('persist-credentials: false')
+    const line = step('Create the release line')
+    expect(line).toContain('GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}')
+    expect(job('line-only')).toContain('contents: write')
+    expect(job('line-only')).not.toContain('environment:')
+  })
+
+  it("reopens an open release PR on update, since a GITHUB_TOKEN push won't re-run its checks", () => {
+    // Closing and reopening with the PAT fires `reopened`, which ci.yml runs on, so the checks
+    // cover the new commit; the PR keeps its number and conversation.
+    const open = step('Open release PR')
+    expect(open.indexOf('git push --quiet --force')).toBeLessThan(open.indexOf('gh pr close "$open"'))
+    expect(open.indexOf('gh pr close "$open"')).toBeLessThan(open.indexOf('gh pr reopen "$open"'))
+    expect(open).toContain('exit 0')
+    const ci = readFileSync(resolve(repoRoot, '.github/workflows/ci.yml'), 'utf8')
+    expect(ci).toContain('types: [opened, synchronize, reopened, labeled]')
   })
 })
 
@@ -134,10 +154,11 @@ describe("release-prepare runs publish's checks first", () => {
     expect(open).toContain('branch="release-pr/v$VERSION"')
   })
 
-  it('can read the PRs it describes, and nothing more', () => {
+  it('can push its branches and read the PRs it describes, and nothing more', () => {
     const prepare = job('prepare')
-    expect(prepare).toMatch(/permissions:\n {6}contents: read\n {6}pull-requests: read/)
-    expect(prepare).not.toMatch(/(contents|pull-requests): write/)
+    expect(prepare).toMatch(/permissions:\n {6}contents: write # .*\n {6}pull-requests: read # /)
+    expect(prepare).not.toContain('pull-requests: write')
+    expect(prepare).not.toContain('id-token')
   })
 
   it("collects the notes' PRs from history and keeps an existing section in place", () => {
