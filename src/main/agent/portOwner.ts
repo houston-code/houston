@@ -107,8 +107,11 @@ function quotable(text: string, max = 48): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
 }
 
+/** Whether `path` is `root` or inside it. Listener folders come from lsof, so always `/`-separated. */
 function within(root: string, path: string): boolean {
-  return path === root || path.startsWith(root.endsWith(sep) ? root : root + sep)
+  if (path === root) return true
+  const base = root.replace(/[\\/]+$/, '')
+  return path.startsWith(`${base}/`) || path.startsWith(`${base}${sep}`)
 }
 
 /**
