@@ -649,6 +649,44 @@ describe('recent workspaces — existence pruning', () => {
   })
 })
 
+describe('global rules moved notice', () => {
+  it('the terminal line prints once and leaves the desktop banner available', async () => {
+    const { takeLegacyRulesTerminalNotice, isLegacyRulesNoticeDismissed, getSettings } =
+      await loadStore()
+    expect(takeLegacyRulesTerminalNotice(() => true)).toBe(true)
+    expect(takeLegacyRulesTerminalNotice(() => true)).toBe(false) // once, ever
+    expect(getSettings().legacyRulesTerminalNoticeShown).toBe(true)
+    // The banner's own state is untouched, so its Import it button still shows.
+    expect(isLegacyRulesNoticeDismissed()).toBe(false)
+  })
+
+  it('the terminal line is skipped once the desktop banner was answered', async () => {
+    const { takeLegacyRulesTerminalNotice, dismissLegacyRulesNotice, getSettings } =
+      await loadStore()
+    dismissLegacyRulesNotice()
+    const applies = vi.fn(() => true)
+    expect(takeLegacyRulesTerminalNotice(applies)).toBe(false)
+    expect(applies).not.toHaveBeenCalled()
+    expect(getSettings().legacyRulesTerminalNoticeShown).toBeUndefined()
+  })
+
+  it('does not record the terminal line when the notice does not apply', async () => {
+    const { takeLegacyRulesTerminalNotice, getSettings } = await loadStore()
+    expect(takeLegacyRulesTerminalNotice(() => false)).toBe(false)
+    expect(getSettings().legacyRulesTerminalNoticeShown).toBeUndefined()
+    // ...so it can still print later, once there is something to say.
+    expect(takeLegacyRulesTerminalNotice(() => true)).toBe(true)
+  })
+
+  it('dismissing the banner persists and is idempotent', async () => {
+    const { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } = await loadStore()
+    expect(isLegacyRulesNoticeDismissed()).toBe(false)
+    dismissLegacyRulesNotice()
+    dismissLegacyRulesNotice()
+    expect(isLegacyRulesNoticeDismissed()).toBe(true)
+  })
+})
+
 describe('git-init dismissal — "don\'t ask again for this folder"', () => {
   it('round-trips an opt-out: dismiss persists it and isGitInitDismissed reads it back', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'ws-gi-'))

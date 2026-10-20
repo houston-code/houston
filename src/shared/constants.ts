@@ -27,6 +27,10 @@ export const IPC = {
   doctorFacts: 'app:doctorFacts',
   /** Save a `#`-captured standing instruction to AGENTS.md (project or global). */
   memorySave: 'app:memorySave',
+  /** Whether to show the one-time "global rules moved to ~/.houston/AGENTS.md" notice. */
+  legacyRulesNoticeStatus: 'app:legacyRulesNoticeStatus',
+  /** Answer that notice: import ~/.claude/CLAUDE.md, or keep the rules separate. */
+  legacyRulesNoticeDecide: 'app:legacyRulesNoticeDecide',
   // Updates
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',

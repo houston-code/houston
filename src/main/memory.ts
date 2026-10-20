@@ -1,32 +1,26 @@
-import { readFileSync, mkdirSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import type { MemoryScope } from '@shared/memory'
 import { writeFileAtomicSync } from './atomic-write'
+import { GLOBAL_RULES_HEADING, globalRulesDir, readTextOrNull } from './globalRules'
 
 /**
  * Persist a `#`-captured standing instruction. Shared by the terminal and the
  * desktop app so both write it the same way.
  *
- * Houston already reads AGENTS.md from the project and from ~/.claude on every run,
- * so this writes to the file that machinery ALREADY loads rather than inventing a
- * store. `project` scope writes the workspace's AGENTS.md; `global` writes
- * ~/.claude/AGENTS.md, which applies everywhere. Returns the path written.
+ * Houston already reads the project's AGENTS.md and the global ~/.houston/AGENTS.md
+ * on every run, so this writes to the file that machinery ALREADY loads rather than
+ * inventing a store. `project` scope writes the workspace's AGENTS.md; `global`
+ * writes ~/.houston/AGENTS.md, which applies everywhere. Returns the path written.
  */
 export async function saveMemory(
   workspace: string,
   scope: MemoryScope,
   text: string
 ): Promise<string> {
-  return saveMemoryTo(scope === 'project' ? workspace : join(homedir(), '.claude'), text)
-}
-
-function safeRead(path: string): string | null {
-  try {
-    return readFileSync(path, 'utf8')
-  } catch {
-    return null
-  }
+  return scope === 'project'
+    ? saveMemoryTo(workspace, text)
+    : saveMemoryTo(globalRulesDir(), text, GLOBAL_RULES_HEADING)
 }
 
 /**
@@ -41,18 +35,25 @@ function oneLine(text: string): string {
   return text.replace(/\s*[\r\n]+\s*/g, ' ').trim()
 }
 
-/** Append `text` as a note to `dir`'s rules file. Exported for tests. */
-export async function saveMemoryTo(dir: string, text: string): Promise<string> {
+/**
+ * Append `text` as a note to `dir`'s rules file, creating it under `title` when it
+ * doesn't exist yet. Exported for tests.
+ */
+export async function saveMemoryTo(
+  dir: string,
+  text: string,
+  title = '# Project instructions'
+): Promise<string> {
   const note = oneLine(text)
   const file = join(dir, 'AGENTS.md')
-  const existing = safeRead(file)
+  const existing = readTextOrNull(file)
   const heading = '## Notes'
   // The Notes heading itself, alone on its line: a bare substring search also hit
   // "### Notes" or "## Notes on deployment" and filed the note under that heading.
   const headingLine = /^## Notes[ \t]*$/m.exec(existing ?? '')
   let next: string
   if (existing === null) {
-    next = `# Project instructions\n\n${heading}\n\n- ${note}\n`
+    next = `${title}\n\n${heading}\n\n- ${note}\n`
   } else if (headingLine) {
     // Append inside the existing Notes section, so related notes stay together.
     const at = headingLine.index + headingLine[0].length

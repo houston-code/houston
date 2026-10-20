@@ -52,7 +52,8 @@ import {
   canSetKey,
   getSettings,
   setProviderKey,
-  updateSettings
+  updateSettings,
+  takeLegacyRulesTerminalNotice
 } from './store'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
@@ -60,6 +61,7 @@ import { runTui, makePainter, mediaTypeForImagePath, type BackgroundSession, typ
 import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
+import { legacyRulesNoticeApplies } from './globalRules'
 import { checkForUpdate } from './update-check'
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
 import { runHeadless, type HeadlessOptions } from './headless'
@@ -538,6 +540,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         ask: (input) => askSideChat(input, hostSideChatDeps()),
         clear: (conversationId) => clearSideChat(conversationId, { saveSideChat })
       },
+      takeLegacyRulesNotice: () => takeLegacyRulesTerminalNotice(() => legacyRulesNoticeApplies()),
       checkUpdate: async () => {
         const found = await checkForUpdate(version)
         latestUpdate = found ? { latest: found.latest, url: found.url } : null

@@ -491,6 +491,18 @@ export interface AppSettings {
    */
   gitInitDismissed?: string[]
   /**
+   * True once the user answered the desktop app's "global rules moved" banner
+   * (importing ~/.claude/CLAUDE.md into ~/.houston/AGENTS.md, or keeping them
+   * separate). The banner never shows again, and the terminal's line is skipped too.
+   */
+  legacyRulesNoticeDismissed?: boolean
+  /**
+   * True once the terminal has printed its one-time "global rules moved" line. Kept
+   * apart from {@link legacyRulesNoticeDismissed}: the terminal has no button, so
+   * seeing the line there must not use up the desktop banner's Import it offer.
+   */
+  legacyRulesTerminalNoticeShown?: boolean
+  /**
    * Per-folder decisions on honoring project elevating config (`allow` rules,
    * hooks, MCP servers from `.houston/settings.json`) — see {@link FolderTrust}.
    * Lives in the user's own settings, never in the project file it governs.
@@ -765,4 +777,15 @@ export interface IntegrationsInfo {
    * and not turned on explicitly), or 'needs-git-bash' (Windows without Git Bash).
    */
   languageServersBlocked?: 'disabled' | 'unsandboxed' | 'needs-git-bash'
+}
+
+/** The user's answer to the one-time "global rules moved" notice. */
+export type LegacyRulesChoice = 'import' | 'keep'
+
+/** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
+export interface LegacyRulesDecideResult {
+  settings: AppSettings
+  /** The global rules file written, after a successful import. */
+  file?: string
+  error?: string
 }

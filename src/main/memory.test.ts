@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { saveMemoryTo } from './memory'
+import { saveMemory, saveMemoryTo } from './memory'
+import { loadProjectRules } from './agent/rules'
+
+// saveMemory's global scope resolves the home dir itself; point it at a temp dir.
+const fakeHome = vi.hoisted(() => ({ dir: '' }))
+vi.mock('node:os', async (importActual) => {
+  const actual = await importActual<typeof import('node:os')>()
+  return { ...actual, homedir: () => fakeHome.dir || actual.homedir() }
+})
 
 let dir: string
 beforeEach(() => {
@@ -73,5 +81,41 @@ describe('saveMemoryTo', () => {
     const { readdirSync } = await import('node:fs')
     const leftover = readdirSync(dir).filter((f) => f !== 'AGENTS.md')
     expect(leftover).toEqual([]) // the atomic temp is renamed away, never orphaned
+  })
+})
+
+describe('saveMemory scopes', () => {
+  let home: string
+  let ws: string
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'houston-memhome-'))
+    ws = mkdtempSync(join(tmpdir(), 'houston-memws-'))
+    fakeHome.dir = home
+  })
+  afterEach(() => {
+    fakeHome.dir = ''
+    rmSync(home, { recursive: true, force: true })
+    rmSync(ws, { recursive: true, force: true })
+  })
+
+  it('writes a global note to ~/.houston/AGENTS.md under a global heading', async () => {
+    const file = await saveMemory(ws, 'global', 'prefer small PRs')
+    expect(file).toBe(join(home, '.houston', 'AGENTS.md'))
+    const out = readFileSync(file, 'utf8')
+    expect(out.startsWith('# Global instructions\n')).toBe(true)
+    expect(out).toContain('- prefer small PRs')
+  })
+
+  it('writes a project note to the workspace AGENTS.md', async () => {
+    const file = await saveMemory(ws, 'project', 'run the linter')
+    expect(file).toBe(join(ws, 'AGENTS.md'))
+    expect(readFileSync(file, 'utf8').startsWith('# Project instructions\n')).toBe(true)
+  })
+
+  it('a saved global note is loaded into the rules on the next run', async () => {
+    await saveMemory(ws, 'global', 'GLOBAL-NOTE-LOADED')
+    const rules = await loadProjectRules(ws, { home })
+    expect(rules.text).toContain('GLOBAL-NOTE-LOADED')
+    expect(rules.files).toEqual(['~/.houston/AGENTS.md (global)'])
   })
 })

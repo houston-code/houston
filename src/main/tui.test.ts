@@ -3088,6 +3088,34 @@ describe('runTui — /login & keyless start', () => {
     expect(t.text()).toContain('No model is ready yet. Run /login')
   })
 
+  it('does not use up the global-rules notice on a launch that exits before the prompt', async () => {
+    const { d } = wizardDeps([], { selected: null, providers: twoProviders })
+    const t = fakeIo([null])
+    d.io = t.io
+    let calls = 0
+    d.takeLegacyRulesNotice = () => {
+      calls++
+      return true
+    }
+    const code = await runTui({ ...opts, providerId: 'bogus' }, d)
+    expect(code).toBe(1)
+    expect(calls).toBe(0) // never checked, so never recorded as shown
+    expect(t.text()).not.toContain('global rules now live in')
+  })
+
+  it('prints the global-rules notice after setup, even when setup was abandoned', async () => {
+    for (const lines of [['', null], [null]]) {
+      const { d } = wizardDeps([], { selected: null, providers: twoProviders })
+      const t = fakeIo(lines)
+      d.io = t.io
+      d.takeLegacyRulesNotice = () => true
+      await runTui(opts, d)
+      const out = t.text()
+      expect(out).toContain('global rules now live in ~/.houston/AGENTS.md')
+      expect(out.indexOf('No provider set up yet')).toBeLessThan(out.indexOf('global rules now live in'))
+    }
+  })
+
   it('/login mid-session stores a key and switches the active model', async () => {
     const { d, rec, setKeyCalls } = wizardDeps(
       [
@@ -4464,10 +4492,40 @@ describe('# memory capture', () => {
     const saved: string[] = []
     d.saveMemory = async (scope) => {
       saved.push(scope)
-      return '~/.claude/AGENTS.md'
+      return '~/.houston/AGENTS.md'
     }
     await runTui(opts, d)
     expect(saved).toEqual(['global'])
+  })
+
+  it('prints the global-rules-moved notice once when the host says so', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['hello', 'again', null])
+    d.io = t.io
+    let calls = 0
+    d.takeLegacyRulesNotice = () => {
+      calls++
+      return true
+    }
+    await runTui(opts, d)
+    expect(calls).toBe(1)
+    const out = t.text()
+    expect(out).toContain('global rules now live in ~/.houston/AGENTS.md')
+    expect(out).toContain('@~/.claude/CLAUDE.md')
+    expect(out.split('global rules now live in').length - 1).toBe(1)
+  })
+
+  it('prints no global-rules notice when the host says no, or throws', async () => {
+    for (const take of [() => false, () => {
+      throw new Error('boom')
+    }]) {
+      const { d } = deps(done)
+      const t = fakeIo([null])
+      d.io = t.io
+      d.takeLegacyRulesNotice = take
+      await runTui(opts, d)
+      expect(t.text()).not.toContain('global rules now live in')
+    }
   })
 
   it('does not save when the scope answer is not one', async () => {

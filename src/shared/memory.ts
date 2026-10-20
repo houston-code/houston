@@ -2,10 +2,11 @@
  * `#`-capture: turning "it should always do X", noticed mid-conversation, into a
  * standing instruction without leaving to open an editor.
  *
- * Houston already reads AGENTS.md / CLAUDE.md from the project and from ~/.claude
- * on every run, so the mechanism for standing instructions exists. What was missing
- * was any way to ADD one in the moment — and the moment you notice it is exactly
- * when you are least likely to open a file and write it down. Pure + shared so the
+ * Houston already reads AGENTS.md / CLAUDE.md from the project and the global
+ * ~/.houston/AGENTS.md on every run, so the mechanism for standing instructions
+ * exists. What was missing was any way to ADD one in the moment — and the moment
+ * you notice it is exactly when you are least likely to open a file and write it
+ * down. Pure + shared so the
  * terminal and the desktop app recognize a capture identically.
  */
 

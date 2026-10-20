@@ -623,6 +623,31 @@ export function dismissGitInit(workspace: string): AppSettings {
   return updateSettings({ gitInitDismissed: [...current, target] })
 }
 
+/** Whether the user already answered the one-time "global rules moved" notice. */
+export function isLegacyRulesNoticeDismissed(): boolean {
+  return getSettings().legacyRulesNoticeDismissed === true
+}
+
+/** Record that the "global rules moved" notice was answered, so it never shows again. */
+export function dismissLegacyRulesNotice(): AppSettings {
+  if (isLegacyRulesNoticeDismissed()) return getSettings()
+  return updateSettings({ legacyRulesNoticeDismissed: true })
+}
+
+/**
+ * Whether the terminal should print its one-time "global rules moved" line now, and
+ * if so record that it did. Skipped once printed, or once the user answered the
+ * desktop banner. Recording it leaves the banner's own state untouched, so its
+ * Import it button stays available. `applies` is only consulted when needed.
+ */
+export function takeLegacyRulesTerminalNotice(applies: () => boolean): boolean {
+  const s = getSettings()
+  if (s.legacyRulesNoticeDismissed === true || s.legacyRulesTerminalNoticeShown === true) return false
+  if (!applies()) return false
+  updateSettings({ legacyRulesTerminalNoticeShown: true })
+  return true
+}
+
 /**
  * A workspace's trust state for its project's elevating config, given the
  * CURRENT elevated-config fingerprint (see projectConfig.elevatedConfigHash).

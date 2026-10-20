@@ -2370,6 +2370,13 @@ export interface TuiDeps {
    */
   checkUpdate?: () => Promise<{ latest: string; url: string; headline?: string } | null>
   /**
+   * Optional one-time "global rules moved" check: true when the notice should be
+   * shown this launch. The host records it as shown when it says so, so it prints
+   * at most once ever. That record is the terminal's own: the desktop banner (with
+   * its Import it button) still shows until it is answered there.
+   */
+  takeLegacyRulesNotice?: () => boolean
+  /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
    * code block, or null to render it plain. Kept as HTML (not ANSI) so the hljs
    * dependency stays at the entry point and the driver + its tests need no hljs.
@@ -2846,6 +2853,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       })
   }
 
+  // Global rules moved to ~/.houston/AGENTS.md; ~/.claude/CLAUDE.md is no longer
+  // loaded unless imported. Checked (and so recorded as shown) only at the first
+  // composer draw, right where it prints: checking at startup would use it up on a
+  // launch that exits before then (e.g. from first-run model setup), unseen.
+  let rulesNoticeChecked = false
+
   deps.io.signal?.({ title: idleTitle(workspaceName) })
   // --continue / --resume: open the chat before the first prompt, so picking up
   // where you left off is the launch itself rather than a step after it.
@@ -2906,6 +2919,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // The update check resolves whenever it resolves; print it HERE, between turns,
     // where nothing else owns the screen. Writing it from the promise would land in
     // the middle of the composer's redraw region (or a streaming turn) and corrupt it.
+    if (!rulesNoticeChecked) {
+      rulesNoticeChecked = true
+      let due = false
+      try {
+        due = deps.takeLegacyRulesNotice?.() === true
+      } catch {
+        /* a failed check is a non-event */
+      }
+      if (due) {
+        deps.io.out(
+          `${paint(
+            '· global rules now live in ~/.houston/AGENTS.md; ~/.claude/CLAUDE.md is no longer loaded\n' +
+              '  to keep it, add this line there: @~/.claude/CLAUDE.md',
+            'yellow'
+          )}\n`
+        )
+      }
+    }
     if (updateNotice) {
       deps.io.out(`${updateNotice}\n`)
       updateNotice = null // one nudge per session, not per prompt
