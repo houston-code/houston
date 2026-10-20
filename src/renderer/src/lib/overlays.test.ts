@@ -8,6 +8,7 @@ const none: OverlayFlags = {
   files: false,
   scorecard: false,
   help: false,
+  viewer: false,
   palette: false,
   find: false,
   connect: false,
@@ -15,7 +16,7 @@ const none: OverlayFlags = {
 }
 const only = (key: keyof OverlayFlags): OverlayFlags => ({ ...none, [key]: true })
 
-const MODALS: (keyof OverlayFlags)[] = ['settings', 'doctor', 'changes', 'files', 'scorecard', 'help', 'palette']
+const MODALS: (keyof OverlayFlags)[] = ['settings', 'doctor', 'changes', 'files', 'scorecard', 'help', 'viewer', 'palette']
 
 describe('overlays', () => {
   it('reports nothing open for the plain chat view', () => {

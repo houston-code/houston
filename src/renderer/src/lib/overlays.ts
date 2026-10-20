@@ -13,6 +13,8 @@ export interface OverlayFlags {
   files: boolean
   scorecard: boolean
   help: boolean
+  /** The full-size image viewer (opened from a gallery or a tool-card screenshot). */
+  viewer: boolean
   palette: boolean
   find: boolean
   /** The get-started "Connect a model" panel (inline, not a modal). */
@@ -23,7 +25,7 @@ export interface OverlayFlags {
 
 /** A full-window modal or side drawer is open over the chat (each has a backdrop). */
 export function modalOpen(f: OverlayFlags): boolean {
-  return f.settings || f.doctor || f.changes || f.files || f.scorecard || f.help || f.palette
+  return f.settings || f.doctor || f.changes || f.files || f.scorecard || f.help || f.viewer || f.palette
 }
 
 /**

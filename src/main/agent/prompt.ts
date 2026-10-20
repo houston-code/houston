@@ -123,6 +123,7 @@ export function buildSystemPrompt(
   // default is the desktop toolset, where every backend is wired.
   tools: readonly string[] = builtinToolset({
     localhostCapture: true,
+    imageGallery: true,
     spawn: true,
     scheduler: true,
     planMode: planMode === true

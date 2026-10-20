@@ -452,6 +452,48 @@
     }
   },
   {
+    "name": "show_images",
+    "description": "Show image files to the user as a gallery in the chat, each with a short label and an optional caption; the user can open any of them full size. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Optional heading for the gallery, e.g. \"Settings page: proposed\"."
+        },
+        "images": {
+          "type": "array",
+          "description": "The images to show, in order (1 to 12).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the image file, relative to the project root."
+              },
+              "label": {
+                "type": "string",
+                "description": "Short name shown under the image, e.g. \"Dark theme\". Defaults to the file name."
+              },
+              "caption": {
+                "type": "string",
+                "description": "Optional sentence shown with the image in the full-size viewer."
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "images"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "web_search",
     "description": "Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one, inside an untrusted-content fence. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a search-provider API key set in Settings.",
     "parameters": {

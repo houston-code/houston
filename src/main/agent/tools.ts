@@ -27,6 +27,13 @@ import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { QUESTION_EMPTY_ANSWER } from '@shared/promptOutcome'
 import { getSearchProviderInfo } from '@shared/search'
 import {
+  MAX_GALLERY_IMAGES,
+  SHOW_IMAGES_NAME,
+  parseGalleryArgs,
+  parseGalleryArgsSafe,
+  sniffImageType
+} from '@shared/gallery'
+import {
   MAX_ATTACH_IMAGE_BYTES,
   MAX_PDF_BYTES,
   humanSize,
@@ -2178,6 +2185,86 @@ const prSweep: ToolDef = {
     const items = parseSweepItems(args.items)
     const summary = formatSweepSummary(mode, items)
     return items.length ? `${summary}\n${formatSweepList(items)}` : summary
+  }
+}
+
+/**
+ * Present image files to the user as a captioned gallery: UI screenshots from a
+ * Playwright or simulator run, rendered mockups, charts. Whatever wrote the files,
+ * this is how they reach the user in the desktop app, where the row renders as a
+ * gallery with a full-size viewer (see ImageGallery.tsx). Read-only: every path is
+ * confined to the roots like read_file, and each file must BE an image by its
+ * leading bytes, so a renamed secret can never ride along. The images are also
+ * attached to the result, so the model sees exactly what it showed.
+ *
+ * All-or-nothing: one bad entry fails the call before anything is attached, which
+ * keeps the attached images in the same order as the arguments the gallery labels
+ * them from.
+ */
+const showImages: ToolDef = {
+  kind: 'read',
+  summarize: (a) => {
+    const g = parseGalleryArgsSafe(a)
+    if (!g) return 'Show images'
+    const n = `${g.images.length} image${g.images.length === 1 ? '' : 's'}`
+    return g.title ? `${g.title} (${n})` : n
+  },
+  schema: {
+    name: SHOW_IMAGES_NAME,
+    description:
+      'Show image files to the user as a gallery in the chat, each with a short label and an optional caption; the user can open any of them full size. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.',
+    parameters: objectSchema(
+      {
+        title: { type: 'string', description: 'Optional heading for the gallery, e.g. "Settings page: proposed".' },
+        images: {
+          type: 'array',
+          description: `The images to show, in order (1 to ${MAX_GALLERY_IMAGES}).`,
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Path to the image file, relative to the project root.' },
+              label: { type: 'string', description: 'Short name shown under the image, e.g. "Dark theme". Defaults to the file name.' },
+              caption: { type: 'string', description: 'Optional sentence shown with the image in the full-size viewer.' }
+            },
+            required: ['path'],
+            additionalProperties: false
+          }
+        }
+      },
+      ['images']
+    )
+  },
+  async execute(args, ctx) {
+    const gallery = parseGalleryArgs(args)
+    if (!ctx.attachImage) throw new Error('Images cannot be shown in this context.')
+    const roots = rootsOf(ctx)
+    const loaded: { mediaType: string; buf: Buffer }[] = []
+    for (const [i, img] of gallery.images.entries()) {
+      const where = `images[${i}] (${img.path})`
+      const abs = resolveInRoots(roots, img.path)
+      let size: number
+      try {
+        const st = await fs.stat(abs)
+        if (!st.isFile()) throw new Error('not a file')
+        size = st.size
+      } catch {
+        throw new Error(`${where}: no such file.`)
+      }
+      if (size > MAX_ATTACH_IMAGE_BYTES) {
+        throw new Error(`${where}: ${humanSize(size)} is over the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} limit.`)
+      }
+      const buf = await fs.readFile(abs)
+      const mediaType = sniffImageType(buf.subarray(0, 16))
+      if (!mediaType) throw new Error(`${where}: not a PNG, JPEG, GIF, or WebP image.`)
+      ctx.fileTracker?.noteRead(abs, buf)
+      loaded.push({ mediaType, buf })
+    }
+    for (const { mediaType, buf } of loaded) ctx.attachImage({ mediaType, data: buf.toString('base64') })
+    const lines = gallery.images.map(
+      (img, i) => `${i + 1}. ${img.label}: ${img.path} (${loaded[i].mediaType}, ${humanSize(loaded[i].buf.byteLength)})`
+    )
+    const heading = gallery.title ? ` titled "${gallery.title}"` : ''
+    return `Showed the user a gallery${heading} of ${loaded.length} image${loaded.length === 1 ? '' : 's'}:\n${lines.join('\n')}\n[images attached below for viewing]`
   }
 }
 
@@ -4421,6 +4508,7 @@ export const TOOLS: ToolDef[] = [
   killShellTool,
   webFetch,
   viewLocalhost,
+  showImages,
   webSearch,
   todoWrite,
   skillTool,
@@ -4469,6 +4557,8 @@ export function getTool(name: string): ToolDef | undefined {
 export interface BuiltinToolsetOptions {
   /** A localhost capture backend is wired (desktop only); backs view_localhost. */
   localhostCapture: boolean
+  /** The client draws show_images as a gallery (the desktop app); backs show_images. */
+  imageGallery: boolean
   /** A spawn backend is wired; backs spawn_session (and propose_session). */
   spawn: boolean
   /**
@@ -4498,6 +4588,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
   return TOOLS.filter((t) => {
     const name = t.schema.name
     if (name === VIEW_LOCALHOST_NAME) return opts.localhostCapture
+    if (name === SHOW_IMAGES_NAME) return opts.imageGallery
     if (name === SPAWN_SESSION_NAME) return opts.spawn
     if (name === PROPOSE_SESSION_NAME) return opts.spawn && opts.proposals !== false
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler

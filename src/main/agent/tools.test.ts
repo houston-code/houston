@@ -119,6 +119,7 @@ describe('tool registry', () => {
       'run_shell',
       'schedule_run',
       'search_files',
+      'show_images',
       'skill',
       'spawn_session',
       'todo_write',

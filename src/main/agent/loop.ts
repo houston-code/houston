@@ -1051,6 +1051,9 @@ export async function startRun(
     // can't call.
     const builtinSchemas = builtinToolset({
       localhostCapture: localhostCaptureAvailable,
+      // The gallery is drawn only by the desktop app, the one host that wires the
+      // localhost capture backend; in a terminal show_images would be a path list.
+      imageGallery: localhostCaptureAvailable,
       spawn: spawnAvailable,
       // A proposal card lives on a persisted chat (its state is stored there), so a
       // one-shot run with no conversation can't offer one.

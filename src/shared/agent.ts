@@ -458,8 +458,12 @@ export interface ConversationError {
  * files are upgraded on load instead of surfacing as runtime breakage. Files
  * written before versioning existed carry no `schemaVersion` and are treated as
  * version 0 (shape-identical to v1).
+ *
+ * v2: attachment bytes (images, documents) are stored in a media folder beside the
+ * JSON and referenced as `{ mediaType, mediaRef }` (see main/conversationMedia.ts).
+ * v1 files carry inline base64, which still loads as-is and moves out on the next save.
  */
-export const CONVERSATION_SCHEMA_VERSION = 1
+export const CONVERSATION_SCHEMA_VERSION = 2
 
 /**
  * Context-compaction state persisted with a conversation, so the next run resumes

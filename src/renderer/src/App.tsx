@@ -91,6 +91,8 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { GetStarted } from './components/GetStarted'
 import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
+import { ImageViewer } from './components/ImageViewer'
+import { ImageViewerContext, type ImageViewerApi, type ViewerImage } from './lib/imageViewer'
 import { useOnboarding } from './hooks/useOnboarding'
 import {
   markTipsSeen,
@@ -179,6 +181,12 @@ export default function App(): JSX.Element {
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
   const [scorecardOpen, setScorecardOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  // The full-size image viewer (a show_images gallery or a tool-card screenshot).
+  const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null)
+  const imageViewerApi = useMemo<ImageViewerApi>(
+    () => ({ open: (images, index) => setViewer(images.length ? { images, index } : null) }),
+    []
+  )
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteSeed, setPaletteSeed] = useState('')
   const [findOpen, setFindOpen] = useState(false)
@@ -1621,6 +1629,7 @@ export default function App(): JSX.Element {
     files: filesOpen,
     scorecard: scorecardOpen,
     help: helpOpen,
+    viewer: viewer !== null,
     palette: paletteOpen,
     find: findOpen,
     connect: connectOpen,
@@ -1730,7 +1739,8 @@ export default function App(): JSX.Element {
         // The open overlays own their own Esc (focus trap), so this mainly handles
         // Esc with nothing focused, still ordered most-recent-first defensively.
         const o = overlaysRef.current
-        if (o.palette) setPaletteOpen(false)
+        if (o.viewer) setViewer(null)
+        else if (o.palette) setPaletteOpen(false)
         else if (o.help) setHelpOpen(false)
         else if (o.find) setFindOpen(false)
         else if (o.settings) setSettingsOpen(false)
@@ -1814,6 +1824,7 @@ export default function App(): JSX.Element {
     : true
 
   return (
+    <ImageViewerContext.Provider value={imageViewerApi}>
     <div
       className="app"
       ref={appRef}
@@ -2202,6 +2213,19 @@ export default function App(): JSX.Element {
         onSeen={(ids) => onboarding.update((s) => markTipsSeen(s, ids))}
         onTourEnd={onboarding.endTour}
       />
+      {viewer && (
+        <ImageViewer
+          images={viewer.images}
+          initialIndex={viewer.index}
+          onClose={() => setViewer(null)}
+          onOpenFile={async (path) => {
+            if (!workspace) return 'No project folder is open.'
+            const res = await window.api.openWorkspacePath(workspace, path)
+            return res.ok ? null : (res.error ?? "Couldn't open that file.")
+          }}
+        />
+      )}
     </div>
+    </ImageViewerContext.Provider>
   )
 }

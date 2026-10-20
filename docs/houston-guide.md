@@ -822,6 +822,12 @@ an occurrence missed while Houston was closed fires once at the next launch.
   transcript.
 - **`pr_sweep`** tracks batch pull-request work (author new PRs from a task list,
   or process a batch of existing open PRs).
+- **`show_images`** (desktop app) shows you image files the agent produced, such
+  as screenshots of an app or rendered mockups, as a captioned gallery in the
+  chat. Click any image to open it full size, step through the set with the arrow
+  keys, and open the file in its default app. It only reads image files (PNG,
+  JPEG, GIF, or WebP, up to 5 MB each, 12 per gallery) inside the project, so it
+  never asks for approval.
 - **`view_localhost`** (desktop app) loads a page from a dev server running on
   your computer in a hidden browser and shows the agent a screenshot plus the
   page's visible text and console output. It can also run steps first (fill a

@@ -111,7 +111,20 @@ export function isSensitivePath(path: string): boolean {
  * path can judge the same call benign that another would have prompted for.
  */
 export function isSensitiveRead(kind: ToolKind, args: Record<string, unknown>): boolean {
-  return kind === 'read' && typeof args.path === 'string' && isSensitivePath(args.path)
+  if (kind !== 'read') return false
+  if (typeof args.path === 'string' && isSensitivePath(args.path)) return true
+  // show_images reads one path per entry. It only attaches files that sniff as
+  // images, but a path naming a credential store still prompts, as read_file does.
+  return (
+    Array.isArray(args.images) &&
+    args.images.some(
+      (img) =>
+        typeof img === 'object' &&
+        img !== null &&
+        typeof (img as Record<string, unknown>).path === 'string' &&
+        isSensitivePath((img as Record<string, unknown>).path as string)
+    )
+  )
 }
 
 /**

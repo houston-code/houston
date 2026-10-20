@@ -7,6 +7,7 @@ import { builtinToolset, type BuiltinToolsetOptions } from './tools'
 function toolNames(over: Partial<BuiltinToolsetOptions> = {}): string[] {
   return builtinToolset({
     localhostCapture: true,
+    imageGallery: true,
     spawn: true,
     scheduler: true,
     planMode: false,

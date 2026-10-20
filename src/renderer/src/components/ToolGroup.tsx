@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
+import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
@@ -9,6 +10,8 @@ import { stoppedPromptText } from '@shared/promptOutcome'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
+import { ImageGallery } from './ImageGallery'
+import { galleryViewerImages, useImageViewer, type ViewerImage } from '../lib/imageViewer'
 
 const KIND_ICON: Record<string, string> = {
   read: '○',
@@ -30,6 +33,7 @@ const TOOL_ICON: Record<string, string> = {
   kill_shell: '›_',
   web_fetch: '@',
   view_localhost: '▣',
+  show_images: '▦',
   web_search: '⌕',
   todo_write: '☰',
   spawn_session: '⧉',
@@ -222,6 +226,10 @@ function ToolRow({
   const isTodo = item.name === 'todo_write' && todos.length > 0
   const sweep = item.name === 'pr_sweep' ? parseSweepItemsSafe(item.args?.items) : []
   const isSweep = item.name === 'pr_sweep' && sweep.length > 0
+  const gallery = item.name === SHOW_IMAGES_NAME ? parseGalleryArgsSafe(item.args) : null
+  const galleryImages = gallery ? galleryViewerImages(gallery, item.images) : []
+  const isGallery = galleryImages.length > 0
+  const viewer = useImageViewer()
   const previews = previewsFor(item)
   // One stat across every file the call touches, so a multi-file patch reports the
   // whole change rather than only its first file.
@@ -359,11 +367,34 @@ function ToolRow({
       )}
       {open && output && !isTodo && !isSweep && <pre className="tool-row__output">{output}</pre>}
 
-      {item.images && item.images.length > 0 && (
+      {isGallery && gallery && <ImageGallery gallery={gallery} images={galleryImages} />}
+
+      {!isGallery && item.images && item.images.length > 0 && (
         <div className="tool-row__images">
-          {item.images.map((img, i) => (
-            <img key={i} className="tool-row__image" src={imageDataUrl(img)} alt="screenshot" />
-          ))}
+          {item.images.map((img, i, all) => {
+            const src = imageDataUrl(img)
+            const label = all.length > 1 ? `Image ${i + 1}` : 'Image'
+            const openAll = (): void => {
+              const set: ViewerImage[] = all.map((a, j) => ({
+                src: imageDataUrl(a),
+                label: all.length > 1 ? `Image ${j + 1}` : 'Image'
+              }))
+              viewer?.open(set, i)
+            }
+            return viewer ? (
+              <button
+                key={i}
+                type="button"
+                className="tool-row__image-open"
+                onClick={openAll}
+                aria-label={`Open ${label.toLowerCase()} full size`}
+              >
+                <img className="tool-row__image" src={src} alt="screenshot" />
+              </button>
+            ) : (
+              <img key={i} className="tool-row__image" src={src} alt="screenshot" />
+            )
+          })}
         </div>
       )}
 
