@@ -670,6 +670,26 @@ describe('runHeadless', () => {
     expect(plans).toEqual([['run-1', 'p1', { kind: 'reject' }]])
   })
 
+  it('prints whether a plan\'s checks can run here to stderr', async () => {
+    const { d, err, out } = deps([
+      {
+        runId: 'run-1',
+        type: 'plan_ready',
+        callId: 'p1',
+        plan: {
+          title: 'My Plan',
+          body: 'Do it.',
+          readiness: { items: [{ need: 'Python packages (requirements.txt)', status: 'needs-network', detail: 'Installing needs network.' }] }
+        }
+      },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    expect(err.join('')).toContain('· Can these checks run here: not as things stand\n')
+    expect(err.join('')).toContain('·   ! Python packages (requirements.txt): Installing needs network.')
+    expect(out.join('')).not.toContain('Can these checks run here')
+  })
+
   it('emits one JSON line per event in --json mode', async () => {
     const { d, out } = deps([
       { runId: 'run-1', type: 'text', delta: 'hi' },

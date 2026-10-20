@@ -18,6 +18,7 @@ import type {
   ToolCall,
   ToolSchema
 } from '@shared/agent'
+import type { PlanReadiness } from '@shared/planReadiness'
 import {
   systemNoteMessage,
   sanitizeApprovalNote,
@@ -115,6 +116,7 @@ import {
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { peekShell } from './shells'
+import { gatherReadinessFacts, planReadiness, readinessNote } from './readiness'
 import { isSensitiveRead } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
@@ -568,7 +570,7 @@ export function resolvePlan(runId: string, callId: string, decision: PlanDecisio
  * effect of accepting: switching the live run off Plan mode to the chosen edit mode
  * so the very next tool call in this turn is no longer blocked as read-only.
  */
-function planDecisionResult(run: RunState, decision: PlanDecision): string {
+function planDecisionResult(run: RunState, decision: PlanDecision, readiness?: PlanReadiness): string {
   if (decision.kind === 'accept') {
     run.policy = decision.mode
     const how =
@@ -581,10 +583,10 @@ function planDecisionResult(run: RunState, decision: PlanDecision): string {
       return (
         'The user ACCEPTED the plan but EDITED it first, and switched off Plan mode. Carry out ' +
         'EXACTLY the following edited plan. It replaces the plan you presented, so follow it precisely ' +
-        `even where it differs from yours:\n\n${edited}\n\n${how}`
+        `even where it differs from yours:\n\n${edited}\n\n${how}${readinessNote(readiness)}`
       )
     }
-    return `The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. ${how}`
+    return `The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. ${how}${readinessNote(readiness)}`
   }
   if (decision.kind === 'suggest') {
     return (
@@ -1844,9 +1846,30 @@ export async function startRun(
       // Accepting flips run.policy here so the next tool call this turn isn't blocked.
       presentPlan: (plan) =>
         new Promise<string>((resolve) => {
-          run.planDecisions.set(callId, (decision) => resolve(planDecisionResult(run, decision)))
-          run.pendingPlans.set(callId, plan)
-          emit({ type: 'plan_ready', callId, plan })
+          // Whether the plan's checks can run here, shown with the plan and told to the
+          // agent on accept. File checks and PATH lookups only: nothing runs.
+          const readiness = planReadiness(
+            gatherReadinessFacts(workspace, plan, {
+              network: !isSandboxed()
+                ? 'ungated'
+                : run.shellNetworkGranted && !egressUnavailable
+                  ? 'granted'
+                  : req.unattended === true
+                    ? 'unattended'
+                    : run.shellNetworkDecided
+                      ? 'declined'
+                      : 'ask',
+              browser: !localhostCaptureAvailable
+                ? 'unavailable'
+                : activeBackendId() === 'bubblewrap'
+                  ? 'isolated'
+                  : 'ok'
+            })
+          )
+          const shown = readiness.items.length ? { ...plan, readiness } : plan
+          run.planDecisions.set(callId, (decision) => resolve(planDecisionResult(run, decision, shown.readiness)))
+          run.pendingPlans.set(callId, shown)
+          emit({ type: 'plan_ready', callId, plan: shown })
         }),
       // Both tiers route through runDispatch (hoisted above), which handles the
       // model override, resume, live progress, nesting, per-model billing, the

@@ -524,7 +524,13 @@ Approval is layered. From most to least restrictive:
 
 - **Plan mode:** read-only. The agent researches and proposes a plan; writes and
   shell commands are blocked. It presents the plan for the user to accept,
-  request changes, or reject.
+  request changes, or reject. The plan lists the checks it will run, and under them
+  Houston shows whether those checks can run on this machine: whether the runtimes
+  are installed, whether the dependencies are, and whether shell commands can reach
+  the network to install them (for example, "choose Allow for run on the install
+  command"). Houston works this out from the machine without running anything, and
+  tells the agent about any problem when you accept, so it can say a check couldn't
+  run instead of claiming it.
 - **Ask every time:** every edit and command needs a click.
 - **Auto-approve edits:** file edits go through automatically; shell commands
   still ask.

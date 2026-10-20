@@ -7,6 +7,7 @@ import type { FileDiffPreview } from './diff'
 import type { RuntimeId } from './runtimes'
 import type { PromptInvocation } from './promptInvocation'
 import type { TurnReceipt } from './evidence'
+import type { PlanReadiness } from './planReadiness'
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -737,6 +738,15 @@ export interface PlanPayload {
   steps?: string[]
   /** Repo-relative paths the plan will create or change, if given. */
   files?: string[]
+  /** The concrete checks the plan will run to verify the work, if given. */
+  verify?: string[]
+  /**
+   * Whether those checks can run on this machine (runtimes, dependencies, network),
+   * worked out by Houston when the plan is presented. Not part of the agent's call: the
+   * loop adds it to the event, so it isn't saved with the plan and a reloaded plan
+   * marker has none.
+   */
+  readiness?: PlanReadiness
 }
 
 /** How edits should run after the user accepts a plan (drives the policy switch). */
