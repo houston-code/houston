@@ -27,6 +27,20 @@ import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { QUESTION_EMPTY_ANSWER } from '@shared/promptOutcome'
 import { getSearchProviderInfo } from '@shared/search'
 import {
+  MAX_GALLERY_IMAGES,
+  SHOW_IMAGES_NAME,
+  parseGalleryArgs,
+  parseGalleryArgsSafe,
+  sniffImageType
+} from '@shared/gallery'
+import {
+  MAX_FULL_PAGE_HEIGHT,
+  MAX_MOCKUP_VARIANTS,
+  RENDER_MOCKUP_NAME,
+  parseMockupArgs,
+  parseMockupArgsSafe
+} from '@shared/mockup'
+import {
   MAX_ATTACH_IMAGE_BYTES,
   MAX_PDF_BYTES,
   humanSize,
@@ -94,6 +108,7 @@ import {
   type SpawnSessionResult
 } from './spawn'
 import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
+import type { RenderMockup } from './mockupRender'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -194,6 +209,8 @@ export interface ToolContext {
   attachDocument?: (doc: DocumentAttachment) => void
   /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */
   captureLocalhost?: (input: CaptureInput) => Promise<LocalhostCapture>
+  /** Render a project HTML mockup offscreen with no network (injected by the loop; Electron-backed). */
+  renderMockup?: RenderMockup
   /**
    * The processes listening on a local port (injected by the loop, see portOwner.ts), so
    * view_localhost can say when the page came from a server outside the workspace.
@@ -2186,6 +2203,182 @@ const prSweep: ToolDef = {
     const items = parseSweepItems(args.items)
     const summary = formatSweepSummary(mode, items)
     return items.length ? `${summary}\n${formatSweepList(items)}` : summary
+  }
+}
+
+/**
+ * Present image files to the user as a captioned gallery: UI screenshots from a
+ * Playwright or simulator run, rendered mockups, charts. Whatever wrote the files,
+ * this is how they reach the user in the desktop app, where the row renders as a
+ * gallery with a full-size viewer (see ImageGallery.tsx). Read-only: every path is
+ * confined to the roots like read_file, and each file must BE an image by its
+ * leading bytes, so a renamed secret can never ride along. The images are also
+ * attached to the result, so the model sees exactly what it showed.
+ *
+ * All-or-nothing: one bad entry fails the call before anything is attached, which
+ * keeps the attached images in the same order as the arguments the gallery labels
+ * them from.
+ */
+const showImages: ToolDef = {
+  kind: 'read',
+  summarize: (a) => {
+    const g = parseGalleryArgsSafe(a)
+    if (!g) return 'Show images'
+    const n = `${g.images.length} image${g.images.length === 1 ? '' : 's'}`
+    return g.title ? `${g.title} (${n})` : n
+  },
+  schema: {
+    name: SHOW_IMAGES_NAME,
+    description:
+      'Show image files to the user as a gallery in the chat, each with a short label and an optional caption; the user can open any of them full size. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.',
+    parameters: objectSchema(
+      {
+        title: { type: 'string', description: 'Optional heading for the gallery, e.g. "Settings page: proposed".' },
+        images: {
+          type: 'array',
+          description: `The images to show, in order (1 to ${MAX_GALLERY_IMAGES}).`,
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Path to the image file, relative to the project root.' },
+              label: { type: 'string', description: 'Short name shown under the image, e.g. "Dark theme". Defaults to the file name.' },
+              caption: { type: 'string', description: 'Optional sentence shown with the image in the full-size viewer.' }
+            },
+            required: ['path'],
+            additionalProperties: false
+          }
+        }
+      },
+      ['images']
+    )
+  },
+  async execute(args, ctx) {
+    const gallery = parseGalleryArgs(args)
+    if (!ctx.attachImage) throw new Error('Images cannot be shown in this context.')
+    const roots = rootsOf(ctx)
+    const loaded: { mediaType: string; buf: Buffer }[] = []
+    for (const [i, img] of gallery.images.entries()) {
+      const where = `images[${i}] (${img.path})`
+      const abs = resolveInRoots(roots, img.path)
+      let size: number
+      try {
+        const st = await fs.stat(abs)
+        if (!st.isFile()) throw new Error('not a file')
+        size = st.size
+      } catch {
+        throw new Error(`${where}: no such file.`)
+      }
+      if (size > MAX_ATTACH_IMAGE_BYTES) {
+        throw new Error(`${where}: ${humanSize(size)} is over the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} limit.`)
+      }
+      const buf = await fs.readFile(abs)
+      const mediaType = sniffImageType(buf.subarray(0, 16))
+      if (!mediaType) throw new Error(`${where}: not a PNG, JPEG, GIF, or WebP image.`)
+      ctx.fileTracker?.noteRead(abs, buf)
+      loaded.push({ mediaType, buf })
+    }
+    for (const { mediaType, buf } of loaded) ctx.attachImage({ mediaType, data: buf.toString('base64') })
+    const lines = gallery.images.map(
+      (img, i) => `${i + 1}. ${img.label}: ${img.path} (${loaded[i].mediaType}, ${humanSize(loaded[i].buf.byteLength)})`
+    )
+    const heading = gallery.title ? ` titled "${gallery.title}"` : ''
+    return `Showed the user a gallery${heading} of ${loaded.length} image${loaded.length === 1 ? '' : 's'}:\n${lines.join('\n')}\n[images attached below for viewing]`
+  }
+}
+
+/**
+ * Render an HTML mockup from the project into screenshots, in the viewports and
+ * color schemes asked for, with no dev server. The page runs in an offscreen,
+ * sandboxed browser that can load files from the mockup's own root and nothing
+ * else: no network, no other folders (see mockupCapture.ts for the isolation).
+ * Read-kind like view_localhost's capture would be if it had no network: it
+ * writes nothing and reaches nothing, so it needs no approval. The images attach
+ * to the result in variant order, and the row renders them as a labelled gallery.
+ */
+const renderMockup: ToolDef = {
+  kind: 'read',
+  summarize: (a) => {
+    const m = parseMockupArgsSafe(a)
+    if (!m) return 'Render mockup'
+    return `${m.file} (${m.variants.length} variant${m.variants.length === 1 ? '' : 's'})`
+  },
+  schema: {
+    name: RENDER_MOCKUP_NAME,
+    description: `Render an HTML mockup file from the project into screenshots, with no dev server, and show them to the user as a gallery. Use it to show how a UI that doesn't exist yet would look: write a self-contained .html page that uses the project's own stylesheet and theme tokens, then render it in the states that matter. The page can load files from its own project folder (CSS, fonts, images, scripts) but nothing from the network. Each variant picks a viewport preset (desktop, tablet, mobile) or a custom size, a light or dark color scheme, optionally a full-page capture, and optionally a query like "?state=error" so one file can show several states. You also receive the images, so check them before you describe them, and tell the user they are mockups, not the running app.`,
+    parameters: objectSchema(
+      {
+        file: { type: 'string', description: 'Path to the .html mockup, relative to the project root.' },
+        variants: {
+          type: 'array',
+          description: `What to render, at most ${MAX_MOCKUP_VARIANTS}; defaults to one desktop, light render.`,
+          items: {
+            type: 'object',
+            properties: {
+              preset: {
+                type: 'string',
+                enum: ['desktop', 'tablet', 'mobile'],
+                description: 'Viewport preset: desktop 1280×800, tablet 768×1024, mobile 390×844. Defaults to desktop.'
+              },
+              colorScheme: { type: 'string', enum: ['light', 'dark'], description: 'Defaults to light.' },
+              label: { type: 'string', description: 'Short name shown under the image, e.g. "Empty state, dark".' },
+              width: { type: 'number', description: 'Custom viewport width in CSS pixels (200 to 2560).' },
+              height: { type: 'number', description: 'Custom viewport height in CSS pixels (200 to 2000).' },
+              fullPage: { type: 'boolean', description: `Capture the whole page height (up to ${MAX_FULL_PAGE_HEIGHT}px).` },
+              query: { type: 'string', description: 'Appended to the file URL, starting with ? or #, e.g. "?state=empty".' }
+            },
+            additionalProperties: false
+          }
+        },
+        fullPage: { type: 'boolean', description: 'Default for every variant: capture the whole page height.' }
+      },
+      ['file']
+    )
+  },
+  async execute(args, ctx) {
+    const mockup = parseMockupArgs(args)
+    if (!ctx.renderMockup) throw new Error('Mockups cannot be rendered in this context.')
+    if (!ctx.attachImage) throw new Error('Images cannot be shown in this context.')
+    const roots = rootsOf(ctx)
+    const abs = resolveInRoots(roots, mockup.file)
+    try {
+      if (!(await fs.stat(abs)).isFile()) throw new Error('not a file')
+    } catch {
+      throw new Error(`No such file: ${mockup.file}`)
+    }
+    // The page may load files only from the root holding the mockup, resolved
+    // through any symlinks so the serving side and this check agree.
+    const file = realpathSync(abs)
+    const root = roots
+      .map((r) => {
+        try {
+          return realpathSync(r)
+        } catch {
+          return r
+        }
+      })
+      .find((r) => file === r || file.startsWith(r.endsWith(sep) ? r : r + sep))
+    if (!root) throw new Error(`Path escapes the allowed roots: ${mockup.file}`)
+    const renders = await ctx.renderMockup({ root, file, variants: mockup.variants, signal: ctx.signal })
+    if (renders.length !== mockup.variants.length) throw new Error('The renderer returned the wrong number of images.')
+    const tooBig = renders.findIndex((r) => r.png.byteLength > MAX_ATTACH_IMAGE_BYTES)
+    if (tooBig >= 0) {
+      throw new Error(
+        `${mockup.variants[tooBig].label}: the screenshot is ${humanSize(renders[tooBig].png.byteLength)}, over the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} limit; use a smaller size or turn off fullPage.`
+      )
+    }
+    for (const r of renders) ctx.attachImage({ mediaType: 'image/png', data: r.png.toString('base64') })
+    const lines = [`Rendered ${mockup.file} in ${renders.length} variant${renders.length === 1 ? '' : 's'}:`]
+    renders.forEach((r, i) => {
+      const v = mockup.variants[i]
+      const notes = [`${r.width}×${r.height}`, humanSize(r.png.byteLength)]
+      if (r.truncated) notes.push(`cut at ${MAX_FULL_PAGE_HEIGHT}px`)
+      lines.push(`${i + 1}. ${v.label} (${notes.join(', ')})`)
+      if (r.loadError) lines.push(`   [load warning: ${r.loadError}]`)
+    })
+    const consoleLines = [...new Set(renders.flatMap((r) => r.console))]
+    lines.push(consoleLines.length ? `Console output:\n${consoleLines.slice(0, 40).join('\n')}` : 'Console output: (none)')
+    lines.push('[screenshots attached below for viewing; the user sees them as a gallery labelled as mockups]')
+    return lines.join('\n')
   }
 }
 
@@ -4439,6 +4632,8 @@ export const TOOLS: ToolDef[] = [
   killShellTool,
   webFetch,
   viewLocalhost,
+  showImages,
+  renderMockup,
   webSearch,
   todoWrite,
   skillTool,
@@ -4487,6 +4682,10 @@ export function getTool(name: string): ToolDef | undefined {
 export interface BuiltinToolsetOptions {
   /** A localhost capture backend is wired (desktop only); backs view_localhost. */
   localhostCapture: boolean
+  /** The client draws show_images as a gallery (the desktop app); backs show_images. */
+  imageGallery: boolean
+  /** An offscreen mockup renderer is wired (desktop only); backs render_mockup. Absent counts as false. */
+  mockupRender?: boolean
   /** A spawn backend is wired; backs spawn_session (and propose_session). */
   spawn: boolean
   /**
@@ -4516,6 +4715,8 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
   return TOOLS.filter((t) => {
     const name = t.schema.name
     if (name === VIEW_LOCALHOST_NAME) return opts.localhostCapture
+    if (name === SHOW_IMAGES_NAME) return opts.imageGallery
+    if (name === RENDER_MOCKUP_NAME) return opts.imageGallery && opts.mockupRender === true
     if (name === SPAWN_SESSION_NAME) return opts.spawn
     if (name === PROPOSE_SESSION_NAME) return opts.spawn && opts.proposals !== false
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
+import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
 import { CONVERSATION_SCHEMA_VERSION } from '@shared/agent'
 import type {
   AgentEvent,
@@ -36,6 +37,11 @@ function dir(): string {
 
 function filePath(id: string): string {
   return join(dir(), `${id}.json`)
+}
+
+/** Where a conversation's attachment bytes live (see conversationMedia.ts). */
+function mediaDir(id: string): string {
+  return join(dir(), `${id}.media`)
 }
 
 /**
@@ -93,7 +99,10 @@ function isConversationShape(raw: unknown): raw is Conversation {
  * here as the on-disk format evolves, oldest first, e.g.:
  *   if (fromVersion < 2) { ...rewrite v1 fields... }
  * v1 is the first stamped version; unversioned legacy files (fromVersion 0) are
- * shape-identical to v1, so today the only change is stamping the version.
+ * shape-identical to v1. v2 moved attachment bytes into the media folder; a v0/v1
+ * file's inline attachments are still valid in memory and are externalized by the
+ * next write(), so no step is needed here either. Today the only change is stamping
+ * the version.
  */
 function migrate(conv: Conversation): Conversation {
   return { ...conv, schemaVersion: stampedVersion(conv.schemaVersion) }
@@ -150,10 +159,15 @@ function write(conv: Conversation): void {
   // Stamp on every write, whatever the call path, so a file read as legacy (v0)
   // converges to the current version the first time it's touched (and a file stamped by
   // a newer Houston keeps its higher version).
-  const toWrite: Conversation = { ...conv, schemaVersion: stampedVersion(conv.schemaVersion) }
+  const stamped: Conversation = { ...conv, schemaVersion: stampedVersion(conv.schemaVersion) }
+  // Attachment bytes go to the media folder first, so the JSON never names a file
+  // that isn't there yet; files no longer referenced are dropped after it lands.
+  const media = mediaDir(conv.id)
+  const { value: toWrite, refs } = externalizeMedia(stamped, media)
   // 0600 — owner read/write only. Transcripts can capture secrets echoed in tool
   // output (a curl with an auth header, an env dump), so keep them off world-read.
   writeFileAtomicSync(path, JSON.stringify(toWrite, null, 2), 0o600)
+  pruneMedia(media, refs)
 }
 
 export function createConversation(input: {
@@ -183,7 +197,23 @@ export function createConversation(input: {
   return conv
 }
 
+/**
+ * A conversation ready to use: attachments carry their bytes again. The internal
+ * read() leaves them as media references, which is all the read-modify-write
+ * helpers below need (write() keeps references as they are), so only callers that
+ * hand messages to a provider, the renderer, or an export pay for loading images.
+ */
 export function getConversation(id: string): Conversation | null {
+  const conv = read(id)
+  return conv && hydrateMedia(conv, mediaDir(conv.id))
+}
+
+/**
+ * A conversation for reading its metadata (title, workspace, prompt snapshot,
+ * compaction state) without loading any attachment bytes: images stay as media
+ * references. Never hand the result to a provider or back to the store.
+ */
+export function peekConversation(id: string): Conversation | null {
   return read(id)
 }
 
@@ -194,7 +224,8 @@ export function getConversation(id: string): Conversation | null {
  * conversation, or null if the source doesn't exist.
  */
 export function forkConversation(id: string): Conversation | null {
-  const src = read(id)
+  // Hydrated: the fork's write() copies the bytes into the fork's own media folder.
+  const src = getConversation(id)
   if (!src) return null
   const fork = forkConversationData(src, randomUUID(), Date.now())
   // The "(fork)" title is intentional — leave it be rather than re-summarizing.
@@ -301,6 +332,7 @@ export function deleteConversation(id: string): void {
   if (!isConversationId(id)) return
   const path = filePath(id)
   if (existsSync(path)) rmSync(path)
+  rmSync(mediaDir(id), { recursive: true, force: true })
   // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
   clearConversationOverride(id)
 }

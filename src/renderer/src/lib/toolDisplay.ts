@@ -127,6 +127,16 @@ export function describeTool(item: ToolItem): ToolDescription {
       return { verb: 'Kill', target: str(a.shell_id) ?? str(a.id) ?? '', mono: true }
     case 'web_fetch':
       return { verb: 'Fetch', target: str(a.url) ?? '', mono: true }
+    case 'show_images': {
+      const n = Array.isArray(a.images) ? a.images.length : 0
+      const count = `${n} image${n === 1 ? '' : 's'}`
+      const title = str(a.title)
+      return { verb: 'Show', target: title ? `${title} (${count})` : count, mono: false }
+    }
+    case 'render_mockup': {
+      const n = Array.isArray(a.variants) ? a.variants.length : 1
+      return { verb: 'Render', target: `${str(a.file) ?? 'mockup'} (${n} variant${n === 1 ? '' : 's'})`, mono: false }
+    }
     case 'view_localhost':
       return { verb: 'View', target: str(a.url) ?? '', mono: true }
     case 'web_search':

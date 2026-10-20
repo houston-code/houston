@@ -41,6 +41,7 @@ import type {
 } from '@shared/agent'
 import type { ApprovalPolicy } from '@shared/types'
 import { resetCaptureBackend, setCaptureBackend } from './viewlocalhost'
+import { resetMockupBackend, setMockupBackend } from './mockupRender'
 import { resetSpawnBackend, setSpawnBackend } from './spawn'
 import { resetSchedulerBackend, setSchedulerBackend } from './scheduler'
 import type { CaptureDeps } from './viewlocalhost'
@@ -117,6 +118,7 @@ vi.mock('./promptSnapshot', async (importActual) => ({
 // goldens off the real conversation store.
 vi.mock('../conversations', () => ({
   getConversation: () => null,
+  peekConversation: () => null,
   setCompaction: () => {},
   setPromptSnapshot: () => {},
   takeChildReports: () => []
@@ -191,17 +193,27 @@ beforeEach(() => {
     projectPlugins: false
   }
 })
+/**
+ * Whether the scenario's run comes from the desktop app, which draws image results
+ * as galleries (AgentRunRequest.imageGallery): the GUI sets it, terminal clients don't.
+ */
+let desktopClient = false
+
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true })
   resetCaptureBackend()
+  resetMockupBackend()
+  desktopClient = false
   resetSpawnBackend()
   resetSchedulerBackend()
   vi.restoreAllMocks()
 })
 
-/** Wire the host backends the Electron shell sets (capture, spawn, scheduler) so the toolset/prompt match it. */
+/** Wire the host backends the Electron shell sets (capture, mockups, spawn, scheduler) so the toolset/prompt match it. */
 function configureDesktopBackends(): void {
+  desktopClient = true
   setCaptureBackend({} as CaptureDeps)
+  setMockupBackend(async () => [])
   setSpawnBackend({} as SpawnBackend)
   setSchedulerBackend({} as SchedulerBackend)
 }
@@ -260,7 +272,8 @@ async function runScenario(opts: {
       approvalPolicy: opts.policy ?? 'ask',
       messages: [{ role: 'user', content: opts.userText ?? 'hello' }],
       ...(opts.unattended ? { unattended: true } : {}),
-      ...(opts.overrides ? { overrides: opts.overrides } : {})
+      ...(opts.overrides ? { overrides: opts.overrides } : {}),
+      ...(desktopClient ? { imageGallery: true } : {})
     },
     send
   )
@@ -657,7 +670,12 @@ const BACKEND_CONFIGS: BackendConfig[] = [true, false].flatMap((capture) =>
 )
 
 function wireBackends(c: Omit<BackendConfig, 'label'>): void {
-  if (c.capture) setCaptureBackend({} as CaptureDeps)
+  // The browser engine comes only with the desktop app, which also draws galleries.
+  if (c.capture) {
+    setCaptureBackend({} as CaptureDeps)
+    setMockupBackend(async () => [])
+    desktopClient = true
+  }
   if (c.spawn) setSpawnBackend({} as SpawnBackend)
   if (c.scheduler) setSchedulerBackend({} as SchedulerBackend)
 }

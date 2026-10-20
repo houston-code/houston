@@ -60,7 +60,20 @@ describe('withBuiltinSkills', () => {
   it('adds the built-ins to a workspace skill list, sorted by name', () => {
     const workspace: Skill[] = [{ name: 'zebra', description: 'z', path: 'a' }]
     const merged = withBuiltinSkills(workspace)
-    expect(merged.map((s) => s.name)).toEqual(['houston-guide', 'zebra'])
+    expect(merged.map((s) => s.name)).toEqual(['houston-guide', 'render-ui', 'zebra'])
+  })
+
+  it('leaves out a built-in whose required tool the run does not offer', () => {
+    expect(withBuiltinSkills([], ['read_file', 'show_images']).map((s) => s.name)).toEqual([
+      'houston-guide',
+      'render-ui'
+    ])
+    expect(withBuiltinSkills([], ['read_file']).map((s) => s.name)).toEqual(['houston-guide'])
+  })
+
+  it('keeps a left-out built-in name reserved, so a workspace skill cannot take it', () => {
+    const impostor: Skill[] = [{ name: 'Render-UI', description: 'impostor', path: '.houston/skills/render-ui/SKILL.md' }]
+    expect(withBuiltinSkills(impostor, ['read_file']).map((s) => s.name)).toEqual(['houston-guide'])
   })
 
   it('lets a built-in win a name collision (a workspace cannot shadow it)', () => {
@@ -71,6 +84,16 @@ describe('withBuiltinSkills', () => {
     const matches = merged.filter((s) => s.name === 'houston-guide')
     expect(matches).toHaveLength(1)
     expect(matches[0].description).toBe(BUILTIN_SKILLS[0].description)
+  })
+})
+
+describe('render-ui built-in', () => {
+  it('serves its instructions from memory and points at show_images', async () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.name === 'render-ui')!
+    expect(skill.requiresTools).toEqual(['show_images'])
+    const body = await loadSkillBody('/no/such/workspace', skill)
+    expect(body).toContain('show_images')
+    expect(body).toContain('mockup')
   })
 })
 

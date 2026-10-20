@@ -4,16 +4,16 @@
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
-system: sha256:38dd9d59dc92 (15504 chars)
-tools (48): read_file, write_file, edit_file, multi_edit, apply_patch, notebook_edit, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, propose_session, schedule_run, list_scheduled_runs, cancel_scheduled_run, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_pr_review, gh_pr_merge, gh_pr_set_state, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_issue_set_state, gh_run_list, gh_run_view
+system: sha256:dcd3edded0d0 (16096 chars)
+tools (50): read_file, write_file, edit_file, multi_edit, apply_patch, notebook_edit, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, show_images, render_mockup, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, propose_session, schedule_run, list_scheduled_runs, cancel_scheduled_run, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_pr_review, gh_pr_merge, gh_pr_set_state, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_issue_set_state, gh_run_list, gh_run_view
 messages (1):
 1. user: "Create a.txt and b.txt"
 --- request 2 ---
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
-system: sha256:38dd9d59dc92 (15504 chars)
-tools (48): read_file, write_file, edit_file, multi_edit, apply_patch, notebook_edit, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, propose_session, schedule_run, list_scheduled_runs, cancel_scheduled_run, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_pr_review, gh_pr_merge, gh_pr_set_state, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_issue_set_state, gh_run_list, gh_run_view
+system: sha256:dcd3edded0d0 (16096 chars)
+tools (50): read_file, write_file, edit_file, multi_edit, apply_patch, notebook_edit, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, show_images, render_mockup, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, propose_session, schedule_run, list_scheduled_runs, cancel_scheduled_run, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_pr_review, gh_pr_merge, gh_pr_set_state, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_issue_set_state, gh_run_list, gh_run_view
 messages (3):
 1. user: "Create a.txt and b.txt"
 2. assistant: ""
@@ -23,8 +23,8 @@ messages (3):
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
-system: sha256:38dd9d59dc92 (15504 chars)
-tools (48): read_file, write_file, edit_file, multi_edit, apply_patch, notebook_edit, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, propose_session, schedule_run, list_scheduled_runs, cancel_scheduled_run, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_pr_review, gh_pr_merge, gh_pr_set_state, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_issue_set_state, gh_run_list, gh_run_view
+system: sha256:dcd3edded0d0 (16096 chars)
+tools (50): read_file, write_file, edit_file, multi_edit, apply_patch, notebook_edit, list_dir, glob, search_files, ast_grep, run_shell, read_shell_output, kill_shell, web_fetch, view_localhost, show_images, render_mockup, web_search, todo_write, skill, pr_sweep, ask_user, recall_history, dispatch_agent, dispatch_writable_agent, spawn_session, propose_session, schedule_run, list_scheduled_runs, cancel_scheduled_run, review_changes, git_status, git_diff, gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_checkout, gh_pr_checks, gh_pr_review, gh_pr_merge, gh_pr_set_state, gh_repo_create, gh_issue_list, gh_issue_view, gh_issue_create, gh_issue_comment, gh_issue_set_state, gh_run_list, gh_run_view
 messages (5):
 1. user: "Create a.txt and b.txt"
 2. assistant: ""

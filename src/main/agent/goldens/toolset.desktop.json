@@ -452,6 +452,116 @@
     }
   },
   {
+    "name": "show_images",
+    "description": "Show image files to the user as a gallery in the chat, each with a short label and an optional caption; the user can open any of them full size. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Optional heading for the gallery, e.g. \"Settings page: proposed\"."
+        },
+        "images": {
+          "type": "array",
+          "description": "The images to show, in order (1 to 12).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the image file, relative to the project root."
+              },
+              "label": {
+                "type": "string",
+                "description": "Short name shown under the image, e.g. \"Dark theme\". Defaults to the file name."
+              },
+              "caption": {
+                "type": "string",
+                "description": "Optional sentence shown with the image in the full-size viewer."
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "images"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "render_mockup",
+    "description": "Render an HTML mockup file from the project into screenshots, with no dev server, and show them to the user as a gallery. Use it to show how a UI that doesn't exist yet would look: write a self-contained .html page that uses the project's own stylesheet and theme tokens, then render it in the states that matter. The page can load files from its own project folder (CSS, fonts, images, scripts) but nothing from the network. Each variant picks a viewport preset (desktop, tablet, mobile) or a custom size, a light or dark color scheme, optionally a full-page capture, and optionally a query like \"?state=error\" so one file can show several states. You also receive the images, so check them before you describe them, and tell the user they are mockups, not the running app.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Path to the .html mockup, relative to the project root."
+        },
+        "variants": {
+          "type": "array",
+          "description": "What to render, at most 6; defaults to one desktop, light render.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "preset": {
+                "type": "string",
+                "enum": [
+                  "desktop",
+                  "tablet",
+                  "mobile"
+                ],
+                "description": "Viewport preset: desktop 1280×800, tablet 768×1024, mobile 390×844. Defaults to desktop."
+              },
+              "colorScheme": {
+                "type": "string",
+                "enum": [
+                  "light",
+                  "dark"
+                ],
+                "description": "Defaults to light."
+              },
+              "label": {
+                "type": "string",
+                "description": "Short name shown under the image, e.g. \"Empty state, dark\"."
+              },
+              "width": {
+                "type": "number",
+                "description": "Custom viewport width in CSS pixels (200 to 2560)."
+              },
+              "height": {
+                "type": "number",
+                "description": "Custom viewport height in CSS pixels (200 to 2000)."
+              },
+              "fullPage": {
+                "type": "boolean",
+                "description": "Capture the whole page height (up to 6000px)."
+              },
+              "query": {
+                "type": "string",
+                "description": "Appended to the file URL, starting with ? or #, e.g. \"?state=empty\"."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "fullPage": {
+          "type": "boolean",
+          "description": "Default for every variant: capture the whole page height."
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "web_search",
     "description": "Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one, inside an untrusted-content fence. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a search-provider API key set in Settings.",
     "parameters": {

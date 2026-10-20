@@ -81,6 +81,13 @@ describe('isSensitiveRead', () => {
     // A write to .env is gated by the write path's own approval, not this check.
     expect(isSensitiveRead('write', { path: '.env' })).toBe(false)
   })
+
+  it('checks every entry of a show_images call', () => {
+    expect(isSensitiveRead('read', { images: [{ path: 'shots/a.png' }, { path: '.ssh/id_ed25519' }] })).toBe(true)
+    expect(isSensitiveRead('read', { images: [{ path: 'shots/a.png' }, { path: 'shots/b.png' }] })).toBe(false)
+    expect(isSensitiveRead('read', { images: [null, 'x', { path: 7 }] })).toBe(false)
+    expect(isSensitiveRead('read', { images: 'not-an-array' })).toBe(false)
+  })
 })
 
 describe('writesSensitivePath', () => {

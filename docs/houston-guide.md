@@ -694,7 +694,9 @@ with front-matter `name` and `description` and a body of instructions. Only the
 name and description are shown to the agent up front (cheap); the agent loads the
 full body on demand by calling the `skill` tool when a task matches. This is
 progressive disclosure: skills stay out of the way until they are needed. Houston
-also ships this guide as a built-in `houston-guide` skill.
+also ships two built-in skills: this guide as `houston-guide`, and, in the desktop
+app, `render-ui`, which the agent follows when you ask to see how something looks or
+will look (screenshots of the running app, or a mockup, shown with `show_images`).
 
 A skill can bundle more than its SKILL.md. Any other files in the skill directory
 (a `references/` folder, a template, a helper script) are listed at the end of the
@@ -842,6 +844,18 @@ an occurrence missed while Houston was closed fires once at the next launch.
   transcript.
 - **`pr_sweep`** tracks batch pull-request work (author new PRs from a task list,
   or process a batch of existing open PRs).
+- **`show_images`** (desktop app) shows you image files the agent produced, such
+  as screenshots of an app or rendered mockups, as a captioned gallery in the
+  chat. Click any image to open it full size, step through the set with the arrow
+  keys, and open the file in its default app. It only reads image files (PNG,
+  JPEG, GIF, or WebP, up to 5 MB each, 12 per gallery) inside the project, so it
+  never asks for approval.
+- **`render_mockup`** (desktop app) turns an HTML mockup file in the project into
+  screenshots without a dev server, in the sizes and themes asked for (desktop,
+  tablet, or mobile, light or dark, or a custom size), and shows them as a gallery
+  marked "Mockup from code". The page runs in a hidden, locked-down browser: it can
+  load its own files from the project folder, but nothing from the network or from
+  elsewhere on your computer. It writes nothing, so it never asks for approval.
 - **`view_localhost`** (desktop app) loads a page from a dev server running on
   your computer in a hidden browser and shows the agent a screenshot plus the
   page's visible text and console output. It can also run steps first (fill a

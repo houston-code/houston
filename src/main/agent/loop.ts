@@ -134,6 +134,7 @@ import {
 } from './subagentSessions'
 import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
+import { isMockupBackendConfigured, mockupBackend } from './mockupRender'
 import { listenersOnPort } from './portOwner'
 import {
   acceptedProposalCalls,
@@ -177,7 +178,7 @@ import {
   summarizationSystemPrompt,
   summaryMaxTokens
 } from './compaction'
-import { getConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
+import { peekConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
 import { buildPinnedMessages, latestTodos, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
 import { todoEvidenceGaps, todoGapNote } from './todoEvidence'
 import { findAcceptedPlan, planProgress, planStillOpen } from './planChecklist'
@@ -1008,9 +1009,40 @@ export async function startRun(
     // gates tool calls live — only the prose the model already saw is fixed.
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
+    // Backend-dependent tools appear only when the host wired their backend at
+    // startup: view_localhost screenshots via an offscreen browser only the Electron
+    // shell wires, and spawn_session and the schedule tools need the spawn and
+    // scheduler backends (the desktop shell and the terminal entries wire both).
+    const localhostCaptureAvailable = isCaptureBackendConfigured()
+    const spawnAvailable = isSpawnBackendConfigured()
+    const schedulerAvailable = isSchedulerConfigured()
+    // The built-in tools this run offers (present_plan only in plan mode). The
+    // prompt is built from the same list, so it never names a tool the model
+    // can't call.
+    const builtinSchemas = builtinToolset({
+      localhostCapture: localhostCaptureAvailable,
+      // Only the desktop app draws image results as a gallery; in a terminal client
+      // show_images and render_mockup would be a list of file names.
+      imageGallery: req.imageGallery === true,
+      mockupRender: isMockupBackendConfigured(),
+      spawn: spawnAvailable,
+      // A proposal card lives on a persisted chat (its state is stored there), so a
+      // one-shot run with no conversation can't offer one.
+      proposals: conversationId !== undefined,
+      scheduler: schedulerAvailable,
+      planMode,
+      // Nobody can answer a question on an unattended run; the prompt built from
+      // this list then says so instead of naming ask_user.
+      askUser: req.unattended !== true
+    }).map((t) => t.schema)
     // Merge Houston's built-in skills (e.g. houston-guide) with the workspace's
-    // own for the agent runtime; `/skills` still lists only the workspace's.
-    const skills = withBuiltinSkills(await loadSkills(workspace))
+    // own for the agent runtime; `/skills` still lists only the workspace's. A
+    // built-in tied to a tool this run doesn't offer (render-ui needs show_images)
+    // is left out.
+    const skills = withBuiltinSkills(
+      await loadSkills(workspace),
+      builtinSchemas.map((s) => s.name)
+    )
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
     // boundary, so they are NEVER auto-run for an opened repo — only when the user
@@ -1047,33 +1079,11 @@ export async function startRun(
     // retaken only when the local date changes. githubContext is a pure PATH probe
     // (no network), so the run start never triggers unapproved egress.
     const { snapshot: promptSnapshot, fresh: freshSnapshot } = await resolvePromptSnapshot(
-      conversationId ? getConversation(conversationId)?.promptSnapshot : undefined,
+      conversationId ? peekConversation(conversationId)?.promptSnapshot : undefined,
       localDateStamp(new Date()),
       async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
     )
     if (freshSnapshot && conversationId) setPromptSnapshot(conversationId, promptSnapshot)
-    // Backend-dependent tools appear only when the host wired their backend at
-    // startup: view_localhost screenshots via an offscreen browser only the Electron
-    // shell wires, and spawn_session and the schedule tools need the spawn and
-    // scheduler backends (the desktop shell and the terminal entries wire both).
-    const localhostCaptureAvailable = isCaptureBackendConfigured()
-    const spawnAvailable = isSpawnBackendConfigured()
-    const schedulerAvailable = isSchedulerConfigured()
-    // The built-in tools this run offers (present_plan only in plan mode). The
-    // prompt is built from the same list, so it never names a tool the model
-    // can't call.
-    const builtinSchemas = builtinToolset({
-      localhostCapture: localhostCaptureAvailable,
-      spawn: spawnAvailable,
-      // A proposal card lives on a persisted chat (its state is stored there), so a
-      // one-shot run with no conversation can't offer one.
-      proposals: conversationId !== undefined,
-      scheduler: schedulerAvailable,
-      planMode,
-      // Nobody can answer a question on an unattended run; the prompt built from
-      // this list then says so instead of naming ask_user.
-      askUser: req.unattended !== true
-    }).map((t) => t.schema)
     let system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
@@ -2007,6 +2017,7 @@ export async function startRun(
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.
       captureLocalhost: localhostCaptureAvailable ? captureLocalhost : undefined,
+      renderMockup: mockupBackend() ?? undefined,
       portListeners: (port) => listenersOnPort(port),
       // The recall tool reads the full, un-compacted log. Return a shallow copy so a
       // tool can't reassign the loop's `messages` array through this handle (push/splice/
@@ -2141,7 +2152,7 @@ export async function startRun(
     // must never kill a run.
     if (conversationId) {
       try {
-        const persisted = getConversation(conversationId)?.compaction
+        const persisted = peekConversation(conversationId)?.compaction
         if (persisted && isValidCompactionState(persisted, messages)) {
           cut = persisted.cut
           if (cut > 0) {

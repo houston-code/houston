@@ -19,6 +19,11 @@ export interface DrainIO {
   emitQueueChanged: (conversationId: string, items: QueuedInputMeta[]) => void
   /** Push a conversation's freshly model-generated title to the renderer (live sidebar update). */
   emitTitleChanged?: (conversationId: string, title: string) => void
+  /**
+   * The client draws image results as a gallery (the desktop app), so its runs,
+   * queued follow-ups included, are offered show_images and render_mockup.
+   */
+  imageGallery?: boolean
 }
 
 /**
@@ -68,7 +73,7 @@ export async function runAndDrain(
   // conversation (a second would interleave its setMessages writes and corrupt
   // the log). The slot is freed when this run ends, before any queue drain below.
   await startRun(
-    { ...runReq, conversationId },
+    { ...runReq, conversationId, ...(io.imageGallery ? { imageGallery: true } : {}) },
     send,
     (msgs) => setMessages(conversationId, msgs),
     owner

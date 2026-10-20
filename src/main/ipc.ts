@@ -106,6 +106,7 @@ import {
   listConversations,
   searchConversations,
   getConversation,
+  peekConversation,
   createConversation,
   forkConversation,
   deleteConversation,
@@ -217,7 +218,7 @@ function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): 
 function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent): void {
   if (getSettings().desktopNotifications === false) return
   if (!notificationFor(e)) return
-  const conv = getConversation(conversationId)
+  const conv = peekConversation(conversationId)
   notifyAgentEvent(e, BrowserWindow.fromWebContents(sender), {
     enabled: true,
     workspaceName: workspaceLabel(conv?.workspace)
@@ -241,6 +242,7 @@ function emitTitleChanged(sender: WebContents, conversationId: string, title: st
 /** Bind the run/queue orchestrator's output to a specific renderer. */
 function makeIo(sender: WebContents): DrainIO {
   return {
+    imageGallery: true,
     emit: (conversationId, e) => emitEvent(sender, conversationId, e),
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
     emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
@@ -262,6 +264,7 @@ function makeBroadcastIo(): DrainIO {
     }
   }
   return {
+    imageGallery: true,
     emit: (conversationId, e) => {
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
@@ -295,7 +298,7 @@ function wireSpawnSession(): void {
       setTitle: (id, title) => {
         setGeneratedTitle(id, title)
       },
-      getTitle: (id) => getConversation(id)?.title,
+      getTitle: (id) => peekConversation(id)?.title,
       rememberWorkspace,
       liveSpawnCount: () => [...liveSpawnedRuns.values()].filter(Boolean).length,
       removeWorktree: (wt) => removeWorktree(wt),

@@ -76,6 +76,7 @@ import {
   updateConversationMeta,
   listConversations,
   getConversation,
+  peekConversation,
   searchConversations,
   forkConversation,
   setGeneratedTitle,
@@ -248,7 +249,7 @@ export function wireTerminalSessionBackends(opts: {
     setTitle: (id, title) => {
       setGeneratedTitle(id, title)
     },
-    getTitle: (id) => getConversation(id)?.title,
+    getTitle: (id) => peekConversation(id)?.title,
     // Terminal hosts keep no recent-workspace list (that's the GUI's welcome screen).
     rememberWorkspace: () => {},
     liveSpawnCount: () => [...liveSpawnedRuns.values()].filter(Boolean).length,
