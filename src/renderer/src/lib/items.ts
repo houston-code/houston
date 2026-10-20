@@ -10,6 +10,7 @@ import {
 } from '@shared/agent'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { FileDiffPreview } from '@shared/diff'
+import type { TurnReceipt } from '@shared/evidence'
 import type { ImageAttachment } from '@shared/images'
 import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
@@ -152,12 +153,24 @@ export interface PlanItem {
   status: PlanStatus
 }
 
+/**
+ * What Houston recorded running during a turn (see TurnReceipt), shown under the
+ * turn's last message. Comes from the `receipt` event live and from the assistant
+ * message it was saved on when the transcript is rebuilt.
+ */
+export interface ReceiptItem {
+  kind: 'receipt'
+  id: string
+  receipt: TurnReceipt
+}
+
 export type DisplayItem =
   | UserItem
   | AssistantItem
   | ToolItem
   | NoticeItem
   | QuestionItem
+  | ReceiptItem
   | PlanItem
   | ElicitationItem
 
@@ -538,6 +551,15 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
             : '⚠ The reply was cut off at the model’s output limit. Ask me to continue it.'
       return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'error' }]
     }
+    case 'receipt': {
+      // A turn has one receipt, and it comes last. A renderer that re-opened the chat
+      // in the moment between the receipt being saved and the run ending rebuilt it
+      // from disk and then replays the event, so a receipt already at the end is
+      // replaced rather than doubled.
+      const finalized = finalizeStreaming(items)
+      const kept = finalized.at(-1)?.kind === 'receipt' ? finalized.slice(0, -1) : finalized
+      return [...kept, { kind: 'receipt', id: nextId(), receipt: e.receipt }]
+    }
     case 'verification': {
       const finalized = finalizeStreaming(items)
       const text = e.passed
@@ -698,6 +720,8 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
           items.push({ kind: 'notice', id: nextId(), text: prNoticeText(pr), tone: 'info' })
         }
       }
+      // Saved on the turn's last assistant message, after everything that turn did.
+      if (m.receipt) items.push({ kind: 'receipt', id: nextId(), receipt: m.receipt })
     }
   }
   return items

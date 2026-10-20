@@ -886,6 +886,63 @@ describe('steered events', () => {
   })
 })
 
+
+describe('turn receipts', () => {
+  const receipt = {
+    v: 1 as const,
+    checks: [{ kind: 'test' as const, label: 'pytest', ok: false, exitCode: 1, runs: 1 }],
+    otherCommands: 0,
+    filesChanged: ['app.py'],
+    filesChangedCount: 1
+  }
+
+  it('shows a receipt after the turn it describes, live and when rebuilt from disk', () => {
+    let live: DisplayItem[] = []
+    live = reduceEvent(live, { runId: 'r1', type: 'text', delta: 'All tests pass.' })
+    live = reduceEvent(live, { runId: 'r1', type: 'receipt', receipt })
+    live = reduceEvent(live, { runId: 'r1', type: 'done', stopReason: 'end_turn' })
+    expect(live.map((i) => i.kind)).toEqual(['assistant', 'receipt'])
+    expect(live[0]).toMatchObject({ streaming: false })
+
+    const saved: ChatMessage[] = [
+      { role: 'user', content: 'build it' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'run_shell', arguments: { command: 'pytest' } }] },
+      { role: 'tool', content: '[exit code: 1]', toolCallId: 'c1', toolName: 'run_shell' },
+      { role: 'assistant', content: 'All tests pass.', receipt }
+    ]
+    const rebuilt = itemsFromMessages(saved)
+    expect(rebuilt.map((i) => i.kind)).toEqual(['user', 'tool', 'assistant', 'receipt'])
+    expect(rebuilt.at(-1)).toMatchObject({ kind: 'receipt', receipt })
+  })
+
+  it('places a receipt saved on a message with tool calls after those calls', () => {
+    // A turn cut off at its step cap ends on an assistant message that called tools.
+    const rebuilt = itemsFromMessages([
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: 'Writing it.',
+        toolCalls: [{ id: 'w1', name: 'write_file', arguments: { path: 'app.py', content: '' } }],
+        receipt
+      },
+      { role: 'tool', content: 'Wrote 0 bytes to app.py.', toolCallId: 'w1', toolName: 'write_file' }
+    ])
+    expect(rebuilt.map((i) => i.kind)).toEqual(['user', 'assistant', 'tool', 'receipt'])
+  })
+
+  it('replaces a receipt already at the end instead of showing it twice', () => {
+    // Re-opened between the receipt being saved and the run ending: the rebuilt
+    // transcript has it, and the live buffer replays the event.
+    const fromDisk = itemsFromMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'Done.', receipt }
+    ])
+    const replayed = reduceEvent(fromDisk, { runId: 'r1', type: 'receipt', receipt })
+    expect(replayed.filter((i) => i.kind === 'receipt')).toHaveLength(1)
+    expect(replayed.map((i) => i.kind)).toEqual(['user', 'assistant', 'receipt'])
+  })
+})
+
 describe('steered messages after a reload', () => {
   it('keep their Steered label from the saved message', () => {
     const items = itemsFromMessages([

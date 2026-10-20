@@ -1,0 +1,329 @@
+import { describe, expect, it } from 'vitest'
+import { join } from 'node:path'
+import { RECEIPT_LABEL_MAX, RECEIPT_MAX_CHECKS, RECEIPT_MAX_FILES } from '@shared/evidence'
+import { classifyCommand, EvidenceLedger, parseTestCounts, type ShellEvidence } from './evidence'
+
+const shell = (command: string, over: Partial<ShellEvidence> = {}): ShellEvidence => ({
+  kind: 'shell',
+  command,
+  background: false,
+  exitCode: 0,
+  timedOut: false,
+  output: '',
+  ...over
+})
+
+describe('classifyCommand', () => {
+  it.each([
+    // test runners, directly and through wrappers
+    ['pytest', 'test'],
+    ['pytest -q tests/test_api.py', 'test'],
+    ['python -m pytest -x', 'test'],
+    ['python3 -m unittest discover', 'test'],
+    ['uv run pytest', 'test'],
+    ['poetry run pytest -k api', 'test'],
+    ['npm test', 'test'],
+    ['npm t', 'test'],
+    ['npm run test:unit', 'test'],
+    ['yarn test --watch=false', 'test'],
+    ['pnpm test', 'test'],
+    ['bun test', 'test'],
+    ['npx vitest run', 'test'],
+    ['./node_modules/.bin/jest --ci', 'test'],
+    ['node --test', 'test'],
+    ['node test.mjs', 'test'],
+    ['node tests/api.js', 'test'],
+    ['node src/app.test.js', 'test'],
+    ['python test_app.py', 'test'],
+    ['python manage.py test', 'test'],
+    ['go test ./...', 'test'],
+    ['cargo test', 'test'],
+    ['make test', 'test'],
+    ['CI=1 npm test', 'test'],
+    // typecheck, build, lint
+    ['npx tsc --noEmit', 'typecheck'],
+    ['npm run typecheck', 'typecheck'],
+    ['mypy app', 'typecheck'],
+    ['cargo check', 'typecheck'],
+    ['npm run build', 'build'],
+    ['yarn build', 'build'],
+    ['vite build', 'build'],
+    ['tsc -p .', 'build'],
+    ['go build ./...', 'build'],
+    ['make', 'build'],
+    ['npm run lint', 'lint'],
+    ['ruff check .', 'lint'],
+    ['eslint src', 'lint'],
+    // installs and scaffolders
+    ['pip install -r requirements.txt', 'install'],
+    ['python -m pip install fastapi', 'install'],
+    ['npm install', 'install'],
+    ['npm ci', 'install'],
+    ['yarn', 'install'],
+    ['npm create vite@latest frontend -- --template react', 'install'],
+    ['npx create-react-app web', 'install'],
+    ['uv sync', 'install'],
+    // servers and local HTTP
+    ['uvicorn main:app --port 8000', 'server'],
+    ['npm run dev', 'server'],
+    ['npm start', 'server'],
+    ['python -m http.server 8080', 'server'],
+    ['python manage.py runserver', 'server'],
+    ['curl -s http://localhost:8000/todos', 'http'],
+    ['curl -X POST 127.0.0.1:8000/todos -d "{}"', 'http']
+  ])('%s is %s', (command, kind) => {
+    expect(classifyCommand(command).kind).toBe(kind)
+  })
+
+  it.each([
+    'ls -la',
+    'git status',
+    'cat package.json',
+    'mkdir -p backend',
+    'echo "npm test"',
+    'npm init -y',
+    'curl -s https://example.com/install.sh',
+    'python app.py',
+    'grep -rn pytest .'
+  ])('%s is no particular kind', (command) => {
+    expect(classifyCommand(command).kind).toBeNull()
+  })
+
+  it('names a compound command by its most telling part', () => {
+    expect(classifyCommand('cd backend && pip install -r requirements.txt && pytest').kind).toBe('test')
+    expect(classifyCommand('npm ci && npm run build').kind).toBe('build')
+    expect(classifyCommand('cd frontend && npm install').kind).toBe('install')
+    expect(classifyCommand('uvicorn main:app & sleep 2 && curl -s localhost:8000/').kind).toBe('http')
+  })
+
+  it('treats a background start of an unknown command as a server, and keeps a backgrounded test a test', () => {
+    expect(classifyCommand('python app.py', true).kind).toBe('server')
+    expect(classifyCommand('npm test', true).kind).toBe('test')
+  })
+
+  it('knows when a zero exit speaks for the test part', () => {
+    expect(classifyCommand('pytest').exitAttributable).toBe(true)
+    expect(classifyCommand('cd api && source .venv/bin/activate && pytest -q').exitAttributable).toBe(true)
+    expect(classifyCommand('npm ci; npm test').exitAttributable).toBe(true)
+    expect(classifyCommand('pytest && echo ok').exitAttributable).toBe(true)
+    // The status that comes back belongs to a later command, or the test may not have run.
+    expect(classifyCommand('pytest; echo done').exitAttributable).toBe(false)
+    expect(classifyCommand('pytest | tail -5').exitAttributable).toBe(false)
+    expect(classifyCommand('pytest || true').exitAttributable).toBe(false)
+    expect(classifyCommand('false || pytest').exitAttributable).toBe(false)
+    expect(classifyCommand('set -o pipefail; pytest | tail -5').exitAttributable).toBe(true)
+    expect(classifyCommand('set -euo pipefail; pytest | tail -5').exitAttributable).toBe(true)
+  })
+
+  it('does not split inside quotes, substitutions, or redirections', () => {
+    expect(classifyCommand('echo "a && pytest"').kind).toBeNull()
+    expect(classifyCommand('echo $(pytest --version)').kind).toBeNull()
+    expect(classifyCommand('pytest 2>&1').exitAttributable).toBe(true)
+    expect(classifyCommand('pytest > out.log 2>&1').exitAttributable).toBe(true)
+    expect(classifyCommand('ls # && pytest').kind).toBeNull()
+  })
+
+  it('reads whether an HTTP request fails on an error status', () => {
+    expect(classifyCommand('curl -s localhost:8000/').httpStatusChecked).toBe(false)
+    expect(classifyCommand('curl -sf localhost:8000/').httpStatusChecked).toBe(true)
+    expect(classifyCommand('curl --fail http://127.0.0.1:3000/api').httpStatusChecked).toBe(true)
+    expect(classifyCommand('wget -qO- localhost:8000/').httpStatusChecked).toBe(true)
+    expect(classifyCommand('http --check-status :8000/ localhost').httpStatusChecked).toBe(true)
+  })
+})
+
+describe('parseTestCounts', () => {
+  it('reads pytest summaries', () => {
+    expect(parseTestCounts('...\n============ 1 failed, 11 passed, 2 skipped in 0.12s ============\n')).toEqual({
+      passed: 11,
+      failed: 1,
+      skipped: 2
+    })
+    expect(parseTestCounts('............\n12 passed in 0.05s\n')).toEqual({ passed: 12, failed: 0 })
+    expect(parseTestCounts('==== 2 errors in 0.30s ====')).toEqual({ passed: 0, failed: 2 })
+    expect(parseTestCounts('==== no tests ran in 0.01s ====')).toEqual({ passed: 0, failed: 0 })
+  })
+
+  it('reads vitest and jest summaries', () => {
+    expect(parseTestCounts(' Test Files  1 failed | 3 passed (4)\n      Tests  1 failed | 11 passed (12)\n')).toEqual({
+      passed: 11,
+      failed: 1
+    })
+    expect(parseTestCounts('      Tests  10 passed | 2 skipped (12)\n')).toEqual({ passed: 10, failed: 0, skipped: 2 })
+    expect(parseTestCounts('Test Suites: 1 failed, 2 passed, 3 total\nTests:       1 failed, 11 passed, 12 total\n')).toEqual(
+      { passed: 11, failed: 1 }
+    )
+  })
+
+  it('reads mocha, node:test, cargo, and unittest summaries', () => {
+    expect(parseTestCounts('\n  12 passing (30ms)\n  1 failing\n  2 pending\n')).toEqual({ passed: 12, failed: 1, skipped: 2 })
+    expect(parseTestCounts('# tests 3\n# pass 3\n# fail 0\n')).toEqual({ passed: 3, failed: 0 })
+    expect(parseTestCounts('ℹ tests 4\nℹ pass 3\nℹ fail 1\nℹ skipped 0\n')).toEqual({ passed: 3, failed: 1 })
+    expect(
+      parseTestCounts(
+        'test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured\ntest result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured\n'
+      )
+    ).toEqual({ passed: 7, failed: 1, skipped: 1 })
+    expect(parseTestCounts('----\nRan 12 tests in 0.003s\n\nOK\n')).toEqual({ passed: 12, failed: 0 })
+    expect(parseTestCounts('Ran 12 tests in 0.003s\n\nFAILED (failures=1, errors=1, skipped=2)\n')).toEqual({
+      passed: 8,
+      failed: 2,
+      skipped: 2
+    })
+  })
+
+  it('stays fast on output crafted to look almost like a summary', () => {
+    // A test can print anything. Patterns that could match the same text two ways
+    // would backtrack exponentially here and stall the main process.
+    const started = Date.now()
+    expect(parseTestCounts(`      Tests  ${'1 a  | '.repeat(5000)}(x`)).toBeUndefined()
+    expect(parseTestCounts(`==== ${'1 passed, '.repeat(5000)} in x`)).toBeUndefined()
+    expect(parseTestCounts(`Tests: ${'1 failed, '.repeat(5000)}`)).toBeUndefined()
+    expect(parseTestCounts(`${' '.repeat(50_000)}x`)).toBeUndefined()
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+
+  it('reads only the end of a long log', () => {
+    const summary = '12 passed in 0.05s'
+    expect(parseTestCounts(`${summary}\n${'.'.repeat(100_000)}`)).toBeUndefined()
+    expect(parseTestCounts(`${'.'.repeat(100_000)}\n${summary}`)).toEqual({ passed: 12, failed: 0 })
+  })
+
+  it('returns undefined when there is no summary to read', () => {
+    expect(parseTestCounts('ModuleNotFoundError: No module named fastapi')).toBeUndefined()
+    expect(parseTestCounts('')).toBeUndefined()
+  })
+})
+
+describe('EvidenceLedger', () => {
+  it('has no receipt for a turn that ran nothing of note and changed nothing', () => {
+    const l = new EvidenceLedger()
+    expect(l.receipt()).toBeNull()
+    l.recordShell(shell('git log --oneline -5'))
+    expect(l.receipt()).toBeNull()
+  })
+
+  it('records a test run by its exit code and its runner summary', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest -q', { output: '12 passed in 0.05s' }))
+    expect(l.receipt()?.checks).toEqual([
+      { kind: 'test', label: 'pytest -q', ok: true, exitCode: 0, counts: { passed: 12, failed: 0 }, runs: 1 }
+    ])
+  })
+
+  it('trusts the runner summary over a zero exit that belongs to something else', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest; echo done', { output: '==== 1 failed, 11 passed in 0.1s ====\ndone' }))
+    expect(l.receipt()?.checks[0]).toMatchObject({ ok: false, counts: { passed: 11, failed: 1 } })
+  })
+
+  it('fails a run that found no tests, even on exit 0', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm test', { output: '      Tests  0 passed (0)' }))
+    expect(l.receipt()?.checks[0].ok).toBe(false)
+  })
+
+  it('marks outcomes it cannot tell as unknown rather than passed', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest | tail -3'))
+    l.recordShell(shell('curl -s localhost:8000/todos'))
+    l.recordShell(shell('npm run dev', { background: true, exitCode: null }))
+    const checks = l.receipt()!.checks
+    expect(checks.map((c) => [c.ok, c.unknown])).toEqual([
+      [null, 'exit-not-attributable'],
+      [null, 'http-status-unchecked'],
+      [null, 'background']
+    ])
+    expect(checks[2]).not.toHaveProperty('exitCode')
+  })
+
+  it('records a failed install with the cause run_shell named', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(
+      shell('pip install -r requirements.txt && pytest', {
+        exitCode: 1,
+        output: 'ERROR: Could not find a version that satisfies the requirement fastapi',
+        blocked: 'network'
+      })
+    )
+    expect(l.receipt()?.checks[0]).toEqual({
+      kind: 'test',
+      label: 'pip install -r requirements.txt && pytest',
+      ok: false,
+      exitCode: 1,
+      blocked: 'network',
+      runs: 1
+    })
+  })
+
+  it('counts a timeout or a kill as a failure', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm run build', { exitCode: null, timedOut: true }))
+    l.recordShell(shell('npm test', { exitCode: null }))
+    expect(l.receipt()!.checks.map((c) => c.ok)).toEqual([false, false])
+  })
+
+  it('keeps the last run of a repeated command, counts its runs, and moves it to the end', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest', { exitCode: 1, output: '1 failed, 11 passed in 0.1s' }))
+    l.recordShell(shell('npm run build'))
+    l.recordShell(shell('pytest', { output: '12 passed in 0.1s' }))
+    const checks = l.receipt()!.checks
+    expect(checks.map((c) => c.label)).toEqual(['npm run build', 'pytest'])
+    expect(checks[1]).toMatchObject({ ok: true, runs: 2, counts: { passed: 12, failed: 0 } })
+  })
+
+  it('keeps no blocked cause on a run that passed', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm test', { blocked: 'network' }))
+    expect(l.receipt()!.checks[0]).not.toHaveProperty('blocked')
+  })
+
+  it('counts other commands without listing them', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('ls'))
+    l.recordShell(shell('npm test'))
+    l.recordShell(shell('git diff'))
+    const r = l.receipt()!
+    expect(r.checks).toHaveLength(1)
+    expect(r.otherCommands).toBe(2)
+  })
+
+  it('caps the checks at the most recent ones', () => {
+    const l = new EvidenceLedger()
+    for (let i = 0; i < RECEIPT_MAX_CHECKS + 3; i++) l.recordShell(shell(`npm run build -- --n ${i}`))
+    const r = l.receipt()!
+    expect(r.checks).toHaveLength(RECEIPT_MAX_CHECKS)
+    expect(r.checksOmitted).toBe(3)
+    expect(r.checks.at(-1)?.label).toBe(`npm run build -- --n ${RECEIPT_MAX_CHECKS + 2}`)
+  })
+
+  it('collapses whitespace, drops control characters, and truncates long commands', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm  test\n  --  --ci\u001b]52;c;aGk=\u0007'))
+    l.recordShell(shell(`npm run build -- ${'x'.repeat(400)}`))
+    const [first, second] = l.receipt()!.checks
+    expect(first.label).toBe('npm test -- --ci]52;c;aGk=')
+    expect(second.label).toHaveLength(RECEIPT_LABEL_MAX)
+    expect(second.label.endsWith('…')).toBe(true)
+  })
+
+  it('records changed files once each, relative to the workspace', () => {
+    const ws = join('/tmp', 'ws')
+    const l = new EvidenceLedger()
+    l.recordFiles(ws, ['src/a.ts', './src/a.ts', join(ws, 'src', 'b.ts'), 'README.md'])
+    l.recordFiles(ws, [join('/elsewhere', 'c.ts')])
+    const r = l.receipt()!
+    expect(r.filesChanged).toEqual([join('src', 'a.ts'), join('src', 'b.ts'), 'README.md', join('/elsewhere', 'c.ts')])
+    expect(r.filesChangedCount).toBe(4)
+    expect(r.checks).toEqual([])
+  })
+
+  it('caps the listed files but keeps the full count', () => {
+    const l = new EvidenceLedger()
+    l.recordFiles('/ws', Array.from({ length: RECEIPT_MAX_FILES + 5 }, (_, i) => `f${i}.ts`))
+    const r = l.receipt()!
+    expect(r.filesChanged).toHaveLength(RECEIPT_MAX_FILES)
+    expect(r.filesChangedCount).toBe(RECEIPT_MAX_FILES + 5)
+  })
+})

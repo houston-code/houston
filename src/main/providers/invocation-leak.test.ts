@@ -31,6 +31,40 @@ describe('invokedAs never reaches a provider', () => {
   })
 })
 
+// A turn's receipt is Houston's record of what ran, saved on the turn's last assistant
+// message for the clients. It is display-only too: the model must never see it, or a
+// later turn could read the harness's verdict as something it said itself.
+const RECEIPT_MARKER = 'receipt-marker-5c1e'
+const withReceipt: ChatMessage[] = [
+  { role: 'user', content: 'Build the app.' },
+  {
+    role: 'assistant',
+    content: 'Built it and ran the tests.',
+    receipt: {
+      v: 1,
+      checks: [{ kind: 'test', label: `pytest -k ${RECEIPT_MARKER}`, ok: false, exitCode: 1, runs: 1 }],
+      otherCommands: 0,
+      filesChanged: [`${RECEIPT_MARKER}.py`],
+      filesChangedCount: 1
+    }
+  },
+  { role: 'user', content: 'Thanks.' }
+]
+
+describe('a turn receipt never reaches a provider', () => {
+  it.each([
+    ['anthropic', () => toAnthropicMessages(withReceipt, false)],
+    ['openai chat completions', () => toOpenAIMessages(undefined, withReceipt)],
+    ['openai responses', () => toResponsesInput(withReceipt)],
+    ['gemini', () => toGeminiContents(withReceipt)]
+  ])('%s sends the reply and not the receipt', (_name, convert) => {
+    const wire = JSON.stringify(convert())
+    expect(wire).toContain('Built it and ran the tests.')
+    expect(wire).not.toContain(RECEIPT_MARKER)
+    expect(wire).not.toContain('receipt')
+  })
+})
+
 describe('the steered mark never reaches a provider', () => {
   const steered: ChatMessage[] = [
     { role: 'user', content: 'add retry to the upload client' },

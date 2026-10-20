@@ -26,6 +26,7 @@ import {
 } from '@shared/provider-catalog'
 import { providerKeyUrl } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
+import { formatReceiptLines, receiptHasFailure } from '@shared/evidence'
 import type { FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
@@ -3759,6 +3760,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // Emitted only when the main process auto-starts a queued follow-up turn;
           // the TUI drives its own composer and never uses that buffer, so ignore it.
           break
+        case 'receipt': {
+          // What Houston recorded running this turn, under the model's own account of
+          // the work: dim like the cost line, unless a check failed. The ledger already
+          // drops control characters; stripped again because it goes to a terminal.
+          const [summary, ...rest] = formatReceiptLines(e.receipt).map(stripControlChars)
+          deps.io.out(paint(`\n· ${summary}\n`, receiptHasFailure(e.receipt) ? 'yellow' : 'dim'))
+          if (rest.length) deps.io.out(paint(`${rest.map((l) => `· ${l}`).join('\n')}\n`, 'dim'))
+          break
+        }
         case 'steered':
           // Say it when it lands, not when it was typed: until the model reaches an
           // iteration boundary the message has changed nothing, and echoing it early

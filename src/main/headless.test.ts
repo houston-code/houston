@@ -899,6 +899,45 @@ describe('runHeadless', () => {
     expect(failedPass.err.join('')).toContain('verification failed')
   })
 
+  it('prints the receipt to stderr and puts it on the result line, without altering the exit code', async () => {
+    const receipt = {
+      v: 1 as const,
+      checks: [
+        { kind: 'install' as const, label: 'pip install -r requirements.txt', ok: false, exitCode: 1, blocked: 'network' as const, runs: 1 },
+        // A model-written command carrying a terminal escape (OSC 52 clipboard write).
+        { kind: 'test' as const, label: 'pytest\u001b]52;c;aGk=\u0007', ok: null, unknown: 'exit-not-attributable' as const, exitCode: 0, runs: 1 }
+      ],
+      otherCommands: 0,
+      filesChanged: ['app.py'],
+      filesChangedCount: 1
+    }
+    const events: AgentEvent[] = [
+      { runId: 'run-1', type: 'text', delta: 'All tests pass.' },
+      { runId: 'run-1', type: 'receipt', receipt },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ]
+    const text = deps(events)
+    expect(await runHeadless(baseOpts, text.d)).toBe(0)
+    const err = text.err.join('')
+    expect(err).toContain('· Recorded by Houston: Test result unknown · install failed (no network) · 1 file changed\n')
+    expect(err).toContain('✗ install: pip install -r requirements.txt (exit 1, no network)')
+    expect(err).not.toContain('\u001b')
+    expect(text.out.join('')).not.toContain('Recorded by Houston')
+
+    const json = deps(events)
+    expect(await runHeadless({ ...baseOpts, json: true }, json.d)).toBe(0)
+    expect(resultLine(json.out)).toMatchObject({ finalText: 'All tests pass.', receipt })
+  })
+
+  it('leaves the receipt off the result line when the run had none', async () => {
+    const { d, out } = deps([
+      { runId: 'run-1', type: 'text', delta: 'It is a linked list.' },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless({ ...baseOpts, json: true }, d)
+    expect(resultLine(out)).not.toHaveProperty('receipt')
+  })
+
   it('prints a notice event (hook systemMessage) to stderr, keeping stdout clean', async () => {
     const { d, out, err } = deps([
       { runId: 'run-1', type: 'notice', message: 'coverage report written to /tmp/cov' },

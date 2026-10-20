@@ -11,6 +11,7 @@ import type {
   NoticeItem,
   PlanItem,
   QuestionItem,
+  ReceiptItem,
   ToolItem,
   UserItem
 } from './items'
@@ -211,6 +212,7 @@ export type RenderNode =
   | { kind: 'question'; id: string; item: QuestionItem }
   | { kind: 'plan'; id: string; item: PlanItem }
   | { kind: 'elicitation'; id: string; item: ElicitationItem }
+  | { kind: 'receipt'; id: string; item: ReceiptItem }
   | { kind: 'toolgroup'; id: string; items: ToolItem[] }
   /** A propose_session call that became a card (its own node, not a tool row). */
   | { kind: 'proposal'; id: string; item: ToolItem }
@@ -268,6 +270,7 @@ export function groupItems(items: DisplayItem[]): RenderNode[] {
     else if (item.kind === 'question') nodes.push({ kind: 'question', id: item.id, item })
     else if (item.kind === 'plan') nodes.push({ kind: 'plan', id: item.id, item })
     else if (item.kind === 'elicitation') nodes.push({ kind: 'elicitation', id: item.id, item })
+    else if (item.kind === 'receipt') nodes.push({ kind: 'receipt', id: item.id, item })
   }
   flush()
   return nodes
