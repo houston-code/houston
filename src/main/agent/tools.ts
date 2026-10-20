@@ -15,6 +15,7 @@ import type {
 import type { ImageAttachment } from '@shared/images'
 import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
 import { missingRuntime, missingRuntimeHint } from '@shared/runtimes'
+import type { BlockedReason } from '@shared/evidence'
 import {
   formatSweepList,
   formatSweepSummary,
@@ -79,6 +80,7 @@ import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
 import { displayLines, numberedLine, numberLines, numberWidth } from './line-numbers'
 import type { FileReadTracker, StaleWriteReason } from './readCache'
+import type { EvidenceDraft } from './evidence'
 import { isSensitivePath } from './sensitive-paths'
 import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
@@ -201,6 +203,13 @@ export interface ToolContext {
   shellSession?: ShellSession
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
   shellOutputMaxBytes?: number
+  /**
+   * Report what a tool executed (a shell command's exit code, from the runner itself)
+   * to the run's evidence ledger, which the turn's receipt is built from (injected by
+   * the loop; see evidence.ts). The model reads a tool's text result; this is the
+   * structured fact behind it, and the model has no way to call it.
+   */
+  recordEvidence?: (e: EvidenceDraft) => void
   /** Run a `gh` subcommand (injected by the loop; falls back to PATH resolution). */
   ghExec?: GhExec
   /** Ask the user a structured question and resolve with their answer (injected by the loop). */
@@ -1622,6 +1631,7 @@ const runShell: ToolDef = {
         signal: ctx.signal
       })
       const id = registerShell(command, child, ctx.conversationId)
+      ctx.recordEvidence?.({ kind: 'shell', command, background: true, exitCode: null, timedOut: false, output: '' })
       const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
@@ -1671,19 +1681,38 @@ const runShell: ToolDef = {
     // cache write to ~/.npm). The first two are disjoint by construction.
     const egressHint = egressBlockHint(ctx.allowNetwork, ctx.egressProxy !== undefined, result, body)
     const netHint = egressHint || networkBlockHint(ctx.allowNetwork, result, body, ctx.unattended === true)
+    // Which cause the hint named, for the receipt (the same judgement, not a second one).
+    let blocked: BlockedReason | undefined = egressHint ? 'egress' : netHint ? 'network' : undefined
     if (netHint) parts.push(netHint)
     else {
       const writeHint = sandboxWriteBlockHint(result, body)
-      if (writeHint) parts.push(writeHint)
-      else {
+      if (writeHint) {
+        parts.push(writeHint)
+        blocked = 'sandbox-write'
+      } else {
         const opHint = sandboxOpDeniedHint(result, body)
-        if (opHint) parts.push(opHint)
+        if (opHint) {
+          parts.push(opHint)
+          blocked = 'sandbox-op'
+        }
       }
     }
     // A missing runtime (exit 127 on `node`, `python3`, …): steer the model away
     // from improvising a system install; the loop shows the user a one-click fix.
     const runtime = missingRuntime(body, result.exitCode)
-    if (runtime) parts.push(missingRuntimeHint(runtime))
+    if (runtime) {
+      parts.push(missingRuntimeHint(runtime))
+      blocked ??= 'runtime-missing'
+    }
+    ctx.recordEvidence?.({
+      kind: 'shell',
+      command,
+      background: false,
+      exitCode: result.exitCode,
+      timedOut: result.timedOut === true,
+      output: body,
+      ...(blocked ? { blocked } : {})
+    })
     // Honest signal: if the command ran unconfined, say so — run_shell's contract
     // promises a sandbox, and approval auto-approves shell on that premise.
     if (!result.sandboxed) parts.push(UNSANDBOXED_SHELL_NOTE)

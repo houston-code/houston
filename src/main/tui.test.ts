@@ -4756,6 +4756,48 @@ describe('steering a running turn', () => {
   })
 })
 
+describe('turn receipt', () => {
+  const receipt = {
+    v: 1 as const,
+    checks: [
+      { kind: 'install' as const, label: 'pip install -r requirements.txt', ok: false, exitCode: 1, blocked: 'network' as const, runs: 1 },
+      // A model-written command carrying a terminal escape (OSC 52 clipboard write).
+      { kind: 'build' as const, label: 'npm run build\x1b]52;c;cGF5', ok: true, exitCode: 0, runs: 1 }
+    ],
+    otherCommands: 2,
+    filesChanged: ['app.py'],
+    filesChangedCount: 1
+  }
+
+  it('prints what Houston recorded under the reply', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'text', delta: 'All tests pass.' },
+      { runId: 'x', type: 'receipt', receipt },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('· Recorded by Houston: No tests ran · build passed · install failed (no network) · 1 file changed')
+    expect(out).toContain('✗ install: pip install -r requirements.txt (exit 1, no network)')
+    expect(out).toContain('plus 2 other commands')
+    expect(out.indexOf('All tests pass.')).toBeLessThan(out.indexOf('Recorded by Houston'))
+  })
+
+  it('strips control characters from the commands it prints', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'receipt', receipt },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('npm run build]52;c;cGF5')
+    expect(t.text()).not.toContain('\x1b]52')
+  })
+})
+
 describe('/proposals and /btw', () => {
   const paintNo = makePainter(false)
   const list: TuiProposal[] = [

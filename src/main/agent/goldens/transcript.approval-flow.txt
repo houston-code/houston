@@ -43,4 +43,5 @@ tool_approval {"args":{"content":"B\n","path":"b.txt"},"callId":"c2","kind":"wri
 tool_result {"callId":"c2","name":"write_file","ok":false,"output":"Denied by the user."}
 text {"delta":"Created a.txt; b.txt was declined."}
 usage {"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
+receipt {"receipt":{"checks":[],"filesChanged":["a.txt"],"filesChangedCount":1,"otherCommands":0,"v":1}}
 done {"stopReason":"end_turn"}

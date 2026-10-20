@@ -6,6 +6,7 @@
 import type { FileDiffPreview } from './diff'
 import type { RuntimeId } from './runtimes'
 import type { PromptInvocation } from './promptInvocation'
+import type { TurnReceipt } from './evidence'
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -115,6 +116,13 @@ export interface ChatMessage {
    * clients show in place of the prompt. Display-only; providers never see it.
    */
   invokedAs?: PromptInvocation
+  /**
+   * Present on the last assistant message of a turn that ran checks (tests, builds,
+   * installs, servers) or changed files: what Houston recorded running, built by the
+   * loop from the tool calls it executed (see TurnReceipt). The model never writes it,
+   * and it is display-only; providers never see it.
+   */
+  receipt?: TurnReceipt
 }
 
 /**
@@ -1047,6 +1055,17 @@ export type AgentEvent =
       reason: string
     }
   | { runId: string; type: 'limit'; reason: 'max-steps' | 'max-output' | 'stalled' }
+  | {
+      // What Houston recorded running this turn (commands that test, build, install, or
+      // serve, and the files the turn changed), emitted once, just before the event that
+      // ends the run (`done`, or a failed run's `error`). Built by the loop from the tool
+      // calls it executed, never by the model, so the clients can show it beside the
+      // model's own account of the work. Also saved on the turn's last assistant message
+      // (`ChatMessage.receipt`).
+      runId: string
+      type: 'receipt'
+      receipt: TurnReceipt
+    }
   | {
       // The run's end-of-turn verification gate (opt-in) ran the user's configured
       // verification command. `passed` reflects whether it succeeded; a failing

@@ -46,6 +46,7 @@ import {
   type ToolContext
 } from './tools'
 import { FileReadTracker } from './readCache'
+import type { EvidenceDraft } from './evidence'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
 import { readShellOutput, registerShell } from './shells'
@@ -2429,6 +2430,57 @@ describe('run_shell missing-runtime hint', () => {
     const out = await run('run_shell', { command: 'export PATH=/houston-no-such-dir; frobnicate' })
     expect(out).toContain('[exit code: 127]')
     expect(out).not.toMatch(/\[Houston: /)
+  })
+})
+
+describe('run_shell evidence', () => {
+  // What the turn's receipt is built from: the runner's own exit code and output, not
+  // the "[exit code: N]" text the model reads.
+  const recorded = (): EvidenceDraft[] => {
+    const seen: EvidenceDraft[] = []
+    ctx = { ...ctx, recordEvidence: (e) => seen.push(e) }
+    return seen
+  }
+
+  it('reports the exit code and the cause run_shell named', async () => {
+    const seen = recorded()
+    await run('run_shell', { command: 'export PATH=/houston-no-such-dir; node --version' })
+    expect(seen).toEqual([
+      {
+        kind: 'shell',
+        command: 'export PATH=/houston-no-such-dir; node --version',
+        background: false,
+        exitCode: 127,
+        timedOut: false,
+        output: expect.any(String),
+        blocked: 'runtime-missing'
+      }
+    ])
+  })
+
+  it('reports the output, so a test summary in it can be read', async () => {
+    writeFileSync(join(workspace, 'test.mjs'), "console.log('# pass 3')\nconsole.log('# fail 0')\n")
+    const seen = recorded()
+    await run('run_shell', { command: 'node test.mjs' })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ exitCode: 0, output: expect.stringContaining('# pass 3') })
+    expect(seen[0]).not.toHaveProperty('blocked')
+  })
+
+  it('reports a background start with no outcome yet', async () => {
+    const seen = recorded()
+    const out = await run('run_shell', { command: 'echo hi', background: true })
+    expect(seen).toEqual([
+      { kind: 'shell', command: 'echo hi', background: true, exitCode: null, timedOut: false, output: '' }
+    ])
+    const id = /Started background shell (\w+)/.exec(out)?.[1]
+    await vi.waitFor(() => expect(readShellOutput(id!).running).toBe(false), { timeout: 10_000 })
+  })
+
+  it('reports nothing for a command it refused to run', async () => {
+    const seen = recorded()
+    await expect(run('run_shell', { command: 'npm run dev & sleep 1', background: true })).rejects.toThrow()
+    expect(seen).toEqual([])
   })
 })
 

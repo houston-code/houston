@@ -14,6 +14,7 @@ import { ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
 import { ProposalCard, type ProposalHandlers } from './ProposalCard'
 import { ElicitationCard } from './ElicitationCard'
+import { Receipt } from './Receipt'
 import { Markdown } from './Markdown'
 import { Icon, type IconName } from './Icon'
 
@@ -366,6 +367,8 @@ export function Transcript({
                 return <ProposalCard key={node.id} item={node.item} handlers={proposals} />
               case 'elicitation':
                 return <ElicitationCard key={node.id} item={node.item} onResolve={onElicit} />
+              case 'receipt':
+                return <Receipt key={node.id} receipt={node.item.receipt} />
               case 'plan':
                 return (
                   <PlanMarker

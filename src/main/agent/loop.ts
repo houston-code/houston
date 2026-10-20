@@ -113,6 +113,7 @@ import {
   overrideForConversation
 } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
+import { EvidenceLedger } from './evidence'
 import { isSensitiveRead } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
@@ -389,6 +390,13 @@ interface RunState {
    * is idempotent.
    */
   transcript: AgentEvent[]
+  /**
+   * What this run executed that bears on whether its work was checked: the commands
+   * run_shell ran (with their real exit codes) and the files the write tools changed.
+   * Fed by the tools and the loop, never by the model, and summarized as the turn's
+   * receipt just before the run's `done` (see evidence.ts).
+   */
+  evidence: EvidenceLedger
   /**
    * The id of the WebContents (renderer window) that started this run, when it was
    * started from the GUI. Recorded so the IPC layer can reject run-control calls
@@ -784,6 +792,7 @@ export async function startRun(
     shellNetworkDecided: seededOverride.shellNetworkDecided || seededShellNetwork,
     policy: req.approvalPolicy,
     transcript: [],
+    evidence: new EvidenceLedger(),
     ...(owner !== undefined ? { owner } : {})
   }
   runs.set(runId, run)
@@ -795,8 +804,19 @@ export async function startRun(
     notifyActiveRunsChanged()
   }
 
+  // Runs once, just before the event that ends the run (its first `done`, or the
+  // `error` a failed run ends on instead), wherever that is emitted: the turn's
+  // receipt goes out ahead of it (set after the intake repair below). A run that
+  // installed and built before its provider failed still shows what it did. Cleared
+  // before it runs, so the receipt's own emit can't re-enter it.
+  let beforeEnd: (() => void) | undefined
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
+    if ((e.type === 'done' || e.type === 'error') && beforeEnd) {
+      const finish = beforeEnd
+      beforeEnd = undefined
+      finish()
+    }
     const full = { ...(e as object), runId } as AgentEvent
     // Buffer what streams this round so a renderer that re-opens the conversation
     // mid-turn can replay it (the disk log lags a streaming round). Cleared at each
@@ -1101,6 +1121,23 @@ export async function startRun(
     if (intakeRepaired !== messages) {
       messages.splice(0, messages.length, ...intakeRepaired)
       persist(messages)
+    }
+
+    // The turn's receipt: what the evidence ledger recorded, saved on the last
+    // assistant message this run wrote and sent to the clients ahead of the run's
+    // last event. A run that ran no checks and changed no files (a question answered)
+    // has none.
+    const runStart = messages.length
+    beforeEnd = () => {
+      const receipt = run.evidence.receipt()
+      if (!receipt) return
+      for (let i = messages.length - 1; i >= runStart; i--) {
+        if (messages[i].role !== 'assistant') continue
+        messages[i] = { ...messages[i], receipt }
+        persist(messages)
+        break
+      }
+      emit({ type: 'receipt', receipt })
     }
 
     // Redact secrets from content that leaves the agent's control boundary — reused
@@ -1730,6 +1767,9 @@ export async function startRun(
       ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
+      // The command is masked like any other text the run keeps; the output is only
+      // scanned for a test summary and never stored.
+      recordEvidence: (e) => run.evidence.recordShell({ ...e, command: redact(e.command) }),
       fileTracker,
       ghExec,
       getSecret: getKey,
@@ -3481,9 +3521,11 @@ export async function startRun(
               // apply_patch deliberately deleted records its absence as the
               // post-turn state, so redo re-deletes it.
               if (ok && tool.kind === 'write') {
-                for (const t of writeTargets(call.name, execArgs)) {
+                const targets = writeTargets(call.name, execArgs)
+                for (const t of targets) {
                   await recordResult(runId, roots, t.path, { expectAbsent: t.deleted })
                 }
+                run.evidence.recordFiles(workspace, targets.map((t) => t.path))
               }
               // Diagnostics-on-save (opt-in): after a successful write, run a fast
               // checker (eslint/ruff/gofmt) on the file and append any problems so

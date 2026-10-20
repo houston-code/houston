@@ -7235,3 +7235,180 @@ describe('output-limit recovery', () => {
     expect(r.messages.filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual(['Here it is.'])
   })
 })
+
+describe('turn receipt', () => {
+  /**
+   * A stand-in under the run_shell name: records the evidence the real tool would
+   * (from a scripted result) and runs nothing, so these tests behave the same on
+   * every platform and sandbox.
+   */
+  function shellProbe(results: Record<string, { exitCode: number | null; output?: string; blocked?: 'network' }>): ToolDef {
+    return {
+      kind: 'shell',
+      summarize: () => 'probe run_shell',
+      schema: {
+        name: 'run_shell',
+        description: 'probe run_shell',
+        parameters: {
+          type: 'object',
+          properties: { command: { type: 'string' } },
+          required: ['command'],
+          additionalProperties: false
+        }
+      },
+      execute: async (a, ctx) => {
+        const command = String((a as { command?: string }).command)
+        const res = results[command] ?? { exitCode: 0 }
+        ctx.recordEvidence?.({
+          kind: 'shell',
+          command,
+          background: false,
+          exitCode: res.exitCode,
+          timedOut: false,
+          output: res.output ?? '',
+          ...(res.blocked ? { blocked: res.blocked } : {})
+        })
+        return `${res.output ?? ''}\n[exit code: ${res.exitCode}]`
+      }
+    }
+  }
+  const call = (id: string, name: string, args: Record<string, unknown>): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name, arguments: args } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const say = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+
+  it('ends a working turn with what actually ran, sent before done and saved on its last message', async () => {
+    h.sandboxed = true
+    h.probeTools = [
+      shellProbe({ 'pip install -r requirements.txt': { exitCode: 1, output: 'ERROR: network', blocked: 'network' } })
+    ]
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('w1', 'write_file', { path: 'app.py', content: 'print(1)\n' }),
+        call('s1', 'run_shell', { command: 'pip install -r requirements.txt' }),
+        say('All 14 tests pass. Production-ready.')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    // The model's claim and the record sit side by side; only one of them is Houston's.
+    const kinds = types(r)
+    expect(kinds.slice(-2)).toEqual(['receipt', 'done'])
+    const receipt = (r.events.find((e) => e.type === 'receipt') as { receipt: unknown }).receipt
+    expect(receipt).toEqual({
+      v: 1,
+      checks: [
+        {
+          kind: 'install',
+          label: 'pip install -r requirements.txt',
+          ok: false,
+          exitCode: 1,
+          blocked: 'network',
+          runs: 1
+        }
+      ],
+      otherCommands: 0,
+      filesChanged: ['app.py'],
+      filesChangedCount: 1
+    })
+    const withReceipt = r.messages.filter((m) => m.receipt)
+    expect(withReceipt).toHaveLength(1)
+    expect(withReceipt[0]).toMatchObject({ role: 'assistant', content: 'All 14 tests pass. Production-ready.' })
+    expect(withReceipt[0].receipt).toEqual(receipt)
+    expect(r.messages.at(-1)).toBe(withReceipt[0])
+  })
+
+  it('has no receipt for a turn that ran nothing of note and changed nothing', async () => {
+    h.sandboxed = true
+    h.probeTools = [shellProbe({})]
+    const r = await run({
+      policy: 'ask',
+      turns: [call('s1', 'run_shell', { command: 'git log --oneline -3' }), say('Here is the history.')],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(types(r)).not.toContain('receipt')
+    expect(r.messages.some((m) => m.receipt)).toBe(false)
+  })
+
+  it('never attaches a receipt to an earlier turn', async () => {
+    const earlier: ChatMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+      { role: 'user', content: 'write it' }
+    ]
+    const r = await run({
+      policy: 'full-auto',
+      messages: earlier,
+      turns: [call('w1', 'write_file', { path: 'a.txt', content: 'a' }), say('Wrote it.')]
+    })
+    expect(r.messages[1].receipt).toBeUndefined()
+    expect(r.messages.at(-1)).toMatchObject({ content: 'Wrote it.', receipt: { filesChanged: ['a.txt'] } })
+  })
+
+  it('masks a stored secret in a recorded command', async () => {
+    h.sandboxed = true
+    h.secrets = ['stored-opaque-credential-value-xyz']
+    h.probeTools = [shellProbe({})]
+    const command = 'curl -sf -H "Authorization: Bearer stored-opaque-credential-value-xyz" localhost:8000/me'
+    const r = await run({
+      policy: 'ask',
+      turns: [call('s1', 'run_shell', { command }), say('Checked the endpoint.')],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const receipt = (r.events.find((e) => e.type === 'receipt') as { receipt: { checks: Array<{ label: string }> } })
+      .receipt
+    expect(receipt.checks[0].label).not.toContain('stored-opaque-credential-value-xyz')
+    expect(receipt.checks[0].label).toContain('[redacted:secret]')
+    expect(JSON.stringify(r.messages.at(-1)?.receipt)).not.toContain('stored-opaque-credential-value-xyz')
+  })
+
+  it('still ends a turn cut off at its step cap with what ran', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      overrides: { maxIterations: 2 },
+      turns: [
+        call('w1', 'write_file', { path: 'a.txt', content: 'a' }),
+        call('w2', 'write_file', { path: 'b.txt', content: 'b' })
+      ]
+    })
+    expect(types(r).slice(-3)).toEqual(['limit', 'receipt', 'done'])
+    const receipt = (r.events.find((e) => e.type === 'receipt') as { receipt: { filesChanged: string[] } }).receipt
+    // The second write was cut at the cap and never ran.
+    expect(receipt.filesChanged).toEqual(['a.txt'])
+  })
+
+  it('still shows what ran when the provider fails partway through', async () => {
+    let calls = 0
+    const provider: Provider = {
+      async *streamChat() {
+        calls++
+        if (calls === 1) {
+          yield { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'a' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'error', message: 'invalid x-api-key', status: 401 }
+      }
+    }
+    const r = await run({ policy: 'full-auto', provider })
+    expect(types(r).slice(-2)).toEqual(['receipt', 'error'])
+    expect(r.messages.find((m) => m.receipt)?.receipt?.filesChanged).toEqual(['a.txt'])
+  })
+
+  it('records only writes that landed', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('w1', 'write_file', { path: 'kept.txt', content: 'a' }),
+        call('w2', 'write_file', { path: 'denied.txt', content: 'b' }),
+        say('Done.')
+      ],
+      onApproval: (id, decide) => decide(id === 'w1' ? 'allow' : 'deny')
+    })
+    expect(r.messages.at(-1)?.receipt?.filesChanged).toEqual(['kept.txt'])
+  })
+})

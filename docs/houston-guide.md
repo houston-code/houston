@@ -51,9 +51,11 @@ ships as a desktop app and as terminal clients.
     that can edit, such as `--full-auto`). A bad value exits 2 before anything runs.
   - **`--json` result line.** After one JSON line per agent event, the last line
     is a summary: `{"type":"result", "status", "stopReason", "limitReason"?,
-    "turns", "costUsd", "inputTokens", "outputTokens", "durationMs", "finalText"}`.
-    `status` is `success`, `limit`, `stalled`, `approval_denied`, or `error`;
-    `finalText` is the agent's closing answer (the text after its last tool call).
+    "turns", "costUsd", "inputTokens", "outputTokens", "durationMs", "finalText",
+    "receipt"?}`. `status` is `success`, `limit`, `stalled`, `approval_denied`, or
+    `error`; `finalText` is the agent's closing answer (the text after its last tool
+    call); `receipt` is Houston's record of what the run actually ran (see "What
+    actually ran"), present when it ran checks or changed files.
   - **Exit codes.** 0: the agent finished on its own. 1: an error or aborted run,
     a stalled agent, or a call refused under `--on-approval fail`. 2: a usage
     error (a bad flag value, or an empty prompt on stdin); nothing ran. 3: the run
@@ -286,6 +288,31 @@ conversation, not a log. Two ways to see more:
   always kept in the conversation, it just had no way out to the screen.
 
 Very long output is capped with a note saying how much was left out.
+
+## What actually ran (the receipt)
+
+A turn that ran checks or changed files ends with a line marked **Recorded by
+Houston** under the agent's last message, for example `No tests ran · install
+failed (no network) · build failed · 14 files changed`. Houston builds it from the
+commands it executed and the files its tools changed. The agent can't write it, so
+it is the thing to compare the agent's own summary against: if the reply says the
+tests pass and the receipt says no tests ran, believe the receipt.
+
+- **What it lists.** Commands that test, typecheck, build, lint, install, start a
+  server, or send an HTTP request to a local server, each with its real exit code
+  and, for most test runners (pytest, vitest, jest, mocha, node:test, cargo,
+  unittest), the passed and failed counts from the runner's own summary. Other
+  commands (`ls`, `git status`) are only counted. Click the line to expand it.
+- **Outcomes it can't tell.** A command started in the background, an HTTP
+  request made without `curl -f` (so an error page still exits 0), or a test whose
+  exit code is hidden by what follows it (`pytest | tail`, `pytest; echo done`) is
+  shown as unknown rather than passed.
+- **Where it lives.** It is saved with the conversation and shown again when you
+  reopen it. It never goes to the model. Importing a conversation doesn't bring
+  receipts along, since Houston didn't record those runs. The terminal client and
+  headless mode print it too, and `--json` includes it in the result line.
+- **What it costs.** Nothing: no extra model calls and no extra commands. It only
+  reads what already ran.
 
 ## Editing files while it works
 

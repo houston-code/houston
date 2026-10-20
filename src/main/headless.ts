@@ -8,8 +8,10 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
+import { stripControlChars } from './tui-wrap'
 import { missingKeyHint } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
+import { formatReceiptLines, type TurnReceipt } from '@shared/evidence'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
@@ -77,6 +79,12 @@ export interface HeadlessResult {
   durationMs: number
   /** The assistant text streamed after the run's last tool call: its closing answer. */
   finalText: string
+  /**
+   * What Houston recorded running this turn (the commands that test, build, install,
+   * or serve, with their real exit codes, and the files changed), when there was any.
+   * The loop builds it, not the model, so a harness can check `finalText` against it.
+   */
+  receipt?: TurnReceipt
 }
 
 /**
@@ -636,6 +644,7 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   // verification pass that sends the agent back to work) means the text so far was
   // narration, so it clears the buffer.
   let finalText = ''
+  let receipt: TurnReceipt | undefined
   // Review findings print once per status change (see createFindingPrinter).
   const printFinding = createFindingPrinter()
   // Text mode holds each model round's text until the round ends. stdout is the
@@ -760,6 +769,14 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
           deps.err(`· ${why}\n`)
         }
         break
+      case 'receipt':
+        receipt = e.receipt
+        // Meta output like a notice: stderr, so stdout stays the model's answer. The
+        // labels are model-written commands, so control characters are kept off the terminal.
+        if (!opts.json) {
+          for (const line of formatReceiptLines(e.receipt)) deps.err(`· ${stripControlChars(line)}\n`)
+        }
+        break
       case 'verification':
         // The end-of-run verification command ran; report pass/fail. A failing
         // pass is fed back for self-correction inside the loop (it doesn't end the
@@ -876,7 +893,8 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
     inputTokens: inTok,
     outputTokens: outTok,
     durationMs: Math.max(0, now() - startedAt),
-    finalText
+    finalText,
+    ...(receipt ? { receipt } : {})
   })
   return headlessExitCode(status)
 }
