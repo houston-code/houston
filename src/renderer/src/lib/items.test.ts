@@ -876,3 +876,13 @@ describe('saved system notes', () => {
     })
   })
 })
+
+describe('steered events', () => {
+  it('become a user message flagged as steered, closing any streaming reply', () => {
+    const start = reduceEvent([], { runId: 'r', type: 'text', delta: 'working on it' } as never)
+    const items = reduceEvent(start, { runId: 'r', type: 'steered', text: 'use YAML' })
+    expect(items.at(-1)).toMatchObject({ kind: 'user', text: 'use YAML', steered: true })
+    expect(items[0]).toMatchObject({ kind: 'assistant', streaming: false })
+  })
+})
+

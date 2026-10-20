@@ -6,7 +6,7 @@
  */
 
 /** Coachmarks in tour order. Each is anchored to an element carrying `data-tour="<id>"`. */
-export const TIP_IDS = ['approval', 'worktree', 'changes', 'revert'] as const
+export const TIP_IDS = ['approval', 'worktree', 'context', 'steer', 'changes', 'revert'] as const
 
 export type TipId = (typeof TIP_IDS)[number]
 
@@ -104,7 +104,9 @@ export interface TipContext {
 export function relevantTips(ctx: TipContext): TipId[] {
   if (ctx.touring) return [...TIP_IDS]
   const out: TipId[] = []
-  if (ctx.readyToSend) out.push('approval', 'worktree')
+  // Steer isn't here: mid-run, the message box's placeholder already says how Enter
+  // and Mod+Enter behave, so its tip shows only in a requested tour.
+  if (ctx.readyToSend) out.push('approval', 'worktree', 'context')
   if (ctx.afterEdit) out.push('revert', 'changes')
   return out
 }

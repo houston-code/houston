@@ -46,7 +46,7 @@ describe('TipHost', () => {
     expect(p.onSeen).toHaveBeenCalledWith(['approval'])
     // The parent persists the seen id and re-renders with it.
     rerender(<TipHost {...p} seen={['approval']} />)
-    expect(screen.getByRole('dialog', { name: 'Work on a safe copy' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Keep your checkout clean' })).toBeInTheDocument()
     expect(screen.getByText('2 of 2')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Got it' })).toBeInTheDocument()
     expect(document.querySelector('[data-tour="approval"]')).not.toHaveClass('tour-anchor')
@@ -67,7 +67,7 @@ describe('TipHost', () => {
       cleanupAnchors = anchors(['worktree'])
       await new Promise((r) => setTimeout(r, 50))
     })
-    expect(screen.getByRole('dialog', { name: 'Work on a safe copy' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Keep your checkout clean' })).toBeInTheDocument()
   })
 
   it('holds tips while a modal is open', () => {
@@ -142,5 +142,18 @@ describe('TipHost Escape scoping', () => {
     render(<TipHost {...props({ seen: ['approval', 'worktree'] })} />)
     expect(observe).not.toHaveBeenCalled()
     observe.mockRestore()
+  })
+})
+
+describe('message-box tips', () => {
+  it('both point at the message box (data-tour="composer")', () => {
+    const el = document.createElement('textarea')
+    el.dataset.tour = 'composer'
+    document.body.appendChild(el)
+    render(<TipHost {...props({ relevant: ['context', 'steer'] })} />)
+    expect(screen.getByRole('dialog', { name: 'Quick additional context' })).toBeInTheDocument()
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(el).toHaveClass('tour-anchor')
+    el.remove()
   })
 })

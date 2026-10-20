@@ -36,6 +36,12 @@ export interface UserItem {
    * handed-off brief): the bubble shows this, with `text` behind a disclosure.
    */
   invokedAs?: PromptInvocation
+  /**
+   * A course correction steered into a running turn (rather than sent as its own
+   * turn). Labelled in the transcript so it's clear it changed the run in progress.
+   * Live only: a reloaded conversation shows it as an ordinary message.
+   */
+  steered?: boolean
 }
 export interface AssistantItem {
   kind: 'assistant'
@@ -265,7 +271,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     case 'steered':
       return [
         ...items.map((i) => (i.kind === 'assistant' && i.streaming ? { ...i, streaming: false } : i)),
-        { kind: 'user', id: nextId(), text: e.text }
+        { kind: 'user', id: nextId(), text: e.text, steered: true }
       ]
     case 'reasoning': {
       const last = items[items.length - 1]

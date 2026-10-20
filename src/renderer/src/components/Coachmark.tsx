@@ -1,32 +1,64 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { TipId } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './Popover'
+import { isMacPlatform } from '../lib/shortcuts'
 
 /**
- * A one-shot tip pinned to a real control. The anchor is found by its
- * `data-tour="<id>"` attribute, highlighted while the tip shows, and the card is
+ * A one-shot tip pinned to a real control. The anchor is found by its `data-tour`
+ * attribute (see TIP_ANCHOR), highlighted while the tip shows, and the card is
  * placed above it when there's room (most anchors sit in the bottom control bar),
  * otherwise below, clamped to the window. Non-modal: it never traps focus, and Esc
  * dismisses it. Focus moves to it only when the user asked for the tour.
  */
 
-export const TIP_COPY: Record<TipId, { title: string; body: string }> = {
-  approval: {
-    title: 'You stay in control',
-    body: 'This sets how much Houston can do without asking. "Ask every time" is a safe start. Plan mode only reads and plans.'
-  },
-  worktree: {
-    title: 'Work on a safe copy',
-    body: 'With New worktree on, this chat runs on its own branch in a separate folder, so your current checkout stays untouched.'
-  },
-  changes: {
-    title: 'Review every change',
-    body: 'Changes shows the uncommitted edits in this project, file by file.'
-  },
-  revert: {
-    title: 'Every edit is undoable',
-    body: 'Revert rolls back the file changes from this turn. Redo puts them back.'
+/** A tip's text. Shortcuts are spelled for the platform (⌘ and ⇧ on macOS). */
+export function tipCopy(id: TipId, mac: boolean): { title: string; body: string } {
+  // Non-breaking spaces keep a shortcut ("⌘ + ↵") on one line when the body wraps.
+  const key = (...parts: string[]): string => parts.join('\u00a0+\u00a0')
+  const mod = mac ? '⌘' : 'Ctrl'
+  const shift = mac ? '⇧' : 'Shift'
+  switch (id) {
+    case 'approval':
+      return {
+        title: 'You stay in control',
+        body: `This sets how much Houston can do without asking. Plan mode only reads and plans. ${key(shift, 'Tab')} cycles modes.`
+      }
+    case 'worktree':
+      return {
+        title: 'Keep your checkout clean',
+        body: 'With New worktree on, this chat runs on its own branch in a separate folder on a separate git worktree.'
+      }
+    case 'context':
+      return {
+        title: 'Quick additional context',
+        body: '@ adds a file, / runs a command, and a line starting with # saves a rule Houston follows every time.'
+      }
+    case 'steer':
+      return {
+        title: 'Redirect it mid-run',
+        body: `Steer (↵) sends this now; Houston reads it before its next step. Queue (${key(mod, '↵')}) waits until the run ends.`
+      }
+    case 'changes':
+      return {
+        title: 'Review, then ship',
+        body: 'Every uncommitted edit, file by file. Open a pull request from here when it looks right.'
+      }
+    case 'revert':
+      return {
+        title: 'Every edit is undoable',
+        body: `Revert rolls back this turn's file edits. Redo restores them. Everything else: ${key(mod, 'K')}.`
+      }
   }
+}
+
+/** The control each tip points at (`data-tour` value). Both message-box tips share one. */
+const TIP_ANCHOR: Record<TipId, string> = {
+  approval: 'approval',
+  worktree: 'worktree',
+  context: 'composer',
+  steer: 'composer',
+  changes: 'changes',
+  revert: 'revert'
 }
 
 const GAP = 10
@@ -34,7 +66,7 @@ const MARGIN = 8
 
 /** The on-screen anchor element for a tip, if it's rendered. */
 export function tipAnchor(id: TipId): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`[data-tour="${id}"]`)
+  return document.querySelector<HTMLElement>(`[data-tour="${TIP_ANCHOR[id]}"]`)
 }
 
 export interface CoachmarkProps {
@@ -125,7 +157,7 @@ export function Coachmark({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onDone])
 
-  const copy = TIP_COPY[id]
+  const copy = tipCopy(id, isMacPlatform())
   return (
     <div
       ref={cardRef}

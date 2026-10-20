@@ -324,6 +324,13 @@ This is the middle ground between the two bad options. Interrupting throws away 
 turn's work and its context; waiting lets the agent keep building on the wrong
 thing for however many steps are left.
 
+In the desktop app, `Enter` steers the running turn the same way, and `⌘+Enter`
+(`Ctrl+Enter` on Windows and Linux) queues the message instead, to be sent as the next
+turn when this one finishes. The message box says so while a run is going, the Steer
+button sits where Send normally is with Queue beside it, and a steered message is
+labelled **Steered** in the transcript. A `/command` or a `# rule` typed mid-run is run
+or saved, never steered.
+
 If the turn finishes before your message lands (you typed it as the agent was
 wrapping up), nothing is lost: it is sent as the next message automatically, with
 no second `Enter`. Several such messages go together as one.
@@ -1171,8 +1178,10 @@ it) and a model picker; on "Open a project folder" it reopens the folder picker.
 can switch model, provider, or folder before your first task.
 
 A few one-time tips then point at controls the first time they matter: the approval
-mode and the **New worktree** toggle before the first message, and **Revert** and
-**Changes** after the first turn that edits files. **Skip tips** or Esc dismisses them.
+mode, the **New worktree** toggle, and the message box (`@` files, `/` commands, `#`
+rules) before the first message, and **Revert** and **Changes** after the first turn
+that edits files. **Skip tips** or Esc dismisses them. **Take the tour** also covers
+steering (see "Typing while it works").
 If you used Houston before this feature, nothing appears on its own. Anyone can play
 the tips any time with **Take the tour** in the command palette (⌘K), or
 **Help → Take the Tour…** in the menu bar.
