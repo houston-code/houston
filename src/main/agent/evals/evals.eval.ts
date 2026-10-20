@@ -43,7 +43,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentEvent, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ProviderConfig } from '@shared/types'
-import { defaultProviders } from '@shared/defaults'
+import { DEFAULT_REASONING_EFFORT, defaultProviders } from '@shared/defaults'
 import { providerKeyEnvVars } from '@shared/provider-keys'
 import {
   assertRecordable,
@@ -248,7 +248,9 @@ beforeEach(() => {
     // 0 disables compaction — a fixture task never fills a window, and a
     // mid-eval compaction would grade the summarizer, not the task.
     compactionThreshold: 0,
-    reasoningEffort: 'off',
+    // The shipped default, so a live run scores the effort users actually get. The
+    // scripted driver ignores it.
+    reasoningEffort: DEFAULT_REASONING_EFFORT,
     permissionRules: [],
     hooks: [],
     mcpServers: [],

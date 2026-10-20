@@ -7,6 +7,7 @@ import {
   type SessionUsage
 } from '@shared/usage'
 import { anthropicThinksByDefault } from '@shared/model-facts'
+import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { branchNameError, canCreateWorktree } from '../lib/worktree'
 import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
@@ -204,7 +205,7 @@ export function ControlBar({
 
       <select
         className="control control--select"
-        value={settings.reasoningEffort ?? 'off'}
+        value={settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT}
         disabled={!hasReasoning}
         aria-label="Reasoning effort"
         onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}

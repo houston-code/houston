@@ -1,8 +1,17 @@
+import type { ReasoningEffort } from './agent'
 import type { AppSettings, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 13
+export const SETTINGS_SCHEMA_VERSION = 14
+
+/**
+ * The reasoning effort a fresh install starts at. Coding and long agentic turns are the
+ * work that gains most from deeper thinking, so the default leans toward a correct first
+ * attempt over a cheaper step. It costs more output tokens and time per step than a
+ * low setting; the reasoning menu and `/reasoning` turn it down.
+ */
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high'
 
 /**
  * Fallback context-compaction threshold in tokens, used only when the selected
@@ -289,7 +298,7 @@ export function defaultSettings(): AppSettings {
     // (window-relative — see resolveCompactionThreshold); only a user's explicit
     // override is ever stored.
     shellOutputMaxBytes: DEFAULT_SHELL_OUTPUT_MAX_BYTES,
-    reasoningEffort: 'off',
+    reasoningEffort: DEFAULT_REASONING_EFFORT,
     stallDetection: true,
     permissionRules: [],
     hooks: [],
